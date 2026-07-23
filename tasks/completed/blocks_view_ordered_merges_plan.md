@@ -390,10 +390,9 @@ async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) ->
 }
 ```
 
-(The sketch shows only the streaming change: the final `write()` signature also carries the
-`force: bool` trait parameter from Design §3, and the `write_partition_from_rows` call also
-takes the `sort_order` and `force` arguments from Design §3/§4 — see Implementation Steps
-15–18.)
+(The sketch shows only the streaming change: the `write_partition_from_rows` call also takes the
+`sort_order` argument from Design §4 — see Implementation Steps 15–18. `write()`'s signature is
+otherwise unchanged; Design §3's concurrency guard does not touch it — see Design §3.)
 
 `flush_chunk` converts the accumulated `Vec<PgRow>` via the existing `rows_to_record_batch`
 (unchanged — it already operates on a row slice, so it works identically on a partial chunk),
@@ -428,24 +427,24 @@ byte-identical too.
 
 ### 3. Forced online regeneration
 
-Add a `force: bool` parameter to `batch_update::materialize_partition` (`batch_update.rs:103`,
-private, with only one caller: the loop inside `materialize_partition_range`).
-`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 9 existing external
-callers — the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`), the
-`materialize_partitions` UDF (`materialize_partitions_table_function.rs:56`), and 7 test call
-sites (`histo_view_test.rs` ×3, `sql_view_test.rs` ×3, `thread_spans_ordering_db_test.rs` ×1) —
-plus its own recursive subdivision call (`batch_update.rs:156`, covered below) — so its
-signature must not change. Instead, factor its loop body into a new private
-`materialize_partition_range_impl(..., force: bool)`: `materialize_partition_range` becomes a
-thin wrapper calling it with `force: false` (unchanged behavior, unchanged signature, zero call
-sites touched), and a new `regenerate_partition_range` (same signature otherwise) calls it with
-`force: true`. When `force` is true, `materialize_partition` replaces
-`verify_overlapping_partitions` with the narrower `verify_force_regeneration_alignment` guard
-(below) — dropping the source-data-hash freshness comparison, the "already up to date" check this
-plan needs to bypass — and takes `PartitionCreationStrategy::CreateFromSource` unconditionally,
-*and* also skips the `get_max_partition_time_delta`-driven subdivision check
-(`batch_update.rs:138-155`) so the entire requested `insert_range` is written as a single
-partition instead of being split into buckets.
+Add a new public `regenerate_partition_range` (`batch_update.rs`) as a sibling of
+`materialize_partition_range`, not a flag on it: `materialize_partition_range` and the private
+`materialize_partition` it calls are untouched by this part — no `force` parameter was added to
+either — so their 9 existing external callers (the production maintenance daemon
+(`rust/public/src/servers/maintenance.rs`), the `materialize_partitions` UDF
+(`materialize_partitions_table_function.rs`), and 7 test call sites) needed zero changes.
+`regenerate_partition_range` validates that `delta` exactly tiles `(begin, end)` (below), then
+loops per-bucket calling a new private `regenerate_partition`. Unlike `materialize_partition`,
+`regenerate_partition` never merges, never aborts on freshness, and never subdivides — each bucket
+the tiling loop produces is already exactly one partition's worth: it calls
+`verify_force_regeneration_alignment` (below) against that bucket, then
+`view.make_batch_partition_spec(...)` and `partition_spec.write(lake, logger)` directly, always
+writing a fresh `CreateFromSource` partition. This is a standalone function rather than a
+`force: bool` threaded through `materialize_partition`'s strategy/subdivision branching (an earlier
+revision of this plan) — regeneration's requirements (always-fresh, always-whole-bucket,
+never-subdivide) are exactly what that branching exists to *avoid* doing unconditionally, so a
+short standalone function duplicates less than parameterizing every branch of `materialize_partition`
+to skip itself.
 
 **Invariant `regenerate_partitions` callers must uphold:** the requested `(begin, end, delta)`
 must exactly cover the boundaries of the partition(s) being regenerated.
@@ -457,26 +456,28 @@ doesn't fully contain the old one, so the old partition is never retired — it 
 while the new one is inserted alongside it, producing silent duplicate rows.
 
 This invariant is enforced, not just documented: `regenerate_partition_range` validates, before
-entering `materialize_partition_range_impl`'s loop, that `delta` exactly tiles `(begin, end)` —
+entering its own per-bucket loop, that `delta` exactly tiles `(begin, end)` —
 `(end - begin)` must be an exact, non-zero multiple of `delta`. `chrono::TimeDelta` implements no
 `Rem`/`%` operator, so the check is integer arithmetic on nanoseconds: with
 `span = (end - begin).num_nanoseconds()` and `step = delta.num_nanoseconds()` (both
 `Option<i64>`-unwrapped with `expect`, well within range for any real time range), require
 `step > 0 && span >= step && span % step == 0` — and returns a loud `Err` otherwise. This is a distinct failure
 mode from the one `verify_force_regeneration_alignment` (below) catches: the loop
-(`batch_update.rs:203-220`, reused by `_impl`) runs `while end_part <= insert_range.end`, so a
+runs `while end_part <= insert_range.end`, so a
 `delta` that doesn't tile the range makes it execute a partial or zero number of iterations and
-return `Ok` without ever reaching `materialize_partition` (and hence
+return `Ok` without ever reaching `regenerate_partition` (and hence
 `verify_force_regeneration_alignment`) for the untiled remainder — a silent partial or total no-op
 that the alignment guard, which only runs per-bucket inside the loop, would never see.
 
-Bypassing `verify_overlapping_partitions` loses that function's *only* other job: rejecting a
-partial overlap (`batch_update.rs:57-67`,
-`begin < insert_range.begin || end > insert_range.end` → `Abort`).
-`verify_force_regeneration_alignment` keeps that protection without reintroducing the freshness
-check — it runs the same partial-overlap test with no source-hash comparison, so it can never
-produce the "already up to date" `Abort` that forcing is meant to bypass, only a loud `Err` on a
-misaligned request. Unlike `verify_overlapping_partitions`, it must filter the
+`verify_force_regeneration_alignment` exists because `regenerate_partition` never calls
+`verify_overlapping_partitions` at all — it goes straight to `make_batch_partition_spec` +
+`write(...)` — so it needs its own guard against `verify_overlapping_partitions`'s *other* job:
+rejecting a partial overlap (`begin < insert_range.begin || end > insert_range.end` → would
+otherwise `Abort` in the `materialize_partition` path).
+`verify_force_regeneration_alignment` runs that same partial-overlap test with no source-hash
+comparison — there is no freshness check to reintroduce here, since `regenerate_partition` never
+had one — producing only a loud `Err` on a misaligned request. Unlike `verify_overlapping_partitions`,
+it must filter the
 existing-partitions snapshot *hash-agnostically*: `PartitionCache::filter` also requires
 `file_schema_hash` equality (`partition_cache.rs:220`), which would make the guard blind to a
 partially-overlapping partition written under an older schema hash — a row that
@@ -516,26 +517,32 @@ fn verify_force_regeneration_alignment(
     Ok(())
 }
 
-let strategy = if force {
+async fn regenerate_partition(
+    existing_partitions_all_views: Arc<PartitionCache>,
+    lakehouse: Arc<LakehouseContext>,
+    insert_range: TimeRange,
+    view: Arc<dyn View>,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let view_set_name = view.get_view_set_name();
+    let view_instance_id = view.get_view_instance_id();
     verify_force_regeneration_alignment(
         &existing_partitions_all_views,
         insert_range,
         &view_set_name,
         &view_instance_id,
     )?;
-    PartitionCreationStrategy::CreateFromSource
-} else {
-    verify_overlapping_partitions(...).await?
-};
-let new_delta = if force {
-    insert_range.end - insert_range.begin
-} else {
-    view.get_max_partition_time_delta(&strategy)
-};
-if new_delta < (insert_range.end - insert_range.begin) {
-    ... // subdivision branch, unreachable when force is true
+    let partition_spec = view
+        .make_batch_partition_spec(lakehouse.clone(), existing_partitions_all_views, insert_range)
+        .await?;
+    partition_spec.write(lakehouse.lake().clone(), logger).await
 }
 ```
+
+No `PartitionCreationStrategy`/subdivision branching runs here at all — `regenerate_partition`
+never consults `get_max_partition_time_delta`, so there is no subdivision decision to skip. Each
+call already writes exactly one whole bucket as `CreateFromSource`, because `regenerate_partition_range`'s
+tiling loop guarantees that invariant before this function is ever called.
 
 This guard is meant to fail the call loudly instead of silently leaving both the stale and the new
 partition in place — but that requires `regenerate_partitions` to surface the `Err` as a
@@ -543,108 +550,93 @@ query-level failure, not as a log row `TaskLogExecPlan` streams back as if the q
 below for why the existing `materialize_partitions`/`TaskLogExecPlan` pattern cannot do this, and
 the mechanism `regenerate_partitions` uses instead).
 
-Skipping the subdivision is required, not optional: `BlocksView::get_max_partition_time_delta`
+Never subdividing is required, not optional: `BlocksView::get_max_partition_time_delta`
 returns `TimeDelta::hours(1)` for `CreateFromSource` but `TimeDelta::days(1)` for
-`MergeExisting` (`blocks_view.rs:140-147`). A forced regeneration over a day range that honored
-the 1-hour delta would recurse into `materialize_partition_range` and write 24 hourly
-partitions instead of one daily partition. `retire_partitions`'s range-containment delete
-(`begin_insert_time >= $3 AND end_insert_time <= $4`, `write_partition.rs:226-246`) only retires
+`MergeExisting` (`blocks_view.rs:140-147`). If `regenerate_partition` honored that 1-hour
+`CreateFromSource` delta for a day-range bucket, it would need to write 24 hourly partitions
+instead of one daily partition. `retire_partitions`'s range-containment delete only retires
 partitions fully contained within *each new* partition's own range, so none of those 24 hourly
 `[h, h+1h)` ranges would contain the pre-existing daily `[day_begin, day_end)` partition — it
 would never be retired, leaving duplicate rows until a manual `retire_partitions` call. Writing
-the whole range as one `CreateFromSource` partition makes the new partition's range exactly
+the whole bucket as one `CreateFromSource` partition makes the new partition's range exactly
 `[day_begin, day_end)`, so `retire_partitions` cleanly deletes the old daily partition in the
 same transaction as the insert.
-
-`force` is threaded unchanged through the `materialize_partition_range_impl` →
-`materialize_partition` loop call (`batch_update.rs:209`); only the subdivision decision inside
-`materialize_partition` itself is affected. The subdivision branch's recursive call
-(`batch_update.rs:156`) is only reachable when `force` is false — a forced call's `new_delta`
-always spans the whole range, so the `new_delta < range` check never recurses — and keeps calling
-the plain, forceless `materialize_partition_range`; no recursion needs to carry `force` through.
 
 Via `partition_spec.write()`, this still uses the now-streaming Postgres fetch from part 2 (so a
 whole-day `CreateFromSource` write stays memory-bounded even without subdivision) and the
 retire-then-insert atomic swap in `insert_partition` (part of the "Current State" analysis
 above), so regeneration is online (no downtime) and memory-bounded from day one.
 
-**Guarding against a concurrent daemon write into the same range.** `verify_force_regeneration_alignment`
+**Guarding against a concurrent write into an overlapping range.** `verify_force_regeneration_alignment`
 only checks the `PartitionCache` snapshot fetched at the start of the call — it cannot see a
-partition the maintenance daemon commits *after* that snapshot but *before* the forced write
-commits. This matters specifically when `regenerate_partitions` targets a range the daemon is
-still actively materializing at finer granularity (e.g. the current or a very recent day, whose
-hours/minutes the daemon has not yet rolled up into a merged daily; already-merged past dailies are
-not exposed to this race). `insert_partition`'s advisory lock (`write_partition.rs:251-263`) is
-keyed on the exact `(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` tuple,
-so a regen write and a concurrent daemon write into an overlapping range take *different* locks and
-can commit in either order, with the overlap running in either direction of containment:
-- A regen daily `[d, d+1)` write, and a concurrent daemon hourly `[h, h+1)` write (contained
-  *inside* `[d, d+1)`) that commits after the regen daily. Nothing retires it: `retire_partitions`
-  only deletes rows fully contained within the *new* partition's own range, and every later daemon
-  pass hits `verify_overlapping_partitions`'s partial-overlap `Abort` (`batch_update.rs:57-67`) on
-  both rows.
-- The reverse: following the rollout's "regenerate finer partitions first" ordering (Rollout), a
-  regen hourly `[h, h+1)` write is in flight when the daemon's daily merge commits `[d, d+1)`
-  first — `d` spans `h`, and the daemon's merge retires the old hourlies. The regen's own
-  `retire_partitions([h, h+1))` cannot delete that daily row (the daily is not contained *inside*
-  `[h, h+1)` — it *contains* `[h, h+1)`, the reverse relationship), so the regen's new hourly and
-  the daemon's new daily both persist.
+partition another writer (e.g. the maintenance daemon) commits *after* that snapshot but *before*
+this write commits. This matters specifically when `regenerate_partitions` targets a range another
+writer is still actively materializing at a different granularity (e.g. the current or a very
+recent day, whose hours/minutes the daemon has not yet rolled up into a merged daily; already-merged
+past dailies are not exposed to this race). `insert_partition`'s advisory lock (`write_partition.rs`)
+is keyed on the exact `(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
+tuple, so a regen write and a concurrent daemon write into an overlapping-but-different range take
+*different* locks and can commit in either order, with the overlap running in either direction of
+containment (e.g. a regen daily `[d, d+1)` racing a concurrent daemon hourly `[h, h+1)` contained
+inside it, or the reverse — a regen hourly racing a daemon daily merge that spans it). Either shape
+would otherwise leave both rows in place forever — `retire_partitions`'s cleanup only deletes
+partitions fully *contained by* the newly-inserted partition's own range, which only catches one of
+the two directions — and queries would double-count the overlapping blocks.
 
-Either shape leaves both rows in place forever, and queries double-count the overlapping hour's
-blocks.
+Rather than closing this with a `force`-gated in-transaction `SELECT` recheck scoped to the write's
+own range (an earlier revision of this plan, which read-then-checked under Postgres's `READ
+COMMITTED` isolation and so only shrank the race window rather than closing it, and only for
+regeneration's own writes), the shipped design enforces disjointness unconditionally, at the
+database layer, for every writer — regeneration, ordinary materialization, and merges alike. The
+v6→v7 migration (`migration.rs`'s `upgrade_v6_to_v7`) adds
+`CREATE EXTENSION IF NOT EXISTS btree_gist;` — needed because `EXCLUDE USING gist` over the
+constraint's equality columns requires the gist equality operator class `btree_gist` provides; on
+PostgreSQL ≤ 12, or if the migrating role lacks `CREATE` on the database, a superuser must run this
+once out of band — and then:
 
-To close this without depending on daemon-scheduling internals (there is no clean, stable
-definition of "the daemon's active horizon" to check against from `batch_update.rs`), the forced
-path re-checks for a new overlap from *inside* `insert_partition`'s own transaction, immediately
-before it would otherwise commit — where it can see anything any other transaction has already
-committed, not a stale snapshot. `PartitionSpec::write` (`view.rs:32`) gains a `force: bool`
-parameter (`false` at every existing call site — `BlockPartitionSpec::write`,
-`SqlPartitionSpec::write`, and `MetadataPartitionSpec::write`'s normal, non-forced callers — so
-this is a no-op everywhere except forced regeneration), threaded through `write_partition_from_rows`
-into `insert_partition`. There are two production call sites of `PartitionSpec::write` itself that
-need updating for the new parameter: `materialize_partition`'s `partition_spec.write(...)`
-(`batch_update.rs:171`), which supplies the real `force` value driving this guard, and
-`write_partition_from_blocks`'s `block_spec.write(...)` (`jit_partitions.rs:632`, JIT partition
-generation at query time), which passes `force: false` and never triggers this guard. When `force` is `true`, `insert_partition`, inside its existing transaction,
-*after* `retire_partitions` has removed the partition being replaced and after the new partition row
-has been inserted — immediately before it would otherwise commit — runs one more `SELECT` against
-`lakehouse_partitions` for the same `(view_set_name, view_instance_id)`, applying a general
-*interval-overlap* predicate — `begin_insert_time < insert_range.end AND end_insert_time >
-insert_range.begin` (the same predicate `PartitionCache::filter` already uses at snapshot time,
-`partition_cache.rs:209-231`) — excluding the row just inserted (its own exact
-`begin_insert_time`/`end_insert_time`) so the new partition doesn't match its own recheck. This
-must be the general overlap test, not a containment-only predicate
-(`begin_insert_time >= insert_range.begin AND end_insert_time <= insert_range.end`): containment
-only asks whether the *existing* row sits *inside* `insert_range`, which catches the first shape
-above (daemon hourly inside regen daily) but misses the second (daemon daily containing regen
-hourly) — there the existing daily row's bounds are not contained within the regen hourly's
-`insert_range` at all; the containment relationship runs the other way. The
-`begin < insert_range.end AND end > insert_range.begin` form is direction-agnostic and catches
-both shapes with one check. `bail!`s — rolling back both the retire and the not-yet-committed
-insert, so neither the old nor a duplicate new partition is left behind — if any row comes back.
-This rollback undoes the retire and the insert but not the Parquet file `finalize_partition_write`
-already wrote and closed before this recheck runs — a guard-triggered `bail!` leaves that file
-orphaned in object storage, neither deleted nor registered via `add_file_for_cleanup`. This matches
-`insert_partition`'s existing INSERT-error path, which leaks the same way, so it is an acknowledged
-pre-existing pattern rather than a new gap; a follow-up could delete the file or register it for
-cleanup before returning the error.
-Because Postgres's default `READ COMMITTED` isolation lets this in-transaction `SELECT` see any row
-another transaction has already committed, this shrinks the race window from "the whole
-forced-regeneration call" down to "the gap between this `SELECT` and this transaction's `COMMIT`" —
-the same order of magnitude every other `insert_partition` caller already lives with, rather than a
-window wide enough for a daemon pass to land in. `regenerate_partition_range` sets `force: true` on
-the `PartitionSpec::write()` call it reaches; `materialize_partition_range`'s existing non-forced
-path always passes `false`.
+```sql
+ALTER TABLE lakehouse_partitions ADD CONSTRAINT lakehouse_partitions_no_overlap
+EXCLUDE USING gist (
+    view_set_name WITH =,
+    view_instance_id WITH =,
+    file_schema_hash WITH =,
+    tstzrange(begin_insert_time, end_insert_time) WITH &&
+);
+```
 
-This in-transaction recheck is keyed on the advisory lock's exact `(view_set_name, view_instance_id,
-begin_insert_time, end_insert_time)` tuple, so it only serializes writers targeting the *identical*
-range; it does not fully close the race between two concurrent *forced* regenerations of
-overlapping-but-different ranges (e.g. an hourly and a daily forced call whose ranges overlap) —
-those take different locks, so under `READ COMMITTED` each transaction's recheck can pass before the
-other commits, and both can commit, leaving duplicate/overlapping partitions. `regenerate_partitions`
-is a temporary/admin rollout tool, not a steady-state path, so the mitigation here is operational,
-not a new locking mechanism: operators must run `regenerate_partitions` calls serially, never with
-overlapping ranges in flight concurrently.
+Scoped by `file_schema_hash` (`btree_gist` supports `bytea` equality) because a schema-hash bump
+legally leaves old- and new-schema partitions coexisting with overlapping ranges until
+`retire_incompatible_partitions` cleans up the old ones — queries already filter by schema hash, so
+only a *same-schema* overlap is ever a real bug. `tstzrange` is `'[)'`, so adjacent partitions
+sharing a boundary do not conflict, and the write path's retire-then-insert runs inside one
+transaction, so replacing a partition with itself never self-conflicts. A Postgres exclusion
+constraint can't be added `NOT VALID`, so the migration first runs a detect-then-fail query for any
+pre-existing same-view/instance/schema-hash overlapping pair (excluding zero-width ranges, which
+never overlap under `tstzrange` semantics) and `bail!`s naming the first 20 conflicting file pairs
+— instructing the operator to retire them (e.g. via `retire_partition_by_metadata`) and restart —
+rather than failing later with a raw constraint-violation error the migration can't attribute to
+specific rows.
+
+Unlike a `SELECT`-based recheck under `READ COMMITTED` (which can only see rows already committed
+at the moment it runs, so two concurrent transactions whose snapshots don't see each other's
+uncommitted rows can both pass it), the exclusion constraint is enforced by the index itself even
+across concurrent transactions: the second conflicting insert blocks on the first, then fails once
+the first commits. `insert_partition_transaction` (`write_partition.rs`) catches the resulting
+constraint violation via `db_err.constraint() == Some("lakehouse_partitions_no_overlap")` and
+re-raises it as a legible domain error naming the new partition's view/instance/range and pointing
+at `retire_partition_by_metadata` or a range/delta alignment fix, instead of surfacing Postgres's
+raw SQLSTATE `23P01`. This closes the race completely and unconditionally — including between two
+concurrent *forced* regenerations of overlapping-but-different ranges, which a range-scoped
+in-transaction recheck could not have closed either — and needed no `force` parameter anywhere in
+`PartitionSpec::write`/`write_partition_from_rows`/`insert_partition`: those three keep the exact
+signatures they had before this plan.
+
+This also closes a related gap for every insert failure, not only constraint violations: on any
+`insert_partition` failure, `delete_if_orphan` (`write_partition.rs`) now checks
+`lakehouse_partitions` for the just-written file's per-write UUID path and deletes it from object
+storage only if no row references it, rather than leaving it orphaned — a failed commit may still
+have been applied server-side, so the returned error alone can't tell us whether the file is
+orphaned, and this checks the authoritative state instead of guessing.
 
 `regenerate_partitions` reads from the Postgres ingestion tables, which retain rows for a shorter
 window than merged lakehouse partitions. If a forced regeneration runs on a partition whose source
@@ -917,32 +909,27 @@ footer-free way to check per-partition sort status before it declares an
    `sqlx::query(...).fetch(...)`, flushing whenever the pending chunk's estimated size reaches
    `SOURCE_BYTES_PER_BATCH` (8 MB); add the `flush_chunk` and `estimate_row_bytes` helpers;
    switch `source_data_hash` to `self.get_source_data_hash()`.
-8. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to (private)
-   `materialize_partition`; factor `materialize_partition_range`'s loop body into a new private
-   `materialize_partition_range_impl(..., force: bool)`. `materialize_partition_range` keeps its
-   existing signature, delegating to `materialize_partition_range_impl(..., force: false)`, so its
+8. `rust/analytics/src/lakehouse/batch_update.rs`: `materialize_partition` and
+   `materialize_partition_range` are untouched — no `force` parameter, no shared `_impl` split; their
    9 existing external callers (`rust/public/src/servers/maintenance.rs`, the
    `materialize_partitions` UDF in `materialize_partitions_table_function.rs`, plus 7 test call
-   sites in `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) — and
-   the internal recursive subdivision call at `batch_update.rs:156`, which stays on the plain,
-   forceless wrapper — need no changes.
-   Add a new `regenerate_partition_range(...)` (same signature) that first validates `delta`
-   exactly tiles `(begin, end)` (Design §3's nanosecond `step > 0 && span >= step &&
-   span % step == 0` check, loud `Err` otherwise, before any partition is written) and then calls
-   `materialize_partition_range_impl(..., force: true)`. When `force`, `materialize_partition`
-   skips only `verify_overlapping_partitions`'s source-hash freshness check, and skips the
-   `get_max_partition_time_delta` subdivision check, so the whole requested range is written as
-   one `CreateFromSource` partition (letting `retire_partitions` cleanly retire the existing
-   partition it replaces). Add a new `verify_force_regeneration_alignment` function, called only
-   on the `force` path in place of `verify_overlapping_partitions`, that re-checks the same
-   partial-overlap condition (`begin < insert_range.begin || end > insert_range.end`) against
-   existing partitions — filtered hash-agnostically via `filter_insert_range` + a view
-   name/instance match, per Design §3 — and returns a loud `Err` on a misaligned
-   `insert_range`/delta instead of silently leaving a duplicate partition behind. `materialize_partition`'s existing
-   `partition_spec.write(lakehouse.lake().clone(), logger)` call (`batch_update.rs`,
-   `CreateFromSource` arm) gains the `force` argument it already has in scope, becoming
-   `partition_spec.write(lakehouse.lake().clone(), logger, force)` — this is what actually reaches
-   the in-transaction concurrency guard added in step 15/18 below.
+   sites in `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) — and the
+   internal recursive subdivision call — need no changes.
+   Add a new public `regenerate_partition_range(...)` that first validates `delta` exactly tiles
+   `(begin, end)` (Design §3's nanosecond `step > 0 && span >= step && span % step == 0` check, loud
+   `Err` otherwise, before any partition is written) and then loops per-bucket calling a new private
+   `regenerate_partition(...)`, which calls `verify_force_regeneration_alignment` (below), then
+   `view.make_batch_partition_spec(...)` and `partition_spec.write(lakehouse.lake().clone(), logger)`
+   directly — always writing one whole bucket as `CreateFromSource`, with no
+   `PartitionCreationStrategy`/subdivision decision to make. Add a new
+   `verify_force_regeneration_alignment` function that re-checks the same partial-overlap condition
+   `verify_overlapping_partitions` guards (`begin < insert_range.begin || end > insert_range.end`)
+   against existing partitions — filtered hash-agnostically via `filter_insert_range` + a view
+   name/instance match, per Design §3 — and returns a loud `Err` on a misaligned `insert_range`/delta
+   instead of silently leaving a duplicate partition behind. Design §3's concurrency guard against a
+   concurrent write into an overlapping range is *not* implemented here (no `force` argument reaches
+   `partition_spec.write(...)`) — it is instead a database-level `EXCLUDE` constraint added in step
+   13's migration and handled in `insert_partition` (step 15).
 9. Generalize the log-stream plumbing to carry an error (Design §3): change the channel item type
    to `Result<(DateTime<Utc>, String), String>` in `rust/analytics/src/dfext/task_log_exec_plan.rs`
    (the `TaskSpawner` alias), `rust/analytics/src/dfext/async_log_stream.rs` (`AsyncLogStream::rx`;
@@ -971,34 +958,32 @@ footer-free way to check per-partition sort status before it declares an
 13. `rust/analytics/src/lakehouse/migration.rs`: bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 7; add
     `upgrade_v6_to_v7` (`ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];` + bump
     `lakehouse_migration.version`), wired into `execute_lakehouse_migration`'s chain next to
-    `upgrade_v5_to_v6`.
+    `upgrade_v5_to_v6`. In the same migration function (Design §3's concurrency guard): add
+    `CREATE EXTENSION IF NOT EXISTS btree_gist;`; run a detect-then-fail `SELECT` for any
+    pre-existing same-view/instance/schema-hash overlapping partition pair (excluding zero-width
+    ranges) and `bail!` naming the first 20 conflicts if any are found; then
+    `ALTER TABLE lakehouse_partitions ADD CONSTRAINT lakehouse_partitions_no_overlap EXCLUDE USING
+    gist (view_set_name WITH =, view_instance_id WITH =, file_schema_hash WITH =,
+    tstzrange(begin_insert_time, end_insert_time) WITH &&);`.
 14. `rust/analytics/src/lakehouse/partition.rs`: add `pub sort_order: Option<Vec<String>>` to
     `Partition`.
 15. `rust/analytics/src/lakehouse/write_partition.rs`: add a `sort_order: Option<Vec<String>>`
     parameter to `write_partition_from_rows`; thread it into the `Partition` literal and into
-    `insert_partition`'s `INSERT` (new `$13` bind, physically after the existing literal `2`).
-    Separately (Design §3's concurrency guard), add a `force: bool` parameter to both
-    `write_partition_from_rows` and `insert_partition`, threaded from the former into the latter.
-    Inside `insert_partition`, when `force` is `true`, after `retire_partitions` has run and the new
-    partition row has been inserted (still inside the same transaction, before `commit`), run the
-    one more `SELECT` against `lakehouse_partitions` described in Design §3 — general overlap
-    predicate `begin_insert_time < insert_range.end AND end_insert_time > insert_range.begin`
-    (matching `PartitionCache::filter`), excluding the just-inserted row's own exact bounds — and
-    `bail!` if any row comes back, aborting the transaction. When `force` is `false` this recheck is
-    skipped entirely (no behavior change for any existing caller).
+    `insert_partition`'s `INSERT` (new `$13` bind, physically after the existing literal `2`). No
+    `force` parameter is added here — Design §3's concurrency guard is the step 13 exclusion
+    constraint, not application-level plumbing. In `insert_partition_transaction`, on an `Err` from
+    the `INSERT`, match the underlying `sqlx::Error`'s database error for
+    `constraint() == Some("lakehouse_partitions_no_overlap")` and, if it matches, `bail!` a legible
+    domain error naming the new partition's view/instance/range and pointing at
+    `retire_partition_by_metadata` or a range/delta fix, instead of propagating the raw constraint
+    error. Separately, add `delete_if_orphan(lake, file_path)` — queries `lakehouse_partitions` for
+    the file path and deletes it from object storage only if unreferenced — called from
+    `insert_partition` (the wrapper around `insert_partition_transaction`) whenever the transaction
+    returns an `Err` and a `file_path` was set, best-effort and never masking the original error.
 16. Update all 6 existing `write_partition_from_rows` call sites for the new `sort_order` parameter:
     `net_spans_view.rs`, `thread_spans_view.rs`, `sql_partition_spec.rs`, and
     `block_partition_spec.rs` pass `None`; `metadata_partition_spec.rs` and `merge.rs` pass a real
-    value per steps 17-18. The same 6 call sites also gain the new `force` parameter added in step
-    15: `net_spans_view.rs`, `thread_spans_view.rs`, and `merge.rs`'s `create_merged_partition` pass
-    `false` (unreachable under `force: true` — a forced regeneration always takes the
-    `CreateFromSource` strategy, so `create_merged_partition` is never invoked from that path, per
-    Design §3); `sql_partition_spec.rs`'s `SqlPartitionSpec::write` and `block_partition_spec.rs`'s
-    `BlockPartitionSpec::write` plumb through the `force` value each now receives on its own
-    `PartitionSpec::write` call (step 18) unchanged, rather than hardcoding `false`, so the guard
-    still applies if a future or ad hoc `regenerate_partitions` call targets a non-blocks view
-    backed by one of these specs; `metadata_partition_spec.rs`'s `MetadataPartitionSpec::write`
-    plumbs through the `force` value it receives the same way.
+    value per steps 17-18.
 17. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: add `pub sort_order:
     Option<Vec<String>>` to `MetadataPartitionSpec` and a matching parameter to
     `fetch_metadata_partition_spec`; pass it through to `write_partition_from_rows` in `write()`.
@@ -1019,18 +1004,13 @@ footer-free way to check per-partition sort status before it declares an
     slice is empty or already has that `sort_order`, `None` otherwise — the same predicate step 6
     uses (without step 6's extra "at least one non-empty input" merger-choice clause, which only
     switches between two paths that both uphold the recorded value — Design §4).
-    Separately, in the same file, add a `force: bool` parameter to the `PartitionSpec::write` trait
-    method (`fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>, force: bool) ->
-    Result<()>`), and update its three implementations to match:
-    `rust/analytics/src/lakehouse/block_partition_spec.rs`'s `BlockPartitionSpec::write` and
-    `rust/analytics/src/lakehouse/sql_partition_spec.rs`'s `SqlPartitionSpec::write` accept the new
-    `force` parameter and pass it straight through to their `write_partition_from_rows` call (step
-    16); `rust/analytics/src/lakehouse/metadata_partition_spec.rs`'s `MetadataPartitionSpec::write`
-    does the same. There are two production call sites of `PartitionSpec::write` that must be
-    updated for the new parameter: `materialize_partition` (step 8, `batch_update.rs:171`) is what
-    supplies a real `force` value; `write_partition_from_blocks`'s `block_spec.write(...)` call
-    (`rust/analytics/src/lakehouse/jit_partitions.rs:632`) is the other — it passes `force: false`,
-    since JIT partition generation at query time never forces regeneration.
+    `PartitionSpec::write`'s trait signature (`fn write(&self, lake: Arc<DataLakeConnection>,
+    logger: Arc<dyn Logger>) -> Result<()>`) is unchanged by this plan — Design §3's concurrency
+    guard is the step 13 exclusion constraint plus step 15's `insert_partition_transaction` error
+    translation, not a parameter on this trait or its three implementations
+    (`BlockPartitionSpec::write`, `SqlPartitionSpec::write`, `MetadataPartitionSpec::write`), so none
+    of them, nor either of their two production call sites (`materialize_partition`'s and
+    `write_partition_from_blocks`'s in `jit_partitions.rs`), need any change for it.
 19. `rust/analytics/src/lakehouse/partition_cache.rs`: add `sort_order` to the `SELECT` column
     lists and `Partition` literals in `fetch_overlapping_insert_range`,
     `fetch_overlapping_insert_range_for_view`, and `LivePartitionProvider::fetch` (both query
@@ -1066,8 +1046,7 @@ footer-free way to check per-partition sort status before it declares an
   (Design §1/§4/Trade-offs); `create_merged_partition` calls
   `view.get_merged_partition_sort_order(&filtered_partitions)` before merging and passes that value
   straight to `write_partition_from_rows` (not gated on `ordering_honored` — the output is
-  `insert_time`-sorted whether elision happened or not; `ordering_honored` drives only the warning);
-  pass `false` for the new `force` parameter (unreachable under forced regeneration, per Design §3).
+  `insert_time`-sorted whether elision happened or not; `ordering_honored` drives only the warning).
 - `rust/analytics/src/lakehouse/batch_partition_merger.rs`,
   `rust/analytics/src/lakehouse/sql_batch_view.rs` — mechanical update of
   `BatchPartitionMerger::execute_merge_query` and `SqlBatchView::merge_partitions` to the new
@@ -1079,14 +1058,11 @@ footer-free way to check per-partition sort status before it declares an
   `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order` with
   the same input-dependent predicate.
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`; add
-  `sort_order` field/parameter and thread it to `write_partition_from_rows`; accept the
-  `PartitionSpec::write` trait's new `force: bool` parameter and plumb it through to
-  `write_partition_from_rows` too.
-- `rust/analytics/src/lakehouse/batch_update.rs` — `force` parameter, new
-  `materialize_partition_range_impl` + `regenerate_partition_range` (existing
-  `materialize_partition_range` signature unchanged), new
-  `verify_force_regeneration_alignment` guard for the `force` path; thread `force` into
-  `materialize_partition`'s `partition_spec.write(...)` call.
+  `sort_order` field/parameter and thread it to `write_partition_from_rows`.
+- `rust/analytics/src/lakehouse/batch_update.rs` — new `regenerate_partition_range` +
+  `regenerate_partition` (both new, alongside the untouched `materialize_partition_range` /
+  `materialize_partition`), new `verify_force_regeneration_alignment` guard called from
+  `regenerate_partition`.
 - `rust/analytics/src/dfext/task_log_exec_plan.rs`, `rust/analytics/src/dfext/async_log_stream.rs`,
   `rust/analytics/src/response_writer.rs` — generalize the log-stream channel item type to
   `Result<(DateTime<Utc>, String), String>` so an `Err` item ends the query with an error instead
@@ -1100,16 +1076,18 @@ footer-free way to check per-partition sort status before it declares an
 - `mkdocs/docs/admin/maintenance.md` — document `regenerate_partitions`.
 - `mkdocs/docs/query-guide/python-api.md` — document `regenerate_partitions`.
 - `rust/analytics/src/lakehouse/migration.rs` — v6→v7 migration adding
-  `lakehouse_partitions.sort_order`.
+  `lakehouse_partitions.sort_order`; also (Design §3's concurrency guard) `CREATE EXTENSION IF NOT
+  EXISTS btree_gist;`, a detect-then-fail pre-check for legacy overlapping partitions, and the
+  `lakehouse_partitions_no_overlap` `EXCLUDE` constraint.
 - `rust/analytics/src/lakehouse/partition.rs` — `Partition::sort_order` field.
 - `rust/analytics/src/lakehouse/write_partition.rs` — `sort_order` parameter on
-  `write_partition_from_rows`; new `insert_partition` bind. Also a `force: bool` parameter on both
-  `write_partition_from_rows` and `insert_partition`, and the in-transaction concurrent-write
-  overlap recheck (Design §3) inside `insert_partition`, gated on `force`.
-- `rust/analytics/src/lakehouse/view.rs` — new `get_merged_partition_sort_order()` method; add
-  `force: bool` to the `PartitionSpec::write` trait method signature; update the default
-  `merge_partitions` impl's return type to `Result<MergeQueryResult>`
-  (`ordering_honored: true`, mechanical).
+  `write_partition_from_rows`; new `insert_partition` bind. Also (Design §3) translate an
+  `lakehouse_partitions_no_overlap` constraint-violation error into a legible domain error in
+  `insert_partition_transaction`, and add `delete_if_orphan` called from `insert_partition` on any
+  insert failure. No `force` parameter anywhere in this file.
+- `rust/analytics/src/lakehouse/view.rs` — new `get_merged_partition_sort_order()` method; update
+  the default `merge_partitions` impl's return type to `Result<MergeQueryResult>`
+  (`ordering_honored: true`, mechanical). `PartitionSpec::write`'s signature is unchanged.
 - `rust/analytics/src/lakehouse/partition_cache.rs` — read `sort_order` in all 3
   partition-fetching query paths.
 - `rust/analytics/src/lakehouse/list_partitions_table_function.rs` — expose `sort_order` column.
@@ -1118,12 +1096,6 @@ footer-free way to check per-partition sort status before it declares an
   `rust/analytics/src/lakehouse/sql_partition_spec.rs`,
   `rust/analytics/src/lakehouse/block_partition_spec.rs` — pass `None` for `sort_order` at their
   `write_partition_from_rows` call sites (new parameter, no behavior change).
-  `sql_partition_spec.rs` (`SqlPartitionSpec::write`) and `block_partition_spec.rs`
-  (`BlockPartitionSpec::write`) additionally accept the `PartitionSpec::write` trait's new `force:
-  bool` parameter and plumb it straight through to their own `write_partition_from_rows` call.
-- `rust/analytics/src/lakehouse/jit_partitions.rs` — `write_partition_from_blocks`'s
-  `block_spec.write(...)` call (`:632`) is a second production call site of `PartitionSpec::write`
-  (alongside `materialize_partition` in `batch_update.rs`); update it to pass `force: false`.
 - `mkdocs/docs/admin/functions-reference.md` — document the `sort_order` column in
   `list_partitions()`'s column table.
 
@@ -1169,12 +1141,35 @@ footer-free way to check per-partition sort status before it declares an
   `sort_and_check_non_overlapping_by_insert_time` function would duplicate ~40 lines with one
   field access changed. An enum parameter keeps one implementation and makes the event-time
   behavior's non-regression explicit (`OrderingBounds::EventTime` at every existing call site).
-- **`force: bool` on `materialize_partition_range` vs. a standalone regeneration code path.**
-  Reimplementing the write/swap plumbing outside `batch_update.rs` would duplicate
-  `materialize_partition`'s partition-spec/write/retire logic. A boolean that skips two
-  decisions — the up-to-date check and the `get_max_partition_time_delta` subdivision check — is
-  a small, localized behavioral change that reuses everything else, including the streaming fix
-  from part 2 and the atomic retire-then-insert swap in `insert_partition`.
+- **A standalone `regenerate_partition` vs. a `force: bool` threaded through `materialize_partition`.**
+  An earlier revision of this plan added a `force: bool` parameter to `materialize_partition` (and,
+  transitively, to `PartitionSpec::write`/`write_partition_from_rows`/`insert_partition`) that made
+  it skip the up-to-date freshness check and the `get_max_partition_time_delta` subdivision check.
+  That reused `materialize_partition`'s branching but meant every layer between it and
+  `insert_partition` carried a boolean most callers always passed `false`, purely to support one
+  caller. The shipped design instead gives regeneration its own short standalone function
+  (`regenerate_partition`) that calls `verify_force_regeneration_alignment` then
+  `make_batch_partition_spec` + `write(...)` directly — regeneration's requirements (always-fresh,
+  always-whole-bucket, never-subdivide) are exactly what `materialize_partition`'s
+  strategy/subdivision branching exists to *avoid* doing unconditionally, so duplicating its
+  two-line write call costs less than parameterizing that branching to skip itself, and it keeps
+  `PartitionSpec::write` and the rest of the write path signature-identical to before this plan.
+  It still reuses the streaming fix from part 2 and the atomic retire-then-insert swap in
+  `insert_partition`, since both live underneath `partition_spec.write(...)` regardless of caller.
+- **A Postgres `EXCLUDE` constraint vs. a `force`-gated in-transaction `SELECT` recheck for the
+  concurrency guard.** An earlier revision closed the "concurrent write into an overlapping range"
+  race (Design §3) with an application-level recheck: `insert_partition`, when `force` was true, ran
+  one more `SELECT` for an overlap immediately before committing. That only shrank the race window
+  (to the gap between that `SELECT` and the transaction's `COMMIT`, under `READ COMMITTED`), only
+  protected forced-regeneration writes (ordinary materialization/merge writes had no such recheck),
+  and did not close the race between two concurrent forced regenerations of overlapping-but-different
+  ranges at all (different advisory-lock keys, so both rechecks could pass before either commits).
+  A database-level `EXCLUDE` constraint closes all of that at once: it is enforced by the index
+  across concurrent transactions regardless of which code path is writing, so no application code
+  needs to know which writes are "forced" or hold a boolean to opt into the check, and the race
+  window shrinks to zero rather than merely narrowing. The cost is a one-time migration (detect-then-fail
+  against legacy overlaps, since the constraint can't be added `NOT VALID`) and a `btree_gist`
+  dependency, both paid once at upgrade time rather than on every write.
 - **Generalizing `TaskLogExecPlan`/`AsyncLogStream`/`LogSender` to a `Result` channel item vs. a
   parallel "fallible" copy.** A mirrored `FallibleTaskLogExecPlan`/`FallibleAsyncLogStream` pair
   would leave the existing files untouched, but at the cost of ~220 duplicated lines and two
@@ -1320,7 +1315,7 @@ footer-free way to check per-partition sort status before it declares an
   `make_partitioned_execution_plan` call sites are updated per Implementation Steps to pass
   `OrderingBounds::EventTime`; its behavioral assertions are otherwise unchanged — regression on
   `write_partition_tests.rs`, `partition_metadata_tests.rs`, etc.).
-- **Force-regeneration alignment guard test**: a DB-backed test (alongside the existing
+- **Regeneration alignment guard test**: a DB-backed test (alongside the existing
   `materialize_partition_range` tests, e.g. `thread_spans_ordering_db_test.rs`-style) asserting
   `regenerate_partition_range`/`verify_force_regeneration_alignment` returns an `Err` when the
   requested `(begin, end)` partially overlaps an existing partition instead of exactly containing
@@ -1332,19 +1327,22 @@ footer-free way to check per-partition sort status before it declares an
   before any partition is written, when `delta` does not exactly tile `(begin, end)` (e.g. a `delta`
   longer than the range, or one that leaves a remainder) — confirming the non-tiling case is
   rejected loudly instead of silently regenerating a partial or empty span.
-- **Forced-regeneration concurrent-write race test**: a DB-backed test that simulates the race in
-  Design §3's "Guarding against a concurrent daemon write" in *both* overlap directions:
-  (a) insert a partition *fully contained within* the target range (standing in for the daemon's
-  overlapping hourly write, e.g. `[h, h+1)` inside a regenerated `[d, d+1)`) *after*
-  `verify_force_regeneration_alignment`'s snapshot would have been taken but *before* the forced
-  `insert_partition` call commits; and (b) the reverse — regenerate a smaller range (e.g.
-  `[h, h+1)`) while a concurrently-committed partition that *contains* it (e.g. a daemon daily
-  `[d, d+1)` where `d` spans `h`) commits in that same window. In both cases, assert the forced
-  write's in-transaction overlap recheck returns an `Err` (rather than committing) and that no
-  duplicate/overlapping partition rows remain afterwards — both the pre-existing partition being
-  replaced and the injected concurrent one should still be exactly and only what they were before
-  the failed forced write, confirming the transaction rolled back cleanly rather than partially
-  applying, in either direction.
+- **Partition overlap exclusion constraint test**: a DB-backed test asserting the
+  `lakehouse_partitions_no_overlap` `EXCLUDE` constraint (Design §3) rejects an overlapping
+  same-view/instance/`file_schema_hash` partition insert while allowing an adjacent
+  (boundary-sharing) insert, a same-range insert under a different `view_instance_id`, and a
+  same-range insert under a different `file_schema_hash` — and that
+  `insert_partition_transaction`'s constraint-violation translation surfaces a legible error rather
+  than a raw Postgres error. Separately, a migration test simulating a pre-existing v6 database
+  (dropping the `sort_order` column and constraint, rolling back `lakehouse_migration.version`)
+  asserts the v6→v7 migration's detect-then-fail pre-check `bail!`s naming the conflict when legacy
+  overlapping partitions already exist, and succeeds (adding the constraint) when they don't. A
+  version of this test (`migration_overlap_constraint_tests.rs`) was written and passed during
+  implementation but was then deleted rather than committed: it mutated/downgraded live schema
+  (rolling back `lakehouse_migration.version` to simulate a pre-migration database) on whatever
+  database `MICROMEGAS_SQL_CONNECTION_STRING` pointed at, guarded only by a doc comment and not
+  wired into CI — the same missing-disposable-test-database gap the Implementation Note below
+  covers for the rest of this plan's DB-backed tests, so this test is deferred alongside them.
 - **Query-level failure test for `regenerate_partitions`**: a query-level test (running the UDTF
   through `ctx.sql(...)`/FlightSQL, not just calling `regenerate_partition_range` directly) asserting
   that `SELECT * FROM regenerate_partitions(...)` with a misaligned range/delta returns a query
@@ -1468,29 +1466,36 @@ under `OrderingBounds::InsertTime` (elision + overlap rejection), and `QueryMerg
 plan-shape check in isolation (elision succeeds; elision is defeated on purpose and reports
 `ordering_honored: false` without erroring).
 
-The DB-backed tests (`sort_order` recording for fresh/merged partitions, the force-regeneration
-alignment/tiling guards, the concurrent-write race, the query-level failure test for
-`regenerate_partitions`, and the migration test) were prototyped against a real local Postgres
-during implementation but are **not** included in the committed test suite: the prototype's
-cleanup step deleted rows from the `blocks` ingestion table by time range to make re-runs
-idempotent, which is not an acceptable thing for a committed, automatically-runnable test to do
-against a real/shared Postgres instance (there is no dedicated, disposable test database in this
-environment — these tests would run against whatever `MICROMEGAS_SQL_CONNECTION_STRING` points
-at). This needs a safer harness before landing as committed tests, e.g.:
+The DB-backed tests (`sort_order` recording for fresh/merged partitions, the regeneration
+alignment/tiling guards, the partition overlap exclusion constraint test, the query-level failure
+test for `regenerate_partitions`, and the migration test) were prototyped against a real local
+Postgres during implementation but are **not** included in the committed test suite: the
+prototype's cleanup step deleted rows from the `blocks` ingestion table by time range to make
+re-runs idempotent, which is not an acceptable thing for a committed, automatically-runnable test
+to do against a real/shared Postgres instance (there is no dedicated, disposable test database in
+this environment — these tests would run against whatever `MICROMEGAS_SQL_CONNECTION_STRING`
+points at). A version of the exclusion-constraint/migration test
+(`migration_overlap_constraint_tests.rs`) was actually written, passed, and briefly committed, but
+was then deleted rather than kept: it rolled back `lakehouse_migration.version` and dropped the
+`sort_order` column to simulate a pre-migration v6 database, guarded only by a doc comment and not
+wired into CI, so an `--ignored` invocation could mutate/downgrade schema on whatever database was
+configured — the same class of risk as the deleted `blocks`-table cleanup. This needs a safer
+harness before landing as committed tests, e.g.:
 - a dedicated/disposable test database or schema (spun up and torn down per test run), so cleanup
-  can freely `DROP`/`TRUNCATE` without touching real data; or
+  can freely `DROP`/`TRUNCATE`/roll back schema version without touching real data or a real
+  database's migration state; or
 - scoping all cleanup strictly to rows the test itself created (by process/stream id), never a
   blanket time-range `DELETE` against `blocks`; or
 - accepting permanent, harmless accumulation of tiny test partitions in a fixed, far-past time
   window (no deletion at all), if that's judged acceptable for the target test database.
 
 Follow-up: build one of the above, then add back DB-backed coverage for the `sort_order` /
-`regenerate_partitions` behaviors this plan introduces, per the Testing Strategy section above.
-The migration test (v6→v7, including simulating a pre-existing v6 database by dropping the
-`sort_order` column and rolling back `lakehouse_migration.version`) additionally mutates the
-shared `lakehouse_partitions` schema itself while other tests may be reading it concurrently, so it
-should run in isolation (e.g. its own dedicated database) rather than share a database with any
-other test.
+`regenerate_partitions` / exclusion-constraint behaviors this plan introduces, per the Testing
+Strategy section above. The migration test (v6→v7, including simulating a pre-existing v6 database
+by dropping the `sort_order` column and rolling back `lakehouse_migration.version`) additionally
+mutates the shared `lakehouse_partitions` schema itself while other tests may be reading it
+concurrently, so it should run in isolation (e.g. its own dedicated database) rather than share a
+database with any other test.
 
 ## Open Questions
 
