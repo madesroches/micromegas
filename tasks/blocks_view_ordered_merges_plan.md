@@ -211,10 +211,24 @@ pub enum OrderingBounds {
      (before Design §4 exists) it has no `sort_order` to say so. `BlocksView::merge_partitions`
      therefore only takes the ordered path below — declaring the `[insert_time]` scan ordering and
      later recording `['insert_time', 'block_id']` — when *every* partition in `partitions_to_merge`
-     already has `sort_order == Some(['insert_time', 'block_id'])`; if even one input's `sort_order`
-     is `NULL` (every pre-fix partition, merged or not), the merge instead runs today's plain
-     unordered query and records `NULL` itself, rather than trusting a per-file order it cannot
-     verify (see Design §4 and Open Questions for the resulting rollout property). Points 2 and 3
+     is either empty (`is_empty()`, `num_rows == 0` — an empty partition contributes no rows and no
+     file to the scan, `make_partitioned_execution_plan` drops it before building the file group, so
+     it vacuously satisfies any ordering whatever its recorded `sort_order`) or already has
+     `sort_order == Some(['insert_time', 'block_id'])`, **and** at least one input is non-empty; if
+     even one non-empty input's `sort_order` is not that exact value (every pre-fix partition,
+     merged or not), the merge instead runs today's plain unordered query and records `NULL` itself,
+     rather than trusting a per-file order it cannot verify (see Design §4 and Open Questions for
+     the resulting rollout property). The all-empty case — a real production shape, since ≥2 empty
+     partitions still satisfy `create_merged_partition`'s "≥2 partitions" merge trigger (a quiet
+     day) — must take the plain merger for a different reason: an all-empty source scans as an
+     `EmptyExec` (`partitioned_execution_plan.rs:152-161`), which declares no output ordering, and
+     no DataFusion 54 rule removes a `SortExec` above an empty source (there is no physical
+     empty-propagation rule; logical `PropagateEmptyRelation` fires only on
+     `LogicalPlan::EmptyRelation`, not on a table scan that turns out empty at physical planning;
+     and `EnforceSorting` elides a sort only when its child already satisfies the ordering, which
+     `EmptyExec` never does) — so the ordered path's plan-shape check below would fail such a merge
+     loudly, forever, on every daemon retry. Routed to the plain merger, an all-empty merge still
+     records the guarantee per Design §4: it is vacuously true of the empty output. Points 2 and 3
      below, and the elision they enable, are therefore only ever relied on once this gate has
      already confirmed point 1 for the specific inputs at hand.
   2. Input partitions have disjoint, half-open `[begin, end)` insert-time ranges by construction,
@@ -247,8 +261,8 @@ pub enum OrderingBounds {
   sort is a no-op concatenation, so the already-`(insert_time, block_id)`-sorted files stay in that
   order end to end. **This is a correctness dependency, not just a memory optimization, and it
   rests on two independent guards, not one:**
-  - Point 1 is only true because the merge only takes this ordered path when every input's own
-    recorded `sort_order` already equals `['insert_time', 'block_id']` (see point 1 above and
+  - Point 1 is only true because the merge only takes this ordered path when every non-empty
+    input's own recorded `sort_order` already equals `['insert_time', 'block_id']` (see point 1 above and
     Design §4). If that gate is wrong or skipped, elision would faithfully concatenate
     internally-unsorted files in validated insert-time order and produce a merged file that is
     *not* `block_id`-sorted within a shared `insert_time`, no matter how well the plan-shape check
@@ -682,13 +696,16 @@ and bumps `lakehouse_migration.version` to 7. `NULL` — the value every existin
 before this change. A non-null value lists the guaranteed sort columns in order, ascending
 implied, e.g. `{insert_time, block_id}`.
 
-Deployment note: all partition-writing binaries must roll forward to the v7 build together with
-this migration — a pre-upgrade binary's `insert_partition` builds a positional 13-value `INSERT`,
-which fails against the new 14-column table, and a v6 binary refuses to even start against an
-already-migrated v7 database (the `assert_eq!(current_version,
-LATEST_LAKEHOUSE_SCHEMA_VERSION)` guards in `migrate_lakehouse` and `execute_lakehouse_migration`,
-`migration.rs:48,97`) — so old and new binaries are not
-cross-compatible and must not run concurrently against the same database during rollout.
+Deployment note: the migration is graceful for already-running writers, not a flag-day. A
+pre-upgrade binary's `insert_partition` builds a positional 13-value `INSERT`, and Postgres maps a
+short `VALUES` list to the first N columns in declared order, filling the rest with defaults — so
+against the migrated 14-column table that `INSERT` succeeds and leaves the trailing `sort_order`
+`NULL`, which is exactly the correct "no guarantee" value for a partition written by pre-fix code.
+A v6 binary that is already running can therefore keep writing safely while the migration lands.
+The hard edge is at (re)start only: a v6 binary refuses to start against an already-migrated v7
+database (the `assert_eq!(current_version, LATEST_LAKEHOUSE_SCHEMA_VERSION)` guards in
+`migrate_lakehouse` and `execute_lakehouse_migration`, `migration.rs:48,97`), so every
+partition-writing binary must be upgraded to the v7 build before its next restart.
 
 **Value semantics** — the recorded guarantee is what the written file actually satisfies, not what
 was declared to DataFusion for sort elision:
@@ -696,9 +713,12 @@ was declared to DataFusion for sort elision:
   `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:46`), so record
   `['insert_time', 'block_id']`.
 - Blocks partitions written by the part-1 ordered merge: `['insert_time', 'block_id']` **only when
-  every partition being merged already carries that exact `sort_order`** — `BlocksView` (Design §1)
-  declares `[insert_time]` to DataFusion and takes the ordered path at all only when every entry in
-  `partitions_to_merge` already has `sort_order == Some(['insert_time', 'block_id'])`; if even one
+  every partition being merged already carries that exact `sort_order` or is empty** — `BlocksView`
+  (Design §1) declares `[insert_time]` to DataFusion and takes the ordered path at all only when
+  every entry in `partitions_to_merge` is empty or already has
+  `sort_order == Some(['insert_time', 'block_id'])`, and at least one is non-empty (an all-empty
+  merge runs the plain merger to avoid the never-elided `SortExec` over an `EmptyExec` — Design §1 —
+  but still records the guarantee, vacuously true of its empty output); if even one non-empty
   input's `sort_order` is `NULL` (every pre-fix partition, including pre-fix *merged* partitions —
   see Design §1), the merge instead runs the plain unordered query with no declared ordering and
   records `NULL`, exactly like today. When every input does carry the guarantee, the elision
@@ -760,9 +780,11 @@ knowing about blocks-view specifics.
     — it's a pure function of the same input slice) and passes the result into its
     `write_partition_from_rows` call (`merge.rs:184-192`). `BlocksView` overrides the method to
     return `Some(vec!["insert_time".to_string(), "block_id".to_string()])` only when every partition
-    in the given slice already has that exact `sort_order`, `None` otherwise — sharing the same
-    predicate `BlocksView::merge_partitions` uses to pick its merger (see Design §1), so the two
-    decisions can't diverge; every other view keeps the default `None`.
+    in the given slice is empty or already has that exact `sort_order`, `None` otherwise — sharing
+    the same predicate `BlocksView::merge_partitions` uses (its merger choice adds only the
+    "at least one non-empty input" clause, which switches between two paths that both uphold the
+    recorded value — see Design §1), so the two decisions can't diverge; every other view keeps the
+    default `None`.
 - `PartitionCache`'s 3 read paths in `partition_cache.rs` add `sort_order` to their `SELECT`
   column lists and `Partition` literals: `fetch_overlapping_insert_range` (query
   `partition_cache.rs:56-73`, construction `:105-114`),
@@ -806,11 +828,19 @@ footer-free way to check per-partition sort status before it declares
 5. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
    `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`. When the
    merger's declared scan ordering is non-empty, `execute_merge_query` must also: set
-   `datafusion.optimizer.repartition_file_scans = false` on the session context (Design §1 point 3);
-   and, before calling `execute_stream()`, build the optimized physical plan (`create_physical_plan`),
+   `datafusion.optimizer.repartition_file_scans = false` on the session context (Design §1 point 3;
+   `SessionContext` has no direct setter — mutate through the state,
+   `ctx.state_ref().write().config_mut().options_mut().optimizer.repartition_file_scans = false`,
+   before `ctx.sql(...)` so physical planning sees it); and, instead of
+   `DataFrame::execute_stream()`, build the optimized physical plan once
+   (`df.create_physical_plan()` — takes `&self` in DataFusion 54),
    inspect it (e.g. via `displayable(plan.as_ref()).indent(true)`) and return a descriptive `Err`
    instead of executing if it contains a `SortExec` or a `SortPreservingMergeExec` node anywhere
-   (Design §1/§4's plan-shape check). Both of these are no-ops when the declared ordering is empty
+   (Design §1/§4's plan-shape check), then execute that same plan via
+   `datafusion::physical_plan::execute_stream(plan, task_ctx)` — the build-once/inspect/execute
+   pattern already used in `rust/public/src/servers/flight_sql_service_impl.rs:420-432`, so the
+   query is planned and run exactly once. Both the setting and the check are no-ops when the
+   declared ordering is empty
    (every existing `View::merge_partitions` caller, plus `sql_batch_view.rs`'s aggregation merger),
    matching the scoping rationale in Trade-offs.
 6. `rust/analytics/src/lakehouse/blocks_view.rs`: store two pre-built `QueryMerger`s — an ordered
@@ -818,9 +848,11 @@ footer-free way to check per-partition sort status before it declares
    query = `"SELECT * FROM source ORDER BY insert_time;"`) and the
    plain unordered one (empty ordering, query = `"SELECT * FROM source;"`, matching
    `View::merge_partitions`'s default); add a helper predicate over `partitions_to_merge` (every
-   input already has `sort_order == Some(['insert_time', 'block_id'])`); override `merge_partitions`
-   to delegate to the ordered merger when the predicate holds, otherwise to the plain merger
-   (mirror `SqlBatchView::merge_partitions`'s delegation pattern). Reuse the same predicate in step
+   input is empty or already has `sort_order == Some(['insert_time', 'block_id'])`); override
+   `merge_partitions` to delegate to the ordered merger when the predicate holds and at least one
+   input is non-empty, otherwise to the plain merger — an all-empty source scans as an `EmptyExec`
+   whose `SortExec` is never elided, so it must not take the ordered path (Design §1) — (mirror
+   `SqlBatchView::merge_partitions`'s delegation pattern). Reuse the same predicate in step
    18's `get_merged_partition_sort_order` override so the two decisions can't diverge.
 7. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
    `sqlx::query(...).fetch(...)`, flushing whenever the pending chunk's estimated size reaches
@@ -920,7 +952,9 @@ footer-free way to check per-partition sort status before it declares
     in `create_merged_partition` and pass the result to `write_partition_from_rows`.
     `rust/analytics/src/lakehouse/blocks_view.rs`: override it to return
     `Some(vec!["insert_time".to_string(), "block_id".to_string()])` only when every partition in the
-    slice already has that `sort_order`, `None` otherwise — the same predicate step 6 uses.
+    slice is empty or already has that `sort_order`, `None` otherwise — the same predicate step 6
+    uses (without step 6's extra "at least one non-empty input" merger-choice clause, which only
+    switches between two paths that both uphold the recorded value — Design §4).
     Separately, in the same file, add a `force: bool` parameter to the `PartitionSpec::write` trait
     method (`fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>, force: bool) ->
     Result<()>`), and update its three implementations to match:
@@ -966,7 +1000,8 @@ footer-free way to check per-partition sort status before it declares
   in `create_merged_partition` and pass it to `write_partition_from_rows`; pass `false` for the new
   `force` parameter (unreachable under forced regeneration, per Design §3).
 - `rust/analytics/src/lakehouse/blocks_view.rs` — ordered vs. plain merger selection in
-  `merge_partitions`, keyed on `partitions_to_merge`'s recorded `sort_order`; pass a declared
+  `merge_partitions`, keyed on `partitions_to_merge`'s recorded `sort_order` and emptiness (empty
+  inputs vacuously satisfy the gate; an all-empty merge takes the plain merger); pass a declared
   `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order` with
   the same input-dependent predicate.
 - `rust/analytics/src/lakehouse/metadata_partition_spec.rs` — streaming `write()`; add
@@ -1224,10 +1259,17 @@ footer-free way to check per-partition sort status before it declares
   `sort_order = Some(['insert_time', 'block_id'])`, is inserted with the same value; (c) a partition
   from another view (e.g. `ThreadSpansView`, or any view exercised by the existing
   `histo_view_test.rs`/`sql_view_test.rs` suites) is inserted with `sort_order = None`; (d) a
-  `BlocksView` merge where at least one input partition has `sort_order = None` (simulating a
-  pre-fix merged hourly) does not declare a scan ordering, runs the plain unordered merger, and is
-  inserted with `sort_order = None` — confirming the merge self-reports as unguaranteed instead of
-  inheriting a false guarantee from its sibling, guaranteed-sorted inputs.
+  `BlocksView` merge where at least one non-empty input partition has `sort_order = None`
+  (simulating a pre-fix merged hourly) does not declare a scan ordering, runs the plain unordered
+  merger, and is inserted with `sort_order = None` — confirming the merge self-reports as
+  unguaranteed instead of inheriting a false guarantee from its sibling, guaranteed-sorted inputs;
+  (e) an all-empty `BlocksView` merge (≥2 empty input partitions — the quiet-day daemon case)
+  routes to the plain merger, completes without tripping the ordered path's plan-shape check (a
+  `SortExec` over an `EmptyExec` is never elided — Design §1), and is inserted with
+  `sort_order = Some(['insert_time', 'block_id'])`, vacuously true of its empty output; and (f) a
+  `BlocksView` merge whose only unguaranteed inputs are *empty* (`NULL`-`sort_order` empty
+  partitions mixed with non-empty guaranteed ones) still takes the ordered path and records the
+  guarantee — empty inputs vacuously satisfy the gate.
 - **`list_partitions()` exposure test**: a query-level test asserting `SELECT sort_order FROM
   list_partitions()` returns the column with the expected type and values for a mix of blocks-view
   and other-view partitions — confirming the `ListPartitionsTableProvider` schema/query change
@@ -1237,14 +1279,16 @@ footer-free way to check per-partition sort status before it declares
 
 - Which merged blocks partitions are "active" today and need `regenerate_partitions` run against
   them? Design §4's `sort_order` column makes this SQL-answerable —
-  `SELECT * FROM list_partitions() WHERE view_set_name = 'blocks' AND sort_order IS NULL` lists
-  exactly the partitions still lacking the guarantee. The rollout should additionally exclude, via
+  `SELECT * FROM list_partitions() WHERE view_set_name = 'blocks' AND sort_order IS NULL AND
+  num_rows > 0` lists
+  exactly the partitions still lacking the guarantee (empty partitions can stay `NULL`: they
+  satisfy the merge gate vacuously, Design §1, so regenerating them buys nothing). The rollout should additionally exclude, via
   a `begin_insert_time` filter, any partition whose insert-time range falls within one partition
   width of the ingestion retention horizon: its source rows in Postgres may already be partially
   aged out, so regenerating it would (per Design §3's accepted "smaller partition outside
   retention is fine" behavior) truncate data that is still queryable for up to that window, rather
   than merely reproduce a smaller-but-equivalent partition. Because the merge only declares the ordering
-  and records it when every input already carries it (Design §1/§4), this correctly includes not
+  and records it when every non-empty input already carries it (Design §1/§4), this correctly includes not
   just pre-fix partitions written before this change, but also any *post-fix* merge whose
   inputs were still unguaranteed at merge time — those self-report `NULL` too rather than
   being missed by this query. The rollout is therefore: run `regenerate_partitions` finest
