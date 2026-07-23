@@ -174,7 +174,9 @@ pub enum OrderingBounds {
   `SqlBatchView::merge_partitions`, `sql_batch_view.rs:249-266`, which just delegates to a
   pre-built merger) to build and reuse a `QueryMerger` configured with:
   - query: `"SELECT * FROM source ORDER BY insert_time;"`
-  - ordering: `[ScanSortColumn { column: "insert_time", descending: false }]`
+  - ordering: `[ScanSortColumn { column: Arc::new(String::from("insert_time")), descending: false }]`
+    (`column` is `Arc<String>`, not `&str` — see `view.rs`'s `ScanSortColumn` struct and the existing
+    usage pattern in `thread_spans_view.rs`'s `get_scan_output_ordering()`)
 
   Only `insert_time` is declared (not `block_id`), and the query's `ORDER BY` matches it exactly:
   `attach_ordering_statistics` can only attach min/max stats for the leading declared column, and
@@ -495,12 +497,22 @@ still actively materializing at finer granularity (e.g. the current or a very re
 hours/minutes the daemon has not yet rolled up into a merged daily; already-merged past dailies are
 not exposed to this race). `insert_partition`'s advisory lock (`write_partition.rs:251-263`) is
 keyed on the exact `(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` tuple,
-so a regen daily `[d, d+1)` write and a concurrent daemon hourly `[h, h+1)` write take *different*
-locks and can commit in either order. If the daemon's hourly write commits after the regen daily,
-nothing retires it: `retire_partitions` only deletes rows fully contained within the *new*
-partition's own range, and every later daemon pass hits `verify_overlapping_partitions`'s
-partial-overlap `Abort` (`batch_update.rs:57-67`) on both rows — both persist forever, and queries
-double-count that hour's blocks.
+so a regen write and a concurrent daemon write into an overlapping range take *different* locks and
+can commit in either order, with the overlap running in either direction of containment:
+- A regen daily `[d, d+1)` write, and a concurrent daemon hourly `[h, h+1)` write (contained
+  *inside* `[d, d+1)`) that commits after the regen daily. Nothing retires it: `retire_partitions`
+  only deletes rows fully contained within the *new* partition's own range, and every later daemon
+  pass hits `verify_overlapping_partitions`'s partial-overlap `Abort` (`batch_update.rs:57-67`) on
+  both rows.
+- The reverse: following the rollout's "regenerate hourlies first" ordering (Open Questions), a
+  regen hourly `[h, h+1)` write is in flight when the daemon's daily merge commits `[d, d+1)`
+  first — `d` spans `h`, and the daemon's merge retires the old hourlies. The regen's own
+  `retire_partitions([h, h+1))` cannot delete that daily row (the daily is not contained *inside*
+  `[h, h+1)` — it *contains* `[h, h+1)`, the reverse relationship), so the regen's new hourly and
+  the daemon's new daily both persist.
+
+Either shape leaves both rows in place forever, and queries double-count the overlapping hour's
+blocks.
 
 To close this without depending on daemon-scheduling internals (there is no clean, stable
 definition of "the daemon's active horizon" to check against from `batch_update.rs`), the forced
@@ -513,16 +525,19 @@ this is a no-op everywhere except forced regeneration), threaded through `write_
 into `insert_partition`. When `force` is `true`, `insert_partition`, inside its existing transaction,
 *after* `retire_partitions` has removed the partition being replaced and after the new partition row
 has been inserted — immediately before it would otherwise commit — runs one more `SELECT` against
-`lakehouse_partitions` for the same `(view_set_name, view_instance_id)`, applying the same
-*containment* predicate `retire_partitions` itself uses to decide what "already covered by this
-range" means (`begin_insert_time >= insert_range.begin AND end_insert_time <= insert_range.end`),
-excluding the row just inserted (its own exact `begin_insert_time`/`end_insert_time`) so the new
-partition doesn't match its own recheck. This is deliberately not the partial-overlap predicate
-`verify_overlapping_partitions`/`verify_force_regeneration_alignment` use — that predicate is
-**false**, and so misses exactly the case this guard exists to catch, for a partition *contained
-inside* `insert_range` (a daemon hourly `[h, h+1)` fully inside the regenerated daily `[d, d+1)`
-satisfies neither `h < d` nor `h+1 > d+1`); the containment predicate is what actually matches it.
-`bail!`s — rolling back both the retire and the not-yet-committed
+`lakehouse_partitions` for the same `(view_set_name, view_instance_id)`, applying a general
+*interval-overlap* predicate — `begin_insert_time < insert_range.end AND end_insert_time >
+insert_range.begin` (the same predicate `PartitionCache::filter` already uses at snapshot time,
+`partition_cache.rs:209-231`) — excluding the row just inserted (its own exact
+`begin_insert_time`/`end_insert_time`) so the new partition doesn't match its own recheck. This
+must be the general overlap test, not a containment-only predicate
+(`begin_insert_time >= insert_range.begin AND end_insert_time <= insert_range.end`): containment
+only asks whether the *existing* row sits *inside* `insert_range`, which catches the first shape
+above (daemon hourly inside regen daily) but misses the second (daemon daily containing regen
+hourly) — there the existing daily row's bounds are not contained within the regen hourly's
+`insert_range` at all; the containment relationship runs the other way. The
+`begin < insert_range.end AND end > insert_range.begin` form is direction-agnostic and catches
+both shapes with one check. `bail!`s — rolling back both the retire and the not-yet-committed
 insert, so neither the old nor a duplicate new partition is left behind — if any row comes back.
 Because Postgres's default `READ COMMITTED` isolation lets this in-transaction `SELECT` see any row
 another transaction has already committed, this shrinks the race window from "the whole
@@ -596,6 +611,13 @@ and bumps `lakehouse_migration.version` to 7. `NULL` — the value every existin
 — means "no ordering guarantee", which is automatically correct for every partition written
 before this change. A non-null value lists the guaranteed sort columns in order, ascending
 implied, e.g. `{insert_time, block_id}`.
+
+Deployment note: all partition-writing binaries must roll forward to the v7 build together with
+this migration — a pre-upgrade binary's `insert_partition` builds a positional 13-value `INSERT`,
+which fails against the new 14-column table, and a v6 binary refuses to even start against an
+already-migrated v7 database (`migrate_lakehouse`'s `assert_eq!(current_version,
+LATEST_LAKEHOUSE_SCHEMA_VERSION)`, `migration.rs:48,97`) — so old and new binaries are not
+cross-compatible and must not run concurrently against the same database during rollout.
 
 **Value semantics** — the recorded guarantee is what the written file actually satisfies, not what
 was declared to DataFusion for sort elision:
@@ -711,9 +733,18 @@ footer-free way to check per-partition sort status before it declares
    `ordering_bounds` fields, keep `new(...)` defaulting both to empty/`EventTime`, add
    `with_ordering(...)` constructor, thread both through `scan()`.
 5. `rust/analytics/src/lakehouse/merge.rs`: add `with_merge_scan_ordering` builder method to
-   `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`.
+   `QueryMerger`; use `PartitionedTableProvider::with_ordering` in `execute_merge_query`. When the
+   merger's declared scan ordering is non-empty, `execute_merge_query` must also: set
+   `datafusion.optimizer.repartition_file_scans = false` on the session context (Design §1 point 3);
+   and, before calling `execute_stream()`, build the optimized physical plan (`create_physical_plan`),
+   inspect it (e.g. via `displayable(plan.as_ref()).indent(true)`) and return a descriptive `Err`
+   instead of executing if it contains a `SortExec` or a `SortPreservingMergeExec` node anywhere
+   (Design §1/§4's plan-shape check). Both of these are no-ops when the declared ordering is empty
+   (every existing `View::merge_partitions` caller, plus `sql_batch_view.rs`'s aggregation merger),
+   matching the scoping rationale in Trade-offs.
 6. `rust/analytics/src/lakehouse/blocks_view.rs`: store two pre-built `QueryMerger`s — an ordered
-   one (ordering = `[insert_time]`, query = `"SELECT * FROM source ORDER BY insert_time;"`) and the
+   one (ordering = `[insert_time]`, i.e. the `Arc<String>`-wrapped `ScanSortColumn` from Design §1,
+   query = `"SELECT * FROM source ORDER BY insert_time;"`) and the
    plain unordered one (empty ordering, query = `"SELECT * FROM source;"`, matching
    `View::merge_partitions`'s default); add a helper predicate over `partitions_to_merge` (every
    input already has `sort_order == Some(['insert_time', 'block_id'])`); override `merge_partitions`
@@ -776,11 +807,11 @@ footer-free way to check per-partition sort status before it declares
     `write_partition_from_rows` and `insert_partition`, threaded from the former into the latter.
     Inside `insert_partition`, when `force` is `true`, after `retire_partitions` has run and the new
     partition row has been inserted (still inside the same transaction, before `commit`), run the
-    one more `SELECT` against `lakehouse_partitions` described in Design §3 — containment predicate
-    `begin_insert_time >= insert_range.begin AND end_insert_time <= insert_range.end`, excluding the
-    just-inserted row's own exact bounds — and `bail!` if any row comes back, aborting the
-    transaction. When `force` is `false` this recheck is skipped entirely (no behavior change for
-    any existing caller).
+    one more `SELECT` against `lakehouse_partitions` described in Design §3 — general overlap
+    predicate `begin_insert_time < insert_range.end AND end_insert_time > insert_range.begin`
+    (matching `PartitionCache::filter`), excluding the just-inserted row's own exact bounds — and
+    `bail!` if any row comes back, aborting the transaction. When `force` is `false` this recheck is
+    skipped entirely (no behavior change for any existing caller).
 16. Update all 6 existing `write_partition_from_rows` call sites for the new `sort_order` parameter:
     `net_spans_view.rs`, `thread_spans_view.rs`, `sql_partition_spec.rs`, and
     `block_partition_spec.rs` pass `None`; `metadata_partition_spec.rs` and `merge.rs` pass a real
@@ -842,10 +873,13 @@ footer-free way to check per-partition sort status before it declares
   `sort_order: None` to the `make_partition()` helper.
 - `rust/analytics/src/lakehouse/materialized_view.rs` — pass `OrderingBounds::EventTime`.
 - `rust/analytics/src/lakehouse/partitioned_table_provider.rs` — ordering-aware constructor.
-- `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method; call
-  `view.get_merged_partition_sort_order(&filtered_partitions)` in `create_merged_partition` and
-  pass it to `write_partition_from_rows`; pass `false` for the new `force` parameter (unreachable
-  under forced regeneration, per Design §3).
+- `rust/analytics/src/lakehouse/merge.rs` — `QueryMerger` ordering builder method; when the declared
+  scan ordering is non-empty, `execute_merge_query` sets
+  `datafusion.optimizer.repartition_file_scans = false` and fails the merge loudly (before
+  executing) unless the optimized physical plan contains neither a `SortExec` nor a
+  `SortPreservingMergeExec` (Design §1/§4); call `view.get_merged_partition_sort_order(&filtered_partitions)`
+  in `create_merged_partition` and pass it to `write_partition_from_rows`; pass `false` for the new
+  `force` parameter (unreachable under forced regeneration, per Design §3).
 - `rust/analytics/src/lakehouse/blocks_view.rs` — ordered vs. plain merger selection in
   `merge_partitions`, keyed on `partitions_to_merge`'s recorded `sort_order`; pass a declared
   `sort_order` to `fetch_metadata_partition_spec`; override `get_merged_partition_sort_order` with
@@ -876,7 +910,7 @@ footer-free way to check per-partition sort status before it declares
 - `rust/analytics/src/lakehouse/write_partition.rs` — `sort_order` parameter on
   `write_partition_from_rows`; new `insert_partition` bind. Also a `force: bool` parameter on both
   `write_partition_from_rows` and `insert_partition`, and the in-transaction concurrent-write
-  containment recheck (Design §3) inside `insert_partition`, gated on `force`.
+  overlap recheck (Design §3) inside `insert_partition`, gated on `force`.
 - `rust/analytics/src/lakehouse/view.rs` — new `get_merged_partition_sort_order()` method; add
   `force: bool` to the `PartitionSpec::write` trait method signature.
 - `rust/analytics/src/lakehouse/partition_cache.rs` — read `sort_order` in all 3
@@ -1008,15 +1042,18 @@ footer-free way to check per-partition sort status before it declares
   longer than the range, or one that leaves a remainder) — confirming the non-tiling case is
   rejected loudly instead of silently regenerating a partial or empty span.
 - **Forced-regeneration concurrent-write race test**: a DB-backed test that simulates the race in
-  Design §3's "Guarding against a concurrent daemon write" — insert a partition *fully contained
-  within* the target range (standing in for the daemon's overlapping hourly write, e.g. `[h, h+1)`
-  inside a regenerated `[d, d+1)`) *after* `verify_force_regeneration_alignment`'s snapshot would
-  have been taken but *before* the forced `insert_partition` call commits, then assert the forced
-  write's in-transaction containment recheck returns an `Err` (rather than committing) and that no
+  Design §3's "Guarding against a concurrent daemon write" in *both* overlap directions:
+  (a) insert a partition *fully contained within* the target range (standing in for the daemon's
+  overlapping hourly write, e.g. `[h, h+1)` inside a regenerated `[d, d+1)`) *after*
+  `verify_force_regeneration_alignment`'s snapshot would have been taken but *before* the forced
+  `insert_partition` call commits; and (b) the reverse — regenerate a smaller range (e.g.
+  `[h, h+1)`) while a concurrently-committed partition that *contains* it (e.g. a daemon daily
+  `[d, d+1)` where `d` spans `h`) commits in that same window. In both cases, assert the forced
+  write's in-transaction overlap recheck returns an `Err` (rather than committing) and that no
   duplicate/overlapping partition rows remain afterwards — both the pre-existing partition being
   replaced and the injected concurrent one should still be exactly and only what they were before
   the failed forced write, confirming the transaction rolled back cleanly rather than partially
-  applying.
+  applying, in either direction.
 - **Query-level failure test for `regenerate_partitions`**: a query-level test (running the UDTF
   through `ctx.sql(...)`/FlightSQL, not just calling `regenerate_partition_range` directly) asserting
   that `SELECT * FROM regenerate_partitions(...)` with a misaligned range/delta returns a query
