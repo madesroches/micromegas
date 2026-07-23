@@ -1413,7 +1413,24 @@ plan.
   under blocks-view's widest real-world `streams.properties`/`processes.properties` payloads? The
   8 MB threshold itself needs no precision (anything in the ~8–64 MB band behaves the same, and
   the Parquet writer's 100 MB buffer dominates peak memory regardless) — the check is only that
-  the estimate isn't off by an order of magnitude; worth a sanity look once this lands.
+  the estimate isn't off by an order of magnitude.
+  **Checked against real (non-synthetic) local telemetry**: a throwaway script summed
+  `pg_column_size()` per column — the same quantity `PgValueRef::as_bytes().len()` would report per
+  column, `NULL` coalesced to 0 as the design specifies — over the exact 29-column join
+  `BlocksView`'s `data_sql` selects, against this dev machine's own `blocks` table (35,100 rows, ~3
+  weeks of real dev-machine usage). Results: rows averaged ~2.4 KB (p50 2396 B, p90 2420 B, p99
+  2742 B, max 2752 B), and the estimate is dominated by exactly the columns the design predicted —
+  `streams.dependencies_metadata` (avg 911 B, max 916 B), `processes.properties` (avg 593 B, max
+  608 B), `streams.objects_metadata` (avg 412 B, max 846 B) — confirming the estimate tracks the
+  right columns, not just plausible in the abstract. At this scale an 8 MB chunk holds ~3000-3500
+  rows: not a degenerate 1-row or million-row chunk, comfortably inside the "well past the
+  per-flush-overhead knee, far below the writer's 100 MB buffer" band the design assumes.
+  This mechanically validates the estimation approach, but doesn't close the question: this dev
+  machine's telemetry doesn't exercise the "MB-sized payload" tail the question actually worries
+  about (max row seen was 2.75 KB — three orders of magnitude under the 8 MB threshold). A busier
+  production process with a much larger tag/property/objects-metadata registry could look very
+  different, so the order-of-magnitude-under-worst-case half of the question is still open — worth
+  a repeat of this same check against real production data once this lands.
 - **TODO: is the `block_id` tie-break actually load-bearing, or would `insert_time` alone suffice as
   the declared/recorded ordering?** This plan's own correctness argument (Design §1, point 2)
   doesn't need `block_id`: merged input files are non-overlapping in `insert_time` by construction,
