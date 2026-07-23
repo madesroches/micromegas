@@ -347,6 +347,11 @@ async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) ->
 }
 ```
 
+(The sketch shows only the streaming change: the final `write()` signature also carries the
+`force: bool` trait parameter from Design §3, and the `write_partition_from_rows` call also
+takes the `sort_order` and `force` arguments from Design §3/§4 — see Implementation Steps
+15–18.)
+
 `flush_chunk` converts the accumulated `Vec<PgRow>` via the existing `rows_to_record_batch`
 (unchanged — it already operates on a row slice, so it works identically on a partial chunk),
 computes the chunk's event-time bounds via `compute_time_bounds.get_time_bounds(...)` (same call
@@ -382,16 +387,18 @@ byte-identical too.
 
 Add a `force: bool` parameter to `batch_update::materialize_partition` (`batch_update.rs:103`,
 private, with only one caller: the loop inside `materialize_partition_range`).
-`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 9 existing callers —
-the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`), the
+`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 9 existing external
+callers — the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`), the
 `materialize_partitions` UDF (`materialize_partitions_table_function.rs:56`), and 7 test call
 sites (`histo_view_test.rs` ×3, `sql_view_test.rs` ×3, `thread_spans_ordering_db_test.rs` ×1) —
-so its signature must not change. Instead, factor its loop body into a new private
+plus its own recursive subdivision call (`batch_update.rs:156`, covered below) — so its
+signature must not change. Instead, factor its loop body into a new private
 `materialize_partition_range_impl(..., force: bool)`: `materialize_partition_range` becomes a
 thin wrapper calling it with `force: false` (unchanged behavior, unchanged signature, zero call
 sites touched), and a new `regenerate_partition_range` (same signature otherwise) calls it with
-`force: true`. When `force` is true, `materialize_partition` skips *only* the source-data-hash
-freshness comparison inside `verify_overlapping_partitions` — the "already up to date" check this
+`force: true`. When `force` is true, `materialize_partition` replaces
+`verify_overlapping_partitions` with the narrower `verify_force_regeneration_alignment` guard
+(below) — dropping the source-data-hash freshness comparison, the "already up to date" check this
 plan needs to bypass — and takes `PartitionCreationStrategy::CreateFromSource` unconditionally,
 *and* also skips the `get_max_partition_time_delta`-driven subdivision check
 (`batch_update.rs:138-155`) so the entire requested `insert_range` is written as a single
@@ -420,14 +427,20 @@ return `Ok` without ever reaching `materialize_partition` (and hence
 `verify_force_regeneration_alignment`) for the untiled remainder — a silent partial or total no-op
 that the alignment guard, which only runs per-bucket inside the loop, would never see.
 
-Because `force` bypasses `verify_overlapping_partitions` entirely, it also loses that function's
-*only* other job: rejecting a partial overlap (`batch_update.rs:57-67`,
-`begin < insert_range.begin || end > insert_range.end` → `Abort`). To keep that protection
-without reintroducing the freshness check, add a small new function,
-`verify_force_regeneration_alignment`, called only on the `force` path, that runs the same
-partial-overlap test against the same filtered existing-partitions set but with no source-hash
-comparison — so it can never produce the "already up to date" `Abort` that forcing is meant to
-bypass, only a loud `Err` on a misaligned request:
+Bypassing `verify_overlapping_partitions` loses that function's *only* other job: rejecting a
+partial overlap (`batch_update.rs:57-67`,
+`begin < insert_range.begin || end > insert_range.end` → `Abort`).
+`verify_force_regeneration_alignment` keeps that protection without reintroducing the freshness
+check — it runs the same partial-overlap test with no source-hash comparison, so it can never
+produce the "already up to date" `Abort` that forcing is meant to bypass, only a loud `Err` on a
+misaligned request. Unlike `verify_overlapping_partitions`, it must filter the
+existing-partitions snapshot *hash-agnostically*: `PartitionCache::filter` also requires
+`file_schema_hash` equality (`partition_cache.rs:220`), which would make the guard blind to a
+partially-overlapping partition written under an older schema hash — a row that
+`retire_partitions`'s equally hash-agnostic range-containment delete (`write_partition.rs:226-246`)
+would not retire either, leaving exactly the silent duplicate this guard exists to prevent. It
+therefore uses the hash-free `filter_insert_range` (`partition_cache.rs:234-247`) and matches
+view name/instance itself:
 
 ```rust
 fn verify_force_regeneration_alignment(
@@ -435,15 +448,16 @@ fn verify_force_regeneration_alignment(
     insert_range: TimeRange,
     view_set_name: &str,
     view_instance_id: &str,
-    file_schema_hash: &[u8],
 ) -> Result<()> {
-    let filtered = existing_partitions_all_views.filter(
-        view_set_name,
-        view_instance_id,
-        file_schema_hash,
-        insert_range,
-    );
+    // hash-agnostic on purpose: any same-view partition overlapping the range
+    // matters here, whatever schema hash it was written under
+    let filtered = existing_partitions_all_views.filter_insert_range(insert_range);
     for part in &filtered.partitions {
+        if *part.view_metadata.view_set_name != view_set_name
+            || *part.view_metadata.view_instance_id != view_instance_id
+        {
+            continue;
+        }
         let begin = part.begin_insert_time();
         let end = part.end_insert_time();
         if begin < insert_range.begin || end > insert_range.end {
@@ -465,7 +479,6 @@ let strategy = if force {
         insert_range,
         &view_set_name,
         &view_instance_id,
-        &view.get_file_schema_hash(),
     )?;
     PartitionCreationStrategy::CreateFromSource
 } else {
@@ -630,7 +643,10 @@ every existing producer funnels through one method:
   they never send an `Err` item, and their log-only error handling is deliberately left as-is.
 - `AsyncLogStream::poll_next` batches `Ok` items into `(time, msg)` rows exactly as today, but on
   encountering an `Err(msg)` item yields
-  `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))` and ends the stream — a
+  `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))` and ends the stream (one
+  `poll_recv_many` batch can contain `Ok` items ahead of the `Err`; the `Err` wins and those
+  same-batch progress rows are dropped — acceptable, they are transient progress lines on a query
+  that is failing anyway) — a
   `RecordBatchStream` `Err` propagates through `execute_stream()`/`collect()` as a query execution
   error, which the FlightSQL layer surfaces to the client as a failed query, not a successful,
   possibly-empty result set.
@@ -814,10 +830,14 @@ footer-free way to check per-partition sort status before it declares
    `materialize_partition`; factor `materialize_partition_range`'s loop body into a new private
    `materialize_partition_range_impl(..., force: bool)`. `materialize_partition_range` keeps its
    existing signature, delegating to `materialize_partition_range_impl(..., force: false)`, so its
-   9 existing callers (`rust/public/src/servers/maintenance.rs`, the `materialize_partitions` UDF
-   in `materialize_partitions_table_function.rs`, plus 7 test call sites in `histo_view_test.rs`,
-   `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) need no changes.
-   Add a new `regenerate_partition_range(...)` (same signature) that calls
+   9 existing external callers (`rust/public/src/servers/maintenance.rs`, the
+   `materialize_partitions` UDF in `materialize_partitions_table_function.rs`, plus 7 test call
+   sites in `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) — and
+   the internal recursive subdivision call at `batch_update.rs:156`, which stays on the plain,
+   forceless wrapper — need no changes.
+   Add a new `regenerate_partition_range(...)` (same signature) that first validates `delta`
+   exactly tiles `(begin, end)` (Design §3's nanosecond `step > 0 && span >= step &&
+   span % step == 0` check, loud `Err` otherwise, before any partition is written) and then calls
    `materialize_partition_range_impl(..., force: true)`. When `force`, `materialize_partition`
    skips only `verify_overlapping_partitions`'s source-hash freshness check, and skips the
    `get_max_partition_time_delta` subdivision check, so the whole requested range is written as
@@ -825,8 +845,9 @@ footer-free way to check per-partition sort status before it declares
    partition it replaces). Add a new `verify_force_regeneration_alignment` function, called only
    on the `force` path in place of `verify_overlapping_partitions`, that re-checks the same
    partial-overlap condition (`begin < insert_range.begin || end > insert_range.end`) against
-   existing partitions and returns a loud `Err` on a misaligned `insert_range`/delta instead of
-   silently leaving a duplicate partition behind. `materialize_partition`'s existing
+   existing partitions — filtered hash-agnostically via `filter_insert_range` + a view
+   name/instance match, per Design §3 — and returns a loud `Err` on a misaligned
+   `insert_range`/delta instead of silently leaving a duplicate partition behind. `materialize_partition`'s existing
    `partition_spec.write(lakehouse.lake().clone(), logger)` call (`batch_update.rs`,
    `CreateFromSource` arm) gains the `force` argument it already has in scope, becoming
    `partition_spec.write(lakehouse.lake().clone(), logger, force)` — this is what actually reaches
@@ -835,7 +856,8 @@ footer-free way to check per-partition sort status before it declares
    to `Result<(DateTime<Utc>, String), String>` in `rust/analytics/src/dfext/task_log_exec_plan.rs`
    (the `TaskSpawner` alias), `rust/analytics/src/dfext/async_log_stream.rs` (`AsyncLogStream::rx`;
    `poll_next` batches `Ok` items into rows as today and turns an `Err(msg)` item into
-   `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))`, ending the stream), and
+   `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))`, ending the stream and dropping any
+   `Ok` items received in the same poll batch), and
    `rust/analytics/src/response_writer.rs` (`LogSender::sender`; `write_log_entry` wraps its
    message in `Ok(...)`). The existing spawners in `materialize_partitions_table_function.rs` and
    `retire_partitions_table_function.rs` only touch the channel through
@@ -1119,7 +1141,9 @@ footer-free way to check per-partition sort status before it declares
   `materialize_partition_range` tests, e.g. `thread_spans_ordering_db_test.rs`-style) asserting
   `regenerate_partition_range`/`verify_force_regeneration_alignment` returns an `Err` when the
   requested `(begin, end)` partially overlaps an existing partition instead of exactly containing
-  it (e.g. a daily partition regenerated with `delta=3600`), and succeeds when the range exactly
+  it (e.g. a daily partition regenerated with `delta=3600`) — including when the overlapping
+  partition was written under a different `file_schema_hash`, since the guard filters
+  hash-agnostically (Design §3) — and succeeds when the range exactly
   matches the partition's boundaries — confirming the guard fails loudly rather than silently
   leaving a duplicate partition. Also assert `regenerate_partition_range` returns an `Err` upfront,
   before any partition is written, when `delta` does not exactly tile `(begin, end)` (e.g. a `delta`
