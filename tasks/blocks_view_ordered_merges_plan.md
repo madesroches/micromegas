@@ -37,9 +37,9 @@ which is an operational rollout step, not a code change. See Open Questions.
 ### Merges are not order-preserving today
 
 `BlocksView` (`rust/analytics/src/lakehouse/blocks_view.rs`) writes fresh partitions sorted —
-`data_sql` ends with `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:44`). But
+`data_sql` ends with `ORDER BY blocks.insert_time, blocks.block_id` (`blocks_view.rs:46`). But
 `BlocksView` does not override `merge_partitions`, so it gets `View::merge_partitions`'s default
-(`view.rs:101-117`): a `QueryMerger` running `SELECT * FROM source;` — no `ORDER BY` — over a
+(`view.rs:101-124`): a `QueryMerger` running `SELECT * FROM source;` — no `ORDER BY` — over a
 `PartitionedTableProvider` source table built with **no declared scan ordering**
 (`merge.rs:81-86` always constructs `PartitionedTableProvider::new(...)`, whose `scan()` always
 passes `&[]` for `output_ordering`, `partitioned_table_provider.rs:63-70`). DataFusion is free to
@@ -50,7 +50,7 @@ This matters because `partitioned_execution_plan.rs`'s declared-ordering machine
 by `MaterializedView` (`materialized_view.rs:94`, via `View::get_scan_output_ordering`) for
 per-view consumer queries (e.g. `ThreadSpansView`, `thread_spans_view.rs:357`) — is entirely
 event-time-based: `sort_and_check_non_overlapping` and `attach_ordering_statistics`
-(`partitioned_execution_plan.rs:27,58`) read `Partition::min_event_time()`/`max_event_time()`.
+(`partitioned_execution_plan.rs:29,61`) read `Partition::min_event_time()`/`max_event_time()`.
 Blocks-view ordering is insert-time-based (`Partition::begin_insert_time()`/`end_insert_time()`,
 `partition.rs:44-51` — always `Some`, unlike the `Option` event-time bounds), and
 `PartitionedTableProvider` never plumbs any ordering into its source scan at all. Neither piece
@@ -62,7 +62,7 @@ of existing infrastructure covers the merge source table today.
 `fetch_metadata_partition_spec` (`metadata_partition_spec.rs:29-53`), which runs a `COUNT(*)`
 query up front (cheap, one row) and returns a `MetadataPartitionSpec` holding that count and the
 sorted `data_sql`. The actual data fetch happens later, in
-`MetadataPartitionSpec::write` (`metadata_partition_spec.rs:66-108`):
+`MetadataPartitionSpec::write` (`metadata_partition_spec.rs:68-118`):
 
 ```rust
 let rows = sqlx::query(&self.data_sql)
@@ -76,7 +76,7 @@ let record_batch = rows_to_record_batch(&rows)?;   // <- entire range, in one Re
 
 `fetch_all` materializes every matching `blocks ⋈ streams ⋈ processes` row for the whole
 `insert_range` — which defaults to a full day (`View::get_max_partition_time_delta`'s default is
-`TimeDelta::days(1)`, `view.rs:127-129`) — as one `Vec<PgRow>`, then `rows_to_record_batch`
+`TimeDelta::days(1)`, `view.rs:130-132`) — as one `Vec<PgRow>`, then `rows_to_record_batch`
 converts all of it into one `RecordBatch` before a single row reaches
 `write_partition_from_rows`. Each row carries the joined `streams`/`processes` columns
 (`tags`, `properties`, `dependencies_metadata`, `objects_metadata` — all JSONB/array columns), so
@@ -89,7 +89,7 @@ still works this way — every sibling implementation already streams:
   block.
 - `SqlPartitionSpec::write` (`sql_partition_spec.rs:77-114`) runs its extract query via
   `df.execute_stream()` and sends one `PartitionRowSet` per `RecordBatch`.
-- `create_merged_partition` (`merge.rs:127-220`) consumes the merge's `SendableRecordBatchStream`
+- `create_merged_partition` (`merge.rs:132-232`) consumes the merge's `SendableRecordBatchStream`
   the same way.
 
 All three write to `write_partition_from_rows` (`write_partition.rs:560-670`) through a
@@ -104,12 +104,12 @@ fix, not a widely shared abstraction.
 ### Regeneration has no forcing path today
 
 The existing `materialize_partitions` admin UDF (`materialize_partitions_table_function.rs`,
-registered in `query.rs:120-131`) calls `batch_update::materialize_partition_range`
+registered in `query.rs:131-137`) calls `batch_update::materialize_partition_range`
 (`batch_update.rs:195-215`), which for each `partition_time_delta`-sized bucket calls
-`materialize_partition` (`batch_update.rs:98-176`). That function always runs
-`verify_overlapping_partitions` (`batch_update.rs:20-91`) first, which compares the *source data
+`materialize_partition` (`batch_update.rs:102-191`). That function always runs
+`verify_overlapping_partitions` (`batch_update.rs:23-100`) first, which compares the *source data
 hash* (an object count) against existing partitions' stored hashes and returns
-`PartitionCreationStrategy::Abort` when they already match (`batch_update.rs:88-90`, "already up
+`PartitionCreationStrategy::Abort` when they already match (`batch_update.rs:94-99`, "already up
 to date"). An existing merged blocks partition whose row order is wrong but whose content
 (hence hash) is unchanged is exactly the "already up to date" case — `materialize_partitions`
 cannot force it to rebuild.
@@ -183,13 +183,13 @@ pub enum OrderingBounds {
   and DataFusion would fall back to a full buffering `SortExec`. A single-column `insert_time`
   ordering is still sufficient for full `(insert_time, block_id)` correctness: source partitions
   are non-overlapping in insert_time by construction and each is already sorted by
-  `(insert_time, block_id)` (`blocks_view.rs:44`), so once the source scan's single sequential
+  `(insert_time, block_id)` (`blocks_view.rs:46`), so once the source scan's single sequential
   file group (see below) has a validated `insert_time` ordering, its file-by-file concatenation is
   already exactly the order the merge needs — no second declared column is required to reach that
   result.
 
   `create_merged_partition` already calls `filtered_partitions.sort_by_key(|p|
-  p.begin_insert_time())` before invoking `view.merge_partitions` (`merge.rs:158`), and
+  p.begin_insert_time())` before invoking `view.merge_partitions` (`merge.rs:171`), and
   time-sliced partitions are non-overlapping in insert_time by construction, so
   `sort_and_check_non_overlapping` under `OrderingBounds::InsertTime` should always pass for
   well-formed input — a failure here would indicate a genuine partitioning bug, matching the
@@ -200,7 +200,7 @@ pub enum OrderingBounds {
   1. Each input file is internally `(insert_time, block_id)`-sorted *if and only if* its own
      recorded `sort_order` (Design §4) already equals `['insert_time', 'block_id']`. This is true
      for partitions written fresh via `data_sql`'s `ORDER BY blocks.insert_time, blocks.block_id`
-     (`blocks_view.rs:44`) and for partitions produced by a prior run of this same ordered merge —
+     (`blocks_view.rs:46`) and for partitions produced by a prior run of this same ordered merge —
      but it is **not** true for a partition merged before this change shipped: the maintenance
      daemon (`rust/public/src/servers/maintenance.rs:296-345`) creates 1-minute `CreateFromSource`
      blocks partitions, merges them hourly, then merges hourlies daily, and every pre-fix merge
@@ -360,8 +360,9 @@ insert range.
 
 Add a `force: bool` parameter to `batch_update::materialize_partition` (`batch_update.rs:103`,
 private, with only one caller: the loop inside `materialize_partition_range`).
-`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 8 existing callers —
-the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`) plus 7 test call
+`materialize_partition_range` itself (`batch_update.rs:195`) is `pub` with 9 existing callers —
+the production maintenance daemon (`rust/public/src/servers/maintenance.rs:55`), the
+`materialize_partitions` UDF (`materialize_partitions_table_function.rs:56`), and 7 test call
 sites (`histo_view_test.rs` ×3, `sql_view_test.rs` ×3, `thread_spans_ordering_db_test.rs` ×1) —
 so its signature must not change. Instead, factor its loop body into a new private
 `materialize_partition_range_impl(..., force: bool)`: `materialize_partition_range` becomes a
@@ -718,8 +719,9 @@ footer-free way to check per-partition sort status before it declares
    `materialize_partition`; factor `materialize_partition_range`'s loop body into a new private
    `materialize_partition_range_impl(..., force: bool)`. `materialize_partition_range` keeps its
    existing signature, delegating to `materialize_partition_range_impl(..., force: false)`, so its
-   8 existing callers (`rust/public/src/servers/maintenance.rs` plus 7 test call sites in
-   `histo_view_test.rs`, `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) need no changes.
+   9 existing callers (`rust/public/src/servers/maintenance.rs`, the `materialize_partitions` UDF
+   in `materialize_partitions_table_function.rs`, plus 7 test call sites in `histo_view_test.rs`,
+   `sql_view_test.rs`, `thread_spans_ordering_db_test.rs`) need no changes.
    Add a new `regenerate_partition_range(...)` (same signature) that calls
    `materialize_partition_range_impl(..., force: true)`. When `force`, `materialize_partition`
    skips only `verify_overlapping_partitions`'s source-hash freshness check, and skips the
@@ -1040,7 +1042,12 @@ footer-free way to check per-partition sort status before it declares
 - Which merged blocks partitions are "active" today and need `regenerate_partitions` run against
   them? Design §4's `sort_order` column makes this SQL-answerable —
   `SELECT * FROM list_partitions() WHERE view_set_name = 'blocks' AND sort_order IS NULL` lists
-  exactly the partitions still lacking the guarantee. Because the merge only declares the ordering
+  exactly the partitions still lacking the guarantee. The rollout should additionally exclude, via
+  a `begin_insert_time` filter, any partition whose insert-time range falls within one partition
+  width of the ingestion retention horizon: its source rows in Postgres may already be partially
+  aged out, so regenerating it would (per Design §3's accepted "smaller partition outside
+  retention is fine" behavior) truncate data that is still queryable for up to that window, rather
+  than merely reproduce a smaller-but-equivalent partition. Because the merge only declares the ordering
   and records it when every input already carries it (Design §1/§4), this correctly includes not
   just pre-fix partitions written before this change, but also any *post-fix* daily merge whose
   hourly inputs were still unguaranteed at merge time — those self-report `NULL` too rather than
