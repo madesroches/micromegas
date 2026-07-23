@@ -193,7 +193,8 @@ where
             Poll::Ready(Some(result)) => {
                 // Check if this is an error result and log it
                 if let Err(ref err) = result {
-                    error!("stream error occurred: {err:?}");
+                    let sql = self.audit.as_ref().map(|state| state.sql.as_str());
+                    error!("stream error occurred: {err:?} sql={sql:?}");
                     if !self.completed {
                         let total_duration = now() - self.start_time;
                         imetric!("query_duration_with_error", "ticks", total_duration as u64);
