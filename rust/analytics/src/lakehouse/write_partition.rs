@@ -698,7 +698,7 @@ pub async fn write_partition_from_rows(
     .await?;
 
     let warm_file_path = result.file_path.clone();
-    insert_partition(
+    if let Err(e) = insert_partition(
         &lake,
         &Partition {
             view_metadata,
@@ -715,7 +715,20 @@ pub async fn write_partition_from_rows(
         force,
     )
     .await
-    .with_context(|| "insert_partition")?;
+    {
+        // The file is durable in object storage but its metadata row was rolled back
+        // (e.g. the forced-regeneration overlap recheck bailed), so nothing references
+        // it and no cleanup process would ever find it. Delete it best-effort before
+        // propagating the error (mirror the partial-write cleanup above).
+        if let Some(file_path) = &warm_file_path {
+            warn!("insert_partition failed, attempting to delete orphaned file: {file_path}");
+            let path = object_store::path::Path::from(file_path.as_str());
+            if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+                warn!("failed to delete orphaned file {file_path}: {delete_err}");
+            }
+        }
+        return Err(e).with_context(|| "insert_partition");
+    }
 
     // The file is now durable in S3 and registered in PostgreSQL: warm the
     // object cache with its key so the follow-up query's first read is a
