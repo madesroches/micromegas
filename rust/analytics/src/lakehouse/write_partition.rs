@@ -262,12 +262,18 @@ fn generate_partition_lock_key(
     hasher.finish() as i64
 }
 
-async fn insert_partition(
+/// Runs every step of the partition-insert transaction up to (but not including) COMMIT:
+/// advisory lock, retirement of the partitions being replaced, the INSERT itself, and the
+/// forced-regeneration overlap recheck. Returns the still-open transaction for the caller to
+/// commit. Split from `insert_partition` so it can distinguish a pre-commit failure (the
+/// transaction is rolled back, the parquet file is provably unreferenced) from a commit failure
+/// (ambiguous: the server may have committed even though the ack was lost).
+async fn prepare_insert_partition_transaction(
     lake: &DataLakeConnection,
     partition: &Partition,
     logger: Arc<dyn Logger>,
     force: bool,
-) -> Result<()> {
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
     // Generate deterministic lock key for this partition
     let lock_key = generate_partition_lock_key(
         &partition.view_metadata.view_set_name,
@@ -432,8 +438,47 @@ async fn insert_partition(
         }
     }
 
+    Ok(transaction)
+}
+
+async fn insert_partition(
+    lake: &DataLakeConnection,
+    partition: &Partition,
+    logger: Arc<dyn Logger>,
+    force: bool,
+) -> Result<()> {
+    let transaction = match prepare_insert_partition_transaction(lake, partition, logger, force)
+        .await
+    {
+        Ok(transaction) => transaction,
+        Err(e) => {
+            // The transaction was rolled back (or never began), so the metadata row does not
+            // exist and the parquet file is provably unreferenced -- no cleanup process would
+            // ever find it. Delete it best-effort before propagating the error.
+            if let Some(file_path) = &partition.file_path {
+                warn!("insert_partition failed before commit, deleting orphaned file: {file_path}");
+                let path = object_store::path::Path::from(file_path.as_str());
+                if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+                    warn!("failed to delete orphaned file {file_path}: {delete_err}");
+                }
+            }
+            return Err(e);
+        }
+    };
+
     // Commit the transaction (this also releases the advisory lock)
-    transaction.commit().await.with_context(|| "commit")?;
+    if let Err(e) = transaction.commit().await {
+        // Ambiguous outcome: the server may have committed even though the ack was lost, in
+        // which case lakehouse_partitions now references the file -- deleting it would lose
+        // data. Leave the file in place; if the commit truly failed, this only leaks one
+        // unreferenced file.
+        warn!(
+            "commit failed for partition file {:?}: the commit may still have been applied \
+             server-side, leaving the file in place",
+            partition.file_path
+        );
+        return Err(anyhow::Error::from(e)).with_context(|| "commit");
+    }
 
     info!(
         "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={:?} - lock released",
@@ -697,8 +742,10 @@ pub async fn write_partition_from_rows(
     )
     .await?;
 
+    // On a pre-commit failure, insert_partition deletes the now-unreferenced parquet file
+    // itself; on an ambiguous commit failure it deliberately leaves the file in place.
     let warm_file_path = result.file_path.clone();
-    if let Err(e) = insert_partition(
+    insert_partition(
         &lake,
         &Partition {
             view_metadata,
@@ -715,20 +762,7 @@ pub async fn write_partition_from_rows(
         force,
     )
     .await
-    {
-        // The file is durable in object storage but its metadata row was rolled back
-        // (e.g. the forced-regeneration overlap recheck bailed), so nothing references
-        // it and no cleanup process would ever find it. Delete it best-effort before
-        // propagating the error (mirror the partial-write cleanup above).
-        if let Some(file_path) = &warm_file_path {
-            warn!("insert_partition failed, attempting to delete orphaned file: {file_path}");
-            let path = object_store::path::Path::from(file_path.as_str());
-            if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
-                warn!("failed to delete orphaned file {file_path}: {delete_err}");
-            }
-        }
-        return Err(e).with_context(|| "insert_partition");
-    }
+    .with_context(|| "insert_partition")?;
 
     // The file is now durable in S3 and registered in PostgreSQL: warm the
     // object cache with its key so the follow-up query's first read is a
