@@ -42,7 +42,7 @@ which is an operational rollout step, not a code change. See Open Questions.
 (`view.rs:101-124`): a `QueryMerger` running `SELECT * FROM source;` — no `ORDER BY` — over a
 `PartitionedTableProvider` source table built with **no declared scan ordering**
 (`merge.rs:81-86` always constructs `PartitionedTableProvider::new(...)`, whose `scan()` always
-passes `&[]` for `output_ordering`, `partitioned_table_provider.rs:63-70`). DataFusion is free to
+passes `&[]` for `output_ordering`, `partitioned_table_provider.rs:63-72`). DataFusion is free to
 interleave file reads from the source partitions in any order, so a merged daily blocks
 partition is not guaranteed sorted, even though its inputs are.
 
@@ -59,7 +59,7 @@ of existing infrastructure covers the merge source table today.
 ### The Postgres-source write path buffers a full insert range
 
 `BlocksView::make_batch_partition_spec` (`blocks_view.rs:67-93`) delegates to
-`fetch_metadata_partition_spec` (`metadata_partition_spec.rs:29-53`), which runs a `COUNT(*)`
+`fetch_metadata_partition_spec` (`metadata_partition_spec.rs:29-56`), which runs a `COUNT(*)`
 query up front (cheap, one row) and returns a `MetadataPartitionSpec` holding that count and the
 sorted `data_sql`. The actual data fetch happens later, in
 `MetadataPartitionSpec::write` (`metadata_partition_spec.rs:68-118`):
@@ -635,8 +635,9 @@ implied, e.g. `{insert_time, block_id}`.
 Deployment note: all partition-writing binaries must roll forward to the v7 build together with
 this migration — a pre-upgrade binary's `insert_partition` builds a positional 13-value `INSERT`,
 which fails against the new 14-column table, and a v6 binary refuses to even start against an
-already-migrated v7 database (`migrate_lakehouse`'s `assert_eq!(current_version,
-LATEST_LAKEHOUSE_SCHEMA_VERSION)`, `migration.rs:48,97`) — so old and new binaries are not
+already-migrated v7 database (the `assert_eq!(current_version,
+LATEST_LAKEHOUSE_SCHEMA_VERSION)` guards in `migrate_lakehouse` and `execute_lakehouse_migration`,
+`migration.rs:48,97`) — so old and new binaries are not
 cross-compatible and must not run concurrently against the same database during rollout.
 
 **Value semantics** — the recorded guarantee is what the written file actually satisfies, not what
