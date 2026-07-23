@@ -1192,6 +1192,28 @@ footer-free way to check per-partition sort status before it declares
   conversion) far below the writer's own 100 MB in-progress buffer, which dominates peak memory
   regardless; anything in the ~8–64 MB band behaves near-identically, and the output file is
   byte-identical for any chunk size (the writer accumulates chunks into its own row groups).
+
+  **Checked against real production data.** Sampled this production fleet's actual rows,
+  including its richest instrumented binaries (Unreal Engine game clients/servers, e.g.
+  `UnrealEditor.exe` and similar, alongside the internal Rust services): over a full day,
+  18,640 distinct streams, the single widest stream's
+  `dependencies_metadata` + `objects_metadata` + `streams.properties` + `processes.properties`
+  totaled 4,432 bytes; the same four columns averaged ~2.4 KB/row fleet-wide, consistent with a
+  separate check of the full 29-column row estimate against real local telemetry (~2.4-2.8 KB/row
+  average). No row anywhere approaches "MB-sized" — three orders of magnitude under the 8 MB
+  threshold, at the widest real payload this fleet produces today. The byte-based-vs-row-count
+  choice above therefore isn't guarding against an observed failure mode in this fleet, but it
+  costs nothing to keep either way, and a future binary with a much larger instrumented
+  event/object registry could still change that.
+
+  This also quantifies the OOM hazard this plan's streaming rewrite actually addresses: the same
+  day produced ~2.06M blocks (steady ~75k-95k/hour, no unusual daily peak observed) — at ~2.5-2.8
+  KB/row that's roughly 5-6 GB of *aggregate* row data for one day's `CreateFromSource` write
+  (Design §3's `regenerate_partitions('blocks', <day_begin>, <day_end>, 86400)` writes exactly this
+  as one partition, with no subdivision). The hazard was never any single row's width — it's ~2M
+  modest rows accumulating in one `Vec<PgRow>`/`RecordBatch` under the current `fetch_all` path. At
+  8 MB/chunk and ~2.5 KB/row, that's ~3,000 rows and ~600-700 flushes for a full busy day —
+  proportional, not degenerate.
 - **Not declaring the JIT-consumer-side `(insert_time, block_id)` ordering in this plan.** Doing
   so before every active merged partition is regenerated would silently mis-group blocks for any
   partition still written under the old, unordered merge — exactly the failure mode
@@ -1409,28 +1431,6 @@ plan.
 
 ## Open Questions
 
-- Does `estimate_row_bytes`'s raw-column-length sum track real allocator footprint closely enough
-  under blocks-view's widest real-world `streams.properties`/`processes.properties` payloads? The
-  8 MB threshold itself needs no precision (anything in the ~8–64 MB band behaves the same, and
-  the Parquet writer's 100 MB buffer dominates peak memory regardless) — the check is only that
-  the estimate isn't off by an order of magnitude.
-  **Checked against real (non-synthetic) local telemetry**: a throwaway script summed
-  `pg_column_size()` per column — the same quantity `PgValueRef::as_bytes().len()` would report per
-  column, `NULL` coalesced to 0 as the design specifies — over the exact 29-column join
-  `BlocksView`'s `data_sql` selects, against this dev machine's own `blocks` table (35,100 rows, ~3
-  weeks of real dev-machine usage). Results: rows averaged ~2.4 KB (p50 2396 B, p90 2420 B, p99
-  2742 B, max 2752 B), and the estimate is dominated by exactly the columns the design predicted —
-  `streams.dependencies_metadata` (avg 911 B, max 916 B), `processes.properties` (avg 593 B, max
-  608 B), `streams.objects_metadata` (avg 412 B, max 846 B) — confirming the estimate tracks the
-  right columns, not just plausible in the abstract. At this scale an 8 MB chunk holds ~3000-3500
-  rows: not a degenerate 1-row or million-row chunk, comfortably inside the "well past the
-  per-flush-overhead knee, far below the writer's 100 MB buffer" band the design assumes.
-  This mechanically validates the estimation approach, but doesn't close the question: this dev
-  machine's telemetry doesn't exercise the "MB-sized payload" tail the question actually worries
-  about (max row seen was 2.75 KB — three orders of magnitude under the 8 MB threshold). A busier
-  production process with a much larger tag/property/objects-metadata registry could look very
-  different, so the order-of-magnitude-under-worst-case half of the question is still open — worth
-  a repeat of this same check against real production data once this lands.
 - **TODO: is the `block_id` tie-break actually load-bearing, or would `insert_time` alone suffice as
   the declared/recorded ordering?** This plan's own correctness argument (Design §1, point 2)
   doesn't need `block_id`: merged input files are non-overlapping in `insert_time` by construction,
