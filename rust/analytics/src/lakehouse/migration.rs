@@ -445,7 +445,8 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     // Detect-then-fail: the exclusion constraint below cannot be added NOT VALID, so if legacy
     // overlapping partitions exist, surface exactly which rows conflict instead of failing with a
     // raw constraint error. Zero-width ranges are excluded to match tstzrange semantics (an empty
-    // range never overlaps anything).
+    // range never overlaps anything). Scoped to same-schema pairs, matching the constraint: a
+    // cross-schema overlap is the legal schema-rollout coexistence state, not a conflict.
     let conflicts = sqlx::query(
         "SELECT a.view_set_name, a.view_instance_id,
                 a.file_path AS file_path_a, b.file_path AS file_path_b,
@@ -455,6 +456,7 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
          JOIN lakehouse_partitions b
            ON a.view_set_name = b.view_set_name
           AND a.view_instance_id = b.view_instance_id
+          AND a.file_schema_hash = b.file_schema_hash
           AND a.ctid < b.ctid
           AND a.begin_insert_time < b.end_insert_time
           AND a.end_insert_time > b.begin_insert_time
@@ -491,11 +493,18 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     // two concurrent writers whose snapshots don't see each other's uncommitted partitions.
     // tstzrange is '[)' so adjacent partitions sharing a boundary do not conflict, and the write
     // path's retire+insert runs in one transaction so replacing a partition never self-conflicts.
+    // Scoped by file_schema_hash (btree_gist supports bytea equality): after a schema-hash bump,
+    // old-schema partitions legally coexist with overlapping new-schema writes until
+    // retire_incompatible_partitions cleans them up -- e.g. an old-schema daily merged partition
+    // vs a new hourly write that overlaps it without containing it, which the insert path's
+    // containment-based retire cannot remove. Queries filter partitions by schema hash, so
+    // cross-schema overlap never yields duplicate rows; only same-schema overlap is a bug.
     tr.execute(
         "ALTER TABLE lakehouse_partitions ADD CONSTRAINT lakehouse_partitions_no_overlap
          EXCLUDE USING gist (
              view_set_name WITH =,
              view_instance_id WITH =,
+             file_schema_hash WITH =,
              tstzrange(begin_insert_time, end_insert_time) WITH &&
          );",
     )
