@@ -289,7 +289,11 @@ into its channel" shape already used by `create_merged_partition`, `SqlPartition
 `BlockPartitionSpec::write`:
 
 ```rust
-const SOURCE_ROWS_PER_BATCH: usize = 20_000; // bounds peak memory to one chunk, not one day
+/// Flush threshold on the estimated byte size of the pending chunk — bounds peak memory to one
+/// ~8 MB chunk, not one day. Byte-based like the Parquet writer's own 100 MB flush
+/// (`write_partition.rs:437-442`), because a row-count threshold bounds nothing when a few rows
+/// carry MB-sized properties/objects_metadata payloads. Deliberately the only flush metric.
+const SOURCE_BYTES_PER_BATCH: usize = 8 * 1024 * 1024;
 
 async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
     ...
@@ -306,11 +310,14 @@ async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) ->
                 .bind(self.insert_range.end)
                 .fetch(&lake.db_pool);           // streaming cursor, not fetch_all
             let ctx = SessionContext::new();
-            let mut chunk = Vec::with_capacity(SOURCE_ROWS_PER_BATCH);
+            let mut chunk = Vec::new();
+            let mut chunk_bytes = 0usize;
             while let Some(row) = rows.try_next().await? {
+                chunk_bytes += estimate_row_bytes(&row);
                 chunk.push(row);
-                if chunk.len() >= SOURCE_ROWS_PER_BATCH {
+                if chunk_bytes >= SOURCE_BYTES_PER_BATCH {
                     flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+                    chunk_bytes = 0;
                 }
             }
             if !chunk.is_empty() {
@@ -346,6 +353,13 @@ computes the chunk's event-time bounds via `compute_time_bounds.get_time_bounds(
 already made once for the whole range today), sends a `PartitionRowSet`, and clears the `Vec` via
 `mem::take`/`clear()` for reuse.
 
+`estimate_row_bytes` sums the row's raw column value lengths — `row.try_get_raw(i)` →
+`PgValueRef::as_bytes()` (an inherent accessor in sqlx 0.8, `sqlx-postgres/src/value.rs:64`),
+counting `NULL`/non-byte-backed values as 0. This estimates payload bytes, not allocator-exact
+footprint — it deliberately tracks the JSONB/binary columns (`properties`, `objects_metadata`,
+`dependencies_metadata`) that dominate blocks-view row width, which is all the flush decision
+needs.
+
 `source_data_hash` switches from `rows.len()` (recomputed from the fully-fetched `Vec<PgRow>`) to
 `self.get_source_data_hash()` — the `record_count` already fetched by the earlier `COUNT(*)`
 query in `fetch_metadata_partition_spec`. This is required because
@@ -354,9 +368,14 @@ parameter, not something derivable after the fact), and it's a simplification: `
 longer computes a second, independently-arrived-at row count that could disagree with
 `get_source_data_hash()`'s.
 
-Peak memory becomes one `SOURCE_ROWS_PER_BATCH`-sized `Vec<PgRow>` plus one `RecordBatch` plus the
-one in-flight channel item — bounded regardless of how many blocks exist in the requested
-insert range.
+Peak memory becomes one ~`SOURCE_BYTES_PER_BATCH` chunk of `PgRow`s plus its `RecordBatch`
+conversion plus the one in-flight channel item — bounded regardless of how many blocks exist in
+the requested insert range and, unlike a row-count threshold, regardless of per-row payload
+width. The Parquet writer's own up-to-100 MB in-progress buffer dominates the total either way,
+which is why 8 MB needs no upward tuning: past the per-flush-overhead knee (one Arrow conversion,
+one time-bounds pass, one channel send per flush), bigger chunks buy nothing — the writer
+accumulates chunks into identical row groups regardless of chunk size, so the output file is
+byte-identical too.
 
 ### 3. Forced online regeneration
 
@@ -773,8 +792,9 @@ footer-free way to check per-partition sort status before it declares
    (mirror `SqlBatchView::merge_partitions`'s delegation pattern). Reuse the same predicate in step
    18's `get_merged_partition_sort_order` override so the two decisions can't diverge.
 7. `rust/analytics/src/lakehouse/metadata_partition_spec.rs`: rewrite `write()` to stream via
-   `sqlx::query(...).fetch(...)` in `SOURCE_ROWS_PER_BATCH`-sized chunks; add the `flush_chunk`
-   helper; switch `source_data_hash` to `self.get_source_data_hash()`.
+   `sqlx::query(...).fetch(...)`, flushing whenever the pending chunk's estimated size reaches
+   `SOURCE_BYTES_PER_BATCH` (8 MB); add the `flush_chunk` and `estimate_row_bytes` helpers;
+   switch `source_data_hash` to `self.get_source_data_hash()`.
 8. `rust/analytics/src/lakehouse/batch_update.rs`: add `force: bool` to (private)
    `materialize_partition`; factor `materialize_partition_range`'s loop body into a new private
    `materialize_partition_range_impl(..., force: bool)`. `materialize_partition_range` keeps its
@@ -986,12 +1006,19 @@ footer-free way to check per-partition sort status before it declares
   from part 2 and the atomic retire-then-insert swap in `insert_partition`.
 - **Chunked `sqlx` row streaming vs. a Postgres `DECLARE CURSOR` / `COPY`-based approach.**
   `sqlx::query(...).fetch(...)` already streams rows off the wire without server-side cursor
-  management; a fixed row-count chunk (not byte-size-based, unlike the Parquet writer's 100MB
-  flush threshold) is simpler and consistent with existing per-count batching elsewhere (e.g.
-  `JitPartitionConfig::max_nb_objects`). `SOURCE_ROWS_PER_BATCH = 20_000` is a first cut, not
-  load-tested against blocks-view's wide joined columns (JSONB tags/properties) — worth a sanity
-  check under a real workload before tuning, same caveat the JIT plan raised for its own batch
-  width.
+  management.
+- **Byte-based flush threshold vs. a row-count chunk.** A row count (the per-count precedent
+  elsewhere, e.g. `JitPartitionConfig::max_nb_objects`) is simpler to compute but bounds nothing
+  when a handful of rows carry MB-sized `properties`/`objects_metadata` payloads — exactly the
+  variance blocks-view's joined JSONB/binary columns exhibit. Flushing on estimated accumulated
+  bytes (`SOURCE_BYTES_PER_BATCH` = 8 MB) mirrors the Parquet writer's own byte-based 100 MB
+  threshold and bounds memory by construction. It is deliberately the *only* flush metric — a
+  secondary row-count cap would bound nothing the byte metric doesn't and would just add a second
+  knob. 8 MB sits well past the per-flush-overhead knee (one Arrow conversion, one time-bounds
+  pass, one channel send per flush) while keeping chunk-side peak (~2× chunk during Arrow
+  conversion) far below the writer's own 100 MB in-progress buffer, which dominates peak memory
+  regardless; anything in the ~8–64 MB band behaves near-identically, and the output file is
+  byte-identical for any chunk size (the writer accumulates chunks into its own row groups).
 - **Not declaring the JIT-consumer-side `(insert_time, block_id)` ordering in this plan.** Doing
   so before every active merged partition is regenerated would silently mis-group blocks for any
   partition still written under the old, unordered merge — exactly the failure mode
@@ -1049,7 +1076,9 @@ footer-free way to check per-partition sort status before it declares
   loss of the memory bound.
 - **`MetadataPartitionSpec` streaming unit tests**: exercise `write()` (or the extracted
   `flush_chunk` helper) against a small `Vec<PgRow>`-free scenario if feasible, or an integration
-  test against a live Postgres fixture, asserting: chunk boundaries don't drop/duplicate rows,
+  test against a live Postgres fixture, with enough data to cross the `SOURCE_BYTES_PER_BATCH`
+  threshold at least twice (or the threshold lowered for the test), asserting: chunk boundaries
+  don't drop/duplicate rows,
   the produced partition's row count matches `record_count`, and the emitted `RecordBatch`(es)
   concatenate to the same content as today's single-batch `fetch_all` path (a semantic
   equivalence test, not a performance one).
@@ -1175,9 +1204,11 @@ footer-free way to check per-partition sort status before it declares
   manual regeneration. Running `regenerate_partitions` over whatever the query returns in
   production is still an operational rollout step, tracked separately (not blocking landing the
   code).
-- Is `SOURCE_ROWS_PER_BATCH = 20_000` the right default? No load testing yet against blocks-view's
-  widest real-world `streams.properties`/`processes.properties` payloads — worth revisiting once
-  this lands.
+- Does `estimate_row_bytes`'s raw-column-length sum track real allocator footprint closely enough
+  under blocks-view's widest real-world `streams.properties`/`processes.properties` payloads? The
+  8 MB threshold itself needs no precision (anything in the ~8–64 MB band behaves the same, and
+  the Parquet writer's 100 MB buffer dominates peak memory regardless) — the check is only that
+  the estimate isn't off by an order of magnitude; worth a sanity look once this lands.
 - Declaring `(insert_time, block_id)` as a trusted `get_scan_output_ordering()` for
   blocks-view/JIT consumers is intentionally deferred to a follow-up plan (per
   `tasks/jit_single_query_plan.md`'s Open Questions), gated on the regeneration rollout above. That
