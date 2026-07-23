@@ -171,7 +171,7 @@ pub enum OrderingBounds {
   empty ordering (every existing `View::merge_partitions` caller, and `sql_batch_view.rs`'s
   merger), this is a no-op — identical plan to today.
 - `BlocksView` overrides `merge_partitions` (mirroring the pattern already used by
-  `SqlBatchView::merge_partitions`, `sql_batch_view.rs:249-266`, which just delegates to a
+  `SqlBatchView::merge_partitions`, `sql_batch_view.rs:250-269`, which just delegates to a
   pre-built merger) to build and reuse a `QueryMerger` configured with:
   - query: `"SELECT * FROM source ORDER BY insert_time;"`
   - ordering: `[ScanSortColumn { column: Arc::new(String::from("insert_time")), descending: false }]`
@@ -204,9 +204,9 @@ pub enum OrderingBounds {
      for partitions written fresh via `data_sql`'s `ORDER BY blocks.insert_time, blocks.block_id`
      (`blocks_view.rs:46`) and for partitions produced by a prior run of this same ordered merge —
      but it is **not** true for a partition merged before this change shipped: the maintenance
-     daemon (`rust/public/src/servers/maintenance.rs:296-345`) creates 1-minute `CreateFromSource`
-     blocks partitions, merges them hourly, then merges hourlies daily, and every pre-fix merge
-     (hourly or daily) ran `View::merge_partitions`'s unordered `SELECT * FROM source;` default
+     daemon (`rust/public/src/servers/maintenance.rs:68-174`) creates 1-second `CreateFromSource`
+     blocks partitions, then rolls them up through minutely, hourly, and daily merges, and every
+     pre-fix merge (at any granularity) ran `View::merge_partitions`'s unordered `SELECT * FROM source;` default
      (`view.rs:101-124`) with no declared scan ordering — its output is not internally sorted, and
      (before Design §4 exists) it has no `sort_order` to say so. `BlocksView::merge_partitions`
      therefore only takes the ordered path below — declaring the `[insert_time]` scan ordering and
@@ -354,8 +354,9 @@ already made once for the whole range today), sends a `PartitionRowSet`, and cle
 `mem::take`/`clear()` for reuse.
 
 `estimate_row_bytes` sums the row's raw column value lengths — `row.try_get_raw(i)` →
-`PgValueRef::as_bytes()` (an inherent accessor in sqlx 0.8, `sqlx-postgres/src/value.rs:64`),
-counting `NULL`/non-byte-backed values as 0. This estimates payload bytes, not allocator-exact
+`PgValueRef::as_bytes()` (an inherent accessor in sqlx 0.8, `sqlx-postgres/src/value.rs:64`; note
+it returns `Result<&[u8], BoxDynError>`, not a bare slice), counting `NULL` and any
+`Err`/non-byte-backed values as 0. This estimates payload bytes, not allocator-exact
 footprint — it deliberately tracks the JSONB/binary columns (`properties`, `objects_metadata`,
 `dependencies_metadata`) that dominate blocks-view row width, which is all the flush decision
 needs.
@@ -407,8 +408,11 @@ while the new one is inserted alongside it, producing silent duplicate rows.
 
 This invariant is enforced, not just documented: `regenerate_partition_range` validates, before
 entering `materialize_partition_range_impl`'s loop, that `delta` exactly tiles `(begin, end)` —
-`(end - begin)` must be an exact, non-zero multiple of `delta` (equivalently, `delta <= end - begin`
-and `(end - begin) % delta == 0`) — and returns a loud `Err` otherwise. This is a distinct failure
+`(end - begin)` must be an exact, non-zero multiple of `delta`. `chrono::TimeDelta` implements no
+`Rem`/`%` operator, so the check is integer arithmetic on nanoseconds: with
+`span = (end - begin).num_nanoseconds()` and `step = delta.num_nanoseconds()` (both
+`Option<i64>`-unwrapped with `expect`, well within range for any real time range), require
+`step > 0 && span >= step && span % step == 0` — and returns a loud `Err` otherwise. This is a distinct failure
 mode from the one `verify_force_regeneration_alignment` (below) catches: the loop
 (`batch_update.rs:203-220`, reused by `_impl`) runs `while end_part <= insert_range.end`, so a
 `delta` that doesn't tile the range makes it execute a partial or zero number of iterations and
@@ -523,7 +527,7 @@ can commit in either order, with the overlap running in either direction of cont
   only deletes rows fully contained within the *new* partition's own range, and every later daemon
   pass hits `verify_overlapping_partitions`'s partial-overlap `Abort` (`batch_update.rs:57-67`) on
   both rows.
-- The reverse: following the rollout's "regenerate hourlies first" ordering (Open Questions), a
+- The reverse: following the rollout's "regenerate finer partitions first" ordering (Open Questions), a
   regen hourly `[h, h+1)` write is in flight when the daemon's daily merge commits `[d, d+1)`
   first — `d` spans `h`, and the daemon's merge retires the old hourlies. The regen's own
   `retire_partitions([h, h+1))` cannot delete that daily row (the daily is not contained *inside*
@@ -1192,13 +1196,13 @@ footer-free way to check per-partition sort status before it declares
   retention is fine" behavior) truncate data that is still queryable for up to that window, rather
   than merely reproduce a smaller-but-equivalent partition. Because the merge only declares the ordering
   and records it when every input already carries it (Design §1/§4), this correctly includes not
-  just pre-fix partitions written before this change, but also any *post-fix* daily merge whose
-  hourly inputs were still unguaranteed at merge time — those self-report `NULL` too rather than
-  being missed by this query. The rollout is therefore: run `regenerate_partitions` over the
-  hourlies the query returns first, then over the dailies (a daily built from hourlies that were
-  `NULL` at the time it was merged stays `NULL` itself until it is regenerated or re-merged, even
-  after its hourly inputs are later fixed — re-running the query after each pass shows the
-  remaining work). Once every existing partition reaches `sort_order = ['insert_time', 'block_id']`,
+  just pre-fix partitions written before this change, but also any *post-fix* merge whose
+  inputs were still unguaranteed at merge time — those self-report `NULL` too rather than
+  being missed by this query. The rollout is therefore: run `regenerate_partitions` finest
+  granularity first, coarsest last (minutely, then hourly, then daily — the daemon's merge cascade,
+  `maintenance.rs:68-174`), because a merged partition built from inputs that were `NULL` at the
+  time it was merged stays `NULL` itself until it is regenerated or re-merged, even after its
+  inputs are later fixed — re-running the query after each pass shows the remaining work. Once every existing partition reaches `sort_order = ['insert_time', 'block_id']`,
   every subsequent ordinary (non-forced) daily merge sees all-guaranteed hourly inputs and
   automatically takes the ordered path itself, propagating the guarantee forward with no further
   manual regeneration. Running `regenerate_partitions` over whatever the query returns in
