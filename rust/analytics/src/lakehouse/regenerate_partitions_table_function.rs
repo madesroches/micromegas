@@ -78,13 +78,13 @@ impl TableFunctionImpl for RegeneratePartitionsTableFunction {
             return plan_err!("Missing first argument, expected view_set_name: String");
         };
         let Some(begin) = args.get(1).map(exp_to_timestamp).transpose()? else {
-            return plan_err!("Missing 3rd argument, expected a UTC nanoseconds timestamp");
+            return plan_err!("Missing 2nd argument, expected a UTC nanoseconds timestamp");
         };
         let Some(end) = args.get(2).map(exp_to_timestamp).transpose()? else {
-            return plan_err!("Missing 4th argument, expected a UTC nanoseconds timestamp");
+            return plan_err!("Missing 3rd argument, expected a UTC nanoseconds timestamp");
         };
         let Some(delta) = args.get(3).map(exp_to_i64).transpose()? else {
-            return plan_err!("Missing 5th argument, expected a number of seconds(i64)");
+            return plan_err!("Missing 4th argument, expected a number of seconds(i64)");
         };
 
         let lakehouse = self.lakehouse.clone();
