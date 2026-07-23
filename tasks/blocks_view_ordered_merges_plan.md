@@ -603,8 +603,8 @@ UDF's behavior is unchanged automatically.
 Add a new `regenerate_partitions` table function (new file
 `regenerate_partitions_table_function.rs`, registered in `query.rs` next to
 `materialize_partitions`), reusing `MaterializePartitionsTableFunction`'s argument parsing
-(`view_set_name`, `begin`, `end`, `delta_seconds`) but **not** its log-only spawn/execution-plan
-shape, because that shape cannot fail a query: `TaskLogExecPlan`/`AsyncLogStream`
+(`view_set_name`, `begin`, `end`, `delta_seconds`) but **not** its log-only error handling,
+because that shape cannot fail a query: today `TaskLogExecPlan`/`AsyncLogStream`
 (`rust/analytics/src/dfext/task_log_exec_plan.rs`,
 `rust/analytics/src/dfext/async_log_stream.rs`) stream a plain `mpsc::Receiver<(DateTime<Utc>,
 String)>` into `(time, msg)` rows with no error channel at all, and
@@ -616,22 +616,33 @@ non-tiling `regenerate_partitions(...)` call must not have this property: a scri
 iterating the Open Questions' rollout query would otherwise see success for a partition that was
 never actually regenerated.
 
-`regenerate_partitions_table_function.rs` therefore uses a distinct, fallible variant of this
-plumbing: a new `FallibleTaskLogExecPlan`/`FallibleAsyncLogStream` pair (new file, e.g.
-`rust/analytics/src/dfext/fallible_task_log_exec_plan.rs`, mirroring `TaskLogExecPlan`/
-`AsyncLogStream` structurally) whose channel item type is `Result<(DateTime<Utc>, String),
-String>` instead of the plain tuple. Its stream's `poll_next` batches `Ok` items into `(time, msg)`
-rows exactly as today, but on receiving an `Err(msg)` item, yields
-`Poll::Ready(Some(Err(DataFusionError::Execution(msg))))` and ends the stream — a
-`RecordBatchStream` `Err` propagates through `execute_stream()`/`collect()` as a query execution
-error, which the FlightSQL layer surfaces to the client as a failed query, not a successful,
-possibly-empty result set. `regenerate_partitions_table_function.rs`'s spawner sends ordinary
-progress lines as `Ok((time, msg))` (matching `materialize_partitions`'s behavior) and, when
+`regenerate_partitions` therefore needs this plumbing to be able to carry an error. Rather than
+duplicating the pair into a parallel "fallible" copy (~220 lines mirrored across two new types,
+kept in sync with the originals forever), generalize the existing pair in place — the change is
+small and behavior-preserving because the plain tuple type appears in exactly three places and
+every existing producer funnels through one method:
+- The channel item type becomes `Result<(DateTime<Utc>, String), String>` in the `TaskSpawner`
+  alias (`task_log_exec_plan.rs:25-26`), `AsyncLogStream::rx` (`async_log_stream.rs:20,26`), and
+  `LogSender::sender` (`response_writer.rs:52-59`).
+- `LogSender::write_log_entry` (`response_writer.rs:64-70`) wraps its message in `Ok(...)`. That
+  is the only way the existing spawners (`materialize_partitions_table_function.rs:91-110`,
+  `retire_partitions_table_function.rs`) touch the channel, so both compile and behave unchanged —
+  they never send an `Err` item, and their log-only error handling is deliberately left as-is.
+- `AsyncLogStream::poll_next` batches `Ok` items into `(time, msg)` rows exactly as today, but on
+  encountering an `Err(msg)` item yields
+  `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))` and ends the stream — a
+  `RecordBatchStream` `Err` propagates through `execute_stream()`/`collect()` as a query execution
+  error, which the FlightSQL layer surfaces to the client as a failed query, not a successful,
+  possibly-empty result set.
+- `LogStreamTableProvider` (`log_stream_table_provider.rs`) holds an opaque
+  `Arc<TaskLogExecPlan>` with no coupling to the item type — no change.
+
+`regenerate_partitions_table_function.rs`'s spawner keeps a clone of the raw channel sender
+alongside the `LogSender` it wraps as its logger: ordinary progress lines flow through the logger
+as `Ok((time, msg))` (matching `materialize_partitions`'s behavior) and, when
 `regenerate_partition_range(...)` (including `verify_force_regeneration_alignment` and the
-tiling check) returns `Err(e)`, sends a single `Err(format!("{e:?}"))` item before closing the
-channel, instead of only logging it. `materialize_partitions_table_function.rs`'s and
-`retire_partitions_table_function.rs`'s existing log-only shape is left as-is — this is additive,
-not a change to their behavior.
+tiling check) returns `Err(e)`, it sends a single `Err(format!("{e:?}"))` item through the raw
+sender before closing the channel, instead of only logging it.
 
 Usage for this issue: `SELECT * FROM regenerate_partitions('blocks', <day_begin>, <day_end>,
 86400);` for each active merged daily blocks partition — `<day_begin>`/`<day_end>`/`86400` must
@@ -820,16 +831,21 @@ footer-free way to check per-partition sort status before it declares
    `CreateFromSource` arm) gains the `force` argument it already has in scope, becoming
    `partition_spec.write(lakehouse.lake().clone(), logger, force)` — this is what actually reaches
    the in-transaction concurrency guard added in step 15/18 below.
-9. New `rust/analytics/src/dfext/fallible_task_log_exec_plan.rs`: add `FallibleTaskLogExecPlan` /
-   `FallibleAsyncLogStream`, mirroring `task_log_exec_plan.rs`/`async_log_stream.rs` but with a
-   `Result<(DateTime<Utc>, String), String>` channel item type, so an `Err` item ends the stream
-   with a `DataFusionError::Execution` instead of becoming a log row (Design §3). New
+9. Generalize the log-stream plumbing to carry an error (Design §3): change the channel item type
+   to `Result<(DateTime<Utc>, String), String>` in `rust/analytics/src/dfext/task_log_exec_plan.rs`
+   (the `TaskSpawner` alias), `rust/analytics/src/dfext/async_log_stream.rs` (`AsyncLogStream::rx`;
+   `poll_next` batches `Ok` items into rows as today and turns an `Err(msg)` item into
+   `Poll::Ready(Some(Err(DataFusionError::Execution(msg))))`, ending the stream), and
+   `rust/analytics/src/response_writer.rs` (`LogSender::sender`; `write_log_entry` wraps its
+   message in `Ok(...)`). The existing spawners in `materialize_partitions_table_function.rs` and
+   `retire_partitions_table_function.rs` only touch the channel through
+   `LogSender::write_log_entry`, so they need no changes. New
    `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs`: reuse
-   `MaterializePartitionsTableFunction`'s argument parsing, but spawn against the new fallible
-   plan/stream and call `regenerate_partition_range(...)`, sending an `Err` item on failure instead
-   of only logging it. Declare both new modules in `rust/analytics/src/dfext/mod.rs` and
-   `rust/analytics/src/lakehouse/mod.rs` respectively (`pub mod fallible_task_log_exec_plan;`, `pub
-   mod regenerate_partitions_table_function;`) — required for them to compile into the crate.
+   `MaterializePartitionsTableFunction`'s argument parsing, spawn
+   `regenerate_partition_range(...)`, send progress through a `LogSender`, and on failure send a
+   single `Err(format!("{e:?}"))` item through a retained clone of the raw sender instead of only
+   logging it. Declare the new module in `rust/analytics/src/lakehouse/mod.rs` (`pub mod
+   regenerate_partitions_table_function;`) — required for it to compile into the crate.
 10. `rust/analytics/src/lakehouse/query.rs`: register `regenerate_partitions` UDTF next to
     `materialize_partitions`.
 11. `python/micromegas/micromegas/flightsql/client.py`: add a `regenerate_partitions(...)` method
@@ -940,9 +956,10 @@ footer-free way to check per-partition sort status before it declares
   `materialize_partition_range` signature unchanged), new
   `verify_force_regeneration_alignment` guard for the `force` path; thread `force` into
   `materialize_partition`'s `partition_spec.write(...)` call.
-- `rust/analytics/src/dfext/fallible_task_log_exec_plan.rs` — new; `Result`-carrying log stream so
-  a guard failure ends the query with an error instead of a log row.
-- `rust/analytics/src/dfext/mod.rs` — declare the new module.
+- `rust/analytics/src/dfext/task_log_exec_plan.rs`, `rust/analytics/src/dfext/async_log_stream.rs`,
+  `rust/analytics/src/response_writer.rs` — generalize the log-stream channel item type to
+  `Result<(DateTime<Utc>, String), String>` so an `Err` item ends the query with an error instead
+  of a log row; `LogSender::write_log_entry` wraps in `Ok`, existing spawners unchanged.
 - `rust/analytics/src/lakehouse/regenerate_partitions_table_function.rs` — new.
 - `rust/analytics/src/lakehouse/mod.rs` — declare the new module (`pub mod
   regenerate_partitions_table_function;`).
@@ -1008,6 +1025,14 @@ footer-free way to check per-partition sort status before it declares
   decisions — the up-to-date check and the `get_max_partition_time_delta` subdivision check — is
   a small, localized behavioral change that reuses everything else, including the streaming fix
   from part 2 and the atomic retire-then-insert swap in `insert_partition`.
+- **Generalizing `TaskLogExecPlan`/`AsyncLogStream`/`LogSender` to a `Result` channel item vs. a
+  parallel "fallible" copy.** A mirrored `FallibleTaskLogExecPlan`/`FallibleAsyncLogStream` pair
+  would leave the existing files untouched, but at the cost of ~220 duplicated lines and two
+  nearly identical implementations to keep in sync. The plain tuple type appears in exactly three
+  places (the `TaskSpawner` alias, `AsyncLogStream::rx`, `LogSender::sender`), `AsyncLogStream` is
+  constructed only by `TaskLogExecPlan::execute`, and both existing spawners touch the channel
+  only through `LogSender::write_log_entry` — so wrapping in `Ok` there makes the generalization
+  behavior-preserving for every existing caller, which simply never sends an `Err` item.
 - **Chunked `sqlx` row streaming vs. a Postgres `DECLARE CURSOR` / `COPY`-based approach.**
   `sqlx::query(...).fetch(...)` already streams rows off the wire without server-side cursor
   management.
@@ -1117,9 +1142,9 @@ footer-free way to check per-partition sort status before it declares
   through `ctx.sql(...)`/FlightSQL, not just calling `regenerate_partition_range` directly) asserting
   that `SELECT * FROM regenerate_partitions(...)` with a misaligned range/delta returns a query
   `Err` to the caller — not a successful, possibly-empty result set containing only a log row with
-  the error text. This is the behavior the log-only `materialize_partitions`/`TaskLogExecPlan`
-  shape cannot provide (Design §3); the test should fail if `regenerate_partitions` is ever
-  refactored back onto that shape.
+  the error text. This is the behavior `materialize_partitions`'s log-only spawner deliberately
+  does not provide (Design §3); the test should fail if `regenerate_partitions`'s spawner is ever
+  refactored to only log its errors instead of sending the `Err` item.
 - **Manual regeneration + memory check**: start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), find a real merged blocks
   partition, run `SELECT * FROM regenerate_partitions('blocks', <begin>, <end>, <delta>);`, and
