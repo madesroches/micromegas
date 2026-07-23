@@ -522,7 +522,11 @@ committed, not a stale snapshot. `PartitionSpec::write` (`view.rs:32`) gains a `
 parameter (`false` at every existing call site — `BlockPartitionSpec::write`,
 `SqlPartitionSpec::write`, and `MetadataPartitionSpec::write`'s normal, non-forced callers — so
 this is a no-op everywhere except forced regeneration), threaded through `write_partition_from_rows`
-into `insert_partition`. When `force` is `true`, `insert_partition`, inside its existing transaction,
+into `insert_partition`. There are two production call sites of `PartitionSpec::write` itself that
+need updating for the new parameter: `materialize_partition`'s `partition_spec.write(...)`
+(`batch_update.rs:171`), which supplies the real `force` value driving this guard, and
+`write_partition_from_blocks`'s `block_spec.write(...)` (`jit_partitions.rs:632`, JIT partition
+generation at query time), which passes `force: false` and never triggers this guard. When `force` is `true`, `insert_partition`, inside its existing transaction,
 *after* `retire_partitions` has removed the partition being replaced and after the new partition row
 has been inserted — immediately before it would otherwise commit — runs one more `SELECT` against
 `lakehouse_partitions` for the same `(view_set_name, view_instance_id)`, applying a general
@@ -539,6 +543,12 @@ hourly) — there the existing daily row's bounds are not contained within the r
 `begin < insert_range.end AND end > insert_range.begin` form is direction-agnostic and catches
 both shapes with one check. `bail!`s — rolling back both the retire and the not-yet-committed
 insert, so neither the old nor a duplicate new partition is left behind — if any row comes back.
+This rollback undoes the retire and the insert but not the Parquet file `finalize_partition_write`
+already wrote and closed before this recheck runs — a guard-triggered `bail!` leaves that file
+orphaned in object storage, neither deleted nor registered via `add_file_for_cleanup`. This matches
+`insert_partition`'s existing INSERT-error path, which leaks the same way, so it is an acknowledged
+pre-existing pattern rather than a new gap; a follow-up could delete the file or register it for
+cleanup before returning the error.
 Because Postgres's default `READ COMMITTED` isolation lets this in-transaction `SELECT` see any row
 another transaction has already committed, this shrinks the race window from "the whole
 forced-regeneration call" down to "the gap between this `SELECT` and this transaction's `COMMIT`" —
@@ -546,6 +556,16 @@ the same order of magnitude every other `insert_partition` caller already lives 
 window wide enough for a daemon pass to land in. `regenerate_partition_range` sets `force: true` on
 the `PartitionSpec::write()` call it reaches; `materialize_partition_range`'s existing non-forced
 path always passes `false`.
+
+This in-transaction recheck is keyed on the advisory lock's exact `(view_set_name, view_instance_id,
+begin_insert_time, end_insert_time)` tuple, so it only serializes writers targeting the *identical*
+range; it does not fully close the race between two concurrent *forced* regenerations of
+overlapping-but-different ranges (e.g. an hourly and a daily forced call whose ranges overlap) —
+those take different locks, so under `READ COMMITTED` each transaction's recheck can pass before the
+other commits, and both can commit, leaving duplicate/overlapping partitions. `regenerate_partitions`
+is a temporary/admin rollout tool, not a steady-state path, so the mitigation here is operational,
+not a new locking mechanism: operators must run `regenerate_partitions` calls serially, never with
+overlapping ranges in flight concurrently.
 
 `regenerate_partitions` reads from the Postgres ingestion tables, which retain rows for a shorter
 window than merged lakehouse partitions. If a forced regeneration runs on a partition whose source
@@ -845,9 +865,11 @@ footer-free way to check per-partition sort status before it declares
     `rust/analytics/src/lakehouse/sql_partition_spec.rs`'s `SqlPartitionSpec::write` accept the new
     `force` parameter and pass it straight through to their `write_partition_from_rows` call (step
     16); `rust/analytics/src/lakehouse/metadata_partition_spec.rs`'s `MetadataPartitionSpec::write`
-    does the same. `materialize_partition` (step 8) is the only production call site of
-    `PartitionSpec::write` and is what supplies a real `force` value; every other path effectively
-    always sees `false`.
+    does the same. There are two production call sites of `PartitionSpec::write` that must be
+    updated for the new parameter: `materialize_partition` (step 8, `batch_update.rs:171`) is what
+    supplies a real `force` value; `write_partition_from_blocks`'s `block_spec.write(...)` call
+    (`rust/analytics/src/lakehouse/jit_partitions.rs:632`) is the other — it passes `force: false`,
+    since JIT partition generation at query time never forces regeneration.
 19. `rust/analytics/src/lakehouse/partition_cache.rs`: add `sort_order` to the `SELECT` column
     lists and `Partition` literals in `fetch_overlapping_insert_range`,
     `fetch_overlapping_insert_range_for_view`, and `LivePartitionProvider::fetch` (both query
@@ -924,6 +946,9 @@ footer-free way to check per-partition sort status before it declares
   `sql_partition_spec.rs` (`SqlPartitionSpec::write`) and `block_partition_spec.rs`
   (`BlockPartitionSpec::write`) additionally accept the `PartitionSpec::write` trait's new `force:
   bool` parameter and plumb it straight through to their own `write_partition_from_rows` call.
+- `rust/analytics/src/lakehouse/jit_partitions.rs` — `write_partition_from_blocks`'s
+  `block_spec.write(...)` call (`:632`) is a second production call site of `PartitionSpec::write`
+  (alongside `materialize_partition` in `batch_update.rs`); update it to pass `force: false`.
 - `mkdocs/docs/admin/functions-reference.md` — document the `sort_order` column in
   `list_partitions()`'s column table.
 
