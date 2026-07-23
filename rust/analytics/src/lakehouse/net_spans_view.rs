@@ -138,6 +138,8 @@ async fn write_partition(
         schema,
         TimeRange::new(min_insert_time, max_insert_time),
         spec.block_ids_hash.clone(),
+        None,
+        false,
         rx,
         null_response_writer,
     ));

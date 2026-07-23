@@ -84,6 +84,11 @@ impl TableProvider for ListPartitionsTableProvider {
             Field::new("source_data_hash", DataType::Binary, false),
             Field::new("num_rows", DataType::Int64, false),
             Field::new("partition_format_version", DataType::Int32, false),
+            Field::new(
+                "sort_order",
+                DataType::List(Arc::new(Field::new("tag", DataType::Utf8, false))),
+                true,
+            ),
         ]))
     }
 
@@ -118,7 +123,8 @@ impl TableProvider for ListPartitionsTableProvider {
                         file_schema_hash,
                         source_data_hash,
                         num_rows,
-                        partition_format_version
+                        partition_format_version,
+                        sort_order
                  FROM lakehouse_partitions
                  LIMIT {n};"
             )
@@ -135,7 +141,8 @@ impl TableProvider for ListPartitionsTableProvider {
                     file_schema_hash,
                     source_data_hash,
                     num_rows,
-                    partition_format_version
+                    partition_format_version,
+                    sort_order
              FROM lakehouse_partitions;"
                 .to_string()
         };

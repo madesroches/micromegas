@@ -2,9 +2,13 @@ use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     lakehouse_context::LakehouseContext,
+    merge::{MergeQueryResult, PartitionMerger, QueryMerger},
     metadata_partition_spec::fetch_metadata_partition_spec,
+    partition::Partition,
     partition_cache::PartitionCache,
-    view::{PartitionSpec, View, ViewMetadata},
+    session_configurator::NoOpSessionConfigurator,
+    view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
+    view_factory::ViewFactory,
 };
 use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
@@ -24,12 +28,30 @@ lazy_static::lazy_static! {
     static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
 }
 
+/// The single sort guarantee this view ever records or declares -- see the plan's Trade-offs
+/// section for why `block_id` is deliberately not part of it.
+fn insert_time_sort_order() -> Vec<String> {
+    vec![String::from("insert_time")]
+}
+
+/// True when every partition in `partitions_to_merge` either contributes no rows or already
+/// carries the exact `sort_order` this view can trust (Design §1/§4): only then can a merge
+/// safely declare and record the `insert_time` guarantee.
+fn all_inputs_ordered_or_empty(partitions_to_merge: &[Partition]) -> bool {
+    let wanted = insert_time_sort_order();
+    partitions_to_merge
+        .iter()
+        .all(|p| p.is_empty() || p.sort_order.as_ref() == Some(&wanted))
+}
+
 /// A view of the `blocks` table, providing access to telemetry block metadata.
 #[derive(Debug)]
 pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
+    ordered_merger: Arc<dyn PartitionMerger>,
+    plain_merger: Arc<dyn PartitionMerger>,
 }
 
 impl BlocksView {
@@ -46,10 +68,32 @@ impl BlocksView {
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
         ));
+        let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
+        let schema = Arc::new(blocks_view_schema());
+        let ordered_merger: Arc<dyn PartitionMerger> = Arc::new(
+            QueryMerger::new(
+                empty_view_factory.clone(),
+                Arc::new(NoOpSessionConfigurator),
+                schema.clone(),
+                Arc::new(String::from("SELECT * FROM source ORDER BY insert_time;")),
+            )
+            .with_merge_scan_ordering(vec![ScanSortColumn {
+                column: Arc::new(String::from("insert_time")),
+                descending: false,
+            }]),
+        );
+        let plain_merger: Arc<dyn PartitionMerger> = Arc::new(QueryMerger::new(
+            empty_view_factory,
+            Arc::new(NoOpSessionConfigurator),
+            schema,
+            Arc::new(String::from("SELECT * FROM source;")),
+        ));
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
+            ordered_merger,
+            plain_merger,
         })
     }
 }
@@ -92,6 +136,7 @@ impl View for BlocksView {
                 self.get_file_schema(),
                 insert_range,
                 self.get_time_bounds(),
+                Some(insert_time_sort_order()),
             )
             .await
             .with_context(|| "fetch_metadata_partition_spec")?,
@@ -143,6 +188,43 @@ impl View for BlocksView {
                 TimeDelta::hours(1)
             }
             PartitionCreationStrategy::MergeExisting(_partitions) => TimeDelta::days(1),
+        }
+    }
+
+    async fn merge_partitions(
+        &self,
+        lakehouse: Arc<LakehouseContext>,
+        partitions_to_merge: Arc<Vec<Partition>>,
+        partitions_all_views: Arc<PartitionCache>,
+        insert_range: TimeRange,
+    ) -> Result<MergeQueryResult> {
+        // An all-empty source scans as an EmptyExec, whose SortExec is never elided -- taking the
+        // ordered path there would trip the plan-shape check's memory-regression warning on every
+        // quiet-day retry. So the ordered path additionally requires at least one non-empty input.
+        let any_non_empty = partitions_to_merge.iter().any(|p| !p.is_empty());
+        let merger = if any_non_empty && all_inputs_ordered_or_empty(&partitions_to_merge) {
+            &self.ordered_merger
+        } else {
+            &self.plain_merger
+        };
+        merger
+            .execute_merge_query(
+                lakehouse,
+                partitions_to_merge,
+                partitions_all_views,
+                insert_range,
+            )
+            .await
+    }
+
+    fn get_merged_partition_sort_order(
+        &self,
+        partitions_to_merge: &[Partition],
+    ) -> Option<Vec<String>> {
+        if all_inputs_ordered_or_empty(partitions_to_merge) {
+            Some(insert_time_sort_order())
+        } else {
+            None
         }
     }
 }

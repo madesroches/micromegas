@@ -5,7 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 6;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 7;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -91,6 +91,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v6");
         let mut tr = pool.begin().await?;
         upgrade_v5_to_v6(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 6 == current_version {
+        info!("upgrade lakehouse schema to v7");
+        let mut tr = pool.begin().await?;
+        upgrade_v6_to_v7(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -422,5 +429,18 @@ async fn upgrade_v5_to_v6(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("UPDATE lakehouse_migration SET version=6;")
         .await
         .with_context(|| "Updating lakehouse schema version to 6")?;
+    Ok(())
+}
+
+async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Nullable, no backfill needed: NULL means "no ordering guarantee", which is automatically
+    // correct for every partition written before this column existed (see
+    // tasks/blocks_view_ordered_merges_plan.md's Design §4).
+    tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];")
+        .await
+        .with_context(|| "adding sort_order column to lakehouse_partitions")?;
+    tr.execute("UPDATE lakehouse_migration SET version=7;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 7")?;
     Ok(())
 }

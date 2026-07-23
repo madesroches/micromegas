@@ -266,6 +266,7 @@ async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
     logger: Arc<dyn Logger>,
+    force: bool,
 ) -> Result<()> {
     // Generate deterministic lock key for this partition
     let lock_key = generate_partition_lock_key(
@@ -339,7 +340,7 @@ async fn insert_partition(
     // Insert the new partition with format version 2 (Arrow 57.0)
     let insert_result = instrument_named!(
         sqlx::query(
-            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
+            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2, $13);",
         )
         .bind(&*partition.view_metadata.view_set_name)
         .bind(&*partition.view_metadata.view_instance_id)
@@ -353,6 +354,7 @@ async fn insert_partition(
         .bind(&partition.view_metadata.file_schema_hash)
         .bind(&partition.source_data_hash)
         .bind(partition.num_rows)
+        .bind(&partition.sort_order)
         .execute(&mut *transaction),
         "sql_insert_partition"
     )
@@ -384,6 +386,51 @@ async fn insert_partition(
             return Err(insert_result.unwrap_err().into());
         }
     };
+
+    // Forced regeneration only: guard against a concurrent writer (e.g. the maintenance daemon)
+    // having committed an overlapping partition after `verify_force_regeneration_alignment`'s
+    // snapshot was taken but before this transaction commits. Postgres's default READ COMMITTED
+    // isolation lets this SELECT see any row another transaction has already committed, so this
+    // shrinks the race window down to the gap between this SELECT and this transaction's COMMIT.
+    // General interval-overlap predicate (not containment-only): catches both a daemon partition
+    // contained inside this one and the reverse (this one contained inside a daemon partition).
+    if force {
+        let overlapping = instrument_named!(
+            sqlx::query(
+                "SELECT begin_insert_time, end_insert_time
+                 FROM lakehouse_partitions
+                 WHERE view_set_name = $1
+                 AND view_instance_id = $2
+                 AND begin_insert_time < $3
+                 AND end_insert_time > $4
+                 AND (begin_insert_time <> $5 OR end_insert_time <> $6)
+                 ;",
+            )
+            .bind(&*partition.view_metadata.view_set_name)
+            .bind(&*partition.view_metadata.view_instance_id)
+            .bind(partition.end_insert_time())
+            .bind(partition.begin_insert_time())
+            .bind(partition.begin_insert_time())
+            .bind(partition.end_insert_time())
+            .fetch_all(&mut *transaction),
+            "sql_select_force_regen_overlap_check"
+        )
+        .await
+        .with_context(|| "checking for concurrent overlapping partition")?;
+        if !overlapping.is_empty() {
+            anyhow::bail!(
+                "forced regeneration for {}/{} [{}, {}] aborted: a concurrent write committed \
+                 an overlapping partition ({} row(s)) after the pre-write snapshot -- retiring \
+                 both would risk deleting a partition this transaction did not create; rolling \
+                 back instead of leaving a duplicate/overlapping partition behind",
+                partition.view_metadata.view_set_name,
+                partition.view_metadata.view_instance_id,
+                partition.begin_insert_time().to_rfc3339(),
+                partition.end_insert_time().to_rfc3339(),
+                overlapping.len()
+            );
+        }
+    }
 
     // Commit the transaction (this also releases the advisory lock)
     transaction.commit().await.with_context(|| "commit")?;
@@ -557,12 +604,21 @@ async fn finalize_partition_write(
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
+///
+/// `sort_order` is recorded on the resulting `Partition` as-is (see
+/// `View::get_merged_partition_sort_order` and `MetadataPartitionSpec::sort_order`). `force`
+/// enables the in-transaction concurrent-write overlap recheck inside `insert_partition`, used
+/// only by forced regeneration (`batch_update::regenerate_partition_range`); every other caller
+/// passes `false`.
+#[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     file_schema: Arc<Schema>,
     insert_range: TimeRange,
     source_data_hash: Vec<u8>,
+    sort_order: Option<Vec<String>>,
+    force: bool,
     mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -653,8 +709,10 @@ pub async fn write_partition_from_rows(
             file_size: result.file_size,
             source_data_hash,
             num_rows: result.num_rows,
+            sort_order,
         },
         logger,
+        force,
     )
     .await
     .with_context(|| "insert_partition")?;

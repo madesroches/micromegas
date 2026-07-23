@@ -629,7 +629,7 @@ pub async fn write_partition_from_blocks(
     };
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     block_spec
-        .write(lake, null_response_writer)
+        .write(lake, null_response_writer, false)
         .await
         .with_context(|| "block_spec.write")?;
     Ok(())

@@ -1460,6 +1460,38 @@ Running `regenerate_partitions` over whatever the query above returns in product
 operational rollout step, tracked separately from — and not blocking — landing the code in this
 plan.
 
+## Implementation Note: DB-backed test harness not yet landed
+
+The offline (no-DB) tests from the Testing Strategy section were implemented and pass
+(`rust/analytics/tests/blocks_view_merge_ordering_tests.rs`): `make_partitioned_execution_plan`
+under `OrderingBounds::InsertTime` (elision + overlap rejection), and `QueryMerger::execute_merge_query`'s
+plan-shape check in isolation (elision succeeds; elision is defeated on purpose and reports
+`ordering_honored: false` without erroring).
+
+The DB-backed tests (`sort_order` recording for fresh/merged partitions, the force-regeneration
+alignment/tiling guards, the concurrent-write race, the query-level failure test for
+`regenerate_partitions`, and the migration test) were prototyped against a real local Postgres
+during implementation but are **not** included in the committed test suite: the prototype's
+cleanup step deleted rows from the `blocks` ingestion table by time range to make re-runs
+idempotent, which is not an acceptable thing for a committed, automatically-runnable test to do
+against a real/shared Postgres instance (there is no dedicated, disposable test database in this
+environment — these tests would run against whatever `MICROMEGAS_SQL_CONNECTION_STRING` points
+at). This needs a safer harness before landing as committed tests, e.g.:
+- a dedicated/disposable test database or schema (spun up and torn down per test run), so cleanup
+  can freely `DROP`/`TRUNCATE` without touching real data; or
+- scoping all cleanup strictly to rows the test itself created (by process/stream id), never a
+  blanket time-range `DELETE` against `blocks`; or
+- accepting permanent, harmless accumulation of tiny test partitions in a fixed, far-past time
+  window (no deletion at all), if that's judged acceptable for the target test database.
+
+Follow-up: build one of the above, then add back DB-backed coverage for the `sort_order` /
+`regenerate_partitions` behaviors this plan introduces, per the Testing Strategy section above.
+The migration test (v6→v7, including simulating a pre-existing v6 database by dropping the
+`sort_order` column and rolling back `lakehouse_migration.version`) additionally mutates the
+shared `lakehouse_partitions` schema itself while other tests may be reading it concurrently, so it
+should run in isolation (e.g. its own dedicated database) rather than share a database with any
+other test.
+
 ## Open Questions
 
 None. (The former question — whether the `block_id` tie-break is load-bearing — is resolved by

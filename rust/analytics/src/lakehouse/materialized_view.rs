@@ -1,6 +1,8 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    partitioned_execution_plan::make_partitioned_execution_plan, reader_factory::ReaderFactory,
+    lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider,
+    partitioned_execution_plan::{OrderingBounds, make_partitioned_execution_plan},
+    reader_factory::ReaderFactory,
     view::View,
 };
 use crate::time::TimeRange;
@@ -92,6 +94,7 @@ impl TableProvider for MaterializedView {
             limit,
             Arc::new(partitions),
             &self.view.get_scan_output_ordering(),
+            OrderingBounds::EventTime,
         )
     }
 

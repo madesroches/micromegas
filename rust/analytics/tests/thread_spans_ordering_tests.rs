@@ -20,7 +20,9 @@ use datafusion::prelude::SessionContext;
 use futures::stream;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
-use micromegas_analytics::lakehouse::partitioned_execution_plan::make_partitioned_execution_plan;
+use micromegas_analytics::lakehouse::partitioned_execution_plan::{
+    OrderingBounds, make_partitioned_execution_plan,
+};
 use micromegas_analytics::lakehouse::perfetto_trace_execution_plan::write_thread_spans;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::view::{ScanSortColumn, ViewMetadata};
@@ -44,6 +46,7 @@ fn make_partition(file_path: &str, min_time: DateTime<Utc>, max_time: DateTime<U
         file_size: 1024,
         source_data_hash: vec![0],
         num_rows: 10,
+        sort_order: None,
     }
 }
 
@@ -83,6 +86,7 @@ async fn overlapping_partitions_are_rejected() {
         None,
         Arc::new(vec![part_a, part_b]),
         &begin_ascending(),
+        OrderingBounds::EventTime,
     );
     assert!(
         result.is_err(),
@@ -111,6 +115,7 @@ async fn non_overlapping_partitions_are_accepted() {
         None,
         Arc::new(vec![part_a, part_b]),
         &begin_ascending(),
+        OrderingBounds::EventTime,
     );
     assert!(
         result.is_ok(),
@@ -153,6 +158,7 @@ async fn build_plan_wrapped_in_sort(output_ordering: &[ScanSortColumn]) -> Arc<d
         None,
         Arc::new(vec![part_later, part_earlier]),
         output_ordering,
+        OrderingBounds::EventTime,
     )
     .expect("plan should build");
 

@@ -64,6 +64,7 @@ SELECT * FROM list_partitions();
 | `file_schema_hash` | Binary | Schema version when partition was created |
 | `source_data_hash` | Binary | Hash of the source data |
 | `num_rows` | Integer | Number of rows in the partition |
+| `sort_order` | List(String) | Recorded sort guarantee (e.g. `["insert_time"]`), or `NULL` if none is guaranteed |
 
 **Example**:
 ```sql
@@ -104,6 +105,31 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 
 !!! warning "Time-Based Retirement"
     This function retires ALL partitions in the specified time range, regardless of schema compatibility. Use with caution.
+
+---
+
+### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
+
+**Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)).
+
+**Parameters**:
+- `view_set_name` (String): Name of the view set to regenerate
+- `begin` (Timestamp): Start time of the partition(s) being regenerated (inclusive)
+- `end` (Timestamp): End time of the partition(s) being regenerated (exclusive)
+- `partition_delta_seconds` (Integer): Size of each partition in seconds. Common values: 3600 (hourly), 86400 (daily)
+
+**Usage**:
+```sql
+SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z', 86400);
+```
+
+**Returns**: A stream of progress log rows (`time`, `msg`), same shape as `materialize_partitions()`.
+
+!!! warning "Alignment invariant"
+    `(begin, end, partition_delta_seconds)` must exactly cover the boundaries of the partition(s) being regenerated: `(end - begin)` must be an exact, non-zero multiple of `partition_delta_seconds`, and the range must exactly match existing partition boundaries. A misaligned range/delta fails the query loudly (an error, not a log row) instead of silently leaving a duplicate, overlapping partition behind.
+
+!!! note "Online, no downtime"
+    Regeneration retires the old partition and inserts the new one atomically, in the same transaction, and streams the source data in bounded chunks -- safe to run against a busy, in-production lakehouse. It is an admin/rollout tool, not a steady-state path: run calls serially, never with overlapping ranges in flight concurrently.
 
 ---
 

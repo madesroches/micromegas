@@ -99,6 +99,45 @@ async fn verify_overlapping_partitions(
     Ok(PartitionCreationStrategy::Abort)
 }
 
+/// Re-checks the same partial-overlap condition `verify_overlapping_partitions` guards, without
+/// its source-hash freshness comparison (the "already up to date" `Abort`, which forcing exists to
+/// bypass). Used only on the `force` path.
+///
+/// Filters the existing-partitions snapshot hash-agnostically (`filter_insert_range` +
+/// view/instance match) rather than via `PartitionCache::filter`'s hash-exact match: a
+/// partially-overlapping partition written under an older schema hash must still be caught here,
+/// since `retire_partitions`'s range-containment delete is equally hash-agnostic and would not
+/// retire it either.
+fn verify_force_regeneration_alignment(
+    existing_partitions_all_views: &PartitionCache,
+    insert_range: TimeRange,
+    view_set_name: &str,
+    view_instance_id: &str,
+) -> Result<()> {
+    let filtered = existing_partitions_all_views.filter_insert_range(insert_range);
+    for part in &filtered.partitions {
+        if *part.view_metadata.view_set_name != view_set_name
+            || *part.view_metadata.view_instance_id != view_instance_id
+        {
+            continue;
+        }
+        let begin = part.begin_insert_time();
+        let end = part.end_insert_time();
+        if begin < insert_range.begin || end > insert_range.end {
+            anyhow::bail!(
+                "regenerate_partitions: requested range [{}, {}] does not fully contain \
+                 existing partition [{}, {}] for {view_set_name}/{view_instance_id} -- \
+                 range/delta must exactly cover the partition(s) being regenerated",
+                insert_range.begin.to_rfc3339(),
+                insert_range.end.to_rfc3339(),
+                begin.to_rfc3339(),
+                end.to_rfc3339(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[span_fn]
 async fn materialize_partition(
     existing_partitions_all_views: Arc<PartitionCache>,
@@ -106,6 +145,7 @@ async fn materialize_partition(
     insert_range: TimeRange,
     view: Arc<dyn View>,
     logger: Arc<dyn Logger>,
+    force: bool,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
@@ -119,22 +159,43 @@ async fn materialize_partition(
     // Allow empty partition specs to be written - write_partition_from_rows
     // will create an empty partition record
     let view_instance_id = view.get_view_instance_id();
-    let strategy = verify_overlapping_partitions(
-        &existing_partitions_all_views,
-        insert_range,
-        &view_set_name,
-        &view_instance_id,
-        &view.get_file_schema_hash(),
-        &partition_spec.get_source_data_hash(),
-        logger.clone(),
-    )
-    .await
-    .with_context(|| "verify_overlapping_partitions")?;
+    let strategy = if force {
+        verify_force_regeneration_alignment(
+            &existing_partitions_all_views,
+            insert_range,
+            &view_set_name,
+            &view_instance_id,
+        )
+        .with_context(|| "verify_force_regeneration_alignment")?;
+        PartitionCreationStrategy::CreateFromSource
+    } else {
+        verify_overlapping_partitions(
+            &existing_partitions_all_views,
+            insert_range,
+            &view_set_name,
+            &view_instance_id,
+            &view.get_file_schema_hash(),
+            &partition_spec.get_source_data_hash(),
+            logger.clone(),
+        )
+        .await
+        .with_context(|| "verify_overlapping_partitions")?
+    };
     if let PartitionCreationStrategy::Abort = &strategy {
         return Ok(());
     }
 
-    let new_delta = view.get_max_partition_time_delta(&strategy);
+    // Forced regeneration always writes the whole requested range as a single
+    // CreateFromSource partition -- skipping the subdivision check is required, not optional
+    // (see the plan's Design §3): BlocksView::get_max_partition_time_delta returns a much
+    // smaller delta for CreateFromSource than for MergeExisting, and honoring it here would
+    // recurse into many small partitions that retire_partitions could not cleanly replace the
+    // single pre-existing merged partition with.
+    let new_delta = if force {
+        insert_range.end - insert_range.begin
+    } else {
+        view.get_max_partition_time_delta(&strategy)
+    };
     if new_delta < (insert_range.end - insert_range.begin) {
         if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy
             && partition_cache
@@ -153,13 +214,14 @@ async fn materialize_partition(
             return Ok(());
         }
 
-        return Box::pin(materialize_partition_range(
+        return Box::pin(materialize_partition_range_impl(
             existing_partitions_all_views,
             lakehouse.clone(),
             view,
             insert_range,
             new_delta,
             logger,
+            force,
         ))
         .await
         .with_context(|| "materialize_partition_range");
@@ -168,7 +230,7 @@ async fn materialize_partition(
     match strategy {
         PartitionCreationStrategy::CreateFromSource => {
             partition_spec
-                .write(lakehouse.lake().clone(), logger)
+                .write(lakehouse.lake().clone(), logger, force)
                 .await
                 .with_context(|| "writing partition")?;
         }
@@ -190,15 +252,16 @@ async fn materialize_partition(
     Ok(())
 }
 
-/// Materializes partitions within a given time range.
+/// Shared loop body for `materialize_partition_range` and `regenerate_partition_range`.
 #[span_fn]
-pub async fn materialize_partition_range(
+async fn materialize_partition_range_impl(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
     view: Arc<dyn View>,
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
+    force: bool,
 ) -> Result<()> {
     let mut begin_part = insert_range.begin;
     let mut end_part = begin_part + partition_time_delta;
@@ -212,6 +275,7 @@ pub async fn materialize_partition_range(
             partition_insert_range,
             view.clone(),
             logger.clone(),
+            force,
         )
         .await
         .with_context(|| "materialize_partition")?;
@@ -219,4 +283,72 @@ pub async fn materialize_partition_range(
         end_part = begin_part + partition_time_delta;
     }
     Ok(())
+}
+
+/// Materializes partitions within a given time range.
+#[span_fn]
+pub async fn materialize_partition_range(
+    existing_partitions_all_views: Arc<PartitionCache>,
+    lakehouse: Arc<LakehouseContext>,
+    view: Arc<dyn View>,
+    insert_range: TimeRange,
+    partition_time_delta: TimeDelta,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    materialize_partition_range_impl(
+        existing_partitions_all_views,
+        lakehouse,
+        view,
+        insert_range,
+        partition_time_delta,
+        logger,
+        false,
+    )
+    .await
+}
+
+/// Force-regenerates the partition(s) covering `insert_range` directly from source data,
+/// bypassing the "already up to date" freshness check `materialize_partition_range` would
+/// otherwise stop at. See `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
+///
+/// **Invariant callers must uphold**: `(begin, end, delta)` must exactly cover the boundaries of
+/// the partition(s) being regenerated -- a misaligned range/delta means the new partition's range
+/// does not fully contain the old one, so `retire_partitions` never retires it, leaving silent
+/// duplicate rows. This is enforced by validating that `delta` exactly tiles `(begin, end)` before
+/// any partition is written, and (per bucket) by `verify_force_regeneration_alignment`.
+#[span_fn]
+pub async fn regenerate_partition_range(
+    existing_partitions_all_views: Arc<PartitionCache>,
+    lakehouse: Arc<LakehouseContext>,
+    view: Arc<dyn View>,
+    insert_range: TimeRange,
+    partition_time_delta: TimeDelta,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    // chrono::TimeDelta implements no Rem/% operator, so tile-checking is done on nanoseconds.
+    let span = (insert_range.end - insert_range.begin)
+        .num_nanoseconds()
+        .expect("time range span should fit in an i64 number of nanoseconds");
+    let step = partition_time_delta
+        .num_nanoseconds()
+        .expect("partition_time_delta should fit in an i64 number of nanoseconds");
+    if !(step > 0 && span >= step && span % step == 0) {
+        anyhow::bail!(
+            "regenerate_partitions: delta ({partition_time_delta}) does not exactly tile the \
+             requested range [{}, {}] -- range/delta must exactly cover the partition(s) being \
+             regenerated",
+            insert_range.begin.to_rfc3339(),
+            insert_range.end.to_rfc3339(),
+        );
+    }
+    materialize_partition_range_impl(
+        existing_partitions_all_views,
+        lakehouse,
+        view,
+        insert_range,
+        partition_time_delta,
+        logger,
+        true,
+    )
+    .await
 }

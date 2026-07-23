@@ -7,6 +7,7 @@ use super::{
     partition_cache::QueryPartitionProvider, partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
     process_spans_table_function::ProcessSpansTableFunction, reader_factory::ReaderFactory,
+    regenerate_partitions_table_function::RegeneratePartitionsTableFunction,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partition_by_metadata_udf::make_retire_partition_by_metadata_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction,
@@ -131,6 +132,13 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "materialize_partitions",
         Arc::new(MaterializePartitionsTableFunction::new(
+            lakehouse.clone(),
+            view_factory.clone(),
+        )),
+    );
+    ctx.register_udtf(
+        "regenerate_partitions",
+        Arc::new(RegeneratePartitionsTableFunction::new(
             lakehouse.clone(),
             view_factory.clone(),
         )),

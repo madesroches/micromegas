@@ -56,6 +56,12 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_partitions)
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
+#### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧
+
+**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at.
+
+See [Admin Functions Reference](../admin/functions-reference.md) for details.
+
 #### `list_view_sets()` 🔧
 
 **Administrative Function** - Lists all available view sets with their current schema information.

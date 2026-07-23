@@ -705,6 +705,70 @@ class FlightSQLClient:
             for index, row in rb.to_pandas().iterrows():
                 print(row["time"], row["msg"])
 
+    def regenerate_partitions(
+        self, view_set_name, begin, end, partition_delta_seconds
+    ):
+        """Force-regenerate existing materialized view partition(s) directly from source data.
+
+        Unlike `materialize_partitions`, this bypasses the "already up to date" freshness
+        check, so it can rebuild a partition whose content hash is unchanged but whose
+        internal row order or format needs to be refreshed (for example, an existing merged
+        `blocks` partition materialized before ordered merges were introduced). Regeneration
+        is online: the old partition is retired and the new one inserted atomically, with no
+        query downtime.
+
+        Args:
+            view_set_name (str): The name of the view set to regenerate.
+            begin (datetime): Start time of the partition(s) being regenerated (inclusive).
+                Must exactly match an existing partition boundary.
+            end (datetime): End time of the partition(s) being regenerated (exclusive).
+                Must exactly match an existing partition boundary.
+            partition_delta_seconds (int): Size of each partition in seconds. `(end - begin)`
+                must be an exact, non-zero multiple of this value. Common values: 3600
+                (hourly), 86400 (daily).
+
+        Returns:
+            None: Prints status messages as partitions are regenerated.
+
+        Raises:
+            Exception: If `(begin, end, partition_delta_seconds)` does not exactly tile an
+                existing partition's boundaries -- a misaligned range/delta would otherwise
+                leave a duplicate, overlapping partition behind, so the call fails loudly
+                instead.
+
+        Example:
+            >>> from datetime import datetime, timedelta, timezone
+            >>>
+            >>> # Regenerate yesterday's daily blocks partition
+            >>> end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            >>> begin = end - timedelta(days=1)
+            >>>
+            >>> client.regenerate_partitions(
+            ...     'blocks',
+            ...     begin,
+            ...     end,
+            ...     86400  # must match the existing daily partition's boundaries
+            ... )
+            # Output: Progress messages for the regenerated partition
+
+        Note:
+            `regenerate_partitions` is an admin/rollout tool, not a steady-state path.
+            Operators should run calls serially, never with overlapping ranges in flight
+            concurrently.
+        """
+        sql = """
+          SELECT time, msg
+          FROM regenerate_partitions('{view_set_name}', '{begin}', '{end}', {partition_delta_seconds})
+        """.format(
+            view_set_name=view_set_name,
+            begin=begin.isoformat(),
+            end=end.isoformat(),
+            partition_delta_seconds=partition_delta_seconds,
+        )
+        for rb in self.query_stream(sql):
+            for index, row in rb.to_pandas().iterrows():
+                print(row["time"], row["msg"])
+
     def find_process(self, process_id):
         """Find and retrieve metadata for a specific process.
 

@@ -49,12 +49,18 @@ impl Logger for ResponseWriter {
 }
 
 /// A sender for sending log entries to a channel.
+///
+/// The channel item is `Result<(time, msg), String>` so a paired consumer (`AsyncLogStream`) can
+/// also carry a query-level failure through the same channel; `write_log_entry` always sends
+/// `Ok(...)`, so this is behavior-preserving for every existing caller.
 pub struct LogSender {
-    sender: Sender<(chrono::DateTime<chrono::Utc>, String)>,
+    sender: Sender<std::result::Result<(chrono::DateTime<chrono::Utc>, String), String>>,
 }
 
 impl LogSender {
-    pub fn new(sender: Sender<(chrono::DateTime<chrono::Utc>, String)>) -> Self {
+    pub fn new(
+        sender: Sender<std::result::Result<(chrono::DateTime<chrono::Utc>, String), String>>,
+    ) -> Self {
         Self { sender }
     }
 }
@@ -64,7 +70,7 @@ impl Logger for LogSender {
     async fn write_log_entry(&self, msg: String) -> Result<()> {
         info!("{msg}");
         self.sender
-            .send((chrono::Utc::now(), msg))
+            .send(Ok((chrono::Utc::now(), msg)))
             .await
             .with_context(|| "LogSender::write_log_entry")
     }

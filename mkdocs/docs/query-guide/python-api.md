@@ -489,6 +489,28 @@ client.materialize_partitions(
 # Prints progress messages for each materialized partition
 ```
 
+### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
+
+Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced):
+
+```python
+# Regenerate yesterday's daily blocks partition
+end = datetime.datetime.now(datetime.timezone.utc).replace(
+    hour=0, minute=0, second=0, microsecond=0
+)
+begin = end - datetime.timedelta(days=1)
+
+client.regenerate_partitions(
+    'blocks',
+    begin,
+    end,
+    86400  # must exactly match the existing daily partition's boundaries
+)
+# Prints progress messages for the regenerated partition
+```
+
+**Warning:** `(begin, end, partition_delta_seconds)` must exactly cover an existing partition's boundaries, or the call fails loudly instead of silently creating a duplicate partition. This is an admin/rollout tool -- run calls serially, never with overlapping ranges in flight concurrently.
+
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
 
 Remove materialized partitions to free up storage:

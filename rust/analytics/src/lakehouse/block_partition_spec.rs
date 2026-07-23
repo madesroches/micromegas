@@ -57,7 +57,12 @@ impl PartitionSpec for BlockPartitionSpec {
     }
 
     #[span_fn]
-    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
+    async fn write(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        logger: Arc<dyn Logger>,
+        force: bool,
+    ) -> Result<()> {
         let desc = format!(
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
@@ -89,6 +94,8 @@ impl PartitionSpec for BlockPartitionSpec {
             self.schema.clone(),
             self.insert_range,
             self.source_data.get_source_data_hash(),
+            None,
+            force,
             rx,
             logger.clone(),
         ));

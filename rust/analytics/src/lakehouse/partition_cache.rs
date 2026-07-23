@@ -35,6 +35,16 @@ impl fmt::Display for PartitionCache {
 }
 
 impl PartitionCache {
+    /// Builds an empty cache for `insert_range`, without querying Postgres. Used by
+    /// offline/no-DB tests that need a `PartitionCache` handle to satisfy an API (e.g. session
+    /// context registration) but have no other view's partitions to supply.
+    pub fn empty(insert_range: TimeRange) -> Self {
+        Self {
+            partitions: vec![],
+            insert_range,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.partitions.len()
     }
@@ -64,7 +74,8 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    num_rows
+                    num_rows,
+                    sort_order
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -111,6 +122,7 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
+                sort_order: r.try_get("sort_order")?,
             };
             partition
                 .validate()
@@ -142,7 +154,8 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    num_rows
+                    num_rows,
+                    sort_order
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -193,6 +206,7 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
+                sort_order: r.try_get("sort_order")?,
             };
             partition
                 .validate()
@@ -353,7 +367,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    num_rows
+                    num_rows,
+                    sort_order
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
@@ -387,7 +402,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    num_rows
+                    num_rows,
+                    sort_order
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
@@ -436,6 +452,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
+                sort_order: r.try_get("sort_order")?,
             };
             partition
                 .validate()

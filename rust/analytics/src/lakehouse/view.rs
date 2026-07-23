@@ -3,7 +3,7 @@ use super::{
     dataframe_time_bounds::DataFrameTimeBounds,
     lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
-    merge::{PartitionMerger, QueryMerger},
+    merge::{MergeQueryResult, PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::PartitionCache,
     session_configurator::NoOpSessionConfigurator,
@@ -13,10 +13,7 @@ use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::{
-    arrow::datatypes::Schema, execution::SendableRecordBatchStream, logical_expr::Expr, prelude::*,
-    sql::TableReference,
-};
+use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -29,7 +26,16 @@ pub trait PartitionSpec: Send + Sync + Debug {
     /// Returns a hash of the source data.
     fn get_source_data_hash(&self) -> Vec<u8>;
     /// Writes the partition to the data lake.
-    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
+    ///
+    /// `force`, when true, tells the underlying write path to run the in-transaction
+    /// concurrent-write overlap recheck used by forced regeneration (see
+    /// `write_partition::insert_partition`). `false` at every non-forced call site.
+    async fn write(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        logger: Arc<dyn Logger>,
+        force: bool,
+    ) -> Result<()>;
 }
 
 /// Metadata about a view.
@@ -104,7 +110,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
         insert_range: TimeRange,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<MergeQueryResult> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let merger = QueryMerger::new(
@@ -121,6 +127,24 @@ pub trait View: std::fmt::Debug + Send + Sync {
                 insert_range,
             )
             .await
+    }
+
+    /// Returns the sort guarantee a merge of `partitions_to_merge` will actually produce, to be
+    /// recorded as the resulting partition's `Partition::sort_order` (see
+    /// `merge::create_merged_partition`).
+    ///
+    /// This is a distinct concept from `get_scan_output_ordering()`: that one is a trusted
+    /// scan-ordering declaration consumed during physical planning, while this one is a record of
+    /// what a specific merge actually produced, computed purely from the input partitions (before
+    /// `merge_partitions` runs) and independent of whether DataFusion's elision optimization
+    /// happened to succeed for this particular run.
+    ///
+    /// Default: `None` -- no guarantee recorded, ignoring the argument.
+    fn get_merged_partition_sort_order(
+        &self,
+        _partitions_to_merge: &[Partition],
+    ) -> Option<Vec<String>> {
+        None
     }
 
     /// tells the daemon which view should be materialized and in what order

@@ -90,6 +90,9 @@ pub mod query;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData, reading footers from the
 /// ObjectStore through a cache-backed reader
 pub mod reader_factory;
+/// Exposes regenerate_partitions as a table function that force-regenerates partitions directly
+/// from source data
+pub mod regenerate_partitions_table_function;
 /// Scalar UDF to retire a single partition by file path
 pub mod retire_partition_by_file_udf;
 /// Scalar UDF to retire a single partition by metadata
