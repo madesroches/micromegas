@@ -16,6 +16,15 @@ It reads the lake from the environment:
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store holding the partitions |
 
+Lakehouse schema migrations run automatically at service startup. The v7
+migration runs `CREATE EXTENSION IF NOT EXISTS btree_gist` (required by the
+partition-overlap exclusion constraint). On PostgreSQL 13+ — including Amazon
+Aurora and RDS — `btree_gist` is a *trusted* extension, so the service's
+database role only needs the `CREATE` privilege on the database it already
+owns. On PostgreSQL 12 or older, or if the role lacks that privilege, have a
+superuser pre-create the extension once; the migration then proceeds
+unchanged.
+
 ## Running the daemon
 
 ```bash

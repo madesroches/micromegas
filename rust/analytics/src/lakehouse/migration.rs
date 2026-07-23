@@ -441,7 +441,7 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
         .with_context(|| "adding sort_order column to lakehouse_partitions")?;
     tr.execute("CREATE EXTENSION IF NOT EXISTS btree_gist;")
         .await
-        .with_context(|| "creating btree_gist extension (required by the partition overlap exclusion constraint)")?;
+        .with_context(|| "creating btree_gist extension (required by the partition overlap exclusion constraint); on PostgreSQL <= 12, or if this role lacks CREATE on the database, a superuser must run CREATE EXTENSION btree_gist once")?;
     // Detect-then-fail: the exclusion constraint below cannot be added NOT VALID, so if legacy
     // overlapping partitions exist, surface exactly which rows conflict instead of failing with a
     // raw constraint error. Zero-width ranges are excluded to match tstzrange semantics (an empty

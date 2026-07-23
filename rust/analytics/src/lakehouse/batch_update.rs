@@ -192,7 +192,7 @@ async fn materialize_partition(
             return Ok(());
         }
 
-        return Box::pin(materialize_partition_range_impl(
+        return Box::pin(materialize_partition_range(
             existing_partitions_all_views,
             lakehouse.clone(),
             view,
@@ -229,9 +229,9 @@ async fn materialize_partition(
     Ok(())
 }
 
-/// Shared loop body for `materialize_partition_range` and `materialize_partition`'s subdivision.
+/// Materializes partitions within a given time range.
 #[span_fn]
-async fn materialize_partition_range_impl(
+pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
     view: Arc<dyn View>,
@@ -258,27 +258,6 @@ async fn materialize_partition_range_impl(
         end_part = begin_part + partition_time_delta;
     }
     Ok(())
-}
-
-/// Materializes partitions within a given time range.
-#[span_fn]
-pub async fn materialize_partition_range(
-    existing_partitions_all_views: Arc<PartitionCache>,
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    partition_time_delta: TimeDelta,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    materialize_partition_range_impl(
-        existing_partitions_all_views,
-        lakehouse,
-        view,
-        insert_range,
-        partition_time_delta,
-        logger,
-    )
-    .await
 }
 
 /// Regenerates the partition(s) covering `insert_range` directly from source data, bypassing the

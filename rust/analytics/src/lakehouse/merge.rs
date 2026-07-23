@@ -268,11 +268,8 @@ pub async fn create_merged_partition(
         )
         .await
         .with_context(|| "view.merge_partitions")?;
-    if !merge_result.ordering_honored {
-        warn!(
-            "{desc}: merge did not honor its declared scan ordering; memory bound not honored for this merge (result is still correctly ordered)"
-        );
-    }
+    // A defeated ordering elision (ordering_honored: false) is already warned about, with the
+    // offending plan, inside QueryMerger::execute_merge_query.
     let mut merged_stream = merge_result.stream;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let view_copy = view.clone();
