@@ -1255,16 +1255,29 @@ footer-free way to check per-partition sort status before it declares
 - **Why the recorded `sort_order` keeps `block_id` rather than simplifying to `[insert_time]`
   alone.** `block_id` is not load-bearing for *this* plan's merge correctness — §1 already proves
   the elided merge is correct on `insert_time` alone (inputs are insert-time-disjoint, so ties
-  never cross files, and within-file order is preserved verbatim). It *is* load-bearing for the
-  recorded guarantee's stated consumer, `tasks/jit_single_query_plan.md`, whose cache reuse
-  derives partition boundaries from `blocks[0]`/`blocks[last]` and therefore needs a fully
-  *deterministic* row order, not merely an `insert_time`-monotonic one. `block_id` is a `UUID`
-  primary key (`sql_telemetry_db.rs:74`) while `insert_time` is a `TIMESTAMPTZ` with no uniqueness
+  never cross files, and within-file order is preserved verbatim). Nor does adjacency of two
+  equal-`insert_time` rows matter to anything that only reads `insert_time`: e.g. a partition's
+  recorded `[min_insert_time, max_insert_time]` is `blocks[0]`/`blocks[last]` insert_time
+  (`get_part_insert_time_range`, `jit_partitions.rs:598-599`), and tied rows share that value, so
+  which one is first/last is irrelevant to the range. The tie-break is load-bearing for one
+  reason: the recorded guarantee's stated consumer, `tasks/jit_single_query_plan.md`, does
+  *position-sensitive* work — its greedy segmenter (`jit_partitions.rs:143-184`) walks rows **in
+  order** and cuts a new partition when a running `nb_objects` sum crosses `max_nb_objects`. When
+  two blocks tie on `insert_time` and a size-cap cut falls between them, their order decides which
+  partition each joins, so a non-deterministic tie order yields *different partition membership*
+  across runs. Because JIT cache validity is checked only by `[min_insert_time, max_insert_time]`
+  range + object count (`hash_to_object_count`, `jit_partitions.rs:579-580`), not by the block
+  set, order-dependent packing causes either constant cache misses (shifted ranges → perpetual
+  regeneration) or a false "up to date" (same range + count, different blocks). `block_id` is a
+  `UUID` (`sql_telemetry_db.rs:74`) while `insert_time` is a `TIMESTAMPTZ` with no uniqueness
   constraint, so `[insert_time]` alone is a *partial* order — ambiguous the moment any two blocks
-  share a microsecond (possible under concurrent ingestion or a single batched `INSERT`), whereas
-  `[insert_time, block_id]` is a *total* order. This is a schema-level fact: the ambiguity's
-  *possibility*, not its production *frequency*, is what governs a determinism guarantee, so no
-  collision-frequency measurement could make dropping `block_id` safe. The two-column key stays.
+  share a microsecond (possible under concurrent ingestion or a single batched `INSERT`) — whereas
+  `[insert_time, block_id]` is a *total* order that makes the packing reproducible. This is a
+  schema-level fact: the ambiguity's *possibility*, not its production *frequency*, governs the
+  determinism guarantee, so no collision-frequency measurement could make dropping `block_id`
+  safe. This plan therefore preserves `block_id` order *through merges* precisely so the JIT
+  consumer reading the merged blocks-view partitions still sees the reproducible order. The
+  two-column key stays.
 
 ## Testing Strategy
 
@@ -1446,7 +1459,8 @@ plan.
 
 None. (The former question — whether the `block_id` tie-break is load-bearing — is resolved from
 the schema and the consumer plan; see the Trade-offs bullet "Why the recorded `sort_order` keeps
-`block_id`". Short version: it is load-bearing for the `jit_single_query_plan.md` consumer, and
-because `insert_time` is non-unique by schema while `block_id` is a `UUID` key, only possibility —
-not production frequency — governs the determinism guarantee, so the two-column key stays and no
-measurement is needed to decide it.)
+`block_id`". Short version: it is load-bearing for the `jit_single_query_plan.md` consumer, whose
+greedy `max_nb_objects` segmenter packs partitions by row *position*, so tied-row order changes
+partition membership; because `insert_time` is non-unique by schema while `block_id` is a `UUID`
+key, only possibility — not production frequency — governs the determinism guarantee, so the
+two-column key stays and no measurement is needed to decide it.)
