@@ -1252,6 +1252,19 @@ footer-free way to check per-partition sort status before it declares
   would either under-record the guarantee (just `[insert_time]`, losing the `block_id` tie-break
   fact §1 establishes) or conflate two different contracts (a DataFusion validation input vs. a
   Postgres-recorded fact about the output). A separate method keeps them independently correct.
+- **Why the recorded `sort_order` keeps `block_id` rather than simplifying to `[insert_time]`
+  alone.** `block_id` is not load-bearing for *this* plan's merge correctness — §1 already proves
+  the elided merge is correct on `insert_time` alone (inputs are insert-time-disjoint, so ties
+  never cross files, and within-file order is preserved verbatim). It *is* load-bearing for the
+  recorded guarantee's stated consumer, `tasks/jit_single_query_plan.md`, whose cache reuse
+  derives partition boundaries from `blocks[0]`/`blocks[last]` and therefore needs a fully
+  *deterministic* row order, not merely an `insert_time`-monotonic one. `block_id` is a `UUID`
+  primary key (`sql_telemetry_db.rs:74`) while `insert_time` is a `TIMESTAMPTZ` with no uniqueness
+  constraint, so `[insert_time]` alone is a *partial* order — ambiguous the moment any two blocks
+  share a microsecond (possible under concurrent ingestion or a single batched `INSERT`), whereas
+  `[insert_time, block_id]` is a *total* order. This is a schema-level fact: the ambiguity's
+  *possibility*, not its production *frequency*, is what governs a determinism guarantee, so no
+  collision-frequency measurement could make dropping `block_id` safe. The two-column key stays.
 
 ## Testing Strategy
 
@@ -1431,21 +1444,9 @@ plan.
 
 ## Open Questions
 
-- **TODO: is the `block_id` tie-break actually load-bearing, or would `insert_time` alone suffice as
-  the declared/recorded ordering?** This plan's own correctness argument (Design §1, point 2)
-  doesn't need `block_id`: merged input files are non-overlapping in `insert_time` by construction,
-  so ties never need to be broken *across* files, only preserved *within* one already-written file,
-  whatever order that file happens to store same-`insert_time` rows in. The two-column key exists
-  for a different consumer: `tasks/jit_single_query_plan.md`'s JIT partition generation reads
-  `blocks[0]`/`blocks[last]` to derive deterministic partition boundaries, and its cache-reuse
-  guarantee depends on generating the *exact same* bucketing on every run — which requires a fully
-  deterministic row order, not merely an `insert_time`-monotonic one. `insert_time` is a
-  `TIMESTAMPTZ` (microsecond precision, no uniqueness constraint), so two blocks landing in the same
-  microsecond (plausible under concurrent ingestion, or a single batched `INSERT` assigning the same
-  timestamp to multiple rows) would sort ambiguously without `block_id` as a tiebreak — worth
-  confirming empirically (e.g. `SELECT insert_time, count(*) FROM blocks GROUP BY insert_time HAVING
-  count(*) > 1` against a busy day) before deciding whether the recorded `sort_order` could be
-  simplified to `['insert_time']` alone. If collisions turn out to be common, `block_id` stays
-  required; if they're vanishingly rare, dropping it would need matching changes to
-  `blocks_view.rs`'s `data_sql` and to the JIT plan's own consumer-ordering assumptions, not just to
-  this plan's `sort_order` value — not undertaken here.
+None. (The former question — whether the `block_id` tie-break is load-bearing — is resolved from
+the schema and the consumer plan; see the Trade-offs bullet "Why the recorded `sort_order` keeps
+`block_id`". Short version: it is load-bearing for the `jit_single_query_plan.md` consumer, and
+because `insert_time` is non-unique by schema while `block_id` is a `UUID` key, only possibility —
+not production frequency — governs the determinism guarantee, so the two-column key stays and no
+measurement is needed to decide it.)
