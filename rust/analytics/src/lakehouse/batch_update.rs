@@ -100,8 +100,8 @@ async fn verify_overlapping_partitions(
 }
 
 /// Re-checks the same partial-overlap condition `verify_overlapping_partitions` guards, without
-/// its source-hash freshness comparison (the "already up to date" `Abort`, which forcing exists to
-/// bypass). Used only on the `force` path.
+/// its source-hash freshness comparison (the "already up to date" `Abort`, which regeneration
+/// exists to bypass). Used only by `regenerate_partition`.
 ///
 /// Filters the existing-partitions snapshot hash-agnostically (`filter_insert_range` +
 /// view/instance match) rather than via `PartitionCache::filter`'s hash-exact match: a
@@ -145,7 +145,6 @@ async fn materialize_partition(
     insert_range: TimeRange,
     view: Arc<dyn View>,
     logger: Arc<dyn Logger>,
-    force: bool,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
@@ -159,43 +158,22 @@ async fn materialize_partition(
     // Allow empty partition specs to be written - write_partition_from_rows
     // will create an empty partition record
     let view_instance_id = view.get_view_instance_id();
-    let strategy = if force {
-        verify_force_regeneration_alignment(
-            &existing_partitions_all_views,
-            insert_range,
-            &view_set_name,
-            &view_instance_id,
-        )
-        .with_context(|| "verify_force_regeneration_alignment")?;
-        PartitionCreationStrategy::CreateFromSource
-    } else {
-        verify_overlapping_partitions(
-            &existing_partitions_all_views,
-            insert_range,
-            &view_set_name,
-            &view_instance_id,
-            &view.get_file_schema_hash(),
-            &partition_spec.get_source_data_hash(),
-            logger.clone(),
-        )
-        .await
-        .with_context(|| "verify_overlapping_partitions")?
-    };
+    let strategy = verify_overlapping_partitions(
+        &existing_partitions_all_views,
+        insert_range,
+        &view_set_name,
+        &view_instance_id,
+        &view.get_file_schema_hash(),
+        &partition_spec.get_source_data_hash(),
+        logger.clone(),
+    )
+    .await
+    .with_context(|| "verify_overlapping_partitions")?;
     if let PartitionCreationStrategy::Abort = &strategy {
         return Ok(());
     }
 
-    // Forced regeneration always writes the whole requested range as a single
-    // CreateFromSource partition -- skipping the subdivision check is required, not optional
-    // (see the plan's Design §3): BlocksView::get_max_partition_time_delta returns a much
-    // smaller delta for CreateFromSource than for MergeExisting, and honoring it here would
-    // recurse into many small partitions that retire_partitions could not cleanly replace the
-    // single pre-existing merged partition with.
-    let new_delta = if force {
-        insert_range.end - insert_range.begin
-    } else {
-        view.get_max_partition_time_delta(&strategy)
-    };
+    let new_delta = view.get_max_partition_time_delta(&strategy);
     if new_delta < (insert_range.end - insert_range.begin) {
         if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy
             && partition_cache
@@ -221,7 +199,6 @@ async fn materialize_partition(
             insert_range,
             new_delta,
             logger,
-            force,
         ))
         .await
         .with_context(|| "materialize_partition_range");
@@ -230,7 +207,7 @@ async fn materialize_partition(
     match strategy {
         PartitionCreationStrategy::CreateFromSource => {
             partition_spec
-                .write(lakehouse.lake().clone(), logger, force)
+                .write(lakehouse.lake().clone(), logger)
                 .await
                 .with_context(|| "writing partition")?;
         }
@@ -252,7 +229,7 @@ async fn materialize_partition(
     Ok(())
 }
 
-/// Shared loop body for `materialize_partition_range` and `regenerate_partition_range`.
+/// Shared loop body for `materialize_partition_range` and `materialize_partition`'s subdivision.
 #[span_fn]
 async fn materialize_partition_range_impl(
     existing_partitions_all_views: Arc<PartitionCache>,
@@ -261,7 +238,6 @@ async fn materialize_partition_range_impl(
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
-    force: bool,
 ) -> Result<()> {
     let mut begin_part = insert_range.begin;
     let mut end_part = begin_part + partition_time_delta;
@@ -275,7 +251,6 @@ async fn materialize_partition_range_impl(
             partition_insert_range,
             view.clone(),
             logger.clone(),
-            force,
         )
         .await
         .with_context(|| "materialize_partition")?;
@@ -302,14 +277,13 @@ pub async fn materialize_partition_range(
         insert_range,
         partition_time_delta,
         logger,
-        false,
     )
     .await
 }
 
-/// Force-regenerates the partition(s) covering `insert_range` directly from source data,
-/// bypassing the "already up to date" freshness check `materialize_partition_range` would
-/// otherwise stop at. See `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
+/// Regenerates the partition(s) covering `insert_range` directly from source data, bypassing the
+/// "already up to date" freshness check `materialize_partition_range` would otherwise stop at. See
+/// `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
 ///
 /// **Invariant callers must uphold**: `(begin, end, delta)` must exactly cover the boundaries of
 /// the partition(s) being regenerated -- a misaligned range/delta means the new partition's range
@@ -341,14 +315,58 @@ pub async fn regenerate_partition_range(
             insert_range.end.to_rfc3339(),
         );
     }
-    materialize_partition_range_impl(
-        existing_partitions_all_views,
-        lakehouse,
-        view,
+    let mut begin_part = insert_range.begin;
+    let mut end_part = begin_part + partition_time_delta;
+    while end_part <= insert_range.end {
+        let bucket = TimeRange::new(begin_part, end_part);
+        let filtered = Arc::new(existing_partitions_all_views.filter_insert_range(bucket));
+        regenerate_partition(
+            filtered,
+            lakehouse.clone(),
+            bucket,
+            view.clone(),
+            logger.clone(),
+        )
+        .await
+        .with_context(|| "regenerate_partition")?;
+        begin_part = end_part;
+        end_part = begin_part + partition_time_delta;
+    }
+    Ok(())
+}
+
+/// Regenerates a single bucket from source, replacing whatever aligned partition(s) currently
+/// cover it. Unlike `materialize_partition` it always writes from source -- never merges, never
+/// aborts on freshness -- and never subdivides: the bucket is exactly one partition. The
+/// transactional retire+insert in the write path replaces the old partition(s) atomically, so a
+/// failure rolls back and leaves the existing partition untouched.
+#[span_fn]
+async fn regenerate_partition(
+    existing_partitions_all_views: Arc<PartitionCache>,
+    lakehouse: Arc<LakehouseContext>,
+    insert_range: TimeRange,
+    view: Arc<dyn View>,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let view_set_name = view.get_view_set_name();
+    let view_instance_id = view.get_view_instance_id();
+    verify_force_regeneration_alignment(
+        &existing_partitions_all_views,
         insert_range,
-        partition_time_delta,
-        logger,
-        true,
+        &view_set_name,
+        &view_instance_id,
     )
-    .await
+    .with_context(|| "verify_force_regeneration_alignment")?;
+    let partition_spec = view
+        .make_batch_partition_spec(
+            lakehouse.clone(),
+            existing_partitions_all_views,
+            insert_range,
+        )
+        .await
+        .with_context(|| "make_batch_partition_spec")?;
+    partition_spec
+        .write(lakehouse.lake().clone(), logger)
+        .await
+        .with_context(|| "writing partition")
 }

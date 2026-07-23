@@ -26,16 +26,7 @@ pub trait PartitionSpec: Send + Sync + Debug {
     /// Returns a hash of the source data.
     fn get_source_data_hash(&self) -> Vec<u8>;
     /// Writes the partition to the data lake.
-    ///
-    /// `force`, when true, tells the underlying write path to run the in-transaction
-    /// concurrent-write overlap recheck used by forced regeneration (see
-    /// `write_partition::insert_partition`). `false` at every non-forced call site.
-    async fn write(
-        &self,
-        lake: Arc<DataLakeConnection>,
-        logger: Arc<dyn Logger>,
-        force: bool,
-    ) -> Result<()>;
+    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
 }
 
 /// Metadata about a view.

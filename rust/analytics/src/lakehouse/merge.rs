@@ -284,7 +284,6 @@ pub async fn create_merged_partition(
         insert_range,
         source_hash.to_le_bytes().to_vec(),
         merged_sort_order,
-        false,
         rx,
         logger.clone(),
     ));
