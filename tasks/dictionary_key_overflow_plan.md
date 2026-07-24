@@ -100,9 +100,10 @@ of scope.
 
 `analytics/src/images_table.rs` (`ImagesRecordBuilder`) has the identical
 `StringDictionaryBuilder<Int16Type>` / panicking-`append_value` pattern
-(`process_ids`/`stream_ids`/`block_ids`/`exes`/`usernames`/`computers`/`formats`) but isn't
-named in the issue. Same bug class, same fix, lower likelihood of hitting it in practice
-(image events are much lower volume). See Open Questions.
+(`process_ids`/`stream_ids`/`block_ids`/`exes`/`usernames`/`computers`/`formats`) and isn't
+named in the issue, but it's the same bug class with the same fix (7 fields, same
+panicking-`append_value` pattern, same `SCHEMA_VERSION` mechanism at `images_view.rs:35`), so
+this plan includes it rather than leaving a known instance of the bug unfixed.
 
 ### Materialized-view schema versioning already handles the migration
 
@@ -117,7 +118,7 @@ schema):
 | net spans | `lakehouse/net_spans_view.rs:33` | `0` |
 | metrics | `lakehouse/metrics_view.rs:39` | `5` |
 | log entries | `lakehouse/log_view.rs:35` | `5` |
-| images (optional) | `lakehouse/images_view.rs:35` | `1` |
+| images | `lakehouse/images_view.rs:35` | `1` |
 
 `PartitionCache::filter` (`lakehouse/partition_cache.rs:223-245`) matches materialized
 partitions to a view by **exact** `file_schema_hash` equality, and
@@ -138,7 +139,20 @@ existing `regenerate_partitions(view_set_name, begin, end, delta)` table functio
 range, followed by `retire_partitions`/`retire_partition_by_metadata` to drop the stale rows
 once satisfied. This plan bumps every affected `SCHEMA_VERSION` by 1 as a normal part of the
 fix (see Implementation Steps) — it's required regardless, since the on-disk Arrow schema is
-changing.
+changing. Running that backfill for existing historical data is a deploy-time operational
+step, not part of this PR's code change — this matches every prior `SCHEMA_VERSION` bump in
+this codebase (commit `8843ebe1b`/PR #521 bumped log/metrics v4→v5, commit `16fce45d5`/PR
+#934 bumped async_events v1→v2, both as a bare const change with no in-code backfill), and
+`regenerate_partitions`/`retire_partitions` are already registered as SQL-callable admin
+table functions (`lakehouse/query.rs:140,121`) for whoever runs that step.
+
+`log_stats` (`lakehouse/log_stats_view.rs`) isn't in the `SCHEMA_VERSION` table above because
+it doesn't have its own version constant — it's a `SqlBatchView` whose transform query
+selects `process_id`/`target` straight `FROM log_entries`, and `SqlBatchView::new`
+(`sql_batch_view.rs:101`) probes its schema live from that query. So once `log_table_schema()`
+widens, `log_stats`' `process_id`/`target` columns — and its derived `file_schema_hash` —
+widen and change automatically, with the same regeneration semantics (old-hash partitions
+excluded, new partitions recomputed going forward) as the explicitly-bumped views above.
 
 ### Tests that assume `Int16Type`
 
@@ -162,7 +176,7 @@ changing.
 
 ### 1. Widen dictionary key type: `Int16Type` → `Int32Type`
 
-In each of the five (six, if images is included) table files:
+In each of the six table files:
 - Swap every `StringDictionaryBuilder<Int16Type>` field to `StringDictionaryBuilder<Int32Type>`.
 - Swap every `Field::new(..., DataType::Dictionary(Box::new(DataType::Int16), ...), ...)` in
   the corresponding `*_table_schema()`/`get_*_schema()` function to
@@ -205,9 +219,8 @@ signature to `-> Result<()>` (turning its two early `return;` statements into
 
 Bump the `const SCHEMA_VERSION: u8` in each affected view file by 1:
 `thread_spans_view.rs` (0→1), `async_events_view.rs` (2→3), `net_spans_view.rs` (0→1),
-`metrics_view.rs` (5→6), `log_view.rs` (5→6), and `images_view.rs` (1→2) if images is
-included. This is what signals to the partition cache that on-disk partitions need
-recomputing (see Current State).
+`metrics_view.rs` (5→6), `log_view.rs` (5→6), and `images_view.rs` (1→2). This is what
+signals to the partition cache that on-disk partitions need recomputing (see Current State).
 
 ## Implementation Steps
 
@@ -225,32 +238,35 @@ recomputing (see Current State).
    `append_value` calls in `append()` (7 calls) and `append_entry_only()` (1 call) to
    `append(...)?`; convert `append_values` calls in `fill_constant_columns()` (6 calls) to
    `append_n(...)?`.
-6. **`lakehouse/otel/logs_block_processor.rs`** — widen the 7 local `Int16Type` builders to
+6. **`images_table.rs`** — widen all seven `Int16Type` fields
+   (`process_ids`/`stream_ids`/`block_ids`/`exes`/`usernames`/`computers`/`formats`) to
+   `Int32Type`; convert their `append_value` calls to `append(...)?`.
+7. **`lakehouse/otel/logs_block_processor.rs`** — widen the 7 local `Int16Type` builders to
    `Int32Type`; convert their `append_value`/`append_values` calls (mirrors step 5's field
    list) to fallible equivalents.
-7. **`lakehouse/otel/metrics_block_processor.rs`** — widen the 9 local `Int16Type` builders
+8. **`lakehouse/otel/metrics_block_processor.rs`** — widen the 9 local `Int16Type` builders
    to `Int32Type`; convert their `append_value`/`append_values` calls (mirrors step 4's field
-   list) to fallible equivalents. Unlike step 6, these calls live inside the private
+   list) to fallible equivalents. Unlike step 7, these calls live inside the private
    `MeasuresRowBuilder::append` helper, not `process()` itself: change that method's
    signature from `fn append(&mut self, …)` to `fn append(&mut self, …) -> Result<()>`,
    convert its two early `return;` statements to `return Ok(());`, end it with `Ok(())`, and
    add `?` to both call sites (`Data::Sum` and `Data::Gauge` arms) in `process()`.
-8. **Schema versions** — bump `SCHEMA_VERSION` in `thread_spans_view.rs`,
-   `async_events_view.rs`, `net_spans_view.rs`, `metrics_view.rs`, `log_view.rs` (and
-   `images_view.rs`, if in scope) per Design §4.
-9. **Fix `analytics/tests/net_spans_test.rs`** — change the five `DictionaryArray<Int16Type>`
-   downcasts (and the `Int16Type` import) in `collect_rows` to `Int32Type`.
-10. **Fix `analytics/tests/sql_view_test.rs`** — change the `Int16Type` downcast at line 135
+9. **Schema versions** — bump `SCHEMA_VERSION` in `thread_spans_view.rs`,
+   `async_events_view.rs`, `net_spans_view.rs`, `metrics_view.rs`, `log_view.rs`, and
+   `images_view.rs` per Design §4.
+10. **Fix `analytics/tests/net_spans_test.rs`** — change the five `DictionaryArray<Int16Type>`
+    downcasts (and the `Int16Type` import) in `collect_rows` to `Int32Type`.
+11. **Fix `analytics/tests/sql_view_test.rs`** — change the `Int16Type` downcast at line 135
     (and its import) to `Int32Type`; update the `ref_schema` `Field` at line 385 to
     `DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into())`; run the test,
     read the new hash out of the assertion failure (or compute it directly), and update the
     `ref_schema_hash` literal at line 396.
-11. **New regression test** — add `analytics/tests/dictionary_key_overflow_tests.rs` per
-    Testing Strategy, proving each production builder accepts more than 32,767 distinct
-    dictionary values without panicking, plus the two OTLP companion tests
-    (`OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` via `BlockProcessor::process`) that
-    prove steps 6/7's "mandatory companions" fix.
-12. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
+12. **New regression test** — add `analytics/tests/dictionary_key_overflow_tests.rs` per
+    Testing Strategy, proving each production builder (including `ImagesRecordBuilder`)
+    accepts more than 32,767 distinct dictionary values without panicking, plus the two OTLP
+    companion tests (`OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` via
+    `BlockProcessor::process`) that prove steps 7/8's "mandatory companions" fix.
+13. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
     `rust/`.
 
 ## Files to Modify
@@ -260,6 +276,7 @@ recomputing (see Current State).
 - `rust/analytics/src/net_spans_table.rs`
 - `rust/analytics/src/metrics_table.rs`
 - `rust/analytics/src/log_entries_table.rs`
+- `rust/analytics/src/images_table.rs`
 - `rust/analytics/src/lakehouse/otel/logs_block_processor.rs`
 - `rust/analytics/src/lakehouse/otel/metrics_block_processor.rs`
 - `rust/analytics/src/lakehouse/thread_spans_view.rs` (`SCHEMA_VERSION` bump)
@@ -267,13 +284,12 @@ recomputing (see Current State).
 - `rust/analytics/src/lakehouse/net_spans_view.rs` (`SCHEMA_VERSION` bump)
 - `rust/analytics/src/lakehouse/metrics_view.rs` (`SCHEMA_VERSION` bump)
 - `rust/analytics/src/lakehouse/log_view.rs` (`SCHEMA_VERSION` bump)
+- `rust/analytics/src/lakehouse/images_view.rs` (`SCHEMA_VERSION` bump)
 - `rust/analytics/tests/net_spans_test.rs`
 - `rust/analytics/tests/sql_view_test.rs`
 - `rust/analytics/tests/dictionary_key_overflow_tests.rs` (new)
 - `rust/analytics/src/lakehouse/view_factory.rs` (module-level doc comments)
 - `mkdocs/docs/query-guide/schema-reference.md` (field type tables + Dictionary Compression note)
-- Optional (see Open Questions): `rust/analytics/src/images_table.rs`,
-  `rust/analytics/src/lakehouse/images_view.rs`
 
 ## Trade-offs
 
@@ -316,24 +332,26 @@ this plan's builders:
 | Table (`###` heading) | Fields to change | Line numbers (current) |
 |---|---|---|
 | `log_entries` | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `target` | 157-165 |
+| `log_stats` | `process_id`, `target` | 208-210 |
 | `measures` | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `target`, `name`, `unit` | 270-280 |
 | `thread_spans` | `name`, `target`, `filename` | 319-321 |
 | `async_events` | `stream_id`, `block_id`, `event_type`, `name`, `filename`, `target` | 349-359 |
 | `net_spans` | `process_id`, `stream_id`, `kind`, `name`, `connection_name` | 461-468 |
-| `images` (only if Open Question 1 resolves to include `images_table.rs`) | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `format` | 581-590 |
+| `images` | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `format` | 581-590 |
 
-Leave the `processes` (lines 31-42), `streams` (lines 68-69), and `log_stats` (lines 208-210)
-tables' `Dictionary(Int16, Utf8)` entries alone — `processes`/`streams` aren't backed by this
-plan's builders, and `log_stats` is a `SqlBatchView` aggregating `log_entries` (its schema
-hash, and thus its dictionary width, is derived automatically like
-`log_entries_per_process_per_minute` in `sql_view_test.rs`, but updating its on-disk
-materialization is outside this plan's builder changes). `otel_spans` already documents
-`Dictionary(Int32, Utf8)` and needs no change.
+Leave the `processes` (lines 31-42) and `streams` (lines 68-69) tables' `Dictionary(Int16,
+Utf8)` entries alone — they aren't backed by this plan's builders. `log_stats` (lines
+208-210) is different: it's a `SqlBatchView` aggregating `log_entries`, and
+`SqlBatchView::new` probes its schema live from that query, so once `log_entries_table`'s
+`process_id`/`target` widen to `Int32`, `log_stats`' matching columns widen automatically
+(the same propagation this plan already relies on for `log_entries_per_process_per_minute`
+in `sql_view_test.rs`) — update its `Dictionary(Int16, Utf8)` entries to `Int32` per the
+table above. `otel_spans` already documents `Dictionary(Int32, Utf8)` and needs no change.
 
 The "Dictionary Compression" note (line 649: "Most string fields use dictionary compression
-(`Dictionary(Int16, Utf8)`) for storage efficiency") also goes stale once the six tables above
+(`Dictionary(Int16, Utf8)`) for storage efficiency") also goes stale once the tables above
 widen — it should be reworded to note that key width varies by table (`Int16` for the
-low-cardinality `processes`/`streams`/`log_stats` metadata, `Int32` for `log_entries`,
+low-cardinality `processes`/`streams` metadata, `Int32` for `log_entries`, `log_stats`,
 `measures`, `thread_spans`, `async_events`, `net_spans`, and `otel_spans`, matching each
 table's field reference above) rather than asserting a single width for all string columns.
 
@@ -349,10 +367,10 @@ for a follow-up rather than pulled into this plan's scope.
 
 - **New regression test** (`analytics/tests/dictionary_key_overflow_tests.rs`): for each of
   `SpanRecordBuilder`, `AsyncEventRecordBuilder`, `NetSpanRecordBuilder`,
-  `MetricsRecordBuilder`, and `LogEntriesRecordBuilder`, append somewhat more than 32,767
-  rows with distinct values in the previously-`Int16` dictionary columns (e.g. distinct
-  `name`/`target`/`filename` per row) and assert `finish()` succeeds. This is the exact
-  scenario that panicked before the fix and must not panic after it.
+  `MetricsRecordBuilder`, `LogEntriesRecordBuilder`, and `ImagesRecordBuilder`, append
+  somewhat more than 32,767 rows with distinct values in the previously-`Int16` dictionary
+  columns (e.g. distinct `name`/`target`/`filename` per row) and assert `finish()` succeeds.
+  This is the exact scenario that panicked before the fix and must not panic after it.
   - `MetricsRecordBuilder`/`LogEntriesRecordBuilder`: use
     `analytics/tests/test_helpers.rs::make_process_metadata` for the `ProcessMetadata` and
     `PropertySet::empty()` for `properties`, looping `fill_constant_columns` (or `append`)
@@ -361,7 +379,7 @@ for a follow-up rather than pulled into this plan's scope.
   - `NetSpanRecordBuilder`: use existing helpers from `net_spans_test.rs`
     (`make_builder_ctx`) as a starting point.
 - **OTLP companion regression test** (same `dictionary_key_overflow_tests.rs`): the
-  "mandatory companions" fix (Design §3, Implementation Steps 6/7) has zero coverage
+  "mandatory companions" fix (Design §3, Implementation Steps 7/8) has zero coverage
   otherwise — `MeasuresRowBuilder` is a private struct with no test referencing it today,
   and no test exercises `OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` at all. Add two
   tests that drive each processor through its real `BlockProcessor::process` entry point:
@@ -379,16 +397,3 @@ for a follow-up rather than pulled into this plan's scope.
   `sql_view_test.rs`, `thread_spans_ordering_tests.rs` all continue to pass, proving normal
   (non-overflow) ingestion and querying is unaffected.
 - `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
-
-## Open Questions
-
-1. **Include `images_table.rs`/`images_view.rs` in this PR?** Same bug class
-   (`StringDictionaryBuilder<Int16Type>` + panicking `append_value`), not named in the
-   issue, much lower practical risk (image events are low-volume). Recommend including it
-   for consistency (cheap, mechanical, same pattern) — but flagging here since it's outside
-   the issue's literal scope, in case it's preferred as a separate follow-up.
-2. **Historical backfill scope.** This plan bumps `SCHEMA_VERSION` so future materialization
-   uses the wider key, but doesn't call `regenerate_partitions`/`retire_partitions` for
-   existing historical data as part of the PR — that's an operational step for whoever
-   deploys this, not a code change. Confirm that's the right split (code change here,
-   backfill as a deploy-time runbook step) rather than something this plan should automate.
