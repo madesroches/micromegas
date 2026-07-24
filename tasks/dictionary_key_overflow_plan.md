@@ -266,7 +266,10 @@ signals to the partition cache that on-disk partitions need recomputing (see Cur
     accepts more than 32,767 distinct dictionary values without panicking, plus the two OTLP
     companion tests (`OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` via
     `BlockProcessor::process`) that prove steps 7/8's "mandatory companions" fix.
-13. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
+13. **Documentation** — update `view_factory.rs`'s module-level doc comments and
+    `mkdocs/docs/query-guide/schema-reference.md` (field tables and the "Dictionary
+    Compression" note) per the Documentation section.
+14. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
     `rust/`.
 
 ## Files to Modify
@@ -373,7 +376,7 @@ for a follow-up rather than pulled into this plan's scope.
   This is the exact scenario that panicked before the fix and must not panic after it.
   - `MetricsRecordBuilder`/`LogEntriesRecordBuilder`: use
     `analytics/tests/test_helpers.rs::make_process_metadata` for the `ProcessMetadata` and
-    `PropertySet::empty()` for `properties`, looping `fill_constant_columns` (or `append`)
+    `PropertySet::find_or_create(vec![])` for `properties`, looping `fill_constant_columns` (or `append`)
     with a distinct `block_id`/`stream_id` per call to drive the exact column the issue
     calls out.
   - `NetSpanRecordBuilder`: use existing helpers from `net_spans_test.rs`
