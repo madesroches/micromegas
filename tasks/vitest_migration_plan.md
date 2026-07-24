@@ -3,7 +3,7 @@
 **Issue**: [#1345](https://github.com/madesroches/micromegas/issues/1345)
 **Goal**: Replace Jest with Vitest as the test runner for `analytics-web-app`, so tests are parsed by the same engine that builds the app and ESM-only dependencies stop requiring per-package carve-outs.
 
-**Success condition**: `yarn test` runs 56 suites / 1167 tests green under Vitest, `yarn lint`, `yarn type-check` and `yarn build` all pass, `build/analytics_web_ci.py` completes, and no Jest/Babel package remains in `package.json`'s `dependencies`/`devDependencies` (Design §2 deliberately keeps `@babel/core` in `resolutions`).
+**Success condition**: `yarn test` runs 56 suites / 1167 tests green under Vitest, `yarn lint`, `yarn type-check` and `yarn build` all pass, `build/analytics_web_ci.py` completes, and no Jest/Babel package remains in `package.json`'s `dependencies`/`devDependencies`, including the now-unreachable `@babel/core` `resolutions` pin (Design §2).
 
 ## Overview
 
@@ -64,12 +64,13 @@ No snapshots (`__snapshots__` / `*.snap`: none), so no snapshot-format churn.
 
 `@vitejs/plugin-react@6` uses Rolldown/Oxc, **not** Babel — its only dependency is `@rolldown/pluginutils`. Confirmed with `yarn why`:
 
-- `@babel/core` — consumers are `@jest/transform`, `jest-config`, `jest-snapshot`, `istanbul-lib-instrument`, plus the direct devDep. Nothing in the build path.
+- `@babel/core` — consumers are `@jest/transform`, `jest-config`, `jest-snapshot`, `istanbul-lib-instrument`, plus the direct devDep. Nothing in the build path, and `@vitest/coverage-v8`'s own dependency tree (`magicast` → `@babel/parser` / `@babel/types`, `@bcoe/v8-coverage`, `ast-v8-to-istanbul`, the `istanbul-*` packages, `obug`, `std-env`, `tinyrainbow`, `@vitest/utils`) does not depend on it either — so once the Jest packages and the direct devDep are gone, `@babel/core` is unreachable, and the `resolutions` pin protects nothing.
+- `magicast` (pulled in by `@vitest/coverage-v8@4.1.10`) — depends on `@babel/parser@^7.29.0` and `@babel/types@^7.29.0`. This is coverage-v8's actual transitive Babel surface; neither package is pinned in `resolutions` today, and there's no known CVE currently forcing one.
 - `@babel/preset-env` — direct devDep only.
 - `@babel/preset-react` — direct devDep only, and **not referenced by `jest.config.js` at all** (dead today).
 - `@babel/plugin-transform-modules-systemjs` (in `resolutions`) — reachable only via `@babel/preset-env`; becomes dead.
 - `browserslist` + `baseline-browser-mapping` — still required by `autoprefixer@10.5.0`. **Keep both**, and keep their `resolutions` pins.
-- `jsdom@26.1.0` — currently only reachable via `jest-environment-jsdom`. Vitest 4 declares `jsdom: '*'` as a **peer** and does not bundle it, so it must become a direct devDep. Latest is `29.1.1` as of this writing, three majors ahead — pinning to today's transitive `^26.1.0` is deliberate, to preserve current jsdom behaviour while swapping the runner; bumping to `29.x` is a separate follow-up, not part of this migration.
+- `jsdom@26.1.0` — currently only reachable via `jest-environment-jsdom`. Vitest 4 declares `jsdom: '*'` as a permissive **peer** (no compatibility signal) and does not bundle it, so it must become a direct devDep. Latest is `29.1.1` as of this writing, three majors ahead — pinning to today's transitive `^26.1.0` is intended to preserve current jsdom behaviour while swapping the runner. However, `vitest@4.1.10`'s own `devDependencies` pin `jsdom: ^27.4.0` — i.e. the version Vitest 4 is actually developed and tested against is a major above `^26.1.0` — so this pairing is untested upstream, not merely conservative. See the corresponding Risks table row; bumping further to `29.x` remains a separate follow-up, but bumping to a Vitest-tested `^27.x` is an in-scope fallback if the `^26.1.0` pairing misbehaves.
 
 ### Registry / compatibility
 
@@ -146,9 +147,9 @@ Notes:
 ### 2. Dependency changes
 
 Remove from `devDependencies`: `@babel/core`, `@babel/preset-env`, `@babel/preset-react`, `@types/jest`, `babel-jest`, `jest`, `jest-environment-jsdom`, `ts-jest`. `@babel/preset-react` is verified dead independent of Jest: it's not referenced by `jest.config.js`, nothing in `yarn.lock` depends on it transitively, and `@vitejs/plugin-react`'s only dependency is `@rolldown/pluginutils` — no build path touches it. Remove it in this pass.
-Add to `devDependencies`: `jsdom@^26.1.0` (today's transitive version, pinned deliberately to preserve current jsdom behaviour during the runner swap — see Current State → Dependency reality check; bumping to the current `29.1.1` is a separate follow-up), `vitest@^4.1.10`, `@vitest/coverage-v8@^4.1.10`.
-Remove from `resolutions`: `@babel/plugin-transform-modules-systemjs` (unreachable once `@babel/preset-env` is gone).
-**Keep** in `resolutions`: `@babel/core` (protective if it returns transitively via a coverage dependency), plus `browserslist` / `baseline-browser-mapping`, which `autoprefixer` still needs.
+Add to `devDependencies`: `jsdom@^26.1.0` (today's transitive version, pinned deliberately to preserve current jsdom behaviour during the runner swap — see Current State → Dependency reality check; note this is a major below the `^27.4.0` Vitest 4.1.10 itself is developed against, so treat an environment-setup failure as an expected possibility, not a surprise — the in-scope fallback is bumping to a Vitest-tested `^27.x`; bumping further to the current `29.1.1` remains a separate follow-up), `vitest@^4.1.10`, `@vitest/coverage-v8@^4.1.10`.
+Remove from `resolutions`: `@babel/plugin-transform-modules-systemjs` (unreachable once `@babel/preset-env` is gone), `@babel/core` (also unreachable once the Jest packages and the direct devDep are gone — `@vitest/coverage-v8`'s Babel surface is `magicast` → `@babel/parser`/`@babel/types`, neither of which pulls in `@babel/core`; see Current State → Dependency reality check).
+**Keep** in `resolutions`: `browserslist` / `baseline-browser-mapping`, which `autoprefixer` still needs.
 
 Scripts (`package.json:12-14`):
 
@@ -319,7 +320,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 5. Confirm discovery before touching test bodies: `yarn vitest list --filesOnly` must report 56 files, including `src/lib/__tests__/arrow-ipc-fixtures.ts`. (`--filesOnly` is required at this point in the sequence — plain `vitest list` imports each test file and `setupFiles`, and at Phase 1 they still contain `jest.*` calls that throw `ReferenceError: jest is not defined`.)
 
 ### Phase 2 — Mechanical pass
-6. Rewrite `src/test-setup.ts` per Design §9 and get **one** small suite green end-to-end first (`src/lib/__tests__/units.test.ts` — no mocks) to validate config, then one that depends on the global setup mocks (`src/hooks/__tests__/useScreenConfig.test.tsx`).
+6. Rewrite `src/test-setup.ts` per Design §9 and get **one** small suite green end-to-end first (`src/lib/__tests__/units.test.ts` — no mocks) to validate config, then one that depends on the global setup mocks without overriding them locally (`src/routes/__tests__/MapsPage.test.tsx` — no local `react-router-dom` mock, and it does reach `@/lib/config`; see Testing Strategy item 7). `src/hooks/__tests__/useScreenConfig.test.tsx` is not a valid check here — its own `jest.mock('react-router-dom', …)` fully overrides the setup-file mock, and it is converted later in Phase 3 (its `vi.hoisted`/`importActual` needs are covered by steps 10-11).
 7. Apply the `jest.*` → `vi.*` rename across the 56 test files (Design §4).
 8. Apply the type renames (Design §3) — `Mock`, `MockedFunction` imported from `vitest`.
 
@@ -412,8 +413,9 @@ Wall-clock is recorded for information only (baseline 6.66 s); it is not a gate.
 | Setup-file mock is defeated by an import-order cache hit (a mocked module gets imported by `test-setup.ts` itself before the `vi.mock` registers) | Low — `test-setup.ts` currently imports only `@testing-library/jest-dom`, `util`, `stream/web`; neither mocked module is among them | Keep setup-file imports minimal; re-check this invariant if a new import is added to `test-setup.ts`; confirmed in Phase 2 step 6 |
 | Vitest default `include` silently drops `arrow-ipc-fixtures.ts` | Medium if `include` is left implicit | Explicit patterns + the Phase 1 step 5 discovery check |
 | `test.alias` object form prefix-matches an unintended subpath import | Low | Switch to array-of-regex form |
-| `@babel/core` returns transitively via a coverage dependency, un-pinned | Low | `resolutions` pin retained deliberately |
+| `magicast` (via `@vitest/coverage-v8`) pulls in unpinned `@babel/parser`/`@babel/types` | Low | No CVE currently forces a pin; add one to `resolutions` targeting these two packages if one surfaces — the old `@babel/core` pin does not cover them |
 | `micromegas-datafusion-wasm` resolution under jsdom | Low — the import is lazy and never reached from a test | If it surfaces, add a `test.alias` stub or `test.server.deps.inline` |
+| `jsdom@^26.1.0` is untested against `vitest@4.1.10` (Vitest's own `devDependencies` pin `jsdom: ^27.4.0`, a major ahead) | Medium — no upstream compatibility signal either way | In-scope fallback, not a strict follow-up: bump the `jsdom` devDep to a Vitest-tested `^27.x` if the jsdom environment fails to initialize or behaves inconsistently |
 
 ## Open Questions
 
