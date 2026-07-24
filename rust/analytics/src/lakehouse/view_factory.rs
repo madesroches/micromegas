@@ -73,15 +73,15 @@
 //!
 //! | field        | type                        | description                                               |
 //! |------------- |-----------------------------|-----------------------------------------------------------|
-//! |stream_id     |Dictionary(Int16, Utf8)      | identifier of the thread stream that emitted the event   |
-//! |block_id      |Dictionary(Int16, Utf8)      | unique identifier of the event block                     |
+//! |stream_id     |Dictionary(Int32, Utf8)      | identifier of the thread stream that emitted the event   |
+//! |block_id      |Dictionary(Int32, Utf8)      | unique identifier of the event block                     |
 //! |time          |UTC Timestamp (nanoseconds)  | time when the async event occurred                       |
-//! |event_type    |Dictionary(Int16, Utf8)      | type of event: "begin" or "end"                          |
+//! |event_type    |Dictionary(Int32, Utf8)      | type of event: "begin" or "end"                          |
 //! |span_id       |Int64                        | unique async span identifier                             |
 //! |parent_span_id|Int64                        | span id of the parent async span                         |
-//! |name          |Dictionary(Int16, Utf8)      | name of the async span, usually a function name          |
-//! |filename      |Dictionary(Int16, Utf8)      | name or path of the source file where the span is coded  |
-//! |target        |Dictionary(Int16, Utf8)      | category or module name                                   |
+//! |name          |Dictionary(Int32, Utf8)      | name of the async span, usually a function name          |
+//! |filename      |Dictionary(Int32, Utf8)      | name or path of the source file where the span is coded  |
+//! |target        |Dictionary(Int32, Utf8)      | category or module name                                   |
 //! |line          |UInt32                       | line number in the file where the span can be found      |
 //!
 //! ### async_events view instances
@@ -102,14 +102,14 @@
 //!
 //! | field            | type                        | description                                                             |
 //! |------------------|-----------------------------|-------------------------------------------------------------------------|
-//! |process_id        |Dictionary(Int16, Utf8)      | process unique id                                                       |
-//! |stream_id         |Dictionary(Int16, Utf8)      | net stream unique id                                                    |
+//! |process_id        |Dictionary(Int32, Utf8)      | process unique id                                                       |
+//! |stream_id         |Dictionary(Int32, Utf8)      | net stream unique id                                                    |
 //! |span_id           |Int64                        | unique span id within the stream                                        |
 //! |parent_span_id    |Int64                        | span id of the enclosing span (-1 sentinel at Connection roots)         |
 //! |depth             |UInt32                       | tree depth (0 = Connection)                                             |
-//! |kind              |Dictionary(Int16, Utf8)      | one of `connection` / `object` / `property` / `rpc`                     |
-//! |name              |Dictionary(Int16, Utf8)      | span name (connection / object / property / function name)              |
-//! |connection_name   |Dictionary(Int16, Utf8)      | enclosing connection name (denormalized onto every row)                 |
+//! |kind              |Dictionary(Int32, Utf8)      | one of `connection` / `object` / `property` / `rpc`                     |
+//! |name              |Dictionary(Int32, Utf8)      | span name (connection / object / property / function name)              |
+//! |connection_name   |Dictionary(Int32, Utf8)      | enclosing connection name (denormalized onto every row)                 |
 //! |is_outgoing       |Boolean                      | direction inherited from the enclosing connection                       |
 //! |begin_bits        |Int64                        | cumulative bit offset within the parent span (0 at the Connection root) |
 //! |end_bits          |Int64                        | `begin_bits + bit_size`                                                 |

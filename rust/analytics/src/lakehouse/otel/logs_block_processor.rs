@@ -17,7 +17,7 @@ use chrono::DateTime;
 use datafusion::arrow::array::{
     BinaryDictionaryBuilder, PrimitiveBuilder, StringBuilder, StringDictionaryBuilder,
 };
-use datafusion::arrow::datatypes::{Int16Type, Int32Type, TimestampNanosecondType};
+use datafusion::arrow::datatypes::{Int32Type, TimestampNanosecondType};
 use datafusion::arrow::record_batch::RecordBatch;
 use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -72,16 +72,16 @@ impl BlockProcessor for OtelLogsBlockProcessor {
             return Ok(None);
         }
 
-        let mut process_ids = StringDictionaryBuilder::<Int16Type>::new();
-        let mut stream_ids = StringDictionaryBuilder::<Int16Type>::new();
-        let mut block_ids = StringDictionaryBuilder::<Int16Type>::new();
+        let mut process_ids = StringDictionaryBuilder::<Int32Type>::new();
+        let mut stream_ids = StringDictionaryBuilder::<Int32Type>::new();
+        let mut block_ids = StringDictionaryBuilder::<Int32Type>::new();
         let mut insert_times =
             PrimitiveBuilder::<TimestampNanosecondType>::with_capacity(row_count);
-        let mut exes = StringDictionaryBuilder::<Int16Type>::new();
-        let mut usernames = StringDictionaryBuilder::<Int16Type>::new();
-        let mut computers = StringDictionaryBuilder::<Int16Type>::new();
+        let mut exes = StringDictionaryBuilder::<Int32Type>::new();
+        let mut usernames = StringDictionaryBuilder::<Int32Type>::new();
+        let mut computers = StringDictionaryBuilder::<Int32Type>::new();
         let mut times = PrimitiveBuilder::<TimestampNanosecondType>::with_capacity(row_count);
-        let mut targets = StringDictionaryBuilder::<Int16Type>::new();
+        let mut targets = StringDictionaryBuilder::<Int32Type>::new();
         let mut levels = PrimitiveBuilder::<Int32Type>::with_capacity(row_count);
         let mut msgs = StringBuilder::new();
         let mut properties = BinaryDictionaryBuilder::<Int32Type>::new();
@@ -178,19 +178,19 @@ impl BlockProcessor for OtelLogsBlockProcessor {
 
                 let props_jsonb = attrs_to_jsonb(&record.attributes, &extras);
 
-                process_ids.append_value(&process_id_str);
-                stream_ids.append_value(&stream_id_str);
-                block_ids.append_value(&block_id_str);
+                process_ids.append(&process_id_str)?;
+                stream_ids.append(&stream_id_str)?;
+                block_ids.append(&block_id_str)?;
                 insert_times.append_value(insert_time_nanos);
-                exes.append_value(&process.exe);
-                usernames.append_value(&process.username);
-                computers.append_value(&process.computer);
+                exes.append(&process.exe)?;
+                usernames.append(&process.username)?;
+                computers.append(&process.computer)?;
                 times.append_value(time_nanos);
-                targets.append_value(&scope_name);
+                targets.append(&scope_name)?;
                 levels.append_value(level);
                 msgs.append_value(&msg);
-                properties.append_value(&props_jsonb);
-                process_properties.append_value(&**process.properties);
+                properties.append(&props_jsonb)?;
+                process_properties.append(&**process.properties)?;
 
                 nb_appended += 1;
             }

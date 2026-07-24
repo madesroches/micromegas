@@ -30,7 +30,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "net_spans";
-const SCHEMA_VERSION: u8 = 0;
+const SCHEMA_VERSION: u8 = 1;
 const NET_STREAM_TAG: &str = "net";
 
 lazy_static::lazy_static! {

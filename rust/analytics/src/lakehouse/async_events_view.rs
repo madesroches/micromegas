@@ -31,7 +31,7 @@ use uuid::Uuid;
 use super::async_events_block_processor::AsyncEventsBlockProcessor;
 
 const VIEW_SET_NAME: &str = "async_events";
-const SCHEMA_VERSION: u8 = 2; // Version 2: added hash field
+const SCHEMA_VERSION: u8 = 3; // Version 3: widened dictionary keys to Int32
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new(String::from("time"));
 }

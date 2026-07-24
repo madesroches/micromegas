@@ -7,7 +7,7 @@ use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Int16Type;
+use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -44,12 +44,12 @@ pub fn async_events_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "block_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -59,7 +59,7 @@ pub fn async_events_table_schema() -> Schema {
         ),
         Field::new(
             "event_type",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("span_id", DataType::Int64, false),
@@ -68,17 +68,17 @@ pub fn async_events_table_schema() -> Schema {
         Field::new("hash", DataType::UInt32, false),
         Field::new(
             "name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "filename",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "target",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("line", DataType::UInt32, false),
@@ -87,17 +87,17 @@ pub fn async_events_table_schema() -> Schema {
 
 /// A builder for creating a `RecordBatch` of async event records.
 pub struct AsyncEventRecordBuilder {
-    stream_ids: StringDictionaryBuilder<Int16Type>,
-    block_ids: StringDictionaryBuilder<Int16Type>,
+    stream_ids: StringDictionaryBuilder<Int32Type>,
+    block_ids: StringDictionaryBuilder<Int32Type>,
     times: PrimitiveBuilder<TimestampNanosecondType>,
-    event_types: StringDictionaryBuilder<Int16Type>,
+    event_types: StringDictionaryBuilder<Int32Type>,
     span_ids: PrimitiveBuilder<Int64Type>,
     parent_span_ids: PrimitiveBuilder<Int64Type>,
     depths: PrimitiveBuilder<UInt32Type>,
     hashes: PrimitiveBuilder<UInt32Type>,
-    names: StringDictionaryBuilder<Int16Type>,
-    filenames: StringDictionaryBuilder<Int16Type>,
-    targets: StringDictionaryBuilder<Int16Type>,
+    names: StringDictionaryBuilder<Int32Type>,
+    filenames: StringDictionaryBuilder<Int32Type>,
+    targets: StringDictionaryBuilder<Int32Type>,
     lines: PrimitiveBuilder<UInt32Type>,
 }
 
@@ -140,17 +140,17 @@ impl AsyncEventRecordBuilder {
     }
 
     pub fn append(&mut self, record: &AsyncEventRecord<'_>) -> Result<()> {
-        self.stream_ids.append_value(&*record.stream_id);
-        self.block_ids.append_value(&*record.block_id);
+        self.stream_ids.append(&*record.stream_id)?;
+        self.block_ids.append(&*record.block_id)?;
         self.times.append_value(record.time);
-        self.event_types.append_value(record.event_type);
+        self.event_types.append(record.event_type)?;
         self.span_ids.append_value(record.span_id);
         self.parent_span_ids.append_value(record.parent_span_id);
         self.depths.append_value(record.depth);
         self.hashes.append_value(record.hash);
-        self.names.append_value(record.name);
-        self.filenames.append_value(record.filename);
-        self.targets.append_value(record.target);
+        self.names.append(record.name)?;
+        self.filenames.append(record.filename)?;
+        self.targets.append(record.target)?;
         self.lines.append_value(record.line);
         Ok(())
     }

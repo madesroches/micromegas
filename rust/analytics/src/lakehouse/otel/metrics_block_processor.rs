@@ -18,7 +18,7 @@ use chrono::DateTime;
 use datafusion::arrow::array::{
     BinaryDictionaryBuilder, PrimitiveBuilder, StringDictionaryBuilder,
 };
-use datafusion::arrow::datatypes::{Float64Type, Int16Type, Int32Type, TimestampNanosecondType};
+use datafusion::arrow::datatypes::{Float64Type, Int32Type, TimestampNanosecondType};
 use datafusion::arrow::record_batch::RecordBatch;
 use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -90,7 +90,7 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
                             ),
                         ];
                         for dp in &sum.data_points {
-                            builder.append(&scope_name, &metric.name, &metric.unit, dp, &extras);
+                            builder.append(&scope_name, &metric.name, &metric.unit, dp, &extras)?;
                         }
                     }
                     Some(Data::Gauge(gauge)) => {
@@ -99,7 +99,7 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
                             JsonbValue::String(Cow::Borrowed("gauge")),
                         )];
                         for dp in &gauge.data_points {
-                            builder.append(&scope_name, &metric.name, &metric.unit, dp, &extras);
+                            builder.append(&scope_name, &metric.name, &metric.unit, dp, &extras)?;
                         }
                     }
                     Some(Data::Histogram(h)) => {
@@ -138,17 +138,17 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
 /// Per-block accumulator for `measures` rows: owns the column builders, time
 /// bounds, and per-block constants so `append` only takes per-data-point inputs.
 struct MeasuresRowBuilder {
-    process_ids: StringDictionaryBuilder<Int16Type>,
-    stream_ids: StringDictionaryBuilder<Int16Type>,
-    block_ids: StringDictionaryBuilder<Int16Type>,
+    process_ids: StringDictionaryBuilder<Int32Type>,
+    stream_ids: StringDictionaryBuilder<Int32Type>,
+    block_ids: StringDictionaryBuilder<Int32Type>,
     insert_times: PrimitiveBuilder<TimestampNanosecondType>,
-    exes: StringDictionaryBuilder<Int16Type>,
-    usernames: StringDictionaryBuilder<Int16Type>,
-    computers: StringDictionaryBuilder<Int16Type>,
+    exes: StringDictionaryBuilder<Int32Type>,
+    usernames: StringDictionaryBuilder<Int32Type>,
+    computers: StringDictionaryBuilder<Int32Type>,
     times: PrimitiveBuilder<TimestampNanosecondType>,
-    targets: StringDictionaryBuilder<Int16Type>,
-    names: StringDictionaryBuilder<Int16Type>,
-    units: StringDictionaryBuilder<Int16Type>,
+    targets: StringDictionaryBuilder<Int32Type>,
+    names: StringDictionaryBuilder<Int32Type>,
+    units: StringDictionaryBuilder<Int32Type>,
     values: PrimitiveBuilder<Float64Type>,
     properties: BinaryDictionaryBuilder<Int32Type>,
     process_properties: BinaryDictionaryBuilder<Int32Type>,
@@ -203,11 +203,11 @@ impl MeasuresRowBuilder {
         unit: &str,
         dp: &NumberDataPoint,
         extras: &[(String, JsonbValue<'static>)],
-    ) {
+    ) -> Result<()> {
         let time_nanos = dp.time_unix_nano as i64;
         if time_nanos == 0 {
             debug!("OTel metric data point for {metric_name} dropped (time_unix_nano=0)");
-            return;
+            return Ok(());
         }
 
         let value = match dp.value.as_ref() {
@@ -215,7 +215,7 @@ impl MeasuresRowBuilder {
             Some(number_data_point::Value::AsInt(i)) => *i as f64,
             None => {
                 debug!("OTel data point for {metric_name} has no value, skipping");
-                return;
+                return Ok(());
             }
         };
 
@@ -224,23 +224,23 @@ impl MeasuresRowBuilder {
 
         let props_jsonb = attrs_to_jsonb(&dp.attributes, extras);
 
-        self.process_ids.append_value(&self.process_id_str);
-        self.stream_ids.append_value(&self.stream_id_str);
-        self.block_ids.append_value(&self.block_id_str);
+        self.process_ids.append(&self.process_id_str)?;
+        self.stream_ids.append(&self.stream_id_str)?;
+        self.block_ids.append(&self.block_id_str)?;
         self.insert_times.append_value(self.insert_time_nanos);
-        self.exes.append_value(&self.process.exe);
-        self.usernames.append_value(&self.process.username);
-        self.computers.append_value(&self.process.computer);
+        self.exes.append(&self.process.exe)?;
+        self.usernames.append(&self.process.username)?;
+        self.computers.append(&self.process.computer)?;
         self.times.append_value(time_nanos);
-        self.targets.append_value(scope_name);
-        self.names.append_value(metric_name);
-        self.units.append_value(unit);
+        self.targets.append(scope_name)?;
+        self.names.append(metric_name)?;
+        self.units.append(unit)?;
         self.values.append_value(value);
-        self.properties.append_value(&props_jsonb);
-        self.process_properties
-            .append_value(&**self.process.properties);
+        self.properties.append(&props_jsonb)?;
+        self.process_properties.append(&**self.process.properties)?;
 
         self.nb_appended += 1;
+        Ok(())
     }
 
     fn finish(mut self) -> Result<Option<PartitionRowSet>> {

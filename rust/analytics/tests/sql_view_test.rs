@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::DurationRound;
 use chrono::{TimeDelta, Utc};
 use datafusion::arrow::array::{DictionaryArray, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, TimeUnit};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
@@ -132,7 +132,7 @@ impl PartitionMerger for LogSummaryMerger {
         let processses_rbs = processes_df.collect().await?;
         let mut builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 10);
         for b in processses_rbs {
-            let process_id_column: &DictionaryArray<Int16Type> =
+            let process_id_column: &DictionaryArray<Int32Type> =
                 typed_column_by_name(&b, "process_id")?;
             let process_id_column: &StringArray = process_id_column
                 .values()
@@ -382,7 +382,7 @@ async fn test_log_summary_view(
         ),
         Field::new(
             "process_id",
-            DataType::Dictionary(DataType::Int16.into(), DataType::Utf8.into()),
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             false,
         ),
         Field::new("nb_fatal", DataType::Int64, true),
@@ -393,7 +393,7 @@ async fn test_log_summary_view(
         Field::new("nb_trace", DataType::Int64, true),
     ]));
     assert_eq!(log_summary_view.get_file_schema(), ref_schema);
-    let ref_schema_hash: Vec<u8> = vec![105, 221, 132, 185, 221, 232, 62, 136];
+    let ref_schema_hash: Vec<u8> = vec![142, 68, 229, 9, 9, 34, 74, 203];
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
     let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
     let begin_range = end_range - (TimeDelta::minutes(3));

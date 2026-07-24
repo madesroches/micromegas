@@ -28,18 +28,18 @@ Contains metadata about processes that have sent telemetry data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the process |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `realname` | `Dictionary(Int16, Utf8)` | Real name of the user |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
-| `distro` | `Dictionary(Int16, Utf8)` | Operating system distribution |
-| `cpu_brand` | `Dictionary(Int16, Utf8)` | CPU brand information |
+| `process_id` | `Utf8` | Unique identifier for the process |
+| `exe` | `Utf8` | Executable name |
+| `username` | `Utf8` | User who ran the process |
+| `realname` | `Utf8` | Real name of the user |
+| `computer` | `Utf8` | Computer/hostname |
+| `distro` | `Utf8` | Operating system distribution |
+| `cpu_brand` | `Utf8` | CPU brand information |
 | `tsc_frequency` | `Int64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `start_ticks` | `Int64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
-| `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
+| `parent_process_id` | `Utf8` | Parent process identifier |
 | `properties` | `Dictionary(Int32, Binary)` | Additional process metadata (JSONB format) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
@@ -65,8 +65,8 @@ Contains information about data streams within processes.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the stream |
-| `process_id` | `Dictionary(Int16, Utf8)` | Reference to the parent process |
+| `stream_id` | `Utf8` | Unique identifier for the stream |
+| `process_id` | `Utf8` | Reference to the parent process |
 | `dependencies_metadata` | `Binary` | Stream dependency metadata |
 | `objects_metadata` | `Binary` | Stream object metadata |
 | `tags` | `List<Utf8>` | Stream tags |
@@ -154,15 +154,15 @@ Text-based log entries with levels and structured data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `insert_time` | `Timestamp(Nanosecond)` | Block insertion time |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `exe` | `Dictionary(Int32, Utf8)` | Executable name |
+| `username` | `Dictionary(Int32, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int32, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Log entry timestamp |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
 | `msg` | `Utf8` | Log message |
 | `properties` | `Dictionary(Int32, Binary)` | Log-specific properties (JSONB format) |
@@ -205,9 +205,9 @@ Materialized view providing aggregated log statistics by process, minute, level,
 | Field | Type | Description |
 |-------|------|-------------|
 | `time_bin` | `Timestamp(Nanosecond)` | 1-minute time bucket for aggregation |
-| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
 | `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target that generated the logs |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target that generated the logs |
 | `count` | `Int64` | Number of log entries in this aggregation |
 
 **Key Features:**
@@ -267,17 +267,17 @@ Numerical measurements and counters.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `insert_time` | `Timestamp(Nanosecond)` | Block insertion time |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `exe` | `Dictionary(Int32, Utf8)` | Executable name |
+| `username` | `Dictionary(Int32, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int32, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Measurement timestamp |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
-| `name` | `Dictionary(Int16, Utf8)` | Metric name |
-| `unit` | `Dictionary(Int16, Utf8)` | Measurement unit. May be an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`); the web app renders these as currency |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
+| `name` | `Dictionary(Int32, Utf8)` | Metric name |
+| `unit` | `Dictionary(Int32, Utf8)` | Measurement unit. May be an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`); the web app renders these as currency |
 | `value` | `Float64` | Metric value |
 | `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
@@ -316,9 +316,9 @@ Derived view for analyzing span durations and hierarchies. Access via `view_inst
 | `begin` | `Timestamp(Nanosecond)` | Span start time |
 | `end` | `Timestamp(Nanosecond)` | Span end time |
 | `duration` | `Int64` | Span duration in nanoseconds |
-| `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
-| `filename` | `Dictionary(Int16, Utf8)` | Source file |
+| `name` | `Dictionary(Int32, Utf8)` | Span name (function) |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
+| `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `line` | `UInt32` | Line number |
 
 **Example Queries:**
@@ -346,17 +346,17 @@ Asynchronous span events for tracking async operations with call hierarchy depth
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Thread stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Thread stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `time` | `Timestamp(Nanosecond)` | Event timestamp |
-| `event_type` | `Dictionary(Int16, Utf8)` | "begin" or "end" |
+| `event_type` | `Dictionary(Int32, Utf8)` | "begin" or "end" |
 | `span_id` | `Int64` | Async span identifier |
 | `parent_span_id` | `Int64` | Parent span identifier |
 | `depth` | `UInt32` | Nesting depth in async call hierarchy |
 | `hash` | `UInt32` | Hash of the span's scope descriptor |
-| `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
-| `filename` | `Dictionary(Int16, Utf8)` | Source file |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
+| `name` | `Dictionary(Int32, Utf8)` | Span name (function) |
+| `filename` | `Dictionary(Int32, Utf8)` | Source file |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `line` | `UInt32` | Line number |
 
 **Example Queries:**
@@ -458,14 +458,14 @@ The view is **JIT-only** and **parameterized by `process_id`** (there is no `glo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process id (the view parameter) |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Source net stream (one per process) |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process id (the view parameter) |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Source net stream (one per process) |
 | `span_id` | `Int64` | Unique span id within the stream |
 | `parent_span_id` | `Int64` | Span id of the enclosing span (`-1` sentinel at the Connection root) |
 | `depth` | `UInt32` | Tree depth (`0` for Connection, `1+` inside) |
-| `kind` | `Dictionary(Int16, Utf8)` | `connection`, `object`, `property`, or `rpc` |
-| `name` | `Dictionary(Int16, Utf8)` | Connection / object / property / function name |
-| `connection_name` | `Dictionary(Int16, Utf8)` | Enclosing connection name (denormalized onto every row) |
+| `kind` | `Dictionary(Int32, Utf8)` | `connection`, `object`, `property`, or `rpc` |
+| `name` | `Dictionary(Int32, Utf8)` | Connection / object / property / function name |
+| `connection_name` | `Dictionary(Int32, Utf8)` | Enclosing connection name (denormalized onto every row) |
 | `is_outgoing` | `Boolean` | Direction of the enclosing connection |
 | `begin_bits` | `Int64` | Cumulative bit offset within the parent span (`0` at the Connection root) |
 | `end_bits` | `Int64` | `begin_bits + bit_size` |
@@ -578,16 +578,16 @@ Screenshot and image data captured from instrumented processes via `send_image()
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process id (the view parameter) |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Source image stream |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process id (the view parameter) |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Source image stream |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `insert_time` | `Timestamp(Nanosecond)` | When the block was ingested |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `exe` | `Dictionary(Int32, Utf8)` | Executable name |
+| `username` | `Dictionary(Int32, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int32, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Timestamp when the image was captured |
 | `name` | `Utf8` | Image name (e.g. `"screenshot"`) |
-| `format` | `Dictionary(Int16, Utf8)` | Image format string (e.g. `"png"`) |
+| `format` | `Dictionary(Int32, Utf8)` | Image format string (e.g. `"png"`) |
 | `payload_size` | `Int64` | Compressed byte size of the image data |
 | `data` | `Binary` | Raw image bytes |
 
@@ -646,7 +646,11 @@ Micromegas maintains full backward compatibility. Existing queries using `proper
 
 ### Dictionary Compression
 
-Most string fields use dictionary compression (`Dictionary(Int16, Utf8)`) for storage efficiency:
+String fields in the event tables use dictionary compression (`Dictionary(Int32, Utf8)`)
+for storage efficiency: `log_entries`, `log_stats`, `measures`, `thread_spans`,
+`async_events`, `net_spans`, `otel_spans`, and `images` (see each table's field reference
+above). The `processes`/`streams` metadata tables store their string columns as plain
+`Utf8`. Dictionary compression:
 
 - Reduces storage space for repeated values
 - Improves query performance

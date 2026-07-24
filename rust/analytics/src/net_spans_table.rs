@@ -8,7 +8,7 @@ use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Int16Type;
+use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -42,12 +42,12 @@ pub fn net_spans_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "process_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("span_id", DataType::Int64, false),
@@ -55,17 +55,17 @@ pub fn net_spans_table_schema() -> Schema {
         Field::new("depth", DataType::UInt32, false),
         Field::new(
             "kind",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "connection_name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("is_outgoing", DataType::Boolean, false),
@@ -87,14 +87,14 @@ pub fn net_spans_table_schema() -> Schema {
 
 /// Accumulates `NetSpanRecord` rows into a single Arrow `RecordBatch`.
 pub struct NetSpanRecordBuilder {
-    process_ids: StringDictionaryBuilder<Int16Type>,
-    stream_ids: StringDictionaryBuilder<Int16Type>,
+    process_ids: StringDictionaryBuilder<Int32Type>,
+    stream_ids: StringDictionaryBuilder<Int32Type>,
     span_ids: PrimitiveBuilder<Int64Type>,
     parent_span_ids: PrimitiveBuilder<Int64Type>,
     depths: PrimitiveBuilder<UInt32Type>,
-    kinds: StringDictionaryBuilder<Int16Type>,
-    names: StringDictionaryBuilder<Int16Type>,
-    connection_names: StringDictionaryBuilder<Int16Type>,
+    kinds: StringDictionaryBuilder<Int32Type>,
+    names: StringDictionaryBuilder<Int32Type>,
+    connection_names: StringDictionaryBuilder<Int32Type>,
     is_outgoings: BooleanBuilder,
     begin_bits: PrimitiveBuilder<Int64Type>,
     end_bits: PrimitiveBuilder<Int64Type>,
@@ -147,14 +147,14 @@ impl NetSpanRecordBuilder {
     }
 
     pub fn append(&mut self, record: &NetSpanRecord) -> Result<()> {
-        self.process_ids.append_value(&*record.process_id);
-        self.stream_ids.append_value(&*record.stream_id);
+        self.process_ids.append(&*record.process_id)?;
+        self.stream_ids.append(&*record.stream_id)?;
         self.span_ids.append_value(record.span_id);
         self.parent_span_ids.append_value(record.parent_span_id);
         self.depths.append_value(record.depth);
-        self.kinds.append_value(&*record.kind);
-        self.names.append_value(&*record.name);
-        self.connection_names.append_value(&*record.connection_name);
+        self.kinds.append(&*record.kind)?;
+        self.names.append(&*record.name)?;
+        self.connection_names.append(&*record.connection_name)?;
         self.is_outgoings.append_value(record.is_outgoing);
         self.begin_bits.append_value(record.begin_bits);
         self.end_bits.append_value(record.end_bits);

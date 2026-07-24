@@ -250,18 +250,18 @@ Contains metadata about processes that have sent telemetry data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the process |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `realname` | `Dictionary(Int16, Utf8)` | Real name of the user |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
-| `distro` | `Dictionary(Int16, Utf8)` | Operating system distribution |
-| `cpu_brand` | `Dictionary(Int16, Utf8)` | CPU brand information |
+| `process_id` | `Utf8` | Unique identifier for the process |
+| `exe` | `Utf8` | Executable name |
+| `username` | `Utf8` | User who ran the process |
+| `realname` | `Utf8` | Real name of the user |
+| `computer` | `Utf8` | Computer/hostname |
+| `distro` | `Utf8` | Operating system distribution |
+| `cpu_brand` | `Utf8` | CPU brand information |
 | `tsc_frequency` | `UInt64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `start_ticks` | `UInt64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
-| `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
+| `parent_process_id` | `Utf8` | Parent process identifier |
 | `properties` | `Map` | Additional process metadata |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 
@@ -270,8 +270,8 @@ Contains information about data streams within processes.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the stream |
-| `process_id` | `Dictionary(Int16, Utf8)` | Reference to the parent process |
+| `stream_id` | `Utf8` | Unique identifier for the stream |
+| `process_id` | `Utf8` | Reference to the parent process |
 | `dependencies_metadata` | Various | Stream dependency metadata |
 | `objects_metadata` | Various | Stream object metadata |
 | `tags` | Various | Stream tags |
@@ -318,15 +318,15 @@ Asynchronous span events for tracking async operations.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Thread stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Thread stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `time` | `Timestamp(Nanosecond)` | Event timestamp |
-| `event_type` | `Dictionary(Int16, Utf8)` | "begin" or "end" |
+| `event_type` | `Dictionary(Int32, Utf8)` | "begin" or "end" |
 | `span_id` | `Int64` | Async span identifier |
 | `parent_span_id` | `Int64` | Parent span identifier |
-| `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
-| `filename` | `Dictionary(Int16, Utf8)` | Source file |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
+| `name` | `Dictionary(Int32, Utf8)` | Span name (function) |
+| `filename` | `Dictionary(Int32, Utf8)` | Source file |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `line` | `UInt32` | Line number |
 
 #### `thread_spans` 
@@ -341,9 +341,9 @@ Derived view for analyzing span durations and hierarchies (accessed via `view_in
 | `begin` | `Timestamp(Nanosecond)` | Span start time |
 | `end` | `Timestamp(Nanosecond)` | Span end time |
 | `duration` | `Int64` | Span duration in nanoseconds |
-| `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
-| `filename` | `Dictionary(Int16, Utf8)` | Source file |
+| `name` | `Dictionary(Int32, Utf8)` | Span name (function) |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
+| `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `line` | `UInt32` | Line number |
 
 #### `measures` (metrics)
@@ -351,17 +351,17 @@ Numerical measurements and counters.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `insert_time` | `Timestamp(Nanosecond)` | Block insertion time |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `exe` | `Dictionary(Int32, Utf8)` | Executable name |
+| `username` | `Dictionary(Int32, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int32, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Measurement timestamp |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
-| `name` | `Dictionary(Int16, Utf8)` | Metric name |
-| `unit` | `Dictionary(Int16, Utf8)` | Measurement unit |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
+| `name` | `Dictionary(Int32, Utf8)` | Metric name |
+| `unit` | `Dictionary(Int32, Utf8)` | Measurement unit |
 | `value` | `Float64` | Metric value |
 | `properties` | `List<Struct>` | Metric-specific properties |
 | `process_properties` | `List<Struct>` | Process-specific properties |
@@ -371,15 +371,15 @@ Text-based log entries with levels and structured data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
-| `stream_id` | `Dictionary(Int16, Utf8)` | Stream identifier |
-| `block_id` | `Dictionary(Int16, Utf8)` | Block identifier |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
+| `stream_id` | `Dictionary(Int32, Utf8)` | Stream identifier |
+| `block_id` | `Dictionary(Int32, Utf8)` | Block identifier |
 | `insert_time` | `Timestamp(Nanosecond)` | Block insertion time |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
+| `exe` | `Dictionary(Int32, Utf8)` | Executable name |
+| `username` | `Dictionary(Int32, Utf8)` | User who ran the process |
+| `computer` | `Dictionary(Int32, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Log entry timestamp |
-| `target` | `Dictionary(Int16, Utf8)` | Module/target |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `level` | `Int32` | Log level: 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace (lower = more severe) |
 | `msg` | `Utf8` | Log message |
 | `properties` | `List<Struct>` | Log-specific properties |

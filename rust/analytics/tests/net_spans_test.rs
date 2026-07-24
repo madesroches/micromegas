@@ -25,7 +25,7 @@ fn collect_rows(builder: NetSpanRecordBuilder) -> Vec<NetRow> {
         BooleanArray, DictionaryArray, Int64Array, StringArray, TimestampNanosecondArray,
         UInt32Array,
     };
-    use datafusion::arrow::datatypes::Int16Type;
+    use datafusion::arrow::datatypes::Int32Type;
 
     let batch = builder.finish().expect("finish record builder");
     let num = batch.num_rows();
@@ -33,13 +33,13 @@ fn collect_rows(builder: NetSpanRecordBuilder) -> Vec<NetRow> {
         .column_by_name("process_id")
         .unwrap()
         .as_any()
-        .downcast_ref::<DictionaryArray<Int16Type>>()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
         .unwrap();
     let stream_ids = batch
         .column_by_name("stream_id")
         .unwrap()
         .as_any()
-        .downcast_ref::<DictionaryArray<Int16Type>>()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
         .unwrap();
     let span_ids = batch
         .column_by_name("span_id")
@@ -63,19 +63,19 @@ fn collect_rows(builder: NetSpanRecordBuilder) -> Vec<NetRow> {
         .column_by_name("kind")
         .unwrap()
         .as_any()
-        .downcast_ref::<DictionaryArray<Int16Type>>()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
         .unwrap();
     let names = batch
         .column_by_name("name")
         .unwrap()
         .as_any()
-        .downcast_ref::<DictionaryArray<Int16Type>>()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
         .unwrap();
     let connection_names = batch
         .column_by_name("connection_name")
         .unwrap()
         .as_any()
-        .downcast_ref::<DictionaryArray<Int16Type>>()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
         .unwrap();
     let is_outgoings = batch
         .column_by_name("is_outgoing")
@@ -114,7 +114,7 @@ fn collect_rows(builder: NetSpanRecordBuilder) -> Vec<NetRow> {
         .downcast_ref::<TimestampNanosecondArray>()
         .unwrap();
 
-    let fetch_dict = |arr: &DictionaryArray<Int16Type>, idx: usize| -> String {
+    let fetch_dict = |arr: &DictionaryArray<Int32Type>, idx: usize| -> String {
         let values = arr.values().as_any().downcast_ref::<StringArray>().unwrap();
         let key = arr.keys().value(idx);
         values.value(key as usize).to_string()

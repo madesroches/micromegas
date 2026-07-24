@@ -8,8 +8,7 @@ use chrono::DateTime;
 use datafusion::arrow::{
     array::{ArrayBuilder, BinaryDictionaryBuilder, PrimitiveBuilder, StringDictionaryBuilder},
     datatypes::{
-        DataType, Field, Float64Type, Int16Type, Int32Type, Schema, TimeUnit,
-        TimestampNanosecondType,
+        DataType, Field, Float64Type, Int32Type, Schema, TimeUnit, TimestampNanosecondType,
     },
     record_batch::RecordBatch,
 };
@@ -20,17 +19,17 @@ pub fn metrics_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "process_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "block_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -40,17 +39,17 @@ pub fn metrics_table_schema() -> Schema {
         ),
         Field::new(
             "exe",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "username",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "computer",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -60,17 +59,17 @@ pub fn metrics_table_schema() -> Schema {
         ),
         Field::new(
             "target",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "unit",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("value", DataType::Float64, false),
@@ -89,17 +88,17 @@ pub fn metrics_table_schema() -> Schema {
 
 /// A builder for creating a `RecordBatch` of metrics.
 pub struct MetricsRecordBuilder {
-    pub process_ids: StringDictionaryBuilder<Int16Type>,
-    pub stream_ids: StringDictionaryBuilder<Int16Type>,
-    pub block_ids: StringDictionaryBuilder<Int16Type>,
+    pub process_ids: StringDictionaryBuilder<Int32Type>,
+    pub stream_ids: StringDictionaryBuilder<Int32Type>,
+    pub block_ids: StringDictionaryBuilder<Int32Type>,
     pub insert_times: PrimitiveBuilder<TimestampNanosecondType>,
-    pub exes: StringDictionaryBuilder<Int16Type>,
-    pub usernames: StringDictionaryBuilder<Int16Type>,
-    pub computers: StringDictionaryBuilder<Int16Type>,
+    pub exes: StringDictionaryBuilder<Int32Type>,
+    pub usernames: StringDictionaryBuilder<Int32Type>,
+    pub computers: StringDictionaryBuilder<Int32Type>,
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
-    pub targets: StringDictionaryBuilder<Int16Type>,
-    pub names: StringDictionaryBuilder<Int16Type>,
-    pub units: StringDictionaryBuilder<Int16Type>,
+    pub targets: StringDictionaryBuilder<Int32Type>,
+    pub names: StringDictionaryBuilder<Int32Type>,
+    pub units: StringDictionaryBuilder<Int32Type>,
     pub values: PrimitiveBuilder<Float64Type>,
     pub properties: PropertySetJsonbDictionaryBuilder,
     pub process_properties: BinaryDictionaryBuilder<Int32Type>,
@@ -147,21 +146,20 @@ impl MetricsRecordBuilder {
 
     pub fn append(&mut self, row: &Measure) -> Result<()> {
         self.process_ids
-            .append_value(format!("{}", row.process.process_id));
-        self.stream_ids.append_value(&*row.stream_id);
-        self.block_ids.append_value(&*row.block_id);
+            .append(format!("{}", row.process.process_id))?;
+        self.stream_ids.append(&*row.stream_id)?;
+        self.block_ids.append(&*row.block_id)?;
         self.insert_times.append_value(row.insert_time);
-        self.exes.append_value(&row.process.exe);
-        self.usernames.append_value(&row.process.username);
-        self.computers.append_value(&row.process.computer);
+        self.exes.append(&row.process.exe)?;
+        self.usernames.append(&row.process.username)?;
+        self.computers.append(&row.process.computer)?;
         self.times.append_value(row.time);
-        self.targets.append_value(row.target);
-        self.names.append_value(row.name);
-        self.units.append_value(row.unit);
+        self.targets.append(row.target)?;
+        self.names.append(row.name)?;
+        self.units.append(row.unit)?;
         self.values.append_value(row.value);
         self.properties.append_property_set(&row.properties)?;
-        self.process_properties
-            .append_value(&*row.process.properties);
+        self.process_properties.append(&*row.process.properties)?;
         Ok(())
     }
 
@@ -169,9 +167,9 @@ impl MetricsRecordBuilder {
     pub fn append_entry_only(&mut self, row: &Measure) -> Result<()> {
         // Only append fields that truly vary per metrics entry
         self.times.append_value(row.time);
-        self.targets.append_value(row.target);
-        self.names.append_value(row.name);
-        self.units.append_value(row.unit);
+        self.targets.append(row.target)?;
+        self.names.append(row.name)?;
+        self.units.append(row.unit)?;
         self.values.append_value(row.value);
         self.properties.append_property_set(&row.properties)?;
         Ok(())
@@ -192,17 +190,17 @@ impl MetricsRecordBuilder {
         let insert_times_slice = vec![insert_time; entry_count];
         self.insert_times.append_slice(&insert_times_slice);
 
-        // For BinaryDictionaryBuilder (process_properties): use append_values for same value
+        // For BinaryDictionaryBuilder (process_properties): use append_n for same value
         self.process_properties
-            .append_values(&**process.properties, entry_count);
+            .append_n(&**process.properties, entry_count)?;
 
-        // For StringDictionaryBuilder: use append_values for same values (optimal for constant data)
-        self.process_ids.append_values(&process_id_str, entry_count);
-        self.stream_ids.append_values(stream_id, entry_count);
-        self.block_ids.append_values(block_id, entry_count);
-        self.exes.append_values(&process.exe, entry_count);
-        self.usernames.append_values(&process.username, entry_count);
-        self.computers.append_values(&process.computer, entry_count);
+        // For StringDictionaryBuilder: use append_n for same values (optimal for constant data)
+        self.process_ids.append_n(&process_id_str, entry_count)?;
+        self.stream_ids.append_n(stream_id, entry_count)?;
+        self.block_ids.append_n(block_id, entry_count)?;
+        self.exes.append_n(&process.exe, entry_count)?;
+        self.usernames.append_n(&process.username, entry_count)?;
+        self.computers.append_n(&process.computer, entry_count)?;
 
         Ok(())
     }

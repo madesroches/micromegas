@@ -171,9 +171,9 @@ ORDER BY lane, begin
 | begin | Timestamp(Nanosecond) | Span start time |
 | end | Timestamp(Nanosecond) | Span end time |
 | duration | Int64 | Duration in nanoseconds |
-| name | Dictionary(Int16, Utf8) | Span name (function) |
-| target | Dictionary(Int16, Utf8) | Module/target |
-| filename | Dictionary(Int16, Utf8) | Source file |
+| name | Dictionary(Int32, Utf8) | Span name (function) |
+| target | Dictionary(Int32, Utf8) | Module/target |
+| filename | Dictionary(Int32, Utf8) | Source file |
 | line | UInt32 | Line number |
 
 **Examples:**

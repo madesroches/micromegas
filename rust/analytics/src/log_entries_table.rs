@@ -9,7 +9,6 @@ use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Int16Type;
 use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -26,17 +25,17 @@ pub fn log_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "process_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "block_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -46,17 +45,17 @@ pub fn log_table_schema() -> Schema {
         ),
         Field::new(
             "exe",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "username",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "computer",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -66,7 +65,7 @@ pub fn log_table_schema() -> Schema {
         ),
         Field::new(
             "target",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("level", DataType::Int32, false),
@@ -86,15 +85,15 @@ pub fn log_table_schema() -> Schema {
 
 /// A builder for creating a `RecordBatch` of log entries.
 pub struct LogEntriesRecordBuilder {
-    process_ids: StringDictionaryBuilder<Int16Type>,
-    stream_ids: StringDictionaryBuilder<Int16Type>,
-    block_ids: StringDictionaryBuilder<Int16Type>,
+    process_ids: StringDictionaryBuilder<Int32Type>,
+    stream_ids: StringDictionaryBuilder<Int32Type>,
+    block_ids: StringDictionaryBuilder<Int32Type>,
     insert_times: PrimitiveBuilder<TimestampNanosecondType>,
-    exes: StringDictionaryBuilder<Int16Type>,
-    usernames: StringDictionaryBuilder<Int16Type>,
-    computers: StringDictionaryBuilder<Int16Type>,
+    exes: StringDictionaryBuilder<Int32Type>,
+    usernames: StringDictionaryBuilder<Int32Type>,
+    computers: StringDictionaryBuilder<Int32Type>,
     times: PrimitiveBuilder<TimestampNanosecondType>,
-    targets: StringDictionaryBuilder<Int16Type>,
+    targets: StringDictionaryBuilder<Int32Type>,
     levels: PrimitiveBuilder<Int32Type>,
     msgs: StringBuilder,
     properties: PropertySetJsonbDictionaryBuilder,
@@ -142,20 +141,19 @@ impl LogEntriesRecordBuilder {
 
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
         self.process_ids
-            .append_value(format!("{}", row.process.process_id));
-        self.stream_ids.append_value(&*row.stream_id);
-        self.block_ids.append_value(&*row.block_id);
+            .append(format!("{}", row.process.process_id))?;
+        self.stream_ids.append(&*row.stream_id)?;
+        self.block_ids.append(&*row.block_id)?;
         self.insert_times.append_value(row.insert_time);
-        self.exes.append_value(&row.process.exe);
-        self.usernames.append_value(&row.process.username);
-        self.computers.append_value(&row.process.computer);
+        self.exes.append(&row.process.exe)?;
+        self.usernames.append(&row.process.username)?;
+        self.computers.append(&row.process.computer)?;
         self.times.append_value(row.time);
-        self.targets.append_value(row.target);
+        self.targets.append(row.target)?;
         self.levels.append_value(row.level);
         self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
-        self.process_properties
-            .append_value(&*row.process.properties);
+        self.process_properties.append(&*row.process.properties)?;
         Ok(())
     }
 
@@ -163,7 +161,7 @@ impl LogEntriesRecordBuilder {
     pub fn append_entry_only(&mut self, row: &LogEntry) -> Result<()> {
         // Only append fields that truly vary per log entry
         self.times.append_value(row.time);
-        self.targets.append_value(row.target);
+        self.targets.append(row.target)?;
         self.levels.append_value(row.level);
         self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
@@ -185,14 +183,14 @@ impl LogEntriesRecordBuilder {
         let insert_times_slice = vec![insert_time; entry_count];
         self.insert_times.append_slice(&insert_times_slice);
 
-        self.process_ids.append_values(&process_id_str, entry_count);
-        self.stream_ids.append_values(stream_id, entry_count);
-        self.block_ids.append_values(block_id, entry_count);
-        self.exes.append_values(&process.exe, entry_count);
-        self.usernames.append_values(&process.username, entry_count);
-        self.computers.append_values(&process.computer, entry_count);
+        self.process_ids.append_n(&process_id_str, entry_count)?;
+        self.stream_ids.append_n(stream_id, entry_count)?;
+        self.block_ids.append_n(block_id, entry_count)?;
+        self.exes.append_n(&process.exe, entry_count)?;
+        self.usernames.append_n(&process.username, entry_count)?;
+        self.computers.append_n(&process.computer, entry_count)?;
         self.process_properties
-            .append_values(&**process.properties, entry_count);
+            .append_n(&**process.properties, entry_count)?;
 
         Ok(())
     }

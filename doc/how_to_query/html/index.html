@@ -610,37 +610,37 @@ for record_batch in client.query_stream(sql, begin, end):
 <tbody>
 <tr>
 <td><code>process_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Unique identifier for the process</td>
 </tr>
 <tr>
 <td><code>exe</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Executable name</td>
 </tr>
 <tr>
 <td><code>username</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>User who ran the process</td>
 </tr>
 <tr>
 <td><code>realname</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Real name of the user</td>
 </tr>
 <tr>
 <td><code>computer</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Computer/hostname</td>
 </tr>
 <tr>
 <td><code>distro</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Operating system distribution</td>
 </tr>
 <tr>
 <td><code>cpu_brand</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>CPU brand information</td>
 </tr>
 <tr>
@@ -665,7 +665,7 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>parent_process_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Parent process identifier</td>
 </tr>
 <tr>
@@ -693,12 +693,12 @@ for record_batch in client.query_stream(sql, begin, end):
 <tbody>
 <tr>
 <td><code>stream_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Unique identifier for the stream</td>
 </tr>
 <tr>
 <td><code>process_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Utf8</code></td>
 <td>Reference to the parent process</td>
 </tr>
 <tr>
@@ -899,12 +899,12 @@ for record_batch in client.query_stream(sql, begin, end):
 <tbody>
 <tr>
 <td><code>stream_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Thread stream identifier</td>
 </tr>
 <tr>
 <td><code>block_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Block identifier</td>
 </tr>
 <tr>
@@ -914,7 +914,7 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>event_type</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>"begin" or "end"</td>
 </tr>
 <tr>
@@ -929,17 +929,17 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>name</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Span name (function)</td>
 </tr>
 <tr>
 <td><code>filename</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Source file</td>
 </tr>
 <tr>
 <td><code>target</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Module/target</td>
 </tr>
 <tr>
@@ -997,17 +997,17 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>name</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Span name (function)</td>
 </tr>
 <tr>
 <td><code>target</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Module/target</td>
 </tr>
 <tr>
 <td><code>filename</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Source file</td>
 </tr>
 <tr>
@@ -1030,17 +1030,17 @@ for record_batch in client.query_stream(sql, begin, end):
 <tbody>
 <tr>
 <td><code>process_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Process identifier</td>
 </tr>
 <tr>
 <td><code>stream_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Stream identifier</td>
 </tr>
 <tr>
 <td><code>block_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Block identifier</td>
 </tr>
 <tr>
@@ -1050,17 +1050,17 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>exe</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Executable name</td>
 </tr>
 <tr>
 <td><code>username</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>User who ran the process</td>
 </tr>
 <tr>
 <td><code>computer</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Computer/hostname</td>
 </tr>
 <tr>
@@ -1070,17 +1070,17 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>target</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Module/target</td>
 </tr>
 <tr>
 <td><code>name</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Metric name</td>
 </tr>
 <tr>
 <td><code>unit</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Measurement unit</td>
 </tr>
 <tr>
@@ -1113,17 +1113,17 @@ for record_batch in client.query_stream(sql, begin, end):
 <tbody>
 <tr>
 <td><code>process_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Process identifier</td>
 </tr>
 <tr>
 <td><code>stream_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Stream identifier</td>
 </tr>
 <tr>
 <td><code>block_id</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Block identifier</td>
 </tr>
 <tr>
@@ -1133,17 +1133,17 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>exe</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Executable name</td>
 </tr>
 <tr>
 <td><code>username</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>User who ran the process</td>
 </tr>
 <tr>
 <td><code>computer</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Computer/hostname</td>
 </tr>
 <tr>
@@ -1153,7 +1153,7 @@ for record_batch in client.query_stream(sql, begin, end):
 </tr>
 <tr>
 <td><code>target</code></td>
-<td><code>Dictionary(Int16, Utf8)</code></td>
+<td><code>Dictionary(Int32, Utf8)</code></td>
 <td>Module/target</td>
 </tr>
 <tr>

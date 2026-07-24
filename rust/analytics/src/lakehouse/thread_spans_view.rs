@@ -30,7 +30,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
-const SCHEMA_VERSION: u8 = 0;
+const SCHEMA_VERSION: u8 = 1;
 lazy_static::lazy_static! {
     static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));

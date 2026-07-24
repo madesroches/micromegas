@@ -4,7 +4,7 @@ use datafusion::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, PrimitiveBuilder, StringBuilder, StringDictionaryBuilder,
     },
-    datatypes::{DataType, Field, Int16Type, Int64Type, Schema, TimeUnit, TimestampNanosecondType},
+    datatypes::{DataType, Field, Int32Type, Int64Type, Schema, TimeUnit, TimestampNanosecondType},
     record_batch::RecordBatch,
 };
 use std::sync::Arc;
@@ -15,17 +15,17 @@ pub fn images_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
             "process_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "block_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -35,17 +35,17 @@ pub fn images_table_schema() -> Schema {
         ),
         Field::new(
             "exe",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "username",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "computer",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
@@ -56,7 +56,7 @@ pub fn images_table_schema() -> Schema {
         Field::new("name", DataType::Utf8, false),
         Field::new(
             "format",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("payload_size", DataType::Int64, false),
@@ -65,16 +65,16 @@ pub fn images_table_schema() -> Schema {
 }
 
 pub struct ImagesRecordBuilder {
-    process_ids: StringDictionaryBuilder<Int16Type>,
-    stream_ids: StringDictionaryBuilder<Int16Type>,
-    block_ids: StringDictionaryBuilder<Int16Type>,
+    process_ids: StringDictionaryBuilder<Int32Type>,
+    stream_ids: StringDictionaryBuilder<Int32Type>,
+    block_ids: StringDictionaryBuilder<Int32Type>,
     insert_times: PrimitiveBuilder<TimestampNanosecondType>,
-    exes: StringDictionaryBuilder<Int16Type>,
-    usernames: StringDictionaryBuilder<Int16Type>,
-    computers: StringDictionaryBuilder<Int16Type>,
+    exes: StringDictionaryBuilder<Int32Type>,
+    usernames: StringDictionaryBuilder<Int32Type>,
+    computers: StringDictionaryBuilder<Int32Type>,
     times: PrimitiveBuilder<TimestampNanosecondType>,
     names: StringBuilder,
-    formats: StringDictionaryBuilder<Int16Type>,
+    formats: StringDictionaryBuilder<Int32Type>,
     payload_sizes: PrimitiveBuilder<Int64Type>,
     data: BinaryBuilder,
     min_time: Option<i64>,
@@ -135,16 +135,16 @@ impl ImagesRecordBuilder {
         payload_size: i64,
         image_data: &[u8],
     ) -> Result<()> {
-        self.process_ids.append_value(process_id_str);
-        self.stream_ids.append_value(stream_id_str);
-        self.block_ids.append_value(block_id_str);
+        self.process_ids.append(process_id_str)?;
+        self.stream_ids.append(stream_id_str)?;
+        self.block_ids.append(block_id_str)?;
         self.insert_times.append_value(insert_time_nanos);
-        self.exes.append_value(&process.exe);
-        self.usernames.append_value(&process.username);
-        self.computers.append_value(&process.computer);
+        self.exes.append(&process.exe)?;
+        self.usernames.append(&process.username)?;
+        self.computers.append(&process.computer)?;
         self.times.append_value(time_ns);
         self.names.append_value(name);
-        self.formats.append_value(format);
+        self.formats.append(format)?;
         self.payload_sizes.append_value(payload_size);
         self.data.append_value(image_data);
         self.min_time = Some(self.min_time.map(|m| m.min(time_ns)).unwrap_or(time_ns));
