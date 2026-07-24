@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["major_state","minor_state"],"struct":["MajorState","MinorState"]};

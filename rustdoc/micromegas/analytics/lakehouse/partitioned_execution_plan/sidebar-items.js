@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["OrderingBounds"],"fn":["make_partitioned_execution_plan"]};

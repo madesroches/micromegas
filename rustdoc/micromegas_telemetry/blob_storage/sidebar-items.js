@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_object_store_url","parse_object_store_url_parsed"],"struct":["BlobStorage"]};

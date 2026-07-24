@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["l1_wrap"],"mod":["backend","blocks","bounded_memory_backend","client","foyer_backend","l1_store","memory_backend","metric_tags","prefetch","range_cache","validation"],"struct":["BoundedMemoryBackend","CacheClientStore","L1CacheStore","PrefixPrefetch"]};

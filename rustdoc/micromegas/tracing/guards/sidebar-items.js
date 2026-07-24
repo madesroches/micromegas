@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["init_telemetry","shutdown_telemetry"],"struct":["ThreadNamedSpanGuard","ThreadSpanGuard","TracingSystemGuard","TracingThreadGuard"]};

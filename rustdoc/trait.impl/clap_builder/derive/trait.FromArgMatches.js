@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["flight_sql_srv",[["impl FromArgMatches for <a class=\"struct\" href=\"flight_sql_srv/struct.Cli.html\" title=\"struct flight_sql_srv::Cli\">Cli</a>",0]]],["http_gateway_srv",[["impl FromArgMatches for <a class=\"struct\" href=\"http_gateway_srv/struct.Cli.html\" title=\"struct http_gateway_srv::Cli\">Cli</a>",0]]],["micromegas",[["impl FromArgMatches for <a class=\"struct\" href=\"micromegas/config/struct.CommonServerArgs.html\" title=\"struct micromegas::config::CommonServerArgs\">CommonServerArgs</a>",0]]],["micromegas_monolith",[["impl FromArgMatches for <a class=\"struct\" href=\"micromegas_monolith/struct.Cli.html\" title=\"struct micromegas_monolith::Cli\">Cli</a>",0]]],["micromegas_object_cache_srv",[["impl FromArgMatches for <a class=\"struct\" href=\"micromegas_object_cache_srv/cli/struct.Cli.html\" title=\"struct micromegas_object_cache_srv::cli::Cli\">Cli</a>",0]]],["telemetry_generator",[["impl FromArgMatches for <a class=\"struct\" href=\"telemetry_generator/struct.Args.html\" title=\"struct telemetry_generator::Args\">Args</a>",0]]],["telemetry_ingestion_srv",[["impl FromArgMatches for <a class=\"struct\" href=\"telemetry_ingestion_srv/struct.Cli.html\" title=\"struct telemetry_ingestion_srv::Cli\">Cli</a>",0]]],["telemetry_maintenance_srv",[["impl FromArgMatches for <a class=\"struct\" href=\"telemetry_maintenance_srv/struct.Cli.html\" title=\"struct telemetry_maintenance_srv::Cli\">Cli</a>",0]]],["write_perfetto",[["impl FromArgMatches for <a class=\"struct\" href=\"write_perfetto/struct.Args.html\" title=\"struct write_perfetto::Args\">Args</a>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[155,162,198,171,204,174,183,189,159]}
