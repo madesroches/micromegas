@@ -36,11 +36,13 @@ This is **not** a performance change. Measured baseline on this branch: **56 sui
 
 56 files match `testMatch`. All are named `*.test.ts(x)` **except one**:
 
-- `src/lib/__tests__/arrow-ipc-fixtures.ts` — exports fixture helpers (lines 103, 154, 200) **and** contains its own `describe`/`it` blocks (lines 212-266).
+- `src/lib/__tests__/arrow-ipc-fixtures.ts` — exports fixture helpers (lines 103, 154, 200) **and** contains its own `describe`/`it` blocks (lines 212-276).
 
-Vitest's default `include` is `['**/*.{test,spec}.?(c|m)[jt]s?(x)']`, which would silently drop that file and its 3 tests (56 → 55 suites). The `include` patterns must mirror `testMatch`, not be left at the default.
+Vitest's default `include` is `['**/*.{test,spec}.?(c|m)[jt]s?(x)']`, which would silently drop that file and its 3 tests (56 → 55 suites). Rather than carry Jest's `testMatch` shape forward as a custom `include`, this plan splits that one file so the default glob is correct — see Design §1a and the Trade-offs.
 
 `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` is **not** in a `__tests__` directory and is correctly not collected.
+
+The other 55 files are already default-compatible: 54 are `*.test.ts(x)` under `src/**/__tests__/`, and `tests/` holds exactly one file, `tests/lib/screens-api.test.ts`.
 
 ### Jest API surface (measured across `src/` + `tests/`)
 
@@ -53,8 +55,8 @@ Vitest's default `include` is `['**/*.{test,spec}.?(c|m)[jt]s?(x)']`, which woul
 | `jest.clearAllMocks` | 12 | mechanical |
 | `jest.MockedFunction` (type) | 7 | → `MockedFunction` from `vitest` |
 | `jest.restoreAllMocks` | 5 | mechanical |
-| `jest.requireActual` | 5 | → `await vi.importActual` (async — changes shape) |
-| `jest.requireMock` | 1 | → `await vi.importMock` (async) |
+| `jest.requireActual` | 5 | → `await importOriginal()` inside factories (async — changes shape); see Design §7 |
+| `jest.requireMock` | 1 | module-level, not in a factory → `await import(...)`; see Design §7 |
 | `jest.useFakeTimers` / `useRealTimers` / `advanceTimersByTime` | 3 | mechanical (`VariableCell.test.tsx:16,20,201`) |
 | `jest.spyOn` | 1 real use | `MapHoverTooltip.test.tsx:65-67` (`const spy = jest\n  .spyOn(HTMLElement.prototype, 'getBoundingClientRect')...`) is a real call, line-broken across `jest` and `.spyOn`; the 2 other grep hits (`test-setup.ts:58`, `table-utils.test.tsx:18`) are comments only |
 
@@ -82,7 +84,7 @@ No snapshots (`__snapshots__` / `*.snap`: none), so no snapshot-format churn.
 
 `build/analytics_web_ci.py` runs `yarn install / type-check / lint / test / build`; `.github/workflows/analytics-web-app.yml` just calls that script. **No CI change needed** — Vitest's `configDefaults` already fall back to run-once mode in CI and when stdin isn't a TTY, which covers both the script and GitHub Actions. The script is still `vitest run` so that an interactive developer running `yarn test` locally lands in run-once mode too, matching `jest`'s default.
 
-`tsconfig.json:35-42` excludes `src/**/*.test.ts(x)`, the `__tests__` directories, and `src/test-setup.ts` — but **not** `__test-utils__` or `__mocks__` directories, which have no matching exclude pattern and so are type-checked today (confirmed with `tsc --noEmit --listFilesOnly`, which includes `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` and all three `src/__mocks__/*` files). So `yarn type-check` skips `*.test.ts(x)` / `__tests__` content both today and after the migration, but does check `__test-utils__` / `__mocks__` content in both cases. See "Types" below and Phase 3 step 9.
+`tsconfig.json:35-42` excludes `src/**/*.test.ts(x)`, the `__tests__` directories, and `src/test-setup.ts` — but **not** `__test-utils__` or `__mocks__` directories, which have no matching exclude pattern and so are type-checked today (confirmed with `tsc --noEmit --listFilesOnly`, which includes `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` and all three `src/__mocks__/*` files). So `yarn type-check` skips `*.test.ts(x)` / `__tests__` content both today and after the migration, but does check `__test-utils__` / `__mocks__` content in both cases. See "Types" below and Phase 3 step 10.
 
 ## Design
 
@@ -107,13 +109,8 @@ test: {
     jsdom: { url: 'http://localhost:3000' },
   },
   setupFiles: ['./src/test-setup.ts'],
-  // Mirrors jest.config.js testMatch. Must stay explicit: the Vitest default
-  // would drop src/lib/__tests__/arrow-ipc-fixtures.ts, which holds 3 tests.
-  include: [
-    'src/**/__tests__/**/*.{ts,tsx}',
-    'src/**/*.{test,spec}.{ts,tsx}',
-    'tests/**/*.{ts,tsx}',
-  ],
+  // No `include` — Vitest's default '**/*.{test,spec}.?(c|m)[jt]s?(x)' covers
+  // all 56 suites once arrow-ipc-fixtures.ts is split (Design §1a).
   // Test-only stubs; merged with resolve.alias, so '@' is inherited.
   alias: {
     'react-markdown': path.resolve(__dirname, './src/__mocks__/react-markdown.tsx'),
@@ -143,6 +140,15 @@ Notes:
 - The `\\.css$ → styleMock.js` mapping is dropped: Vitest returns an empty module for CSS imports by default (`css: false`). `src/__mocks__/styleMock.js` is deleted.
 - `globals: true` is load-bearing beyond avoiding 55 import edits: `@testing-library/react`'s auto-`cleanup` registers itself through the global `afterEach`. Without globals, DOM would leak across tests in every render-based suite.
 - The `wasm-content-type` and `log-base-path` plugins only implement `configureServer` and are inert under test. `loadWasmEngine` (`src/lib/wasm-engine.ts:11`) uses a lazy dynamic `import()` never reached from a test, and `optimizeDeps.exclude` already lists the package.
+
+### 1a. Split `arrow-ipc-fixtures.ts` so the default `include` is correct
+
+`src/lib/__tests__/arrow-ipc-fixtures.ts` is the only file in the repo that Vitest's default glob would miss — verified: it is the sole non-`*.test.*` file in any `__tests__` directory, and `tests/` holds only `screens-api.test.ts`. Two ways to keep its 3 tests:
+
+- **Custom `include` mirroring `testMatch`** — encodes Jest's "every `.ts` under `__tests__` is a suite" convention, which has no Vitest equivalent. It also inverts the trap it guards: any future helper dropped into a `__tests__` directory silently becomes a suite.
+- **Split the file** (chosen) — move the self-test block at lines 211-276 (comment at 211, `describe` at 212-276) into a new sibling `src/lib/__tests__/arrow-ipc-fixtures.test.ts` that imports the three helpers it exercises (`createDictionaryFramedIpc`, `createPlainFramedIpc`, `combineChunks`) from `./arrow-ipc-fixtures`. All three are already exported, and the fixtures module has exactly one other importer (`arrow-stream-dictionary.test.ts:14`), which is unaffected.
+
+Suite and test counts are preserved exactly: `arrow-ipc-fixtures.ts` stops being a suite and `arrow-ipc-fixtures.test.ts` becomes one, so the parity gate stays **56 suites / 1167 tests**. The config then needs no `include` at all, and the runner's discovery rule matches the file-naming convention the other 55 files already follow.
 
 ### 2. Dependency changes
 
@@ -225,7 +231,7 @@ Vitest runs test files as ESM; `require` is not defined. The shared cell-registr
 - `…cell-registry-mock.ts:14` — `const { substituteMacros, DEFAULT_SQL } = require('../notebook-utils')` → static `import`
 - `…cell-registry-mock.ts:6` — the usage doc-comment needs updating to the new form
 
-`cell-registry-mock.ts` sits under `__test-utils__`, which — unlike `__tests__` and `*.test.ts(x)` — is not excluded by `tsconfig.json` (see Current State → CI above), so it is already part of the `tsc --noEmit` program today. Its two `require()` calls are currently implicitly `any`; converting them to typed static imports puts this ~330-line helper under `strict: true` for the first time. Budget for `yarn type-check` to newly surface errors here (see Phase 3 step 9).
+`cell-registry-mock.ts` sits under `__test-utils__`, which — unlike `__tests__` and `*.test.ts(x)` — is not excluded by `tsconfig.json` (see Current State → CI above), so it is already part of the `tsc --noEmit` program today. Its two `require()` calls are currently implicitly `any`; converting them to typed static imports puts this ~330-line helper under `strict: true` for the first time. Budget for `yarn type-check` to newly surface errors here (see Phase 3 step 10).
 
 Call sites become async factories with a dynamic import:
 
@@ -240,7 +246,16 @@ Sites: `NotebookRenderer.test.tsx:98`, `useCellExecution.test.ts:66`, `notebook-
 
 ### 7. `requireActual` / `requireMock` — 6 async conversions
 
-`await vi.importActual(...)` / `await vi.importMock(...)` are async, so the factory becomes `async`:
+The Vitest idiom inside a factory is the `importOriginal` helper the factory receives as its argument, not a bare `vi.importActual` call — it is typed against the real module and needs no module specifier repeated:
+
+```ts
+vi.mock('../notebook-utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../notebook-utils')>()
+  return { ...actual, evaluateTemplate: vi.fn(actual.evaluateTemplate) }
+})
+```
+
+Five of the six sites below are inside `vi.mock` factories and take this form; the factory becomes `async`. Only `arrow-utils.test.ts:114` sits at module top level with no enclosing factory, so it stays a direct call:
 
 | File | Line | Module |
 |---|---|---|
@@ -249,18 +264,18 @@ Sites: `NotebookRenderer.test.tsx:98`, `useCellExecution.test.ts:66`, `notebook-
 | `src/routes/__tests__/ScreenPage.urlState.test.tsx` | 21 | `react-router-dom` |
 | `src/lib/screen-renderers/__tests__/useNotebookVariables.test.tsx` | 30 | `react-router-dom` — combined with its §5 row above; see below |
 | `src/lib/screen-renderers/__tests__/table-utils.test.tsx` | 22 | `../notebook-utils` |
-| `src/lib/__tests__/arrow-utils.test.ts` | 114 | `jest.requireMock('apache-arrow')` → top-level `await vi.importMock('apache-arrow')` (test files are ESM, so top-level `await` is available) |
+| `src/lib/__tests__/arrow-utils.test.ts` | 114 | `jest.requireMock('apache-arrow')` at module top level (not in a factory) → `await import('apache-arrow')`, which the hoisted `vi.mock` factory already intercepts; test files are ESM, so top-level `await` is available. The destructured `__test__` helper does not exist on the real module's types, so this needs a cast either way |
 
-**`useNotebookVariables.test.tsx` is one combined conversion, not two independent one-liners.** Its `react-router-dom` factory (lines 29-61) both needs `vi.hoisted()` for the outer `mockInitialSearch` binding (Design §5) *and* `await vi.importActual('react-router-dom')` in place of `jest.requireActual` (Design §7) — but the factory also calls `useState`, `useMemo`, `useRef`, and `useCallback`, imported from `react` at line 16. Hoisted `vi.mock` factories run before the file's own top-level imports are initialised, so those bindings cannot be closed over directly. The factory must become `async` and pull them in itself:
+**`useNotebookVariables.test.tsx` is one combined conversion, not two independent one-liners.** Its `react-router-dom` factory (lines 29-61) both needs `vi.hoisted()` for the outer `mockInitialSearch` binding (Design §5) *and* `await importOriginal()` in place of `jest.requireActual` (Design §7) — but the factory also calls `useState`, `useMemo`, `useRef`, and `useCallback`, imported from `react` at line 16. Hoisted `vi.mock` factories run before the file's own top-level imports are initialised, so those bindings cannot be closed over directly. The factory must become `async` and pull them in itself:
 
 ```ts
 const { mockInitialSearch, setMockInitialSearch } = vi.hoisted(() => ({
   mockInitialSearch: { current: '' },
   setMockInitialSearch: (v: string) => { mockInitialSearch.current = v },
 }))
-vi.mock('react-router-dom', async () => {
+vi.mock('react-router-dom', async (importOriginal) => {
   const { useState, useMemo, useRef, useCallback } = await import('react')
-  const actual = await vi.importActual('react-router-dom')
+  const actual = await importOriginal<typeof import('react-router-dom')>()
   return {
     ...actual,
     useSearchParams: (): [URLSearchParams, SetSearchParamsFn] => {
@@ -293,12 +308,12 @@ Every one of the 64 `vi.mock` factories that returns a subset of a module's expo
 
 (`@/lib/config` exports exactly `getConfig` and `appLink`; all three factories mocking it return both, so despite its earlier billing here it carries zero strict-mock exposure.)
 
-Fix per occurrence, in preference order: (a) add the missing export to the factory when the point of the mock is a narrow stub; (b) spread `await vi.importActual(...)` when the mock only means to override one or two names. This is per-error work, not a sweep — budget the bulk of the migration time here.
+Fix per occurrence, in preference order: (a) add the missing export to the factory when the point of the mock is a narrow stub; (b) spread the real module when the mock only means to override one or two names — `vi.mock('m', async (importOriginal) => ({ ...(await importOriginal<typeof import('m')>()), foo: vi.fn() }))`, the same `importOriginal` idiom as Design §7. This is per-error work, not a sweep — budget the bulk of the migration time here.
 
 ### 9. `src/test-setup.ts` specifics
 
 - `import '@testing-library/jest-dom'` → `import '@testing-library/jest-dom/vitest'`.
-- The two global `jest.mock` calls (`@/lib/config` at line 43, `react-router-dom` at line 50) become `vi.mock`, with `vi.hoisted()` for `mockNavigate` and an async factory for the `react-router-dom` `importActual` spread. `vi.mock` in a setup file applying to every test file is verified against the 4.1.10 implementation, not documented behavior — the docs (`docs/api/vi.md`) actually recommend using `vi.mock` / `vi.hoisted` only inside test files, and never affirm that setup-file mocks apply repo-wide. It does work in 4.1.10: the hoisting transform has no setup-file exemption, `experimental.viteModuleRunner` defaults to `true`, and the mock registry is a plain `Map.set` shared process-wide — but that's an implementation fact with a config dependency, not a documented guarantee, so the empirical check in Phase 2 step 6 is load-bearing, not a sanity check. The real, documented constraint is different — **a module already imported by the setup file is cached before the mock is registered and cannot then be mocked.** `src/test-setup.ts` today imports only `@testing-library/jest-dom`, `util`, and `stream/web`, so neither `@/lib/config` nor `react-router-dom` is pre-imported and both mocks are safe; keep it that way as new setup-file imports are added. The 4 test files which re-mock `react-router-dom` themselves keep winning either way: their `vi.mock` is hoisted within a file that runs after setup, so the last registration wins — same precedence as Jest today.
+- The two global `jest.mock` calls (`@/lib/config` at line 43, `react-router-dom` at line 50) become `vi.mock`, with `vi.hoisted()` for `mockNavigate` and an async factory spreading `importOriginal()` for `react-router-dom` (Design §7). `vi.mock` in a setup file applying to every test file is verified against the 4.1.10 implementation, not documented behavior — the docs (`docs/api/vi.md`) actually recommend using `vi.mock` / `vi.hoisted` only inside test files, and never affirm that setup-file mocks apply repo-wide. It does work in 4.1.10: the hoisting transform has no setup-file exemption, `experimental.viteModuleRunner` defaults to `true`, and the mock registry is a plain `Map.set` shared process-wide — but that's an implementation fact with a config dependency, not a documented guarantee, so the empirical check in Phase 2 step 7 is load-bearing, not a sanity check. The real, documented constraint is different — **a module already imported by the setup file is cached before the mock is registered and cannot then be mocked.** `src/test-setup.ts` today imports only `@testing-library/jest-dom`, `util`, and `stream/web`, so neither `@/lib/config` nor `react-router-dom` is pre-imported and both mocks are safe; keep it that way as new setup-file imports are added. The 4 test files which re-mock `react-router-dom` themselves keep winning either way: their `vi.mock` is hoisted within a file that runs after setup, so the last registration wins — same precedence as Jest today.
 - `process.env.NODE_ENV = 'development'` (line 39) can be dropped: nothing in `src/` reads `NODE_ENV`, Vitest runs in mode `test` so `import.meta.env.DEV` is `true`, and React resolves to its development build because `process.env.NODE_ENV !== 'production'` at runtime. One-line revert if anything regresses.
 - The `TextEncoder` / `TextDecoder` / web-streams polyfills (lines 2-3, 10-20) are almost certainly redundant under Node 20/22 + Vitest's jsdom environment, but they are idempotent — **leave them alone in this change** to keep the diff to one concern. Switch the specifiers to `node:util` / `node:stream/web` while touching the file. The `@ts-expect-error` directives above them may become "unused directive" errors, but `tsconfig.json` excludes `src/test-setup.ts`, so `tsc --noEmit` will not see it.
 - The `DOMRect` polyfill (lines 22-35) stays.
@@ -308,7 +323,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 `src/components/__tests__/CellContainer.test.tsx:23` and `src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx:46` both say "mocked via moduleNameMapper in jest.config.js" → point them at `test.alias` in `vite.config.ts`.
 
-`src/lib/screen-renderers/__tests__/table-utils.test.tsx:18-19` also survive the mechanical rename as plain comments — "…identical output. `jest.spyOn`" and "can't be used here — this repo's Jest runs in ESM mode and module-namespace…" — and would otherwise match Phase 5 step 16's cleanup grep. The technical claim still holds under Vitest; reword "this repo's Jest" to "this repo's test runner" (or similar) without changing the underlying reasoning.
+`src/lib/screen-renderers/__tests__/table-utils.test.tsx:18-19` also survive the mechanical rename as plain comments — "…identical output. `jest.spyOn`" and "can't be used here — this repo's Jest runs in ESM mode and module-namespace…" — and would otherwise match Phase 5 step 17's cleanup grep. The technical claim still holds under Vitest; reword "this repo's Jest" to "this repo's test runner" (or similar) without changing the underlying reasoning.
 
 ## Implementation Steps
 
@@ -317,27 +332,28 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 2. `vite.config.ts`: add the triple-slash reference and the `test` block from Design §1.
 3. No ambient globals file to add (Design §3) — skip.
 4. Delete `jest.config.js` and `src/__mocks__/styleMock.js`; remove `jest.config.js` from `.eslintrc.json` `ignorePatterns`.
-5. Confirm discovery before touching test bodies: `yarn vitest list --filesOnly` must report 56 files, including `src/lib/__tests__/arrow-ipc-fixtures.ts`. (`--filesOnly` is required at this point in the sequence — plain `vitest list` imports each test file and `setupFiles`, and at Phase 1 they still contain `jest.*` calls that throw `ReferenceError: jest is not defined`.)
+5. Split `src/lib/__tests__/arrow-ipc-fixtures.ts` per Design §1a: move its self-test block (lines 211-276) into a new `src/lib/__tests__/arrow-ipc-fixtures.test.ts` importing `createDictionaryFramedIpc`, `createPlainFramedIpc` and `combineChunks` from `./arrow-ipc-fixtures`. Leave the `jest.*` calls in the moved block alone — step 7's sweep picks them up.
+6. Confirm discovery before touching test bodies: `yarn vitest list --filesOnly` must report 56 files, including the new `src/lib/__tests__/arrow-ipc-fixtures.test.ts` and *excluding* `arrow-ipc-fixtures.ts`. (`--filesOnly` is required at this point in the sequence — plain `vitest list` imports each test file and `setupFiles`, and at Phase 1 they still contain `jest.*` calls that throw `ReferenceError: jest is not defined`.)
 
 ### Phase 2 — Mechanical pass
-6. Rewrite `src/test-setup.ts` per Design §9 and get **one** small suite green end-to-end first (`src/lib/__tests__/units.test.ts` — no mocks) to validate config, then one that depends on the global setup mocks without overriding them locally (`src/routes/__tests__/MapsPage.test.tsx` — no local `react-router-dom` mock, and it does reach `@/lib/config`; see Testing Strategy item 7). `src/hooks/__tests__/useScreenConfig.test.tsx` is not a valid check here — its own `jest.mock('react-router-dom', …)` fully overrides the setup-file mock, and it is converted later in Phase 3 (its `vi.hoisted`/`importActual` needs are covered by steps 10-11).
-7. Apply the `jest.*` → `vi.*` rename across the 56 test files (Design §4).
-8. Apply the type renames (Design §3) — `Mock`, `MockedFunction` imported from `vitest`.
+7. Rewrite `src/test-setup.ts` per Design §9 and get **one** small suite green end-to-end first (`src/lib/__tests__/units.test.ts` — no mocks) to validate config, then one that depends on the global setup mocks without overriding them locally (`src/routes/__tests__/MapsPage.test.tsx` — no local `react-router-dom` mock, and it does reach `@/lib/config`; see Testing Strategy item 7). `src/hooks/__tests__/useScreenConfig.test.tsx` is not a valid check here — its own `jest.mock('react-router-dom', …)` fully overrides the setup-file mock, and it is converted later in Phase 3 (its `vi.hoisted`/`importActual` needs are covered by steps 11-12).
+8. Apply the `jest.*` → `vi.*` rename across the 56 test files (Design §4).
+9. Apply the type renames (Design §3) — `Mock`, `MockedFunction` imported from `vitest`.
 
 ### Phase 3 — Non-mechanical pass
-9. Convert `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` to ESM imports and update its doc comment; convert the 5 `require()`-in-factory call sites (Design §6). This file is type-checked (not excluded by `tsconfig.json`), so the switch to typed static imports puts it under `strict: true` for the first time — budget time for `yarn type-check` errors here, not just at Phase 4 step 14.
-10. Convert the 12 `vi.hoisted()` sites (Design §5).
-11. Convert the 6 `importActual` / `importMock` sites (Design §7).
+10. Convert `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` to ESM imports and update its doc comment; convert the 5 `require()`-in-factory call sites (Design §6). This file is type-checked (not excluded by `tsconfig.json`), so the switch to typed static imports puts it under `strict: true` for the first time — budget time for `yarn type-check` errors here, not just at Phase 4 step 15.
+11. Convert the 12 `vi.hoisted()` sites (Design §5).
+12. Convert the 6 `importActual` / `importMock` sites (Design §7) — `importOriginal` inside factories, a direct `await import(...)` at `arrow-utils.test.ts:114`.
 
 ### Phase 4 — Converge
-12. `yarn test` and work the failure list, which is expected to be dominated by strict partial mocks (Design §8). Fix per Design §8's preference order.
-13. Update the stale comments (Design §10).
-14. `yarn lint`, `yarn type-check`, `yarn build`, then `python3 build/analytics_web_ci.py` for the full CI path.
-15. Update documentation (see below).
+13. `yarn test` and work the failure list, which is expected to be dominated by strict partial mocks (Design §8). Fix per Design §8's preference order.
+14. Update the stale comments (Design §10).
+15. `yarn lint`, `yarn type-check`, `yarn build`, then `python3 build/analytics_web_ci.py` for the full CI path.
+16. Update documentation (see below).
 
 ### Phase 5 — Cleanup verification
-16. `grep -rn 'jest' analytics-web-app/src analytics-web-app/tests analytics-web-app/package.json` returns only `@testing-library/jest-dom` hits.
-17. `yarn test:coverage` produces a report over `src/**/*.{ts,tsx}`.
+17. `grep -rn 'jest' analytics-web-app/src analytics-web-app/tests analytics-web-app/package.json` returns only `@testing-library/jest-dom` hits.
+18. `yarn test:coverage` produces a report over `src/**/*.{ts,tsx}`.
 
 ## Files to Modify
 
@@ -346,7 +362,8 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 - `analytics-web-app/src/__mocks__/styleMock.js`
 
 **Create**
-- None (see Design §3 — no ambient globals file is needed for this migration).
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.test.ts` — the self-tests moved out of `arrow-ipc-fixtures.ts` (Design §1a)
+- No ambient globals file (see Design §3 — none is needed for this migration).
 
 **Config / metadata**
 - `analytics-web-app/package.json` (deps, resolutions, scripts)
@@ -355,6 +372,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 - `analytics-web-app/yarn.lock`
 
 **Test infrastructure**
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` (self-tests removed; fixture exports unchanged)
 - `analytics-web-app/src/test-setup.ts`
 - `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
 
@@ -378,7 +396,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 **Keeping the `react-markdown` / `remark-gfm` stubs.** Under Vitest these packages would load natively — the stubs exist because Jest could not require them. But `MarkdownCell` tests assert against the stub's simplified HTML output, so removing them means rewriting assertions. Out of scope; noted as a follow-up.
 
-**Explicit `include` patterns vs. Vitest's default.** Mirroring `testMatch` is slightly less conventional than the default `*.test.*` glob, but the default silently drops `arrow-ipc-fixtures.ts`'s 3 tests. Silent test loss is worse than an unconventional glob. The alternative — splitting that file's tests into `arrow-ipc-fixtures.test.ts` — is a reasonable follow-up but is orthogonal churn here.
+**Splitting `arrow-ipc-fixtures.ts` vs. an explicit `include`.** Mirroring Jest's `testMatch` would avoid touching any test file, but it makes a Jest convention permanent config and leaves the inverse trap (a future `__tests__` helper silently becoming a suite). Splitting the file is a ~20-line move in one file, keeps counts identical, and lets the config carry no `include` at all. Chosen: split (Design §1a). Cost: one extra file in the diff, and the fixtures module and its new test file must stay in sync if helpers are renamed.
 
 **Second test runner in the monorepo.** `grafana/` gets Jest from the Grafana plugin toolchain and cannot easily move. Two runners for two unrelated toolchains is the accepted cost; the alternative (migrating `grafana/` too) is a much larger change against upstream-managed config.
 
@@ -395,7 +413,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 The test suite *is* the artifact under test, so verification is parity against the recorded baseline:
 
-1. **Discovery parity** — `yarn vitest list --filesOnly` reports 56 files. Compare against the `testMatch` file list before and after.
+1. **Discovery parity** — `yarn vitest list --filesOnly` reports 56 files. Compare against the `testMatch` file list before and after: the only difference must be `arrow-ipc-fixtures.ts` → `arrow-ipc-fixtures.test.ts` (Design §1a).
 2. **Count parity** — `yarn test` reports **56 passed / 1167 passed**. Any lower number means silently skipped tests, not a fix. Zero skipped, zero todo.
 3. **No accidental relaxations** — during Phase 4, resist making a failing assertion pass by loosening it. A strict-partial-mock error is a missing export in a factory, not a wrong expectation.
 4. **Coverage runs** — `yarn test:coverage` completes and reports over `src/**/*.{ts,tsx}`.
@@ -410,8 +428,8 @@ Wall-clock is recorded for information only (baseline 6.66 s); it is not a gate.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Strict partial mocks throw on missing exports | High — expect a double-digit failure count on first run | Design §8; the error message names the module and the export |
-| Setup-file mock is defeated by an import-order cache hit (a mocked module gets imported by `test-setup.ts` itself before the `vi.mock` registers) | Low — `test-setup.ts` currently imports only `@testing-library/jest-dom`, `util`, `stream/web`; neither mocked module is among them | Keep setup-file imports minimal; re-check this invariant if a new import is added to `test-setup.ts`; confirmed in Phase 2 step 6 |
-| Vitest default `include` silently drops `arrow-ipc-fixtures.ts` | Medium if `include` is left implicit | Explicit patterns + the Phase 1 step 5 discovery check |
+| Setup-file mock is defeated by an import-order cache hit (a mocked module gets imported by `test-setup.ts` itself before the `vi.mock` registers) | Low — `test-setup.ts` currently imports only `@testing-library/jest-dom`, `util`, `stream/web`; neither mocked module is among them | Keep setup-file imports minimal; re-check this invariant if a new import is added to `test-setup.ts`; confirmed in Phase 2 step 7 |
+| `arrow-ipc-fixtures.ts`'s 3 tests are lost if the split (Design §1a) is skipped or botched, since no custom `include` backstops them | Medium | The Phase 1 step 6 discovery check (56 files, `arrow-ipc-fixtures.test.ts` present) runs before any test body is touched, and Testing Strategy item 2's count parity gate catches a partial move |
 | `test.alias` object form prefix-matches an unintended subpath import | Low | Switch to array-of-regex form |
 | `magicast` (via `@vitest/coverage-v8`) pulls in unpinned `@babel/parser`/`@babel/types` | Low | No CVE currently forces a pin; add one to `resolutions` targeting these two packages if one surfaces — the old `@babel/core` pin does not cover them |
 | `micromegas-datafusion-wasm` resolution under jsdom | Low — the import is lazy and never reached from a test | If it surfaces, add a `test.alias` stub or `test.server.deps.inline` |
