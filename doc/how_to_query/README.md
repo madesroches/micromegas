@@ -250,18 +250,18 @@ Contains metadata about processes that have sent telemetry data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the process |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `realname` | `Dictionary(Int16, Utf8)` | Real name of the user |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
-| `distro` | `Dictionary(Int16, Utf8)` | Operating system distribution |
-| `cpu_brand` | `Dictionary(Int16, Utf8)` | CPU brand information |
+| `process_id` | `Utf8` | Unique identifier for the process |
+| `exe` | `Utf8` | Executable name |
+| `username` | `Utf8` | User who ran the process |
+| `realname` | `Utf8` | Real name of the user |
+| `computer` | `Utf8` | Computer/hostname |
+| `distro` | `Utf8` | Operating system distribution |
+| `cpu_brand` | `Utf8` | CPU brand information |
 | `tsc_frequency` | `UInt64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `start_ticks` | `UInt64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
-| `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
+| `parent_process_id` | `Utf8` | Parent process identifier |
 | `properties` | `Map` | Additional process metadata |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 
@@ -270,8 +270,8 @@ Contains information about data streams within processes.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the stream |
-| `process_id` | `Dictionary(Int16, Utf8)` | Reference to the parent process |
+| `stream_id` | `Utf8` | Unique identifier for the stream |
+| `process_id` | `Utf8` | Reference to the parent process |
 | `dependencies_metadata` | Various | Stream dependency metadata |
 | `objects_metadata` | Various | Stream object metadata |
 | `tags` | Various | Stream tags |

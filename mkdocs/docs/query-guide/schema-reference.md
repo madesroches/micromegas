@@ -28,18 +28,18 @@ Contains metadata about processes that have sent telemetry data.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `process_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the process |
-| `exe` | `Dictionary(Int16, Utf8)` | Executable name |
-| `username` | `Dictionary(Int16, Utf8)` | User who ran the process |
-| `realname` | `Dictionary(Int16, Utf8)` | Real name of the user |
-| `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
-| `distro` | `Dictionary(Int16, Utf8)` | Operating system distribution |
-| `cpu_brand` | `Dictionary(Int16, Utf8)` | CPU brand information |
+| `process_id` | `Utf8` | Unique identifier for the process |
+| `exe` | `Utf8` | Executable name |
+| `username` | `Utf8` | User who ran the process |
+| `realname` | `Utf8` | Real name of the user |
+| `computer` | `Utf8` | Computer/hostname |
+| `distro` | `Utf8` | Operating system distribution |
+| `cpu_brand` | `Utf8` | CPU brand information |
 | `tsc_frequency` | `Int64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `start_ticks` | `Int64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
-| `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
+| `parent_process_id` | `Utf8` | Parent process identifier |
 | `properties` | `Dictionary(Int32, Binary)` | Additional process metadata (JSONB format) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
@@ -65,8 +65,8 @@ Contains information about data streams within processes.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stream_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the stream |
-| `process_id` | `Dictionary(Int16, Utf8)` | Reference to the parent process |
+| `stream_id` | `Utf8` | Unique identifier for the stream |
+| `process_id` | `Utf8` | Reference to the parent process |
 | `dependencies_metadata` | `Binary` | Stream dependency metadata |
 | `objects_metadata` | `Binary` | Stream object metadata |
 | `tags` | `List<Utf8>` | Stream tags |
@@ -646,11 +646,11 @@ Micromegas maintains full backward compatibility. Existing queries using `proper
 
 ### Dictionary Compression
 
-Most string fields use dictionary compression for storage efficiency. The dictionary key
-width varies by table: `Int16` for the low-cardinality `processes`/`streams` metadata tables,
-and `Int32` for `log_entries`, `log_stats`, `measures`, `thread_spans`, `async_events`,
-`net_spans`, and `otel_spans` (whose string columns can accumulate many more distinct
-values per batch — see each table's field reference above):
+String fields in the event tables use dictionary compression (`Dictionary(Int32, Utf8)`)
+for storage efficiency: `log_entries`, `log_stats`, `measures`, `thread_spans`,
+`async_events`, `net_spans`, `otel_spans`, and `images` (see each table's field reference
+above). The `processes`/`streams` metadata tables store their string columns as plain
+`Utf8`. Dictionary compression:
 
 - Reduces storage space for repeated values
 - Improves query performance
