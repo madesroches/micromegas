@@ -153,8 +153,7 @@ impl LogEntriesRecordBuilder {
         self.levels.append_value(row.level);
         self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
-        self.process_properties
-            .append_value(&*row.process.properties);
+        self.process_properties.append(&*row.process.properties)?;
         Ok(())
     }
 
@@ -191,7 +190,7 @@ impl LogEntriesRecordBuilder {
         self.usernames.append_n(&process.username, entry_count)?;
         self.computers.append_n(&process.computer, entry_count)?;
         self.process_properties
-            .append_values(&**process.properties, entry_count);
+            .append_n(&**process.properties, entry_count)?;
 
         Ok(())
     }

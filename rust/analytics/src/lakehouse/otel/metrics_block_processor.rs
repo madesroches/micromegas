@@ -236,9 +236,8 @@ impl MeasuresRowBuilder {
         self.names.append(metric_name)?;
         self.units.append(unit)?;
         self.values.append_value(value);
-        self.properties.append_value(&props_jsonb);
-        self.process_properties
-            .append_value(&**self.process.properties);
+        self.properties.append(&props_jsonb)?;
+        self.process_properties.append(&**self.process.properties)?;
 
         self.nb_appended += 1;
         Ok(())

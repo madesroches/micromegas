@@ -189,8 +189,8 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 targets.append(&scope_name)?;
                 levels.append_value(level);
                 msgs.append_value(&msg);
-                properties.append_value(&props_jsonb);
-                process_properties.append_value(&**process.properties);
+                properties.append(&props_jsonb)?;
+                process_properties.append(&**process.properties)?;
 
                 nb_appended += 1;
             }

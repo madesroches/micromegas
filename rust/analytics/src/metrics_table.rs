@@ -159,8 +159,7 @@ impl MetricsRecordBuilder {
         self.units.append(row.unit)?;
         self.values.append_value(row.value);
         self.properties.append_property_set(&row.properties)?;
-        self.process_properties
-            .append_value(&*row.process.properties);
+        self.process_properties.append(&*row.process.properties)?;
         Ok(())
     }
 
@@ -191,9 +190,9 @@ impl MetricsRecordBuilder {
         let insert_times_slice = vec![insert_time; entry_count];
         self.insert_times.append_slice(&insert_times_slice);
 
-        // For BinaryDictionaryBuilder (process_properties): use append_values for same value
+        // For BinaryDictionaryBuilder (process_properties): use append_n for same value
         self.process_properties
-            .append_values(&**process.properties, entry_count);
+            .append_n(&**process.properties, entry_count)?;
 
         // For StringDictionaryBuilder: use append_n for same values (optimal for constant data)
         self.process_ids.append_n(&process_id_str, entry_count)?;

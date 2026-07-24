@@ -72,7 +72,7 @@ Views are listed below. **Do not run DESCRIBE queries** — all schemas are docu
 
 **Log levels:** 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace
 
-**Type notes:** Types below are simplified for readability. `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int16, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` shown as `Binary` are actually `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
+**Type notes:** Types below are simplified for readability. `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int32, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` shown as `Binary` are actually `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
 
 ### `processes` — process metadata (global)
 
