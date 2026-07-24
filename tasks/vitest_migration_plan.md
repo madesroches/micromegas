@@ -69,7 +69,7 @@ No snapshots (`__snapshots__` / `*.snap`: none), so no snapshot-format churn.
 - `@babel/preset-react` — direct devDep only, and **not referenced by `jest.config.js` at all** (dead today).
 - `@babel/plugin-transform-modules-systemjs` (in `resolutions`) — reachable only via `@babel/preset-env`; becomes dead.
 - `browserslist` + `baseline-browser-mapping` — still required by `autoprefixer@10.5.0`. **Keep both**, and keep their `resolutions` pins.
-- `jsdom@26.1.0` — currently only reachable via `jest-environment-jsdom`. Vitest 4 declares `jsdom: '*'` as a **peer** and does not bundle it, so it must become a direct devDep.
+- `jsdom@26.1.0` — currently only reachable via `jest-environment-jsdom`. Vitest 4 declares `jsdom: '*'` as a **peer** and does not bundle it, so it must become a direct devDep. Latest is `29.1.1` as of this writing, three majors ahead — pinning to today's transitive `^26.1.0` is deliberate, to preserve current jsdom behaviour while swapping the runner; bumping to `29.x` is a separate follow-up, not part of this migration.
 
 ### Registry / compatibility
 
@@ -79,7 +79,7 @@ No snapshots (`__snapshots__` / `*.snap`: none), so no snapshot-format churn.
 
 ### CI
 
-`build/analytics_web_ci.py` runs `yarn install / type-check / lint / test / build`; `.github/workflows/analytics-web-app.yml` just calls that script. **No CI change needed** — but `yarn test` must not enter watch mode, so the script must be `vitest run`.
+`build/analytics_web_ci.py` runs `yarn install / type-check / lint / test / build`; `.github/workflows/analytics-web-app.yml` just calls that script. **No CI change needed** — Vitest's `configDefaults` already fall back to run-once mode in CI and when stdin isn't a TTY, which covers both the script and GitHub Actions. The script is still `vitest run` so that an interactive developer running `yarn test` locally lands in run-once mode too, matching `jest`'s default.
 
 `tsconfig.json:35-42` excludes `src/**/*.test.ts(x)`, the `__tests__` directories, and `src/test-setup.ts` — but **not** `__test-utils__` or `__mocks__` directories, which have no matching exclude pattern and so are type-checked today (confirmed with `tsc --noEmit --listFilesOnly`, which includes `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` and all three `src/__mocks__/*` files). So `yarn type-check` skips `*.test.ts(x)` / `__tests__` content both today and after the migration, but does check `__test-utils__` / `__mocks__` content in both cases. See "Types" below and Phase 3 step 9.
 
@@ -146,7 +146,7 @@ Notes:
 ### 2. Dependency changes
 
 Remove from `devDependencies`: `@babel/core`, `@babel/preset-env`, `@babel/preset-react`, `@types/jest`, `babel-jest`, `jest`, `jest-environment-jsdom`, `ts-jest`. `@babel/preset-react` is verified dead independent of Jest: it's not referenced by `jest.config.js`, nothing in `yarn.lock` depends on it transitively, and `@vitejs/plugin-react`'s only dependency is `@rolldown/pluginutils` — no build path touches it. Remove it in this pass.
-Add to `devDependencies`: `jsdom@^26.1.0`, `vitest@^4.1.10`, `@vitest/coverage-v8@^4.1.10`.
+Add to `devDependencies`: `jsdom@^26.1.0` (today's transitive version, pinned deliberately to preserve current jsdom behaviour during the runner swap — see Current State → Dependency reality check; bumping to the current `29.1.1` is a separate follow-up), `vitest@^4.1.10`, `@vitest/coverage-v8@^4.1.10`.
 Remove from `resolutions`: `@babel/plugin-transform-modules-systemjs` (unreachable once `@babel/preset-env` is gone).
 **Keep** in `resolutions`: `@babel/core` (protective if it returns transitively via a coverage dependency), plus `browserslist` / `baseline-browser-mapping`, which `autoprefixer` still needs.
 
@@ -158,7 +158,7 @@ Scripts (`package.json:12-14`):
 "test:coverage": "vitest run --coverage"
 ```
 
-`vitest run` (not bare `vitest`) is required so `build/analytics_web_ci.py` and local `yarn test` do not hang in watch mode.
+`vitest run` (not bare `vitest`) is used so interactive local `yarn test` does not enter watch mode. (Vitest already falls back to run-once mode in CI and when stdin isn't a TTY, so `build/analytics_web_ci.py` and GitHub Actions would not hang either way — the explicit `run` is about matching `jest`'s default for a developer typing `yarn test` at a terminal.)
 
 Delete `jest.config.js` and drop it from `.eslintrc.json` `ignorePatterns`.
 
@@ -166,16 +166,9 @@ Delete `jest.config.js` and drop it from `.eslintrc.json` `ignorePatterns`.
 
 `@types/jest` currently injects the `jest` global namespace repo-wide (tsconfig has no `types` allowlist, so every `@types/*` package is ambient). Removing it makes any leftover `jest.Mock` / `jest.MockedFunction` reference an editor error — useful pressure to finish the rename, but it also removes the ambient `describe`/`it`/`expect` declarations that `globals: true` needs.
 
-`vitest/globals` is not an `@types/*` package, so it is not picked up automatically. Add a one-line ambient file:
+`vitest/globals` is not an `@types/*` package, so it is not picked up automatically. But `yarn tsc --noEmit --listFilesOnly` shows the only test-adjacent files in the checked program are the three `src/__mocks__/*` files and `src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` — none of which references `describe`/`it`/`expect`/`vi`. `tsconfig.json:35-42` **excludes** `src/**/*.test.ts(x)`, the `__tests__` directories, and `src/test-setup.ts` — the only file that will reference `vi` — from that same program. A `/// <reference>` inside a `.d.ts` only augments the program that contains it, so no new ambient file is needed today: nothing in the checked program uses a Vitest global.
 
-```ts
-// analytics-web-app/src/vitest-globals.d.ts
-/// <reference types="vitest/globals" />
-```
-
-It sits under `src/**/*.ts`, which `tsconfig.json:30-34` already includes — but `tsconfig.json:35-42` **excludes** `src/**/*.test.ts(x)`, the `__tests__` directories, and `src/test-setup.ts` from that same program. A `/// <reference>` inside a `.d.ts` only augments the program that contains it, so it does not reach files the program excludes: this file does not restore `describe`/`it`/`expect` typing inside test files, either for `tsc --noEmit` (which never saw them anyway) or for editors (whose fallback inferred-project behavior auto-includes `@types/*` packages, but `vitest/globals` is not one, so nothing replaces the `@types/jest` ambient it loses).
-
-Decision: accept this as a status-quo-preserving trade-off, not a regression — test files were already outside the type-checked program before this migration, so `yarn type-check` / CI behavior is unchanged; only editor-level hints for `describe`/`it`/`expect` inside test files are lost. A `tsconfig.test.json` with `"types": ["vitest/globals"]` that brings test files into a checked program would restore that, but it's a separable follow-up, not part of this migration.
+Decision: skip adding a dedicated ambient file. If a future edit adds a `vi`/`describe`/`it`/`expect` reference to a checked-in file, fold `/// <reference types="vitest/globals" />` into the existing `src/vite-env.d.ts` (which already carries `/// <reference types="vite/client" />` and is part of the same program) rather than creating a new file. Test files remain outside the type-checked program before and after this migration, so `yarn type-check` / CI behavior is unchanged; only editor-level hints for `describe`/`it`/`expect` inside test files are affected, and a `tsconfig.test.json` with `"types": ["vitest/globals"]` that brings test files into a checked program would address that as a separable follow-up, not part of this migration.
 
 Type-level renames:
 - `jest.MockedFunction<typeof f>` → `MockedFunction<typeof f>` with `import type { MockedFunction } from 'vitest'` (7 uses, 6 files).
@@ -283,17 +276,19 @@ Under Jest's CJS interop, importing a name a partial factory did not return yiel
 
 > `No "X" export is defined on the "Y" mock. Did you forget to return it from vi.mock?`
 
-Every one of the 64 `vi.mock` factories that returns a subset of a module's exports is exposed to this, but only when the importer actually pulls in the missing name at the **value** position — a name imported only as a type is erased by the transform and never triggers the runtime check (e.g. `arrow-utils.test.ts:81-99` omits `Duration`, `Timestamp`, `Table`, all used solely as `apache-arrow` type imports in `arrow-utils.ts:5`, so none of the three throws). Highest-risk factories, by breadth of the real module's API *and* confirmed value-position exposure:
+Every one of the 64 `vi.mock` factories that returns a subset of a module's exports is exposed to this, but only when the importer actually pulls in the missing name at the **value** position — a name imported only as a type is erased by the transform and never triggers the runtime check (e.g. the `apache-arrow` factory at `arrow-utils.test.ts:6-99` omits only `Duration` — it returns `Timestamp` and `Table` classes directly — and `Duration` is used solely as an `apache-arrow` type import in `arrow-utils.ts:5`, so it never throws). Highest-risk factories, by breadth of the real module's API *and* confirmed value-position exposure:
 
 - `@/lib/arrow-stream` — `NotebookRenderer.test.tsx:9-11` returns only `streamQuery`, omitting `fetchQueryIPC`. `NotebookRenderer.tsx` pulls in `useCellExecution.ts`, which imports `fetchQueryIPC` and calls it at `useCellExecution.ts:217`/`:254` — a certain first-run throw, not a hypothetical one.
 - `apache-arrow` — `NotebookRenderer.test.tsx:14` (returns only `Table`), `useStreamQuery.test.ts`, `useCellExecution.test.ts`, `arrow-utils.test.ts`
-- `lucide-react` — 5 files, each enumerating a fixed icon list
+- `lucide-react` — 5 files, each enumerating a fixed icon list; two are confirmed certain throws, not just breadth risk:
+  - `CustomRange.test.tsx:15` returns only `Calendar`; `CustomRange.tsx:8` imports `@/components/ui/DateTimePicker`, which imports `Clock` (`:4`) and renders it at `:107`.
+  - `NotebookRenderer.test.tsx:23-44` omits `Check`; `NotebookRenderer.tsx:35` imports `./NotebookSourceView`, which imports `Check` (`:2`) and renders it at `:85`.
 - `@dnd-kit/core` / `@dnd-kit/sortable` / `@dnd-kit/utilities` — `NotebookRenderer.test.tsx:47-83`, `HorizontalGroupCell.test.tsx`; the `@dnd-kit/sortable` factory omits `horizontalListSortingStrategy`, used in a value position at `cells/HorizontalGroupCell.tsx:172`
 - `@/components/layout`, `@/lib/auth` — `MapsPage.test.tsx`, `PerformanceAnalysisPage.test.tsx`
 - `@/lib/data-sources-api` — 4 call sites, factories return 1 of 8 real exports
 - `@/lib/api` — 3 call sites
-- `@/lib/arrow-utils` — 1 of 13 real exports returned
-- `../cell-registry` (via the shared `cell-registry-mock.ts` helper, Design §6) — 6 call sites
+- `@/lib/arrow-utils` — 1 of 13 real exports returned; confirmed certain throw at `log-utils.test.ts:10`, which returns only `timestampToDate` — `log-utils.tsx:8` imports `./table-utils`, which imports and calls `isTimeType`, `isNumericType`, `isBinaryType`, `isDurationType`, `durationToMs` (`table-utils.tsx:14-21`, used at `:730`, `:757`, `:762-763`, `:767`, `:782`)
+- `../cell-registry` — 5 helper-based sites (Design §6) plus one independent inline factory at `notebook-cell-view.test.ts:14`, which is safe (it returns only `getCellTypeMetadata`, the only name `notebook-cell-view.ts:3` imports)
 
 (`@/lib/config` exports exactly `getConfig` and `appLink`; all three factories mocking it return both, so despite its earlier billing here it carries zero strict-mock exposure.)
 
@@ -302,7 +297,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 ### 9. `src/test-setup.ts` specifics
 
 - `import '@testing-library/jest-dom'` → `import '@testing-library/jest-dom/vitest'`.
-- The two global `jest.mock` calls (`@/lib/config` at line 43, `react-router-dom` at line 50) become `vi.mock`, with `vi.hoisted()` for `mockNavigate` and an async factory for the `react-router-dom` `importActual` spread. `vi.mock` in a setup file applying to every test file is documented Vitest behavior, not an assumption to verify: the hoisting transform has no setup-file exemption, and the mock registry is a plain `Map.set` shared process-wide. The real, documented constraint is different — **a module already imported by the setup file is cached before the mock is registered and cannot then be mocked.** `src/test-setup.ts` today imports only `@testing-library/jest-dom`, `util`, and `stream/web`, so neither `@/lib/config` nor `react-router-dom` is pre-imported and both mocks are safe; keep it that way as new setup-file imports are added. The 4 test files which re-mock `react-router-dom` themselves keep winning either way: their `vi.mock` is hoisted within a file that runs after setup, so the last registration wins — same precedence as Jest today.
+- The two global `jest.mock` calls (`@/lib/config` at line 43, `react-router-dom` at line 50) become `vi.mock`, with `vi.hoisted()` for `mockNavigate` and an async factory for the `react-router-dom` `importActual` spread. `vi.mock` in a setup file applying to every test file is verified against the 4.1.10 implementation, not documented behavior — the docs (`docs/api/vi.md`) actually recommend using `vi.mock` / `vi.hoisted` only inside test files, and never affirm that setup-file mocks apply repo-wide. It does work in 4.1.10: the hoisting transform has no setup-file exemption, `experimental.viteModuleRunner` defaults to `true`, and the mock registry is a plain `Map.set` shared process-wide — but that's an implementation fact with a config dependency, not a documented guarantee, so the empirical check in Phase 2 step 6 is load-bearing, not a sanity check. The real, documented constraint is different — **a module already imported by the setup file is cached before the mock is registered and cannot then be mocked.** `src/test-setup.ts` today imports only `@testing-library/jest-dom`, `util`, and `stream/web`, so neither `@/lib/config` nor `react-router-dom` is pre-imported and both mocks are safe; keep it that way as new setup-file imports are added. The 4 test files which re-mock `react-router-dom` themselves keep winning either way: their `vi.mock` is hoisted within a file that runs after setup, so the last registration wins — same precedence as Jest today.
 - `process.env.NODE_ENV = 'development'` (line 39) can be dropped: nothing in `src/` reads `NODE_ENV`, Vitest runs in mode `test` so `import.meta.env.DEV` is `true`, and React resolves to its development build because `process.env.NODE_ENV !== 'production'` at runtime. One-line revert if anything regresses.
 - The `TextEncoder` / `TextDecoder` / web-streams polyfills (lines 2-3, 10-20) are almost certainly redundant under Node 20/22 + Vitest's jsdom environment, but they are idempotent — **leave them alone in this change** to keep the diff to one concern. Switch the specifiers to `node:util` / `node:stream/web` while touching the file. The `@ts-expect-error` directives above them may become "unused directive" errors, but `tsconfig.json` excludes `src/test-setup.ts`, so `tsc --noEmit` will not see it.
 - The `DOMRect` polyfill (lines 22-35) stays.
@@ -312,14 +307,16 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 `src/components/__tests__/CellContainer.test.tsx:23` and `src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx:46` both say "mocked via moduleNameMapper in jest.config.js" → point them at `test.alias` in `vite.config.ts`.
 
+`src/lib/screen-renderers/__tests__/table-utils.test.tsx:18-19` also survive the mechanical rename as plain comments — "…identical output. `jest.spyOn`" and "can't be used here — this repo's Jest runs in ESM mode and module-namespace…" — and would otherwise match Phase 5 step 16's cleanup grep. The technical claim still holds under Vitest; reword "this repo's Jest" to "this repo's test runner" (or similar) without changing the underlying reasoning.
+
 ## Implementation Steps
 
 ### Phase 1 — Toolchain swap
 1. `package.json`: apply the dependency and script changes from Design §2; run `yarn install` and confirm a clean, warning-free install.
 2. `vite.config.ts`: add the triple-slash reference and the `test` block from Design §1.
-3. Add `src/vitest-globals.d.ts`.
+3. No ambient globals file to add (Design §3) — skip.
 4. Delete `jest.config.js` and `src/__mocks__/styleMock.js`; remove `jest.config.js` from `.eslintrc.json` `ignorePatterns`.
-5. Confirm discovery before touching test bodies: `yarn vitest list` must report 56 files, including `src/lib/__tests__/arrow-ipc-fixtures.ts`.
+5. Confirm discovery before touching test bodies: `yarn vitest list --filesOnly` must report 56 files, including `src/lib/__tests__/arrow-ipc-fixtures.ts`. (`--filesOnly` is required at this point in the sequence — plain `vitest list` imports each test file and `setupFiles`, and at Phase 1 they still contain `jest.*` calls that throw `ReferenceError: jest is not defined`.)
 
 ### Phase 2 — Mechanical pass
 6. Rewrite `src/test-setup.ts` per Design §9 and get **one** small suite green end-to-end first (`src/lib/__tests__/units.test.ts` — no mocks) to validate config, then one that depends on the global setup mocks (`src/hooks/__tests__/useScreenConfig.test.tsx`).
@@ -333,7 +330,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 ### Phase 4 — Converge
 12. `yarn test` and work the failure list, which is expected to be dominated by strict partial mocks (Design §8). Fix per Design §8's preference order.
-13. Update the two stale comments (Design §10).
+13. Update the stale comments (Design §10).
 14. `yarn lint`, `yarn type-check`, `yarn build`, then `python3 build/analytics_web_ci.py` for the full CI path.
 15. Update documentation (see below).
 
@@ -348,7 +345,7 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 - `analytics-web-app/src/__mocks__/styleMock.js`
 
 **Create**
-- `analytics-web-app/src/vitest-globals.d.ts`
+- None (see Design §3 — no ambient globals file is needed for this migration).
 
 **Config / metadata**
 - `analytics-web-app/package.json` (deps, resolutions, scripts)
@@ -397,13 +394,13 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 
 The test suite *is* the artifact under test, so verification is parity against the recorded baseline:
 
-1. **Discovery parity** — `yarn vitest list` reports 56 files. Compare against the `testMatch` file list before and after.
+1. **Discovery parity** — `yarn vitest list --filesOnly` reports 56 files. Compare against the `testMatch` file list before and after.
 2. **Count parity** — `yarn test` reports **56 passed / 1167 passed**. Any lower number means silently skipped tests, not a fix. Zero skipped, zero todo.
 3. **No accidental relaxations** — during Phase 4, resist making a failing assertion pass by loosening it. A strict-partial-mock error is a missing export in a factory, not a wrong expectation.
 4. **Coverage runs** — `yarn test:coverage` completes and reports over `src/**/*.{ts,tsx}`.
 5. **Build unaffected** — `yarn build` succeeds and `dist/` output is unchanged in shape (the `test` block must not leak into the bundle; spot-check that no `vitest` chunk appears).
-6. **Full CI path** — `python3 build/analytics_web_ci.py` green, and specifically that `yarn test` terminates rather than entering watch mode.
-7. **Global-setup mocks** — a low-risk sanity check, not a load-bearing verification: confirm with a test file that has no local `react-router-dom` mock (e.g. `src/routes/__tests__/MapsPage.test.tsx`) and one that does (`ScreenPage.urlState.test.tsx`) that setup-file mocks apply and that a per-file re-mock still takes precedence, matching Jest.
+6. **Full CI path** — `python3 build/analytics_web_ci.py` green; separately, confirm interactive `yarn test` at a terminal runs once and exits rather than entering watch mode.
+7. **Global-setup mocks** — load-bearing, not a sanity check (Design §9): confirm with a test file that has no local `react-router-dom` mock (e.g. `src/routes/__tests__/MapsPage.test.tsx`) and one that does (`ScreenPage.urlState.test.tsx`) that setup-file mocks apply and that a per-file re-mock still takes precedence, matching Jest.
 
 Wall-clock is recorded for information only (baseline 6.66 s); it is not a gate. If the run turns out dramatically slower, `pool: 'threads'` is the first knob.
 
