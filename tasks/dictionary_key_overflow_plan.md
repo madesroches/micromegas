@@ -270,6 +270,8 @@ recomputing (see Current State).
 - `rust/analytics/tests/net_spans_test.rs`
 - `rust/analytics/tests/sql_view_test.rs`
 - `rust/analytics/tests/dictionary_key_overflow_tests.rs` (new)
+- `rust/analytics/src/lakehouse/view_factory.rs` (module-level doc comments)
+- `mkdocs/docs/query-guide/schema-reference.md` (field type tables + Dictionary Compression note)
 - Optional (see Open Questions): `rust/analytics/src/images_table.rs`,
   `rust/analytics/src/lakehouse/images_view.rs`
 
@@ -304,8 +306,44 @@ recomputing (see Current State).
 `async_events` and `net_spans` view schemas with `Dictionary(Int16, Utf8)` for the affected
 columns (`stream_id`, `block_id`, `event_type`, `name`, `filename`, `target`, `process_id`,
 `kind`, `connection_name`). These doc comments must be updated to `Dictionary(Int32, Utf8)`
-to stay accurate. No `mkdocs/` page documents dictionary key widths (they're an internal
-storage detail, not part of the public SQL surface), so no user-facing docs need updating.
+to stay accurate.
+
+`mkdocs/docs/query-guide/schema-reference.md` also documents these schemas field-by-field and
+must be updated in lockstep, or the public docs silently disagree with the on-disk schema.
+Change `Dictionary(Int16, Utf8)` to `Dictionary(Int32, Utf8)` for exactly the fields backed by
+this plan's builders:
+
+| Table (`###` heading) | Fields to change | Line numbers (current) |
+|---|---|---|
+| `log_entries` | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `target` | 157-165 |
+| `measures` | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `target`, `name`, `unit` | 270-280 |
+| `thread_spans` | `name`, `target`, `filename` | 319-321 |
+| `async_events` | `stream_id`, `block_id`, `event_type`, `name`, `filename`, `target` | 349-359 |
+| `net_spans` | `process_id`, `stream_id`, `kind`, `name`, `connection_name` | 461-468 |
+| `images` (only if Open Question 1 resolves to include `images_table.rs`) | `process_id`, `stream_id`, `block_id`, `exe`, `username`, `computer`, `format` | 581-590 |
+
+Leave the `processes` (lines 31-42), `streams` (lines 68-69), and `log_stats` (lines 208-210)
+tables' `Dictionary(Int16, Utf8)` entries alone — `processes`/`streams` aren't backed by this
+plan's builders, and `log_stats` is a `SqlBatchView` aggregating `log_entries` (its schema
+hash, and thus its dictionary width, is derived automatically like
+`log_entries_per_process_per_minute` in `sql_view_test.rs`, but updating its on-disk
+materialization is outside this plan's builder changes). `otel_spans` already documents
+`Dictionary(Int32, Utf8)` and needs no change.
+
+The "Dictionary Compression" note (line 649: "Most string fields use dictionary compression
+(`Dictionary(Int16, Utf8)`) for storage efficiency") also goes stale once the six tables above
+widen — it should be reworded to note that key width varies by table (`Int16` for the
+low-cardinality `processes`/`streams`/`log_stats` metadata, `Int32` for `log_entries`,
+`measures`, `thread_spans`, `async_events`, `net_spans`, and `otel_spans`, matching each
+table's field reference above) rather than asserting a single width for all string columns.
+
+`mkdocs/docs/query-guide/functions-reference.md`'s `process_spans(process_id, types)` table
+(lines 165-176) is out of scope for this fix: its `stream_id`/`thread_name` columns come from
+`process_spans_table_function.rs`'s own local builders, which Design/Current State already
+excludes from this plan, so they stay `Dictionary(Int16, Utf8)`. Note that the same table's
+`name`/`target`/`filename` rows are documented as "same schema as `thread_spans`" and will
+technically drift out of date once `thread_spans` widens — tracked here as a known gap, left
+for a follow-up rather than pulled into this plan's scope.
 
 ## Testing Strategy
 
