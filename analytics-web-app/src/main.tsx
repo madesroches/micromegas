@@ -43,13 +43,7 @@ const basePath = getConfig().basePath
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter
-      basename={basePath}
-      future={{
-        v7_startTransition: true,
-        v7_relativeSplatPath: true,
-      }}
-    >
+    <BrowserRouter basename={basePath}>
       <AuthProvider>
         <QueryProvider>
           <AppRouter />

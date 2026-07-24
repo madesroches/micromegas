@@ -19,7 +19,7 @@
   },
   "resolutions": {
     "esbuild": "0.28.1",
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.18",
     "rollup": "^4.59.0",
     "tar": "^7.5.19",
     "undici": ">=6.27.0",
