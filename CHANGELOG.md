@@ -20,6 +20,7 @@ This file documents the historical progress of the Micromegas project. For curre
   * Pin the transitive `websocket-driver` dev dependency to `^0.7.5` via yarn `resolutions` to resolve Dependabot alerts #339/#340
   * Bump `js-yaml` to `^4.3.0`, `protobufjs` to `^7.6.5`, and `brace-expansion` to `^5.0.7`/`^2.1.2` via yarn `resolutions` across the root, `welcome/`, and `analytics-web-app/` workspaces to resolve Dependabot alerts #341-#347
   * Bump `tar` to `^7.5.19` (resolving to 7.5.20) across all yarn workspaces (root, `welcome/`, `analytics-web-app/`, and the `doc/*` sites) to resolve 24 Dependabot alerts (#348-371)
+  * Bump `immutable` to `^5.1.8` (resolving to 5.1.9) in the root yarn workspace to resolve 2 Dependabot alerts (#374, #375)
   * Delete the unused `uri-handler` crate, and route `analytics-web-srv` and `object-cache-srv` through the public `micromegas` facade (`micromegas::auth`/`micromegas::object_cache`/`micromegas::tracing`) instead of depending on internal crates directly (#1256)
 * **Caching:**
   * Fix a benign but observable write race in `FoyerBackend::get`: replace foyer's `HybridCache::get` with a two-step read (RAM lookup, then direct disk load) whose disk→RAM promotion is gated on a caller-supplied expected length, plus a per-key single-flight around the disk load to keep read-coalescing parity; this makes foyer's inflight decoy-close-flag path unreachable and adds `object_cache_ram_tier_hit`/`object_cache_disk_tier_hit`, `range_cache_load_coalesced`, and `range_cache_promotion_len_mismatch` metrics (#1318)
