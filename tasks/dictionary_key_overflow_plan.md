@@ -191,8 +191,15 @@ at the end of each `finish()` already gives a build-time error location, and a b
 
 Apply the same two changes (Int32 key + fallible append) to the local builders in
 `lakehouse/otel/logs_block_processor.rs` and `lakehouse/otel/metrics_block_processor.rs`.
-These files build one `RecordBatch` per block inside `process()` (returns
-`Result<Option<PartitionRowSet>>`), so the same `?`-propagation applies.
+`logs_block_processor.rs` appends inline inside `process()` (returns
+`Result<Option<PartitionRowSet>>`), so the same `?`-propagation applies directly.
+`metrics_block_processor.rs` is different: all its dictionary appends live inside the
+private `MeasuresRowBuilder::append(&mut self, …)` helper, which currently returns `()` and
+is called without `?` from the two `process()` match arms (`Data::Sum`, `Data::Gauge`).
+Making its internal calls fallible requires changing `MeasuresRowBuilder::append`'s
+signature to `-> Result<()>` (turning its two early `return;` statements into
+`return Ok(());`, and its final line into `Ok(())`), and adding `?` to both call sites in
+`process()`.
 
 ### 4. Bump `SCHEMA_VERSION`
 
@@ -223,7 +230,11 @@ recomputing (see Current State).
    list) to fallible equivalents.
 7. **`lakehouse/otel/metrics_block_processor.rs`** — widen the 9 local `Int16Type` builders
    to `Int32Type`; convert their `append_value`/`append_values` calls (mirrors step 4's field
-   list) to fallible equivalents.
+   list) to fallible equivalents. Unlike step 6, these calls live inside the private
+   `MeasuresRowBuilder::append` helper, not `process()` itself: change that method's
+   signature from `fn append(&mut self, …)` to `fn append(&mut self, …) -> Result<()>`,
+   convert its two early `return;` statements to `return Ok(());`, end it with `Ok(())`, and
+   add `?` to both call sites (`Data::Sum` and `Data::Gauge` arms) in `process()`.
 8. **Schema versions** — bump `SCHEMA_VERSION` in `thread_spans_view.rs`,
    `async_events_view.rs`, `net_spans_view.rs`, `metrics_view.rs`, `log_view.rs` (and
    `images_view.rs`, if in scope) per Design §4.
@@ -236,7 +247,9 @@ recomputing (see Current State).
     `ref_schema_hash` literal at line 396.
 11. **New regression test** — add `analytics/tests/dictionary_key_overflow_tests.rs` per
     Testing Strategy, proving each production builder accepts more than 32,767 distinct
-    dictionary values without panicking.
+    dictionary values without panicking, plus the two OTLP companion tests
+    (`OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` via `BlockProcessor::process`) that
+    prove steps 6/7's "mandatory companions" fix.
 12. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
     `rust/`.
 
@@ -309,6 +322,20 @@ storage detail, not part of the public SQL surface), so no user-facing docs need
     calls out.
   - `NetSpanRecordBuilder`: use existing helpers from `net_spans_test.rs`
     (`make_builder_ctx`) as a starting point.
+- **OTLP companion regression test** (same `dictionary_key_overflow_tests.rs`): the
+  "mandatory companions" fix (Design §3, Implementation Steps 6/7) has zero coverage
+  otherwise — `MeasuresRowBuilder` is a private struct with no test referencing it today,
+  and no test exercises `OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` at all. Add two
+  tests that drive each processor through its real `BlockProcessor::process` entry point:
+  build a `ResourceLogs`/`ResourceMetrics` proto with more than 32,767 distinct values in a
+  dictionary column (e.g. one `scope_logs`/`scope_metrics` per distinct scope name, one
+  record/data point each, driving `targets`), prost-encode and CBOR-wrap it as a
+  `BlockPayload`, write it to an in-memory `ObjectStore` (`object_store::memory::InMemory`)
+  wrapped in `BlobStorage::new(...)` at the `blobs/{process_id}/{stream_id}/{block_id}` path
+  `fetch_block_payload` expects, construct a matching `PartitionSourceBlock` (process via
+  `test_helpers::make_process_metadata`), call `.process(...)`, and assert it returns
+  `Ok(Some(_))` with the expected row count instead of panicking. This is the exact scenario
+  the "mandatory companions" fix claims to correct, so it must not ship without a test.
 - `cargo test -p micromegas-analytics` from `rust/` — existing `span_tests.rs`,
   `async_events_tests.rs`, `metrics_test.rs`, `log_tests.rs`, `net_spans_test.rs`,
   `sql_view_test.rs`, `thread_spans_ordering_tests.rs` all continue to pass, proving normal
