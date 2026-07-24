@@ -9,7 +9,7 @@
 
 `analytics-web-app` builds with Vite 8 but tests with Jest 30 through `ts-jest` + `babel-jest`. Every ESM-only dependency has to be hand-carved out of Jest's CommonJS pipeline (`jest.config.js:23-25` already does this for `d3-dsv`; `react-router@8` in #1347 needs the same plus a `babel-plugin-transform-import-meta` shim). Vitest reads the app's own `vite.config.ts`, so that class of problem disappears: the alias set, the React plugin, and `import.meta` support are already configured for the build and are reused verbatim.
 
-**Sequencing note (also covers the tables in Design §5, §7, §9):** as of this writing, #1347 is still open — `jest.config.js` carries only the `d3-dsv` carve-out and `package.json:41` still pins `react-router-dom@^7.18.0` — but both issues state #1347 lands first as a security fix. #1347's scope is the `react-router-dom` → `react-router` rename across 29 files, including the `jest.mock('react-router-dom')` sites; that rename is #1347's job, not this plan's. If #1347 has landed by the time this migration starts, read `react-router` everywhere this plan says `react-router-dom` (the §5 hoisted-factory rows tied to router mocks, all `react-router-dom` rows in the §7 table, and the two `react-router-dom` mentions in §9).
+**Sequencing note (also covers the tables in Design §5, §7, §9):** as of this writing, #1347 is still open — `jest.config.js` carries only the `d3-dsv` carve-out and `package.json:41` still pins `react-router-dom@^7.18.0` — but both issues state #1347 lands first as a security fix. #1347's scope is the `react-router-dom` → `react-router` rename across 29 files, including the `jest.mock('react-router-dom')` sites; that rename is #1347's job, not this plan's. If #1347 has landed by the time this migration starts, read `react-router` everywhere this plan says `react-router-dom` (the §5 hoisted-factory rows tied to router mocks, all `react-router-dom` rows in the §7 table, and the two `react-router-dom` mentions in §9). Whichever way it goes, Phase 5 step 19 re-checks #1347's scope against actual state before this PR opens — see "Re-evaluating #1347".
 
 This is **not** a performance change. Measured baseline on this branch: **56 suites, 1167 tests, 6.66 s**. There is no wall-clock target and no regression gate.
 
@@ -354,6 +354,23 @@ Fix per occurrence, in preference order: (a) add the missing export to the facto
 ### Phase 5 — Cleanup verification
 17. `grep -rn 'jest' analytics-web-app/src analytics-web-app/tests analytics-web-app/package.json` returns only `@testing-library/jest-dom` hits.
 18. `yarn test:coverage` produces a report over `src/**/*.{ts,tsx}`.
+19. **Before opening the PR, re-evaluate [#1347](https://github.com/madesroches/micromegas/issues/1347)** — see "Re-evaluating #1347" below.
+
+## Re-evaluating #1347 before the PR
+
+#1347 bumps `react-router-dom@^7.18.0` → `react-router@^8.3.0` for `GHSA-qwww-vcr4-c8h2` (high severity, Dependabot alert #388). Its scope is three parts, and this migration changes the value of only one of them:
+
+1. The dependency bump and the `react-router-dom` → `react-router` rename across 29 files, plus the module name in the `vi.mock('react-router-dom')` sites — **still needed either way.**
+2. Adding `react-router` to `transformIgnorePatterns` and `babel-plugin-transform-import-meta` to the `babel-jest` chain — **dead once this migration lands.** Both exist only because Jest's CJS pipeline cannot `require` a pure-ESM package and then trips on the two `import.meta.hot` guards in `lib/dom/ssr/routeModules.js`. Vitest loads it natively; `jest.config.js` and the whole Babel chain are deleted by Design §2.
+3. The "land first, don't let a test-runner migration gate a security fix" sequencing argument — worth re-checking against actual state rather than assumed state.
+
+Decide between these, in this order:
+
+- **If #1347 has already landed:** nothing to decide about its scope. Instead, confirm this PR *removes* what it added — `babel-plugin-transform-import-meta` from `devDependencies` and its `transformIgnorePatterns` entry (both vanish with `jest.config.js`) — and that the plan's `react-router` renaming (Overview sequencing note) was applied throughout.
+- **If #1347 has not landed and this migration is ready to merge first:** propose narrowing #1347 to part 1 only. Adding part 2 would mean landing four lines of Jest config plus a devDependency that this PR deletes in the same week. Post that reasoning on #1347 rather than silently rescoping it, and do not make this PR do the bump — the two changes stay separable so a revert of either is clean.
+- **If #1347 has not landed and the security clock is the binding constraint:** leave #1347 exactly as scoped and let it land first, accepting the throwaway config. A high-severity alert open for longer is worse than four lines of config churn.
+
+**#1347 is not a candidate for closing** in any branch of this decision: the alert stays open until `react-router@>=8.3.0` is in `analytics-web-app/yarn.lock`, and repo policy is to never dismiss a Dependabot alert. The question is its scope and ordering, not whether the vulnerability gets fixed.
 
 ## Files to Modify
 
