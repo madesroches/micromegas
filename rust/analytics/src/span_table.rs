@@ -8,7 +8,7 @@ use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Int16Type;
+use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -40,9 +40,9 @@ pub struct SpanRecordBuilder {
     pub begins: PrimitiveBuilder<TimestampNanosecondType>,
     pub ends: PrimitiveBuilder<TimestampNanosecondType>,
     pub durations: PrimitiveBuilder<Int64Type>,
-    pub names: StringDictionaryBuilder<Int16Type>,
-    pub targets: StringDictionaryBuilder<Int16Type>,
-    pub filenames: StringDictionaryBuilder<Int16Type>,
+    pub names: StringDictionaryBuilder<Int32Type>,
+    pub targets: StringDictionaryBuilder<Int32Type>,
+    pub filenames: StringDictionaryBuilder<Int32Type>,
     pub lines: PrimitiveBuilder<UInt32Type>,
 }
 
@@ -66,17 +66,17 @@ pub fn get_spans_schema() -> Schema {
         Field::new("duration", DataType::Int64, false), //DataType::Duration not supported by parquet
         Field::new(
             "name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "target",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "filename",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new("line", DataType::UInt32, false),
@@ -116,9 +116,9 @@ impl SpanRecordBuilder {
         self.begins.append_value(row.begin);
         self.ends.append_value(row.end);
         self.durations.append_value(row.end - row.begin);
-        self.names.append_value(&*row.name);
-        self.targets.append_value(&*row.target);
-        self.filenames.append_value(&*row.filename);
+        self.names.append(&*row.name)?;
+        self.targets.append(&*row.target)?;
+        self.filenames.append(&*row.filename)?;
         self.lines.append_value(row.line);
         Ok(())
     }
