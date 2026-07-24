@@ -127,8 +127,8 @@ bumping `SCHEMA_VERSION` is the existing, established way to signal "this table'
 format changed": old-schema partitions are simply excluded from future queries (not read
 with a mismatched schema — no risk of a read-side type-mismatch crash), and the daemon/JIT
 path transparently recomputes new partitions from source going forward
-(`batch_update.rs`'s `verify_overlapping_partitions`, `jit_partitions.rs:571-576`
-`is_jit_partition_up_to_date`).
+(`batch_update.rs`'s `verify_overlapping_partitions`, `jit_partitions.rs:498-587`
+`is_jit_partition_up_to_date`, whose `file_schema_hash` mismatch check is at lines 571-576).
 
 The trade-off: this is **not** an automatic backfill. Historical time ranges whose
 partitions were materialized under the old hash won't be visible under the new hash until
@@ -136,8 +136,8 @@ something (re-)materializes that range. For the daemon-driven tables here, ongoi
 materialization naturally recomputes recent/future ranges; older ranges stay queryable only
 via JIT recomputation (already happens per-query for on-demand views) or by running the
 existing `regenerate_partitions(view_set_name, begin, end, delta)` table function for a
-range, followed by `retire_partitions`/`retire_partition_by_metadata` to drop the stale rows
-once satisfied. This plan bumps every affected `SCHEMA_VERSION` by 1 as a normal part of the
+range, followed by `retire_partitions`/`retire_partition_by_metadata` (the latter a scalar
+UDF, not a table function) to drop the stale rows once satisfied. This plan bumps every affected `SCHEMA_VERSION` by 1 as a normal part of the
 fix (see Implementation Steps) — it's required regardless, since the on-disk Arrow schema is
 changing. Running that backfill for existing historical data is a deploy-time operational
 step, not part of this PR's code change — this matches every prior `SCHEMA_VERSION` bump in
@@ -161,7 +161,7 @@ excluded, new partitions recomputed going forward) as the explicitly-bumped view
   `connection_name`).
 - `analytics/tests/sql_view_test.rs` — `LogSummaryMerger::execute_merge_query` downcasts a
   `process_id` column (sourced from `log_entries` via SQL) to `DictionaryArray<Int16Type>`
-  (line 135), and `test_log_summary` asserts an exact `ref_schema` `Field` with
+  (line 135), and `test_log_summary_view` asserts an exact `ref_schema` `Field` with
   `DataType::Dictionary(DataType::Int16.into(), DataType::Utf8.into())` (line 385) plus a
   hardcoded `ref_schema_hash` byte vector (line 396) for the derived `SqlBatchView`
   `"log_entries_per_process_per_minute"`. That view's `get_file_schema_hash()`
@@ -266,9 +266,10 @@ signals to the partition cache that on-disk partitions need recomputing (see Cur
     accepts more than 32,767 distinct dictionary values without panicking, plus the two OTLP
     companion tests (`OtelLogsBlockProcessor`/`OtelMetricsBlockProcessor` via
     `BlockProcessor::process`) that prove steps 7/8's "mandatory companions" fix.
-13. **Documentation** — update `view_factory.rs`'s module-level doc comments and
+13. **Documentation** — update `view_factory.rs`'s module-level doc comments,
     `mkdocs/docs/query-guide/schema-reference.md` (field tables and the "Dictionary
-    Compression" note) per the Documentation section.
+    Compression" note), and `mkdocs/docs/query-guide/functions-reference.md`'s `process_spans`
+    `name`/`target`/`filename` cells, per the Documentation section.
 14. **Verify** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from
     `rust/`.
 
@@ -293,6 +294,7 @@ signals to the partition cache that on-disk partitions need recomputing (see Cur
 - `rust/analytics/tests/dictionary_key_overflow_tests.rs` (new)
 - `rust/analytics/src/lakehouse/view_factory.rs` (module-level doc comments)
 - `mkdocs/docs/query-guide/schema-reference.md` (field type tables + Dictionary Compression note)
+- `mkdocs/docs/query-guide/functions-reference.md` (`process_spans` `name`/`target`/`filename` cells)
 
 ## Trade-offs
 
@@ -359,12 +361,12 @@ low-cardinality `processes`/`streams` metadata, `Int32` for `log_entries`, `log_
 table's field reference above) rather than asserting a single width for all string columns.
 
 `mkdocs/docs/query-guide/functions-reference.md`'s `process_spans(process_id, types)` table
-(lines 165-176) is out of scope for this fix: its `stream_id`/`thread_name` columns come from
-`process_spans_table_function.rs`'s own local builders, which Design/Current State already
-excludes from this plan, so they stay `Dictionary(Int16, Utf8)`. Note that the same table's
-`name`/`target`/`filename` rows are documented as "same schema as `thread_spans`" and will
-technically drift out of date once `thread_spans` widens — tracked here as a known gap, left
-for a follow-up rather than pulled into this plan's scope.
+(lines 165-176) is only partially out of scope: its `stream_id`/`thread_name` columns come
+from `process_spans_table_function.rs`'s own local builders, which Design/Current State
+already excludes from this plan, so they stay `Dictionary(Int16, Utf8)`. Its
+`name`/`target`/`filename` rows, however, are documented as "same schema as `thread_spans`"
+and go stale the moment `thread_spans` widens — since this same PR already updates the
+sibling docs above, this plan also updates those three cells to `Dictionary(Int32, Utf8)`.
 
 ## Testing Strategy
 
