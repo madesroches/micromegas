@@ -7,6 +7,7 @@
 
 import { authenticatedFetch } from '@/lib/api'
 import { streamQuery, StreamResult } from '../arrow-stream'
+import type { MockedFunction } from 'vitest'
 import {
   createDictionaryFramedIpc,
   createPlainFramedIpc,
@@ -14,8 +15,8 @@ import {
 } from './arrow-ipc-fixtures'
 
 // Mock only the API layer, not apache-arrow
-jest.mock('@/lib/api', () => ({
-  authenticatedFetch: jest.fn(),
+vi.mock('@/lib/api', () => ({
+  authenticatedFetch: vi.fn(),
   AuthenticationError: class AuthenticationError extends Error {
     constructor() {
       super('Authentication required')
@@ -26,7 +27,7 @@ jest.mock('@/lib/api', () => ({
   getAuthBase: () => '',
 }))
 
-const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>
+const mockedFetch = authenticatedFetch as MockedFunction<typeof authenticatedFetch>
 
 // Helper to create a mock ReadableStream from chunks
 function createMockStream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
@@ -55,7 +56,7 @@ function createMockResponse(chunks: Uint8Array[]): Response {
 
 describe('streamQuery with dictionary-encoded columns', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should correctly parse dictionary-encoded columns in a single batch', async () => {

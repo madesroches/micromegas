@@ -5,31 +5,34 @@
 // Mock matchMedia for uPlot (imported via cell-registry -> ChartCell -> XYChart)
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: jest.fn().mockImplementation((query) => ({
+  value: vi.fn().mockImplementation((query) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: jest.fn(),
-    removeListener: jest.fn(),
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   })),
 })
 
 import { renderHook, act, waitFor } from '@testing-library/react'
+import type { Mock } from 'vitest'
 
 // Mock streamQuery and fetchQueryIPC functions
-const mockStreamQuery = jest.fn()
-const mockFetchQueryIPC = jest.fn()
+const { mockStreamQuery, mockFetchQueryIPC } = vi.hoisted(() => ({
+  mockStreamQuery: vi.fn(),
+  mockFetchQueryIPC: vi.fn(),
+}))
 
-jest.mock('@/lib/arrow-stream', () => ({
+vi.mock('@/lib/arrow-stream', () => ({
   streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
   fetchQueryIPC: (...args: unknown[]) => mockFetchQueryIPC(...args),
 }))
 
 // Mock Apache Arrow
-jest.mock('apache-arrow', () => {
+vi.mock('apache-arrow', () => {
   class MockTable {
     numRows: number
     numCols: number
@@ -62,8 +65,10 @@ jest.mock('apache-arrow', () => {
 })
 
 // Mock cell-registry to prevent uPlot CSS import chain
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock({ withSqlExecution: true }))
+vi.mock('../cell-registry', async () => {
+  const { createCellRegistryMock } = await import('../__test-utils__/cell-registry-mock')
+  return createCellRegistryMock({ withSqlExecution: true })
+})
 
 import { useCellExecution, NotebookQueryEngine } from '../useCellExecution'
 import { CellConfig } from '../notebook-utils'
@@ -71,10 +76,10 @@ import { CellConfig } from '../notebook-utils'
 // Helper to create a mock WASM engine
 function createMockEngine(overrides?: Partial<NotebookQueryEngine>): NotebookQueryEngine {
   return {
-    register_table: jest.fn().mockReturnValue(5),
-    execute_and_register: jest.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
-    deregister_table: jest.fn().mockReturnValue(true),
-    reset: jest.fn(),
+    register_table: vi.fn().mockReturnValue(5),
+    execute_and_register: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    deregister_table: vi.fn().mockReturnValue(true),
+    reset: vi.fn(),
     ...overrides,
   }
 }
@@ -136,7 +141,7 @@ describe('useCellExecution', () => {
   }
 
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('initial state', () => {
@@ -147,7 +152,7 @@ describe('useCellExecution', () => {
           cells: [],
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -162,7 +167,7 @@ describe('useCellExecution', () => {
           cells: [],
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -187,7 +192,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -221,7 +226,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -250,7 +255,7 @@ describe('useCellExecution', () => {
             layout: { height: 'auto' },
           },
         ]
-        const setVariableValue = jest.fn()
+        const setVariableValue = vi.fn()
         const variableValuesRef = createVariableValuesRef()
 
         const { result } = renderHook(() =>
@@ -286,7 +291,7 @@ describe('useCellExecution', () => {
             layout: { height: 'auto' },
           },
         ]
-        const setVariableValue = jest.fn()
+        const setVariableValue = vi.fn()
         // Use 'val0' which is a valid option returned by the mock
         const variableValuesRef = createVariableValuesRef({ Dropdown: 'val0' })
 
@@ -319,7 +324,7 @@ describe('useCellExecution', () => {
             layout: { height: 'auto' },
           },
         ]
-        const setVariableValue = jest.fn()
+        const setVariableValue = vi.fn()
         // Use 'invalid_value' which is NOT in the options
         const variableValuesRef = createVariableValuesRef({ Dropdown: 'invalid_value' })
 
@@ -356,7 +361,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -381,7 +386,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -419,7 +424,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -448,7 +453,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -472,7 +477,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -503,7 +508,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -546,7 +551,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -584,7 +589,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -616,7 +621,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -663,7 +668,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
         statusHistory.push(Object.fromEntries(Object.entries(hook.cellStates).map(([name, state]) => [name, state.status])))
@@ -703,7 +708,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -741,7 +746,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -775,7 +780,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -806,7 +811,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -839,7 +844,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           })
         )
@@ -868,7 +873,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -896,7 +901,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -924,7 +929,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -958,7 +963,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange: defaultRawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger,
           }),
         { initialProps: { refreshTrigger: 0 } }
@@ -998,7 +1003,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           }),
         { initialProps: { rawTimeRange: defaultRawTimeRange } }
@@ -1036,7 +1041,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           }),
         { initialProps: { rawTimeRange: defaultRawTimeRange } }
@@ -1073,7 +1078,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           }),
         { initialProps: { rawTimeRange: defaultRawTimeRange } }
@@ -1111,7 +1116,7 @@ describe('useCellExecution', () => {
             cells,
             rawTimeRange,
             variableValuesRef,
-            setVariableValue: jest.fn(),
+            setVariableValue: vi.fn(),
             refreshTrigger: 0,
           }),
         { initialProps: { rawTimeRange: defaultRawTimeRange } }
@@ -1162,7 +1167,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -1195,7 +1200,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           dataSource: 'fallback-source',
         })
@@ -1229,7 +1234,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           dataSource: 'default-source',
         })
@@ -1267,7 +1272,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
         })
       )
@@ -1307,7 +1312,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine,
         })
@@ -1342,7 +1347,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine,
         })
@@ -1372,7 +1377,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine: null,
         })
@@ -1401,7 +1406,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine,
         })
@@ -1412,7 +1417,7 @@ describe('useCellExecution', () => {
         expect(result.current.cellStates['First']?.status).toBe('success')
       })
 
-      ;(engine.reset as jest.Mock).mockClear()
+      ;(engine.reset as Mock).mockClear()
 
       await act(async () => {
         await result.current.executeFromCell(0)
@@ -1436,7 +1441,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine,
         })
@@ -1446,7 +1451,7 @@ describe('useCellExecution', () => {
         expect(result.current.cellStates['Second']?.status).toBe('success')
       })
 
-      ;(engine.reset as jest.Mock).mockClear()
+      ;(engine.reset as Mock).mockClear()
 
       await act(async () => {
         await result.current.executeFromCell(1)
@@ -1466,7 +1471,7 @@ describe('useCellExecution', () => {
           cells,
           rawTimeRange: defaultRawTimeRange,
           variableValuesRef,
-          setVariableValue: jest.fn(),
+          setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine: null,
         })

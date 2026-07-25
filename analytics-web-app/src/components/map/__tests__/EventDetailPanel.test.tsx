@@ -26,7 +26,7 @@ function renderPanel(props: {
         timeRange={props.timeRange ?? { begin: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' }}
         cellResults={{}}
         cellSelections={{}}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
       />
     </MemoryRouter>,
   )

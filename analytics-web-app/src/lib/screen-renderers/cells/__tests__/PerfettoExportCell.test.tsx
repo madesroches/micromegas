@@ -3,18 +3,19 @@ import { PerfettoExportCell, perfettoExportMetadata } from '../PerfettoExportCel
 import type { CellRendererProps } from '../../cell-registry'
 import { fetchPerfettoTrace } from '@/lib/perfetto-trace'
 import { openInPerfetto } from '@/lib/perfetto'
+import type { MockedFunction } from 'vitest'
 
 // Mock the perfetto-trace and perfetto modules to prevent actual calls
-jest.mock('@/lib/perfetto-trace', () => ({
-  fetchPerfettoTrace: jest.fn(),
+vi.mock('@/lib/perfetto-trace', () => ({
+  fetchPerfettoTrace: vi.fn(),
 }))
 
-jest.mock('@/lib/perfetto', () => ({
-  openInPerfetto: jest.fn(),
+vi.mock('@/lib/perfetto', () => ({
+  openInPerfetto: vi.fn(),
 }))
 
-const mockFetchPerfettoTrace = fetchPerfettoTrace as jest.MockedFunction<typeof fetchPerfettoTrace>
-const mockOpenInPerfetto = openInPerfetto as jest.MockedFunction<typeof openInPerfetto>
+const mockFetchPerfettoTrace = fetchPerfettoTrace as MockedFunction<typeof fetchPerfettoTrace>
+const mockOpenInPerfetto = openInPerfetto as MockedFunction<typeof openInPerfetto>
 
 // Create minimal mock props for CellRendererProps
 const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRendererProps => ({
@@ -30,9 +31,9 @@ const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRender
   timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
   variables: {},
   isEditing: false,
-  onRun: jest.fn(),
-  onSqlChange: jest.fn(),
-  onOptionsChange: jest.fn(),
+  onRun: vi.fn(),
+  onSqlChange: vi.fn(),
+  onOptionsChange: vi.fn(),
   ...overrides,
 })
 
@@ -217,7 +218,7 @@ describe('PerfettoExportCell', () => {
     const mockBuffer = new ArrayBuffer(100)
 
     beforeEach(() => {
-      jest.clearAllMocks()
+      vi.clearAllMocks()
       mockFetchPerfettoTrace.mockResolvedValue(mockBuffer)
       mockOpenInPerfetto.mockResolvedValue(undefined)
     })
@@ -376,7 +377,7 @@ describe('perfettoExportMetadata', () => {
       cellResults: {},
       cellSelections: {},
       timeRange: { begin: '2024-01-01T00:00:00.000Z', end: '2024-01-02T00:00:00.000Z' },
-      runQuery: jest.fn(),
+      runQuery: vi.fn(),
     }
 
     it('resolves to the global range when no timeRange override is set', async () => {

@@ -2,22 +2,23 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { VariableTitleBarContent, variableMetadata } from '../VariableCell'
 import { CellRendererProps } from '../../cell-registry'
 import type { VariableCellConfig, CellState } from '../../notebook-types'
+import type { MockedFunction } from 'vitest'
 
 // Mock the data-sources-api module
-jest.mock('@/lib/data-sources-api', () => ({
-  getDataSourceList: jest.fn(),
+vi.mock('@/lib/data-sources-api', () => ({
+  getDataSourceList: vi.fn(),
 }))
 
 import { getDataSourceList } from '@/lib/data-sources-api'
-const mockGetDataSourceList = getDataSourceList as jest.MockedFunction<typeof getDataSourceList>
+const mockGetDataSourceList = getDataSourceList as MockedFunction<typeof getDataSourceList>
 
 // Use fake timers for debounce testing
 beforeEach(() => {
-  jest.useFakeTimers()
+  vi.useFakeTimers()
 })
 
 afterEach(() => {
-  jest.useRealTimers()
+  vi.useRealTimers()
 })
 
 // Create a minimal mock for required CellRendererProps
@@ -31,9 +32,9 @@ const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRender
   timeRange: { begin: '2024-01-01', end: '2024-01-02' },
   variables: {},
   isEditing: false,
-  onRun: jest.fn(),
-  onSqlChange: jest.fn(),
-  onOptionsChange: jest.fn(),
+  onRun: vi.fn(),
+  onSqlChange: vi.fn(),
+  onOptionsChange: vi.fn(),
   ...overrides,
 })
 
@@ -127,7 +128,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should call onValueChange when selection changes', () => {
-      const onValueChange = jest.fn()
+      const onValueChange = vi.fn()
       render(
         <VariableTitleBarContent
           {...createMockProps({
@@ -182,7 +183,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should call onValueChange when text changes (debounced)', () => {
-      const onValueChange = jest.fn()
+      const onValueChange = vi.fn()
       render(
         <VariableTitleBarContent
           {...createMockProps({
@@ -198,7 +199,7 @@ describe('VariableTitleBarContent', () => {
       expect(onValueChange).not.toHaveBeenCalled()
 
       act(() => {
-        jest.advanceTimersByTime(300)
+        vi.advanceTimersByTime(300)
       })
 
       expect(onValueChange).toHaveBeenCalledWith('new value')
@@ -246,7 +247,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: {},
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
       // 86400000 / 1920 = 45000 -> snaps to 30s
       expect(result).toEqual({ data: [], expressionResult: '30s' })
@@ -263,7 +264,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: {},
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
       expect(result).toBeNull()
     })
@@ -282,7 +283,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: { myVar: 'hello' },
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
       expect(result).toEqual({ data: [], expressionResult: 'hello' })
     })
@@ -290,7 +291,7 @@ describe('VariableTitleBarContent', () => {
 
   describe('variableMetadata.onExecutionComplete (expression)', () => {
     it('should set variable value from expression result', () => {
-      const setVariableValue = jest.fn()
+      const setVariableValue = vi.fn()
       const config: VariableCellConfig = {
         type: 'variable',
         name: 'bin',
@@ -306,7 +307,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should not call setVariableValue when expressionResult is undefined', () => {
-      const setVariableValue = jest.fn()
+      const setVariableValue = vi.fn()
       const config: VariableCellConfig = {
         type: 'variable',
         name: 'bin',
@@ -390,7 +391,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should call onValueChange when selection changes', () => {
-      const onValueChange = jest.fn()
+      const onValueChange = vi.fn()
       render(
         <VariableTitleBarContent
           {...createMockProps({
@@ -428,7 +429,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: {},
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
 
       expect(result).toEqual({
@@ -452,7 +453,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: {},
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
 
       expect(result).toEqual({ data: [], variableOptions: [] })
@@ -472,7 +473,7 @@ describe('VariableTitleBarContent', () => {
       const result = await variableMetadata.execute!(config, {
         variables: {},
         timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-        runQuery: jest.fn(),
+        runQuery: vi.fn(),
       })
 
       expect(result!.variableOptions![0].label).toBe('main (default)')
@@ -482,7 +483,7 @@ describe('VariableTitleBarContent', () => {
 
   describe('variableMetadata.onExecutionComplete (datasource)', () => {
     it('should auto-select default value when current value is not set', () => {
-      const setVariableValue = jest.fn()
+      const setVariableValue = vi.fn()
       const config: VariableCellConfig = {
         type: 'variable',
         name: 'env',
@@ -506,7 +507,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should not change value when current value is valid', () => {
-      const setVariableValue = jest.fn()
+      const setVariableValue = vi.fn()
       const config: VariableCellConfig = {
         type: 'variable',
         name: 'env',
@@ -529,7 +530,7 @@ describe('VariableTitleBarContent', () => {
     })
 
     it('should fall back to first option when current value is invalid', () => {
-      const setVariableValue = jest.fn()
+      const setVariableValue = vi.fn()
       const config: VariableCellConfig = {
         type: 'variable',
         name: 'env',

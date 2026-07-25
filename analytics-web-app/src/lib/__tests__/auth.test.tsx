@@ -1,24 +1,25 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
+import type { Mock } from 'vitest'
 import { AuthProvider, useAuth } from '../auth'
 
 // Mock fetch globally
-global.fetch = jest.fn()
+global.fetch = vi.fn()
 
 // Mock navigation module (jsdom 26 freezes window.location methods)
-const mockNavigateTo = jest.fn()
-jest.mock('../navigation', () => ({
+const { mockNavigateTo } = vi.hoisted(() => ({ mockNavigateTo: vi.fn() }))
+vi.mock('../navigation', () => ({
   navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
 }))
 
 describe('AuthProvider', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
-    ;(global.fetch as jest.Mock).mockReset()
+    vi.clearAllMocks()
+    ;(global.fetch as Mock).mockReset()
   })
 
   afterEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   const TestComponent = () => {
@@ -33,7 +34,7 @@ describe('AuthProvider', () => {
   }
 
   it('should initialize with loading status', () => {
-    (global.fetch as jest.Mock).mockImplementation(
+    (global.fetch as Mock).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     )
 
@@ -48,7 +49,7 @@ describe('AuthProvider', () => {
   })
 
   it('should load authenticated user on mount', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -82,7 +83,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle unauthenticated status (401) and attempt refresh', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       // First call to /auth/me returns 401
       .mockResolvedValueOnce({
         ok: false,
@@ -118,7 +119,7 @@ describe('AuthProvider', () => {
   })
 
   it('should automatically refresh expired token and retry auth check', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       // First call to /auth/me returns 401 (expired token)
       .mockResolvedValueOnce({
         ok: false,
@@ -177,7 +178,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle service unavailable error (500)', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
     })
@@ -196,7 +197,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle network error', async () => {
-    (global.fetch as jest.Mock).mockRejectedValueOnce(
+    (global.fetch as Mock).mockRejectedValueOnce(
       new Error('Network error')
     )
 
@@ -214,7 +215,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle invalid JSON response', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => {
@@ -236,8 +237,8 @@ describe('AuthProvider', () => {
 
 describe('useAuth hook', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
-    ;(global.fetch as jest.Mock).mockReset()
+    vi.clearAllMocks()
+    ;(global.fetch as Mock).mockReset()
   })
 
   const TestLoginComponent = () => {
@@ -263,7 +264,7 @@ describe('useAuth hook', () => {
   it('should throw error when used outside AuthProvider', () => {
     // Suppress console.error for this test
     const originalError = console.error
-    console.error = jest.fn()
+    console.error = vi.fn()
 
     expect(() => {
       render(<TestLoginComponent />)
@@ -273,7 +274,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call login with return URL', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({ sub: 'user123', email: 'test@example.com' }),
@@ -305,7 +306,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call logout endpoint', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -349,7 +350,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call refresh endpoint', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -398,7 +399,7 @@ describe('useAuth hook', () => {
   })
 
   it('should handle logout failure by setting error state', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -411,7 +412,7 @@ describe('useAuth hook', () => {
 
     // Suppress console.error for expected error
     const originalError = console.error
-    console.error = jest.fn()
+    console.error = vi.fn()
 
     const TestLogoutErrorComponent = () => {
       const { logout, status, error } = useAuth()
@@ -457,7 +458,7 @@ describe('useAuth hook', () => {
   })
 
   it('should handle refresh failure', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -482,7 +483,7 @@ describe('useAuth hook', () => {
 
     // Suppress console.error for expected error
     const originalError = console.error
-    console.error = jest.fn()
+    console.error = vi.fn()
 
     await act(async () => {
       try {

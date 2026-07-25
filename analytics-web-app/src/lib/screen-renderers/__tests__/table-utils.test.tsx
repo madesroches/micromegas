@@ -1,32 +1,33 @@
 // Mock matchMedia and cell-registry to avoid heavyweight imports in this file.
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: jest.fn().mockImplementation((query) => ({
+  value: vi.fn().mockImplementation((query) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: jest.fn(),
-    removeListener: jest.fn(),
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   })),
 })
 
 // Wrap the real `evaluateTemplate` in a counting mock so the memoization
 // test can assert call counts. The factory delegates to the actual
-// implementation, so every other test renders identical output. `jest.spyOn`
-// can't be used here — this repo's Jest runs in ESM mode and module-namespace
+// implementation, so every other test renders identical output. `vi.spyOn`
+// can't be used here — this repo's test runner runs in ESM mode and module-namespace
 // exports are read-only.
-jest.mock('../notebook-utils', () => {
-  const actual = jest.requireActual('../notebook-utils')
-  return { ...actual, evaluateTemplate: jest.fn(actual.evaluateTemplate) }
+vi.mock('../notebook-utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../notebook-utils')>()
+  return { ...actual, evaluateTemplate: vi.fn(actual.evaluateTemplate) }
 })
 
 import { useMemo, useState } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { DataType, Timestamp, TimeUnit, Float64, Table } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
+import type { Mock } from 'vitest'
 import {
   extractMacroColumns,
   extractMacroRefs,
@@ -790,7 +791,7 @@ describe('buildEvaluateKey', () => {
 
 describe('OverrideCell — memoization', () => {
   it('does not re-run evaluateTemplate on re-renders with equal-but-fresh inputs', () => {
-    const mockEval = evaluateTemplate as jest.Mock
+    const mockEval = evaluateTemplate as Mock
     mockEval.mockClear()
 
     function Harness() {
@@ -858,7 +859,7 @@ describe('SortHeader', () => {
 
   it('should render column name', () => {
     renderInTable(
-      <SortHeader columnName="id" onSort={jest.fn()}>
+      <SortHeader columnName="id" onSort={vi.fn()}>
         id
       </SortHeader>,
     )
@@ -866,7 +867,7 @@ describe('SortHeader', () => {
   })
 
   it('should call onSort on left-click', () => {
-    const onSort = jest.fn()
+    const onSort = vi.fn()
     renderInTable(
       <SortHeader columnName="name" onSort={onSort}>
         name
@@ -877,8 +878,8 @@ describe('SortHeader', () => {
   })
 
   it('should call onSort on left-click even when onHide is provided', () => {
-    const onSort = jest.fn()
-    const onHide = jest.fn()
+    const onSort = vi.fn()
+    const onHide = vi.fn()
     renderInTable(
       <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
         name
@@ -890,8 +891,8 @@ describe('SortHeader', () => {
   })
 
   it('should not open context menu on left-click when onHide is provided', () => {
-    const onSort = jest.fn()
-    const onHide = jest.fn()
+    const onSort = vi.fn()
+    const onHide = vi.fn()
     renderInTable(
       <SortHeader columnName="name" onSort={onSort} onHide={onHide}>
         name
@@ -904,7 +905,7 @@ describe('SortHeader', () => {
 
   it('should render sort indicator when active ascending', () => {
     renderInTable(
-      <SortHeader columnName="name" sortColumn="name" sortDirection="asc" onSort={jest.fn()}>
+      <SortHeader columnName="name" sortColumn="name" sortDirection="asc" onSort={vi.fn()}>
         name
       </SortHeader>,
     )
@@ -914,7 +915,7 @@ describe('SortHeader', () => {
 
   it('should render sort indicator when active descending', () => {
     renderInTable(
-      <SortHeader columnName="name" sortColumn="name" sortDirection="desc" onSort={jest.fn()}>
+      <SortHeader columnName="name" sortColumn="name" sortDirection="desc" onSort={vi.fn()}>
         name
       </SortHeader>,
     )
@@ -924,7 +925,7 @@ describe('SortHeader', () => {
 
   it('should render muted style when not active', () => {
     renderInTable(
-      <SortHeader columnName="name" sortColumn="other" sortDirection="asc" onSort={jest.fn()}>
+      <SortHeader columnName="name" sortColumn="other" sortDirection="asc" onSort={vi.fn()}>
         name
       </SortHeader>,
     )
@@ -934,7 +935,7 @@ describe('SortHeader', () => {
 
   it('renders a trailingIcon when provided', () => {
     renderInTable(
-      <SortHeader columnName="name" onSort={jest.fn()} trailingIcon={<span data-testid="trail">!</span>}>
+      <SortHeader columnName="name" onSort={vi.fn()} trailingIcon={<span data-testid="trail">!</span>}>
         name
       </SortHeader>,
     )
@@ -944,27 +945,27 @@ describe('SortHeader', () => {
 
 describe('HiddenColumnsBar', () => {
   it('should render nothing when no columns are hidden', () => {
-    const { container } = render(<HiddenColumnsBar hiddenColumns={[]} onRestore={jest.fn()} />)
+    const { container } = render(<HiddenColumnsBar hiddenColumns={[]} onRestore={vi.fn()} />)
     expect(container.firstChild).toBeNull()
   })
 
   it('should render a pill for each hidden column', () => {
-    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} />)
+    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={vi.fn()} />)
     expect(screen.getByText('col_a')).toBeInTheDocument()
     expect(screen.getByText('col_b')).toBeInTheDocument()
   })
 
   it('should call onRestore when clicking a pill', () => {
-    const onRestore = jest.fn()
+    const onRestore = vi.fn()
     render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={onRestore} />)
     fireEvent.click(screen.getByText('col_a'))
     expect(onRestore).toHaveBeenCalledWith('col_a')
   })
 
   it('should show "Show all" button when more than one column is hidden and onRestoreAll is provided', () => {
-    const onRestoreAll = jest.fn()
+    const onRestoreAll = vi.fn()
     render(
-      <HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} onRestoreAll={onRestoreAll} />,
+      <HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={vi.fn()} onRestoreAll={onRestoreAll} />,
     )
     const showAll = screen.getByText('Show all')
     expect(showAll).toBeInTheDocument()
@@ -974,44 +975,44 @@ describe('HiddenColumnsBar', () => {
 
   it('should not show "Show all" when only one column is hidden', () => {
     render(
-      <HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} onRestoreAll={jest.fn()} />,
+      <HiddenColumnsBar hiddenColumns={['col_a']} onRestore={vi.fn()} onRestoreAll={vi.fn()} />,
     )
     expect(screen.queryByText('Show all')).not.toBeInTheDocument()
   })
 
   it('should not show "Show all" when onRestoreAll is not provided', () => {
-    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={jest.fn()} />)
+    render(<HiddenColumnsBar hiddenColumns={['col_a', 'col_b']} onRestore={vi.fn()} />)
     expect(screen.queryByText('Show all')).not.toBeInTheDocument()
   })
 
   it('should render "Hidden:" label', () => {
-    render(<HiddenColumnsBar hiddenColumns={['col_a']} onRestore={jest.fn()} />)
+    render(<HiddenColumnsBar hiddenColumns={['col_a']} onRestore={vi.fn()} />)
     expect(screen.getByText('Hidden:')).toBeInTheDocument()
   })
 })
 
 describe('useRowManagement', () => {
   it('should return empty hiddenRows by default', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() => useRowManagement({}, onChange))
     expect(result.current.hiddenRows).toEqual([])
   })
 
   it('should return hiddenRows from config', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() => useRowManagement({ hiddenRows: ['a', 'b'] }, onChange))
     expect(result.current.hiddenRows).toEqual(['a', 'b'])
   })
 
   it('should hide a row', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() => useRowManagement({}, onChange))
     act(() => result.current.handleHideRow('field_a'))
     expect(onChange).toHaveBeenCalledWith({ hiddenRows: ['field_a'] })
   })
 
   it('should not duplicate when hiding an already hidden row', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() =>
       useRowManagement({ hiddenRows: ['field_a'] }, onChange),
     )
@@ -1020,7 +1021,7 @@ describe('useRowManagement', () => {
   })
 
   it('should restore a row', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() =>
       useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange),
     )
@@ -1029,7 +1030,7 @@ describe('useRowManagement', () => {
   })
 
   it('should restore all rows', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() =>
       useRowManagement({ hiddenRows: ['field_a', 'field_b'] }, onChange),
     )
@@ -1038,7 +1039,7 @@ describe('useRowManagement', () => {
   })
 
   it('should preserve other config keys when hiding', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { result } = renderHook(() =>
       useRowManagement({ hiddenRows: [], otherKey: 'value' }, onChange),
     )
@@ -1059,7 +1060,7 @@ describe('RowContextMenu', () => {
 
   it('should render children', () => {
     renderInTable(
-      <RowContextMenu rowName="field_a" onHide={jest.fn()}>
+      <RowContextMenu rowName="field_a" onHide={vi.fn()}>
         <td>field_a</td>
       </RowContextMenu>,
     )
@@ -1068,7 +1069,7 @@ describe('RowContextMenu', () => {
 
   it('should show context menu on right-click with Hide Row option', () => {
     renderInTable(
-      <RowContextMenu rowName="field_a" onHide={jest.fn()}>
+      <RowContextMenu rowName="field_a" onHide={vi.fn()}>
         <td>field_a</td>
       </RowContextMenu>,
     )
@@ -1077,7 +1078,7 @@ describe('RowContextMenu', () => {
   })
 
   it('should call onHide when Hide Row is clicked', () => {
-    const onHide = jest.fn()
+    const onHide = vi.fn()
     renderInTable(
       <RowContextMenu rowName="field_a" onHide={onHide}>
         <td>field_a</td>

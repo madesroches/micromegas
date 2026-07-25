@@ -1,13 +1,14 @@
 import { fetchPerfettoTrace } from '../perfetto-trace'
 import type { StreamResult } from '../arrow-stream'
 import type { RecordBatch } from 'apache-arrow'
+import type { MockedFunction } from 'vitest'
 
-jest.mock('../arrow-stream', () => ({
-  streamQuery: jest.fn(),
+vi.mock('../arrow-stream', () => ({
+  streamQuery: vi.fn(),
 }))
 
 import { streamQuery } from '../arrow-stream'
-const mockStreamQuery = streamQuery as jest.MockedFunction<typeof streamQuery>
+const mockStreamQuery = streamQuery as MockedFunction<typeof streamQuery>
 
 function makeBatch(data: Uint8Array, chunkId: number = 0): RecordBatch {
   return {
@@ -32,7 +33,7 @@ async function* fakeStream(results: StreamResult[]): AsyncGenerator<StreamResult
 
 describe('fetchPerfettoTrace', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('should concatenate chunks in order', async () => {
@@ -58,7 +59,7 @@ describe('fetchPerfettoTrace', () => {
 
   it('should call onProgress with byte counts', async () => {
     const chunk = new Uint8Array([10, 20, 30])
-    const onProgress = jest.fn()
+    const onProgress = vi.fn()
 
     mockStreamQuery.mockReturnValue(
       fakeStream([

@@ -72,11 +72,11 @@ describe('fetchMapCatalog', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('caches the result across calls (single fetch)', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve([{ file: 'main.glb', size: 100 }]),
     } as unknown as Response)
@@ -95,14 +95,14 @@ describe('fetchMapCatalog', () => {
   })
 
   it('returns an empty array on fetch error', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new Error('network')) as unknown as typeof fetch
+    global.fetch = vi.fn().mockRejectedValue(new Error('network')) as unknown as typeof fetch
 
     const catalog = await fetchMapCatalog('/mmlocal')
     expect(catalog).toEqual([])
   })
 
   it('returns an empty array on non-OK response', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       json: () => Promise.resolve(null),
     } as unknown as Response) as unknown as typeof fetch
@@ -118,11 +118,11 @@ describe('uploadMap', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('PUTs the file as raw body with model/gltf-binary and returns the parsed body', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ file: 'level.glb', size: 1234 }),
     } as unknown as Response)
@@ -152,7 +152,7 @@ describe('uploadMap', () => {
   it('invalidates the catalog cache on success', async () => {
     // Prime the cache with a single fetch
     const catalogPayload = [{ file: 'main.glb', size: 100, last_modified: '2026-01-01T00:00:00Z' }]
-    const fetchMock = jest
+    const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -180,7 +180,7 @@ describe('uploadMap', () => {
   })
 
   it('surfaces JSON server errors as MapApiError with code + message', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 415,
       json: () =>
@@ -201,7 +201,7 @@ describe('uploadMap', () => {
   it('maps 413 (axum body-limit plaintext) to a friendly TOO_LARGE error', async () => {
     // DefaultBodyLimit responds with plaintext, so reading JSON would
     // throw — uploadMap short-circuits on 413 with a stable code.
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 413,
       json: () => Promise.reject(new Error('not json')),
@@ -215,7 +215,7 @@ describe('uploadMap', () => {
   })
 
   it('falls back to HTTP status when the error body is not JSON', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
       json: () => Promise.reject(new Error('not json')),
@@ -232,11 +232,11 @@ describe('deleteMap', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('DELETEs the right URL and invalidates the cache on success', async () => {
-    const fetchMock = jest
+    const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -263,7 +263,7 @@ describe('deleteMap', () => {
   })
 
   it('surfaces server errors as MapApiError', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 403,
       json: () =>
@@ -283,11 +283,11 @@ describe('invalidateMapCatalog', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('forces a re-fetch on the next fetchMapCatalog call', async () => {
-    const fetchMock = jest
+    const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,

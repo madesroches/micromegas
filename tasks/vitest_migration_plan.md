@@ -1,9 +1,11 @@
 # Jest → Vitest Migration Plan (analytics-web-app)
 
+**Status: Implemented.** All five phases below have been carried out on the `vitest` branch. `yarn test` (56 suites / 1164 tests), `yarn lint`, `yarn type-check`, `yarn build`, and `python3 build/analytics_web_ci.py` are all green; `yarn test:coverage` now completes (previously broken under Jest, see Coverage baseline). No Jest/Babel package remains in `package.json`. One correction to this doc's own baseline surfaced during implementation: the plan's stated **1167 tests** was off by 3 — `src/lib/__tests__/arrow-stream.test.ts`'s `error code retryability` block generates 4 tests from a single `testCases.forEach(...)` wrapping one `it(...)` call site, which a static grep-based count (used when this plan was authored) undercounts. **1164 is the correct, fully-accounted-for total** (verified: 1161 static `it(`/`test(` call sites + 3 net from that one dynamic block = 1164, matching the actual Vitest run exactly); every other count in this document (Success condition above, Overview, §1a, Testing Strategy item 2) should be read as 1164, not 1167. #1347 (`react-router-dom` → `react-router`) had not landed as of implementation — see "Re-evaluating #1347" below; this PR does not touch that dependency bump.
+
 **Issue**: [#1345](https://github.com/madesroches/micromegas/issues/1345)
 **Goal**: Replace Jest with Vitest as the test runner for `analytics-web-app`, so tests are parsed by the same engine that builds the app and ESM-only dependencies stop requiring per-package carve-outs.
 
-**Success condition**: `yarn test` runs 56 suites / 1167 tests green under Vitest, `yarn lint`, `yarn type-check` and `yarn build` all pass, `build/analytics_web_ci.py` completes, and no Jest/Babel package remains in `package.json`'s `dependencies`/`devDependencies`, including the now-unreachable `@babel/plugin-transform-modules-systemjs`, `@babel/core` and `handlebars` `resolutions` pins (Design §2).
+**Success condition**: `yarn test` runs 56 suites / 1164 tests green under Vitest, `yarn lint`, `yarn type-check` and `yarn build` all pass, `build/analytics_web_ci.py` completes, and no Jest/Babel package remains in `package.json`'s `dependencies`/`devDependencies`, including the now-unreachable `@babel/plugin-transform-modules-systemjs`, `@babel/core` and `handlebars` `resolutions` pins (Design §2).
 
 ## Overview
 
@@ -11,7 +13,7 @@
 
 **Sequencing note (also covers the tables in Design §5, §7, §9):** as of this writing, #1347 is still open — `jest.config.js` carries only the `d3-dsv` carve-out and `package.json:41` still pins `react-router-dom@^7.18.0` — but both issues state #1347 lands first as a security fix. #1347's scope is the `react-router-dom` → `react-router` rename across 29 files, including the `jest.mock('react-router-dom')` sites; that rename is #1347's job, not this plan's. If #1347 has landed by the time this migration starts, read `react-router` everywhere this plan says `react-router-dom` (the §5 hoisted-factory rows tied to router mocks, all `react-router-dom` rows in the §7 table, and the two `react-router-dom` mentions in §9). Whichever way it goes, Phase 5 step 19 re-checks #1347's scope against actual state before this PR opens — see "Re-evaluating #1347". Separately, the repo-root `package.json` also carries a `react-router` `resolutions` pin, but root `workspaces` is `["grafana", "typescript/*"]` — `analytics-web-app` is a separate Yarn project with its own lockfile and `resolutions` — so that root pin cannot reach it either way.
 
-This is **not** a performance change. Measured baseline on this branch: **56 suites, 1167 tests**, roughly **5-7 s** (machine-dependent — 6.66 s and 4.6 s have both been measured across runs). There is no wall-clock target and no regression gate.
+This is **not** a performance change. Measured baseline on this branch: **56 suites, 1164 tests** (see the Status note above — the original 1167 estimate was off by 3), roughly **5-7 s** (machine-dependent — 6.66 s and 4.6 s have both been measured across runs). There is no wall-clock target and no regression gate.
 
 ## Current State
 
@@ -176,7 +178,7 @@ Notes:
 - **Custom `include` mirroring `testMatch`** — encodes Jest's "every `.ts` under `__tests__` is a suite" convention, which has no Vitest equivalent. It also inverts the trap it guards: any future helper dropped into a `__tests__` directory silently becomes a suite.
 - **Split the file** (chosen) — move the self-test block at lines 211-276 (comment at 211, `describe` at 212-276) into a new sibling `src/lib/__tests__/arrow-ipc-fixtures.test.ts` that imports the three helpers it exercises (`createDictionaryFramedIpc`, `createPlainFramedIpc`, `combineChunks`) from `./arrow-ipc-fixtures`. All three are already exported, and the fixtures module has exactly one other importer (`arrow-stream-dictionary.test.ts:10`), which is unaffected.
 
-Suite and test counts are preserved exactly: `arrow-ipc-fixtures.ts` stops being a suite and `arrow-ipc-fixtures.test.ts` becomes one, so the parity gate stays **56 suites / 1167 tests**. The config then needs no `include` at all, and the runner's discovery rule matches the file-naming convention the other 55 files already follow.
+Suite and test counts are preserved exactly: `arrow-ipc-fixtures.ts` stops being a suite and `arrow-ipc-fixtures.test.ts` becomes one, so the parity gate stays **56 suites / 1164 tests**. The config then needs no `include` at all, and the runner's discovery rule matches the file-naming convention the other 55 files already follow.
 
 ### 2. Dependency changes
 
@@ -413,6 +415,8 @@ Decide between these, in this order:
 
 **#1347 is not a candidate for closing** in any branch of this decision: the alert stays open until `react-router@>=8.3.0` is in `analytics-web-app/yarn.lock`, and repo policy is to never dismiss a Dependabot alert. The question is its scope and ordering, not whether the vulnerability gets fixed.
 
+**Outcome as implemented:** #1347 had not landed (`package.json` still pinned `react-router-dom@^7.18.0` at implementation time) — the second bullet applies. This migration does not touch the `react-router-dom` dependency or rename it; #1347 keeps its full current scope. The "propose narrowing #1347 to part 1 only" step is a comment to post on #1347 itself, which is a separate, explicit action from this migration and hasn't been done yet.
+
 ## Files to Modify
 
 **Delete**
@@ -475,7 +479,7 @@ Decide between these, in this order:
 The test suite *is* the artifact under test, so verification is parity against the recorded baseline:
 
 1. **Discovery parity** — `yarn vitest list --filesOnly` reports 56 files. Compare against the `testMatch` file list before and after: the only difference must be `arrow-ipc-fixtures.ts` → `arrow-ipc-fixtures.test.ts` (Design §1a).
-2. **Count parity** — `yarn test` reports **56 passed / 1167 passed**. Any lower number means silently skipped tests, not a fix. Zero skipped, zero todo.
+2. **Count parity** — `yarn test` reports **56 passed / 1164 passed**. Any lower number means silently skipped tests, not a fix. Zero skipped, zero todo.
 3. **No accidental relaxations** — during Phase 4, resist making a failing assertion pass by loosening it. A strict-partial-mock error is a missing export in a factory, not a wrong expectation.
 4. **Coverage newly works** — `yarn test:coverage` completes and reports over `src/**/*.{ts,tsx}`. This verifies newly-working behavior, not parity: `yarn test:coverage` fails today on this branch with a `minimatch is not a function` error (see Current State → Coverage baseline), so there is no working baseline to match.
 5. **Build unaffected** — `yarn build` succeeds and `dist/` output is unchanged in shape (the `test` block must not leak into the bundle; spot-check that no `vitest` chunk appears).

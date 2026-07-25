@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DateTimePicker } from '../DateTimePicker'
 
-jest.mock('react-day-picker', () => ({
+vi.mock('react-day-picker', () => ({
   DayPicker: ({ onSelect, selected }: { onSelect?: (date: Date | undefined) => void, selected?: Date }) => (
     <div data-testid="day-picker">
       <button data-testid="day-picker-day" onClick={() => onSelect?.(new Date(2026, 2, 15))}>
@@ -15,7 +15,7 @@ jest.mock('react-day-picker', () => ({
   ),
 }))
 
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   Calendar: () => <span data-testid="calendar-icon">cal</span>,
   Clock: () => <span data-testid="clock-icon">clock</span>,
 }))
@@ -24,7 +24,7 @@ describe('DateTimePicker', () => {
   const baseDate = new Date(2026, 2, 10, 14, 30)
 
   it('should open calendar on button click', () => {
-    render(<DateTimePicker value={baseDate} onChange={jest.fn()} />)
+    render(<DateTimePicker value={baseDate} onChange={vi.fn()} />)
 
     expect(screen.queryByTestId('day-picker')).not.toBeInTheDocument()
 
@@ -35,7 +35,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should stay open after date selection', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<DateTimePicker value={baseDate} onChange={onChange} />)
 
     const calendarButton = screen.getByRole('button', { name: /mar 10, 2026/i })
@@ -49,7 +49,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should call onChange on time input change', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<DateTimePicker value={baseDate} onChange={onChange} />)
 
     const hoursInput = screen.getAllByRole('spinbutton')[0]
@@ -61,7 +61,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should call onChange for quick action buttons', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<DateTimePicker value={baseDate} onChange={onChange} />)
 
     fireEvent.click(screen.getByText('Now'))
@@ -77,7 +77,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should reset to start of day on same-date re-selection', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<DateTimePicker value={baseDate} onChange={onChange} />)
 
     const calendarButton = screen.getByRole('button', { name: /mar 10, 2026/i })
@@ -93,7 +93,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should not call onChange on re-selection when no value', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<DateTimePicker value={undefined} onChange={onChange} />)
 
     const calendarButton = screen.getByRole('button', { name: /select date/i })
@@ -105,7 +105,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should close calendar on overlay click', () => {
-    const { container } = render(<DateTimePicker value={baseDate} onChange={jest.fn()} />)
+    const { container } = render(<DateTimePicker value={baseDate} onChange={vi.fn()} />)
 
     const calendarButton = screen.getByRole('button', { name: /mar 10, 2026/i })
     fireEvent.click(calendarButton)
@@ -119,7 +119,7 @@ describe('DateTimePicker', () => {
   })
 
   it('should close calendar on toggle button re-click', () => {
-    render(<DateTimePicker value={baseDate} onChange={jest.fn()} />)
+    render(<DateTimePicker value={baseDate} onChange={vi.fn()} />)
 
     const calendarButton = screen.getByRole('button', { name: /mar 10, 2026/i })
     fireEvent.click(calendarButton)

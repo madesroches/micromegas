@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CustomRange } from '../CustomRange'
 
-jest.mock('@/components/ui/DateTimePicker', () => ({
+vi.mock('@/components/ui/DateTimePicker', () => ({
   DateTimePicker: ({ value, onChange }: { value?: Date, onChange: (d: Date) => void }) => (
     <div data-testid="date-time-picker">
       <button data-testid="mock-date-select" onClick={() => onChange(new Date(2026, 2, 15))}>
@@ -12,7 +12,7 @@ jest.mock('@/components/ui/DateTimePicker', () => ({
   ),
 }))
 
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   Calendar: () => <span data-testid="calendar-icon">cal</span>,
 }))
 
@@ -20,11 +20,11 @@ describe('CustomRange', () => {
   const defaultProps = {
     from: 'now-1h',
     to: 'now',
-    onApply: jest.fn(),
+    onApply: vi.fn(),
   }
 
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('should show calendar when from toggle is clicked', () => {

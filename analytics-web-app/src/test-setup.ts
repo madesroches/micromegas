@@ -1,6 +1,6 @@
-import '@testing-library/jest-dom'
-import { TextEncoder, TextDecoder } from 'util'
-import { ReadableStream, TransformStream, WritableStream } from 'stream/web'
+import '@testing-library/jest-dom/vitest'
+import { TextEncoder, TextDecoder } from 'node:util'
+import { ReadableStream, TransformStream, WritableStream } from 'node:stream/web'
 
 // Polyfill TextEncoder/TextDecoder for Apache Arrow
 global.TextEncoder = TextEncoder
@@ -34,25 +34,24 @@ if (typeof globalThis.DOMRect === 'undefined') {
   }
 }
 
-// Set NODE_ENV to development for tests
-// @ts-expect-error - Override readonly property for testing
-process.env.NODE_ENV = 'development'
-
 // Mock the config module to provide a consistent basePath for tests
-jest.mock('@/lib/config', () => ({
+vi.mock('@/lib/config', () => ({
   getConfig: () => ({ basePath: '' }),
   appLink: (path: string) => path,
 }))
 
 // Default mock for react-router-dom (can be overridden in individual tests)
-const mockNavigate = jest.fn()
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
 
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
-  useNavigate: jest.fn(() => mockNavigate),
-  useLocation: jest.fn(() => ({ pathname: '/', search: '', hash: '', state: null, key: 'default' })),
-  useSearchParams: jest.fn(() => [new URLSearchParams(), jest.fn()]),
-}))
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    ...actual,
+    useNavigate: vi.fn(() => mockNavigate),
+    useLocation: vi.fn(() => ({ pathname: '/', search: '', hash: '', state: null, key: 'default' })),
+    useSearchParams: vi.fn(() => [new URLSearchParams(), vi.fn()]),
+  }
+})
 
-// window.location is configured via jest testEnvironmentOptions.url = 'http://localhost:3000'
-// In jsdom 26+, window.location cannot be replaced. Use jest.spyOn in individual tests.
+// window.location is configured via vitest environmentOptions.jsdom.url = 'http://localhost:3000'
+// In jsdom 26+, window.location cannot be replaced. Use vi.spyOn in individual tests.

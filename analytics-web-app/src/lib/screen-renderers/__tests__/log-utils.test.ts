@@ -7,7 +7,7 @@ import {
 } from '../log-utils'
 
 // Mock arrow-utils (timestampToDate) used by formatLocalTime
-jest.mock('@/lib/arrow-utils', () => ({
+vi.mock('@/lib/arrow-utils', () => ({
   timestampToDate: (value: unknown) => {
     if (!value) return null
     if (value instanceof Date) return value

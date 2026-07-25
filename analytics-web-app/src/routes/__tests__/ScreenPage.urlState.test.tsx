@@ -16,11 +16,14 @@ import { getTimeRangeForApi } from '@/lib/time-range'
 import type { ScreenConfig } from '@/lib/screens-api'
 
 // Mock navigate
-const mockNavigate = jest.fn()
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
-  useNavigate: () => mockNavigate,
-}))
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 /**
  * Hook that mirrors the URL state management pattern:

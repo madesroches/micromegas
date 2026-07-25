@@ -1,13 +1,13 @@
 import { render, waitFor } from '@testing-library/react'
 import { DataSourceSelector } from '../DataSourceSelector'
 
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   Database: () => null,
   AlertCircle: () => null,
 }))
 
-const getDataSourceList = jest.fn()
-jest.mock('@/lib/data-sources-api', () => ({
+const { getDataSourceList } = vi.hoisted(() => ({ getDataSourceList: vi.fn() }))
+vi.mock('@/lib/data-sources-api', () => ({
   getDataSourceList: (...args: unknown[]) => getDataSourceList(...args),
 }))
 
@@ -21,7 +21,7 @@ describe('DataSourceSelector value sync', () => {
   })
 
   it('does not rewrite a variable reference that is missing from the known variables', async () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <DataSourceSelector
         value="$source"
@@ -37,7 +37,7 @@ describe('DataSourceSelector value sync', () => {
   })
 
   it('keeps a variable reference even when it is a known variable', async () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <DataSourceSelector
         value="$source"
@@ -52,7 +52,7 @@ describe('DataSourceSelector value sync', () => {
   })
 
   it('surfaces a literal data source that no longer exists instead of rewriting it', async () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { findByText } = render(
       <DataSourceSelector
         value="deleted-source"
@@ -69,7 +69,7 @@ describe('DataSourceSelector value sync', () => {
   })
 
   it('surfaces an out-of-scope variable reference as a selectable option', async () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { findByText } = render(
       <DataSourceSelector
         value="$source"

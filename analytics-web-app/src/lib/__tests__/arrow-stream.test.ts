@@ -3,10 +3,11 @@
  */
 import { authenticatedFetch } from '@/lib/api';
 import { ErrorCode, StreamResult } from '../arrow-stream';
+import type { MockedFunction } from 'vitest';
 
 // We need to import the module after mocking
-jest.mock('@/lib/api', () => ({
-  authenticatedFetch: jest.fn(),
+vi.mock('@/lib/api', () => ({
+  authenticatedFetch: vi.fn(),
   AuthenticationError: class AuthenticationError extends Error {
     constructor() {
       super('Authentication required');
@@ -17,7 +18,7 @@ jest.mock('@/lib/api', () => ({
   getAuthBase: () => '',
 }));
 
-const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>;
+const mockedFetch = authenticatedFetch as MockedFunction<typeof authenticatedFetch>;
 
 // Helper to create a mock ReadableStream from data
 function createMockStream(chunks: (string | Uint8Array)[]): ReadableStream<Uint8Array> {
@@ -59,7 +60,7 @@ function createMockResponse(
 
 describe('streamQuery', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
 
   describe('error handling', () => {
@@ -264,7 +265,7 @@ describe('streamQuery', () => {
 
 describe('executeStreamQuery', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
 
   it('should collect all results', async () => {
@@ -303,7 +304,7 @@ describe('error code retryability', () => {
   ];
 
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
 
   testCases.forEach(({ code, retryable }) => {

@@ -11,9 +11,9 @@ function createMockProps(overrides: Partial<CellRendererProps> = {}): CellRender
     timeRange: { begin: '2024-01-01', end: '2024-01-02' },
     variables: {},
     isEditing: false,
-    onRun: jest.fn(),
-    onSqlChange: jest.fn(),
-    onOptionsChange: jest.fn(),
+    onRun: vi.fn(),
+    onSqlChange: vi.fn(),
+    onOptionsChange: vi.fn(),
     ...overrides,
   }
 }
