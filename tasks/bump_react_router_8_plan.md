@@ -27,9 +27,9 @@ accordingly.
   same bump: the frontend-builder stages in `docker/analytics-web.Dockerfile`,
   `docker/monolith.Dockerfile`, and `docker/all-in-one.Dockerfile` (each `FROM
   node:20-alpine`), and `docker/github-runner.Dockerfile`'s nodesource `setup_20.x` install (used
-  for CI runner builds, not `.nvmrc`-driven). This change bumps `.nvmrc` to a Node 22 LTS release
-  (`>=22.22.0`) and bumps all four of those Node 20 pins to Node 22, rather than trying to keep
-  Node 20 working against a dependency that declares it unsupported.
+  for CI runner builds, not `.nvmrc`-driven). This change bumps `.nvmrc` to the floating major `22`
+  (satisfying the `>=22.22.0` floor) and bumps all four of those Node 20 pins to Node 22, rather
+  than trying to keep Node 20 working against a dependency that declares it unsupported.
 - 29 files import from `react-router-dom` (components, hooks, routes, and their tests):
   `src/components/AppLink.tsx`, `src/components/AuthGuard.tsx`, `src/components/ErrorBoundary.tsx`,
   `src/components/layout/PivotButton.tsx`, `src/components/layout/Sidebar.tsx`,
@@ -92,7 +92,7 @@ This is a mechanical rename plus a version bump — no architectural change:
    dependency conflict on `react`/`react-dom` (react-router 8 wants `>=19.2.7`), bump
    `react`/`react-dom` to `^19.2.7` in the same commit — still within `analytics-web-app`'s
    existing major version.
-3. Bump `analytics-web-app/.nvmrc` from `20` to a Node 22 LTS version satisfying
+3. Bump `analytics-web-app/.nvmrc` from `20` to the floating major `22`, satisfying
    `react-router@8.3.0`'s declared `engines.node >=22.22.0` floor. Both the GitHub Actions
    workflow (`node-version-file: 'analytics-web-app/.nvmrc'`) and local dev (`nvm install` via
    `build/analytics_web_ci.py`'s `setup_nvm_and_node`) read this file directly, so no other config
