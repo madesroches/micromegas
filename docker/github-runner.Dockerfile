@@ -89,6 +89,20 @@ WORKDIR /home/runner
 RUN ARCH=$([ "$(uname -m)" = "x86_64" ] && echo "x64" || echo "arm64") \
     && curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${ARCH}-${RUNNER_VERSION}.tar.gz" | tar -xz
 
+# nvm, for the runner user — this runner is shared across projects that pin
+# different Node versions via their own .nvmrc (analytics-web-app: 22,
+# grafana: 20). build/analytics_web_ci.py and build/grafana_ci.py already
+# source nvm.sh and call `nvm install`/`nvm use` against each project's
+# .nvmrc; without nvm present they silently fall back to whatever Node
+# ships in this base image. Pre-install both current pins so `nvm use`
+# doesn't need network access at CI time.
+ENV NVM_DIR=/home/runner/.nvm
+RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
+    && bash -c '. "$NVM_DIR/nvm.sh" \
+        && nvm install 20 && corepack enable && corepack prepare yarn@4.14.1 --activate \
+        && nvm install 22 && corepack enable && corepack prepare yarn@4.14.1 --activate \
+        && nvm alias default 22'
+
 # Install runner system dependencies
 USER root
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
