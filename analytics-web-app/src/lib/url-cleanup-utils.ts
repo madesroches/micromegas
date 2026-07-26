@@ -1,5 +1,5 @@
 import { type MutableRefObject, useCallback, useEffect } from 'react'
-import type { SetURLSearchParams } from 'react-router-dom'
+import type { SetURLSearchParams } from 'react-router'
 import type { ScreenConfig } from './screens-api'
 
 /** URL params managed by the routing layer (not notebook variables) */

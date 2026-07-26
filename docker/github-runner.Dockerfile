@@ -41,13 +41,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     unzip \
     wget
 
-# Node.js 20 + Yarn 4 (via corepack). Shared COREPACK_HOME so the runner user
+# Node.js 22 + Yarn 4 (via corepack). Shared COREPACK_HOME so the runner user
 # reads the same prepared binary that root sets up — without this, switching
 # USER would force corepack to re-fetch yarn from the network on every container.
 ENV COREPACK_HOME=/opt/corepack
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && corepack enable \
     && corepack prepare yarn@4.14.1 --activate \
@@ -88,6 +88,20 @@ USER runner
 WORKDIR /home/runner
 RUN ARCH=$([ "$(uname -m)" = "x86_64" ] && echo "x64" || echo "arm64") \
     && curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${ARCH}-${RUNNER_VERSION}.tar.gz" | tar -xz
+
+# nvm, for the runner user — this runner is shared across projects that pin
+# different Node versions via their own .nvmrc (analytics-web-app: 22,
+# grafana: 20). build/analytics_web_ci.py and build/grafana_ci.py already
+# source nvm.sh and call `nvm install`/`nvm use` against each project's
+# .nvmrc; without nvm present they silently fall back to whatever Node
+# ships in this base image. Pre-install both current pins so `nvm use`
+# doesn't need network access at CI time.
+ENV NVM_DIR=/home/runner/.nvm
+RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
+    && bash -c '. "$NVM_DIR/nvm.sh" \
+        && nvm install 20 && corepack enable && corepack prepare yarn@4.14.1 --activate \
+        && nvm install 22 && corepack enable && corepack prepare yarn@4.14.1 --activate \
+        && nvm alias default 22'
 
 # Install runner system dependencies
 USER root

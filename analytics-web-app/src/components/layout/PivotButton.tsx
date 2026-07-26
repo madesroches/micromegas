@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, FileText, BarChart2, Zap, Info } from 'lucide-react'
 

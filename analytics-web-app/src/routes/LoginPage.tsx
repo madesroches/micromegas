@@ -1,5 +1,5 @@
 import { Suspense, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'

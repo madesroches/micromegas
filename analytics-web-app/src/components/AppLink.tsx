@@ -1,4 +1,4 @@
-import { Link, LinkProps } from 'react-router-dom'
+import { Link, LinkProps } from 'react-router'
 import { ReactNode } from 'react'
 import { appLink } from '@/lib/config'
 
@@ -13,7 +13,7 @@ interface AppLinkProps extends Omit<LinkProps, 'to'> {
  * App-aware Link component that:
  * 1. Prepends the runtime base path to href
  *
- * Use this instead of react-router-dom Link for all internal navigation.
+ * Use this instead of react-router Link for all internal navigation.
  */
 export function AppLink({ href, children, className, title, ...props }: AppLinkProps) {
   return (

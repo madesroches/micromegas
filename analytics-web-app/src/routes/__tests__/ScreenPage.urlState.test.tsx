@@ -9,7 +9,7 @@
  */
 import { renderHook, act } from '@testing-library/react'
 import { ReactNode, useCallback, useMemo } from 'react'
-import { MemoryRouter, useSearchParams, useNavigate } from 'react-router-dom'
+import { MemoryRouter, useSearchParams, useNavigate } from 'react-router'
 import { RESERVED_URL_PARAMS, cleanupTimeParams } from '@/lib/url-cleanup-utils'
 import { cleanupVariableParams } from '@/lib/screen-renderers/notebook-utils'
 import { getTimeRangeForApi } from '@/lib/time-range'
@@ -17,8 +17,8 @@ import type { ScreenConfig } from '@/lib/screens-api'
 
 // Mock navigate
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>()
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>()
   return {
     ...actual,
     useNavigate: () => mockNavigate,

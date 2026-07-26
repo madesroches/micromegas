@@ -40,7 +40,7 @@ def check_command_exists(command):
 
 
 def check_yarn_installed():
-    """Check if yarn is installed (via corepack — Node 20+ ships it)."""
+    """Check if yarn is installed (via corepack — Node 22+ ships it)."""
     if not check_command_exists("yarn"):
         print_status("Yarn not found. Enabling corepack...", "info")
         try:
@@ -309,7 +309,7 @@ def main():
         return 1
 
     if not check_command_exists("node"):
-        print_status("Node.js not found. Please install Node.js 18+.", "error")
+        print_status("Node.js not found. Please install Node.js 22+.", "error")
         return 1
 
     if not check_yarn_installed():

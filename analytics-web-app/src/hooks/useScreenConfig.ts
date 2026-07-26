@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router'
 import { parseUrlParams } from '@/lib/url-params'
 import type { BaseScreenConfig } from '@/lib/screen-config'
 

@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router'
 import { QueryProvider } from '@/components/QueryProvider'
 import { AuthProvider } from '@/lib/auth'
 import { Toaster } from '@/components/ui/toaster'

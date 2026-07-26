@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import {
   CellConfig,

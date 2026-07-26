@@ -28,9 +28,9 @@ const { mockInitialSearch } = vi.hoisted(() => ({
   mockInitialSearch: { current: '' },
 }))
 
-vi.mock('react-router-dom', async (importOriginal) => {
+vi.mock('react-router', async (importOriginal) => {
   const { useState, useMemo, useRef, useCallback } = await import('react')
-  const actual = await importOriginal<typeof import('react-router-dom')>()
+  const actual = await importOriginal<typeof import('react-router')>()
   return {
     ...actual,
     useSearchParams: (): [URLSearchParams, SetSearchParamsFn] => {

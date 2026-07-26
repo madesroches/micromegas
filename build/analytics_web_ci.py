@@ -19,7 +19,7 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
             required_version = f.read().strip()
         print(f"Found .nvmrc at {nvmrc_path} with Node version: {required_version}")
     else:
-        required_version = "20"  # Default to Node 20 LTS
+        required_version = "22"  # Default to Node 22 LTS
         print(f"No .nvmrc found, using Node {required_version}")
 
     # Find NVM installation

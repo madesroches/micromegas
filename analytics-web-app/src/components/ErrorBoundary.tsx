@@ -1,5 +1,5 @@
 import React from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { ApiErrorException, AuthenticationError } from '@/lib/api'
 import { appLink } from '@/lib/config'
 import { useToast } from '@/lib/use-toast'

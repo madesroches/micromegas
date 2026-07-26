@@ -5,7 +5,7 @@
  * intentionally avoided; we render the page and probe the fetch calls.
  */
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import MapsPage from '../MapsPage'
 
 // Force useAuth to report an admin user so AuthGuard renders the page.

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { ChevronDown } from 'lucide-react'
 import type { Table } from 'apache-arrow'
 import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
