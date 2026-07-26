@@ -113,7 +113,7 @@ yarn dev                # Dev server on port 3000 (Vite)
 yarn build              # Production build to dist/
 yarn lint               # ESLint
 yarn type-check         # TypeScript type check (no emit)
-yarn test               # Jest unit tests
+yarn test               # Vitest unit tests
 ```
 
 ### TypeScript/JavaScript Workspaces
@@ -202,7 +202,7 @@ cd grafana && yarn test:ci               # Grafana plugin tests only
 
 **Analytics web app:**
 ```bash
-cd analytics-web-app && yarn test        # Jest unit tests
+cd analytics-web-app && yarn test        # Vitest unit tests
 ```
 
 #### Linting

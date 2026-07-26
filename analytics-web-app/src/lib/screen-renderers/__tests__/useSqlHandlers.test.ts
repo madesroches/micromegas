@@ -6,8 +6,8 @@ import { useSqlHandlers } from '../useSqlHandlers'
 
 describe('useSqlHandlers', () => {
   const createMocks = () => ({
-    onConfigChange: jest.fn(),
-    execute: jest.fn(),
+    onConfigChange: vi.fn(),
+    execute: vi.fn(),
   })
 
   describe('handleSqlChange', () => {

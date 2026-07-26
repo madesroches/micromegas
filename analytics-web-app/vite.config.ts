@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
@@ -67,6 +68,41 @@ export default defineConfig(({ mode }) => {
         [`${basePath}/auth`]: {
           target: backendUrl,
         },
+      },
+    },
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      environmentOptions: {
+        jsdom: { url: 'http://localhost:3000' },
+      },
+      setupFiles: ['./src/test-setup.ts'],
+      exclude: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+      alias: {
+        'react-markdown': path.resolve(__dirname, './src/__mocks__/react-markdown.tsx'),
+        'remark-gfm': path.resolve(__dirname, './src/__mocks__/remark-gfm.ts'),
+        '@radix-ui/react-dropdown-menu': path.resolve(
+          __dirname,
+          './src/__mocks__/@radix-ui/react-dropdown-menu.tsx'
+        ),
+        'micromegas-datafusion-wasm': path.resolve(
+          __dirname,
+          './src/__mocks__/micromegas-datafusion-wasm.ts'
+        ),
+      },
+      coverage: {
+        provider: 'v8',
+        include: ['src/**/*.{ts,tsx}'],
+        exclude: [
+          'src/**/*.d.ts',
+          'src/**/__mocks__/**',
+          'src/**/__tests__/**',
+          'src/**/__test-utils__/**',
+          'src/lib/datafusion-wasm/**',
+          'src/main.tsx',
+          'src/router.tsx',
+          'src/components/layout/TimeRangePicker/types.ts',
+        ],
       },
     },
   }

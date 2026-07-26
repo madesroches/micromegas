@@ -1,30 +1,33 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import type { Mock } from 'vitest'
 import { AuthGuard } from '../AuthGuard'
 import { AuthProvider } from '@/lib/auth'
 
 // Mock fetch globally
-global.fetch = jest.fn()
+global.fetch = vi.fn()
 
 // Mock navigation module (jsdom 26 freezes window.location methods)
-const mockNavigateTo = jest.fn()
-const mockReloadPage = jest.fn()
-jest.mock('@/lib/navigation', () => ({
+const { mockNavigateTo, mockReloadPage } = vi.hoisted(() => ({
+  mockNavigateTo: vi.fn(),
+  mockReloadPage: vi.fn(),
+}))
+vi.mock('@/lib/navigation', () => ({
   navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
   reloadPage: () => mockReloadPage(),
 }))
 
 describe('AuthGuard', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
-    ;(global.fetch as jest.Mock).mockReset()
+    vi.clearAllMocks()
+    ;(global.fetch as Mock).mockReset()
   })
 
   afterEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('should show loading state while checking authentication', () => {
-    (global.fetch as jest.Mock).mockImplementation(
+    (global.fetch as Mock).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     )
 
@@ -41,7 +44,7 @@ describe('AuthGuard', () => {
   })
 
   it('should render children when authenticated', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -67,7 +70,7 @@ describe('AuthGuard', () => {
   })
 
   it('should redirect to login when unauthenticated', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: false,
       status: 401,
     })
@@ -92,7 +95,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on service unavailable', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
     })
@@ -114,7 +117,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on network error', async () => {
-    (global.fetch as jest.Mock).mockRejectedValueOnce(
+    (global.fetch as Mock).mockRejectedValueOnce(
       new Error('Network error')
     )
 
@@ -134,7 +137,7 @@ describe('AuthGuard', () => {
   })
 
   it('should retry authentication when retry button is clicked', async () => {
-    (global.fetch as jest.Mock)
+    (global.fetch as Mock)
       .mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -153,7 +156,7 @@ describe('AuthGuard', () => {
     })
 
     // Mock successful response for retry
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    ;(global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({

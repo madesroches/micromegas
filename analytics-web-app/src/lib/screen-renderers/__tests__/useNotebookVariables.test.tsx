@@ -13,7 +13,7 @@
  * setSearchParams doesn't flush in renderHook.
  */
 import { renderHook, act } from '@testing-library/react'
-import { ReactNode, useState, useCallback, useMemo, useRef } from 'react'
+import { ReactNode } from 'react'
 import type { CellConfig, VariableCellConfig } from '../notebook-types'
 
 // ---------------------------------------------------------------------------
@@ -24,15 +24,18 @@ type SetSearchParamsFn = (
   opts?: { replace?: boolean },
 ) => void
 
-let mockInitialSearch = ''
+const { mockInitialSearch } = vi.hoisted(() => ({
+  mockInitialSearch: { current: '' },
+}))
 
-jest.mock('react-router-dom', () => {
-  const actual = jest.requireActual('react-router-dom')
+vi.mock('react-router-dom', async (importOriginal) => {
+  const { useState, useMemo, useRef, useCallback } = await import('react')
+  const actual = await importOriginal<typeof import('react-router-dom')>()
   return {
     ...actual,
     useSearchParams: (): [URLSearchParams, SetSearchParamsFn] => {
       // eslint-disable-next-line react-hooks/rules-of-hooks
-      const [raw, setRaw] = useState(mockInitialSearch)
+      const [raw, setRaw] = useState(mockInitialSearch.current)
       // eslint-disable-next-line react-hooks/rules-of-hooks
       const params = useMemo(() => new URLSearchParams(raw), [raw])
 
@@ -91,7 +94,7 @@ function makeVariableCell(
 
 describe('useNotebookVariables', () => {
   beforeEach(() => {
-    mockInitialSearch = ''
+    mockInitialSearch.current = ''
   })
 
   describe('basic variable values', () => {
@@ -113,7 +116,7 @@ describe('useNotebookVariables', () => {
     })
 
     it('applies URL overrides over defaults', () => {
-      mockInitialSearch = 'source=staging&interval=500ms'
+      mockInitialSearch.current = 'source=staging&interval=500ms'
 
       const cells: CellConfig[] = [
         makeVariableCell('source', 'datasource', 'prod'),
@@ -151,7 +154,7 @@ describe('useNotebookVariables', () => {
     })
 
     it('removes URL param when value matches saved default (delta logic)', () => {
-      mockInitialSearch = 'source=staging'
+      mockInitialSearch.current = 'source=staging'
 
       const cells: CellConfig[] = [
         makeVariableCell('source', 'datasource', 'prod'),
@@ -226,7 +229,7 @@ describe('useNotebookVariables', () => {
     })
 
     it('rapid set + reset-to-default does not clobber the set', () => {
-      mockInitialSearch = 'interval=500ms'
+      mockInitialSearch.current = 'interval=500ms'
 
       const cells: CellConfig[] = [
         makeVariableCell('source', 'datasource', 'prod'),

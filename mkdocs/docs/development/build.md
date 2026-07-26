@@ -117,7 +117,7 @@ yarn dev            # Vite dev server on port 3000
 yarn build          # Production build to dist/
 yarn lint           # ESLint
 yarn type-check     # TypeScript check (no emit)
-yarn test           # Jest unit tests
+yarn test           # Vitest unit tests
 ```
 
 ### Grafana Plugin (`grafana/`)

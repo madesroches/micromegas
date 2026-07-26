@@ -1,8 +1,9 @@
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import React from 'react'
+import type { Mock } from 'vitest'
 
 // Mock lucide-react icons
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   Download: () => <span data-testid="download">⬇</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Play: () => <span data-testid="play">▶</span>,
@@ -19,16 +20,16 @@ jest.mock('lucide-react', () => ({
 }))
 
 // Mock @dnd-kit
-jest.mock('@dnd-kit/core', () => ({
+vi.mock('@dnd-kit/core', () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <div data-testid="dnd-context">{children}</div>,
-  closestCenter: jest.fn(),
-  PointerSensor: jest.fn(),
-  useSensor: jest.fn(() => ({})),
-  useSensors: jest.fn(() => []),
+  closestCenter: vi.fn(),
+  PointerSensor: vi.fn(),
+  useSensor: vi.fn(() => ({})),
+  useSensors: vi.fn(() => []),
   DragOverlay: ({ children }: { children: React.ReactNode }) => <div data-testid="drag-overlay">{children}</div>,
 }))
 
-jest.mock('@dnd-kit/sortable', () => ({
+vi.mock('@dnd-kit/sortable', () => ({
   arrayMove: (arr: unknown[], from: number, to: number) => {
     const result = [...arr] as unknown[]
     const [removed] = result.splice(from, 1)
@@ -41,15 +42,15 @@ jest.mock('@dnd-kit/sortable', () => ({
   useSortable: () => ({
     attributes: { 'data-testid': 'drag-handle-attrs' },
     listeners: {},
-    setNodeRef: jest.fn(),
+    setNodeRef: vi.fn(),
     transform: null,
     transition: null,
     isDragging: false,
   }),
-  horizontalListSortingStrategy: jest.fn(),
+  horizontalListSortingStrategy: vi.fn(),
 }))
 
-jest.mock('@dnd-kit/utilities', () => ({
+vi.mock('@dnd-kit/utilities', () => ({
   CSS: {
     Transform: {
       toString: () => '',
@@ -58,24 +59,24 @@ jest.mock('@dnd-kit/utilities', () => ({
 }))
 
 // Mock data-sources-api (used by DataSourceSelector)
-jest.mock('@/lib/data-sources-api', () => ({
-  getDataSourceList: jest.fn().mockReturnValue(new Promise(() => {})),
+vi.mock('@/lib/data-sources-api', () => ({
+  getDataSourceList: vi.fn().mockReturnValue(new Promise(() => {})),
 }))
 
 // Mock arrow-to-csv
-jest.mock('../arrow-to-csv', () => ({
-  arrowTableToCsv: jest.fn(() => 'col1,col2\n1,2'),
-  triggerCsvDownload: jest.fn(),
+vi.mock('../arrow-to-csv', () => ({
+  arrowTableToCsv: vi.fn(() => 'col1,col2\n1,2'),
+  triggerCsvDownload: vi.fn(),
 }))
 
 // Mock cell-registry
-jest.mock('../../cell-registry', () =>
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  require('../../__test-utils__/cell-registry-mock').createCellRegistryMock({
+vi.mock('../../cell-registry', async () => {
+  const { createCellRegistryMock } = await import('../../__test-utils__/cell-registry-mock')
+  return createCellRegistryMock({
     withRenderers: true,
     withEditors: true,
   })
-)
+})
 
 import {
   HorizontalGroupCell,
@@ -119,11 +120,11 @@ function createRendererProps(overrides: Partial<HorizontalGroupCellProps> = {}):
     variableValues: {},
     timeRange: { begin: '2024-01-01', end: '2024-01-02' },
     selectedChildName: null,
-    onChildSelect: jest.fn(),
-    onChildRun: jest.fn(),
-    onVariableValueChange: jest.fn(),
-    onConfigChange: jest.fn(),
-    onChildDragOut: jest.fn(),
+    onChildSelect: vi.fn(),
+    onChildRun: vi.fn(),
+    onVariableValueChange: vi.fn(),
+    onConfigChange: vi.fn(),
+    onChildDragOut: vi.fn(),
     allCellNames: new Set(['group1']),
     ...overrides,
   }
@@ -131,9 +132,9 @@ function createRendererProps(overrides: Partial<HorizontalGroupCellProps> = {}):
 
 interface EditorOverrides {
   config?: HorizontalGroupCellConfig
-  onChange?: jest.Mock
+  onChange?: Mock
   selectedChildName?: string | null
-  onChildSelect?: jest.Mock
+  onChildSelect?: Mock
   variables?: Record<string, string>
   timeRange?: { begin: string; end: string }
   allCellNames?: Set<string>
@@ -151,9 +152,9 @@ function createEditorProps(overrides: EditorOverrides = {}) {
       layout: { height: 300 },
       children: [],
     },
-    onChange: overrides.onChange || jest.fn(),
+    onChange: overrides.onChange || vi.fn(),
     selectedChildName: overrides.selectedChildName ?? null,
-    onChildSelect: overrides.onChildSelect || jest.fn(),
+    onChildSelect: overrides.onChildSelect || vi.fn(),
     variables: overrides.variables || {},
     timeRange: overrides.timeRange || { begin: '2024-01-01', end: '2024-01-02' },
     allCellNames: overrides.allCellNames || new Set(['group1']),
@@ -278,7 +279,7 @@ describe('HorizontalGroupCell', () => {
 
   describe('interactions', () => {
     it('double-click child header calls onChildSelect with child name', () => {
-      const onChildSelect = jest.fn()
+      const onChildSelect = vi.fn()
       const children = [makeChild('clickme', 'table')]
       render(
         <HorizontalGroupCell
@@ -293,7 +294,7 @@ describe('HorizontalGroupCell', () => {
     })
 
     it('click run button calls onChildRun with child name', () => {
-      const onChildRun = jest.fn()
+      const onChildRun = vi.fn()
       const children = [makeChild('runme', 'table')]
       render(
         <HorizontalGroupCell
@@ -323,7 +324,7 @@ describe('HorizontalGroupCell', () => {
     })
 
     it('click "Remove from group" calls onConfigChange with child removed', () => {
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
       const children = [makeChild('a', 'table'), makeChild('b', 'chart')]
       render(
         <HorizontalGroupCell
@@ -344,8 +345,8 @@ describe('HorizontalGroupCell', () => {
     })
 
     it('removing selected child also calls onChildSelect(null)', () => {
-      const onChildSelect = jest.fn()
-      const onConfigChange = jest.fn()
+      const onChildSelect = vi.fn()
+      const onConfigChange = vi.fn()
       const children = [makeChild('selected', 'table')]
       render(
         <HorizontalGroupCell
@@ -362,7 +363,7 @@ describe('HorizontalGroupCell', () => {
     })
 
     it('stopPropagation on drag handle click', () => {
-      const onChildSelect = jest.fn()
+      const onChildSelect = vi.fn()
       const children = [makeChild('draggable', 'table')]
       render(
         <HorizontalGroupCell
@@ -450,7 +451,7 @@ describe('HorizontalGroupCellEditor', () => {
     })
 
     it('click child name calls onChildSelect', () => {
-      const onChildSelect = jest.fn()
+      const onChildSelect = vi.fn()
       const children = [makeChild('clickable', 'table')]
       render(
         <HorizontalGroupCellEditor
@@ -465,7 +466,7 @@ describe('HorizontalGroupCellEditor', () => {
     })
 
     it('move left reorders children', () => {
-      const onChange = jest.fn()
+      const onChange = vi.fn()
       const children = [makeChild('first', 'table'), makeChild('second', 'chart')]
       render(
         <HorizontalGroupCellEditor
@@ -515,7 +516,7 @@ describe('HorizontalGroupCellEditor', () => {
     })
 
     it('remove button removes child from config', () => {
-      const onChange = jest.fn()
+      const onChange = vi.fn()
       const children = [makeChild('keep', 'table'), makeChild('remove_me', 'chart')]
       render(
         <HorizontalGroupCellEditor
@@ -543,7 +544,7 @@ describe('HorizontalGroupCellEditor', () => {
 
   describe('child editor view', () => {
     it('shows "Back to group" button that calls onChildSelect(null)', () => {
-      const onChildSelect = jest.fn()
+      const onChildSelect = vi.fn()
       const children = [makeChild('editable', 'table')]
       render(
         <HorizontalGroupCellEditor
@@ -589,8 +590,8 @@ describe('HorizontalGroupCellEditor', () => {
     })
 
     it('name change updates config with sanitized name', () => {
-      const onChange = jest.fn()
-      const onChildSelect = jest.fn()
+      const onChange = vi.fn()
+      const onChildSelect = vi.fn()
       const children = [makeChild('old_name', 'table')]
       render(
         <HorizontalGroupCellEditor
@@ -668,7 +669,7 @@ describe('AddChildModal (via HorizontalGroupCellEditor)', () => {
   })
 
   it('clicking option calls onChange with new child added', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(<HorizontalGroupCellEditor {...createEditorProps({ onChange })} />)
     fireEvent.click(screen.getByText('Add Child Cell'))
 

@@ -2,15 +2,16 @@
  * Tests for screens API client
  */
 import { authenticatedFetch } from '@/lib/api'
+import type { MockedFunction } from 'vitest'
 
 // Mock the dependencies
-jest.mock('@/lib/api', () => ({
-  authenticatedFetch: jest.fn(),
+vi.mock('@/lib/api', () => ({
+  authenticatedFetch: vi.fn(),
   getApiBase: () => '/api',
   getAuthBase: () => '',
 }))
 
-const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>
+const mockedFetch = authenticatedFetch as MockedFunction<typeof authenticatedFetch>
 
 // Import after mocking
 import {
@@ -70,7 +71,7 @@ describe('ScreenApiError', () => {
 
 describe('getScreenTypes', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should fetch and return screen types', async () => {
@@ -102,7 +103,7 @@ describe('getScreenTypes', () => {
 
 describe('getDefaultConfig', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should fetch default config for a screen type', async () => {
@@ -132,7 +133,7 @@ describe('getDefaultConfig', () => {
 
 describe('listScreens', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should fetch and return all screens', async () => {
@@ -164,7 +165,7 @@ describe('listScreens', () => {
 
 describe('getScreen', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should fetch a screen by name', async () => {
@@ -215,7 +216,7 @@ describe('getScreen', () => {
 
 describe('createScreen', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should create a new screen', async () => {
@@ -297,7 +298,7 @@ describe('createScreen', () => {
 
 describe('updateScreen', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should update an existing screen', async () => {
@@ -359,7 +360,7 @@ describe('updateScreen', () => {
 
 describe('deleteScreen', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should delete a screen', async () => {
@@ -418,7 +419,7 @@ describe('deleteScreen', () => {
 
 describe('error handling edge cases', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   it('should handle non-JSON error responses', async () => {
@@ -468,7 +469,7 @@ describe('error handling edge cases', () => {
 
 describe('importScreen', () => {
   beforeEach(() => {
-    jest.resetAllMocks()
+    vi.resetAllMocks()
   })
 
   const makeExportedScreen = (overrides: Partial<ExportedScreen> = {}): ExportedScreen => ({

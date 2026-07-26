@@ -481,7 +481,7 @@ describe('ChannelBindingControl', () => {
   }
 
   it('does not fire onChange while the user types', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <ChannelBindingControl
         {...baseProps}
@@ -498,7 +498,7 @@ describe('ChannelBindingControl', () => {
   })
 
   it('commits the draft on blur', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <ChannelBindingControl
         {...baseProps}
@@ -514,7 +514,7 @@ describe('ChannelBindingControl', () => {
   })
 
   it('commits the draft on Enter', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <ChannelBindingControl
         {...baseProps}
@@ -535,7 +535,7 @@ describe('ChannelBindingControl', () => {
     // Regression: keydown's setDraft is batched in React 18+, so the
     // synchronous blur triggered by `.blur()` reads the typed value from
     // closure. A skip-next-commit flag is required.
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <ChannelBindingControl
         {...baseProps}
@@ -552,7 +552,7 @@ describe('ChannelBindingControl', () => {
   })
 
   it('does not fire onChange on blur when the draft equals the prop', () => {
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     render(
       <ChannelBindingControl
         {...baseProps}
@@ -570,7 +570,7 @@ describe('ChannelBindingControl', () => {
     // Mode switches, color-picker picks, and saved-config reloads update
     // the binding from outside. The text input should pick up the new
     // value instead of keeping a stale uncommitted draft.
-    const onChange = jest.fn()
+    const onChange = vi.fn()
     const { rerender } = render(
       <ChannelBindingControl
         {...baseProps}
@@ -596,7 +596,7 @@ describe('ChannelBindingControl', () => {
       <ChannelBindingControl
         {...baseProps}
         binding={{ scalar: 25 } as ChannelBinding}
-        onChange={jest.fn()}
+        onChange={vi.fn()}
       />,
     )
     expect(screen.getByDisplayValue('25')).toBeInTheDocument()
@@ -610,7 +610,7 @@ describe('ChannelBindingControl', () => {
         fallbackScalar={0xbf360cff}
         columns={[]}
         binding={{ scalar: 0xbf360cff } as ChannelBinding}
-        onChange={jest.fn()}
+        onChange={vi.fn()}
       />,
     )
     expect(screen.getByDisplayValue('#bf360cff')).toBeInTheDocument()

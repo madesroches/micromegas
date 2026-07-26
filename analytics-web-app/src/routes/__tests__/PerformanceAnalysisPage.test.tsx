@@ -13,10 +13,11 @@
  */
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, useLocation, useSearchParams } from 'react-router-dom'
+import type { Mock } from 'vitest'
 import PerformanceAnalysisPage from '../PerformanceAnalysisPage'
 
 // AuthGuard needs an authenticated user to render its children.
-jest.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     status: 'authenticated',
     user: { sub: 'admin', is_admin: true },
@@ -24,21 +25,21 @@ jest.mock('@/lib/auth', () => ({
   }),
 }))
 
-jest.mock('@/lib/config', () => ({
+vi.mock('@/lib/config', () => ({
   getConfig: () => ({ basePath: '' }),
   appLink: (path: string) => path,
 }))
 
-jest.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
+vi.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
 
-jest.mock('@/hooks/useDefaultDataSource', () => ({
+vi.mock('@/hooks/useDefaultDataSource', () => ({
   useDefaultDataSource: () => ({ name: 'ds', error: null }),
 }))
 
 // PageLayout pulls in header/sidebar; stub it to a pass-through that also
 // surfaces the controls the page wires up so the test can trigger a
 // time-range change and a refresh.
-jest.mock('@/components/layout', () => ({
+vi.mock('@/components/layout', () => ({
   PageLayout: ({
     children,
     rightPanel,
@@ -66,25 +67,25 @@ jest.mock('@/components/layout', () => ({
   ),
 }))
 
-jest.mock('@/components/MetricsChart', () => ({
+vi.mock('@/components/MetricsChart', () => ({
   MetricsChart: () => <div data-testid="metrics-chart" />,
 }))
 
-jest.mock('@/components/ThreadCoverageTimeline', () => ({
+vi.mock('@/components/ThreadCoverageTimeline', () => ({
   ThreadCoverageTimeline: () => <div data-testid="thread-coverage" />,
 }))
 
-jest.mock('@/components/QueryEditor', () => ({
+vi.mock('@/components/QueryEditor', () => ({
   QueryEditor: () => <div data-testid="query-editor" />,
 }))
 
-jest.mock('@/lib/perfetto-trace', () => ({
-  fetchPerfettoTrace: jest.fn(),
-  triggerTraceDownload: jest.fn(),
+vi.mock('@/lib/perfetto-trace', () => ({
+  fetchPerfettoTrace: vi.fn(),
+  triggerTraceDownload: vi.fn(),
 }))
 
-jest.mock('@/lib/perfetto', () => ({
-  openInPerfetto: jest.fn(),
+vi.mock('@/lib/perfetto', () => ({
+  openInPerfetto: vi.fn(),
   PerfettoError: class PerfettoError extends Error {},
 }))
 
@@ -92,8 +93,8 @@ jest.mock('@/lib/perfetto', () => ({
 // armed (hasLoaded === true). The returned object is closure-stable to mirror
 // the real hook (whose outputs come from useState/useMemo) — otherwise the
 // page's view-state lift effect would re-fire every render and loop.
-const mockExecute = jest.fn()
-jest.mock('@/hooks/useMetricsData', () => {
+const { mockExecute } = vi.hoisted(() => ({ mockExecute: vi.fn() }))
+vi.mock('@/hooks/useMetricsData', () => {
   // Built lazily on first call (so mockExecute is initialized) and cached so
   // the reference is stable across renders.
   let metrics: Record<string, unknown> | null = null
@@ -125,8 +126,8 @@ function fakeBatch(rows: Record<string, unknown>[]) {
   }
 }
 
-const executeStreamQuery = jest.fn()
-jest.mock('@/lib/arrow-stream', () => ({
+const { executeStreamQuery } = vi.hoisted(() => ({ executeStreamQuery: vi.fn() }))
+vi.mock('@/lib/arrow-stream', () => ({
   executeStreamQuery: (...args: unknown[]) => executeStreamQuery(...args),
 }))
 
@@ -147,17 +148,17 @@ function callsByKind() {
 }
 
 beforeEach(() => {
-  jest.clearAllMocks()
-  ;(useLocation as jest.Mock).mockReturnValue({
+  vi.clearAllMocks()
+  ;(useLocation as Mock).mockReturnValue({
     pathname: '/performance',
     search: '?process_id=p1',
     hash: '',
     state: null,
     key: 'default',
   })
-  ;(useSearchParams as jest.Mock).mockReturnValue([
+  ;(useSearchParams as Mock).mockReturnValue([
     new URLSearchParams('process_id=p1'),
-    jest.fn(),
+    vi.fn(),
   ])
 
   executeStreamQuery.mockImplementation(async ({ sql }: { sql: string }) => {

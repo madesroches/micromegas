@@ -4,14 +4,14 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 
 // Mock streamQuery function
-const mockStreamQuery = jest.fn();
+const { mockStreamQuery } = vi.hoisted(() => ({ mockStreamQuery: vi.fn() }));
 
-jest.mock('@/lib/arrow-stream', () => ({
+vi.mock('@/lib/arrow-stream', () => ({
   streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
 }));
 
 // Mock Apache Arrow
-jest.mock('apache-arrow', () => ({
+vi.mock('apache-arrow', () => ({
   Table: class MockTable {
     constructor(public batches: unknown[]) {}
   },
@@ -50,7 +50,7 @@ function createMockGenerator<T>(results: T[]): AsyncGenerator<T> {
 
 describe('useStreamQuery', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('initial state', () => {

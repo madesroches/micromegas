@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import MapsPage from '../MapsPage'
 
 // Force useAuth to report an admin user so AuthGuard renders the page.
-jest.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     status: 'authenticated',
     user: { sub: 'admin', is_admin: true },
@@ -18,20 +18,20 @@ jest.mock('@/lib/auth', () => ({
 }))
 
 // Pin basePath to a known value so the URL assertions are stable.
-jest.mock('@/lib/config', () => ({
+vi.mock('@/lib/config', () => ({
   getConfig: () => ({ basePath: '/mmlocal' }),
   appLink: (path: string) => `/mmlocal${path}`,
 }))
 
 // The page-title hook reads from window during effects; stub it out so
 // jsdom doesn't warn on the document title side effect.
-jest.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
+vi.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
 
 // PageLayout pulls in a fair amount (header, sidebar). Stub it down to a
 // simple pass-through wrapper — the page's contract under test is the
 // catalog list, the upload button, and the delete confirmation, not the
 // app chrome.
-jest.mock('@/components/layout', () => ({
+vi.mock('@/components/layout', () => ({
   PageLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
@@ -45,11 +45,11 @@ function renderPage() {
 
 describe('MapsPage', () => {
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('renders the empty state when the catalog is empty', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve([]),
     } as unknown as Response) as unknown as typeof fetch
@@ -62,7 +62,7 @@ describe('MapsPage', () => {
   })
 
   it('lists existing maps from the catalog response', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
         Promise.resolve([
@@ -78,7 +78,7 @@ describe('MapsPage', () => {
   })
 
   it('opens the delete confirm dialog and DELETEs the right URL on confirm', async () => {
-    const fetchMock = jest
+    const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -113,7 +113,7 @@ describe('MapsPage', () => {
   })
 
   it('uploads via the file input and refreshes the catalog', async () => {
-    const fetchMock = jest
+    const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,

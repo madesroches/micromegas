@@ -6,11 +6,14 @@ import { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
 // Mock react-router-dom's useNavigate
-const mockNavigate = jest.fn()
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
-  useNavigate: () => mockNavigate,
-}))
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 import { useScreenConfig } from '../useScreenConfig'
 import type { BaseScreenConfig } from '@/lib/screen-config'

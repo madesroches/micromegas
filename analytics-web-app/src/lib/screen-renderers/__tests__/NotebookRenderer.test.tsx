@@ -5,13 +5,13 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import React from 'react'
 
 // Mock streamQuery to prevent actual API calls
-const mockStreamQuery = jest.fn()
-jest.mock('@/lib/arrow-stream', () => ({
+const { mockStreamQuery } = vi.hoisted(() => ({ mockStreamQuery: vi.fn() }))
+vi.mock('@/lib/arrow-stream', () => ({
   streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
 }))
 
 // Mock Apache Arrow
-jest.mock('apache-arrow', () => ({
+vi.mock('apache-arrow', () => ({
   Table: class MockTable {
     numRows = 0
     numCols = 0
@@ -20,7 +20,7 @@ jest.mock('apache-arrow', () => ({
 }))
 
 // Mock lucide-react icons
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   Plus: () => <span data-testid="plus-icon">+</span>,
   X: () => <span data-testid="x-icon">×</span>,
   ChevronDown: () => <span data-testid="chevron-down">▼</span>,
@@ -43,20 +43,20 @@ jest.mock('lucide-react', () => ({
   Pencil: () => <span data-testid="pencil">✏</span>,
 }))
 
-// @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
+// @radix-ui/react-dropdown-menu is mocked via test.alias in vite.config.ts
 
 // Mock @dnd-kit to simplify testing
-jest.mock('@dnd-kit/core', () => ({
+vi.mock('@dnd-kit/core', () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <div data-testid="dnd-context">{children}</div>,
-  closestCenter: jest.fn(),
-  KeyboardSensor: jest.fn(),
-  PointerSensor: jest.fn(),
-  useSensor: jest.fn(() => ({})),
-  useSensors: jest.fn(() => []),
+  closestCenter: vi.fn(),
+  KeyboardSensor: vi.fn(),
+  PointerSensor: vi.fn(),
+  useSensor: vi.fn(() => ({})),
+  useSensors: vi.fn(() => []),
   DragOverlay: ({ children }: { children: React.ReactNode }) => <div data-testid="drag-overlay">{children}</div>,
 }))
 
-jest.mock('@dnd-kit/sortable', () => ({
+vi.mock('@dnd-kit/sortable', () => ({
   arrayMove: (arr: unknown[], from: number, to: number) => {
     const result = [...arr] as unknown[]
     const [removed] = result.splice(from, 1)
@@ -66,19 +66,19 @@ jest.mock('@dnd-kit/sortable', () => ({
   SortableContext: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="sortable-context">{children}</div>
   ),
-  sortableKeyboardCoordinates: jest.fn(),
+  sortableKeyboardCoordinates: vi.fn(),
   useSortable: () => ({
     attributes: {},
     listeners: {},
-    setNodeRef: jest.fn(),
+    setNodeRef: vi.fn(),
     transform: null,
     transition: null,
     isDragging: false,
   }),
-  verticalListSortingStrategy: jest.fn(),
+  verticalListSortingStrategy: vi.fn(),
 }))
 
-jest.mock('@dnd-kit/utilities', () => ({
+vi.mock('@dnd-kit/utilities', () => ({
   CSS: {
     Transform: {
       toString: () => '',
@@ -89,13 +89,15 @@ jest.mock('@dnd-kit/utilities', () => ({
 // Mock data sources API (used by DataSourceSelector in CellEditor)
 // Return a never-settling promise to avoid act() warnings from async state updates.
 // These tests don't exercise data source selection.
-jest.mock('@/lib/data-sources-api', () => ({
-  getDataSourceList: jest.fn().mockReturnValue(new Promise(() => {})),
+vi.mock('@/lib/data-sources-api', () => ({
+  getDataSourceList: vi.fn().mockReturnValue(new Promise(() => {})),
 }))
 
 // Mock the cell registry
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock({ withRenderers: true, withEditors: true }))
+vi.mock('../cell-registry', async () => {
+  const { createCellRegistryMock } = await import('../__test-utils__/cell-registry-mock')
+  return createCellRegistryMock({ withRenderers: true, withEditors: true })
+})
 
 // Import after mocks are set up
 import { NotebookRenderer } from '../NotebookRenderer'
@@ -106,14 +108,14 @@ import { CellConfig } from '../notebook-utils'
 function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): ScreenRendererProps {
   return {
     config: { cells: [] },
-    onConfigChange: jest.fn(),
+    onConfigChange: vi.fn(),
     savedConfig: { cells: [] },
     timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
     rawTimeRange: { from: 'now-5m', to: 'now' },
-    onTimeRangeChange: jest.fn(),
+    onTimeRangeChange: vi.fn(),
     timeRangeLabel: 'Last 1 hour',
     currentValues: {},
-    onSave: jest.fn(),
+    onSave: vi.fn(),
     refreshTrigger: 0,
     ...overrides,
   }
@@ -159,7 +161,7 @@ function createChartCell(name: string, sql = 'SELECT time, value FROM metrics'):
 
 describe('NotebookRenderer', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
     // Default mock for successful queries - synchronously return done
     mockStreamQuery.mockImplementation(async function* () {
       yield { type: 'done' }
@@ -226,7 +228,7 @@ describe('NotebookRenderer', () => {
     })
 
     it('should add a new cell when type is selected', async () => {
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -249,7 +251,7 @@ describe('NotebookRenderer', () => {
 
     it('should generate unique names for new cells', async () => {
       const existingCells = [createTableCell('Table')]
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -337,7 +339,7 @@ describe('NotebookRenderer', () => {
 
     it('should delete cell when confirmed', async () => {
       const cells = [createTableCell('ToDelete')]
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -364,7 +366,7 @@ describe('NotebookRenderer', () => {
 
     it('should cancel deletion when cancel is clicked', async () => {
       const cells = [createTableCell('ToDelete')]
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -395,7 +397,7 @@ describe('NotebookRenderer', () => {
   describe('cell updates', () => {
     it('should update cell name through editor', async () => {
       const cells = [createTableCell('OldName')]
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -457,7 +459,7 @@ describe('NotebookRenderer', () => {
   describe('unsaved changes', () => {
     it('should expose save handler via onSaveRef', async () => {
       const cells = [createTableCell('Query')]
-      const onSave = jest.fn().mockResolvedValue({ cells })
+      const onSave = vi.fn().mockResolvedValue({ cells })
       const saveRef = { current: null } as React.MutableRefObject<(() => Promise<void>) | null>
 
       await renderNotebook(
@@ -526,7 +528,7 @@ describe('NotebookRenderer', () => {
   describe('collapsed cells', () => {
     it('should toggle collapsed state when chevron is clicked', async () => {
       const cells = [createTableCell('Query')]
-      const onConfigChange = jest.fn()
+      const onConfigChange = vi.fn()
 
       await renderNotebook(
         createDefaultProps({
@@ -559,7 +561,7 @@ describe('NotebookRenderer', () => {
 
   describe('time range selection', () => {
     it('should call onTimeRangeChange with ISO strings when cell triggers time range select', async () => {
-      const onTimeRangeChange = jest.fn()
+      const onTimeRangeChange = vi.fn()
       const cells = [createChartCell('Metrics')]
 
       await renderNotebook(
@@ -580,7 +582,7 @@ describe('NotebookRenderer', () => {
     })
 
     it('should pass onTimeRangeSelect to all cell types', async () => {
-      const onTimeRangeChange = jest.fn()
+      const onTimeRangeChange = vi.fn()
       const cells = [
         createTableCell('Table'),
         createChartCell('Chart'),

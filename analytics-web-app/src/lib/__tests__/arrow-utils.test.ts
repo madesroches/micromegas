@@ -3,7 +3,7 @@
  */
 
 // Mock Apache Arrow before importing
-jest.mock('apache-arrow', () => {
+vi.mock('apache-arrow', () => {
   // Create mock type identifiers
   const TypeId = {
     Timestamp: 1,
@@ -111,7 +111,20 @@ import {
 } from '../arrow-utils'
 
 // Get test helpers from mock
-const { __test__ } = jest.requireMock('apache-arrow')
+type MockArrowType = { typeId: number }
+const { __test__ } = (await import('apache-arrow')) as unknown as {
+  __test__: {
+    createTimestampType: () => MockArrowType
+    createIntType: () => MockArrowType
+    createFloatType: () => MockArrowType
+    createUtf8Type: () => MockArrowType
+    createBoolType: () => MockArrowType
+    createBinaryType: () => MockArrowType
+    createLargeBinaryType: () => MockArrowType
+    createFixedSizeBinaryType: () => MockArrowType
+    createDictionaryType: (valueType: MockArrowType) => MockArrowType
+  }
+}
 const {
   createTimestampType,
   createIntType,

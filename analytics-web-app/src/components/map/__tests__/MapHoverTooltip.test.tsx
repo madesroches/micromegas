@@ -62,7 +62,7 @@ describe('MapHoverTooltip', () => {
     const origH = window.innerHeight
     Object.defineProperty(window, 'innerWidth', { value: 200, configurable: true })
     Object.defineProperty(window, 'innerHeight', { value: 200, configurable: true })
-    const spy = jest
+    const spy = vi
       .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockReturnValue({ width: 150, height: 150 } as DOMRect)
     try {

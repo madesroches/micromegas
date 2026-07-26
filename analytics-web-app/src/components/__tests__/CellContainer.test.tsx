@@ -2,11 +2,13 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { CellContainer } from '../CellContainer'
 
 // Mock cell-registry to provide metadata
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-jest.mock('@/lib/screen-renderers/cell-registry', () => require('@/lib/screen-renderers/__test-utils__/cell-registry-mock').createCellRegistryMock())
+vi.mock('@/lib/screen-renderers/cell-registry', async () => {
+  const { createCellRegistryMock } = await import('@/lib/screen-renderers/__test-utils__/cell-registry-mock')
+  return createCellRegistryMock()
+})
 
 // Mock lucide-react icons
-jest.mock('lucide-react', () => ({
+vi.mock('lucide-react', () => ({
   ChevronDown: () => <span data-testid="chevron-down">▼</span>,
   ChevronRight: () => <span data-testid="chevron-right">▶</span>,
   Download: () => <span data-testid="download">⬇</span>,
@@ -20,7 +22,7 @@ jest.mock('lucide-react', () => ({
   Pencil: () => <span data-testid="pencil">✏</span>,
 }))
 
-// @radix-ui/react-dropdown-menu is mocked via moduleNameMapper in jest.config.js
+// @radix-ui/react-dropdown-menu is mocked via test.alias in vite.config.ts
 
 describe('CellContainer', () => {
   const defaultProps = {
@@ -109,7 +111,7 @@ describe('CellContainer', () => {
 
   describe('interactions', () => {
     it('should call onToggleCollapsed when collapse button is clicked', () => {
-      const onToggleCollapsed = jest.fn()
+      const onToggleCollapsed = vi.fn()
       render(<CellContainer {...defaultProps} onToggleCollapsed={onToggleCollapsed} />)
 
       // Find the collapse toggle button (contains chevron)
@@ -120,7 +122,7 @@ describe('CellContainer', () => {
     })
 
     it('should call onSelect when cell is double-clicked', () => {
-      const onSelect = jest.fn()
+      const onSelect = vi.fn()
       const { container } = render(<CellContainer {...defaultProps} onSelect={onSelect} />)
 
       // Double-click on the cell container root
@@ -131,7 +133,7 @@ describe('CellContainer', () => {
     })
 
     it('should call onRun when run button is clicked', () => {
-      const onRun = jest.fn()
+      const onRun = vi.fn()
       render(<CellContainer {...defaultProps} onRun={onRun} />)
 
       // Find the run button (has title="Run cell")
@@ -142,8 +144,8 @@ describe('CellContainer', () => {
     })
 
     it('should not call onSelect when run button is clicked', () => {
-      const onSelect = jest.fn()
-      const onRun = jest.fn()
+      const onSelect = vi.fn()
+      const onRun = vi.fn()
       render(<CellContainer {...defaultProps} onSelect={onSelect} onRun={onRun} />)
 
       const runButton = screen.getByTitle('Run cell')
@@ -155,7 +157,7 @@ describe('CellContainer', () => {
     })
 
     it('should disable run button when loading', () => {
-      const onRun = jest.fn()
+      const onRun = vi.fn()
       render(<CellContainer {...defaultProps} status="loading" onRun={onRun} />)
 
       const runButton = screen.getByTitle('Run cell')
@@ -163,7 +165,7 @@ describe('CellContainer', () => {
     })
 
     it('should not show run button for markdown cells', () => {
-      render(<CellContainer {...defaultProps} type="markdown" onRun={jest.fn()} />)
+      render(<CellContainer {...defaultProps} type="markdown" onRun={vi.fn()} />)
       expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
     })
   })
@@ -173,8 +175,8 @@ describe('CellContainer', () => {
       render(
         <CellContainer
           {...defaultProps}
-          onRunFromHere={jest.fn()}
-          onDelete={jest.fn()}
+          onRunFromHere={vi.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -184,12 +186,12 @@ describe('CellContainer', () => {
     })
 
     it('should call onRunFromHere when menu item is clicked', () => {
-      const onRunFromHere = jest.fn()
+      const onRunFromHere = vi.fn()
       render(
         <CellContainer
           {...defaultProps}
           onRunFromHere={onRunFromHere}
-          onDelete={jest.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -199,11 +201,11 @@ describe('CellContainer', () => {
     })
 
     it('should call onDelete when delete menu item is clicked', () => {
-      const onDelete = jest.fn()
+      const onDelete = vi.fn()
       render(
         <CellContainer
           {...defaultProps}
-          onRunFromHere={jest.fn()}
+          onRunFromHere={vi.fn()}
           onDelete={onDelete}
         />
       )
@@ -218,8 +220,8 @@ describe('CellContainer', () => {
         <CellContainer
           {...defaultProps}
           type="markdown"
-          onRunFromHere={jest.fn()}
-          onDelete={jest.fn()}
+          onRunFromHere={vi.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -231,8 +233,8 @@ describe('CellContainer', () => {
       render(
         <CellContainer
           {...defaultProps}
-          onToggleAutoRunFromHere={jest.fn()}
-          onDelete={jest.fn()}
+          onToggleAutoRunFromHere={vi.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -240,12 +242,12 @@ describe('CellContainer', () => {
     })
 
     it('should call onToggleAutoRunFromHere when auto-run item is clicked', () => {
-      const onToggle = jest.fn()
+      const onToggle = vi.fn()
       render(
         <CellContainer
           {...defaultProps}
           onToggleAutoRunFromHere={onToggle}
-          onDelete={jest.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -259,8 +261,8 @@ describe('CellContainer', () => {
         <CellContainer
           {...defaultProps}
           autoRunFromHere={true}
-          onToggleAutoRunFromHere={jest.fn()}
-          onDelete={jest.fn()}
+          onToggleAutoRunFromHere={vi.fn()}
+          onDelete={vi.fn()}
         />
       )
 
@@ -272,7 +274,7 @@ describe('CellContainer', () => {
         <CellContainer
           {...defaultProps}
           autoRunFromHere={true}
-          onToggleAutoRunFromHere={jest.fn()}
+          onToggleAutoRunFromHere={vi.fn()}
         />
       )
 
@@ -334,7 +336,7 @@ describe('CellContainer', () => {
     })
 
     it('should render resize handle when onHeightChange is provided', () => {
-      const onHeightChange = jest.fn()
+      const onHeightChange = vi.fn()
       render(<CellContainer {...defaultProps} onHeightChange={onHeightChange} />)
 
       // ResizeHandle has role="separator"
@@ -348,7 +350,7 @@ describe('CellContainer', () => {
     })
 
     it('should not render resize handle when collapsed', () => {
-      const onHeightChange = jest.fn()
+      const onHeightChange = vi.fn()
       render(<CellContainer {...defaultProps} collapsed={true} onHeightChange={onHeightChange} />)
 
       expect(screen.queryByRole('separator')).not.toBeInTheDocument()

@@ -3,15 +3,16 @@
  * Centralizes mock definitions to avoid duplication across test files.
  *
  * Usage in test files:
- *   jest.mock('../cell-registry', () => require('./cell-registry-mock').createCellRegistryMock())
+ *   vi.mock('../cell-registry', async () => {
+ *     const { createCellRegistryMock } = await import('./cell-registry-mock')
+ *     return createCellRegistryMock()
+ *   })
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-const React = require('react')
+import React from 'react'
 
 // Import substituteMacros for execute implementations that need SQL substitution
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-const { substituteMacros, DEFAULT_SQL } = require('../notebook-utils')
+import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
 /** Mock editor component for all cell types */
 const MockEditorComponent = ({ config }: { config: { type: string } }) =>

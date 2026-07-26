@@ -1,21 +1,23 @@
 // Mock matchMedia for uPlot (imported via cell-registry -> ChartCell -> XYChart)
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: jest.fn().mockImplementation((query) => ({
+  value: vi.fn().mockImplementation((query) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: jest.fn(),
-    removeListener: jest.fn(),
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   })),
 })
 
 // Mock cell-registry to prevent uPlot CSS import chain
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
+vi.mock('../cell-registry', async () => {
+  const { createCellRegistryMock } = await import('../__test-utils__/cell-registry-mock')
+  return createCellRegistryMock()
+})
 
 import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'apache-arrow'
 import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate, resolveQueryTimeRange, shouldShowTimeRange } from '../notebook-utils'

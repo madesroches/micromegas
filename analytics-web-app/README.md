@@ -4,7 +4,7 @@ Web application for exploring and analyzing micromegas telemetry data.
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - Rust 1.70+
 - Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)
 - Running micromegas services (PostgreSQL, ingestion, flight-sql)
@@ -91,7 +91,9 @@ The entire application is served from a single port.
 | `yarn build` | Production build to `dist/` |
 | `yarn lint` | Run ESLint |
 | `yarn type-check` | Run TypeScript type checking |
-| `yarn test` | Run Jest tests |
+| `yarn test` | Run Vitest tests |
+| `yarn test:watch` | Run Vitest in watch mode |
+| `yarn test:coverage` | Run Vitest with coverage |
 
 ## Environment Variables
 

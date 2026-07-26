@@ -1,4 +1,5 @@
 import { Table } from 'apache-arrow'
+import type { Mock } from 'vitest'
 import type { CellConfig, CellState, VariableValue } from '../notebook-types'
 import type { CellViewContext, CellViewCallbacks } from '../notebook-cell-view'
 import {
@@ -11,14 +12,14 @@ import {
 } from '../notebook-cell-view'
 
 // Mock the cell registry — buildCellRendererProps calls getCellTypeMetadata
-jest.mock('../cell-registry', () => ({
-  getCellTypeMetadata: jest.fn(() => ({
+vi.mock('../cell-registry', () => ({
+  getCellTypeMetadata: vi.fn(() => ({
     getRendererProps: () => ({}),
   })),
 }))
 
 import { getCellTypeMetadata } from '../cell-registry'
-const mockGetCellTypeMetadata = getCellTypeMetadata as jest.Mock
+const mockGetCellTypeMetadata = getCellTypeMetadata as Mock
 
 // =============================================================================
 // Helpers
@@ -57,9 +58,9 @@ function makeContext(overrides: Partial<CellViewContext> = {}): CellViewContext 
 
 function makeCallbacks(overrides: Partial<CellViewCallbacks> = {}): CellViewCallbacks {
   return {
-    onRun: jest.fn(),
-    onSqlChange: jest.fn(),
-    onOptionsChange: jest.fn(),
+    onRun: vi.fn(),
+    onSqlChange: vi.fn(),
+    onOptionsChange: vi.fn(),
     ...overrides,
   }
 }
@@ -302,8 +303,8 @@ describe('buildCellRendererProps', () => {
     const state = makeState({ data, error: 'oops' })
     const context = makeContext({ dataSource: 'my-ds' })
     const callbacks = makeCallbacks({
-      onContentChange: jest.fn(),
-      onTimeRangeSelect: jest.fn(),
+      onContentChange: vi.fn(),
+      onTimeRangeSelect: vi.fn(),
     })
 
     const result = buildCellRendererProps(cell, state, context, callbacks)
@@ -327,7 +328,7 @@ describe('buildCellRendererProps', () => {
 
   it('sets value and onValueChange for variable cells', () => {
     const cell = makeCell({ type: 'variable', name: 'my_var' })
-    const onValueChange = jest.fn()
+    const onValueChange = vi.fn()
     const context = makeContext({
       allVariableValues: { my_var: 'selected_val' },
     })
@@ -342,7 +343,7 @@ describe('buildCellRendererProps', () => {
   it('sets value to undefined when variable has no value in map', () => {
     const cell = makeCell({ type: 'variable', name: 'missing_var' })
     const context = makeContext({ allVariableValues: {} })
-    const callbacks = makeCallbacks({ onValueChange: jest.fn() })
+    const callbacks = makeCallbacks({ onValueChange: vi.fn() })
 
     const result = buildCellRendererProps(cell, makeState(), context, callbacks)
 
