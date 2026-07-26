@@ -92,6 +92,9 @@ This is a mechanical rename plus a version bump — no architectural change:
    anticipate).
 6. Confirm Dependabot alert #388 closes once the bump is merged (Dependabot detects the
    `yarn.lock` change automatically; no manual action beyond merging).
+7. Add a `CHANGELOG.md` entry under **Unreleased** / **Security** noting the `react-router` bump
+   to `^8.3.0` and the resolved Dependabot alert #388, matching the format of the prior
+   `react-router-dom` 7.18.0 entry (`CHANGELOG.md:21`) and the 6.30.4 CVE entry (`CHANGELOG.md:173`).
 
 ## Files to Modify
 
@@ -99,6 +102,7 @@ This is a mechanical rename plus a version bump — no architectural change:
 - `analytics-web-app/yarn.lock`
 - The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
   string updated.
+- `CHANGELOG.md` (Security entry for the alert #388 fix, per prior react-router bump precedent).
 
 ## Trade-offs
 
@@ -122,8 +126,11 @@ outside of source imports.
 - `yarn build` — verify the production Vite build succeeds with the new package.
 - `yarn type-check` — verify TypeScript resolves types from `react-router` correctly.
 - `yarn lint` — verify no lint regressions from the import rename.
-- Manual smoke check not required beyond the above, since routing behavior (component API) is
-  unchanged between v7 and v8 per the issue.
+- Manual smoke navigation pass before merging, since `router.tsx`'s `<Routes>`/`<Route>`/`<Navigate>`
+  usage with `AuthGuard`, nested `:name` params, and a catch-all is real routing surface that
+  `test-setup.ts`'s mocked `useNavigate`/`useSearchParams` (etc.) don't exercise: verify the login
+  redirect via `AuthGuard`, a param route (e.g. `/screen/:name`), and the catch-all/404 all behave
+  correctly under `react-router@8`.
 
 ## Open Questions
 
