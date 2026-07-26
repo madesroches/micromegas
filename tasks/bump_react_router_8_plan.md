@@ -27,7 +27,10 @@ accordingly.
   same bump: the frontend-builder stages in `docker/analytics-web.Dockerfile`,
   `docker/monolith.Dockerfile`, and `docker/all-in-one.Dockerfile` (each `FROM
   node:20-alpine`), and `docker/github-runner.Dockerfile`'s nodesource `setup_20.x` install (used
-  for CI runner builds, not `.nvmrc`-driven). This change bumps `.nvmrc` to the floating major `22`
+  for CI runner builds, not `.nvmrc`-driven). `docker/github-runner.Dockerfile` also gained an nvm
+  install pre-provisioning both Node 20 and 22 for the runner user, since the same runner image
+  builds the Grafana plugin, which still pins Node 20 in its own `.nvmrc` — the system Node moving
+  to 22 would otherwise break that build. This change bumps `.nvmrc` to the floating major `22`
   (satisfying the `>=22.22.0` floor) and bumps all four of those Node 20 pins to Node 22, rather
   than trying to keep Node 20 working against a dependency that declares it unsupported.
 - 29 files import from `react-router-dom` (components, hooks, routes, and their tests):
@@ -118,7 +121,8 @@ This is a mechanical rename plus a version bump — no architectural change:
 - `analytics-web-app/.nvmrc` (Node 20 → 22 LTS, per Implementation Step 3).
 - `docker/analytics-web.Dockerfile`, `docker/monolith.Dockerfile`, `docker/all-in-one.Dockerfile`
   (frontend-builder stage: `node:20-alpine` → `node:22-alpine`), and
-  `docker/github-runner.Dockerfile` (`setup_20.x` → `setup_22.x`) — the other places pinning Node
+  `docker/github-runner.Dockerfile` (`setup_20.x` → `setup_22.x`, plus a new nvm install
+  pre-provisioning Node 20 and 22 for the shared runner) — the other places pinning Node
   20 for `analytics-web-app` builds, per Current State.
 - The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
   string updated.
