@@ -17,6 +17,14 @@ accordingly.
   requirement (`react >= 19.2.7` — note: current React pin is `^19.2.0`; if `react-router@8.3.0`
   hard-requires `>=19.2.7` at install time, yarn will need `react`/`react-dom` bumped to at least
   `19.2.7` as part of this change, still within the `^19.2.0` range).
+- `react-router@8.3.0` declares an `engines.node` floor of `>=22.22.0` (`npm view
+  react-router@8.3.0 engines`). `analytics-web-app/.nvmrc` currently pins Node `20`, and both
+  `.github/workflows/analytics-web-app.yml` (`node-version-file: 'analytics-web-app/.nvmrc'`) and
+  `build/analytics_web_ci.py` (`setup_nvm_and_node`, which installs/uses the exact `.nvmrc`
+  version before every check) build and test against that pinned Node 20 — two majors below the
+  new floor. Yarn Berry does not hard-enforce package `engines` by default, so this likely won't
+  fail `yarn install`, but it needs to be verified against `yarn build`/`yarn test`/`yarn
+  type-check` rather than assumed to work.
 - 29 files import from `react-router-dom` (components, hooks, routes, and their tests):
   `src/components/AppLink.tsx`, `src/components/AuthGuard.tsx`, `src/components/ErrorBoundary.tsx`,
   `src/components/layout/PivotButton.tsx`, `src/components/layout/Sidebar.tsx`,
@@ -70,14 +78,22 @@ This is a mechanical rename plus a version bump — no architectural change:
    dependency conflict on `react`/`react-dom` (react-router 8 wants `>=19.2.7`), bump
    `react`/`react-dom` to `^19.2.7` in the same commit — still within `analytics-web-app`'s
    existing major version.
-3. Rename every `'react-router-dom'` import specifier to `'react-router'` across the 29 files in
+3. Verify Node 20 (the version pinned by `analytics-web-app/.nvmrc` and used by both
+   `.github/workflows/analytics-web-app.yml` and `build/analytics_web_ci.py`) is actually
+   sufficient to run `yarn build`, `yarn test`, and `yarn type-check` with `react-router@8.3.0`
+   installed, despite its declared `engines.node >=22.22.0` floor. If any of those commands fail
+   under Node 20, bump `analytics-web-app/.nvmrc` to a version `>=22.22.0`, after confirming that
+   version is available both to the GitHub Actions runner (via `node-version-file`, which reads
+   `.nvmrc` and installs the matching version automatically) and to local dev machines (via
+   `nvm install` under `build/analytics_web_ci.py`'s `setup_nvm_and_node`).
+4. Rename every `'react-router-dom'` import specifier to `'react-router'` across the 29 files in
    **Current State** above. A project-wide search-and-replace of the exact string
    `'react-router-dom'` → `'react-router'` (single-quoted, to avoid touching unrelated substrings)
    covers both plain imports and the `vi.mock`/`importOriginal` call sites.
-4. Run `yarn build`, `yarn type-check`, `yarn lint`, and `yarn test` in `analytics-web-app/` and
+5. Run `yarn build`, `yarn type-check`, `yarn lint`, and `yarn test` in `analytics-web-app/` and
    fix anything that surfaces (e.g. any behavioral differences between v7 and v8 the issue didn't
    anticipate).
-5. Confirm Dependabot alert #388 closes once the bump is merged (Dependabot detects the
+6. Confirm Dependabot alert #388 closes once the bump is merged (Dependabot detects the
    `yarn.lock` change automatically; no manual action beyond merging).
 
 ## Files to Modify
