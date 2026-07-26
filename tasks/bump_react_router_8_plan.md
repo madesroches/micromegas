@@ -23,9 +23,13 @@ accordingly.
   `.github/workflows/analytics-web-app.yml` (`node-version-file: 'analytics-web-app/.nvmrc'`) and
   `build/analytics_web_ci.py` (`setup_nvm_and_node`, which installs/uses the exact `.nvmrc`
   version before every check) build and test against that pinned Node 20 — two majors below the
-  new floor. Both read `.nvmrc` directly with no other place pinning Node 20, so this change bumps
-  `.nvmrc` to a Node 22 LTS release (`>=22.22.0`) rather than trying to keep Node 20 working
-  against a dependency that declares it unsupported.
+  new floor. Four other places also pinned Node 20 for building `analytics-web-app` and needed the
+  same bump: the frontend-builder stages in `docker/analytics-web.Dockerfile`,
+  `docker/monolith.Dockerfile`, and `docker/all-in-one.Dockerfile` (each `FROM
+  node:20-alpine`), and `docker/github-runner.Dockerfile`'s nodesource `setup_20.x` install (used
+  for CI runner builds, not `.nvmrc`-driven). This change bumps `.nvmrc` to a Node 22 LTS release
+  (`>=22.22.0`) and bumps all four of those Node 20 pins to Node 22, rather than trying to keep
+  Node 20 working against a dependency that declares it unsupported.
 - 29 files import from `react-router-dom` (components, hooks, routes, and their tests):
   `src/components/AppLink.tsx`, `src/components/AuthGuard.tsx`, `src/components/ErrorBoundary.tsx`,
   `src/components/layout/PivotButton.tsx`, `src/components/layout/Sidebar.tsx`,
@@ -112,6 +116,10 @@ This is a mechanical rename plus a version bump — no architectural change:
 - `analytics-web-app/package.json`
 - `analytics-web-app/yarn.lock`
 - `analytics-web-app/.nvmrc` (Node 20 → 22 LTS, per Implementation Step 3).
+- `docker/analytics-web.Dockerfile`, `docker/monolith.Dockerfile`, `docker/all-in-one.Dockerfile`
+  (frontend-builder stage: `node:20-alpine` → `node:22-alpine`), and
+  `docker/github-runner.Dockerfile` (`setup_20.x` → `setup_22.x`) — the other places pinning Node
+  20 for `analytics-web-app` builds, per Current State.
 - The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
   string updated.
 - `analytics-web-app/README.md` (Prerequisites section, per Documentation below).
