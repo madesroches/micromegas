@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+For an architecture overview (core crates, services, data flow), see `.github/copilot-instructions.md`.
+
 ## Critical Rules
 - **NEVER push without a direct, unambiguous instruction** — this includes `git push`, `git push --force`, and creating PRs. Local commits are fine; publishing them is not.
 - **NEVER commit directly to `main`** — always work on a branch.
@@ -66,3 +68,7 @@ Logo and color scheme assets are in the `branding/` folder:
 - **Brand sheet**: `micromegas-brand-sheet.svg` (full reference with color palette)
 - **Logos**: horizontal, vertical, icon variants for dark/light backgrounds
 - **Colors**: Rust orange (#bf360c), Blue (#1565c0), Wheat (#ffb300), Dark bg (#0a0a0f)
+
+## Other
+
+- Unreal Engine integration is available in the `unreal/` directory.
