@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType, Field } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'

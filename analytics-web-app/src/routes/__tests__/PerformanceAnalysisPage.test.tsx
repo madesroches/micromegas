@@ -12,7 +12,7 @@
  * is the page's orchestration, not pixel output.
  */
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { MemoryRouter, useLocation, useSearchParams } from 'react-router-dom'
+import { MemoryRouter, useLocation, useSearchParams } from 'react-router'
 import type { Mock } from 'vitest'
 import PerformanceAnalysisPage from '../PerformanceAnalysisPage'
 

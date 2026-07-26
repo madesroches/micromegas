@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
 import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'

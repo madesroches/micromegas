@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import type { DataType } from 'apache-arrow'
 import { Table, Timestamp, TimeUnit, vectorFromArray } from 'apache-arrow'
 import { EventDetailPanel } from '../EventDetailPanel'

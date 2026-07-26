@@ -40,11 +40,11 @@ vi.mock('@/lib/config', () => ({
   appLink: (path: string) => path,
 }))
 
-// Default mock for react-router-dom (can be overridden in individual tests)
+// Default mock for react-router (can be overridden in individual tests)
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }))
 
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>()
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>()
   return {
     ...actual,
     useNavigate: vi.fn(() => mockNavigate),

@@ -4,9 +4,9 @@ Web application for exploring and analyzing micromegas telemetry data.
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - Rust 1.70+
-- Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)
+- Yarn 4 (Berry) — installed via `corepack enable` (Node 22 ships with corepack)
 - Running micromegas services (PostgreSQL, ingestion, flight-sql)
 
 For Local Query screens (optional):

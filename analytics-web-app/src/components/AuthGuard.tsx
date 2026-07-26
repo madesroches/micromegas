@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
 import { navigateTo, reloadPage } from '@/lib/navigation'

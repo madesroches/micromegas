@@ -1,4 +1,4 @@
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { AppLink } from '@/components/AppLink'
 import { useAuth } from '@/lib/auth'
 import { LayoutGrid, Layers, Wrench } from 'lucide-react'

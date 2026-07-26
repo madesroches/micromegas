@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { AppLink } from '@/components/AppLink'
 import { SplitButton } from '@/components/ui/SplitButton'
 import { AlertCircle, Download, ExternalLink } from 'lucide-react'

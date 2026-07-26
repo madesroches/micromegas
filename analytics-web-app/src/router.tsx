@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router'
 
 // Lazy load route components for code splitting
 const LoginPage = lazy(() => import('@/routes/LoginPage'))
