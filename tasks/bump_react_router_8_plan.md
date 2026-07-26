@@ -1,0 +1,118 @@
+# Bump react-router to 8.x in analytics-web-app Plan
+
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1347
+
+## Overview
+
+`analytics-web-app` depends on `react-router-dom@^7.18.0`, which is covered by Dependabot
+alert #388 (`GHSA-qwww-vcr4-c8h2`, "RSC Mode CSRF Bypass", high severity, vulnerable range
+`>= 7.12.0, < 8.3.0`). The fix is to move to `react-router@^8.3.0` (the package was renamed
+from `react-router-dom` to `react-router` starting with v8) and update all imports and mocks
+accordingly.
+
+## Current State
+
+- `analytics-web-app/package.json:41` depends on `"react-router-dom": "^7.18.0"`.
+- The app already runs React 19 (`react@^19.2.0`), which satisfies react-router 8's peer
+  requirement (`react >= 19.2.7` — note: current React pin is `^19.2.0`; if `react-router@8.3.0`
+  hard-requires `>=19.2.7` at install time, yarn will need `react`/`react-dom` bumped to at least
+  `19.2.7` as part of this change, still within the `^19.2.0` range).
+- 29 files import from `react-router-dom` (components, hooks, routes, and their tests):
+  `src/components/AppLink.tsx`, `src/components/AuthGuard.tsx`, `src/components/ErrorBoundary.tsx`,
+  `src/components/layout/PivotButton.tsx`, `src/components/layout/Sidebar.tsx`,
+  `src/components/map/__tests__/EventDetailPanel.test.tsx`,
+  `src/components/map/__tests__/MapHoverTooltip.test.tsx`,
+  `src/hooks/__tests__/useScreenConfig.test.tsx`, `src/hooks/useScreenConfig.ts`,
+  `src/lib/screen-renderers/LogRenderer.tsx`, `src/lib/screen-renderers/MetricsRenderer.tsx`,
+  `src/lib/screen-renderers/NotebookRenderer.tsx`, `src/lib/screen-renderers/ProcessListRenderer.tsx`,
+  `src/lib/screen-renderers/TableRenderer.tsx`,
+  `src/lib/screen-renderers/__tests__/useNotebookVariables.test.tsx`,
+  `src/lib/screen-renderers/useNotebookVariables.ts`, `src/lib/url-cleanup-utils.ts`,
+  `src/main.tsx`, `src/router.tsx`, `src/routes/LoginPage.tsx`,
+  `src/routes/PerformanceAnalysisPage.tsx`, `src/routes/ProcessLogPage.tsx`,
+  `src/routes/ProcessMetricsPage.tsx`, `src/routes/ScreenPage.tsx`, `src/routes/ScreensPage.tsx`,
+  `src/routes/__tests__/MapsPage.test.tsx`, `src/routes/__tests__/PerformanceAnalysisPage.test.tsx`,
+  `src/routes/__tests__/ScreenPage.urlState.test.tsx`, `src/test-setup.ts`.
+- 4 files call `vi.mock('react-router-dom', ...)`: `src/test-setup.ts:46`,
+  `src/routes/__tests__/ScreenPage.urlState.test.tsx:20`,
+  `src/hooks/__tests__/useScreenConfig.test.tsx:10`,
+  `src/lib/screen-renderers/__tests__/useNotebookVariables.test.tsx:31`. Each also has a matching
+  `importOriginal<typeof import('react-router-dom')>()` type reference to update.
+- The issue's original obstacle — Jest's CJS pipeline choking on `react-router@8`'s pure-ESM
+  `import.meta.hot` usage — no longer applies: `analytics-web-app` migrated from Jest to Vitest in
+  #1349 (already merged to `main`). There is no `jest.config.js` in the project anymore, and
+  Vitest handles ESM-only packages natively, so **no test-runner config changes are needed** for
+  this bump (no `transformIgnorePatterns`, no `babel-plugin-transform-import-meta`). This
+  significantly narrows the fix versus what the issue originally scoped.
+- The separate root `yarn.lock` react-router alert (#395) has an unrelated cause and is out of
+  scope here.
+
+## Design
+
+This is a mechanical rename plus a version bump — no architectural change:
+
+1. **`package.json`**: replace the `react-router-dom` dependency entry with
+   `"react-router": "^8.3.0"`.
+2. **Import rename**: change `from 'react-router-dom'` to `from 'react-router'` in all 29 files
+   listed above. The named exports used (`BrowserRouter`, `Routes`, `Route`, `Navigate`,
+   `MemoryRouter`, `useNavigate`, `useSearchParams`, `Link`, etc.) are unchanged between
+   `react-router-dom@7` and `react-router@8` — only the package name changed, per the issue.
+3. **Mock rename**: change the 4 `vi.mock('react-router-dom', ...)` calls to
+   `vi.mock('react-router', ...)`, and their paired `importOriginal<typeof import('react-router-dom')>()`
+   generic to `import('react-router')`.
+4. **Lockfile**: run `yarn install` to regenerate `yarn.lock` with the new dependency resolved.
+
+## Implementation Steps
+
+1. In `analytics-web-app/package.json`, replace the `react-router-dom` line with
+   `"react-router": "^8.3.0"`.
+2. Run `yarn install` from `analytics-web-app/` to update `yarn.lock`. If yarn reports a peer
+   dependency conflict on `react`/`react-dom` (react-router 8 wants `>=19.2.7`), bump
+   `react`/`react-dom` to `^19.2.7` in the same commit — still within `analytics-web-app`'s
+   existing major version.
+3. Rename every `'react-router-dom'` import specifier to `'react-router'` across the 29 files in
+   **Current State** above. A project-wide search-and-replace of the exact string
+   `'react-router-dom'` → `'react-router'` (single-quoted, to avoid touching unrelated substrings)
+   covers both plain imports and the `vi.mock`/`importOriginal` call sites.
+4. Run `yarn build`, `yarn type-check`, `yarn lint`, and `yarn test` in `analytics-web-app/` and
+   fix anything that surfaces (e.g. any behavioral differences between v7 and v8 the issue didn't
+   anticipate).
+5. Confirm Dependabot alert #388 closes once the bump is merged (Dependabot detects the
+   `yarn.lock` change automatically; no manual action beyond merging).
+
+## Files to Modify
+
+- `analytics-web-app/package.json`
+- `analytics-web-app/yarn.lock`
+- The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
+  string updated.
+
+## Trade-offs
+
+- Considered keeping `react-router-dom` pinned below 8 and waiting for #1345/#1349 (Vitest
+  migration) to land first, per the issue's own suggested sequencing — but that migration is
+  already merged (#1349), so the sequencing concern is moot and this bump can proceed directly
+  with no test-runner workaround needed.
+- Considered a broader `sed`-style rename vs. per-file edits — a single global replace of the
+  quoted string `'react-router-dom'` is safe here because grep confirms no other package or path
+  contains that exact substring in this repo's `analytics-web-app` source tree.
+
+## Documentation
+
+None — no user-facing or developer-facing docs reference the `react-router-dom` package name
+outside of source imports.
+
+## Testing Strategy
+
+- `yarn test` (Vitest) — all suites should pass unchanged; the mock rename is the only test-file
+  edit required.
+- `yarn build` — verify the production Vite build succeeds with the new package.
+- `yarn type-check` — verify TypeScript resolves types from `react-router` correctly.
+- `yarn lint` — verify no lint regressions from the import rename.
+- Manual smoke check not required beyond the above, since routing behavior (component API) is
+  unchanged between v7 and v8 per the issue.
+
+## Open Questions
+
+- None — the issue fully scopes the change, and the Jest-specific complexity it anticipated is
+  already obsolete following the Vitest migration.
