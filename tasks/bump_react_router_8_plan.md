@@ -100,8 +100,10 @@ This is a mechanical rename plus a version bump — no architectural change:
 
 - `analytics-web-app/package.json`
 - `analytics-web-app/yarn.lock`
+- `analytics-web-app/.nvmrc` (Node 20 → 22 LTS, per Implementation Step 3).
 - The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
   string updated.
+- `analytics-web-app/README.md` (Prerequisites section, per Documentation below).
 - `CHANGELOG.md` (Security entry for the alert #388 fix, per prior react-router bump precedent).
 
 ## Trade-offs
@@ -116,8 +118,11 @@ This is a mechanical rename plus a version bump — no architectural change:
 
 ## Documentation
 
-None — no user-facing or developer-facing docs reference the `react-router-dom` package name
-outside of source imports.
+No docs reference the `react-router-dom` package name itself, but `analytics-web-app/README.md`'s
+Prerequisites section (lines 7 and 9) states "Node.js 20+" and "Yarn 4 (Berry) — installed via
+`corepack enable` (Node 20 ships with corepack)". Once `.nvmrc` is bumped to Node 22 (Implementation
+Step 3), these lines go stale and need updating to "Node.js 22+" and the corepack parenthetical
+adjusted to reference Node 22.
 
 ## Testing Strategy
 
