@@ -14,9 +14,10 @@ accordingly.
 
 - `analytics-web-app/package.json:41` depends on `"react-router-dom": "^7.18.0"`.
 - The app already runs React 19 (`react@^19.2.0`), which satisfies react-router 8's peer
-  requirement (`react >= 19.2.7` — note: current React pin is `^19.2.0`; if `react-router@8.3.0`
-  hard-requires `>=19.2.7` at install time, yarn will need `react`/`react-dom` bumped to at least
-  `19.2.7` as part of this change, still within the `^19.2.0` range).
+  requirement (`react >= 19.2.7`). The current `yarn.lock` already resolves `react`/`react-dom` to
+  `19.2.8` — above the `19.2.7` floor — so no `package.json` version bump is expected to be
+  needed; Implementation Step 2's conditional bump is a safety net in case a fresh resolution
+  picks a lower `19.2.x` patch, not an anticipated action.
 - `react-router@8.3.0` declares an `engines.node` floor of `>=22.22.0` (`npm view
   react-router@8.3.0 engines`). `analytics-web-app/.nvmrc` currently pins Node `20`, and both
   `.github/workflows/analytics-web-app.yml` (`node-version-file: 'analytics-web-app/.nvmrc'`) and
@@ -52,8 +53,14 @@ accordingly.
   Vitest handles ESM-only packages natively, so **no test-runner config changes are needed** for
   this bump (no `transformIgnorePatterns`, no `babel-plugin-transform-import-meta`). This
   significantly narrows the fix versus what the issue originally scoped.
-- The separate root `yarn.lock` react-router alert (#395) has an unrelated cause and is out of
-  scope here.
+- The root `yarn.lock` react-router alert (#395) is the *same* advisory as #388
+  (`GHSA-qwww-vcr4-c8h2`, vulnerable range `>= 7.12.0, < 8.3.0`, confirmed via `gh api
+  repos/madesroches/micromegas/dependabot/alerts/395`), not an unrelated one. It flags the root
+  workspace's `resolutions.react-router: "^7.18.0"` (`package.json:39`, resolving to 7.18.1) — a
+  pin added for `@grafana/ui`'s legacy v5 routing compat shim (`CHANGELOG.md:21`), unconnected to
+  `analytics-web-app`. It's out of scope for issue #1347 (scoped to `analytics-web-app`), but needs
+  its own follow-up fix — bumping that root resolution to `^8.3.0` and confirming `@grafana/ui`'s
+  compat shim still resolves — tracked separately from this change.
 
 ## Design
 
@@ -64,7 +71,10 @@ This is a mechanical rename plus a version bump — no architectural change:
 2. **Import rename**: change `from 'react-router-dom'` to `from 'react-router'` in all 29 files
    listed above. The named exports used (`BrowserRouter`, `Routes`, `Route`, `Navigate`,
    `MemoryRouter`, `useNavigate`, `useSearchParams`, `Link`, etc.) are unchanged between
-   `react-router-dom@7` and `react-router@8` — only the package name changed, per the issue.
+   `react-router-dom@7` and `react-router@8`. Note: v8 does carve `RouterProvider` and
+   `HydratedRouter` out into a separate `react-router/dom` subpath, but a repo-wide grep confirms
+   this app uses neither (it's declarative `BrowserRouter`/`Routes`/`Route`, not a data router), so
+   the blanket rename to `react-router` covers every import used here.
 3. **Mock rename**: change the 4 `vi.mock('react-router-dom', ...)` calls to
    `vi.mock('react-router', ...)`, and their paired `importOriginal<typeof import('react-router-dom')>()`
    generic to `import('react-router')`.
@@ -92,9 +102,10 @@ This is a mechanical rename plus a version bump — no architectural change:
    anticipate).
 6. Confirm Dependabot alert #388 closes once the bump is merged (Dependabot detects the
    `yarn.lock` change automatically; no manual action beyond merging).
-7. Add a `CHANGELOG.md` entry under **Unreleased** / **Security** noting the `react-router` bump
-   to `^8.3.0` and the resolved Dependabot alert #388, matching the format of the prior
-   `react-router-dom` 7.18.0 entry (`CHANGELOG.md:21`) and the 6.30.4 CVE entry (`CHANGELOG.md:173`).
+7. Add a `CHANGELOG.md` entry under **Unreleased** / **Build** (the Unreleased section has no
+   Security subsection; the prior `react-router-dom` 7.18.0 entry at `CHANGELOG.md:21` — the
+   closer, same-file precedent — is itself filed under **Build**), noting the `react-router` bump
+   to `^8.3.0` and the resolved Dependabot alert #388.
 
 ## Files to Modify
 
@@ -104,7 +115,9 @@ This is a mechanical rename plus a version bump — no architectural change:
 - The 29 files listed in **Current State** (import rename), 4 of which also need the `vi.mock`
   string updated.
 - `analytics-web-app/README.md` (Prerequisites section, per Documentation below).
-- `CHANGELOG.md` (Security entry for the alert #388 fix, per prior react-router bump precedent).
+- `doc/GETTING_STARTED.md` (Prerequisites section, per Documentation below).
+- `CHANGELOG.md` (Build entry for the alert #388 fix, per prior react-router bump precedent — see
+  Implementation Step 7).
 
 ## Trade-offs
 
@@ -118,11 +131,15 @@ This is a mechanical rename plus a version bump — no architectural change:
 
 ## Documentation
 
-No docs reference the `react-router-dom` package name itself, but `analytics-web-app/README.md`'s
-Prerequisites section (lines 7 and 9) states "Node.js 20+" and "Yarn 4 (Berry) — installed via
-`corepack enable` (Node 20 ships with corepack)". Once `.nvmrc` is bumped to Node 22 (Implementation
-Step 3), these lines go stale and need updating to "Node.js 22+" and the corepack parenthetical
-adjusted to reference Node 22.
+No docs reference the `react-router-dom` package name itself, but two docs state Node version
+requirements that go stale once `.nvmrc` is bumped to Node 22 (Implementation Step 3):
+- `analytics-web-app/README.md`'s Prerequisites section (lines 7 and 9) states "Node.js 20+" and
+  "Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)"; update to
+  "Node.js 22+" and adjust the corepack parenthetical to reference Node 22.
+- `doc/GETTING_STARTED.md`'s Prerequisites section (lines 13 and 14) states "Node.js 18+" and
+  "Yarn 4 (Berry) — installed via `corepack enable` (Node 20 ships with corepack)"; this guide
+  covers setting up `analytics-web-app` for frontend development (see its "Full Local Stack" /
+  "Hybrid Setup" steps, `cd analytics-web-app` at line 138), so update both lines the same way.
 
 ## Testing Strategy
 
