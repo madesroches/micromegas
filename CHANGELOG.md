@@ -41,6 +41,7 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Docs:**
   * Fix `schema-reference.md`/`functions-reference.md`/`how_to_query` docs to match the `Int16`->`Int32` dictionary widening above, and correct stale `processes`/`streams` string-column types (Utf8, not `Int16` dictionaries) and a missing `images` table `Int32` list entry (#1341)
   * Rewrite the "Getting Started" page as a Docker-based quickstart (clone-free `curl` + in-repo compose options, self-contained monolith compose file with inline DB init, web app, optional Python sample query, stop/cleanup, troubleshooting); relocate the developer/build setup to the Build Guide and repoint entry-point links; note the Compose v2.23.1+ prerequisite where the shared compose file is invoked (#1273)
+  * Split the root `CLAUDE.md` into per-subproject files (`rust/`, `python/`, `analytics-web-app/`, `grafana/`, `mkdocs/`) so subproject-specific guidance only loads when that subproject is touched, trim the root file to cross-cutting rules, and delete the now-fully-absorbed `AI_GUIDELINES.md`
 * **Config:**
   * Consolidate ad-hoc `MICROMEGAS_*` env-var reads into typed config structs (`DataLakeConfig`, `WebServerConfig`, `CommonServerArgs`, `GatewayConfig`) and shared helpers (`parse_object_store_url`), replacing ~15 scattered `std::env::var` call sites; flatten `CommonServerArgs` into the service binaries and add an env-backed `--flightsql-url` flag to `http-gateway` to fail fast instead of reading the env per request (#1248)
 * **Observability:**
