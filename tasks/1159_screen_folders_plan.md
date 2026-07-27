@@ -33,6 +33,9 @@ The issue explicitly calls for *creating* folders (not just implying them from s
 
 - New `folders` table: `path VARCHAR(1024) PRIMARY KEY, created_by VARCHAR(255), created_at TIMESTAMPTZ DEFAULT NOW()`.
 - A folder "exists" if it has a row in `folders` **or** appears as a prefix of some `screens.folder_path` (covers folders that were never explicitly created but contain screens — e.g. from a future bulk import). `GET /folders` computes the union.
+- Before running the rename transaction, validate the request and reject rather than let the SQL corrupt data or surface a raw DB error:
+  - If `new_path == old_path` or `new_path` starts with `old_path || '/'` (renaming/moving a folder into its own subtree), reject with `400`/`409`. Otherwise statement 2 below (`WHERE path LIKE $old || '/%'`) re-matches the row statement 1 just rewrote, double-processing it and garbling the path — e.g. moving `team` to `team/archive/team` when `team/archive` is itself a child of `team`.
+  - If `new_path` already exists — either as an explicit `folders` row, or implicitly as a prefix of an existing `screens.folder_path` — return `409 CONFLICT`, matching the delete endpoint's convention below. Otherwise a colliding explicit folder row would surface as a raw PRIMARY KEY violation instead of a clean `409`, and a colliding implicit prefix would silently merge two subtrees with no defined semantics.
 - Renaming/moving a folder is a prefix rewrite in one transaction (materialized-path pattern, same idea the issue itself proposed for screens — just applied where it belongs, to folders):
   1. `UPDATE folders SET path = $new WHERE path = $old`
   2. `UPDATE folders SET path = $new || substring(path from length($old)+2) WHERE path LIKE $old || '/%'`
@@ -58,7 +61,7 @@ New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON
 ### Frontend changes
 
 - `screens-api.ts`: add `folder_path` to `Screen`/`CreateScreenRequest`; add `folder_path` to `UpdateScreenRequest`; add a small `folders-api.ts` (or extend this file) for the four folder endpoints.
-- `ScreensPage.tsx`: replace the flat grid with a folder-aware view — sidebar tree + breadcrumb + grid of subfolders/screens for the current folder, plus the existing flat "all screens" view for search results. Visual layout follows `alt-a-sidebar-tree.html`'s structure (sidebar tree, breadcrumbs, drag-to-move onto a folder row/card, kebab-menu "Move to folder" modal) — but every operation is keyed by `name` exactly as it is today; a "move" is `updateScreen(name, { folder_path })`, never a lookup-by-path-then-rename.
+- `ScreensPage.tsx`: replace the flat grid with a folder-aware view — sidebar tree + breadcrumb + grid of subfolders/screens for the current folder, plus the existing flat "all screens" view for search results. Visual layout follows `alt-a-sidebar-tree.html`'s structure (sidebar tree, breadcrumbs, drag-to-move onto a folder row/card, kebab-menu "Move to folder" modal) — but every operation is keyed by `name` exactly as it is today; a "move" is `updateScreen(name, { folder_path })`, never a lookup-by-path-then-rename. The current folder is reflected in and driven by a `?folder=<path>` URL query param via `useSearchParams`, following the same convention already used by `ScreenPage.tsx`, `PerformanceAnalysisPage.tsx`, `ProcessMetricsPage.tsx`, `ProcessLogPage.tsx`, and `NotebookRenderer.tsx` — so folder views are bookmarkable/shareable and browser back/forward traverse folder navigation.
 - `SaveScreenDialog.tsx`: add a destination-folder field (defaults to the current screen's folder for "Save As", or root for new screens), matching the mockup's "Save Screen" modal (location chip + "Change" → folder picker). `createScreen` request includes `folder_path`.
 - New shared components: `FolderTree` (sidebar), `FolderBreadcrumb`, `FolderPickerModal` — the picker backs both the kebab "Move" action and the Save dialog's "Change" location button, so there's one implementation of "pick a destination folder."
 - Search: unchanged approach (client-side filter over the flat list from `GET /screens`), extended to match `folder_path` too, with matched folders auto-expanded in the tree — same idea as the mockup's `matchesQuery`/`computeMatchedFolders`, reimplemented against the real `Screen` type.
@@ -103,14 +106,10 @@ No backfill logic needed beyond the column default — existing screens land in 
 
 ## Trade-offs
 
-- **No surrogate `id`.** The issue's flaw was proposing `(path, name)` as a composite key, not the choice of `name` as the key itself — `name` was already decoupled from folder location before this change. Adding a surrogate id would be solving a problem that doesn't exist here (YAGNI), at the cost of a breaking change to `GET/PUT/DELETE /screens/:name` and the `/screen/:name` route. If a future need arises to actually *rename* a screen without breaking bookmarks, that's a separate, well-scoped follow-up (see Open Questions).
+- **No surrogate `id`.** The issue's flaw was proposing `(path, name)` as a composite key, not the choice of `name` as the key itself — `name` was already decoupled from folder location before this change. Adding a surrogate id would be solving a problem that doesn't exist here (YAGNI), at the cost of a breaking change to `GET/PUT/DELETE /screens/:name` and the `/screen/:name` route. If a future need arises to actually *rename* a screen without breaking bookmarks, that's a separate, well-scoped follow-up (e.g. a surrogate id plus redirect-on-rename), not something to design here.
 - **Materialized path (string column) over closure table / adjacency list for folders.** Matches the issue's own suggestion ("path-style column is simplest") and avoids a second structure to keep in sync. The cost is `LIKE`-based prefix rewrites on rename, which is fine at the expected scale (per-org screen counts, not millions of rows).
 - **Explicit `folders` table instead of purely-derived folders.** Costs one more table and one more migration step, but is required to support creating/keeping an empty folder — a feature the issue and mockups both call for.
 - **`config` becomes optional on update.** Small API shape change to the existing `PUT /screens/:name`, justified by avoiding "resend the whole config to move a screen" payloads. Backward compatible — existing callers that always send `config` are unaffected.
-
-## Open Questions
-
-- **Renaming a screen without breaking bookmarks.** Out of scope for this change — `name` remains the identity and this plan doesn't touch it. If a future need arises to let users rename a screen in place (rather than delete+recreate) without invalidating existing `/screen/:name` links, that's a separate, well-scoped follow-up (e.g. a surrogate id plus redirect-on-rename), not something to design here.
 
 ## Testing Strategy
 
