@@ -12,7 +12,7 @@ Two interactive mockups exist at `tasks/1159_folders_mockups/` (`alt-a-sidebar-t
 
 - `screens` table: `name VARCHAR(255) PRIMARY KEY`, `screen_type`, `config JSONB`, audit columns, `managed_by`. No folder/parent field. (`rust/analytics-web-srv/src/app_db/schema.rs:16-34`)
 - `Screen` model mirrors the table 1:1 (`rust/analytics-web-srv/src/app_db/models.rs:8-19`).
-- `name` is already the sole identity today: it's the primary key, the path param for `GET/PUT/DELETE /screens/:name` (`rust/analytics-web-srv/src/screens.rs:133-263`), and the frontend route `/screen/:name` (`analytics-web-app/src/router.tsx:44`). There is no rename endpoint — the only "rename" path is delete+recreate during import conflict resolution (`analytics-web-app/src/lib/screens-api.ts:271-279`).
+- `name` is already the sole identity today: it's the primary key, the path param for `GET/PUT/DELETE /screens/:name` (`rust/analytics-web-srv/src/screens.rs:133-263`), and the frontend route `/screen/:name` (`analytics-web-app/src/router.tsx:44`). There is no rename endpoint. Import conflict resolution in `analytics-web-app/src/lib/screens-api.ts` has three `createScreen` call sites: the non-conflict path (~249-253), the `overwrite` path which does delete+recreate (261-269), and the `rename` path which creates under a suffixed name via `generateUniqueName` (271-279) — none of these actually rename an existing screen in place.
 - `GET /screens` returns the full flat list, consumed by a flat grid sorted by name (`analytics-web-app/src/routes/ScreensPage.tsx:148-192`).
 - `SaveScreenDialog.tsx` only captures a name; no destination picker.
 - `name` uniqueness and format are enforced by `normalize_name`/`validate_name` (`rust/analytics-web-srv/src/app_db/models.rs:116-224`), shared between backend validation and the frontend's `normalizeScreenName` (`analytics-web-app/src/components/SaveScreenDialog.tsx:23-30`, kept in sync by hand today).
@@ -49,10 +49,10 @@ The issue explicitly calls for *creating* folders (not just implying them from s
 - `UpdateScreenRequest.config` becomes `Option<serde_json::Value>` and gains `folder_path: Option<String>`, both applied with `COALESCE` like `managed_by` already is. This lets a drag-and-drop move send just `{"folder_path": "team/x"}` without re-sending the whole JSONB config — the current endpoint requires `config` unconditionally, which would make every move payload carry the full screen config for no reason.
 - `create_screen`/`update_screen` validate `folder_path` segments the same way `name` is validated.
 
-New `folders.rs` module + routes (path passed as query param on `GET`/`DELETE`, JSON body on `POST`/`PATCH` — nested slashes in a URL path segment are exactly the kind of thing that breaks silently with naive routing, so the folder path never appears as an Axum path-extractor segment):
+New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON body on `POST`/`PUT`; `GET` takes no parameter and returns the full list — nested slashes in a URL path segment are exactly the kind of thing that breaks silently with naive routing, so the folder path never appears as an Axum path-extractor segment):
 - `GET /folders` → `Vec<FolderInfo>` (`path`, screen count, subfolder count) — union of explicit `folders` rows and implicit prefixes from `screens.folder_path`.
 - `POST /folders` `{path}` → create (idempotent — creating an already-existing path is a no-op, not an error, since two users concurrently opening "new folder" on the same path shouldn't be treated as a conflict).
-- `PATCH /folders` `{path, new_path}` → rename/move (the transaction above).
+- `PUT /folders` `{path, new_path}` → rename/move (the transaction above), matching the crate-wide convention of `.put(...)` for updates (`update_screen`, `update_data_source` in `web_server.rs` — there is no `.patch(...)` anywhere in `build_protected_routes`).
 - `DELETE /folders?path=...` → delete if empty, else `409`.
 
 ### Frontend changes
@@ -68,7 +68,7 @@ New `folders.rs` module + routes (path passed as query param on `GET`/`DELETE`, 
 App-db schema v3 → v4, following the existing pattern in `rust/analytics-web-srv/src/app_db/migration.rs`:
 1. `CREATE TABLE folders (...)`.
 2. `ALTER TABLE screens ADD COLUMN folder_path VARCHAR(1024) NOT NULL DEFAULT '';`
-3. `CREATE INDEX screens_folder_path ON screens(folder_path);` (prefix scans use `LIKE 'x%'`, which this index supports for anchored patterns).
+3. `CREATE INDEX screens_folder_path ON screens(folder_path varchar_pattern_ops);` (a plain B-tree index isn't usable for `LIKE 'x%'` prefix scans under a non-C locale, and `local_test_env/db/Dockerfile` is a bare `FROM postgres:16.1` with no locale override — `varchar_pattern_ops` makes the prefix scan usable regardless of locale).
 4. Bump `LATEST_APP_SCHEMA_VERSION` to 4.
 
 No backfill logic needed beyond the column default — existing screens land in the root folder (`''`), matching the issue's migration note (the "root default" half of it, not the "(path+name) uniqueness" half).
@@ -82,7 +82,7 @@ No backfill logic needed beyond the column default — existing screens land in 
 5. **Folder UI components**: `FolderTree`, `FolderBreadcrumb`, `FolderPickerModal`.
 6. **ScreensPage rewrite**: folder-aware browsing, drag-and-drop move, "New folder", search-with-matched-folders.
 7. **SaveScreenDialog**: destination-folder field wired to the shared picker.
-8. **Export/Import**: `ExportedScreen`/import flow should carry `folder_path` too (round-trip), so exporting and re-importing preserves organization. Conflict-resolution `rename` path (delete+recreate, `screens-api.ts:263-278`) needs no change since it's still keyed by `name`.
+8. **Export/Import**: `ExportedScreen` type gains `folder_path`, and all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
 
 ## Files to Modify
 
@@ -108,8 +108,12 @@ No backfill logic needed beyond the column default — existing screens land in 
 - **Explicit `folders` table instead of purely-derived folders.** Costs one more table and one more migration step, but is required to support creating/keeping an empty folder — a feature the issue and mockups both call for.
 - **`config` becomes optional on update.** Small API shape change to the existing `PUT /screens/:name`, justified by avoiding "resend the whole config to move a screen" payloads. Backward compatible — existing callers that always send `config` are unaffected.
 
+## Open Questions
+
+- **Renaming a screen without breaking bookmarks.** Out of scope for this change — `name` remains the identity and this plan doesn't touch it. If a future need arises to let users rename a screen in place (rather than delete+recreate) without invalidating existing `/screen/:name` links, that's a separate, well-scoped follow-up (e.g. a surrogate id plus redirect-on-rename), not something to design here.
+
 ## Testing Strategy
 
 - Backend: unit/integration tests for `folders.rs` (create idempotency, rename cascades to descendant folders and screens, delete blocked on non-empty), and for the extended `update_screen` (partial update with only `folder_path`, only `config`, or both).
-- Backend: migration test asserting v3→v4 is idempotent and existing screens default to root.
+- Backend: no fixture currently exists in this crate for testing migrations directly — `execute_migration` is never invoked by any existing test in `rust/analytics-web-srv/tests/*.rs`, which are all pure unit/validation tests with no real Postgres connection or pinned-schema-version fixture. A new DB-fixture/harness must be built to pin a test database at schema v3, then invoke `execute_migration` directly and assert v3→v4 is idempotent and existing screens default to root.
 - Frontend: extend `ScreensPage`/`SaveScreenDialog` tests for folder selection, move, and search-with-folder-match; a test asserting a folder move never sends a name-changing request.
