@@ -71,14 +71,15 @@ New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON
 App-db schema v3 → v4, following the existing pattern in `rust/analytics-web-srv/src/app_db/migration.rs`:
 1. `CREATE TABLE folders (...)`.
 2. `ALTER TABLE screens ADD COLUMN folder_path VARCHAR(1024) NOT NULL DEFAULT '';`
-3. `CREATE INDEX screens_folder_path ON screens(folder_path varchar_pattern_ops);` (a plain B-tree index isn't usable for `LIKE 'x%'` prefix scans under a non-C locale, and `local_test_env/db/Dockerfile` is a bare `FROM postgres:16.1` with no locale override — `varchar_pattern_ops` makes the prefix scan usable regardless of locale).
-4. Bump `LATEST_APP_SCHEMA_VERSION` to 4.
+3. Bump `LATEST_APP_SCHEMA_VERSION` to 4.
+
+No index on `screens.folder_path`: `GET /screens` already returns the full unfiltered list, and the only `LIKE`-based prefix scan (the rename transaction's descendant rewrite) runs at folder-rename time, not on a hot read path — at the expected per-org screen counts, a sequential scan there is fine. Same YAGNI call as not adding `?folder=...` filtering to `GET /screens` above.
 
 No backfill logic needed beyond the column default — existing screens land in the root folder (`''`), matching the issue's migration note (the "root default" half of it, not the "(path+name) uniqueness" half).
 
 ## Implementation Steps
 
-1. **Schema/migration**: `folders` table, `screens.folder_path` column + index, v3→v4 migration function. (`schema.rs`, `migration.rs`)
+1. **Schema/migration**: `folders` table, `screens.folder_path` column, v3→v4 migration function. (`schema.rs`, `migration.rs`)
 2. **Screens API**: extend `Screen`/`CreateScreenRequest`/`UpdateScreenRequest` models and handlers for `folder_path`, reusing name-validation helpers for path segments. (`models.rs`, `screens.rs`)
 3. **Folders API**: new `folders.rs` with list/create/rename/delete handlers + the prefix-rewrite transaction; wire routes in `web_server.rs`.
 4. **Frontend types/API client**: `screens-api.ts` additions, new `folders-api.ts`.
