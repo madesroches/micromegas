@@ -24,7 +24,7 @@ Two interactive mockups exist at `tasks/1159_folders_mockups/` (`alt-a-sidebar-t
 
 - **Identity stays `name`** (unchanged PK, unchanged route, unchanged validation). Nothing about the issue requires touching this, and `name` was never coupled to a folder before — the design goal is to *keep it that way* as folders are introduced, not to invent a new surrogate key. Introducing a surrogate `id` isn't needed to satisfy "path is not identity"; it's only needed if identity itself becomes unstable, which it doesn't here.
 - **`folder_path` is a plain, non-unique, mutable column** on `screens` — a label describing where the screen currently lives, exactly like `screen_type` or `managed_by`. No composite uniqueness on `(folder_path, name)`. A screen named `foo` is still simply "the screen named foo," regardless of which folder it's filed under. Moving it is `UPDATE screens SET folder_path = $1 WHERE name = $2` — one property, no identity change, no re-validation of name uniqueness.
-- Path format: `/`-delimited, no leading/trailing slash, `""` = root (matches the mockups' convention). Each segment is validated/normalized with a new folder-segment validator that shares `normalize_name`/`validate_name`'s character/hyphen rules but with a minimum length of 1 (not 3) and without the screen-specific `RESERVED_NAMES` check (`"new"` is reserved because of the `/screen/new` route, which doesn't apply to folders) — reusing `validate_name` verbatim would reject reasonable folder names like `qa`/`ui`/`ai` and forbid a folder literally named `new`.
+- Path format: `/`-delimited, no leading/trailing slash, `""` = root (matches the mockups' convention). Each segment is validated/normalized with a new folder-segment validator that shares `normalize_name`/`validate_name`'s character/hyphen rules but with a minimum length of 1 (not 3) and without the screen-specific `RESERVED_NAMES` check (`"new"` is reserved because of the `/screen/new` route, which doesn't apply to folders) — reusing `validate_name` verbatim would reject reasonable folder names like `qa`/`ui`/`ai` and forbid a folder literally named `new`. `validate_name`'s only caller today is `screens.rs`, so implement this as a parameterized core function (min length, whether to check `RESERVED_NAMES`) called by both `validate_name` (3, checked) and the new folder-segment validator (1, unchecked) — not a second copy-pasted implementation of the same character/hyphen logic.
 - No hardcoded max folder depth — segments are just validated individually; nesting is unbounded like a filesystem path.
 
 ### Folders need to exist independently of screens
@@ -37,12 +37,13 @@ The issue explicitly calls for *creating* folders (not just implying them from s
   - If `new_path == old_path` or `new_path` starts with `old_path || '/'` (renaming/moving a folder into its own subtree), reject with `400`/`409`. Otherwise statement 2 below (`WHERE path LIKE $old || '/%'`) re-matches the row statement 1 just rewrote, double-processing it and garbling the path — e.g. moving `team` to `team/archive/team` when `team/archive` is itself a child of `team`.
   - If `new_path` already exists — either as an explicit `folders` row, or implicitly as a prefix of an existing `screens.folder_path` — return `409 CONFLICT`, matching the delete endpoint's convention below. Otherwise a colliding explicit folder row would surface as a raw PRIMARY KEY violation instead of a clean `409`, and a colliding implicit prefix would silently merge two subtrees with no defined semantics.
   - If `old_path` doesn't exist — no `folders` row and no `screens.folder_path` with that value as a prefix, i.e. it fails the same "exists" check defined above — return `404 NOT FOUND`, mirroring `update_screen`/`delete_screen`'s `NotFound` convention for a mutating, key-addressed operation on a missing key. Otherwise the 4-statement rewrite below simply matches zero rows and commits as a silent no-op.
+  - Both `path` and `new_path` are validated/normalized with the folder-segment validator (same as `create_screen`/`update_screen` do for `folder_path`) before any of the above checks run — an unvalidated path would break the format invariant (no leading/trailing slash, valid segments) the prefix-rewrite SQL and the frontend both assume.
 - Renaming/moving a folder is a prefix rewrite in one transaction (materialized-path pattern, same idea the issue itself proposed for screens — just applied where it belongs, to folders):
   1. `UPDATE folders SET path = $new WHERE path = $old`
   2. `UPDATE folders SET path = $new || substring(path from length($old)+2) WHERE path LIKE $old || '/%'`
   3. `UPDATE screens SET folder_path = $new WHERE folder_path = $old`
   4. `UPDATE screens SET folder_path = $new || substring(folder_path from length($old)+2) WHERE folder_path LIKE $old || '/%'`
-- Deleting a folder requires it to be empty (no screens, no subfolders) — return `409 CONFLICT` otherwise. No recursive/cascading delete: the user must move or delete the contents first. Decided, not just a default — a folder delete should never be able to take screens down with it.
+- Deleting a folder requires it to be empty (no screens, no subfolders) — return `409 CONFLICT` otherwise. No recursive/cascading delete: the user must move or delete the contents first. Decided, not just a default — a folder delete should never be able to take screens down with it. If `path` fails the same "exists" check defined above (no `folders` row, no `screens.folder_path` prefix match), return `404 NOT FOUND` — the same missing-key convention applied to rename's `old_path`, not a silent no-op.
 
 ### API changes
 
@@ -55,9 +56,9 @@ The issue explicitly calls for *creating* folders (not just implying them from s
 
 New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON body on `POST`/`PUT`; `GET` takes no parameter and returns the full list — nested slashes in a URL path segment are exactly the kind of thing that breaks silently with naive routing, so the folder path never appears as an Axum path-extractor segment):
 - `GET /folders` → `Vec<FolderInfo>` (`path`, screen count, subfolder count) — union of explicit `folders` rows and implicit prefixes from `screens.folder_path`. No recursive CTE or string-aggregation SQL: consistent with the crate's existing flat-query style (and the Trade-offs section's own low-scale justification), fetch `folders.path` (via a plain `SELECT path FROM folders`) and distinct `screens.folder_path` (via `SELECT DISTINCT folder_path FROM screens`) with two flat queries, then in Rust split each path on `/` to expand ancestor prefixes into a `HashMap<String, FolderInfo>` and increment direct screen/subfolder counts as each row is folded in — same defaulting/aggregation-in-Rust approach already used elsewhere in this crate rather than in SQL.
-- `POST /folders` `{path}` → create (idempotent — creating an already-existing path is a no-op, not an error, since two users concurrently opening "new folder" on the same path shouldn't be treated as a conflict).
-- `PUT /folders` `{path, new_path}` → rename/move (the transaction above), matching the crate-wide convention of `.put(...)` for updates (`update_screen`, `update_data_source` in `web_server.rs` — there is no `.patch(...)` anywhere in `build_protected_routes`).
-- `DELETE /folders?path=...` → delete if empty, else `409`.
+- `POST /folders` `{path}` → create (idempotent — creating an already-existing path is a no-op, not an error, since two users concurrently opening "new folder" on the same path shouldn't be treated as a conflict). `path` is validated/normalized with the folder-segment validator before the insert.
+- `PUT /folders` `{path, new_path}` → rename/move (the transaction above, including the `path`/`new_path` format validation described there), matching the crate-wide convention of `.put(...)` for updates (`update_screen`, `update_data_source` in `web_server.rs` — there is no `.patch(...)` anywhere in `build_protected_routes`).
+- `DELETE /folders?path=...` → delete if empty, `409` if not, `404` if `path` doesn't exist (see above).
 
 ### Frontend changes
 
@@ -88,7 +89,7 @@ No backfill logic needed beyond the column default — existing screens land in 
 6. **Folder UI components**: `FolderTree`, `FolderBreadcrumb`, `FolderPickerModal`.
 7. **ScreensPage rewrite**: folder-aware browsing, drag-and-drop move, "New folder", search-with-matched-folders.
 8. **SaveScreenDialog**: destination-folder field wired to the shared picker.
-9. **Export/Import**: `ExportedScreen` type gains `folder_path`. `buildScreensExport` (`screens-api.ts:177-188`) must add `folder_path: s.folder_path` to its per-screen mapping so exports actually carry the field. On the import side, all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
+9. **Export/Import**: `ExportedScreen` type gains an optional `folder_path?: string` (optional, not required — pre-existing export files lack the field, and `undefined` already flows through `createScreen` correctly since `JSON.stringify` drops it and the backend defaults via `#[serde(default)]`). `buildScreensExport` (`screens-api.ts:177-188`) must add `folder_path: s.folder_path` to its per-screen mapping so exports actually carry the field. On the import side, all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
 
 ## Files to Modify
 
@@ -97,8 +98,10 @@ No backfill logic needed beyond the column default — existing screens land in 
 - `rust/analytics-web-srv/src/app_db/models.rs`
 - `rust/analytics-web-srv/src/screens.rs`
 - `rust/analytics-web-srv/src/folders.rs` (new)
+- `rust/analytics-web-srv/src/lib.rs` (add `pub mod folders;`)
 - `rust/analytics-web-srv/src/web_server.rs`
 - `rust/analytics-web-srv/tests/migration_test.rs` (new — schema v3→v4 fixture/harness)
+- `rust/analytics-web-srv/tests/folders_tests.rs` (new — folders.rs CRUD/rename/delete tests)
 - `analytics-web-app/src/lib/screens-api.ts`
 - `analytics-web-app/src/lib/folders-api.ts` (new)
 - `analytics-web-app/src/routes/ScreensPage.tsx`
@@ -106,7 +109,6 @@ No backfill logic needed beyond the column default — existing screens land in 
 - `analytics-web-app/src/components/FolderTree.tsx` (new)
 - `analytics-web-app/src/components/FolderBreadcrumb.tsx` (new)
 - `analytics-web-app/src/components/FolderPickerModal.tsx` (new)
-- `analytics-web-app/src/routes/ExportScreensPage.tsx`, `ImportScreensPage.tsx`
 
 ## Trade-offs
 
@@ -117,6 +119,6 @@ No backfill logic needed beyond the column default — existing screens land in 
 
 ## Testing Strategy
 
-- Backend: unit/integration tests for `folders.rs` (create idempotency, rename cascades to descendant folders and screens, delete blocked on non-empty), and for the extended `update_screen` (partial update with only `folder_path`, only `config`, or both).
-- Backend: no fixture currently exists in this crate for testing migrations directly — `execute_migration` is never invoked by any existing test in `rust/analytics-web-srv/tests/*.rs`, which are all pure unit/validation tests with no real Postgres connection or pinned-schema-version fixture. A new DB-fixture/harness must be built to pin a test database at schema v3, then invoke `execute_migration` directly and assert v3→v4 is idempotent and existing screens default to root.
+- Backend: unit/integration tests for `folders.rs` (create idempotency, rename cascades to descendant folders and screens, delete blocked on non-empty), and for the extended `update_screen` (partial update with only `folder_path`, only `config`, or both). Like every other DB-dependent test in this repo (`rust/analytics/tests/{histo_view_test,thread_spans_ordering_db_test,sql_view_test}.rs`, `rust/ingestion/tests/readiness.rs`, `rust/public/tests/{firehose_tests,pg_stats_test}.rs`), these are marked `#[ignore]` and run manually against `local_test_env`'s Postgres — `build/rust_ci.py` runs plain `cargo test` with no `--ignored`, so they are not part of default CI.
+- Backend: no fixture currently exists in this crate for testing migrations directly — `execute_migration` is never invoked by any existing test in `rust/analytics-web-srv/tests/*.rs`, which are all pure unit/validation tests with no real Postgres connection or pinned-schema-version fixture. A new DB-fixture/harness must be built to pin a test database at schema v3, then invoke `execute_migration` directly and assert v3→v4 is idempotent and existing screens default to root. Same `#[ignore]`-and-run-manually convention as above; not part of default CI.
 - Frontend: extend `ScreensPage`/`SaveScreenDialog` tests for folder selection, move, and search-with-folder-match; a test asserting a folder move never sends a name-changing request.
