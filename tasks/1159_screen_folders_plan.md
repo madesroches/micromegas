@@ -86,7 +86,7 @@ No backfill logic needed beyond the column default — existing screens land in 
 5. **Folder UI components**: `FolderTree`, `FolderBreadcrumb`, `FolderPickerModal`.
 6. **ScreensPage rewrite**: folder-aware browsing, drag-and-drop move, "New folder", search-with-matched-folders.
 7. **SaveScreenDialog**: destination-folder field wired to the shared picker.
-8. **Export/Import**: `ExportedScreen` type gains `folder_path`, and all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
+8. **Export/Import**: `ExportedScreen` type gains `folder_path`. `buildScreensExport` (`screens-api.ts:177-188`) must add `folder_path: s.folder_path` to its per-screen mapping so exports actually carry the field. On the import side, all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
 
 ## Files to Modify
 
