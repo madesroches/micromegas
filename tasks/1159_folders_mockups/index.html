@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Issue #1159 — Screen folders: design alternatives</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --app-bg:#0a0a0f; --header-bg:#12121a; --panel-bg:#12121a; --card-bg:#1a1a2e;
+    --border:#2a2a3e; --border-hover:#3a3a4e;
+    --text-primary:#e7e9ea; --text-secondary:#9ca3af; --text-muted:#6b7280;
+    --link:#1565c0; --link-hover:#1976d2;
+    --success:#22c55e; --gold:#ffb300; --error:#f87171; --rust:#bf360c;
+    --radius:0.5rem;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--app-bg); color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:15px; line-height:1.6;
+  }
+  a{color:var(--link); text-decoration:none;}
+  a:hover{color:var(--link-hover); text-decoration:underline;}
+  .topheader{
+    height:52px; background:var(--header-bg); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:.6rem; padding:0 1rem;
+  }
+  .logo-mark{width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg, var(--rust), var(--gold)); flex:none;}
+  .logo-text{font-weight:700; letter-spacing:.02em; font-size:14px;}
+  .logo-text .sp{color:var(--text-muted); font-weight:400;}
+
+  .wrap{max-width:920px; margin:0 auto; padding:2rem 1.5rem 4rem;}
+  .eyebrow{
+    font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--gold); font-weight:700; margin-bottom:.5rem;
+  }
+  h1{font-size:1.9rem; font-weight:650; margin:0 0 .5rem; text-wrap:balance;}
+  .lede{color:var(--text-secondary); max-width:62ch; margin:0 0 2rem;}
+  .lede code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:var(--card-bg); padding:.1rem .35rem; border-radius:4px; font-size:.9em;}
+
+  h2{font-size:1.25rem; font-weight:600; margin:2.5rem 0 .25rem;}
+  .section-note{color:var(--text-secondary); margin:0 0 1.25rem; max-width:62ch;}
+
+  .cards{display:grid; grid-template-columns:1fr; gap:1rem;}
+  .alt-card{
+    border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-bg);
+    padding:1.25rem 1.4rem; display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:start;
+  }
+  .alt-card h3{font-size:1.05rem; margin:0 0 .35rem; display:flex; align-items:center; gap:.5rem;}
+  .letter{
+    display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:6px;
+    background:rgba(21,101,192,.18); color:var(--link); font-size:12.5px; font-weight:700; flex:none;
+  }
+  .alt-card p{margin:0 0 .6rem; color:var(--text-secondary);}
+  .pros-cons{display:flex; gap:1.5rem; flex-wrap:wrap; font-size:13px;}
+  .pros-cons > div{flex:1; min-width:200px;}
+  .pros-cons .label{font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.3rem;}
+  .pros .label{color:var(--success);}
+  .cons .label{color:var(--error);}
+  .pros-cons ul{margin:0; padding-left:1.1rem; color:var(--text-secondary);}
+  .pros-cons li{margin-bottom:.2rem;}
+  .open-btn{
+    display:inline-flex; align-items:center; gap:.4rem; font-size:13px; font-weight:600;
+    padding:.5rem .9rem; border-radius:calc(var(--radius) - 2px); background:var(--link); color:#fff; white-space:nowrap;
+    align-self:center;
+  }
+  .open-btn:hover{background:var(--link-hover); text-decoration:none;}
+
+  table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  th, td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  th{color:var(--text-muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em;}
+  td{color:var(--text-secondary);}
+  td.dim{color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .table-wrap{overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius);}
+  .table-wrap table{margin:0;}
+  .table-wrap th:first-child, .table-wrap td:first-child{padding-left:.9rem;}
+
+  .callout{
+    border:1px solid var(--border); border-left:3px solid var(--gold); border-radius:6px; background:var(--card-bg);
+    padding:.9rem 1.1rem; margin-top:1.75rem; font-size:13.5px; color:var(--text-secondary);
+  }
+  .callout strong{color:var(--text-primary);}
+
+  footer{margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-muted);}
+</style>
+</head>
+<body>
+
+<div class="topheader">
+  <div class="logo-mark"></div>
+  <div class="logo-text">micromegas<span class="sp"> / analytics</span></div>
+</div>
+
+<div class="wrap">
+  <div class="eyebrow">Design exploration &middot; not for implementation yet</div>
+  <h1>Organizing notebooks into folders</h1>
+  <p class="lede">
+    Three interactive mockups for <a href="https://github.com/madesroches/micromegas/issues/1159" target="_blank" rel="noopener">issue #1159</a>:
+    letting users group screens (notebooks, log views, tables, metrics) into a folder hierarchy and find one quickly by name.
+    Each mock reuses the app's current dark theme and component styling, is fully click-through (expand folders, search,
+    move a screen via its <code>&#8942;</code> menu, preview the updated save dialog), and works against the same 13 fake screens
+    so the three are easy to compare directly.
+  </p>
+
+  <h2>The three alternatives</h2>
+  <p class="section-note">Open each in its own tab and try the search box and the "Preview: Save dialog" button — behavior differs meaningfully between them.</p>
+
+  <div class="cards">
+    <div class="alt-card">
+      <div>
+        <h3><span class="letter">A</span> Sidebar tree explorer</h3>
+        <p>A persistent, collapsible folder tree on the left (like VS Code's file explorer). Selecting a folder filters the main grid to its contents; an "All Screens" pin at the top shows everything flattened with a folder badge on each card.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <div class="label">Strong fit when</div>
+            <ul>
+              <li>Hierarchy depth is real and worth seeing at a glance</li>
+              <li>Users will maintain the tree over time (rename, nest, reorganize)</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <div class="label">Cost</div>
+            <ul>
+              <li>Fixed sidebar width eats into card real estate</li>
+              <li>Most new UI surface of the three to build and test</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <a class="open-btn" href="./alt-a-sidebar-tree.html">Open mock &rarr;</a>
+    </div>
+
+    <div class="alt-card">
+      <div>
+        <h3><span class="letter">B</span> Breadcrumb explorer</h3>
+        <p>No persistent sidebar. Folders and screens appear together as cards in the current directory (Google Drive-style); a breadcrumb trail at the top navigates back up. Search still flattens across the whole hierarchy.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <div class="label">Strong fit when</div>
+            <ul>
+              <li>Screen names/thumbnails matter more than seeing the whole tree</li>
+              <li>Most users stay a folder or two deep, not deeply nested</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <div class="label">Cost</div>
+            <ul>
+              <li>No at-a-glance overview of the full hierarchy</li>
+              <li>Jumping between distant folders takes more clicks than a tree</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <a class="open-btn" href="./alt-b-breadcrumb-explorer.html">Open mock &rarr;</a>
+    </div>
+
+    <div class="alt-card">
+      <div>
+        <h3><span class="letter">C</span> Grouped list, search-first</h3>
+        <p>Keeps today's single scrolling list, but sections it by folder with collapsible headers. A prominent search box up top is the primary way to find something; typing flattens all groups into one filtered, highlighted result list.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <div class="label">Strong fit when</div>
+            <ul>
+              <li>Folders are mostly a light label, not a deep structure</li>
+              <li>Search-by-name is how people will actually find screens day to day</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <div class="label">Cost</div>
+            <ul>
+              <li>One folder level only — no visual nesting for sub-subfolders</li>
+              <li>Many folders means many headers even when collapsed</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <a class="open-btn" href="./alt-c-grouped-search-first.html">Open mock &rarr;</a>
+    </div>
+  </div>
+
+  <h2>Side-by-side</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Dimension</th><th>A &middot; Sidebar tree</th><th>B &middot; Breadcrumb explorer</th><th>C &middot; Grouped list</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="dim">Full hierarchy visible at once</td>
+          <td>Yes, always</td>
+          <td>No — one level at a time</td>
+          <td>Yes, one level of section headers</td>
+        </tr>
+        <tr>
+          <td class="dim">Screen-name search</td>
+          <td>Sidebar box; flattens results, auto-expands matching folders</td>
+          <td>Top-right box; flattens results across all folders</td>
+          <td>Primary hero control; flattens groups while typing</td>
+        </tr>
+        <tr>
+          <td class="dim">Nesting supported</td>
+          <td>Arbitrary depth</td>
+          <td>Arbitrary depth</td>
+          <td>One level (deeper paths shown as a path label, not nested visually)</td>
+        </tr>
+        <tr>
+          <td class="dim">Screen card width</td>
+          <td>Reduced (260px sidebar)</td>
+          <td>Full width</td>
+          <td>Full width, denser rows instead of cards</td>
+        </tr>
+        <tr>
+          <td class="dim">Change vs. today's flat grid</td>
+          <td>Largest — new persistent nav surface</td>
+          <td>Large — new browse/navigate mode replaces the grid</td>
+          <td>Smallest — same list, same cards, adds grouping + search</td>
+        </tr>
+        <tr>
+          <td class="dim">Move / organize affordance</td>
+          <td>Card <code>&#8942;</code> menu &rarr; folder picker; inline "new subfolder" on any tree row</td>
+          <td>Card <code>&#8942;</code> menu &rarr; folder picker; "new folder here" in current directory</td>
+          <td>Row <code>&#8942;</code> menu &rarr; folder picker (folders are created implicitly by naming one on save/move)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <strong>Data model, all three alternatives:</strong> a single <code>folder_path</code> string column on <code>screens</code>
+    (e.g. <code>"team/dashboards"</code>, empty string for the root), per the issue's proposal — no separate folders table needed.
+    Folders exist only as distinct path prefixes of at least one screen, <em>except</em> in A/B where "new (sub)folder" is offered
+    as an explicit action — that needs either a placeholder/marker row or a lightweight <code>folders</code> table so an empty
+    folder can persist before anything is saved into it. C never lets you create an empty folder, so it avoids that question
+    entirely — folders there come into existence only when a screen names one.
+  </div>
+
+  <footer>
+    Fake data only (13 screens across 8 folder paths, repeated identically in A/B/C). Screen-type icons and color tokens
+    are copied from <code>analytics-web-app/src/styles/globals.css</code> and <code>ScreensPage.tsx</code> — nothing here is wired to the real API.
+  </footer>
+</div>
+
+</body>
+</html>

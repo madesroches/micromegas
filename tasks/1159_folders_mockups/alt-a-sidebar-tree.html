@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Alt A — Sidebar Tree · Screens folders mockup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --app-bg:#0a0a0f; --header-bg:#12121a; --panel-bg:#12121a; --card-bg:#1a1a2e;
+    --border:#2a2a3e; --border-hover:#3a3a4e;
+    --text-primary:#e7e9ea; --text-secondary:#9ca3af; --text-muted:#6b7280;
+    --link:#1565c0; --link-hover:#1976d2;
+    --success:#22c55e; --gold:#ffb300; --error:#f87171; --rust:#bf360c;
+    --radius:0.5rem;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--app-bg); color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:14px; line-height:1.5;
+  }
+  a{color:inherit;}
+  .note-bar{
+    background:linear-gradient(90deg, rgba(191,54,12,.14), rgba(21,101,192,.14));
+    border-bottom:1px solid var(--border);
+    padding:.55rem 1rem; font-size:12.5px; color:var(--text-secondary);
+    display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+  }
+  .note-bar a{color:var(--link); text-decoration:none; font-weight:600;}
+  .note-bar a:hover{color:var(--link-hover); text-decoration:underline;}
+  .topheader{
+    height:52px; background:var(--header-bg); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:.6rem; padding:0 1rem;
+  }
+  .logo-mark{width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg, var(--rust), var(--gold)); flex:none;}
+  .logo-text{font-weight:700; letter-spacing:.02em; font-size:14px;}
+  .logo-text .sp{color:var(--text-muted); font-weight:400;}
+
+  .page{ padding:1.5rem; max-width:1400px; margin:0 auto; }
+  .page-head h1{font-size:1.5rem; font-weight:600; margin:0 0 .25rem;}
+  .page-head p{margin:0; color:var(--text-secondary);}
+
+  .new-row{display:flex; gap:.5rem; flex-wrap:wrap; margin:1.25rem 0;}
+  .btn{
+    display:inline-flex; align-items:center; gap:.4rem; font-size:13px; font-weight:500;
+    padding:.4rem .7rem; border-radius:calc(var(--radius) - 2px); border:1px solid var(--border);
+    background:transparent; color:var(--text-primary); cursor:pointer;
+  }
+  .btn:hover{border-color:var(--border-hover); background:var(--card-bg);}
+  .btn.primary{background:var(--link); border-color:var(--link); color:#fff;}
+  .btn.primary:hover{background:var(--link-hover); border-color:var(--link-hover);}
+  .btn.ghost{border-color:transparent;}
+  .btn.ghost:hover{background:var(--card-bg); border-color:var(--border);}
+  .btn.sm{padding:.3rem .5rem; font-size:12px;}
+  .icon{flex:none; display:inline-flex;}
+
+  .sidebar-controls{
+    display:flex; align-items:center; gap:.75rem; margin-bottom:.75rem; flex-wrap:wrap;
+  }
+  .sc-label{font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.05em;}
+  .mode-switch{display:flex; gap:2px; background:var(--app-bg); border:1px solid var(--border); border-radius:7px; padding:2px;}
+  .mode-switch button{
+    font-size:12px; font-weight:500; padding:.35rem .6rem; border:none; background:none; color:var(--text-secondary);
+    border-radius:5px; cursor:pointer;
+  }
+  .mode-switch button:hover{color:var(--text-primary);}
+  .mode-switch button.active{background:var(--link); color:#fff;}
+  .sc-hint{font-size:12px; color:var(--text-muted);}
+
+  .workspace{
+    display:grid; grid-template-columns:260px 1fr; gap:0;
+    border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-bg);
+    overflow:hidden; min-height:560px; position:relative;
+  }
+  .workspace.mode-push.collapsed{ grid-template-columns:52px 1fr; }
+  .workspace.mode-overlay{ grid-template-columns:52px 1fr; }
+  .workspace.mode-overlay.pinned{ grid-template-columns:260px 1fr; }
+  .workspace.mode-hidden{ grid-template-columns:0px 1fr; }
+
+  .sidebar-dock{
+    border-right:1px solid var(--border); background:rgba(255,255,255,0.012); min-width:0; overflow:visible;
+  }
+  .workspace.mode-hidden .sidebar-dock{ display:none; }
+
+  .sidebar{
+    padding:.75rem; display:flex; flex-direction:column; gap:.6rem; height:100%;
+  }
+  .content-head-actions{display:flex; justify-content:flex-end;}
+  .collapse-btn{
+    display:inline-flex; align-items:center; gap:.35rem; font-size:11.5px; color:var(--text-muted);
+    background:none; border:1px solid var(--border); border-radius:6px; padding:.25rem .5rem; cursor:pointer;
+  }
+  .collapse-btn:hover{color:var(--text-primary); border-color:var(--border-hover); background:var(--card-bg);}
+  .collapse-btn .chevleft{transform:rotate(180deg); display:inline-flex;}
+
+  .rail{
+    display:flex; flex-direction:column; align-items:center; gap:.35rem; padding:.6rem 0; height:100%;
+  }
+  .rail button{
+    width:32px; height:32px; border-radius:8px; border:1px solid transparent; background:none;
+    color:var(--text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none;
+  }
+  .rail button:hover{background:var(--card-bg); color:var(--text-primary); border-color:var(--border);}
+  .rail button.drop-target{background:rgba(21,101,192,.28); color:var(--text-primary); border-color:var(--link);}
+  .rail .rail-sep{width:20px; height:1px; background:var(--border); margin:.15rem 0; flex:none;}
+
+  .flyout-host, .drawer-host{
+    position:absolute; top:0; bottom:0; width:270px; z-index:30; background:var(--panel-bg);
+    border-right:1px solid var(--border-hover); box-shadow:18px 0 44px rgba(0,0,0,.55); padding:.75rem;
+    overflow:auto; display:none;
+  }
+  .flyout-host{ left:52px; }
+  .drawer-host{ left:0; width:280px; z-index:31; }
+  .drawer-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.3); z-index:29; display:none; }
+  .search-box{
+    display:flex; align-items:center; gap:.4rem; border:1px solid var(--border); border-radius:calc(var(--radius) - 2px);
+    padding:.35rem .55rem; background:var(--app-bg);
+  }
+  .search-box:focus-within{border-color:var(--link);}
+  .search-box input{
+    border:none; outline:none; background:transparent; color:var(--text-primary); font-size:13px; width:100%;
+  }
+  .search-box input::placeholder{color:var(--text-muted);}
+  .search-box svg{color:var(--text-muted); flex:none;}
+  .clear-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0;display:flex;}
+  .clear-btn:hover{color:var(--text-primary);}
+
+  .pinned{display:flex; flex-direction:column; gap:1px;}
+  .new-folder-btn{
+    display:flex; align-items:center; justify-content:center; gap:.35rem; width:100%; margin-top:.35rem;
+    font-size:12px; color:var(--text-secondary); background:none; border:1px dashed var(--border-hover);
+    border-radius:6px; padding:.4rem .5rem; cursor:pointer;
+  }
+  .new-folder-btn:hover{color:var(--text-primary); border-color:var(--link); background:rgba(21,101,192,.08);}
+  .tree{flex:1; overflow:auto;}
+  .row{
+    display:flex; align-items:center; gap:.4rem; padding:.35rem .4rem; border-radius:6px; cursor:pointer;
+    font-size:13px; color:var(--text-secondary); position:relative; user-select:none;
+  }
+  .row:hover{background:var(--card-bg); color:var(--text-primary);}
+  .row.selected{background:rgba(21,101,192,.16); color:var(--text-primary); box-shadow:inset 2px 0 0 var(--link);}
+  .row.drop-target{background:rgba(21,101,192,.28); color:var(--text-primary); box-shadow:inset 0 0 0 1.5px var(--link);}
+  .row .chev{width:14px; height:14px; flex:none; display:flex; align-items:center; justify-content:center; color:var(--text-muted); transition:transform .12s;}
+  .row .chev.open{transform:rotate(90deg);}
+  .row .chev.spacer{visibility:hidden;}
+  .row .rowlabel{flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .row .badge-dot{width:6px; height:6px; border-radius:50%; background:var(--gold); flex:none;}
+  .row .rowactions{display:none; gap:2px; flex:none;}
+  .row:hover .rowactions{display:flex;}
+  .rowactions button{background:none; border:none; color:var(--text-muted); cursor:pointer; padding:2px; border-radius:4px; display:flex;}
+  .rowactions button:hover{color:var(--text-primary); background:var(--border);}
+  .children{margin-left:1.05rem;}
+  mark{background:transparent; color:var(--gold); font-weight:600; padding:0;}
+
+  .inline-create{display:flex; gap:.3rem; align-items:center; margin:.15rem 0 .15rem 1.4rem;}
+  .inline-create input{
+    flex:1; font-size:12.5px; padding:.25rem .4rem; border-radius:5px; border:1px solid var(--link);
+    background:var(--app-bg); color:var(--text-primary); outline:none;
+  }
+
+  .main{padding:1rem 1.25rem 1.5rem; overflow:auto;}
+  .crumbs{display:flex; align-items:center; gap:.3rem; font-size:13px; color:var(--text-secondary); margin-bottom:.9rem; flex-wrap:wrap;}
+  .crumbs .seg{cursor:pointer; padding:.15rem .35rem; border-radius:5px;}
+  .crumbs .seg:hover{background:var(--card-bg); color:var(--text-primary);}
+  .crumbs .seg.current{color:var(--text-primary); font-weight:600; cursor:default;}
+  .crumbs .seg.current:hover{background:none;}
+  .crumbs .seg.drop-target{background:rgba(21,101,192,.28); color:var(--text-primary); box-shadow:inset 0 0 0 1.5px var(--link);}
+  .crumbs .sep{color:var(--text-muted);}
+
+  .toolbar-row{display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; gap:.5rem; flex-wrap:wrap;}
+  .result-count{font-size:12.5px; color:var(--text-muted);}
+
+  .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:.75rem;}
+  .folder-card, .screen-card{
+    border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-bg);
+    padding:.85rem; cursor:pointer; position:relative; transition:background .12s, border-color .12s, box-shadow .12s;
+  }
+  .folder-card:hover, .screen-card:hover{background:var(--card-bg); border-color:var(--link);}
+  .screen-card{ cursor:grab; }
+  .screen-card.dragging{ opacity:.4; cursor:grabbing; }
+  .folder-card.drop-target{
+    border-color:var(--link); background:rgba(21,101,192,.16); box-shadow:0 0 0 1.5px var(--link) inset;
+  }
+  .folder-card .fc-top, .screen-card .fc-top{display:flex; align-items:center; gap:.5rem;}
+  .folder-card .fc-top svg{color:var(--gold);}
+  .screen-card .fc-top svg{color:var(--link);}
+  .folder-card .fc-name{font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .screen-card .fc-name{font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .folder-card .fc-meta, .screen-card .fc-meta{font-size:11.5px; color:var(--text-muted); margin-top:.35rem;}
+  .screen-card .fc-path{font-size:11px; color:var(--text-muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-top:.15rem;}
+  .kebab-wrap{position:absolute; top:.55rem; right:.5rem;}
+  .kebab-btn{background:none; border:none; color:var(--text-muted); cursor:pointer; padding:3px; border-radius:5px; display:flex; opacity:0; transition:opacity .1s;}
+  .screen-card:hover .kebab-btn, .folder-card:hover .kebab-btn{opacity:1;}
+  .kebab-btn:hover{color:var(--text-primary); background:var(--border);}
+  .menu{
+    position:absolute; top:2rem; right:.5rem; background:var(--card-bg); border:1px solid var(--border-hover);
+    border-radius:8px; min-width:150px; box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:5; overflow:hidden;
+  }
+  .menu button{
+    display:block; width:100%; text-align:left; background:none; border:none; color:var(--text-primary);
+    font-size:12.5px; padding:.5rem .7rem; cursor:pointer;
+  }
+  .menu button:hover{background:var(--border);}
+  .menu button.danger{color:var(--error);}
+
+  .empty{padding:2.5rem 1rem; text-align:center; color:var(--text-muted); border:1px dashed var(--border); border-radius:var(--radius);}
+
+  /* Modal */
+  .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:50;}
+  .modal{width:100%; max-width:420px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 20px 60px rgba(0,0,0,.5);}
+  .modal-head{display:flex; align-items:center; justify-content:space-between; padding:.85rem 1rem; border-bottom:1px solid var(--border);}
+  .modal-head h2{font-size:15px; font-weight:600; margin:0;}
+  .modal-body{padding:1rem;}
+  .modal-foot{display:flex; justify-content:flex-end; gap:.5rem; padding:.85rem 1rem; border-top:1px solid var(--border);}
+  .field-label{font-size:12.5px; font-weight:600; color:var(--text-secondary); display:block; margin-bottom:.3rem;}
+  .text-input{width:100%; padding:.5rem .65rem; border-radius:6px; border:1px solid var(--border); background:var(--app-bg); color:var(--text-primary); font-size:13px; outline:none;}
+  .text-input:focus{border-color:var(--link);}
+  .location-picker{display:flex; align-items:center; gap:.5rem; margin-top:1rem;}
+  .location-chip{
+    flex:1; display:flex; align-items:center; gap:.4rem; font-size:12.5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    padding:.4rem .6rem; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); background:var(--app-bg);
+  }
+  .location-chip svg{color:var(--gold); flex:none;}
+  .picker-list{max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:8px; margin-top:.6rem;}
+  .picker-row{display:flex; align-items:center; gap:.4rem; padding:.4rem .6rem; font-size:12.5px; cursor:pointer;}
+  .picker-row:hover{background:var(--card-bg);}
+  .picker-row.selected{background:rgba(21,101,192,.16);}
+  .toast{
+    position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--card-bg); border:1px solid var(--success);
+    color:var(--text-primary); padding:.55rem .9rem; border-radius:8px; font-size:12.5px; display:flex; align-items:center; gap:.5rem;
+    box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:60;
+  }
+  .toast svg{color:var(--success);}
+</style>
+</head>
+<body>
+
+<div class="note-bar">
+  <span>Mockup A — Sidebar tree explorer (default: hover-peek overlay). Try creating a folder from the sidebar or a row's <strong>+</strong>, and drag a screen card onto a folder — including hovering the collapsed rail mid-drag to reveal it. For <strong>issue #1159</strong>. Not the live app.</span>
+  <a href="./index.html">&larr; Back to all alternatives</a>
+</div>
+
+<div class="topheader">
+  <div class="logo-mark"></div>
+  <div class="logo-text">micromegas<span class="sp"> / analytics</span></div>
+</div>
+
+<div class="page">
+  <div class="page-head">
+    <h1>Screens</h1>
+    <p>Create and manage custom screens with editable SQL queries.</p>
+  </div>
+
+  <div class="new-row">
+    <button class="btn" id="btn-save-preview"></button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Notebook</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Log View</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Table</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Metrics</button>
+  </div>
+
+  <div class="sidebar-controls">
+    <span class="sc-label">Sidebar</span>
+    <div class="mode-switch" id="mode-switch">
+      <button data-mode="push">Push (icon rail)</button>
+      <button data-mode="overlay">Overlay (hover peek)</button>
+      <button data-mode="hidden">Hidden (drawer)</button>
+    </div>
+    <button class="btn sm" id="folders-trigger" style="display:none"></button>
+    <span class="sc-hint" id="sc-hint"></span>
+  </div>
+
+  <div class="workspace" id="workspace">
+    <div class="sidebar-dock" id="sidebar-dock"></div>
+    <div class="main" id="main"></div>
+    <div class="flyout-host" id="flyout-host"></div>
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
+    <div class="drawer-host" id="drawer-host"></div>
+  </div>
+
+  <div id="content-holder" style="display:none"></div>
+
+  <div id="sidebar-content" class="sidebar">
+    <div class="content-head-actions" id="content-head-actions"></div>
+    <div class="search-box">
+      <span data-icon="search"></span>
+      <input id="search-input" type="text" placeholder="Search screens & folders" />
+      <button class="clear-btn" id="clear-search" style="display:none" data-icon="x" title="Clear"></button>
+    </div>
+    <div class="pinned" id="pinned"></div>
+    <div style="height:1px;background:var(--border);margin:.1rem 0;"></div>
+    <div class="tree" id="tree"></div>
+  </div>
+
+  <div id="rail" class="rail">
+    <button id="rail-expand" title="Expand sidebar"></button>
+    <div class="rail-sep"></div>
+    <button id="rail-all" title="All Screens"></button>
+    <button id="rail-home" title="Home"></button>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const ICONS = {
+  chevron:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
+  folder:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>',
+  folderOpen:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2"></path></svg>',
+  search:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+  notebook:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>',
+  terminal:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>',
+  table:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="3" x2="9" y2="21"></line></svg>',
+  activity:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>',
+  plus:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+  kebab:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>',
+  home:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>',
+  x:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+  grid:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>',
+  check:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+};
+function ic(name){ return ICONS[name] || ''; }
+
+const TYPE_ICON = { notebook:'notebook', log:'terminal', table:'table', metrics:'activity' };
+const TYPE_LABEL = { notebook:'Notebook', log:'Log', table:'Table', metrics:'Metrics' };
+
+let SCREENS = [
+  { name:'quick-check', type:'log', updated:'2026-07-25', folder:'' },
+  { name:'scratch', type:'notebook', updated:'2026-07-20', folder:'' },
+  { name:'latency-overview', type:'metrics', updated:'2026-07-24', folder:'team/dashboards' },
+  { name:'error-rates', type:'table', updated:'2026-07-22', folder:'team/dashboards' },
+  { name:'slo-burn-rate', type:'notebook', updated:'2026-07-26', folder:'team/dashboards' },
+  { name:'incident-2026-03-12', type:'notebook', updated:'2026-03-14', folder:'team/dashboards/incidents' },
+  { name:'incident-postmortem-checklist', type:'table', updated:'2026-03-15', folder:'team/dashboards/incidents' },
+  { name:'deploy-runbook', type:'notebook', updated:'2026-06-01', folder:'team/runbooks' },
+  { name:'rollback-steps', type:'notebook', updated:'2026-06-02', folder:'team/runbooks' },
+  { name:'my-scratchpad', type:'notebook', updated:'2026-07-27', folder:'personal' },
+  { name:'draft-weekly-report', type:'notebook', updated:'2026-07-10', folder:'personal/drafts' },
+  { name:'old-dashboard-v1', type:'metrics', updated:'2025-11-02', folder:'archive' },
+  { name:'deprecated-error-view', type:'log', updated:'2025-09-18', folder:'archive' },
+];
+let extraFolders = new Set();
+let selection = 'all';
+let expanded = new Set(['team','team/dashboards']);
+let searchQuery = '';
+let openMenuFor = null;
+
+// --- Sidebar space-saving behaviors -----------------------------------
+// sidebarMode: 'push' (icon rail that permanently reflows content),
+//              'overlay' (icon rail with hover-to-peek flyout, pin to dock),
+//              'hidden' (sidebar removed entirely, opened as a drawer on demand)
+let sidebarMode = 'overlay';
+let collapsedPush = false;   // push mode: rail vs full 260px
+let overlayPinned = false;   // overlay mode: docked at 260px vs resting as a rail
+let peeking = false;         // overlay mode: transient flyout open (hover or click)
+let drawerOpen = false;      // hidden mode: transient drawer open
+let peekCloseTimer = null;
+let dockDragDepth = 0;        // nested dragenter/dragleave counters so hovering
+let flyoutDragDepth = 0;      // over child elements while dragging doesn't flicker
+
+function buildTree(){
+  const root = { name:'', path:'', children:{}, screens:[] };
+  function ensure(path){
+    if(path===''){ return root; }
+    const parts = path.split('/');
+    let node = root, cur='';
+    for(const part of parts){
+      cur = cur ? cur+'/'+part : part;
+      if(!node.children[part]) node.children[part] = { name:part, path:cur, children:{}, screens:[] };
+      node = node.children[part];
+    }
+    return node;
+  }
+  for(const s of SCREENS){ ensure(s.folder).screens.push(s); }
+  for(const p of extraFolders){ ensure(p); }
+  return root;
+}
+function findNode(root, path){
+  if(path===''||path==null) return root;
+  let node = root;
+  for(const part of path.split('/')){
+    node = node.children[part];
+    if(!node) return null;
+  }
+  return node;
+}
+function allFolderPaths(node, out){
+  out.push(node.path);
+  Object.values(node.children).sort((a,b)=>a.name.localeCompare(b.name)).forEach(c=>allFolderPaths(c,out));
+  return out;
+}
+function label(path){ return path===''? 'Home' : path.split('/').pop(); }
+function joinPath(parent, name){ return parent ? parent+'/'+name : name; }
+
+function highlight(text, q){
+  if(!q) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if(idx===-1) return escapeHtml(text);
+  return escapeHtml(text.slice(0,idx)) + '<mark>' + escapeHtml(text.slice(idx,idx+q.length)) + '</mark>' + escapeHtml(text.slice(idx+q.length));
+}
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function renderPinned(){
+  const el = document.getElementById('pinned');
+  const newFolderParent = (selection==='all' || selection==null) ? '' : selection;
+  el.innerHTML = `
+    <div class="row ${selection==='all'?'selected':''}" data-select="all">
+      <span class="chev spacer">${ic('chevron')}</span>
+      <span data-icon-inline="grid" style="color:var(--link);display:flex;"></span>
+      <span class="rowlabel">All Screens</span>
+    </div>
+    <div class="row ${selection==='' ?'selected':''}" data-select="" data-drop="">
+      <span class="chev spacer">${ic('chevron')}</span>
+      <span data-icon-inline="home" style="color:var(--text-muted);display:flex;"></span>
+      <span class="rowlabel">Home</span>
+    </div>
+    <button class="new-folder-btn" id="pinned-new-folder">${ic('plus')} New folder in ${escapeHtml(newFolderParent===''?'Home':newFolderParent)}</button>
+  `;
+  el.querySelectorAll('[data-icon-inline]').forEach(n=>{ n.innerHTML = ic(n.dataset.iconInline); });
+  el.querySelectorAll('.row').forEach(r=>r.addEventListener('click', ()=>{ selection = r.dataset.select; searchQuery=''; syncSearchInput(); renderAll(); }));
+  wireDropTarget(el.querySelector('[data-drop=""]'), '');
+  document.getElementById('pinned-new-folder').addEventListener('click', ()=>{
+    if(newFolderParent) expanded.add(newFolderParent);
+    window.__creatingIn = newFolderParent;
+    renderTree();
+  });
+}
+
+function matchesQuery(s, q){
+  if(!q) return false;
+  return s.name.toLowerCase().includes(q) || s.folder.toLowerCase().includes(q);
+}
+
+function renderTreeNode(node, depth, container, matchedFolders){
+  const kids = Object.values(node.children).sort((a,b)=>a.name.localeCompare(b.name));
+  for(const child of kids){
+    const isOpen = expanded.has(child.path) || (searchQuery && matchedFolders.has(child.path));
+    const hasKids = Object.keys(child.children).length>0;
+    const row = document.createElement('div');
+    row.innerHTML = `
+      <div class="row ${selection===child.path?'selected':''}" style="padding-left:${depth*14+8}px" data-select="${child.path}">
+        <span class="chev ${hasKids ? (isOpen?'open':'') : 'spacer'}" data-toggle="${child.path}">${hasKids?ic('chevron'):''}</span>
+        <span style="color:var(--gold);display:flex;">${ic(isOpen?'folderOpen':'folder')}</span>
+        <span class="rowlabel">${searchQuery && matchedFolders.has(child.path) ? highlight(child.name, searchQuery) : escapeHtml(child.name)}</span>
+        ${searchQuery && matchedFolders.has(child.path) ? '<span class="badge-dot" title="Contains matches"></span>' : ''}
+        <span class="rowactions">
+          <button data-newsub="${child.path}" title="New subfolder">${ic('plus')}</button>
+        </span>
+      </div>
+    `;
+    container.appendChild(row);
+    if(document.getElementById('creating-in')===child.path){}
+    if(window.__creatingIn === child.path){
+      const wrap = document.createElement('div');
+      wrap.className='inline-create';
+      wrap.style.paddingLeft = ((depth+1)*14+8)+'px';
+      wrap.innerHTML = `<input id="new-folder-input" placeholder="Folder name" />`;
+      container.appendChild(wrap);
+    }
+    if(isOpen){
+      const kidsWrap = document.createElement('div');
+      renderTreeNode(child, depth+1, kidsWrap, matchedFolders);
+      container.appendChild(kidsWrap);
+    }
+  }
+}
+
+function computeMatchedFolders(q){
+  const set = new Set();
+  if(!q) return set;
+  for(const s of SCREENS){
+    if(matchesQuery(s,q)){
+      let cur='';
+      for(const part of s.folder.split('/')){
+        if(!part) continue;
+        cur = cur? cur+'/'+part : part;
+        set.add(cur);
+      }
+    }
+  }
+  return set;
+}
+
+function renderTree(){
+  const root = buildTree();
+  const el = document.getElementById('tree');
+  el.innerHTML = '';
+
+  if(window.__creatingIn===''){
+    const wrap = document.createElement('div');
+    wrap.className = 'inline-create';
+    wrap.style.paddingLeft = '8px';
+    wrap.innerHTML = `<input id="new-folder-input" placeholder="Folder name" />`;
+    el.appendChild(wrap);
+  }
+
+  const matchedFolders = computeMatchedFolders(searchQuery.toLowerCase());
+  renderTreeNode(root, 0, el, matchedFolders);
+
+  el.querySelectorAll('[data-select]').forEach(r=>{
+    r.addEventListener('click', (e)=>{
+      if(e.target.closest('[data-toggle]') || e.target.closest('[data-newsub]')) return;
+      selection = r.dataset.select; searchQuery=''; syncSearchInput(); renderAll();
+    });
+    wireDropTarget(r, r.dataset.select);
+  });
+  el.querySelectorAll('[data-toggle]').forEach(t=>{
+    t.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const p = t.dataset.toggle;
+      if(expanded.has(p)) expanded.delete(p); else expanded.add(p);
+      renderTree();
+    });
+  });
+  el.querySelectorAll('[data-newsub]').forEach(b=>{
+    b.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const p = b.dataset.newsub;
+      expanded.add(p);
+      window.__creatingIn = p;
+      renderTree();
+    });
+  });
+
+  wireNewFolderInputIfPresent();
+}
+
+function wireNewFolderInputIfPresent(){
+  const input = document.getElementById('new-folder-input');
+  if(!input) return;
+  const parent = window.__creatingIn;
+  input.focus();
+  const commit = ()=>{
+    const v = input.value.trim();
+    if(!v) return;
+    const full = joinPath(parent, v);
+    extraFolders.add(full);
+    if(parent) expanded.add(parent);
+    expanded.add(full);
+    window.__creatingIn = null;
+    renderAll();
+    showToast(`Folder "${full}" created`);
+  };
+  input.addEventListener('keydown', (ev)=>{
+    if(ev.key==='Enter'){ commit(); }
+    else if(ev.key==='Escape'){ window.__creatingIn = null; renderTree(); }
+  });
+  input.addEventListener('blur', ()=>{ window.__creatingIn = null; renderTree(); });
+}
+
+// --- Drag & drop: move a screen into a folder --------------------------
+function wireDropTarget(el, path){
+  if(!el) return;
+  el.addEventListener('dragover', (e)=>{
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop-target');
+  });
+  el.addEventListener('dragleave', ()=>{ el.classList.remove('drop-target'); });
+  el.addEventListener('drop', (e)=>{
+    e.preventDefault();
+    el.classList.remove('drop-target');
+    const name = e.dataTransfer.getData('text/plain');
+    const s = SCREENS.find(x=>x.name===name);
+    if(!s || s.folder===path) return;
+    s.folder = path;
+    if(sidebarMode==='overlay' && !overlayPinned && peeking){
+      peeking = false; dockDragDepth = 0; flyoutDragDepth = 0;
+    }
+    renderAll();
+    updateLayout();
+    showToast(`Moved "${name}" to ${path===''?'Home':path}`);
+  });
+}
+
+function screenCardHtml(s, showPath){
+  return `
+    <div class="screen-card" data-open="${s.name}" data-drag="${s.name}" draggable="true" title="Drag onto a folder to move it">
+      <div class="fc-top">
+        ${ic(TYPE_ICON[s.type])}
+        <span class="fc-name">${searchQuery && matchesQuery(s,searchQuery.toLowerCase()) ? highlight(s.name, searchQuery) : escapeHtml(s.name)}</span>
+      </div>
+      <div class="fc-meta">${TYPE_LABEL[s.type]} · Updated ${s.updated}</div>
+      ${showPath ? `<div class="fc-path">${s.folder ? '/'+s.folder : '/'}</div>` : ''}
+      <div class="kebab-wrap">
+        <button class="kebab-btn" data-menu="${s.name}">${ic('kebab')}</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderBreadcrumb(path){
+  if(path===null){
+    return `<div class="crumbs"><span class="seg current">Search results</span></div>`;
+  }
+  const parts = path==='' ? [] : path.split('/');
+  let html = `<div class="crumbs"><span class="seg" data-crumb="">${ic('home')}</span>`;
+  let cur='';
+  parts.forEach((p, i)=>{
+    cur = cur? cur+'/'+p : p;
+    const isLast = i===parts.length-1;
+    html += `<span class="sep">/</span><span class="seg ${isLast?'current':''}" data-crumb="${cur}">${escapeHtml(p)}</span>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function renderMain(){
+  const el = document.getElementById('main');
+  const q = searchQuery.trim().toLowerCase();
+
+  if(q){
+    const results = SCREENS.filter(s=>matchesQuery(s,q)).sort((a,b)=>a.name.localeCompare(b.name));
+    el.innerHTML = renderBreadcrumb(null) +
+      `<div class="toolbar-row"><span class="result-count">${results.length} match${results.length===1?'':'es'} across all folders</span></div>` +
+      (results.length ? `<div class="grid">${results.map(s=>screenCardHtml(s,true)).join('')}</div>`
+        : `<div class="empty">No screens or folders match &ldquo;${escapeHtml(searchQuery)}&rdquo;.</div>`);
+    attachCardHandlers();
+    return;
+  }
+
+  if(selection==='all'){
+    const all = [...SCREENS].sort((a,b)=>a.name.localeCompare(b.name));
+    el.innerHTML = `<div class="crumbs"><span class="seg current">All Screens</span></div>` +
+      `<div class="toolbar-row"><span class="result-count">${all.length} screens across ${new Set(SCREENS.map(s=>s.folder)).size} folders</span></div>` +
+      `<div class="grid">${all.map(s=>screenCardHtml(s,true)).join('')}</div>`;
+    attachCardHandlers();
+    return;
+  }
+
+  const root = buildTree();
+  const node = findNode(root, selection);
+  const subfolders = Object.values(node.children).sort((a,b)=>a.name.localeCompare(b.name));
+  const items = [...node.screens].sort((a,b)=>a.name.localeCompare(b.name));
+
+  el.innerHTML = renderBreadcrumb(selection) +
+    `<div class="toolbar-row">
+       <span class="result-count">${subfolders.length} folder${subfolders.length===1?'':'s'} · ${items.length} screen${items.length===1?'':'s'}</span>
+       <button class="btn sm" id="new-subfolder-here">${ic('plus')} New folder</button>
+     </div>` +
+    (subfolders.length || items.length ? `<div class="grid">
+        ${subfolders.map(f=>`
+          <div class="folder-card" data-enter="${f.path}">
+            <div class="fc-top">${ic('folder')}<span class="fc-name">${escapeHtml(f.name)}</span></div>
+            <div class="fc-meta">${countScreens(f)} screen${countScreens(f)===1?'':'s'}</div>
+          </div>`).join('')}
+        ${items.map(s=>screenCardHtml(s,false)).join('')}
+      </div>` : `<div class="empty">This folder is empty. Create a screen or a subfolder to get started.</div>`);
+
+  el.querySelectorAll('[data-enter]').forEach(c=>{
+    c.addEventListener('click', ()=>{ selection = c.dataset.enter; expanded.add(selection); renderAll(); });
+    wireDropTarget(c, c.dataset.enter);
+  });
+  document.getElementById('new-subfolder-here').addEventListener('click', ()=>{
+    window.__creatingIn = selection; expanded.add(selection); renderAll();
+  });
+  el.querySelectorAll('[data-crumb]').forEach(c=>c.addEventListener('click', ()=>{
+    if(c.classList.contains('current')) return;
+    selection = c.dataset.crumb; renderAll();
+  }));
+  attachCardHandlers();
+}
+
+function countScreens(node){
+  let n = node.screens.length;
+  for(const c of Object.values(node.children)) n += countScreens(c);
+  return n;
+}
+
+function attachCardHandlers(){
+  document.querySelectorAll('[data-crumb]').forEach(c=>{
+    c.addEventListener('click', ()=>{
+      if(c.classList.contains('current')) return;
+      selection=c.dataset.crumb; renderAll();
+    });
+    wireDropTarget(c, c.dataset.crumb);
+  });
+  document.querySelectorAll('[data-menu]').forEach(b=>b.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    openMoveModal(b.dataset.menu);
+  }));
+  document.querySelectorAll('[data-open]').forEach(c=>c.addEventListener('click', (e)=>{
+    if(e.target.closest('[data-menu]')) return;
+    showToast(`Would open screen "${c.dataset.open}"`);
+  }));
+  document.querySelectorAll('[data-drag]').forEach(c=>{
+    c.addEventListener('dragstart', (e)=>{
+      e.dataTransfer.setData('text/plain', c.dataset.drag);
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(()=>c.classList.add('dragging'), 0);
+    });
+    c.addEventListener('dragend', ()=>{ c.classList.remove('dragging'); });
+  });
+}
+
+function openMoveModal(screenName){
+  const s = SCREENS.find(x=>x.name===screenName);
+  const root = buildTree();
+  const paths = allFolderPaths(root, []);
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="mm-backdrop">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>Move "${escapeHtml(screenName)}"</h2>
+          <button class="clear-btn" id="mm-close">${ic('x')}</button>
+        </div>
+        <div class="modal-body">
+          <span class="field-label">Choose destination folder</span>
+          <div class="picker-list">
+            ${paths.map(p=>`
+              <div class="picker-row ${p===s.folder?'selected':''}" data-pick="${p}" style="padding-left:${(p===''?0:p.split('/').length-1)*14+10}px">
+                ${p===s.folder?ic('check'):'<span style=\"width:14px;display:inline-block\"></span>'} ${ic('folder')} ${escapeHtml(label(p))}
+              </div>`).join('')}
+          </div>
+          <div style="margin-top:.75rem; display:flex; gap:.4rem;">
+            <input class="text-input" id="mm-new-folder" placeholder="Or type a new folder path, e.g. team/reports" />
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="mm-cancel">Cancel</button>
+          <button class="btn primary" id="mm-move-new">Move to new folder</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('mm-backdrop').addEventListener('click', (e)=>{ if(e.target.id==='mm-backdrop') closeModal(); });
+  document.getElementById('mm-close').addEventListener('click', closeModal);
+  document.getElementById('mm-cancel').addEventListener('click', closeModal);
+  modalRoot.querySelectorAll('[data-pick]').forEach(r=>r.addEventListener('click', ()=>{
+    s.folder = r.dataset.pick; closeModal(); renderAll(); showToast(`Moved to ${r.dataset.pick===''?'Home':r.dataset.pick}`);
+  }));
+  document.getElementById('mm-move-new').addEventListener('click', ()=>{
+    const v = document.getElementById('mm-new-folder').value.trim().replace(/^\/+|\/+$/g,'');
+    if(!v) return;
+    s.folder = v; extraFolders.add(v); closeModal(); renderAll(); showToast(`Moved to ${v}`);
+  });
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+function showToast(msg){
+  const root = document.getElementById('toast-root');
+  root.innerHTML = `<div class="toast">${ic('check')} ${escapeHtml(msg)}</div>`;
+  setTimeout(()=>{ root.innerHTML=''; }, 2200);
+}
+
+function syncSearchInput(){
+  const input = document.getElementById('search-input');
+  input.value = searchQuery;
+  document.getElementById('clear-search').style.display = searchQuery ? 'flex' : 'none';
+}
+
+function renderAll(){
+  renderPinned();
+  renderTree();
+  renderMain();
+}
+
+// --- Layout: decide where #sidebar-content actually lives -------------
+function refreshContentHead(dest){
+  const el = document.getElementById('content-head-actions');
+  if(dest==='docked-push'){
+    el.innerHTML = `<button class="collapse-btn" id="ch-btn"><span class="chevleft">${ic('chevron')}</span> Collapse to rail</button>`;
+    document.getElementById('ch-btn').onclick = ()=>{ collapsedPush = true; updateLayout(); };
+  } else if(dest==='docked-overlay'){
+    el.innerHTML = `<button class="collapse-btn" id="ch-btn">Unpin</button>`;
+    document.getElementById('ch-btn').onclick = ()=>{ overlayPinned = false; updateLayout(); };
+  } else if(dest==='flyout'){
+    el.innerHTML = `<button class="collapse-btn" id="ch-btn">Pin sidebar open</button>`;
+    document.getElementById('ch-btn').onclick = ()=>{ overlayPinned = true; peeking = false; updateLayout(); };
+  } else if(dest==='drawer'){
+    el.innerHTML = `<button class="collapse-btn" id="ch-btn">${ic('x')} Close</button>`;
+    document.getElementById('ch-btn').onclick = ()=>{ drawerOpen = false; updateLayout(); };
+  }
+}
+
+function updateLayout(){
+  const ws = document.getElementById('workspace');
+  ws.className = 'workspace mode-' + sidebarMode
+    + (sidebarMode==='push' && collapsedPush ? ' collapsed' : '')
+    + (sidebarMode==='overlay' && overlayPinned ? ' pinned' : '');
+
+  document.querySelectorAll('#mode-switch button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.mode===sidebarMode);
+  });
+
+  const dock = document.getElementById('sidebar-dock');
+  const rail = document.getElementById('rail');
+  const flyoutHost = document.getElementById('flyout-host');
+  const drawerHost = document.getElementById('drawer-host');
+  const drawerBackdrop = document.getElementById('drawer-backdrop');
+  const foldersTrigger = document.getElementById('folders-trigger');
+  const content = document.getElementById('sidebar-content');
+  const holder = document.getElementById('content-holder');
+  const hint = document.getElementById('sc-hint');
+
+  flyoutHost.style.display = 'none';
+  drawerHost.style.display = 'none';
+  drawerBackdrop.style.display = 'none';
+  foldersTrigger.style.display = 'none';
+
+  if(sidebarMode==='push'){
+    hint.textContent = collapsedPush
+      ? 'Rail is 52px and stays; content reflows to use the extra width.'
+      : 'Click "Collapse to rail" in the sidebar to shrink it to icons only.';
+    if(collapsedPush){ dock.appendChild(rail); holder.appendChild(content); }
+    else { dock.appendChild(content); refreshContentHead('docked-push'); }
+  } else if(sidebarMode==='overlay'){
+    if(overlayPinned){
+      hint.textContent = 'Pinned open — behaves like Push. Click "Unpin" to go back to a hover rail.';
+      dock.appendChild(content); refreshContentHead('docked-overlay');
+    } else {
+      hint.textContent = 'Rail stays at 52px; hover it (or click the arrow) to peek the full tree without reflowing content.';
+      dock.appendChild(rail);
+      if(peeking){ flyoutHost.style.display='block'; flyoutHost.appendChild(content); refreshContentHead('flyout'); }
+      else { holder.appendChild(content); }
+    }
+  } else { // hidden
+    hint.textContent = 'Sidebar takes zero space until you open "Folders"; it floats over the content and closes on outside click.';
+    foldersTrigger.style.display = 'inline-flex';
+    if(drawerOpen){
+      drawerBackdrop.style.display='block'; drawerHost.style.display='block';
+      drawerHost.appendChild(content); refreshContentHead('drawer');
+    } else {
+      holder.appendChild(content);
+    }
+  }
+}
+
+function openPeek(){
+  if(peekCloseTimer){ clearTimeout(peekCloseTimer); peekCloseTimer=null; }
+  if(sidebarMode==='overlay' && !overlayPinned && !peeking){ peeking = true; updateLayout(); }
+}
+function scheduleClosePeek(){
+  if(peekCloseTimer) clearTimeout(peekCloseTimer);
+  peekCloseTimer = setTimeout(()=>{
+    if(sidebarMode==='overlay' && !overlayPinned && peeking){ peeking = false; updateLayout(); }
+  }, 220);
+}
+
+document.querySelectorAll('#mode-switch button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    sidebarMode = b.dataset.mode;
+    collapsedPush = false;
+    overlayPinned = false;
+    peeking = false;
+    drawerOpen = false;
+    updateLayout();
+  });
+});
+
+document.getElementById('rail-expand').innerHTML = ic('chevron');
+document.getElementById('rail-all').innerHTML = ic('grid');
+document.getElementById('rail-home').innerHTML = ic('home');
+document.getElementById('rail-expand').addEventListener('click', ()=>{
+  if(sidebarMode==='push'){ collapsedPush = false; updateLayout(); }
+  else if(sidebarMode==='overlay'){ peeking = !peeking; if(peekCloseTimer){ clearTimeout(peekCloseTimer); peekCloseTimer=null; } updateLayout(); }
+});
+document.getElementById('rail-all').addEventListener('click', ()=>{ selection='all'; searchQuery=''; syncSearchInput(); renderAll(); });
+document.getElementById('rail-home').addEventListener('click', ()=>{ selection=''; searchQuery=''; syncSearchInput(); renderAll(); });
+wireDropTarget(document.getElementById('rail-home'), '');
+
+document.getElementById('sidebar-dock').addEventListener('mouseenter', openPeek);
+document.getElementById('sidebar-dock').addEventListener('mouseleave', scheduleClosePeek);
+document.getElementById('flyout-host').addEventListener('mouseenter', ()=>{ if(peekCloseTimer){ clearTimeout(peekCloseTimer); peekCloseTimer=null; } });
+document.getElementById('flyout-host').addEventListener('mouseleave', scheduleClosePeek);
+
+// Hovering the collapsed rail while dragging a card also reveals the peek flyout,
+// so a screen can be dragged straight into a folder without leaving it pinned open.
+document.getElementById('sidebar-dock').addEventListener('dragenter', ()=>{ dockDragDepth++; openPeek(); });
+document.getElementById('sidebar-dock').addEventListener('dragleave', ()=>{
+  dockDragDepth = Math.max(0, dockDragDepth-1);
+  if(dockDragDepth===0) scheduleClosePeek();
+});
+document.getElementById('flyout-host').addEventListener('dragenter', ()=>{
+  flyoutDragDepth++;
+  if(peekCloseTimer){ clearTimeout(peekCloseTimer); peekCloseTimer=null; }
+});
+document.getElementById('flyout-host').addEventListener('dragleave', ()=>{
+  flyoutDragDepth = Math.max(0, flyoutDragDepth-1);
+  if(flyoutDragDepth===0) scheduleClosePeek();
+});
+
+document.getElementById('folders-trigger').innerHTML = ic('folder') + ' Folders';
+document.getElementById('folders-trigger').addEventListener('click', ()=>{ drawerOpen = !drawerOpen; updateLayout(); });
+document.getElementById('drawer-backdrop').addEventListener('click', ()=>{ drawerOpen = false; updateLayout(); });
+
+document.getElementById('search-input').addEventListener('input', (e)=>{
+  searchQuery = e.target.value;
+  document.getElementById('clear-search').style.display = searchQuery ? 'flex' : 'none';
+  renderAll();
+});
+document.getElementById('clear-search').innerHTML = ic('x');
+document.getElementById('clear-search').addEventListener('click', ()=>{
+  searchQuery=''; syncSearchInput(); renderAll();
+});
+
+const saveBtn = document.getElementById('btn-save-preview');
+saveBtn.innerHTML = 'Preview: Save dialog with folder picker';
+saveBtn.addEventListener('click', ()=>{
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="sv-backdrop">
+      <div class="modal">
+        <div class="modal-head"><h2>Save Screen</h2><button class="clear-btn" id="sv-close">${ic('x')}</button></div>
+        <div class="modal-body">
+          <span class="field-label">Screen Name</span>
+          <input class="text-input" placeholder="e.g., My Error Logs" value="weekly-slo-review" />
+          <div class="location-picker">
+            <span class="field-label" style="margin:0;white-space:nowrap;">Location</span>
+            <div class="location-chip">${ic('folder')} team/dashboards</div>
+            <button class="btn sm" id="sv-change-loc">Change</button>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="sv-cancel">Cancel</button>
+          <button class="btn primary">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('sv-backdrop').addEventListener('click', (e)=>{ if(e.target.id==='sv-backdrop') closeModal(); });
+  document.getElementById('sv-close').addEventListener('click', closeModal);
+  document.getElementById('sv-cancel').addEventListener('click', closeModal);
+  document.getElementById('sv-change-loc').addEventListener('click', ()=>openMoveModal('weekly-slo-review-DRAFT'));
+});
+// ensure the preview save's screen exists so the move-modal demo works standalone
+SCREENS.push({name:'weekly-slo-review-DRAFT', type:'notebook', updated:'2026-07-27', folder:'team/dashboards'});
+
+renderAll();
+updateLayout();
+</script>
+</body>
+</html>
