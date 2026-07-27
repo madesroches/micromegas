@@ -12,9 +12,12 @@ today (commit `6d83fa29a`) because react-router 8.x dropped CommonJS support ent
 Jest's ability to load `@grafana/ui`'s legacy `react-router-dom-v5-compat` shim. This plan bumps
 to `8.3.0` anyway, but pairs it with a small `yarn patch` that neutralizes the one line actually
 responsible for the Jest breakage (dead code, never reachable in this app), plus a minimal Jest
-config change for a second, genuinely new ESM-only transitive dependency. Both are narrowly
-scoped and verified working end-to-end (`yarn test:ci`, `yarn build`, `yarn lint:fix`, `yarn
-typecheck` all pass).
+config change for a second, genuinely new ESM-only transitive dependency. `react-router@8.3.0`
+also declares an `engines.node >=22.22.0` floor, so this plan bumps `grafana/.nvmrc` and the
+`grafana-plugin` CI workflow from Node 20 to 22, mirroring the same bump `analytics-web-app`
+already made in #1351 for the identical requirement. All of this is narrowly scoped and verified
+working end-to-end under Node 22 (`yarn test:ci`, `yarn build`, `yarn lint:fix`, `yarn typecheck`
+all pass).
 
 ## Current State
 
@@ -79,11 +82,32 @@ typecheck` all pass).
   `set-cookie-parser`), which ships only `dist/index.mjs`. Since no transform is configured for
   `.mjs`, Jest loads it raw and fails on `Unexpected token 'export'` — this is a genuinely new gap
   introduced by the 8.x bump, unrelated to the pre-existing `transformIgnorePatterns` quirk.
+- **Node version floor**: `react-router@8.3.0`'s `package.json` declares
+  `"engines": {"node": ">=22.22.0"}`. `grafana/.nvmrc` (and root `.nvmrc`) currently pin Node
+  `20`, and `.github/workflows/grafana-plugin.yml:43` hardcodes `node-version: '20'` for its
+  `ubuntu-latest` fallback path; `build/grafana_ci.py`'s `setup_nvm_and_node` reads
+  `grafana/.nvmrc` for the self-hosted-runner path. This is the same floor `analytics-web-app`
+  hit in #1351, resolved there by bumping its own `.nvmrc` to the floating major `22` — this plan
+  does the same for `grafana/`. Yarn Berry does not hard-enforce `engines` at install time (a
+  plain `yarn install` under Node 20 completes with only the pre-existing, unrelated
+  react/react-dom peer-dependency warning, no engine error), so staying on Node 20 wouldn't
+  necessarily break the install — but running under an unsupported Node major is an unforced risk
+  for no benefit, since nothing else in `grafana/` requires staying on 20. The shared CI runner
+  image (`docker/github-runner.Dockerfile`) already pre-installs both Node 20 and 22 via `nvm`
+  (added for `analytics-web-app`'s #1351 bump), so no Docker image changes are needed here — only
+  its explanatory comment needs a small update since grafana no longer pins 20. Verified: the full
+  patch + jest-config fix, plus this `.nvmrc`/workflow bump, produces a clean `yarn test:ci`
+  (47/47), `yarn build`, `yarn lint:fix`, and `yarn typecheck` when run under Node `22.22.2`
+  (not just whatever Node the plan happened to be authored under).
+- The Docker frontend-builder stages in `docker/analytics-web.Dockerfile`, `docker/monolith.Dockerfile`,
+  and `docker/all-in-one.Dockerfile` (`node:22-alpine`) build only `analytics-web-app`, not the
+  grafana plugin — confirmed by reading each stage's `COPY`/`RUN` steps, which reference
+  `analytics-web-app/` exclusively. No changes needed there.
 
 ## Design
 
-Two independent, narrowly-scoped changes, both verified together to produce a fully green
-`yarn test:ci` (47/47 tests) and a clean `yarn build`:
+Three independent, narrowly-scoped changes, all verified together to produce a fully green
+`yarn test:ci` (47/47 tests) and a clean `yarn build` under Node 22:
 
 1. **`yarn patch` on `react-router@8.3.0`**: neutralize the single dead-code line responsible for
    the `import.meta` parse failure. The failing code is inside `loadRouteModule` in
@@ -117,9 +141,13 @@ Two independent, narrowly-scoped changes, both verified together to produce a fu
    same `@swc/jest` transformer already configured for `.ts`/`.tsx`/`.js`/`.jsx`, so `cookie-es`
    parses correctly. `transformIgnorePatterns` is left completely untouched (see Current State
    above for why).
+3. **Bump `grafana/.nvmrc` and `.github/workflows/grafana-plugin.yml`'s `node-version` from `20`
+   to `22`**, satisfying react-router 8.3.0's declared `engines.node` floor, mirroring
+   `analytics-web-app`'s #1351 precedent exactly.
 
 No changes to `transformIgnorePatterns`, no new packages added to any allowlist, no changes to
-`analytics-web-app` (already fixed separately by #1351) or any other workspace.
+`analytics-web-app` (already fixed separately by #1351), the Docker frontend-builder stages (see
+Current State), or any other workspace.
 
 ## Implementation Steps
 
@@ -160,15 +188,24 @@ No changes to `transformIgnorePatterns`, no new packages added to any allowlist,
    ```
    Do not touch `transformIgnorePatterns` — leave the existing line exactly as-is (see Current
    State for why).
-5. Run `yarn install` from the repo root to regenerate `yarn.lock`.
-6. Verify from `grafana/`: `yarn test:ci` (expect 5/5 suites, 47/47 tests passing), `yarn build`
-   (expect a clean compile — the ~60 pre-existing `immutable`/`@react-awesome-query-builder`
-   warnings are unrelated and unchanged), `yarn lint:fix`, `yarn typecheck`.
-7. Add a `CHANGELOG.md` entry under **Unreleased** / **Build**, following the precedent of the
+5. Bump `grafana/.nvmrc` from `20` to `22`, and `.github/workflows/grafana-plugin.yml:43`'s
+   `node-version: '20'` to `node-version: '22'`. Update the stale comment in
+   `docker/github-runner.Dockerfile` above the `nvm install 20`/`nvm install 22` block, which
+   currently says grafana pins `20` — no functional change needed there (both versions are
+   already pre-installed for `analytics-web-app`'s sake, and other workspaces may still rely on
+   the root `.nvmrc`'s `20`), just correct the comment.
+6. Run `yarn install` from the repo root to regenerate `yarn.lock`.
+7. Verify from `grafana/`, **under Node 22** (e.g. `nvm use 22` first — matching the new
+   `.nvmrc`/CI pin, not whatever Node happens to be active locally): `yarn test:ci` (expect 5/5
+   suites, 47/47 tests passing), `yarn build` (expect a clean compile — the ~60 pre-existing
+   `immutable`/`@react-awesome-query-builder` warnings are unrelated and unchanged), `yarn
+   lint:fix`, `yarn typecheck`.
+8. Add a `CHANGELOG.md` entry under **Unreleased** / **Build**, following the precedent of the
    adjacent react-router entries in that section: note the bump to `^8.3.0` resolving Dependabot
    alert #395 (GHSA-qwww-vcr4-c8h2), the `yarn patch` neutralizing the dead
-   `import.meta.hot` HMR guard in react-router's framework-mode `loadRouteModule`, and the
-   `.mjs` transform addition for `cookie-es`.
+   `import.meta.hot` HMR guard in react-router's framework-mode `loadRouteModule`, the
+   `.mjs` transform addition for `cookie-es`, and the `grafana/.nvmrc`/CI Node 20→22 bump required
+   by react-router 8.3.0's `engines.node` floor.
 
 ## Files to Modify
 
@@ -178,6 +215,9 @@ No changes to `transformIgnorePatterns`, no new packages added to any allowlist,
 - `.yarnrc.yml` (yarn may add/update an `unplugged`/patch reference here automatically — verify
   after `yarn install`, only commit if it actually changes)
 - `grafana/jest.config.js` (`.mjs` transform mapping)
+- `grafana/.nvmrc` (`20` → `22`)
+- `.github/workflows/grafana-plugin.yml` (`node-version: '20'` → `'22'`)
+- `docker/github-runner.Dockerfile` (comment only — no functional change)
 - `CHANGELOG.md` (Build entry)
 
 ## Trade-offs
@@ -199,14 +239,25 @@ No changes to `transformIgnorePatterns`, no new packages added to any allowlist,
   upstream code no longer needs it — react-router may eventually fix this at the source, e.g. by
   gating the check behind a proper environment detection instead of bare `import.meta.hot`).
   Acceptable one-line maintenance cost versus the alternatives above.
+- **Node 22 bump vs. staying on Node 20**: Yarn doesn't hard-enforce the `engines` floor, so
+  staying on Node 20 would likely still install and run. Bumping to 22 was chosen instead of
+  papering over the mismatch, since there's no reason to run an explicitly-unsupported Node major
+  for a dependency already required by this fix, and it keeps `grafana/` consistent with
+  `analytics-web-app`'s identical #1351 precedent rather than leaving the two workspaces on
+  different (and, for grafana, unsupported) Node versions.
 
 ## Documentation
 
-No project documentation references the root `react-router` resolution or this Jest quirk.
-`CHANGELOG.md` is the only doc requiring an update (per Implementation Step 7).
+No project documentation references the root `react-router` resolution, this Jest quirk, or
+grafana's Node version (unlike `analytics-web-app`, no README/`GETTING_STARTED.md` prerequisites
+section mentions a Node version tied to the grafana plugin — confirmed via grep). `CHANGELOG.md`
+is the only doc requiring an update (per Implementation Step 8).
 
 ## Testing Strategy
 
+- Run all of the below under Node 22 (`nvm use 22` / matching the new `grafana/.nvmrc`), not
+  whichever Node happens to be active locally — this is the version CI and the actual grafana
+  build will use once this plan lands.
 - `yarn test:ci` in `grafana/` — all 5 test suites / 47 tests must pass (this is the primary
   regression check; it directly exercises the code path that broke on the first bump attempt).
 - `yarn build` in `grafana/` — production webpack build must complete with no new
