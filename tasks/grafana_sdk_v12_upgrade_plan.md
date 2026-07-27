@@ -92,10 +92,8 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 
 5. **Fix fallout**
    - Run `python3 build/grafana_ci.py` (or the equivalent `yarn typecheck`, `yarn lint`, `yarn test:ci`, `yarn build` from `grafana/`, using `yarn lint:fix` locally per grafana/CLAUDE.md) and resolve any type/lint errors surfaced by the SDK bump. No new lint deprecation warnings are expected from this bump alone: `@grafana/eslint-config` stays at `^9.0.0` (unchanged), and `grafana/eslint.config.mjs` doesn't enable `@typescript-eslint/no-deprecated`. The existing `Select`/`HorizontalGroup` usage (5 call sites total) remains a well-scoped, separately-tracked deferral (see Trade-offs).
+   - Extend `tests/smoke.spec.ts` (or add a new Playwright spec) to open the query builder/raw editor view and interact with the SQL editor (e.g. type a query, confirm it renders/autocompletes), giving the `@grafana/experimental` → `@grafana/plugin-ui` `SQLEditor` swap automated e2e coverage instead of relying solely on manual verification.
    - Run `python3 build/grafana_e2e_tests.py` (or the equivalent `yarn playwright install --with-deps chromium`, `docker compose up -d`, `yarn e2e`, `docker compose down` from `grafana/`) against the Grafana 12.4.6 docker instance; fix any UI regressions surfaced by the real browser tests (this is the step most likely to surface actual behavior changes, since 12.x visual/DOM diffs for `Select`/`Modal`/`Checkbox` aren't captured by unit tests).
-
-6. **Update CHANGELOG**
-   - Add an entry to `grafana/CHANGELOG.md` noting the SDK bump to 12.4.6.
 
 ## Files to Modify
 - `grafana/package.json` — dependency version bumps, `@grafana/experimental` → `@grafana/plugin-ui`
@@ -105,7 +103,7 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 - `grafana/src/components/utils.ts`
 - `grafana/docker-compose.yaml` — `GRAFANA_VERSION` default
 - `grafana/.config/**`, `grafana/tsconfig.json`, `grafana/eslint.config.mjs` (as hand-ported from a diff against a fresh `create-plugin generate` reference scaffold)
-- `grafana/CHANGELOG.md`
+- `tests/smoke.spec.ts` (or a new Playwright spec) — e2e coverage for the `@grafana/plugin-ui` `SQLEditor` swap
 
 ## Trade-offs
 - **Diff-and-hand-port scaffold refresh vs. hand-editing versions only**: hand-editing just the SDK versions in `package.json` is lower-risk/lower-effort, but the `.config/` scaffolding is explicitly marked as generated and may embed 11.x-specific webpack/jest assumptions (e.g. SWC/TS target, plugin.json schema validation rules) that a fresh scaffold reflects correctly. `create-plugin update`'s own codemod mechanism isn't usable here (this repo has no `.config/.cprc.json` for it to key off, so it's a guaranteed no-op — see `.config/` scaffolding refresh above), so the diff-against-`generate`-output approach is used instead, accepting the extra manual review/port effort that entails.
@@ -113,15 +111,14 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 - **Not migrating `Select`→`Combobox` / `HorizontalGroup`→`Stack` now**: both are deprecated but not removed in 12.4.6. Migrating them is a larger, purely cosmetic/API-surface change unrelated to this issue's scope (dependency bump); tracking as a follow-up rather than bundling in.
 
 ## Documentation
-- `grafana/CHANGELOG.md` — add the version bump entry.
 - `mkdocs/docs/grafana/index.md:22` and `mkdocs/docs/grafana/installation.md:7` both state "Grafana 9.2.5 or later", mirroring `plugin.json`'s `grafanaDependency`. Since `grafanaDependency` is staying at `>=9.2.5` (see Current State), these docs remain accurate as-is and require no changes.
+- `grafana/CHANGELOG.md` is not touched by this PR: per `git log` on that file, its entries are always added by a dedicated "Release vX.Y.Z" commit, not by the feature/dependency-bump PR itself — the 12.4.6 entry will be added later by that process.
 
 ## Testing Strategy
 - `yarn typecheck` and `yarn lint` in `grafana/` — catch type/lint regressions from the SDK bump.
 - `yarn test:ci` — existing Jest unit tests (`datasource.test.ts`, `ConfigEditor.test.tsx`, `types.test.ts`) must continue to pass.
 - `yarn build` — verify webpack production build succeeds against the new SDK/scaffolding.
-- `yarn server -d && yarn e2e` — boot the plugin against a real Grafana 12.4.6 instance via docker-compose and run the Playwright smoke test (`tests/smoke.spec.ts`), satisfying the issue's "test against a Grafana 12 instance" requirement.
-- Manual sanity check: open the query builder and raw SQL editor views in the running Grafana 12 instance to confirm the `@grafana/plugin-ui` `SQLEditor` swap renders and autocompletes correctly (this is the one behavior change unit tests won't catch).
+- `yarn server -d && yarn e2e` — boot the plugin against a real Grafana 12.4.6 instance via docker-compose and run the Playwright e2e tests, satisfying the issue's "test against a Grafana 12 instance" requirement. Extend `tests/smoke.spec.ts` (or add a new spec) to open the query builder/raw editor view and interact with the SQL editor (type a query, confirm it renders/autocompletes) — this is the one behavior change unit tests won't catch, and giving it e2e coverage (see Implementation Step 5) removes the need to rely on manual eyeballing.
 
 ## Open Questions
 None remaining. (Previously open: whether to raise `grafanaDependency` in `plugin.json` above `>=9.2.5` — decided to leave it as-is; if older installs hit issues post-upgrade, they'll be handled via bug reports rather than pre-emptively raising the floor.)
