@@ -17,31 +17,38 @@ test('query editor can switch to the raw SQL editor and accept input', async ({ 
     },
   });
   expect(createResp.ok()).toBeTruthy();
+  const { datasource } = await createResp.json();
 
-  await page.goto('/dashboard/new');
-  await page.getByRole('button', { name: 'Add visualization' }).click();
-
-  // If other datasources already exist, Grafana shows a picker to choose one; if the
-  // datasource we just created is the only one, it's auto-selected and the picker is skipped.
   try {
+    await page.goto('/dashboard/new');
+    await page.getByRole('button', { name: 'Add visualization' }).click();
+
+    // The builder view renders by default once the query editor is showing.
+    const editSqlButton = page.getByRole('button', { name: 'Edit SQL' });
+
+    // Grafana shows a picker to choose a data source when opening a new panel. Wait for
+    // either the picker or the query editor itself, then click through the picker if it's
+    // the one that showed up.
     const dialog = page.getByRole('dialog', { name: 'Select data source' });
-    await dialog.getByRole('button', { name: new RegExp(dsName) }).click({ timeout: 10000 });
-  } catch {
-    // No picker shown - our datasource was auto-selected.
+    await expect(dialog.or(editSqlButton)).toBeVisible({ timeout: 15000 });
+    if (await dialog.isVisible()) {
+      await dialog.getByRole('button', { name: new RegExp(dsName) }).click({ timeout: 10000 });
+    }
+
+    // Confirm the query editor controls are showing.
+    await expect(editSqlButton).toBeVisible({ timeout: 15000 });
+
+    // Switch from the builder view to the raw SQL editor.
+    await editSqlButton.click();
+    await page.getByRole('button', { name: 'Switch' }).click();
+
+    const editor = page.locator('.monaco-editor').first();
+    await expect(editor).toBeVisible();
+    await editor.click();
+    await page.keyboard.type('SELECT 1');
+
+    await expect(editor).toContainText('SELECT 1');
+  } finally {
+    await request.delete(`/api/datasources/uid/${datasource.uid}`);
   }
-
-  // The builder view renders by default - confirm the query editor controls are showing.
-  const editSqlButton = page.getByRole('button', { name: 'Edit SQL' });
-  await expect(editSqlButton).toBeVisible({ timeout: 15000 });
-
-  // Switch from the builder view to the raw SQL editor.
-  await editSqlButton.click();
-  await page.getByRole('button', { name: 'Switch' }).click();
-
-  const editor = page.locator('.monaco-editor').first();
-  await expect(editor).toBeVisible();
-  await editor.click();
-  await page.keyboard.type('SELECT 1');
-
-  await expect(editor).toContainText('SELECT 1');
 });
