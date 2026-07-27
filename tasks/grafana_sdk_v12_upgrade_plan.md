@@ -34,8 +34,14 @@ Upgrade the Grafana plugin (`grafana/`) frontend dependencies from the Grafana 1
 | `@grafana/tsconfig` (dev) | `^2.0.1` | `^2.2.0` |
 | `@grafana/eslint-config` (dev) | `^9.0.0` | `^9.0.0` (no bump) |
 | `@grafana/plugin-e2e` (dev) | `^3.0.0` | `^3.10.0` |
+| `@testing-library/react` (dev) | `^14.0.0` | `>=15.0.2` |
+| `@testing-library/user-event` (dev, new) | — | `^14.5.2` |
 
-React (`^18.0.0`) and Node (`.nvmrc` = `20`) requirements are unchanged — `@grafana/data`/`@grafana/ui`/`@grafana/runtime@12.4.6` still peer-depend on React 18, and `@grafana/create-plugin`'s `engines.node` is `>=20`.
+`@grafana/plugin-ui@0.16.1` declares peer dependencies `@testing-library/react@>=15.0.2` and `@testing-library/user-event@>=14.5.2` (verified via `npm view @grafana/plugin-ui@0.16.1 peerDependencies --json`). The repo's `@testing-library/react` is currently pinned below that floor (`^14.0.0`) and `@testing-library/user-event` isn't installed at all, so both need bumping/adding alongside the `@grafana/plugin-ui` swap to avoid a peer dependency warning.
+
+React (`^18.0.0`) requirement is unchanged — `@grafana/data`/`@grafana/ui`/`@grafana/runtime@12.4.6` still peer-depend on React 18. Node: see the engines note below — `@grafana/plugin-ui@0.16.1` itself declares a higher floor than the repo currently uses.
+
+**Engines mismatch (informational, not a blocker)**: `@grafana/plugin-ui@0.16.1` declares `engines: {"node": ">=24", "yarn": ">=4.16.0"}` (verified via `npm view @grafana/plugin-ui@0.16.1 engines --json`). The repo's `.nvmrc` is `20`, CI's `actions/setup-node` pins `node-version: '20'`, and root `package.json`'s `packageManager` is `yarn@4.14.1` — none satisfy that floor. `grafana/.yarnrc.yml` has no such file and the root `.yarnrc.yml` sets no `engineStrict`-equivalent enforcement, so yarn's engines check stays advisory: `yarn install` is expected to print a non-blocking engines warning for `@grafana/plugin-ui`, not fail the install or CI. Bumping Node/yarn is out of scope for this dependency-bump plan; this is noted here so the warning isn't mistaken for a regression.
 
 `@grafana/eslint-config` stays at `^9.0.0`: `10.0.0` removed the `flat.js`/`base.js` subpath exports that `grafana/eslint.config.mjs` imports (`@grafana/eslint-config/flat.js`), so bumping it breaks `yarn lint` and the webpack `eslint-webpack-plugin` step with `ERR_PACKAGE_PATH_NOT_EXPORTED`. It also swaps the peer dep `@stylistic/eslint-plugin-ts` for `@stylistic/eslint-plugin@>=5.0.0`, which isn't installed. `@grafana/create-plugin@7.9.0`'s own scaffold template still pins `eslint-config@^9.0.0`, so staying on v9 matches current official tooling; migrating to v10 is out of scope for this dependency bump.
 
@@ -54,6 +60,8 @@ npx @grafana/create-plugin@latest generate --path /tmp/create-plugin-reference
 ```
 Diff this repo's `.config/`, `tsconfig.json`, and `eslint.config.mjs` against the fresh scaffold's equivalents, and hand-port any meaningful upstream changes (e.g. webpack/jest/TS target bumps) while preserving this repo's intentional customizations (custom webpack wrapper in `webpack.config.ts`, docker-compose old-plugin-version mount, etc.).
 
+**Caveat — the generated reference scaffold targets Grafana 13.x, not 12.x**: `@grafana/create-plugin@7.9.0`'s own scaffold template (`templates/common/_package.json`) pins the generated plugin's dependencies to `@grafana/data`/`runtime`/`ui@13.1.0`, adds new `@grafana/schema`/`@grafana/i18n` dependencies, and sets `engines.node: ">=22"` — there's no CLI flag to target the 12.x line. The diff will therefore contain 13.x-specific changes that don't belong in a plugin deliberately staying on 12.4.6. When hand-porting, exclude/ignore diff hunks tied to 13.x-only changes (new `@grafana/schema`/`@grafana/i18n` deps, the `engines.node >=22` bump, any rspack-related config) and focus only on webpack/jest/TS/eslint tooling changes that are version-line-agnostic.
+
 ### Local/e2e test environment
 Bump the default Grafana test image in `grafana/docker-compose.yaml`:
 ```yaml
@@ -67,7 +75,8 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
    - In `grafana/package.json`, update `@grafana/data`, `@grafana/runtime`, `@grafana/ui`, `@grafana/e2e-selectors` to `12.4.6`.
    - Remove `@grafana/experimental`; add `@grafana/plugin-ui@^0.16.1`.
    - Bump `@grafana/tsconfig` to `^2.2.0` and `@grafana/plugin-e2e` to `^3.10.0`. Leave `@grafana/eslint-config` at `^9.0.0` (see Dependency changes — `10.0.0` breaks the existing `flat.js` import).
-   - Run `yarn install` from `grafana/` and commit the updated lockfile entries (root `yarn.lock`).
+   - Bump `@testing-library/react` to `>=15.0.2` and add `@testing-library/user-event@^14.5.2` (dev dependencies) to satisfy `@grafana/plugin-ui@0.16.1`'s peer dependencies.
+   - Run `yarn install` from `grafana/` and commit the updated lockfile entries (root `yarn.lock`). Expect a non-blocking engines warning for `@grafana/plugin-ui` (declares `node >=24`/`yarn >=4.16.0`; see Dependency changes) — this doesn't fail the install.
 
 2. **Swap `@grafana/experimental` imports**
    - Update the three import statements listed above in `QueryEditor.tsx`, `RawEditor.tsx`, `utils.ts` to import from `@grafana/plugin-ui`.
@@ -76,6 +85,7 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 3. **Refresh generated scaffolding**
    - Run `npx @grafana/create-plugin@latest generate --path /tmp/create-plugin-reference` to produce a fresh reference scaffold (the `update` command is a no-op here — this repo has no `.config/.cprc.json` for it to key off of).
    - Diff this repo's `.config/`, `tsconfig.json`, `eslint.config.mjs` against the fresh scaffold's equivalents; hand-port meaningful upstream changes and keep intentional project customizations (custom webpack wrapper in `webpack.config.ts`, docker-compose old-plugin-version mount, etc.).
+   - The generated scaffold targets Grafana 13.x (there's no flag to pin `create-plugin generate` to 12.x) — ignore diff hunks tied to 13.x-only changes (new `@grafana/schema`/`@grafana/i18n` deps, `engines.node >=22` bump, rspack config) and hand-port only version-line-agnostic webpack/jest/TS/eslint tooling changes.
 
 4. **Bump local/CI Grafana test version**
    - Update `grafana/docker-compose.yaml` default `GRAFANA_VERSION` to `12.4.6`.
