@@ -36,6 +36,7 @@ The issue explicitly calls for *creating* folders (not just implying them from s
 - Before running the rename transaction, validate the request and reject rather than let the SQL corrupt data or surface a raw DB error:
   - If `new_path == old_path` or `new_path` starts with `old_path || '/'` (renaming/moving a folder into its own subtree), reject with `400`/`409`. Otherwise statement 2 below (`WHERE path LIKE $old || '/%'`) re-matches the row statement 1 just rewrote, double-processing it and garbling the path — e.g. moving `team` to `team/archive/team` when `team/archive` is itself a child of `team`.
   - If `new_path` already exists — either as an explicit `folders` row, or implicitly as a prefix of an existing `screens.folder_path` — return `409 CONFLICT`, matching the delete endpoint's convention below. Otherwise a colliding explicit folder row would surface as a raw PRIMARY KEY violation instead of a clean `409`, and a colliding implicit prefix would silently merge two subtrees with no defined semantics.
+  - If `old_path` doesn't exist — no `folders` row and no `screens.folder_path` with that value as a prefix, i.e. it fails the same "exists" check defined above — return `404 NOT FOUND`, mirroring `update_screen`/`delete_screen`'s `NotFound` convention for a mutating, key-addressed operation on a missing key. Otherwise the 4-statement rewrite below simply matches zero rows and commits as a silent no-op.
 - Renaming/moving a folder is a prefix rewrite in one transaction (materialized-path pattern, same idea the issue itself proposed for screens — just applied where it belongs, to folders):
   1. `UPDATE folders SET path = $new WHERE path = $old`
   2. `UPDATE folders SET path = $new || substring(path from length($old)+2) WHERE path LIKE $old || '/%'`
@@ -53,7 +54,7 @@ The issue explicitly calls for *creating* folders (not just implying them from s
 - `create_screen`/`update_screen` validate `folder_path` segments the same way `name` is validated.
 
 New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON body on `POST`/`PUT`; `GET` takes no parameter and returns the full list — nested slashes in a URL path segment are exactly the kind of thing that breaks silently with naive routing, so the folder path never appears as an Axum path-extractor segment):
-- `GET /folders` → `Vec<FolderInfo>` (`path`, screen count, subfolder count) — union of explicit `folders` rows and implicit prefixes from `screens.folder_path`. Shape of the query (not final SQL): a `WITH RECURSIVE` CTE (or a `regexp_split_to_table(path, '/')` + `string_agg`/array-slice pass) that, for each distinct `screens.folder_path` and `folders.path`, expands every ancestor prefix (`"a/b/c"` → `"a"`, `"a/b"`, `"a/b/c"`); `UNION` that expanded set with the explicit `folders.path` rows; then `GROUP BY` the resulting path, joining back to count direct child screens (`screens.folder_path = path`) and direct child folders (prefixes exactly one segment longer).
+- `GET /folders` → `Vec<FolderInfo>` (`path`, screen count, subfolder count) — union of explicit `folders` rows and implicit prefixes from `screens.folder_path`. No recursive CTE or string-aggregation SQL: consistent with the crate's existing flat-query style (and the Trade-offs section's own low-scale justification), fetch `folders.path` (via a plain `SELECT path FROM folders`) and distinct `screens.folder_path` (via `SELECT DISTINCT folder_path FROM screens`) with two flat queries, then in Rust split each path on `/` to expand ancestor prefixes into a `HashMap<String, FolderInfo>` and increment direct screen/subfolder counts as each row is folded in — same defaulting/aggregation-in-Rust approach already used elsewhere in this crate rather than in SQL.
 - `POST /folders` `{path}` → create (idempotent — creating an already-existing path is a no-op, not an error, since two users concurrently opening "new folder" on the same path shouldn't be treated as a conflict).
 - `PUT /folders` `{path, new_path}` → rename/move (the transaction above), matching the crate-wide convention of `.put(...)` for updates (`update_screen`, `update_data_source` in `web_server.rs` — there is no `.patch(...)` anywhere in `build_protected_routes`).
 - `DELETE /folders?path=...` → delete if empty, else `409`.
@@ -63,7 +64,7 @@ New `folders.rs` module + routes (path passed as a query param on `DELETE`; JSON
 - `screens-api.ts`: add `folder_path` to `Screen`/`CreateScreenRequest`; add `folder_path` to `UpdateScreenRequest` and make `UpdateScreenRequest.config` optional (`config?: ScreenConfig`), mirroring the backend's `Option<serde_json::Value>` change so a folder-only move (`updateScreen(name, { folder_path })`) type-checks; add a small `folders-api.ts` (or extend this file) for the four folder endpoints.
 - `ScreensPage.tsx`: replace the flat grid with a folder-aware view — sidebar tree + breadcrumb + grid of subfolders/screens for the current folder, plus the existing flat "all screens" view for search results. Visual layout follows `alt-a-sidebar-tree.html`'s structure (sidebar tree, breadcrumbs, drag-to-move onto a folder row/card, kebab-menu "Move to folder" modal) — but every operation is keyed by `name` exactly as it is today; a "move" is `updateScreen(name, { folder_path })`, never a lookup-by-path-then-rename. The current folder is reflected in and driven by a `?folder=<path>` URL query param via `useSearchParams`, following the same convention already used by `ScreenPage.tsx`, `PerformanceAnalysisPage.tsx`, `ProcessMetricsPage.tsx`, `ProcessLogPage.tsx`, and `NotebookRenderer.tsx` — so folder views are bookmarkable/shareable and browser back/forward traverse folder navigation.
 - `SaveScreenDialog.tsx`: add a destination-folder field (defaults to the current screen's folder for "Save As", or root for new screens), matching the mockup's "Save Screen" modal (location chip + "Change" → folder picker). `createScreen` request includes `folder_path`.
-- New shared components: `FolderTree` (sidebar), `FolderBreadcrumb`, `FolderPickerModal` — the picker backs both the kebab "Move" action and the Save dialog's "Change" location button, so there's one implementation of "pick a destination folder."
+- New shared components: `FolderTree` (sidebar), `FolderBreadcrumb`, `FolderPickerModal` — the picker backs both the kebab "Move" action and the Save dialog's "Change" location button, so there's one implementation of "pick a destination folder." The "New folder" name input reuses a `normalizeScreenName`-style client-side preview ("Will be saved as: ...") for consistency with `SaveScreenDialog.tsx`'s existing live preview.
 - Search: unchanged approach (client-side filter over the flat list from `GET /screens`), extended to match `folder_path` too, with matched folders auto-expanded in the tree — same idea as the mockup's `matchesQuery`/`computeMatchedFolders`, reimplemented against the real `Screen` type.
 
 ## Migration
@@ -80,13 +81,14 @@ No backfill logic needed beyond the column default — existing screens land in 
 ## Implementation Steps
 
 1. **Schema/migration**: `folders` table, `screens.folder_path` column, v3→v4 migration function. (`schema.rs`, `migration.rs`)
-2. **Screens API**: extend `Screen`/`CreateScreenRequest`/`UpdateScreenRequest` models and handlers for `folder_path`, reusing name-validation helpers for path segments. (`models.rs`, `screens.rs`)
-3. **Folders API**: new `folders.rs` with list/create/rename/delete handlers + the prefix-rewrite transaction; wire routes in `web_server.rs`.
-4. **Frontend types/API client**: `screens-api.ts` additions, new `folders-api.ts`.
-5. **Folder UI components**: `FolderTree`, `FolderBreadcrumb`, `FolderPickerModal`.
-6. **ScreensPage rewrite**: folder-aware browsing, drag-and-drop move, "New folder", search-with-matched-folders.
-7. **SaveScreenDialog**: destination-folder field wired to the shared picker.
-8. **Export/Import**: `ExportedScreen` type gains `folder_path`. `buildScreensExport` (`screens-api.ts:177-188`) must add `folder_path: s.folder_path` to its per-screen mapping so exports actually carry the field. On the import side, all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
+2. **Migration test harness**: build the DB-fixture/harness needed to pin a test database at schema v3 and invoke `execute_migration` directly, then assert v3→v4 is idempotent and existing screens default to root. (new integration test file(s) under `rust/analytics-web-srv/tests/`)
+3. **Screens API**: extend `Screen`/`CreateScreenRequest`/`UpdateScreenRequest` models and handlers for `folder_path`, reusing name-validation helpers for path segments. (`models.rs`, `screens.rs`)
+4. **Folders API**: new `folders.rs` with list/create/rename/delete handlers + the prefix-rewrite transaction; wire routes in `web_server.rs`.
+5. **Frontend types/API client**: `screens-api.ts` additions, new `folders-api.ts`.
+6. **Folder UI components**: `FolderTree`, `FolderBreadcrumb`, `FolderPickerModal`.
+7. **ScreensPage rewrite**: folder-aware browsing, drag-and-drop move, "New folder", search-with-matched-folders.
+8. **SaveScreenDialog**: destination-folder field wired to the shared picker.
+9. **Export/Import**: `ExportedScreen` type gains `folder_path`. `buildScreensExport` (`screens-api.ts:177-188`) must add `folder_path: s.folder_path` to its per-screen mapping so exports actually carry the field. On the import side, all three `createScreen` call sites in `screens-api.ts` need it threaded through: the non-conflict path (~249-253), the `overwrite` path (delete+recreate, 261-269), and the `rename` path (create-with-suffix via `generateUniqueName`, 271-279). All three stay keyed by `name`; no identity change.
 
 ## Files to Modify
 
@@ -96,6 +98,7 @@ No backfill logic needed beyond the column default — existing screens land in 
 - `rust/analytics-web-srv/src/screens.rs`
 - `rust/analytics-web-srv/src/folders.rs` (new)
 - `rust/analytics-web-srv/src/web_server.rs`
+- `rust/analytics-web-srv/tests/migration_test.rs` (new — schema v3→v4 fixture/harness)
 - `analytics-web-app/src/lib/screens-api.ts`
 - `analytics-web-app/src/lib/folders-api.ts` (new)
 - `analytics-web-app/src/routes/ScreensPage.tsx`
