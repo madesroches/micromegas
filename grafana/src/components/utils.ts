@@ -1,4 +1,4 @@
-import {LanguageCompletionProvider, getStandardSQLCompletionProvider} from '@grafana/experimental'
+import {LanguageCompletionProvider, getStandardSQLCompletionProvider} from '@grafana/plugin-ui'
 
 export const buildQueryString = (
   columns: string,

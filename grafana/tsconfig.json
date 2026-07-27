@@ -1,3 +1,14 @@
 {
-  "extends": "./.config/tsconfig.json"
+  "extends": "./.config/tsconfig.json",
+  // ts-node override: @grafana/tsconfig@2.2.0 sets moduleResolution "bundler", which
+  // conflicts (TS5095) with ts-node's commonjs/es5 defaults, so ts-node needs its own module settings here.
+  "ts-node": {
+    "compilerOptions": {
+      "module": "nodenext",
+      "moduleResolution": "nodenext",
+      "target": "es2022",
+      "esModuleInterop": true
+    },
+    "transpileOnly": true
+  }
 }
