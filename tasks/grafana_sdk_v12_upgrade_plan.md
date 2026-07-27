@@ -18,7 +18,7 @@ Upgrade the Grafana plugin (`grafana/`) frontend dependencies from the Grafana 1
 - `grafana/src/plugin.json:54` declares `"grafanaDependency": ">=9.2.5"` — this is a minimum version floor, not a pin, and does not need to change since no 12.x-only API is being adopted.
 - `@grafana/tsconfig` is pinned `^2.0.1` (latest `2.2.0`) and `@grafana/eslint-config` is pinned `^9.0.0` (latest `10.0.0`) — the issue explicitly calls these out for review.
 - CI (`.github/workflows/grafana-plugin.yml`) invokes two scripts that are the real correctness gate for this upgrade: `build/grafana_ci.py` runs a root-level `NODE_ENV=development yarn install` (yarn workspaces), then `yarn typecheck`, `yarn lint` (non-mutating), `yarn test:ci`, `yarn build`; `build/grafana_e2e_tests.py` installs dependencies, runs `yarn playwright install --with-deps chromium`, brings up the dockerized Grafana instance (`docker compose up -d`), runs `yarn e2e` (Playwright), and tears it down with `docker compose down` regardless of test outcome.
-- Grafana's official migration guide for this range (`update-from-grafana-versions/migrate-11_6_x-to-12_0_x`) only documents breaking changes to the plugin **extension API** (`usePluginExtensions`, `getPluginLinkExtensions`, `AppPlugin.configureExtensionLink`, etc., replaced by `addLink`/`addComponent`/`usePluginLinks`/`usePluginComponents`) and the `Select`/`MultiSelect` → `Combobox`/`MultiCombobox` deprecation. Micromegas's plugin doesn't implement any plugin extension points (checked `grafana/src/module.ts`, `grafana/src/plugin.json` — no `extensions` block), so none of the extension-API changes apply. There is no separate guide for 12.0→12.3 (no additional breaking changes documented in that range).
+- Grafana's official migration guide for this range (`update-from-grafana-versions/migrate-11_6_x-to-12_0_x`) only documents breaking changes to the plugin **extension API** (`usePluginExtensions`, `getPluginLinkExtensions`, `AppPlugin.configureExtensionLink`, etc., replaced by `addLink`/`addComponent`/`usePluginLinks`/`usePluginComponents`) and the `Select`/`MultiSelect` → `Combobox`/`MultiCombobox` deprecation. Micromegas's plugin doesn't implement any plugin extension points (checked `grafana/src/module.ts`, `grafana/src/plugin.json` — no `extensions` block), so none of the extension-API changes apply. Beyond that guide, two further breaking changes are documented between 12.0 and 12.4: Grafana 12.0.2 removed the ability for plugins to pin a specific version when declaring a dependency on another plugin, and Grafana 12.4 changed backend plugins to no longer receive all host environment variables by default (relevant here since `plugin.json` declares `"backend": true`). Both were checked and found inapplicable: this plugin doesn't declare a dependency on another plugin (no inter-plugin version pinning used), and a grep for `os.Getenv`/`os.LookupEnv` across `grafana/pkg` found no direct usage, so the plugin's own Go code doesn't rely on host environment variables.
 
 ## Design
 
@@ -34,7 +34,7 @@ Upgrade the Grafana plugin (`grafana/`) frontend dependencies from the Grafana 1
 | `@grafana/tsconfig` (dev) | `^2.0.1` | `^2.2.0` |
 | `@grafana/eslint-config` (dev) | `^9.0.0` | `^9.0.0` (no bump) |
 | `@grafana/plugin-e2e` (dev) | `^3.0.0` | `^3.10.0` |
-| `@testing-library/react` (dev) | `^14.0.0` | `>=15.0.2` |
+| `@testing-library/react` (dev) | `^14.0.0` | `^15.0.2` |
 | `@testing-library/user-event` (dev, new) | — | `^14.5.2` |
 
 `@grafana/plugin-ui@0.16.1` declares peer dependencies `@testing-library/react@>=15.0.2` and `@testing-library/user-event@>=14.5.2` (verified via `npm view @grafana/plugin-ui@0.16.1 peerDependencies --json`). The repo's `@testing-library/react` is currently pinned below that floor (`^14.0.0`) and `@testing-library/user-event` isn't installed at all, so both need bumping/adding alongside the `@grafana/plugin-ui` swap to avoid a peer dependency warning.
@@ -75,7 +75,8 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
    - In `grafana/package.json`, update `@grafana/data`, `@grafana/runtime`, `@grafana/ui`, `@grafana/e2e-selectors` to `12.4.6`.
    - Remove `@grafana/experimental`; add `@grafana/plugin-ui@^0.16.1`.
    - Bump `@grafana/tsconfig` to `^2.2.0` and `@grafana/plugin-e2e` to `^3.10.0`. Leave `@grafana/eslint-config` at `^9.0.0` (see Dependency changes — `10.0.0` breaks the existing `flat.js` import).
-   - Bump `@testing-library/react` to `>=15.0.2` and add `@testing-library/user-event@^14.5.2` (dev dependencies) to satisfy `@grafana/plugin-ui@0.16.1`'s peer dependencies.
+   - Bump `@testing-library/react` to `^15.0.2` and add `@testing-library/user-event@^14.5.2` (dev dependencies) to satisfy `@grafana/plugin-ui@0.16.1`'s peer dependencies.
+   - Bump `engines.node` in `grafana/package.json` from `>=16` to `>=20` to match `.nvmrc` and current tooling requirements (stale value, unrelated to the SDK bump itself).
    - Run `yarn install` from `grafana/` and commit the updated lockfile entries (root `yarn.lock`). Expect a non-blocking engines warning for `@grafana/plugin-ui` (declares `node >=24`/`yarn >=4.16.0`; see Dependency changes) — this doesn't fail the install.
 
 2. **Swap `@grafana/experimental` imports**
@@ -116,7 +117,7 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 
 ## Testing Strategy
 - `yarn typecheck` and `yarn lint` in `grafana/` — catch type/lint regressions from the SDK bump.
-- `yarn test:ci` — existing Jest unit tests (`datasource.test.ts`, `ConfigEditor.test.tsx`, `types.test.ts`) must continue to pass.
+- `yarn test:ci` — existing Jest unit tests (`datasource.test.ts`, `ConfigEditor.test.tsx`, `types.test.ts`, `components/utils.test.ts`, `components/BuilderView.test.tsx`) must continue to pass.
 - `yarn build` — verify webpack production build succeeds against the new SDK/scaffolding.
 - `yarn server -d && yarn e2e` — boot the plugin against a real Grafana 12.4.6 instance via docker-compose and run the Playwright e2e tests, satisfying the issue's "test against a Grafana 12 instance" requirement. Extend `tests/smoke.spec.ts` (or add a new spec) to open the query builder/raw editor view and interact with the SQL editor (type a query, confirm it renders/autocompletes) — this is the one behavior change unit tests won't catch, and giving it e2e coverage (see Implementation Step 5) removes the need to rely on manual eyeballing.
 
