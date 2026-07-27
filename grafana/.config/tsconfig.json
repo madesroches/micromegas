@@ -14,9 +14,8 @@
   },
   "ts-node": {
     "compilerOptions": {
-      "module": "nodenext",
-      "moduleResolution": "nodenext",
-      "target": "es2022",
+      "module": "commonjs",
+      "target": "es5",
       "esModuleInterop": true
     },
     "transpileOnly": true
