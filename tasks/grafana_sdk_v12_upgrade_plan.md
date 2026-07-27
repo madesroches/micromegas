@@ -32,10 +32,12 @@ Upgrade the Grafana plugin (`grafana/`) frontend dependencies from the Grafana 1
 | `@grafana/experimental` | `^2.1.6` | removed |
 | `@grafana/plugin-ui` (new) | — | `^0.16.1` |
 | `@grafana/tsconfig` (dev) | `^2.0.1` | `^2.2.0` |
-| `@grafana/eslint-config` (dev) | `^9.0.0` | `^10.0.0` |
+| `@grafana/eslint-config` (dev) | `^9.0.0` | `^9.0.0` (no bump) |
 | `@grafana/plugin-e2e` (dev) | `^3.0.0` | `^3.10.0` |
 
 React (`^18.0.0`) and Node (`.nvmrc` = `20`) requirements are unchanged — `@grafana/data`/`@grafana/ui`/`@grafana/runtime@12.4.6` still peer-depend on React 18, and `@grafana/create-plugin`'s `engines.node` is `>=20`.
+
+`@grafana/eslint-config` stays at `^9.0.0`: `10.0.0` removed the `flat.js`/`base.js` subpath exports that `grafana/eslint.config.mjs` imports (`@grafana/eslint-config/flat.js`), so bumping it breaks `yarn lint` and the webpack `eslint-webpack-plugin` step with `ERR_PACKAGE_PATH_NOT_EXPORTED`. It also swaps the peer dep `@stylistic/eslint-plugin-ts` for `@stylistic/eslint-plugin@>=5.0.0`, which isn't installed. `@grafana/create-plugin@7.9.0`'s own scaffold template still pins `eslint-config@^9.0.0`, so staying on v9 matches current official tooling; migrating to v10 is out of scope for this dependency bump.
 
 ### `@grafana/experimental` → `@grafana/plugin-ui` swap
 `@grafana/plugin-ui@0.16.1` re-exports the same SQL-editor primitives under the same names (confirmed via its type declarations): `SQLEditor`, `LanguageDefinition`, `LanguageCompletionProvider`, `getStandardSQLCompletionProvider`, `MacroType`. This is expected to be a drop-in import-path rename with no call-site logic changes. Pinned to `^0.16.1` rather than latest: `@grafana/plugin-ui@0.17.0`+ hard-requires `@grafana/data`/`ui`/`runtime`/`e2e-selectors@^13.0.0` as peer deps, which this plan's 12.x target doesn't satisfy; `0.14.0`–`0.16.1` have a permissive peer range (`>=10.4.7`) that tolerates 12.x.
@@ -44,11 +46,13 @@ React (`^18.0.0`) and Node (`.nvmrc` = `20`) requirements are unchanged — `@gr
 - `grafana/src/components/utils.ts:1` — `import {LanguageCompletionProvider, getStandardSQLCompletionProvider} from '@grafana/experimental'` → `from '@grafana/plugin-ui'`
 
 ### `.config/` scaffolding refresh
-Rather than hand-editing the generated webpack/jest/tsconfig files, regenerate them with the official updater so they match what a fresh 12.x plugin scaffold looks like:
+`npx @grafana/create-plugin@latest update` cannot be used here: inspecting the actual `@grafana/create-plugin@7.9.0` package shows `dist/commands/update.command.js`'s `getRootConfig()` reads the plugin's current scaffold version from `.config/.cprc.json`, and this repo has no such file anywhere. When it's missing, the version read fails and silently defaults to `CURRENT_APP_VERSION` itself, so the version-gte-check is trivially satisfied and the command prints "Nothing to update, exiting." and exits immediately — a guaranteed no-op that touches nothing.
+
+Instead, generate a disposable reference scaffold and hand-port the diff:
 ```
-npx @grafana/create-plugin@latest update
+npx @grafana/create-plugin@latest generate --path /tmp/create-plugin-reference
 ```
-This is a known, idempotent, non-interactive mechanism, not a generative/interactive one: inspecting the actual `@grafana/create-plugin@7.9.0` package shows `dist/commands/update.command.js` checks the plugin's current scaffold version against `CURRENT_APP_VERSION` and applies only the targeted codemods needed to bring it current (or reports "Nothing to update" if already current). Review the diff it produces (it may touch `.config/`, `tsconfig.json`, `.eslintrc`/`eslint.config.mjs`, `package.json` scripts) and reconcile with the project's existing customizations (e.g. this repo builds from `webpack.config.ts` rather than the default `.config` entrypoint directly — verify that wrapper still composes correctly after the update).
+Diff this repo's `.config/`, `tsconfig.json`, and `eslint.config.mjs` against the fresh scaffold's equivalents, and hand-port any meaningful upstream changes (e.g. webpack/jest/TS target bumps) while preserving this repo's intentional customizations (custom webpack wrapper in `webpack.config.ts`, docker-compose old-plugin-version mount, etc.).
 
 ### Local/e2e test environment
 Bump the default Grafana test image in `grafana/docker-compose.yaml`:
@@ -62,7 +66,7 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 1. **Bump frontend SDK dependencies**
    - In `grafana/package.json`, update `@grafana/data`, `@grafana/runtime`, `@grafana/ui`, `@grafana/e2e-selectors` to `12.4.6`.
    - Remove `@grafana/experimental`; add `@grafana/plugin-ui@^0.16.1`.
-   - Bump `@grafana/tsconfig` to `^2.2.0`, `@grafana/eslint-config` to `^10.0.0`, `@grafana/plugin-e2e` to `^3.10.0`.
+   - Bump `@grafana/tsconfig` to `^2.2.0` and `@grafana/plugin-e2e` to `^3.10.0`. Leave `@grafana/eslint-config` at `^9.0.0` (see Dependency changes — `10.0.0` breaks the existing `flat.js` import).
    - Run `yarn install` from `grafana/` and commit the updated lockfile entries (root `yarn.lock`).
 
 2. **Swap `@grafana/experimental` imports**
@@ -70,14 +74,14 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
    - Run `yarn typecheck` to confirm the replacement types line up (props/generics for `SQLEditor`, `LanguageCompletionProvider` should be identical, but verify).
 
 3. **Refresh generated scaffolding**
-   - Run `npx @grafana/create-plugin@latest update` from `grafana/`.
-   - Diff the result against the current `.config/`, `tsconfig.json`, `webpack.config.ts`, eslint config; keep intentional project customizations (custom webpack wrapper, docker-compose old-plugin-version mount, etc.) and accept upstream scaffold changes otherwise.
+   - Run `npx @grafana/create-plugin@latest generate --path /tmp/create-plugin-reference` to produce a fresh reference scaffold (the `update` command is a no-op here — this repo has no `.config/.cprc.json` for it to key off of).
+   - Diff this repo's `.config/`, `tsconfig.json`, `eslint.config.mjs` against the fresh scaffold's equivalents; hand-port meaningful upstream changes and keep intentional project customizations (custom webpack wrapper in `webpack.config.ts`, docker-compose old-plugin-version mount, etc.).
 
 4. **Bump local/CI Grafana test version**
    - Update `grafana/docker-compose.yaml` default `GRAFANA_VERSION` to `12.4.6`.
 
 5. **Fix fallout**
-   - Run `python3 build/grafana_ci.py` (or the equivalent `yarn typecheck`, `yarn lint`, `yarn test:ci`, `yarn build` from `grafana/`, using `yarn lint:fix` locally per grafana/CLAUDE.md) and resolve any type/lint errors surfaced by the SDK bump. No new deprecation warnings are expected from this bump alone: `@grafana/eslint-config@10` has no rule targeting deprecated `@grafana/ui` components (it only adds ESLint 10 support and an ESM/stylistic-plugin swap), and `grafana/eslint.config.mjs` doesn't enable `@typescript-eslint/no-deprecated` either. The existing `Select`/`HorizontalGroup` usage (5 call sites total) remains a well-scoped, separately-tracked deferral (see Trade-offs).
+   - Run `python3 build/grafana_ci.py` (or the equivalent `yarn typecheck`, `yarn lint`, `yarn test:ci`, `yarn build` from `grafana/`, using `yarn lint:fix` locally per grafana/CLAUDE.md) and resolve any type/lint errors surfaced by the SDK bump. No new lint deprecation warnings are expected from this bump alone: `@grafana/eslint-config` stays at `^9.0.0` (unchanged), and `grafana/eslint.config.mjs` doesn't enable `@typescript-eslint/no-deprecated`. The existing `Select`/`HorizontalGroup` usage (5 call sites total) remains a well-scoped, separately-tracked deferral (see Trade-offs).
    - Run `python3 build/grafana_e2e_tests.py` (or the equivalent `yarn playwright install --with-deps chromium`, `docker compose up -d`, `yarn e2e`, `docker compose down` from `grafana/`) against the Grafana 12.4.6 docker instance; fix any UI regressions surfaced by the real browser tests (this is the step most likely to surface actual behavior changes, since 12.x visual/DOM diffs for `Select`/`Modal`/`Checkbox` aren't captured by unit tests).
 
 6. **Update CHANGELOG**
@@ -90,11 +94,11 @@ so `yarn server` / the CI e2e job exercise an actual Grafana 12 instance, satisf
 - `grafana/src/components/RawEditor.tsx`
 - `grafana/src/components/utils.ts`
 - `grafana/docker-compose.yaml` — `GRAFANA_VERSION` default
-- `grafana/.config/**`, `grafana/tsconfig.json`, `grafana/eslint.config.mjs` (as touched by `create-plugin update`)
+- `grafana/.config/**`, `grafana/tsconfig.json`, `grafana/eslint.config.mjs` (as hand-ported from a diff against a fresh `create-plugin generate` reference scaffold)
 - `grafana/CHANGELOG.md`
 
 ## Trade-offs
-- **Full `create-plugin update` vs. hand-editing versions only**: hand-editing just the SDK versions in `package.json` is lower-risk/lower-effort, but the `.config/` scaffolding is explicitly marked as generated and may embed 11.x-specific webpack/jest assumptions (e.g. SWC/TS target, plugin.json schema validation rules) that only the official updater knows how to migrate correctly. Given the issue explicitly asks to follow the migration guide and this repo hasn't run the updater before, running it is the safer choice, accepting the extra review diff it produces.
+- **Diff-and-hand-port scaffold refresh vs. hand-editing versions only**: hand-editing just the SDK versions in `package.json` is lower-risk/lower-effort, but the `.config/` scaffolding is explicitly marked as generated and may embed 11.x-specific webpack/jest assumptions (e.g. SWC/TS target, plugin.json schema validation rules) that a fresh scaffold reflects correctly. `create-plugin update`'s own codemod mechanism isn't usable here (this repo has no `.config/.cprc.json` for it to key off, so it's a guaranteed no-op — see `.config/` scaffolding refresh above), so the diff-against-`generate`-output approach is used instead, accepting the extra manual review/port effort that entails.
 - **`@grafana/plugin-ui` vs. keeping `@grafana/experimental`**: `@grafana/experimental` might still work at runtime against 12.x despite its peer dependency range (peer dep warnings aren't hard failures), but relying on an unmaintained package with declared incompatibility is fragile and the replacement is a same-name drop-in, so there's no reason to keep it.
 - **Not migrating `Select`→`Combobox` / `HorizontalGroup`→`Stack` now**: both are deprecated but not removed in 12.4.6. Migrating them is a larger, purely cosmetic/API-surface change unrelated to this issue's scope (dependency bump); tracking as a follow-up rather than bundling in.
 
