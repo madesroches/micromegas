@@ -1,7 +1,7 @@
 import React, {useState, useMemo, useCallback, useEffect} from 'react'
 import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput, Checkbox} from '@grafana/ui'
 import {QueryEditorProps, SelectableValue} from '@grafana/data'
-import {MacroType} from '@grafana/experimental'
+import {MacroType} from '@grafana/plugin-ui'
 import {FlightSQLDataSource} from '../datasource'
 import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, migrateQuery, QueryContext} from '../types'
 import {getSqlCompletionProvider, checkCasing} from './utils'

@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useRef} from 'react'
 
-import {LanguageDefinition, SQLEditor} from '@grafana/experimental'
+import {LanguageDefinition, SQLEditor} from '@grafana/plugin-ui'
 
 type Props = {
   query: any
