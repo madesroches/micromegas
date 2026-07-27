@@ -10,11 +10,20 @@ tasks, so when the grace period elapses and `main()` returns, the tokio
 runtime drops any still-in-flight fetch task. That trips `FulfillGuard`'s
 panic-path fallback and logs a misleading "(likely a panic)" warning even
 though nothing panicked, and it wastes the in-flight origin GET — every
-joiner gets a synthesized error and must refetch after restart. This plan (1)
-makes the log message accurate by distinguishing a real panic from a
-runtime-shutdown drop, and (2) has `FetchScheduler` track outstanding fetch
-tasks so `main()` can wait for them to drain (bounded by the existing grace
-period) before returning.
+joiner gets a synthesized error and must refetch after restart *unless the
+fetched bytes are also recoverable from the disk-tier cache across the
+restart*, which today they are not: `FoyerBackend::new_with_shards` never
+sets a write policy, so foyer defaults to `WriteOnEviction` and a demand
+fill's `put()` only lands in the RAM tier, and `main()` never calls
+`FoyerBackend::close()`, so even a prefetch-hinted fill that *did* reach
+foyer's write pipeline has its flusher torn down with the runtime before it
+can reach disk. This plan (1) makes the log message accurate by
+distinguishing a real panic from a runtime-shutdown drop, (2) has
+`FetchScheduler` track outstanding fetch tasks so `main()` can wait for them
+to drain (bounded by the existing grace period) before returning, and (3)
+retains and closes the `FoyerBackend` after that drain so a successfully
+drained fetch's bytes actually survive the restart instead of only avoiding
+the synthesized-error path.
 
 ## Current State
 
@@ -72,7 +81,7 @@ discarding real origin bandwidth/latency and forcing every joiner (including
 ones from a fresh connection after restart) to refetch.
 
 ### Precedent: `ShutdownFanout` used directly by a binary
-`flight_sql_server.rs:248-317` already constructs `ShutdownFanout` itself
+`rust/public/src/servers/flight_sql_server.rs:248-317` already constructs `ShutdownFanout` itself
 (rather than going through `serve_axum_with_graceful_shutdown`) and
 subscribes to it three times — once for the gRPC serve future, once for an
 optional health-check sidecar, once for its own grace-period deadline — all
@@ -93,7 +102,8 @@ impl Drop for FulfillGuard {
             return;
         }
         let n = self.entries.len();
-        if std::thread::panicking() {
+        let panicking = std::thread::panicking();
+        if panicking {
             warn!("fetch task panicked; fulfilling {n} in-flight entries with an error");
         } else {
             warn!(
@@ -101,7 +111,7 @@ impl Drop for FulfillGuard {
                  (joiners see a synthesized error and must refetch after restart)"
             );
         }
-        let msg = if std::thread::panicking() {
+        let msg = if panicking {
             "fetch task panicked before producing a result"
         } else {
             "fetch task was abandoned (cache service shutting down)"
@@ -148,10 +158,17 @@ impl FetchScheduler {
         self.outstanding_tasks.load(Ordering::Acquire)
     }
 
-    /// Resolves once no detached fetch task is outstanding. Race-free the
-    /// same way `any_entry_promoted` is: the `Notified` future is created
-    /// and the count re-checked before awaiting it, so a `notify_waiters()`
-    /// between the first check and the await is never missed.
+    /// Resolves once no detached fetch task is outstanding. Race-free by
+    /// construction: `Notify::notified()`'s docs guarantee that a
+    /// `notify_waiters()` call is observed by a `Notified` future as long as
+    /// that call happens after the `Notified` was created, regardless of
+    /// whether `enable`/`poll` has run yet — so creating the `Notified`
+    /// *before* re-checking the count (rather than after) means a
+    /// `notify_waiters()` racing the check in between is never missed. This
+    /// is a different guarantee than `any_entry_promoted`'s below, which
+    /// relies on `notify_one`'s stored-permit semantics; `notify_waiters`
+    /// stores no permit, so the ordering above — not a permit — is what
+    /// makes this race-free.
     pub(super) async fn wait_drained(&self) {
         loop {
             if self.outstanding_tasks() == 0 {
@@ -241,30 +258,89 @@ Shutdown must therefore stop *both* producers — axum handlers and the
 prefetch worker — from admitting new work before it waits for
 `outstanding_fetch_tasks()` to reach zero.
 
-**Stop new prefetch intake.** Thread the shutdown signal into both
-`spawn_prefetch_worker` and `spawn_saturation_monitor`. The worker wraps its
-receiver in `.take_until(shutdown)`, so it stops pulling *new* items the
-moment the signal fires but still lets any `warm_item` call it already
-started run to completion (its underlying fetch tasks are tracked the same
-as demand's via `FetchTaskGuard`); the sampler exits its loop on the same
-signal, which drops its own `prefetch_tx` clone instead of holding it
-forever:
+**Stop new prefetch intake, in both the channel and each in-flight item's
+window loop.** Thread the shutdown signal into `spawn_prefetch_worker`, and
+also into `warm_item` itself. Gating only the channel is not enough:
+`warm_item` pulls its `BlockWindows` through `.buffered(WINDOW_CONCURRENCY)`
+with `WINDOW_CONCURRENCY = 1` (`prefetch_queue.rs:21`), so window N+1's
+future isn't even created until window N resolves — a guaranteed point,
+once per window, where a `warm_item` call that's already "started" can still
+spawn a brand-new `spawn_run_fetch` task after the drain below has already
+observed zero outstanding tasks and returned. The worker wraps its receiver
+in `.take_until(shutdown)` so it stops pulling *new* items the moment the
+signal fires, and `warm_item` checks a shared `shutting_down: Arc<AtomicBool>`
+flag before pulling its next window so it stops between windows instead of
+only between items (any window already dispatched still runs to completion
+and is tracked via `FetchTaskGuard` like demand fetches). Since the flag
+must be checked synchronously from every concurrent `warm_item` call rather
+than awaited once, `spawn_prefetch_worker` takes a *second* shutdown future
+(a second `fanout.subscribe()` from the call site) driving a tiny detached
+task that flips the flag — cheaper to clone into every `warm_item` call than
+the shutdown future itself. The sampler exits its loop on its own subscribe
+call, which drops its own `prefetch_tx` clone instead of holding it forever:
 
 ```rust
+async fn warm_item(
+    cache: &RangeCache,
+    item: PrefetchItem,
+    block_size: u64,
+    shutting_down: &Arc<AtomicBool>,
+) {
+    let windows = lazy_windows(&item, block_size);
+    let mut stream = stream::iter(windows)
+        .map(|w| {
+            let cache = cache.clone();
+            let key = item.key.clone();
+            let size = item.size;
+            async move { cache.prefetch_blocks(&key, size, &w).await }
+        })
+        .buffered(WINDOW_CONCURRENCY);
+
+    let mut warmed_any = false;
+    loop {
+        // Stop pulling the next window once shutdown has fired; a window
+        // already dispatched into `stream`'s internal buffer still runs to
+        // completion (it's already tracked by its own `FetchTaskGuard`).
+        if shutting_down.load(Ordering::Acquire) {
+            return;
+        }
+        match stream.next().await {
+            Some(Ok(())) => warmed_any = true,
+            Some(Err(e)) => {
+                imetric!("object_cache_prefetch_fill_error", "count", 1_u64);
+                debug!("prefetch fill failed key={}: {e:?}", item.key);
+                return;
+            }
+            None => break,
+        }
+    }
+    if warmed_any {
+        imetric!("object_cache_prefetch_keys_warmed", "count", 1_u64);
+    }
+}
+
 pub fn spawn_prefetch_worker(
     cache: RangeCache,
     queue_capacity: usize,
     worker_concurrency: usize,
     shutdown: impl Future<Output = ()> + Send + 'static,
+    window_shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> (mpsc::Sender<PrefetchItem>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<PrefetchItem>(queue_capacity);
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let flag = shutting_down.clone();
+    tokio::spawn(async move {
+        window_shutdown.await;
+        flag.store(true, Ordering::Release);
+    });
     let handle = tokio::spawn(async move {
         let block_size = cache.block_size();
         ReceiverStream::new(rx)
             .take_until(shutdown)
             .for_each_concurrent(worker_concurrency, |item| {
                 let cache = cache.clone();
-                async move { warm_item(&cache, item, block_size).await }
+                let shutting_down = shutting_down.clone();
+                async move { warm_item(&cache, item, block_size, &shutting_down).await }
             })
             .await;
     });
@@ -272,28 +348,52 @@ pub fn spawn_prefetch_worker(
 }
 ```
 
+`window_shutdown` is a second, independent `fanout.subscribe()` from the
+call site (see Design §3's `main()` snippet below) — `ShutdownFanout` exists
+precisely to hand out cheap independent subscriptions, so this is one more
+of the same call already made for the axum drain and the channel gate, not
+a new primitive.
+
+**The worker's `JoinHandle` must be awaited before the fetch-task drain
+starts**, not discarded. `main()` currently binds it to `_prefetch_worker`
+and never looks at it again; that leaves a window where `warm_item`'s
+in-flight window fetch has been dispatched (tracked by `FetchTaskGuard`) but
+`join_prefetch` hasn't yet reached the `remove_entry`/`guard.disarm()` tail
+of the spawned fetch task, and the *next* window's future isn't even
+constructed yet — so `outstanding_tasks` can legitimately read 0 between two
+windows of the same still-running `warm_item` call. Awaiting
+`_prefetch_worker` first (bounded by the same shared `remaining` deadline)
+establishes that the last prefetch producer has actually exited before
+`wait_for_fetch_tasks_drain()` is trusted to mean "no more origin GETs will
+be spawned."
+
+`spawn_saturation_monitor` itself does **not** take a shutdown parameter.
+The sample loop's only stated reason to take one would be to stop sampling
+and drop its `prefetch_tx` clone early, but neither holds up: the drain
+budget is short (default 25s grace) and `SAMPLE_INTERVAL` is 5s, so a
+maxed-out drain is exactly the case where telemetry from the last few
+samples is most useful, not something to cut off at the first sign of
+shutdown; and once the worker exits via `take_until(shutdown)` (and the
+window-loop flag above), nothing depends on this clone's closure anymore —
+the channel only has to close for `for_each_concurrent` to stop pulling,
+which `take_until` already guarantees independent of any other clone. The
+sampler is therefore left unchanged and simply dies with the runtime, like
+today:
+
 ```rust
 pub fn spawn_saturation_monitor(
     cache: RangeCache,
     mem_permits: Arc<Semaphore>,
     memory_budget_mb: u32,
     prefetch_tx: mpsc::Sender<PrefetchItem>,
-    shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        tokio::pin!(shutdown);
         let mut networks = Networks::new_with_refreshed_list();
         let mut prev_disk_stats: Option<BackendDiskStats> = None;
         loop {
-            tokio::select! {
-                () = tokio::time::sleep(SAMPLE_INTERVAL) => {
-                    sample_once(&cache, &mem_permits, memory_budget_mb, &prefetch_tx,
-                                &mut networks, &mut prev_disk_stats, SAMPLE_INTERVAL.as_secs_f64());
-                }
-                () = &mut shutdown => {
-                    return; // drops this task's `prefetch_tx` clone
-                }
-            }
+            tokio::time::sleep(SAMPLE_INTERVAL).await;
+            sample_once(&cache, &mem_permits, memory_budget_mb, &prefetch_tx,
+                        &mut networks, &mut prev_disk_stats, SAMPLE_INTERVAL.as_secs_f64());
         }
     })
 }
@@ -337,21 +437,23 @@ let fanout = ShutdownFanout::new(async move {
     let _ = signal_at2.set(Instant::now());
 });
 
-let (prefetch_tx, _prefetch_worker) = spawn_prefetch_worker(
+let (prefetch_tx, prefetch_worker) = spawn_prefetch_worker(
     cache.clone(),
     args.prefetch_queue_capacity,
     args.prefetch_worker_concurrency,
     fanout.subscribe(),
+    fanout.subscribe(), // window_shutdown: gates warm_item's per-window loop
 );
 
 let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb, prefetch_tx);
 
+// No shutdown parameter: the sampler simply dies with the runtime (see
+// Design §3 above for why taking one would buy nothing).
 let _saturation_monitor = saturation_monitor::spawn_saturation_monitor(
     state.cache.clone(),
     state.mem_permits.clone(),
     state.memory_budget_mb,
     state.prefetch_tx.clone(),
-    fanout.subscribe(),
 );
 
 // Taken here -- between `AppState::new` and `.with_state(state)`, the same
@@ -373,6 +475,19 @@ let axum_res = serve_axum_with_graceful_shutdown(
 // only now is it safe to wait for the fetch-task count to reach zero.
 let signal_instant = signal_at.get().copied().unwrap_or_else(Instant::now);
 let remaining = grace.saturating_sub(signal_instant.elapsed());
+
+// The prefetch worker is the *other* fetch-task producer, and its
+// `JoinHandle` must actually be awaited (not discarded, as `main()` does
+// today) before `wait_for_fetch_tasks_drain()` is trusted: `warm_item`'s
+// window loop can still be between iterations -- guard dropped, next
+// window's future not yet spawned -- when `outstanding_tasks` transiently
+// reads 0, so only the worker's own exit proves no further window will be
+// dispatched. Bounded by the same shared deadline as the fetch drain below.
+if tokio::time::timeout(remaining, prefetch_worker).await.is_err() {
+    warn!("prefetch worker did not exit within the grace period; proceeding anyway");
+}
+let remaining = grace.saturating_sub(signal_instant.elapsed());
+
 tokio::select! {
     () = cache_for_drain.wait_for_fetch_tasks_drain() => {
         info!("origin fetch tasks drained");
@@ -392,11 +507,47 @@ tokio::select! {
 axum_res?;
 ```
 
-`AppState::cache` (`app_state.rs`) is already an `Arc`/`Clone`-cheap
-`RangeCache`, so cloning it via `state.cache.clone()` between `AppState::new`
+`AppState::cache` (`app_state.rs`) is already `Clone` and cheap — every
+field is an `Arc` clone except `ns: String`, one small heap allocation, not
+a concern on a shutdown path — so cloning it via `state.cache.clone()`
+between `AppState::new`
 (`object_cache_srv.rs:144`) and `.with_state(state)` (`:180`) — the same gap
 the existing saturation-monitor clone at `:153-154` already uses — is a
 one-line change.
+
+### 4. Close the `FoyerBackend` after the fetch-task drain
+The fetch-task drain above only prevents the *symptom* (a synthesized error
+instead of a clean result) — it does not, by itself, make a drained fetch's
+bytes recoverable across a restart, which is the benefit the Overview
+claims. Two gaps must be closed for that to actually be true:
+
+- **A handle to close.** `object_cache_srv.rs` currently does
+  `RangeCache::new(origin_store, Arc::new(foyer), ...)`, so no reference to
+  the `FoyerBackend` survives outside the `RangeCache`. Bind it to a local
+  first — `let foyer = Arc::new(FoyerBackend::new_with_shards(...).await?);`
+  — and pass that same `Arc` into `RangeCache::new`, so `main()` retains
+  `foyer` alongside `cache` for use after the drain.
+- **A close call, bounded by whatever grace remains.** After the fetch-task
+  drain (Design §3) completes or times out, call `foyer.close()`, racing it
+  against the remaining grace the same way the two drains above do. Whether
+  `FoyerBackend::new_with_shards` should also set `.with_flush_on_close(false)`
+  (leaving foyer's default `flush_on_close = true` otherwise applies) is the
+  operational tradeoff left open below, not decided here:
+
+```rust
+let remaining = grace.saturating_sub(signal_instant.elapsed());
+match tokio::time::timeout(remaining, foyer.close()).await {
+    Ok(Ok(())) => info!("foyer cache closed"),
+    Ok(Err(e)) => warn!("foyer cache close failed: {e:#}"),
+    Err(_) => warn!("grace period of {}s elapsed before foyer cache close finished", grace.as_secs()),
+}
+```
+
+This is what actually delivers the Overview's claim: a demand fetch's bytes
+are only recoverable after restart once (a) this close step exists *and*
+(b) the write policy admits demand fills to the write pipeline at all — see
+the foyer flush-semantics question in Open Questions, which this step
+depends on but does not resolve.
 
 ## Implementation Steps
 1. **Accurate log** — `rust/object-cache/src/range_cache/scheduler.rs`:
@@ -411,15 +562,32 @@ one-line change.
 4. **Expose on `RangeCache`** — `rust/object-cache/src/range_cache/mod.rs`:
    `outstanding_fetch_tasks()`, `wait_for_fetch_tasks_drain()`.
 5. **Stop new prefetch intake on shutdown** — `rust/object-cache-srv/src/prefetch_queue.rs`:
-   add a `shutdown` future parameter to `spawn_prefetch_worker`, wrap the
-   receiver in `.take_until(shutdown)`; `rust/object-cache-srv/src/saturation_monitor.rs`:
-   add the same `shutdown` parameter to `spawn_saturation_monitor` and exit
-   its sample loop on it (dropping its `prefetch_tx` clone).
+   add `shutdown` and `window_shutdown` future parameters to
+   `spawn_prefetch_worker`; wrap the receiver in `.take_until(shutdown)` and
+   have `window_shutdown` drive a small detached task that flips a shared
+   `shutting_down: Arc<AtomicBool>`, which `warm_item` (now taking that flag)
+   checks before pulling each window's next item from its `buffered` stream.
+   Update the three now-inaccurate doc comments this touches:
+   `prefetch_queue.rs:107-112`'s `spawn_prefetch_worker` doc (the handle no
+   longer resolves only on channel closure), `saturation_monitor.rs:160-163`
+   (no longer true that the handle needn't be awaited, nor that it parallels
+   the prefetch worker), and `app_state.rs:28-31` (channel closure is no
+   longer what stops the worker, even though the sentence stays literally
+   true). Also update the six existing call sites in
+   `rust/object-cache-srv/tests/prefetch_tests.rs` (`:180`, `:247`, `:294`,
+   `:447`, `:534`, `:597`), threading a never-firing
+   `std::future::pending::<()>()` for both new parameters so the tests keep
+   compiling and behaving as before.
 6. **Wire shutdown in `main()`** — `rust/object-cache-srv/src/object_cache_srv.rs`:
-   build `ShutdownFanout` directly (recording the signal instant), pass its
-   `subscribe()` into the prefetch worker and saturation monitor, run the
-   axum drain to completion, then run the fetch-task drain bounded by
-   whatever remains of `grace` measured from the recorded signal instant.
+   build `ShutdownFanout` directly (recording the signal instant), pass two
+   independent `subscribe()`s into the prefetch worker (`shutdown` and
+   `window_shutdown`) and one into axum's drain; run the axum drain to
+   completion, then await the prefetch worker's `JoinHandle` (bounded by
+   whatever remains of `grace`) before running the fetch-task drain bounded
+   by whatever remains after that. Then (Design §4): retain the
+   `Arc<FoyerBackend>` bound before it's passed into `RangeCache::new`, and
+   after the fetch-task drain call `foyer.close()` bounded by whatever
+   remains of `grace`.
 7. **Saturation gauge** — `rust/object-cache-srv/src/saturation_monitor.rs`:
    emit `outstanding_fetch_tasks()` as a new `object_cache_outstanding_fetch_tasks`
    gauge alongside `inflight_len()` (already sampled), so a stuck drain is
@@ -429,7 +597,10 @@ one-line change.
    directly, mirroring the existing per-gauge tests there (e.g. the
    `object_cache_ram_tier_entries` precedent, #1322).
 8. **Tests** — see Testing Strategy below, including a new panic-on-`get_range`
-   `ObjectStore` test double.
+   `ObjectStore` test double, and a new `log_blocks`/`LogStringEvent`
+   text-extraction helper for the shutdown-drop test — no in-repo precedent
+   exists (unlike the metrics-block helpers already in `saturation_tests.rs`),
+   so it must be written from scratch.
 9. **Docs** — update `mkdocs/docs/admin/object-cache.md`,
    `mkdocs/docs/admin/service-lifecycle.md`, and
    `rust/object-cache-srv/README.md` to describe the second drain; see
@@ -448,20 +619,37 @@ one-line change.
 - `rust/object-cache/src/range_cache/mod.rs` — construct + hold
   `FetchTaskGuard` around `size()`'s owner branch; expose
   `outstanding_fetch_tasks()` / `wait_for_fetch_tasks_drain()`.
-- `rust/object-cache-srv/src/prefetch_queue.rs` — add a `shutdown` future
-  parameter to `spawn_prefetch_worker`; `.take_until(shutdown)` on the
-  receiver stream.
-- `rust/object-cache-srv/src/saturation_monitor.rs` — add a `shutdown`
-  parameter to `spawn_saturation_monitor`; new `object_cache_outstanding_fetch_tasks`
-  gauge in `sample_once`.
+- `rust/object-cache-srv/src/prefetch_queue.rs` — add `shutdown` and
+  `window_shutdown` future parameters to `spawn_prefetch_worker`;
+  `.take_until(shutdown)` on the receiver stream; a `shutting_down:
+  Arc<AtomicBool>` flag flipped by `window_shutdown` and checked by
+  `warm_item` before each window; update the `spawn_prefetch_worker` doc
+  comment (`:107-112`) to stop claiming the handle resolves only on channel
+  closure.
+- `rust/object-cache-srv/src/saturation_monitor.rs` — new
+  `object_cache_outstanding_fetch_tasks` gauge in `sample_once` (no
+  `shutdown` parameter — see Design §3/Step 5 for why); update the
+  `spawn_saturation_monitor` doc comment (`:160-163`), which currently
+  claims its handle parallels the prefetch worker's.
+- `rust/object-cache-srv/src/app_state.rs` — update the `prefetch_tx` doc
+  comment (`:28-31`): channel closure is no longer what stops the worker,
+  even though the sentence stays literally true.
 - `rust/object-cache-srv/src/object_cache_srv.rs` — build `ShutdownFanout`
-  directly with a recorded signal instant; wire it into the prefetch worker
-  and saturation monitor; sequence the axum drain then the fetch drain
-  against the shared deadline.
+  directly with a recorded signal instant; wire two independent
+  subscriptions into the prefetch worker (`shutdown`, `window_shutdown`)
+  and one into axum's drain; sequence the axum drain, then await the
+  prefetch worker's `JoinHandle`, then the fetch-task drain, then
+  `foyer.close()`, all against the shared deadline; retain the
+  `Arc<FoyerBackend>` bound before it's passed into `RangeCache::new` so
+  `close()` has something to call it on (Design §4).
 - `rust/object-cache/tests/range_cache_tests.rs` — drain/panic-distinction
   regression tests; new panic-on-`get_range` `ObjectStore` double.
 - `rust/object-cache-srv/tests/saturation_tests.rs` — new
   `object_cache_outstanding_fetch_tasks` gauge test.
+- `rust/object-cache-srv/tests/prefetch_tests.rs` — update the six existing
+  `spawn_prefetch_worker` call sites (`:180`, `:247`, `:294`, `:447`, `:534`,
+  `:597`) to pass the two new parameters (a never-firing
+  `std::future::pending::<()>()` for each).
 - `mkdocs/docs/admin/object-cache.md` — shutdown-behavior note on the grace
   period; new Saturation-table row.
 - `mkdocs/docs/admin/service-lifecycle.md` — update the object cache's "What
@@ -487,9 +675,34 @@ one-line change.
   client is merely between windows — and then watch axum's drain spawn more
   fetch tasks afterward, which the runtime would still drop uncounted at
   teardown. Running the fetch drain only after axum's drain completes closes
-  that window; it costs some of the shared grace budget in the worst case
-  (slow HTTP drain *and* slow fetches), which the shared-deadline design
-  below already accounts for.
+  that window on the branch where axum's drain actually finishes; it costs
+  some of the shared grace budget in the worst case (slow HTTP drain *and*
+  slow fetches), which the shared-deadline design below already accounts
+  for. On the *deadline* branch the window narrows but does not fully close:
+  axum 0.8.9 `tokio::spawn`s a task per accepted connection
+  (`serve/mod.rs:389`), so dropping `serve_future` at the deadline kills only
+  the accept loop — already-accepted connections survive as orphaned tasks
+  and can still call `RangeCache::size`/`spawn_run_fetch` after the fetch
+  drain has already started. Practical impact is small because `remaining`
+  is itself `~= 0` in exactly that branch, leaving little time for an
+  orphaned connection to spawn and lose new work.
+- **25s default grace period, unchanged.** `rust/public/src/config.rs:9-21`
+  is the single source of the default (`default_value = "25"`), already set
+  deliberately against a 30s orchestrator termination window (ECS
+  `stopTimeout`, Kubernetes `terminationGracePeriodSeconds`) — see
+  `mkdocs/docs/admin/service-lifecycle.md:92-95`, which already prescribes
+  the escape hatch for slow origins: raise **both** the service grace period
+  and the orchestrator window together. Two facts specific to this feature
+  confirm 25s doesn't need revisiting for it: the cache client's own
+  `CACHE_REQUEST_TIMEOUT` is 15s with fallback-to-direct-store
+  (`object-cache/src/client.rs:19-25`), so no caller is listening past 15s
+  regardless of how long the server-side drain runs; and there is no
+  per-fetch timeout on the origin GET at all, so no finite grace could
+  *guarantee* draining an 8 MiB coalesced run — which is exactly why
+  "abandon and warn at the deadline" (rather than lengthening the default)
+  is the right shape for this drain. Operators with unusually slow origins
+  should use the existing escape hatch above rather than a bespoke default
+  change here.
 - **Single shared deadline (via a recorded signal `Instant`) vs. two
   independent `tokio::time::sleep(grace)` timers.** Independent timers would
   effectively double the usable grace budget now that the drains are
@@ -503,7 +716,7 @@ one-line change.
   by `ingestion.rs`, `analytics-web-srv/web_server.rs`, and
   `object_cache_srv.rs` itself (three callers total); the other two have no
   detached-task concept, so adding one there would be dead complexity for
-  both of them. `flight_sql_server.rs` does not call this helper at all — it
+  both of them. `rust/public/src/servers/flight_sql_server.rs` does not call this helper at all — it
   already constructs `ShutdownFanout` directly and composes its own extra
   drain concerns around it (see Precedent above), which is exactly the
   pattern object-cache-srv follows instead of modifying the shared helper.
@@ -526,9 +739,22 @@ one-line change.
 - `rust/object-cache-srv/README.md:78` documents the same
   `--shutdown-grace-period-seconds` flag/default — add the same note there.
 - Add `outstanding_fetch_tasks` to the saturation gauge list (new
-  `object_cache_outstanding_fetch_tasks` row in the Saturation table,
-  `mkdocs/docs/admin/object-cache.md:247-266`) alongside the existing
+  `object_cache_outstanding_fetch_tasks` row in the two-column Saturation
+  table, `mkdocs/docs/admin/object-cache.md:251-264`, next to the
+  `object_cache_inflight_entries` row at `:255`) alongside the existing
   `inflight_len()`-derived gauge (`saturation_monitor.rs:75`).
+- `mkdocs/docs/admin/object-cache.md:104-123` (Prefetch section) documents
+  the bounded queue and its load-shedding counters but says nothing about
+  shutdown; add a note that on `SIGTERM` the worker stops admitting new
+  items once the drain begins and any queued backlog is abandoned (Step 5).
+- `mkdocs/docs/admin/object-cache.md:156-170` (In-process L1 cache) and/or
+  `service-lifecycle.md:14-17`: add a sentence clarifying that the L1
+  `RangeCache` used by FlightSQL/the monolith (`l1_store.rs:101`, wired via
+  `lakehouse_context.rs` and `static_tables_configurator.rs`) gets the same
+  accurate panic/shutdown log from Step 1, but **not** this plan's
+  fetch-task drain — that drain is object-cache-srv-specific. Without this,
+  a reader could infer from the new object-cache row in the
+  service-lifecycle table that L1 drains too.
 - `mkdocs/docs/admin/monolith.md`, `ingestion.md`, and `maintenance.md` need
   no change — none of them run or front an object cache.
 
@@ -538,28 +764,46 @@ one-line change.
   `FulfillGuard`, and `FetchScheduler` are all `pub(super)`, and the joiner
   future dies with the runtime):
   - *Panic half*: drive a fetch that panics (the new panic-on-`get_range`
-    `ObjectStore` test double from step 8) and assert on the returned `Err`'s
-    text (via `reconstruct_shared_error`) — it must match the panic-branch
-    message ("fetch task panicked before producing a result"), confirming
-    `FulfillGuard::drop` took the panic branch.
+    `ObjectStore` test double from step 8) through a public entry point
+    (e.g. `get_range`/`prefetch_blocks`) and assert the returned `Err`'s
+    formatted text **contains** the panic-branch message ("fetch task
+    panicked before producing a result"), confirming `FulfillGuard::drop`
+    took the panic branch. The test cannot call `reconstruct_shared_error`
+    directly — it's `pub(super)`, not visible from the external test crate —
+    so the assertion goes through whatever public call path already invokes
+    it internally (`fetch.rs:445`/`:467`); and it must be a substring check
+    (`.contains(...)`), never equality, since `reconstruct_shared_error`
+    formats with `{shared:?}`, which includes the full anyhow context chain
+    around the message, not just the message itself.
   - *Shutdown-drop half*: this needs `micromegas_tracing::test_utils::init_in_memory_tracing()`
     (already used in `object-cache/tests/telemetry_tests.rs:11`) plus
     `micromegas_tracing::dispatch::flush_log_buffer()` and `#[serial]`
     (global sink; precedent `telemetry_tests.rs:71`), and a plain `#[test]`
-    (not `#[tokio::test]`) that builds its own `tokio::runtime::Runtime`,
-    spawns the fetch on it, then `drop(runtime)` before it completes to force
-    a task-drop-without-poll-to-completion — dropping a `Runtime` from inside
-    an async context panics (precedent `telemetry_tests.rs:70-74`,
-    `rust/analytics/tests/async_span_tests.rs:38-60`). Assert the captured
-    log contains the shutdown-branch message, since that log line is the
-    only thing observable on this path.
+    (not `#[tokio::test]`) that builds its own `tokio::runtime::Runtime` via
+    `Builder::new_multi_thread()`, spawns the fetch on it, then
+    `drop(runtime)` before it completes to force a
+    task-drop-without-poll-to-completion — dropping a `Runtime` from inside
+    an async context panics. The real precedent for this pattern is
+    `rust/analytics/tests/async_span_tests.rs:38-60` (explicit
+    `drop(runtime)` at `:60`); `telemetry_tests.rs:70-74` does not drop its
+    runtime early and is not an example of this. Reading the captured log
+    requires a new helper with no precedent in the repo (see Step 8);
+    existing in-memory-sink assertions in this codebase all read
+    `metrics_blocks` (`saturation_tests.rs:30,47`), not `log_blocks` — the
+    new helper walks `MemSinkState::log_blocks`
+    (`tracing/src/event/in_memory_sink.rs:23`, `pub`) and matches
+    `LogMsgQueueAny::LogStringEvent` (`tracing/src/logs/block.rs:96`) to
+    extract log text. Assert the captured log contains the shutdown-branch
+    message, since that log line is the only thing observable on this path.
 - **Drain waits for outstanding tasks**: drive `RangeCache::prefetch_blocks`
-  (public, and skips the `size()` HEAD call that `get_range`/`fetch_blocks`
-  would otherwise trigger first — that HEAD is itself a tracked task whose
-  guard can transiently overlap the block fetch's guard, making an `== 1`
-  assertion racy) against a `CountingStore::with_gate` origin double
+  (public, and — unlike `get_range`, which resolves `size()` via a separate
+  HEAD before calling `fetch_blocks` — takes `file_size` directly, so no
+  HEAD call happens at all; that HEAD, when it does happen, is itself a
+  tracked task whose guard can transiently overlap the block fetch's guard,
+  making an `== 1` assertion racy) against a `CountingStore::with_gate` origin double
   (existing infrastructure, `range_cache_tests.rs:65`/`:91`, same pattern as
-  `:613`/`:684`/`:751`/`:785`/`:836`) with an explicit `file_size` so no
+  the gated fetches at `:613`/`:684` — not `:751`/`:785`/`:836`, which use
+  the ungated `CountingStore::new`) with an explicit `file_size` so no
   `size()` call happens at all. Poll with a `tokio::task::yield_now` loop
   (precedent `range_cache_tests.rs:620`) until `counting.get_range_count() >= 1`
   (the origin GET has actually started, so its `spawn_run_fetch` task guard
@@ -576,7 +820,8 @@ one-line change.
   mode (with MinIO up and `MICROMEGAS_OBJECT_STORE_URI` set, so the object
   cache actually starts — `start_object_cache` is only wired into
   `start_split_mode`; `--monolith` starts the monolith *instead*, and the
-  monolith runs no in-process object cache), issuing a slow/streamed request
+  monolith runs no object-cache *server* — it does run the in-process L1
+  `RangeCache`, which is unaffected by this plan), issuing a slow/streamed request
   against the cache, then sending SIGTERM to the `micromegas-object-cache-srv`
   PID and confirming via `/tmp/object_cache.log` that fetch tasks drain (or
   are abandoned with the new accurate wording) before the process exits, with
@@ -585,8 +830,16 @@ one-line change.
   `cargo test -p micromegas-object-cache -p micromegas-object-cache-srv -p micromegas`.
 
 ## Open Questions
-- Is 25s (the current default `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS`)
-  still enough once fetch-task draining is added, or should the default be
-  revisited given large coalesced runs (`max_coalesced_get_bytes`, default
-  8 MiB) can take longer than typical HTTP handler drains? No evidence either
-  way; flagging for the reviewer rather than guessing.
+- **Which foyer flush semantics should the new shutdown close step (Design
+  §4) use?** Both shapes are implementable and neither has an in-repo
+  precedent (the only existing `FoyerBackend::close()` callers are tests):
+  (a) `close()` with foyer's default `flush_on_close = true` — best
+  cross-restart warmth, but flushes the whole RAM tier (`--ram-mb` defaults
+  to 512, `cli.rs:24-25`), consuming real wall-clock inside the same 25s
+  budget the HTTP and fetch drains already share; or (b)
+  `with_flush_on_close(false)` + `close()` — only drains the write pipeline,
+  bounding shutdown latency, but helps only prefetch-hinted fills unless the
+  cache policy is also changed to `WriteOnInsertion`. This is an operational
+  tradeoff between shutdown latency and post-restart cache warmth with no
+  in-repo convention or infra constraint to decide it; flagging for the
+  reviewer rather than guessing.
