@@ -189,11 +189,18 @@ Current State), or any other workspace.
    Do not touch `transformIgnorePatterns` — leave the existing line exactly as-is (see Current
    State for why).
 5. Bump `grafana/.nvmrc` from `20` to `22`, and `.github/workflows/grafana-plugin.yml:43`'s
-   `node-version: '20'` to `node-version: '22'`. Update the stale comment in
-   `docker/github-runner.Dockerfile` above the `nvm install 20`/`nvm install 22` block, which
-   currently says grafana pins `20` — no functional change needed there (both versions are
-   already pre-installed for `analytics-web-app`'s sake, and other workspaces may still rely on
-   the root `.nvmrc`'s `20`), just correct the comment.
+   `node-version: '20'` to `node-version: '22'`. Also bump `grafana/package.json:76`'s own
+   `"engines": {"node": ">=20"}` to `">=22"` (precedent: `tasks/completed/grafana_sdk_v12_upgrade_plan.md`
+   bumped this same field from `>=16` to `>=20` to track `.nvmrc`/tooling requirements — it must
+   move in lockstep here too, otherwise the package falsely declares support for a Node major that
+   no longer satisfies its own transitive dependency's `engines` floor). Update
+   `CONTRIBUTING.md:358` and its manually-maintained mirror `mkdocs/docs/contributing.md:238`
+   (both currently read "Node.js 20+ (matches `.nvmrc` and all CI workflows; Yarn 4 requires
+   ≥18.12)" under "Grafana Plugin Development" → "Prerequisites") from "Node.js 20+" to "Node.js
+   22+". Update the stale comment in `docker/github-runner.Dockerfile` above the `nvm install
+   20`/`nvm install 22` block, which currently says grafana pins `20` — no functional change
+   needed there (both versions are already pre-installed for `analytics-web-app`'s sake, and other
+   workspaces may still rely on the root `.nvmrc`'s `20`), just correct the comment.
 6. Run `yarn install` from the repo root to regenerate `yarn.lock`.
 7. Verify from `grafana/`, **under Node 22** (e.g. `nvm use 22` first — matching the new
    `.nvmrc`/CI pin, not whatever Node happens to be active locally): `yarn test:ci` (expect 5/5
@@ -223,8 +230,11 @@ Current State), or any other workspace.
   after `yarn install`, only commit if it actually changes)
 - `grafana/jest.config.js` (`.mjs` transform mapping)
 - `grafana/.nvmrc` (`20` → `22`)
+- `grafana/package.json` (`engines.node`: `>=20` → `>=22`)
 - `.github/workflows/grafana-plugin.yml` (`node-version: '20'` → `'22'`)
 - `docker/github-runner.Dockerfile` (comment only — no functional change)
+- `CONTRIBUTING.md` and `mkdocs/docs/contributing.md` ("Node.js 20+" → "Node.js 22+" in the
+  Grafana Plugin Development prerequisites)
 - `CHANGELOG.md` (Build entry)
 
 ## Trade-offs
@@ -255,10 +265,12 @@ Current State), or any other workspace.
 
 ## Documentation
 
-No project documentation references the root `react-router` resolution, this Jest quirk, or
-grafana's Node version (unlike `analytics-web-app`, no README/`GETTING_STARTED.md` prerequisites
-section mentions a Node version tied to the grafana plugin — confirmed via grep). `CHANGELOG.md`
-is the only doc requiring an update (per Implementation Step 8).
+No project documentation references the root `react-router` resolution or this Jest quirk. Two
+docs do state a Node version requirement tied to the grafana plugin specifically:
+`CONTRIBUTING.md:358` and its manually-maintained mirror `mkdocs/docs/contributing.md:238`, both
+under "Grafana Plugin Development" → "Prerequisites", currently reading "Node.js 20+ (matches
+`.nvmrc` and all CI workflows; Yarn 4 requires ≥18.12)" — update both to "Node.js 22+" (per
+Implementation Step 5). `CHANGELOG.md` also requires an update (per Implementation Step 8).
 
 ## Testing Strategy
 
