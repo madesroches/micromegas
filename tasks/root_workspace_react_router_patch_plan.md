@@ -205,7 +205,14 @@ Current State), or any other workspace.
    alert #395 (GHSA-qwww-vcr4-c8h2), the `yarn patch` neutralizing the dead
    `import.meta.hot` HMR guard in react-router's framework-mode `loadRouteModule`, the
    `.mjs` transform addition for `cookie-es`, and the `grafana/.nvmrc`/CI Node 20→22 bump required
-   by react-router 8.3.0's `engines.node` floor.
+   by react-router 8.3.0's `engines.node` floor. In the same edit, amend the existing
+   `CHANGELOG.md:27` bullet (the `brace-expansion` entry, still under this same `Unreleased`/Build
+   section), which currently ends "...Dependabot alert 395 (`react-router` CSRF bypass,
+   GHSA-qwww-vcr4-c8h2, root workspace) stays open — react-router 8.x dropped CommonJS support
+   entirely...so it can't be bumped past 7.x without a separate `@grafana/ui` major upgrade" —
+   that claim is exactly what this plan disproves, so remove the now-stale "stays open" clause
+   from that bullet (keeping the unrelated `brace-expansion` portion intact) rather than leaving
+   two contradictory statements about the same alert in the same section.
 
 ## Files to Modify
 
