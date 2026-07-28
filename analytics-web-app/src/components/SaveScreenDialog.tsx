@@ -3,6 +3,7 @@ import { Folder, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createScreen, ScreenTypeName, ScreenConfig, ScreenApiError } from '@/lib/screens-api'
 import { listFolders, FolderInfo } from '@/lib/folders-api'
+import { notifyFoldersChanged } from '@/lib/folders-sync'
 import { FolderPickerModal } from '@/components/FolderPickerModal'
 
 interface SaveScreenDialogProps {
@@ -102,6 +103,7 @@ export function SaveScreenDialog({
         config,
         folder_path: destinationFolder,
       })
+      notifyFoldersChanged()
       onSaved(screenName)
     } catch (err) {
       if (err instanceof ScreenApiError) {
