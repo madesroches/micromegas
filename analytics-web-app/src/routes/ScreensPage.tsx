@@ -1,7 +1,7 @@
 import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Plus, MoreVertical, Folder } from 'lucide-react'
+import { Plus, MoreVertical, Folder, FolderPlus } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -11,6 +11,7 @@ import { AppLink } from '@/components/AppLink'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { FolderBreadcrumb } from '@/components/FolderBreadcrumb'
 import { FolderPickerModal } from '@/components/FolderPickerModal'
+import { normalizeFolderSegment } from '@/components/FolderTree'
 import {
   listScreens,
   getScreenTypes,
@@ -20,7 +21,7 @@ import {
   deleteScreen,
   ScreenApiError,
 } from '@/lib/screens-api'
-import { listFolders, FolderInfo } from '@/lib/folders-api'
+import { listFolders, createFolder, FolderInfo } from '@/lib/folders-api'
 import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
 import { useMoveScreen } from '@/hooks/useMoveScreen'
 
@@ -44,6 +45,8 @@ function ScreensPageContent() {
   const [openMenuFor, setOpenMenuFor] = useState<string | null>(null)
   const [movingScreen, setMovingScreen] = useState<string | null>(null)
   const [draggingScreen, setDraggingScreen] = useState<string | null>(null)
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
 
   // `?folder=<path>` is the single source of truth for the selected folder;
   // absent means the root (Home) folder. `?q=` drives the search view; both
@@ -93,6 +96,30 @@ function ScreensPageContent() {
 
   const handleCreateNew = (typeName: ScreenTypeName) => {
     navigate(`/screen/new?type=${typeName}`)
+  }
+
+  const normalizedNewFolderName = useMemo(() => normalizeFolderSegment(newFolderName), [newFolderName])
+
+  const commitCreateFolder = async () => {
+    if (!normalizedNewFolderName) {
+      setCreatingFolder(false)
+      setNewFolderName('')
+      return
+    }
+    const path = selectedFolder ? `${selectedFolder}/${normalizedNewFolderName}` : normalizedNewFolderName
+    setActionError(null)
+    try {
+      await createFolder(path)
+      notifyFoldersChanged()
+      await loadData()
+    } catch (err) {
+      setActionError(
+        err instanceof ScreenApiError ? `Failed to create folder: ${err.message}` : 'Failed to create folder'
+      )
+    } finally {
+      setCreatingFolder(false)
+      setNewFolderName('')
+    }
   }
 
   const handleDeleteClick = (screenName: string, e: React.MouseEvent) => {
@@ -309,7 +336,45 @@ function ScreensPageContent() {
                     New {type.display_name}
                   </Button>
                 ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setNewFolderName('')
+                    setCreatingFolder(true)
+                  }}
+                  disabled={isSearching}
+                  className="gap-1.5"
+                >
+                  <FolderPlus className="w-4 h-4" />
+                  New Folder
+                </Button>
               </div>
+
+              {creatingFolder && (
+                <div className="mb-4 max-w-xs">
+                  <input
+                    autoFocus
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    onBlur={commitCreateFolder}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitCreateFolder()
+                      if (e.key === 'Escape') {
+                        setCreatingFolder(false)
+                        setNewFolderName('')
+                      }
+                    }}
+                    placeholder="Folder name"
+                    className="w-full px-2 py-1 text-sm bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
+                  />
+                  {normalizedNewFolderName && normalizedNewFolderName !== newFolderName.toLowerCase() && (
+                    <p className="text-[11px] text-theme-text-muted mt-0.5">
+                      Will be saved as: <span className="font-mono text-accent-link">{normalizedNewFolderName}</span>
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Content */}
               <div className="flex-1 overflow-auto">
