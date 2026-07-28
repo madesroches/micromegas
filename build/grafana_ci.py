@@ -31,16 +31,16 @@ def setup_nvm_and_node(repo_root: Path) -> str | None:
     else:
         # Create .nvmrc in grafana directory if it doesn't exist
         nvmrc_path = repo_root / "grafana" / ".nvmrc"
-        required_version = "20"  # Default to Node 20 LTS
+        required_version = "22"  # Default to Node 22 (react-router@8.3.0 requires >=22.22.0)
         print(f"No .nvmrc found, creating {nvmrc_path} with Node {required_version}")
         nvmrc_path.parent.mkdir(parents=True, exist_ok=True)
         with open(nvmrc_path, "w") as f:
             f.write(f"{required_version}\n")
 
     # Update .nvmrc to a compatible version if needed
-    # ESLint requires ^18.18.0 || ^20.9.0 || >=21.1.0
+    # react-router@8.3.0 requires Node >=22.22.0
     if required_version in ["16", "17", "19"]:
-        required_version = "20"
+        required_version = "22"
         print(
             f"Updating {nvmrc_path} to Node {required_version} (required by dependencies)"
         )
@@ -111,7 +111,7 @@ def main():
 
     # Setup Node version first
     node_version = setup_nvm_and_node(repo_root)
-    if not node_version:
+    if node_version is None:
         return 1
 
     # Install dependencies (must be done from root for yarn workspaces)

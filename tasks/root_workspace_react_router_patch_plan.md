@@ -212,13 +212,19 @@ Current State), or any other workspace.
    20`/`nvm install 22` block, which currently says grafana pins `20` — no functional change
    needed there (both versions are already pre-installed for `analytics-web-app`'s sake, and other
    workspaces may still rely on the root `.nvmrc`'s `20`), just correct the comment.
-6. Run `yarn install` from the repo root to regenerate `yarn.lock`.
-7. Verify from `grafana/`, **under Node 22** (e.g. `nvm use 22` first — matching the new
+6. Fix `build/grafana_ci.py`'s `run_cmd` to `nvm use` the explicit resolved Node version
+   (`setup_nvm_and_node`'s return value) instead of a bare `nvm use`: the bare form resolves the
+   nearest `.nvmrc` by walking up from `cwd`, which is wrong for steps invoked with
+   `cwd=repo_root` (they'd pick up the root `.nvmrc`, not `grafana/.nvmrc`) — a bug that stayed
+   latent while both `.nvmrc`s pinned `20`, but went live the moment this branch bumped
+   `grafana/.nvmrc` to `22`.
+7. Run `yarn install` from the repo root to regenerate `yarn.lock`.
+8. Verify from `grafana/`, **under Node 22** (e.g. `nvm use 22` first — matching the new
    `.nvmrc`/CI pin, not whatever Node happens to be active locally): `yarn test:ci` (expect 5/5
    suites, 47/47 tests passing), `yarn build` (expect a clean compile — the ~60 pre-existing
    `immutable`/`@react-awesome-query-builder` warnings are unrelated and unchanged), `yarn
    lint:fix`, `yarn typecheck`.
-8. Add a `CHANGELOG.md` entry under **Unreleased** / **Build**, following the precedent of the
+9. Add a `CHANGELOG.md` entry under **Unreleased** / **Build**, following the precedent of the
    adjacent react-router entries in that section: note the bump to `^8.3.0` resolving Dependabot
    alert #395 (GHSA-qwww-vcr4-c8h2), the `yarn patch` neutralizing the dead
    `import.meta.hot` HMR guard in react-router's framework-mode `loadRouteModule`, the
@@ -244,6 +250,8 @@ Current State), or any other workspace.
 - `grafana/package.json` (`engines.node`: `>=20` → `>=22`)
 - `.github/workflows/grafana-plugin.yml` (`node-version: '20'` → `'22'`)
 - `docker/github-runner.Dockerfile` (comment only — no functional change)
+- `build/grafana_ci.py` (`run_cmd`: `nvm use` the explicit resolved Node version instead of a bare
+  `nvm use`, which was resolving the wrong `.nvmrc` when invoked with `cwd=repo_root`)
 - `CONTRIBUTING.md` and `mkdocs/docs/contributing.md` ("Node.js 20+" → "Node.js 22+" in the
   Grafana Plugin Development prerequisites)
 - `CHANGELOG.md` (Build entry)

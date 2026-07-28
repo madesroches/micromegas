@@ -9,8 +9,11 @@ module.exports = {
     transformIgnorePatterns: ["node_modules/?!(d3-interpolate)"],
   // cookie-es (pulled in transitively via react-router) ships only a .mjs build; the scaffolded
   // transform regex only matches .ts/.tsx/.js/.jsx, so .mjs files are never transformed otherwise.
+  // Reuse whichever transformer the scaffolded config defines (rather than indexing by its literal
+  // key string) so a future regeneration of .config/jest.config.js with a differently-worded key
+  // doesn't silently break this lookup.
   transform: {
     ...require('./.config/jest.config').transform,
-    '^.+\\.mjs$': require('./.config/jest.config').transform['^.+\\.(t|j)sx?$'],
+    '^.+\\.mjs$': Object.values(require('./.config/jest.config').transform)[0],
   },
 };

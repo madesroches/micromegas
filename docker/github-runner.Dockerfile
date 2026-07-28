@@ -91,7 +91,8 @@ RUN ARCH=$([ "$(uname -m)" = "x86_64" ] && echo "x64" || echo "arm64") \
 
 # nvm, for the runner user — this runner is shared across projects that pin
 # Node versions via their own .nvmrc (analytics-web-app and grafana both
-# pin 22; other workspaces may still rely on the root .nvmrc's 20).
+# pin 22). Node 20 is kept pre-installed too as a low-cost fallback (e.g.
+# for older branches that haven't picked up the Node 22 bump yet).
 # build/analytics_web_ci.py and build/grafana_ci.py already source nvm.sh
 # and call `nvm install`/`nvm use` against each project's .nvmrc; without
 # nvm present they silently fall back to whatever Node ships in this base
