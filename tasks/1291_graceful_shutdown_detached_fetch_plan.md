@@ -1200,7 +1200,7 @@ No code change is made for this (see the matching Trade-offs note).
   tracked task whose guard can transiently overlap the block fetch's guard,
   making an `== 1` assertion racy) against a `CountingStore::with_gate` origin double
   (existing infrastructure, `range_cache_tests.rs:65`/`:91`, same pattern as
-  the gated fetches at `:613`/`:684` — not `:751`/`:785`/`:836`, which use
+  the gated fetches at `:666`/`:959` — not `:739`/`:768`/`:819`, which use
   the ungated `CountingStore::new`) with an explicit `file_size` so no
   `size()` call happens at all. Poll with a `tokio::task::yield_now` loop
   (precedent `range_cache_tests.rs:620`) until `counting.get_range_count() >= 1`
