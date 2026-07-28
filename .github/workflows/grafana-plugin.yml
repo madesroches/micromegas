@@ -40,7 +40,7 @@ jobs:
         if: needs.check-runner.outputs.runner == 'ubuntu-latest'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'yarn'
 
       - name: Setup Go environment

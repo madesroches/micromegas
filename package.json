@@ -36,7 +36,7 @@
     "protobufjs": "^7.6.5",
     "protocol-buffers-schema": "^3.6.1",
     "qs": "^6.15.2",
-    "react-router": "^7.18.0",
+    "react-router": "patch:react-router@npm%3A8.3.0#~/.yarn/patches/react-router-npm-8.3.0-258476627b.patch",
     "serialize-javascript": "^7.0.5",
     "tar": "^7.5.21",
     "undici": ">=6.27.0",
