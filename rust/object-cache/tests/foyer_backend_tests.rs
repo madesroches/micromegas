@@ -138,6 +138,58 @@ async fn round_trip_through_disk_tier() {
     assert_eq!(got, data);
 }
 
+// This is the load-bearing case for the 1291 shutdown plan's Design §4 claim:
+// close()'s default eviction-to-zero flush persists a RAM-resident demand
+// fill even with no eviction pressure at all. Every other put->close->get
+// case in this file either forces eviction first with a tiny `ram_bytes` (see
+// `round_trip_through_disk_tier` above) or uses `FillHint::Prefetch`'s
+// `.force()` storage-only writer, so none of them today exercises a demand
+// entry surviving *only* because `close()` flushed it.
+#[tokio::test]
+async fn demand_fill_survives_close_without_eviction() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_path = dir.path().to_str().expect("utf8 path");
+    let data = Bytes::from(vec![9u8; 4096]);
+
+    {
+        // `ram_bytes` generous enough that this single put never triggers
+        // eviction.
+        let backend = FoyerBackend::new_with_shards(
+            dir_path,
+            16 * 1024 * 1024,
+            16 * 1024 * 1024,
+            1,
+            WriteTuning::default(),
+            Arc::from(Vec::new()),
+        )
+        .await
+        .expect("create backend");
+        backend
+            .put("key".to_string(), data.clone(), FillHint::Demand)
+            .await;
+        backend.close().await.expect("close backend");
+    }
+
+    // Reopen a fresh backend over the same directory: the only way `get` can
+    // hit here is if `close()`'s flush actually reached disk, since nothing
+    // survives in RAM across a fresh `FoyerBackend` instance.
+    let reopened = FoyerBackend::new_with_shards(
+        dir_path,
+        16 * 1024 * 1024,
+        16 * 1024 * 1024,
+        1,
+        WriteTuning::default(),
+        Arc::from(Vec::new()),
+    )
+    .await
+    .expect("reopen backend");
+    let got = reopened
+        .get("key", data.len() as u64)
+        .await
+        .expect("demand fill must survive close-without-eviction across a restart");
+    assert_eq!(got, data);
+}
+
 // A prefetch fill must be admitted to the SSD tier deterministically (via
 // `.force()`, bypassing the disk admission picker) and must not retain RAM-tier
 // residency: only an ephemeral record is held during the write, dropped

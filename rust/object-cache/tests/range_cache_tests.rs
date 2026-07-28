@@ -1379,3 +1379,166 @@ async fn stream_ranges_mid_stream_origin_failure_surfaces_as_stream_err() {
     let second = stream.next().await.expect("stream yields the failure");
     assert!(second.is_err(), "mid-stream origin failure must be an Err");
 }
+
+// -- Shutdown/panic distinction, fetch-task drain ----------------------------
+
+/// A ranged `get_opts` call panics unconditionally; HEAD requests pass
+/// through untouched. Used to drive `spawn_run_fetch`'s task into a genuine
+/// panic (rather than a returned `Err`) so `FulfillGuard::drop`'s
+/// panic-branch message can be observed from a public entry point.
+#[derive(Debug)]
+struct PanicOnRangeStore {
+    inner: Arc<dyn ObjectStore>,
+}
+
+impl std::fmt::Display for PanicOnRangeStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PanicOnRangeStore({})", self.inner)
+    }
+}
+
+#[async_trait]
+impl ObjectStore for PanicOnRangeStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        if options.range.is_some() {
+            panic!("PanicOnRangeStore: simulated panic during ranged GET");
+        }
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+/// A panicking `spawn_run_fetch` task must be reported through
+/// `FulfillGuard::drop`'s panic branch, not its shutdown-drop branch: the
+/// joiner's error must contain the panic-specific message. `reconstruct_shared_error`
+/// is `pub(super)` and not reachable from this external test crate, so the
+/// assertion goes through `get_range`, the public call path that invokes it
+/// internally; the check is a substring match, not equality, since the
+/// reconstructed error's `{:?}` carries the full anyhow context chain around
+/// the message, not just the message itself.
+#[tokio::test]
+async fn panic_during_fetch_reports_panic_not_shutdown() {
+    with_timeout(async move {
+        let store = Arc::new(InMemory::new());
+        put_bytes(&store, "obj", &[1u8; 4096]).await;
+        let panicking = Arc::new(PanicOnRangeStore {
+            inner: store.clone() as Arc<dyn ObjectStore>,
+        });
+        let cache = make_cache(panicking as Arc<dyn ObjectStore>);
+
+        let err = cache
+            .get_range("obj", 0..10)
+            .await
+            .expect_err("a panicking origin fetch must surface as an error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("fetch task panicked before producing a result"),
+            "expected the panic-branch message, got: {msg}"
+        );
+    })
+    .await;
+}
+
+/// `wait_for_fetch_tasks_drain()` must not resolve while a detached fetch
+/// task is still outstanding. Uses `prefetch_blocks` with an explicit
+/// `file_size` (unlike `get_range`, which resolves `size()` via a separate
+/// HEAD first) so no HEAD call happens at all and the only tracked task is
+/// the block fetch itself.
+#[tokio::test]
+async fn drain_waits_for_outstanding_fetch_tasks() {
+    with_timeout(async move {
+        let file_size = 4096u64;
+        let store = Arc::new(InMemory::new());
+        put_bytes(&store, "obj", &vec![1u8; file_size as usize]).await;
+        let (counting, gate) = CountingStore::with_gate(store.clone() as Arc<dyn ObjectStore>);
+        let cache = make_cache(counting.clone() as Arc<dyn ObjectStore>);
+
+        let prefetch_cache = cache.clone();
+        let prefetch =
+            tokio::spawn(
+                async move { prefetch_cache.prefetch_blocks("obj", file_size, &[0]).await },
+            );
+
+        // Wait until the origin GET has actually started, so its
+        // `spawn_run_fetch` task guard is registered.
+        while counting.get_range_count() < 1 {
+            tokio::task::yield_now().await;
+        }
+        assert!(cache.outstanding_fetch_tasks() >= 1);
+
+        let drain_cache = cache.clone();
+        let drain = tokio::spawn(async move { drain_cache.wait_for_fetch_tasks_drain().await });
+
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !drain.is_finished(),
+            "drain must not resolve while a fetch task is outstanding"
+        );
+
+        gate.add_permits(1);
+        drain.await.expect("join drain");
+        prefetch
+            .await
+            .expect("join prefetch")
+            .expect("prefetch_blocks");
+        assert_eq!(cache.outstanding_fetch_tasks(), 0);
+    })
+    .await;
+}
+
+/// With nothing in flight, `wait_for_fetch_tasks_drain()` must return
+/// immediately rather than hang -- bounded by a short timeout to catch a
+/// regression that never resolves.
+#[tokio::test]
+async fn drain_resolves_immediately_with_nothing_in_flight() {
+    let cache = make_cache(Arc::new(InMemory::new()) as Arc<dyn ObjectStore>);
+    tokio::time::timeout(Duration::from_secs(5), cache.wait_for_fetch_tasks_drain())
+        .await
+        .expect("wait_for_fetch_tasks_drain must resolve immediately with nothing outstanding");
+}

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -194,6 +195,12 @@ fn reason_str(reason: Event) -> &'static str {
 /// design doc for why this is safe from any thread.
 struct RamEvictionListener {
     tags: Arc<EvictionTagTable>,
+    /// Set immediately before `FoyerBackend::close()`'s full-tier flush, so
+    /// that flush's eviction-to-zero sweep doesn't poison these gauges with a
+    /// burst indistinguishable from real capacity thrashing. Shared with
+    /// `FoyerBackend` via `FoyerBackend::mark_shutting_down()` -- see that
+    /// method's doc.
+    shutting_down: Arc<AtomicBool>,
 }
 
 impl EventListener for RamEvictionListener {
@@ -207,6 +214,13 @@ impl EventListener for RamEvictionListener {
             // dropped, i.e. the disk-write dispatch) for the *same*
             // disk-only write, both at age ~= 0 ms -- indistinguishable from
             // real thrashing if counted. Exclude from both signals.
+            return;
+        }
+        if self.shutting_down.load(Ordering::Relaxed) {
+            // The close-time full-tier flush evicts every entry to zero,
+            // which would otherwise emit both gauges for the *entire* RAM
+            // tier on every clean shutdown -- indistinguishable from real
+            // capacity thrashing (#1281). See `mark_shutting_down`.
             return;
         }
         let t = self.tags.classify(key);
@@ -270,6 +284,8 @@ pub struct FoyerBackend {
     /// (buggy, see #1318) inflight coalescing now that `get` no longer
     /// routes through `HybridCache::get`/`get_or_fetch`.
     loads: Arc<Mutex<HashMap<String, SharedLoad>>>,
+    /// Shared with `RamEvictionListener`; see `mark_shutting_down`.
+    shutting_down: Arc<AtomicBool>,
 }
 
 impl FoyerBackend {
@@ -311,7 +327,11 @@ impl FoyerBackend {
             .build()?;
 
         let tags = Arc::new(EvictionTagTable::new(prefix_labels));
-        let listener = Arc::new(RamEvictionListener { tags: tags.clone() });
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let listener = Arc::new(RamEvictionListener {
+            tags: tags.clone(),
+            shutting_down: shutting_down.clone(),
+        });
 
         let cache = HybridCacheBuilder::new()
             .with_event_listener(listener)
@@ -336,7 +356,18 @@ impl FoyerBackend {
             cache,
             tags,
             loads: Arc::new(Mutex::new(HashMap::new())),
+            shutting_down,
         })
+    }
+
+    /// Marks this backend as shutting down, so `RamEvictionListener::on_leave`
+    /// skips emitting `object_cache_ram_tier_eviction_count`/`_age_ms` for the
+    /// entries `close()`'s full-tier flush is about to evict. Call
+    /// immediately before `close()` -- the only place this is needed, since a
+    /// flush that never runs (the overall shutdown deadline elapses first)
+    /// emits nothing to suppress.
+    pub fn mark_shutting_down(&self) {
+        self.shutting_down.store(true, Ordering::Relaxed);
     }
 
     pub async fn close(&self) -> Result<()> {
