@@ -169,11 +169,27 @@ pub async fn create_screen(
         ))
     })?;
 
+    let mut tx = pool.begin().await?;
+
+    // Lock the destination folder path so a concurrent delete/rename of that
+    // folder (which takes the same lock in `folders.rs`) can't race past this
+    // create and leave the folder resurrected or the screen orphaned. Root
+    // (empty path) has no lock, matching `folder_exists`/`folders.rs`.
+    if !request.folder_path.is_empty() {
+        instrument_named!(
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&request.folder_path)
+                .execute(&mut *tx),
+            "sql_folder_advisory_lock"
+        )
+        .await?;
+    }
+
     // Check for duplicate name
     let exists = instrument_named!(
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM screens WHERE name = $1)")
             .bind(&name)
-            .fetch_one(&pool),
+            .fetch_one(&mut *tx),
         "sql_select_screen_exists"
     )
     .await?;
@@ -202,10 +218,12 @@ pub async fn create_screen(
             .bind(user_id)
             .bind(&request.managed_by)
             .bind(&request.folder_path)
-            .fetch_one(&pool),
+            .fetch_one(&mut *tx),
         "sql_insert_screen"
     )
     .await?;
+
+    tx.commit().await?;
 
     info!("Created screen: {} by {}", name, user_id);
     Ok((StatusCode::CREATED, Json(screen)))
@@ -226,6 +244,43 @@ pub async fn update_screen(
     // Use email if available, otherwise fall back to subject
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
+    let mut tx = pool.begin().await?;
+
+    // If the folder is changing, lock both the screen's current folder path
+    // and the destination folder path (sorted, to match `update_folder`'s
+    // deadlock-avoidance convention) so a concurrent delete/rename of either
+    // folder can't race past this move. Root (empty path) is never locked.
+    if let Some(ref new_folder_path) = request.folder_path {
+        let current_folder_path = instrument_named!(
+            sqlx::query_scalar::<_, String>("SELECT folder_path FROM screens WHERE name = $1")
+                .bind(&name)
+                .fetch_optional(&mut *tx),
+            "sql_select_screen_folder_path"
+        )
+        .await?
+        .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
+
+        let mut lock_paths: Vec<&str> = Vec::new();
+        if !current_folder_path.is_empty() {
+            lock_paths.push(current_folder_path.as_str());
+        }
+        if !new_folder_path.is_empty() && new_folder_path.as_str() != current_folder_path.as_str() {
+            lock_paths.push(new_folder_path.as_str());
+        }
+        lock_paths.sort_unstable();
+        lock_paths.dedup();
+
+        for lock_path in lock_paths {
+            instrument_named!(
+                sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                    .bind(lock_path)
+                    .execute(&mut *tx),
+                "sql_folder_advisory_lock"
+            )
+            .await?;
+        }
+    }
+
     let query = format!(
         "UPDATE screens
          SET config = COALESCE($1, config), updated_by = $2, updated_at = NOW(),
@@ -240,11 +295,13 @@ pub async fn update_screen(
             .bind(&name)
             .bind(&request.managed_by)
             .bind(&request.folder_path)
-            .fetch_optional(&pool),
+            .fetch_optional(&mut *tx),
         "sql_update_screen"
     )
     .await?
     .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
+
+    tx.commit().await?;
 
     info!("Updated screen: {} by {}", name, user_id);
     Ok(Json(screen))

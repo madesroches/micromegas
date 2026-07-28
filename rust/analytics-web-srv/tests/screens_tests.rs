@@ -8,6 +8,8 @@ use analytics_web_srv::app_db::{CreateScreenRequest, UpdateScreenRequest};
 use analytics_web_srv::auth::ValidatedUser;
 use analytics_web_srv::screens::{create_screen, update_screen};
 use axum::extract::{Extension, Json, Path};
+use axum::http::StatusCode;
+use std::time::Duration;
 
 async fn connect() -> sqlx::PgPool {
     let conn_str = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
@@ -224,4 +226,82 @@ async fn update_screen_rejects_invalid_folder_path() {
     )
     .await;
     assert!(result.is_err(), "invalid folder_path must be rejected");
+}
+
+// Proves create_screen actually takes the same `pg_advisory_xact_lock(hashtext($1))`
+// on the destination folder_path that `update_folder`/`delete_folder` take in
+// folders.rs, by holding that lock key via a session-scoped advisory lock on a
+// separate connection and observing create_screen block until it's released.
+#[ignore]
+#[tokio::test]
+async fn create_screen_serializes_on_destination_folder_advisory_lock() {
+    let pool = connect().await;
+    clear_tables(&pool).await;
+
+    let mut lock_conn = pool.acquire().await.expect("acquiring lock connection");
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1))")
+        .bind("locked-folder")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("taking session advisory lock");
+
+    let pool_for_task = pool.clone();
+    let create_task = tokio::spawn(async move {
+        create_screen(
+            Extension(pool_for_task),
+            Extension(test_user()),
+            Json(CreateScreenRequest {
+                name: "blocked-widget".to_string(),
+                screen_type: "notebook".to_string(),
+                config: serde_json::json!({}),
+                managed_by: None,
+                folder_path: "locked-folder".to_string(),
+            }),
+        )
+        .await
+    });
+
+    // Poll (bounded) until the create_screen backend shows up waiting on a
+    // lock, proving it contends on our held advisory lock instead of racing
+    // past it.
+    let mut waiting = false;
+    for _ in 0..100 {
+        if create_task.is_finished() {
+            break;
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%pg_advisory_xact_lock%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("checking pg_stat_activity");
+        if count > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        waiting,
+        "create_screen must block waiting on the destination folder's advisory lock"
+    );
+    assert!(
+        !create_task.is_finished(),
+        "create_screen must not complete while the folder lock is held"
+    );
+
+    sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+        .bind("locked-folder")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("releasing session advisory lock");
+    drop(lock_conn);
+
+    let (status, screen) = tokio::time::timeout(Duration::from_secs(5), create_task)
+        .await
+        .expect("create_screen should complete promptly after the lock is released")
+        .expect("task join")
+        .expect("create_screen should succeed once unblocked");
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(screen.0.folder_path, "locked-folder");
 }
