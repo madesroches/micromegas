@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Issue #1159 — outer sidebar placement</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --app-bg:#0a0a0f; --header-bg:#12121a; --panel-bg:#12121a; --card-bg:#1a1a2e;
+    --border:#2a2a3e; --text-primary:#e7e9ea; --text-secondary:#9ca3af; --text-muted:#6b7280;
+    --link:#1565c0; --link-hover:#1976d2; --gold:#ffb300; --rust:#bf360c; --radius:0.5rem;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--app-bg); color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:15px; line-height:1.6;
+  }
+  a{color:var(--link); text-decoration:none;}
+  a:hover{color:var(--link-hover); text-decoration:underline;}
+  .topheader{height:52px; background:var(--header-bg); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:.6rem; padding:0 1rem;}
+  .logo-mark{width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg, var(--rust), var(--gold));}
+  .logo-text{font-weight:700; font-size:14px;}
+  .wrap{max-width:820px; margin:0 auto; padding:2rem 1.5rem 4rem;}
+  .eyebrow{font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--gold); font-weight:700; margin-bottom:.5rem;}
+  h1{font-size:1.7rem; font-weight:650; margin:0 0 .5rem;}
+  .lede{color:var(--text-secondary); max-width:62ch; margin:0 0 1.5rem;}
+  .cards{display:grid; grid-template-columns:1fr; gap:1rem;}
+  .alt-card{border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-bg); padding:1.25rem 1.4rem; display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:start;}
+  .alt-card h3{font-size:1.05rem; margin:0 0 .35rem;}
+  .alt-card p{margin:0; color:var(--text-secondary);}
+  .open-btn{display:inline-flex; align-items:center; gap:.4rem; font-size:13px; font-weight:600; padding:.5rem .9rem; border-radius:calc(var(--radius) - 2px); background:var(--link); color:#fff; white-space:nowrap;}
+  .open-btn:hover{background:var(--link-hover); text-decoration:none;}
+  .callout{border:1px solid var(--border); border-left:3px solid var(--gold); border-radius:6px; background:var(--card-bg); padding:.9rem 1.1rem; margin-top:1.5rem; font-size:13.5px; color:var(--text-secondary);}
+  .callout strong{color:var(--text-primary);}
+</style>
+</head>
+<body>
+<div class="topheader"><div class="logo-mark"></div><div class="logo-text">micromegas</div></div>
+<div class="wrap">
+  <div class="eyebrow">Follow-up to issue #1159 &middot; not for implementation yet</div>
+  <h1>Where should the folder tree live in the outer app shell?</h1>
+  <p class="lede">
+    Decided already: the folder tree moves out of the Screens page's own local panel and into the app's persistent
+    outer icon rail (<code>Sidebar.tsx</code>), visible on every page &mdash; clicking a folder from anywhere (e.g. Processes)
+    navigates to <code>/screens?folder=&lt;path&gt;</code>. Open question: do <strong>All Screens</strong>, <strong>Home</strong>,
+    and the search box move into that outer bar too, or stay in the Screens page's own content header?
+  </p>
+
+  <div class="cards">
+    <div class="alt-card">
+      <div>
+        <h3>A &middot; Full nav in outer bar</h3>
+        <p>All Screens, Home, search, and the folder tree all move into the outer bar. The Screens page content area becomes just the grid for whatever's selected.</p>
+      </div>
+      <a class="open-btn" href="./outer-a-full-nav.html">Open mock &rarr;</a>
+    </div>
+    <div class="alt-card">
+      <div>
+        <h3>B &middot; Tree only in outer bar</h3>
+        <p>Only the folder tree moves out and becomes app-wide. All Screens, Home, and search stay as page-level controls inside the Screens page itself.</p>
+      </div>
+      <a class="open-btn" href="./outer-b-tree-only.html">Open mock &rarr;</a>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>Try this in each mock:</strong> toggle "Simulate: Processes page" vs "Simulate: Screens page" at the top,
+    and click a folder in the tree while on Processes &mdash; it should jump you to the Screens page on that folder in both.
+    The difference is what else is (or isn't) sitting next to the tree in the outer bar.
+  </div>
+</div>
+</body>
+</html>

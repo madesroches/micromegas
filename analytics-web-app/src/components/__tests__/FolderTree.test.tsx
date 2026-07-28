@@ -1,4 +1,4 @@
-import { buildFolderTree, ancestorPaths, normalizeFolderSegment } from '../FolderTree'
+import { buildFolderTree, ancestorPaths, normalizeFolderSegment, parentOf } from '../FolderTree'
 import { FolderInfo } from '@/lib/folders-api'
 
 function folder(path: string, screenCount = 0, subfolderCount = 0): FolderInfo {
@@ -79,5 +79,15 @@ describe('normalizeFolderSegment', () => {
 
   it('allows a purely numeric segment (unlike screen names)', () => {
     expect(normalizeFolderSegment('2025')).toBe('2025')
+  })
+})
+
+describe('parentOf', () => {
+  it('returns the root for a top-level folder', () => {
+    expect(parentOf('team')).toBe('')
+  })
+
+  it('returns everything before the last segment', () => {
+    expect(parentOf('team/dashboards/incidents')).toBe('team/dashboards')
   })
 })

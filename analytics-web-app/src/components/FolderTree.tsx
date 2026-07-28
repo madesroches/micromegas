@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, Folder, FolderOpen, Grid2x2, Home, MoreVertical, Plus } from 'lucide-react'
+import { ChevronRight, Folder, FolderOpen, Home, MoreVertical, Plus } from 'lucide-react'
 import { FolderInfo } from '@/lib/folders-api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
@@ -69,9 +69,11 @@ export function ancestorPaths(path: string): string[] {
 
 interface FolderTreeProps {
   folders: FolderInfo[]
-  /** Currently selected folder path, or null when "All Screens" / search is active. */
+  /**
+   * Currently selected folder path ('' is the Home/root folder), or null
+   * when no folder is active (e.g. the sidebar is shown on a non-Screens page).
+   */
   selectedFolder: string | null
-  onSelectAll: () => void
   onSelectFolder: (path: string) => void
   expandedPaths: Set<string>
   onToggleExpand: (path: string) => void
@@ -84,7 +86,7 @@ interface FolderTreeProps {
   onDeleteFolder: (path: string) => void
 }
 
-function parentOf(path: string): string {
+export function parentOf(path: string): string {
   const idx = path.lastIndexOf('/')
   return idx === -1 ? '' : path.slice(0, idx)
 }
@@ -92,7 +94,6 @@ function parentOf(path: string): string {
 export function FolderTree({
   folders,
   selectedFolder,
-  onSelectAll,
   onSelectFolder,
   expandedPaths,
   onToggleExpand,
@@ -243,7 +244,7 @@ export function FolderTree({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              onToggleExpand(node.path)
+              if (!expandedPaths.has(node.path)) onToggleExpand(node.path)
               startCreating(node.path)
             }}
             title="New subfolder"
@@ -299,20 +300,6 @@ export function FolderTree({
 
   return (
     <div className="flex flex-col gap-1 h-full" onClick={() => setMenuFor(null)}>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onSelectAll}
-        onKeyDown={(e) => e.key === 'Enter' && onSelectAll()}
-        className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md cursor-pointer text-sm transition-colors ${
-          selectedFolder === null && !isSearching
-            ? 'bg-accent-link/15 text-theme-text-primary'
-            : 'text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'
-        }`}
-      >
-        <Grid2x2 className="w-4 h-4 flex-none text-accent-link" />
-        <span>All Screens</span>
-      </div>
       <div
         role="button"
         tabIndex={0}

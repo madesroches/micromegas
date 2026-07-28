@@ -1,7 +1,7 @@
 import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Plus, MoreVertical, Search, X, Folder } from 'lucide-react'
+import { Plus, MoreVertical, Folder } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -9,7 +9,6 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
 import { renderIcon } from '@/lib/screen-type-utils'
-import { FolderTree, ancestorPaths } from '@/components/FolderTree'
 import { FolderBreadcrumb } from '@/components/FolderBreadcrumb'
 import { FolderPickerModal } from '@/components/FolderPickerModal'
 import {
@@ -22,28 +21,12 @@ import {
   deleteScreen,
   ScreenApiError,
 } from '@/lib/screens-api'
-import { listFolders, createFolder, moveFolder, deleteFolder, FolderInfo } from '@/lib/folders-api'
+import { listFolders, FolderInfo } from '@/lib/folders-api'
+import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
 
 function parentPath(path: string): string {
   const idx = path.lastIndexOf('/')
   return idx === -1 ? '' : path.slice(0, idx)
-}
-
-function computeMatchedFolders(screens: Screen[], query: string): Set<string> {
-  const set = new Set<string>()
-  const q = query.trim().toLowerCase()
-  if (!q) return set
-  for (const s of screens) {
-    if (s.name.toLowerCase().includes(q) || s.folder_path.toLowerCase().includes(q)) {
-      let cur = ''
-      for (const part of s.folder_path.split('/')) {
-        if (!part) continue
-        cur = cur ? `${cur}/${part}` : part
-        set.add(cur)
-      }
-    }
-  }
-  return set
 }
 
 function ScreensPageContent() {
@@ -58,15 +41,15 @@ function ScreensPageContent() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [deletingScreen, setDeletingScreen] = useState<string | null>(null)
   const [screenToDelete, setScreenToDelete] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
   const [openMenuFor, setOpenMenuFor] = useState<string | null>(null)
   const [movingScreen, setMovingScreen] = useState<string | null>(null)
   const [draggingScreen, setDraggingScreen] = useState<string | null>(null)
 
   // `?folder=<path>` is the single source of truth for the selected folder;
-  // absent means the "All Screens" view.
-  const selectedFolder = searchParams.get('folder')
+  // absent means the root (Home) folder. `?q=` drives the search view; both
+  // params are also read/written by the persistent sidebar (Sidebar.tsx).
+  const selectedFolder = searchParams.get('folder') ?? ''
+  const searchQuery = searchParams.get('q') ?? ''
   const isSearching = searchQuery.trim().length > 0
 
   const loadData = useCallback(async () => {
@@ -96,43 +79,17 @@ function ScreensPageContent() {
     loadData()
   }, [loadData])
 
-  // Keep the tree expanded down to whatever folder the URL points at.
-  useEffect(() => {
-    if (selectedFolder) {
-      setExpandedPaths((prev) => {
-        const next = new Set(prev)
-        ancestorPaths(selectedFolder).forEach((p) => next.add(p))
-        next.add(selectedFolder)
-        return next
-      })
-    }
-  }, [selectedFolder])
+  useFoldersChangedListener(loadData)
 
   const selectFolder = useCallback(
     (path: string) => {
-      setSearchQuery('')
       const next = new URLSearchParams(searchParams)
       next.set('folder', path)
+      next.delete('q')
       setSearchParams(next)
     },
     [searchParams, setSearchParams]
   )
-
-  const selectAll = useCallback(() => {
-    setSearchQuery('')
-    const next = new URLSearchParams(searchParams)
-    next.delete('folder')
-    setSearchParams(next)
-  }, [searchParams, setSearchParams])
-
-  const toggleExpand = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
 
   const handleCreateNew = (typeName: ScreenTypeName) => {
     navigate(`/screen/new?type=${typeName}`)
@@ -153,6 +110,7 @@ function ScreensPageContent() {
     try {
       await deleteScreen(screenToDelete)
       setScreenToDelete(null)
+      notifyFoldersChanged()
       await loadData()
     } catch (err) {
       if (err instanceof ScreenApiError) {
@@ -173,68 +131,13 @@ function ScreensPageContent() {
       setActionError(null)
       try {
         await updateScreen(screenName, { folder_path: destPath })
+        notifyFoldersChanged()
         await loadData()
       } catch (err) {
         setActionError(err instanceof ScreenApiError ? `Failed to move: ${err.message}` : 'Failed to move screen')
       }
     },
     [screens, loadData]
-  )
-
-  const handleCreateFolder = useCallback(
-    async (parent: string, name: string) => {
-      const path = parent ? `${parent}/${name}` : name
-      setActionError(null)
-      try {
-        await createFolder(path)
-        await loadData()
-      } catch (err) {
-        setActionError(
-          err instanceof ScreenApiError ? `Failed to create folder: ${err.message}` : 'Failed to create folder'
-        )
-      }
-    },
-    [loadData]
-  )
-
-  const handleRenameFolder = useCallback(
-    async (path: string, newPath: string) => {
-      setActionError(null)
-      try {
-        await moveFolder(path, newPath)
-        // Keep the current view pointed at the renamed folder (or a
-        // descendant of it) instead of a now-nonexistent path.
-        if (selectedFolder === path) {
-          selectFolder(newPath)
-        } else if (selectedFolder && selectedFolder.startsWith(`${path}/`)) {
-          selectFolder(`${newPath}${selectedFolder.slice(path.length)}`)
-        }
-        await loadData()
-      } catch (err) {
-        setActionError(
-          err instanceof ScreenApiError ? `Failed to rename folder: ${err.message}` : 'Failed to rename folder'
-        )
-      }
-    },
-    [loadData, selectedFolder, selectFolder]
-  )
-
-  const handleDeleteFolder = useCallback(
-    async (path: string) => {
-      setActionError(null)
-      try {
-        await deleteFolder(path)
-        if (selectedFolder === path) {
-          selectFolder(parentPath(path))
-        }
-        await loadData()
-      } catch (err) {
-        setActionError(
-          err instanceof ScreenApiError ? `Failed to delete folder: ${err.message}` : 'Failed to delete folder'
-        )
-      }
-    },
-    [loadData, selectedFolder, selectFolder]
   )
 
   // Create lookup map for screen type info
@@ -246,8 +149,6 @@ function ScreensPageContent() {
     return map
   }, [screenTypes])
 
-  const matchedFolders = useMemo(() => computeMatchedFolders(screens, searchQuery), [screens, searchQuery])
-
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q) return []
@@ -256,17 +157,15 @@ function ScreensPageContent() {
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [screens, searchQuery])
 
-  const allScreensSorted = useMemo(() => [...screens].sort((a, b) => a.name.localeCompare(b.name)), [screens])
+  const directSubfolders = useMemo(
+    () => folders.filter((f) => parentPath(f.path) === selectedFolder).sort((a, b) => a.path.localeCompare(b.path)),
+    [folders, selectedFolder]
+  )
 
-  const directSubfolders = useMemo(() => {
-    if (selectedFolder === null) return []
-    return folders.filter((f) => parentPath(f.path) === selectedFolder).sort((a, b) => a.path.localeCompare(b.path))
-  }, [folders, selectedFolder])
-
-  const directScreens = useMemo(() => {
-    if (selectedFolder === null) return []
-    return screens.filter((s) => s.folder_path === selectedFolder).sort((a, b) => a.name.localeCompare(b.name))
-  }, [screens, selectedFolder])
+  const directScreens = useMemo(
+    () => screens.filter((s) => s.folder_path === selectedFolder).sort((a, b) => a.name.localeCompare(b.name)),
+    [screens, selectedFolder]
+  )
 
   const screenCard = (screen: Screen, showPath: boolean) => (
     <div
@@ -426,91 +325,39 @@ function ScreensPageContent() {
                 ))}
               </div>
 
-              {/* Search */}
-              <div className="flex items-center gap-2 mb-4 border border-theme-border rounded-md px-3 py-2 bg-app-panel max-w-md">
-                <Search className="w-4 h-4 text-theme-text-muted flex-none" />
-                <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search screens & folders"
-                  className="flex-1 bg-transparent outline-none text-sm text-theme-text-primary placeholder-theme-text-muted"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="text-theme-text-muted hover:text-theme-text-primary">
-                    <X className="w-4 h-4" />
-                  </button>
+              {/* Content */}
+              <div className="flex-1 overflow-auto">
+                {isSearching ? (
+                  <>
+                    <FolderBreadcrumb path={null} onNavigate={selectFolder} />
+                    <p className="text-xs text-theme-text-muted mb-3">
+                      {searchResults.length} match{searchResults.length === 1 ? '' : 'es'} across all folders
+                    </p>
+                    {searchResults.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        {searchResults.map((s) => screenCard(s, true))}
+                      </div>
+                    ) : (
+                      <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
+                        <p className="text-theme-text-muted">No screens or folders match &ldquo;{searchQuery}&rdquo;.</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <FolderBreadcrumb path={selectedFolder} onNavigate={selectFolder} onDropScreen={handleMoveScreen} />
+                    {directSubfolders.length > 0 || directScreens.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        {directSubfolders.map((f) => folderCard(f))}
+                        {directScreens.map((s) => screenCard(s, false))}
+                      </div>
+                    ) : (
+                      <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
+                        <p className="text-theme-text-muted">This folder is empty. Create a screen or a subfolder to get started.</p>
+                      </div>
+                    )}
+                  </>
                 )}
-              </div>
-
-              <div className="flex-1 overflow-hidden grid grid-cols-[240px_1fr] gap-4">
-                {/* Sidebar */}
-                <div className="overflow-auto border border-theme-border rounded-lg bg-app-panel p-3">
-                  <FolderTree
-                    folders={folders}
-                    selectedFolder={selectedFolder}
-                    onSelectAll={selectAll}
-                    onSelectFolder={selectFolder}
-                    expandedPaths={expandedPaths}
-                    onToggleExpand={toggleExpand}
-                    matchedFolders={matchedFolders}
-                    isSearching={isSearching}
-                    onDropScreen={handleMoveScreen}
-                    onCreateFolder={handleCreateFolder}
-                    onRenameFolder={handleRenameFolder}
-                    onDeleteFolder={handleDeleteFolder}
-                  />
-                </div>
-
-                {/* Main content */}
-                <div className="overflow-auto">
-                  {isSearching ? (
-                    <>
-                      <FolderBreadcrumb path={null} onNavigate={selectFolder} />
-                      <p className="text-xs text-theme-text-muted mb-3">
-                        {searchResults.length} match{searchResults.length === 1 ? '' : 'es'} across all folders
-                      </p>
-                      {searchResults.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                          {searchResults.map((s) => screenCard(s, true))}
-                        </div>
-                      ) : (
-                        <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
-                          <p className="text-theme-text-muted">No screens or folders match &ldquo;{searchQuery}&rdquo;.</p>
-                        </div>
-                      )}
-                    </>
-                  ) : selectedFolder === null ? (
-                    <>
-                      <FolderBreadcrumb path={null} onNavigate={selectFolder} />
-                      {allScreensSorted.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                          {allScreensSorted.map((s) => screenCard(s, true))}
-                        </div>
-                      ) : (
-                        <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
-                          <p className="text-theme-text-muted mb-2">No screens yet.</p>
-                          <p className="text-sm text-theme-text-muted">
-                            Create your first screen using the buttons above.
-                          </p>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <FolderBreadcrumb path={selectedFolder} onNavigate={selectFolder} onDropScreen={handleMoveScreen} />
-                      {directSubfolders.length > 0 || directScreens.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                          {directSubfolders.map((f) => folderCard(f))}
-                          {directScreens.map((s) => screenCard(s, false))}
-                        </div>
-                      ) : (
-                        <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
-                          <p className="text-theme-text-muted">This folder is empty. Create a screen or a subfolder to get started.</p>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
               </div>
             </div>
           )}
