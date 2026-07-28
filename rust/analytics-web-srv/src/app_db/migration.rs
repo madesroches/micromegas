@@ -1,10 +1,13 @@
-use crate::app_db::schema::{add_screens_managed_by, create_data_sources_table, create_tables};
+use crate::app_db::schema::{
+    add_screens_folder_path, add_screens_managed_by, create_data_sources_table,
+    create_folders_table, create_tables,
+};
 use anyhow::{Context, Result};
 use micromegas::tracing::prelude::*;
 use sqlx::Row;
 
 /// The latest schema version for the micromegas_app database.
-pub const LATEST_APP_SCHEMA_VERSION: i32 = 3;
+pub const LATEST_APP_SCHEMA_VERSION: i32 = 4;
 
 /// Reads the current schema version from the database.
 async fn read_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -26,7 +29,7 @@ async fn read_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
     }
 }
 
-async fn update_schema_version(
+pub async fn update_schema_version(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     version: i32,
 ) -> Result<()> {
@@ -67,6 +70,19 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
             .await
             .with_context(|| "adding managed_by column to screens")?;
         update_schema_version(&mut tr, 3).await?;
+        current_version = read_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if current_version == 3 {
+        info!("migrating app schema v3 -> v4: adding folders table and screens.folder_path");
+        let mut tr = pool.begin().await?;
+        create_folders_table(&mut tr)
+            .await
+            .with_context(|| "creating folders table")?;
+        add_screens_folder_path(&mut tr)
+            .await
+            .with_context(|| "adding folder_path column to screens")?;
+        update_schema_version(&mut tr, 4).await?;
         current_version = read_schema_version(&mut tr).await;
         tr.commit().await?;
     }

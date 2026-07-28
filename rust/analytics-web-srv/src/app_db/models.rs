@@ -16,6 +16,7 @@ pub struct Screen {
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub managed_by: Option<String>,
+    pub folder_path: String,
 }
 
 /// Request to create a new screen.
@@ -25,13 +26,43 @@ pub struct CreateScreenRequest {
     pub screen_type: String,
     pub config: serde_json::Value,
     pub managed_by: Option<String>,
+    #[serde(default)]
+    pub folder_path: String,
 }
 
 /// Request to update an existing screen.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateScreenRequest {
-    pub config: serde_json::Value,
+    pub config: Option<serde_json::Value>,
     pub managed_by: Option<String>,
+    pub folder_path: Option<String>,
+}
+
+/// A folder in the screens hierarchy.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct Folder {
+    pub path: String,
+}
+
+/// A folder entry as returned by `GET /folders`, with derived counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderInfo {
+    pub path: String,
+    pub screen_count: i64,
+    pub subfolder_count: i64,
+}
+
+/// Request to create a folder.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateFolderRequest {
+    pub path: String,
+}
+
+/// Request to rename/move a folder.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateFolderRequest {
+    pub path: String,
+    pub new_path: String,
 }
 
 /// Validation error for screen names.
@@ -146,19 +177,25 @@ pub fn normalize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
-/// Validates a name according to the rules:
-/// - 3-100 characters
-/// - Lowercase letters, numbers, and hyphens only
-/// - Must start with a letter
-/// - Must end with a letter or number
-/// - No consecutive hyphens
-/// - Not a reserved name
-pub fn validate_name(name: &str) -> Result<(), ValidationError> {
+/// Shared core for `validate_name` and the folder-segment validator.
+///
+/// - `min_length`: minimum character count (3 for screen names, 1 for folder segments).
+/// - `check_reserved`: whether `RESERVED_NAMES` is enforced (screen names only — `"new"`
+///   collides with the `/screen/new` route, which doesn't apply to folders).
+/// - `enforce_boundaries`: whether the name must start with a letter and end with a
+///   letter or digit (screen names only — folder segments may start/end with a digit,
+///   e.g. a year like `2025`).
+fn validate_name_core(
+    name: &str,
+    min_length: usize,
+    check_reserved: bool,
+    enforce_boundaries: bool,
+) -> Result<(), ValidationError> {
     // Check length
-    if name.len() < 3 {
+    if name.len() < min_length {
         return Err(ValidationError::new(
             "NAME_TOO_SHORT",
-            "Name must be at least 3 characters",
+            &format!("Name must be at least {min_length} characters"),
         ));
     }
     if name.len() > 100 {
@@ -169,7 +206,7 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     }
 
     // Check reserved names
-    if RESERVED_NAMES.contains(&name) {
+    if check_reserved && RESERVED_NAMES.contains(&name) {
         return Err(ValidationError::new(
             "RESERVED_NAME",
             "This name is reserved",
@@ -179,23 +216,25 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
     // Check characters
     let chars: Vec<char> = name.chars().collect();
 
-    // Must start with a letter
-    if !chars.first().is_some_and(|c| c.is_ascii_lowercase()) {
-        return Err(ValidationError::new(
-            "INVALID_START",
-            "Name must start with a lowercase letter",
-        ));
-    }
+    if enforce_boundaries {
+        // Must start with a letter
+        if !chars.first().is_some_and(|c| c.is_ascii_lowercase()) {
+            return Err(ValidationError::new(
+                "INVALID_START",
+                "Name must start with a lowercase letter",
+            ));
+        }
 
-    // Must end with a letter or number
-    if !chars
-        .last()
-        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        return Err(ValidationError::new(
-            "INVALID_END",
-            "Name must end with a letter or number",
-        ));
+        // Must end with a letter or number
+        if !chars
+            .last()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return Err(ValidationError::new(
+                "INVALID_END",
+                "Name must end with a letter or number",
+            ));
+        }
     }
 
     // Check all characters are valid and no consecutive hyphens
@@ -220,5 +259,52 @@ pub fn validate_name(name: &str) -> Result<(), ValidationError> {
         }
     }
 
+    Ok(())
+}
+
+/// Validates a name according to the rules:
+/// - 3-100 characters
+/// - Lowercase letters, numbers, and hyphens only
+/// - Must start with a letter
+/// - Must end with a letter or number
+/// - No consecutive hyphens
+/// - Not a reserved name
+pub fn validate_name(name: &str) -> Result<(), ValidationError> {
+    validate_name_core(name, 3, true, true)
+}
+
+/// Maximum length of a composed folder path (matches the `VARCHAR(1024)` columns).
+const MAX_FOLDER_PATH_LENGTH: usize = 1024;
+
+/// Validates a single folder path segment:
+/// - 1-100 characters
+/// - Lowercase letters, numbers, and hyphens only
+/// - No consecutive hyphens
+/// - No reserved-word check (`"new"` is a valid folder name)
+/// - No start/end-character restriction (a segment may start or end with a digit)
+fn validate_folder_segment(segment: &str) -> Result<(), ValidationError> {
+    validate_name_core(segment, 1, false, false)
+}
+
+/// Validates a folder path (`/`-delimited, no leading/trailing slash, `""` = root).
+///
+/// An empty path is always a valid root and is returned as-is without being split
+/// on `/` — `"".split('/')` yields one empty segment, which would otherwise fail the
+/// minimum-length check. A non-empty path is split on `/` and each segment is
+/// validated individually, then the total composed length is checked against the
+/// `VARCHAR(1024)` column limit.
+pub fn validate_folder_path(path: &str) -> Result<(), ValidationError> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    for segment in path.split('/') {
+        validate_folder_segment(segment)?;
+    }
+    if path.len() > MAX_FOLDER_PATH_LENGTH {
+        return Err(ValidationError::new(
+            "PATH_TOO_LONG",
+            &format!("Folder path must be at most {MAX_FOLDER_PATH_LENGTH} characters"),
+        ));
+    }
     Ok(())
 }

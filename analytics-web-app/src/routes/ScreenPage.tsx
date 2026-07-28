@@ -485,6 +485,7 @@ function ScreenPageContent() {
           screenType={screenType}
           config={screenConfig}
           suggestedName={screen?.name ? `${screen.name}-copy` : undefined}
+          sourceFolderPath={screen?.folder_path}
         />
       )}
 

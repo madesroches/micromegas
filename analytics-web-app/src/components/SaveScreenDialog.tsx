@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { X } from 'lucide-react'
+import { Folder, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createScreen, ScreenTypeName, ScreenConfig, ScreenApiError } from '@/lib/screens-api'
+import { listFolders, FolderInfo } from '@/lib/folders-api'
+import { FolderPickerModal } from '@/components/FolderPickerModal'
 
 interface SaveScreenDialogProps {
   isOpen: boolean
@@ -11,6 +13,8 @@ interface SaveScreenDialogProps {
   config: ScreenConfig
   /** If provided, pre-fill the name field with a suggested name */
   suggestedName?: string
+  /** The current screen's folder, used to default the destination for "Save As". */
+  sourceFolderPath?: string
 }
 
 /**
@@ -36,25 +40,36 @@ export function SaveScreenDialog({
   screenType,
   config,
   suggestedName,
+  sourceFolderPath,
 }: SaveScreenDialogProps) {
   const [name, setName] = useState(suggestedName || '')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [destinationFolder, setDestinationFolder] = useState(sourceFolderPath ?? '')
+  const [folders, setFolders] = useState<FolderInfo[]>([])
+  const [showFolderPicker, setShowFolderPicker] = useState(false)
   const wasOpenRef = useRef(false)
 
   // Compute normalized name synchronously to avoid flicker
   const normalizedName = useMemo(() => normalizeScreenName(name), [name])
 
-  // Reset state only when dialog opens (not on every suggestedName change)
+  // Reset state only when dialog opens (not on every suggestedName change). The
+  // dialog is a fixed child of its callers and never unmounts between opens, so
+  // this must also reset the destination folder — otherwise reopening "Save As"
+  // for a different screen would carry over the previous screen's folder.
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
       // Dialog just opened
       setName(suggestedName || '')
       setError(null)
       setIsSaving(false)
+      setDestinationFolder(sourceFolderPath ?? '')
+      listFolders()
+        .then(setFolders)
+        .catch(() => setFolders([]))
     }
     wasOpenRef.current = isOpen
-  }, [isOpen, suggestedName])
+  }, [isOpen, suggestedName, sourceFolderPath])
 
   const handleSave = useCallback(async () => {
     const screenName = normalizedName
@@ -85,6 +100,7 @@ export function SaveScreenDialog({
         name: screenName,
         screen_type: screenType,
         config,
+        folder_path: destinationFolder,
       })
       onSaved(screenName)
     } catch (err) {
@@ -100,7 +116,7 @@ export function SaveScreenDialog({
     } finally {
       setIsSaving(false)
     }
-  }, [normalizedName, screenType, config, onSaved])
+  }, [normalizedName, screenType, config, destinationFolder, onSaved])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -155,6 +171,17 @@ export function SaveScreenDialog({
             </p>
           )}
 
+          <div className="flex items-center gap-2 mt-3">
+            <span className="text-sm font-medium text-theme-text-primary whitespace-nowrap">Location</span>
+            <div className="flex-1 flex items-center gap-1.5 px-2.5 py-1.5 border border-theme-border rounded-md bg-app-bg text-sm text-theme-text-secondary font-mono truncate">
+              <Folder className="w-3.5 h-3.5 text-accent-warning flex-none" />
+              <span className="truncate">{destinationFolder ? `/${destinationFolder}` : '/'}</span>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setShowFolderPicker(true)}>
+              Change
+            </Button>
+          </div>
+
           {error && (
             <p className="mt-3 text-sm text-accent-error">{error}</p>
           )}
@@ -173,6 +200,15 @@ export function SaveScreenDialog({
           </Button>
         </div>
       </div>
+
+      <FolderPickerModal
+        isOpen={showFolderPicker}
+        onClose={() => setShowFolderPicker(false)}
+        onSelect={setDestinationFolder}
+        currentPath={destinationFolder}
+        folders={folders}
+        title="Choose location"
+      />
     </div>
   )
 }

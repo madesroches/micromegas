@@ -63,6 +63,28 @@ pub async fn add_screens_managed_by(tr: &mut sqlx::Transaction<'_, sqlx::Postgre
     Ok(())
 }
 
+pub async fn create_folders_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    let sql = "
+        CREATE TABLE folders(
+            path VARCHAR(1024) PRIMARY KEY,
+            created_by VARCHAR(255),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    ";
+    tr.execute(sql)
+        .await
+        .with_context(|| "Creating folders table")?;
+    Ok(())
+}
+
+pub async fn add_screens_folder_path(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    sqlx::query("ALTER TABLE screens ADD COLUMN folder_path VARCHAR(1024) NOT NULL DEFAULT '';")
+        .execute(&mut **tr)
+        .await
+        .with_context(|| "Adding folder_path column to screens table")?;
+    Ok(())
+}
+
 /// Creates the tables for the micromegas_app database.
 pub async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     create_screens_table(tr).await?;

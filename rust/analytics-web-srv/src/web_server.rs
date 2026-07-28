@@ -5,7 +5,7 @@ use crate::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
 use crate::data_source_cache::DataSourceCache;
 use crate::maps;
 use crate::stream_query;
-use crate::{data_sources, screens};
+use crate::{data_sources, folders, screens};
 use anyhow::{Context, Result};
 use axum::{
     Extension, Json, Router, ServiceExt,
@@ -251,6 +251,13 @@ fn build_protected_routes(
             get(screens::get_screen)
                 .put(screens::update_screen)
                 .delete(screens::delete_screen),
+        )
+        .route(
+            &format!("{base_path}/api/folders"),
+            get(folders::list_folders)
+                .post(folders::create_folder)
+                .put(folders::update_folder)
+                .delete(folders::delete_folder),
         )
         .route(
             &format!("{base_path}/api/data-sources"),

@@ -9,6 +9,7 @@ function makeScreen(overrides: Partial<Screen> = {}): Screen {
     updated_by: 'user2',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
+    folder_path: '',
     ...overrides,
   }
 }
@@ -37,6 +38,14 @@ describe('buildScreensExport', () => {
     expect(exported.updated_by).toBeUndefined()
     expect(exported.created_at).toBeUndefined()
     expect(exported.updated_at).toBeUndefined()
+  })
+
+  it('includes folder_path in the exported screen', () => {
+    const screens = [makeScreen({ folder_path: 'team/dashboards' })]
+    const json = buildScreensExport(screens)
+    const parsed = JSON.parse(json)
+
+    expect(parsed.screens[0].folder_path).toBe('team/dashboards')
   })
 
   it('handles multiple screens', () => {
@@ -125,6 +134,25 @@ describe('parseScreensImportFile', () => {
     expect(parsed.screens).toHaveLength(2)
     expect(parsed.screens[0].name).toBe('alpha')
     expect(parsed.screens[1].name).toBe('beta')
+  })
+
+  it('roundtrips folder_path', () => {
+    const screens = [makeScreen({ name: 'alpha', folder_path: 'team/dashboards' })]
+    const json = buildScreensExport(screens)
+    const parsed = parseScreensImportFile(json)
+
+    expect(parsed.screens[0].folder_path).toBe('team/dashboards')
+  })
+
+  it('accepts an export file with no folder_path (pre-existing exports)', () => {
+    const input = JSON.stringify({
+      version: 1,
+      exported_at: '2026-01-01T00:00:00Z',
+      screens: [{ name: 'test', screen_type: 'notebook', config: {} }],
+    })
+
+    const result = parseScreensImportFile(input)
+    expect(result.screens[0].folder_path).toBeUndefined()
   })
 })
 

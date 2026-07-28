@@ -2,7 +2,7 @@
 
 use crate::app_db::{
     CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_name,
-    validate_name,
+    validate_folder_path, validate_name,
 };
 use crate::auth::ValidatedUser;
 use crate::screen_types::ScreenType;
@@ -33,6 +33,7 @@ impl ErrorResponse {
 }
 
 /// Unified error type for screen handlers.
+#[derive(Debug)]
 pub enum ScreenError {
     NotFound(String),
     BadRequest(ErrorResponse),
@@ -112,8 +113,7 @@ pub async fn get_default_config(
 // Screens CRUD
 // ============================================================================
 
-const SCREEN_COLUMNS: &str =
-    "name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by";
+const SCREEN_COLUMNS: &str = "name, screen_type, config, created_by, updated_by, created_at, updated_at, managed_by, folder_path";
 
 /// List all screens.
 #[span_fn]
@@ -158,6 +158,9 @@ pub async fn create_screen(
     let name = normalize_name(&request.name);
     validate_name(&name)?;
 
+    // Validate destination folder path
+    validate_folder_path(&request.folder_path)?;
+
     // Validate screen type
     let _screen_type: ScreenType = request.screen_type.parse().map_err(|_| {
         ScreenError::BadRequest(ErrorResponse::new(
@@ -187,8 +190,8 @@ pub async fn create_screen(
 
     // Insert screen
     let query = format!(
-        "INSERT INTO screens (name, screen_type, config, created_by, updated_by, managed_by)
-         VALUES ($1, $2, $3, $4, $4, $5)
+        "INSERT INTO screens (name, screen_type, config, created_by, updated_by, managed_by, folder_path)
+         VALUES ($1, $2, $3, $4, $4, $5, $6)
          RETURNING {SCREEN_COLUMNS}"
     );
     let screen = instrument_named!(
@@ -198,6 +201,7 @@ pub async fn create_screen(
             .bind(&request.config)
             .bind(user_id)
             .bind(&request.managed_by)
+            .bind(&request.folder_path)
             .fetch_one(&pool),
         "sql_insert_screen"
     )
@@ -215,12 +219,17 @@ pub async fn update_screen(
     Path(name): Path<String>,
     Json(request): Json<UpdateScreenRequest>,
 ) -> ScreenResult<Json<Screen>> {
+    if let Some(ref folder_path) = request.folder_path {
+        validate_folder_path(folder_path)?;
+    }
+
     // Use email if available, otherwise fall back to subject
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
     let query = format!(
         "UPDATE screens
-         SET config = $1, updated_by = $2, updated_at = NOW(), managed_by = COALESCE($4, managed_by)
+         SET config = COALESCE($1, config), updated_by = $2, updated_at = NOW(),
+             managed_by = COALESCE($4, managed_by), folder_path = COALESCE($5, folder_path)
          WHERE name = $3
          RETURNING {SCREEN_COLUMNS}"
     );
@@ -230,6 +239,7 @@ pub async fn update_screen(
             .bind(user_id)
             .bind(&name)
             .bind(&request.managed_by)
+            .bind(&request.folder_path)
             .fetch_optional(&pool),
         "sql_update_screen"
     )

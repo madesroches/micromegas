@@ -31,6 +31,7 @@ export interface Screen {
   created_at: string
   updated_at: string
   managed_by?: string | null
+  folder_path: string
 }
 
 export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table' | 'notebook'
@@ -46,11 +47,13 @@ export interface CreateScreenRequest {
   name: string
   screen_type: ScreenTypeName
   config: ScreenConfig
+  folder_path?: string
 }
 
 export interface UpdateScreenRequest {
-  config: ScreenConfig
+  config?: ScreenConfig
   managed_by?: string | null
+  folder_path?: string
 }
 
 export interface ApiErrorResponse {
@@ -157,6 +160,7 @@ export interface ExportedScreen {
   name: string
   screen_type: ScreenTypeName
   config: ScreenConfig
+  folder_path?: string
 }
 
 export interface ScreensExportFile {
@@ -182,6 +186,7 @@ export function buildScreensExport(screens: Screen[]): string {
       name: s.name,
       screen_type: s.screen_type,
       config: s.config,
+      folder_path: s.folder_path,
     })),
   }
   return JSON.stringify(exported, null, 2)
@@ -250,6 +255,7 @@ export async function importScreen(
       name: screen.name,
       screen_type: screen.screen_type,
       config: screen.config,
+      folder_path: screen.folder_path,
     })
     return { name: screen.name, status: 'created' }
   }
@@ -265,6 +271,7 @@ export async function importScreen(
         name: screen.name,
         screen_type: screen.screen_type,
         config: screen.config,
+        folder_path: screen.folder_path,
       })
       return { name: screen.name, status: 'overwritten' }
 
@@ -274,6 +281,7 @@ export async function importScreen(
         name: newName,
         screen_type: screen.screen_type,
         config: screen.config,
+        folder_path: screen.folder_path,
       })
       return { name: screen.name, status: 'renamed', finalName: newName }
     }

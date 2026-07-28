@@ -1,10 +1,12 @@
 mod migration;
 mod models;
-pub(crate) mod schema;
+pub mod schema;
 
 pub use migration::execute_migration;
+pub use migration::update_schema_version;
 pub use models::{
-    CreateDataSourceRequest, CreateScreenRequest, DataSource, DataSourceConfig, DataSourceSummary,
-    Screen, UpdateDataSourceRequest, UpdateScreenRequest, ValidationError, normalize_name,
-    validate_data_source_config, validate_name,
+    CreateDataSourceRequest, CreateFolderRequest, CreateScreenRequest, DataSource,
+    DataSourceConfig, DataSourceSummary, Folder, FolderInfo, Screen, UpdateDataSourceRequest,
+    UpdateFolderRequest, UpdateScreenRequest, ValidationError, normalize_name,
+    validate_data_source_config, validate_folder_path, validate_name,
 };

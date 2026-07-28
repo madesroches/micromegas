@@ -1,6 +1,6 @@
 //! Unit tests for app_db models (name validation and normalization)
 
-use analytics_web_srv::app_db::{normalize_name, validate_name};
+use analytics_web_srv::app_db::{normalize_name, validate_folder_path, validate_name};
 
 #[test]
 fn test_normalize_name() {
@@ -81,6 +81,93 @@ fn test_validate_name_invalid() {
     assert_eq!(
         validate_name("test.name").unwrap_err().code,
         "INVALID_CHARACTER"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// validate_folder_path
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_validate_folder_path_root_is_valid() {
+    assert!(validate_folder_path("").is_ok());
+}
+
+#[test]
+fn test_validate_folder_path_valid_segments() {
+    assert!(validate_folder_path("team").is_ok());
+    assert!(validate_folder_path("team/dashboards").is_ok());
+    assert!(validate_folder_path("team/dashboards/incidents").is_ok());
+    // Single/double-char segments would be rejected by validate_name's min length of 3,
+    // but are valid folder segments (min length 1).
+    assert!(validate_folder_path("qa").is_ok());
+    assert!(validate_folder_path("ui").is_ok());
+    assert!(validate_folder_path("a").is_ok());
+}
+
+#[test]
+fn test_validate_folder_path_numeric_only_segment_allowed() {
+    // Folder segments may start/end with a digit, unlike screen names.
+    assert!(validate_folder_path("2025").is_ok());
+    assert!(validate_folder_path("archive/2025").is_ok());
+}
+
+#[test]
+fn test_validate_folder_path_reserved_screen_name_allowed() {
+    // "new" is reserved for screen names (the /screen/new route) but not for folders.
+    assert!(validate_folder_path("new").is_ok());
+    assert_eq!(validate_name("new").unwrap_err().code, "RESERVED_NAME");
+}
+
+#[test]
+fn test_validate_folder_path_empty_segment_rejected() {
+    // Leading/trailing/double slashes produce an empty segment.
+    assert_eq!(
+        validate_folder_path("/team").unwrap_err().code,
+        "NAME_TOO_SHORT"
+    );
+    assert_eq!(
+        validate_folder_path("team/").unwrap_err().code,
+        "NAME_TOO_SHORT"
+    );
+    assert_eq!(
+        validate_folder_path("team//dashboards").unwrap_err().code,
+        "NAME_TOO_SHORT"
+    );
+}
+
+#[test]
+fn test_validate_folder_path_invalid_character_rejected() {
+    assert_eq!(
+        validate_folder_path("Team").unwrap_err().code,
+        "INVALID_CHARACTER"
+    );
+    assert_eq!(
+        validate_folder_path("team/my_folder").unwrap_err().code,
+        "INVALID_CHARACTER"
+    );
+}
+
+#[test]
+fn test_validate_folder_path_consecutive_hyphens_rejected() {
+    assert_eq!(
+        validate_folder_path("team--dashboards").unwrap_err().code,
+        "CONSECUTIVE_HYPHENS"
+    );
+}
+
+#[test]
+fn test_validate_folder_path_too_long_rejected() {
+    // Each segment must be <= 100 chars, so build several long segments to exceed
+    // the 1024-char total-path cap without exceeding any single segment's limit.
+    let long_segment = "a".repeat(100);
+    let long_path = std::iter::repeat_n(long_segment, 11)
+        .collect::<Vec<_>>()
+        .join("/");
+    assert!(long_path.len() > 1024);
+    assert_eq!(
+        validate_folder_path(&long_path).unwrap_err().code,
+        "PATH_TOO_LONG"
     );
 }
 
