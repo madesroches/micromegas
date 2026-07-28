@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Check, Folder, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { FolderInfo } from '@/lib/folders-api'
@@ -34,6 +34,20 @@ export function FolderPickerModal({
   title = 'Move to folder',
 }: FolderPickerModalProps) {
   const [newPath, setNewPath] = useState('')
+  const wasOpenRef = useRef(false)
+
+  // Reset the free-text path when the modal opens. This is a fixed child of
+  // its callers and never unmounts between opens, so without this a stale
+  // path typed for a previous screen/folder would still be sitting in the
+  // input (and its enabled "Move to new folder" button) the next time the
+  // modal is reopened. Mirrors the same fix applied to SaveScreenDialog's
+  // destinationFolder.
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setNewPath('')
+    }
+    wasOpenRef.current = isOpen
+  }, [isOpen])
 
   if (!isOpen) return null
 
