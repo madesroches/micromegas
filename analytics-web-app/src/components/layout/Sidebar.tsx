@@ -43,6 +43,16 @@ function computeMatchedFolders(screens: Screen[], query: string): Set<string> {
   return set
 }
 
+function computeMatchedScreens(screens: Screen[], query: string): Set<string> {
+  const set = new Set<string>()
+  const q = query.trim().toLowerCase()
+  if (!q) return set
+  for (const s of screens) {
+    if (s.name.toLowerCase().includes(q)) set.add(s.name)
+  }
+  return set
+}
+
 export function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -61,6 +71,10 @@ export function Sidebar() {
   const pathname = location.pathname
   const isScreensPage = pathname === '/screens'
   const selectedFolder = isScreensPage ? searchParams.get('folder') ?? '' : null
+
+  const screenPageMatch = pathname.match(/^\/screen\/([^/]+)$/)
+  const activeScreenName = screenPageMatch ? screenPageMatch[1] : null
+  const activeScreen = activeScreenName ? screens.find((s) => s.name === activeScreenName) : undefined
 
   const isActive = (item: NavItem) => {
     if (item.matchPaths) {
@@ -105,6 +119,19 @@ export function Sidebar() {
     }
   }, [selectedFolder])
 
+  // Also reveal the folder containing whatever screen is currently open.
+  useEffect(() => {
+    const folderPath = activeScreen?.folder_path
+    if (folderPath) {
+      setExpandedPaths((prev) => {
+        const next = new Set(prev)
+        ancestorPaths(folderPath).forEach((p) => next.add(p))
+        next.add(folderPath)
+        return next
+      })
+    }
+  }, [activeScreen])
+
   // Keep the search box in sync with the URL (direct links, back/forward).
   useEffect(() => {
     setSearchQuery(isScreensPage ? searchParams.get('q') ?? '' : '')
@@ -130,6 +157,14 @@ export function Sidebar() {
       setSearchQuery('')
     },
     [isScreensPage, searchParams, navigate]
+  )
+
+  const goToScreen = useCallback(
+    (name: string) => {
+      navigate(`/screen/${name}`)
+      setSearchQuery('')
+    },
+    [navigate]
   )
 
   const updateSearch = useCallback(
@@ -215,6 +250,7 @@ export function Sidebar() {
   )
 
   const matchedFolders = computeMatchedFolders(screens, searchQuery)
+  const matchedScreens = computeMatchedScreens(screens, searchQuery)
   const isSearching = searchQuery.trim().length > 0
 
   const closeUnlessFocusInside = () => {
@@ -301,11 +337,15 @@ export function Sidebar() {
           <div className="flex-1 overflow-auto">
             <FolderTree
               folders={folders}
+              screens={screens}
               selectedFolder={selectedFolder}
               onSelectFolder={goToFolder}
+              selectedScreen={activeScreenName}
+              onSelectScreen={goToScreen}
               expandedPaths={expandedPaths}
               onToggleExpand={toggleExpand}
               matchedFolders={matchedFolders}
+              matchedScreens={matchedScreens}
               isSearching={isSearching}
               onDropScreen={handleMoveScreen}
               onCreateFolder={handleCreateFolder}

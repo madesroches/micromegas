@@ -1,17 +1,19 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, Folder, FolderOpen, Home, MoreVertical, Plus } from 'lucide-react'
+import { ChevronRight, FileText, Folder, FolderOpen, Home, MoreVertical, Plus } from 'lucide-react'
 import { FolderInfo } from '@/lib/folders-api'
+import { Screen } from '@/lib/screens-api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 export interface FolderTreeNode {
   name: string
   path: string
   children: FolderTreeNode[]
+  screens: Screen[]
 }
 
-/** Builds a nested tree from the flat `GET /folders` response (root excluded). */
-export function buildFolderTree(folders: FolderInfo[]): FolderTreeNode {
-  const root: FolderTreeNode = { name: '', path: '', children: [] }
+/** Builds a nested tree from the flat `GET /folders` response (root excluded), attaching screens to their folder. */
+export function buildFolderTree(folders: FolderInfo[], screens: Screen[] = []): FolderTreeNode {
+  const root: FolderTreeNode = { name: '', path: '', children: [], screens: [] }
   const nodeByPath = new Map<string, FolderTreeNode>([['', root]])
 
   const sorted = [...folders].sort((a, b) => a.path.localeCompare(b.path))
@@ -22,7 +24,7 @@ export function buildFolderTree(folders: FolderInfo[]): FolderTreeNode {
     for (const segment of segments) {
       currentPath = currentPath ? `${currentPath}/${segment}` : segment
       if (!nodeByPath.has(currentPath)) {
-        const node: FolderTreeNode = { name: segment, path: currentPath, children: [] }
+        const node: FolderTreeNode = { name: segment, path: currentPath, children: [], screens: [] }
         nodeByPath.set(currentPath, node)
         nodeByPath.get(parentPath)?.children.push(node)
       }
@@ -30,8 +32,13 @@ export function buildFolderTree(folders: FolderInfo[]): FolderTreeNode {
     }
   }
 
+  for (const screen of screens) {
+    nodeByPath.get(screen.folder_path)?.screens.push(screen)
+  }
+
   const sortChildren = (node: FolderTreeNode) => {
     node.children.sort((a, b) => a.name.localeCompare(b.name))
+    node.screens.sort((a, b) => a.name.localeCompare(b.name))
     node.children.forEach(sortChildren)
   }
   sortChildren(root)
@@ -69,16 +76,22 @@ export function ancestorPaths(path: string): string[] {
 
 interface FolderTreeProps {
   folders: FolderInfo[]
+  screens: Screen[]
   /**
    * Currently selected folder path ('' is the Home/root folder), or null
    * when no folder is active (e.g. the sidebar is shown on a non-Screens page).
    */
   selectedFolder: string | null
   onSelectFolder: (path: string) => void
+  /** Name of the screen currently open (e.g. on its screen page), or null/undefined if none. */
+  selectedScreen?: string | null
+  onSelectScreen: (screenName: string) => void
   expandedPaths: Set<string>
   onToggleExpand: (path: string) => void
   /** Folders (or their ancestors) that contain a search match; drives auto-expand + a dot marker. */
   matchedFolders?: Set<string>
+  /** Screen names that match the current search query; drives a dot marker. */
+  matchedScreens?: Set<string>
   isSearching?: boolean
   onDropScreen: (screenName: string, destPath: string) => void
   onCreateFolder: (parentPath: string, name: string) => void
@@ -93,18 +106,22 @@ export function parentOf(path: string): string {
 
 export function FolderTree({
   folders,
+  screens,
   selectedFolder,
   onSelectFolder,
+  selectedScreen,
+  onSelectScreen,
   expandedPaths,
   onToggleExpand,
   matchedFolders,
+  matchedScreens,
   isSearching,
   onDropScreen,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
 }: FolderTreeProps) {
-  const tree = useMemo(() => buildFolderTree(folders), [folders])
+  const tree = useMemo(() => buildFolderTree(folders, screens), [folders, screens])
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [creatingUnder, setCreatingUnder] = useState<string | null>(null)
   const [newFolderName, setNewFolderName] = useState('')
@@ -199,9 +216,37 @@ export function FolderTree({
     },
   })
 
+  const renderScreen = (screen: Screen, depth: number) => (
+    <div
+      key={`screen:${screen.name}`}
+      role="button"
+      tabIndex={0}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', screen.name)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onClick={() => onSelectScreen(screen.name)}
+      onKeyDown={(e) => e.key === 'Enter' && onSelectScreen(screen.name)}
+      style={{ paddingLeft: `${depth * 14 + 8}px` }}
+      className={`group flex items-center gap-1.5 py-1.5 pr-2 rounded-md cursor-pointer text-sm transition-colors ${
+        selectedScreen === screen.name
+          ? 'bg-accent-link/15 text-theme-text-primary'
+          : 'text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'
+      }`}
+    >
+      <span className="w-3.5 h-3.5 flex-none" />
+      <FileText className="w-4 h-4 flex-none text-accent-link" />
+      <span className="flex-1 truncate">{screen.name}</span>
+      {isSearching && matchedScreens?.has(screen.name) && (
+        <span className="w-1.5 h-1.5 rounded-full bg-accent-warning flex-none" />
+      )}
+    </div>
+  )
+
   const renderNode = (node: FolderTreeNode, depth: number) => {
     const isOpen = expandedPaths.has(node.path) || (isSearching && matchedFolders?.has(node.path))
-    const hasChildren = node.children.length > 0
+    const hasChildren = node.children.length > 0 || node.screens.length > 0
     const hasMatch = isSearching && matchedFolders?.has(node.path)
 
     return (
@@ -294,6 +339,7 @@ export function FolderTree({
           </div>
         )}
         {isOpen && node.children.map((child) => renderNode(child, depth + 1))}
+        {isOpen && node.screens.map((screen) => renderScreen(screen, depth + 1))}
       </div>
     )
   }
@@ -321,6 +367,7 @@ export function FolderTree({
       <div className="flex-1 overflow-auto">
         {creatingUnder === '' && <div className="py-1 pr-2 pl-2">{newFolderInput()}</div>}
         {tree.children.map((child) => renderNode(child, 0))}
+        {tree.screens.map((screen) => renderScreen(screen, 0))}
       </div>
 
       <button
