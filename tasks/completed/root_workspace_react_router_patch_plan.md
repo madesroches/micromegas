@@ -4,7 +4,7 @@
 
 ## Overview
 
-Dependabot alert #395 (`GHSA-qwww-vcr4-c8h2`, "React Router: RSC Mode CSRF Bypass", high
+Dependabot alert 395 (`GHSA-qwww-vcr4-c8h2`, "React Router: RSC Mode CSRF Bypass", high
 severity, vulnerable range `>= 7.12.0, < 8.3.0`) flags the root workspace's
 `resolutions."react-router": "^7.18.0"` (`package.json:39`), which resolves to `7.18.1` — inside
 the vulnerable range. A plain version bump to `^8.3.0` was already attempted and reverted earlier
@@ -47,11 +47,11 @@ all pass).
   `BuilderView.tsx`/`utils.ts`/`ConfigEditor.tsx` (three of our own component test files import
   `@grafana/ui` pieces that transitively pull in `Link`).
 - **Why downgrading below the vulnerable range doesn't work either**: versions `7.0.0`–`7.11.0`
-  fall outside alert #395's vulnerable range, but the *previous* bump from `6.x` to `7.18.0`
+  fall outside alert 395's vulnerable range, but the *previous* bump from `6.x` to `7.18.0`
   (commit `f0512e455`) was itself required to fix three other advisories with no fix in the 6.x
   line: `GHSA-wrjc-x8rr-h8h6` and `GHSA-337j-9hxr-rhxg` (patched only at `7.18.0`) and
   `GHSA-jjmj-jmhj-qwj2` (vulnerable `7.9.6`–`7.12.0`, patched at `7.13.0`). Since the fix version
-  for those (`7.18.0`/`7.13.0`) is itself *inside* alert #395's vulnerable range
+  for those (`7.18.0`/`7.13.0`) is itself *inside* alert 395's vulnerable range
   (`>= 7.12.0, < 8.3.0`), there is no 7.x version that is simultaneously patched against all four
   advisories — confirmed empirically by pinning `7.11.0` and running the grafana test suite, which
   passes, but reopens the three other CVEs. A downgrade is not a valid fix.
@@ -226,7 +226,7 @@ Current State), or any other workspace.
    lint:fix`, `yarn typecheck`.
 9. Add a `CHANGELOG.md` entry under **Unreleased** / **Build**, following the precedent of the
    adjacent react-router entries in that section: note the bump to `^8.3.0` resolving Dependabot
-   alert #395 (GHSA-qwww-vcr4-c8h2), the `yarn patch` neutralizing the dead
+   alert 395 (GHSA-qwww-vcr4-c8h2), the `yarn patch` neutralizing the dead
    `import.meta.hot` HMR guard in react-router's framework-mode `loadRouteModule`, the
    `.mjs` transform addition for `cookie-es`, and the `grafana/.nvmrc`/CI Node 20→22 bump required
    by react-router 8.3.0's `engines.node` floor. In the same edit, amend the existing
@@ -317,7 +317,7 @@ Implementation Step 5). `CHANGELOG.md` also requires an update (per Implementati
   warnings/errors beyond the ~60 pre-existing, unrelated `immutable` default-export warnings.
 - `yarn lint:fix` and `yarn typecheck` in `grafana/` — must pass cleanly (project convention,
   required before commit per `grafana/CLAUDE.md`).
-- Confirm Dependabot alert #395 closes once merged (Dependabot detects the `yarn.lock` change
+- Confirm Dependabot alert 395 closes once merged (Dependabot detects the `yarn.lock` change
   automatically).
 - Manual smoke check not required beyond the automated suite: `react-router` has no direct
   application-level usage in this workspace (only reached transitively through `@grafana/ui`'s own
