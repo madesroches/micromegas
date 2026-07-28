@@ -402,8 +402,8 @@ in-flight window fetch has been dispatched (tracked by `FetchTaskGuard`) but
 of the spawned fetch task, and the *next* window's future isn't even
 constructed yet — so `outstanding_tasks` can legitimately read 0 between two
 windows of the same still-running `warm_item` call. Awaiting
-`_prefetch_worker` first — within the same overall grace deadline that
-bounds the whole sequence (see below) — establishes that the last prefetch
+`_prefetch_worker` first — within the single deadline that bounds the
+three post-axum stages (see below) — establishes that the last prefetch
 producer has actually exited before `wait_for_fetch_tasks_drain()` is
 trusted to mean "no more origin GETs will be spawned."
 
@@ -474,37 +474,77 @@ first an even split, then fixed percentages, then weighted percentages with
 a cap on axum's share and a floor under every stage, then a version that let
 `foyer.close()` absorb whatever the other three didn't use — and each
 revision's design review found a new hole in the arithmetic (see
-Trade-offs). This plan abandons per-stage budgeting entirely in favor of one
-deadline around the whole sequence:
+Trade-offs). This plan abandons per-stage budgeting entirely. Instead, axum's
+drain keeps running exactly as it does today — awaited directly, not wrapped
+in anything new — and one single deadline covers the three stages that come
+after it:
 
 ```rust
-let _ = tokio::time::timeout(grace, async {
-    // stage order IS the priority order
-    serve_axum_with_graceful_shutdown(.., grace).await?;   // full grace, unchanged from today
+// main() — unchanged shape, still awaited with `?` so a serve error still
+// aborts main() with a nonzero exit:
+serve_axum_with_graceful_shutdown(listener, make_service, shutdown_signal, grace).await?;
+
+// `shutdown_signal` (built in the main() snippet below) stamps `signal_at`
+// the instant the shutdown signal fires. It is always set by the time the
+// line above returns, because `serve_axum_with_graceful_shutdown`'s
+// `tokio::select!` (`shutdown.rs:106-115`) can only resolve once its own
+// internal fanout has observed that same signal.
+let remaining = grace.saturating_sub(signal_at.get().expect("signal_at set before serve returns").elapsed());
+
+// stage order IS the priority order; `remaining`, not `grace`, is what
+// bounds these three stages, since axum may have already spent some (or
+// all) of `grace` on its own drain.
+shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await?;
+```
+
+```rust
+// inside shutdown_sequence::run:
+tokio::time::timeout(remaining, async {
     prefetch_worker.await;
     cache.wait_for_fetch_tasks_drain().await;
     foyer.close().await;
-}).await;
+}).await
 ```
 
+This is the direct fix for a bug in an earlier draft of this plan: wrapping
+the axum serve call itself inside `tokio::time::timeout(grace, ..)` does not
+work, because `tokio::time::timeout` arms its `Sleep` at creation time — at
+process boot, for a serve future that runs for the process's entire
+lifetime — not when the shutdown signal fires. That timeout would therefore
+elapse `grace` seconds after *startup*, at which point the whole wrapped
+block (including the still-running `serve_future`) gets dropped and the
+error is discarded, silently killing the server long before any real
+shutdown signal arrives. Keeping axum's own `await` outside any timeout
+(exactly as it works today) and measuring the *second* deadline from
+`signal_at` rather than from process start fixes both problems: axum's serve
+error still propagates via `?`, and the post-axum deadline actually reflects
+time remaining in the grace period, not time since boot.
+
 `serve_axum_with_graceful_shutdown` keeps the **full** `grace` it gets today
-(`object_cache_srv.rs:200-207`) — nothing changes about axum's own drain or
-about the meaning of its existing log lines
+(`object_cache_srv.rs:200-207`) — nothing changes about axum's own drain, its
+`?`-propagated error path, or the meaning of its existing log lines
 (`shutdown.rs:85,91,112`, `mkdocs/docs/admin/service-lifecycle.md:49-54`).
 Because axum's own deadline arm always sleeps for the entire duration it's
 given before returning (`shutdown.rs:98-115`), a busy axum drain can by
-itself consume the whole outer `grace`, leaving little or nothing for the
-three stages that follow it. That is accepted, not engineered around: this
-design does not try to guarantee any minimum time for the prefetch-worker
-await, the fetch-task drain, or `foyer.close()` on a saturated shutdown.
+itself consume the whole outer `grace`, leaving little or nothing — or,
+once scheduling overhead is accounted for, nothing at all — for the three
+stages that follow it. `remaining` is computed with `saturating_sub`
+specifically for that case: if axum's drain took `grace` or longer,
+`remaining` is `Duration::ZERO`, and `tokio::time::timeout(Duration::ZERO,
+..)` fails on its very first poll without ever polling the wrapped future —
+so a saturated axum drain means the prefetch-worker await, the fetch-task
+drain, and `foyer.close()` are skipped outright, not attempted and cut
+short. That is accepted, not engineered around: this design does not try to
+guarantee any minimum time for those three stages on a saturated shutdown.
 Cross-restart cache warmth — the benefit Design §4 adds — is therefore
 explicitly **best-effort**, never a guarantee, and the Overview and this
 section should be read that way.
 
-If the outer timeout fires, the whole `async` block above is dropped
-mid-stage, and whatever it was doing is simply abandoned — the same fate
-every in-flight future has today at process-exit runtime teardown.
-Concretely:
+If the post-axum timeout fires (or is skipped outright because `remaining`
+was already zero), the `async` block wrapping the three stages is dropped
+mid-stage (or never polled), and whatever it was doing is simply abandoned —
+the same fate every in-flight future has today at process-exit runtime
+teardown. Concretely:
 - If it fires while awaiting `prefetch_worker`, the `JoinHandle` is dropped,
   which *detaches* the task rather than stopping it
   (`tokio-1.52.3/src/runtime/task/join.rs:18,35`); the worker keeps running,
@@ -523,16 +563,19 @@ Concretely:
   `Ok(())` immediately without retrying — a `foyer.close()` interrupted by
   the outer deadline gets no second chance.
 
-With only one deadline around the whole sequence, there is no per-stage
-timeout branch left to instrument individually, so the warning set
+With only one deadline around the three post-axum stages, there is no
+per-stage timeout branch left to instrument individually, so the warning set
 collapses to what's actually observable from outside the dropped block
 (kept minimal and consistent with `mkdocs/docs/admin/object-cache.md:270`'s
 policy — routine conditions log at `debug`, genuinely unexpected ones at
 `warn`/`error`):
-- If the outer timeout elapses, log once at `warn` (an elapsed shutdown
-  deadline is not routine — the same level `serve_axum_with_graceful_shutdown`'s
-  own deadline arm already uses) that the grace period elapsed before the
-  sequence finished, so whichever stage was still running was abandoned.
+- If the post-axum timeout elapses — including the `remaining == ZERO` case,
+  where it elapses on its first poll without running any of the three stages
+  at all — log once at `warn` (an elapsed shutdown deadline is not routine —
+  the same level `serve_axum_with_graceful_shutdown`'s own deadline arm
+  already uses) that the grace period elapsed before the sequence finished,
+  so whichever stage was still running (or, on the zero-remaining branch, all
+  three) was abandoned.
 - On that same branch, if `cache.outstanding_fetch_tasks()` — read from a
   clone held outside the `async` block, since the block itself was dropped
   — is still nonzero, log a second `warn` reporting that count. This is the
@@ -540,8 +583,8 @@ policy — routine conditions log at `debug`, genuinely unexpected ones at
   abandoned" is the one number an operator can actually act on.
 - A `prefetch_worker` `JoinError` (task panicked) and an `Err` from
   `foyer.close()` both stay `warn`, exactly as before, on the branch where
-  the sequence finishes within `grace` (so the block is still alive to log
-  them).
+  the sequence finishes within `remaining` (so the block is still alive to
+  log them).
 - Successful completion of each stage stays an `info!`, as today
   (`origin fetch tasks drained`, `foyer cache closed`) — this isn't the
   routine/unexpected distinction the `debug`/`warn` policy is about.
