@@ -9,4 +9,5 @@ pub mod cli;
 pub mod handlers;
 pub mod prefetch_queue;
 pub mod saturation_monitor;
+pub mod shutdown_sequence;
 pub mod validation;

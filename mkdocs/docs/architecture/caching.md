@@ -64,6 +64,13 @@ The eviction-policy difference is intentional. L1 has a small in-process RAM bud
 L2's RAM tier fronts a large SSD tier, so its job is to catch **recency** (LRU), with the SSD tier
 providing capacity behind it.
 
+Graceful shutdown is another point where the two deployments diverge, not just share behavior: both
+get the same accurate panic-vs-shutdown log for a detached fetch task that never completes, but only
+L2 (`object-cache-srv`) drains outstanding origin fetches and persists its disk tier on `SIGTERM` —
+see [Service Lifecycle](../admin/service-lifecycle.md#how-it-works). L1 has no disk tier to persist
+and lives inside the query process rather than behind its own `SIGTERM` handling, so an in-flight L1
+origin fetch is simply dropped when the query process exits, same as before this drain existed.
+
 ### Why it works: the write-once lake invariant
 
 Blocks and partitions are written to deterministic paths exactly once and never mutated. A cached

@@ -173,6 +173,20 @@ impl RangeCache {
         self.scheduler.inflight_len()
     }
 
+    /// Number of detached fetch tasks (coalesced block runs + `size()` HEADs)
+    /// currently in flight to origin, for the shutdown path's
+    /// abandoned-fetch-count warning.
+    pub fn outstanding_fetch_tasks(&self) -> usize {
+        self.scheduler.outstanding_tasks()
+    }
+
+    /// Resolves once every detached fetch task has finished. Used by graceful
+    /// shutdown to wait for in-flight origin GETs instead of letting the
+    /// tokio runtime drop them.
+    pub async fn wait_for_fetch_tasks_drain(&self) {
+        self.scheduler.wait_drained().await;
+    }
+
     /// Backend disk write-path counters (`None` for a backend with no disk
     /// tier), for the saturation sampler's per-second foyer disk gauges.
     pub fn backend_disk_stats(&self) -> Option<BackendDiskStats> {
@@ -231,7 +245,12 @@ impl RangeCache {
                 let key_owned = key.to_string();
                 let meta_key_owned = meta_key.clone();
                 let task_entry = entry.clone();
+                // See `spawn_run_fetch`'s identical comment: constructed
+                // before `tokio::spawn`, and declared before `FulfillGuard`
+                // inside the async block so it's the last thing dropped.
+                let task_guard = FetchScheduler::track_task(&scheduler);
                 tokio::spawn(async move {
+                    let _task_guard = task_guard;
                     let guard = FulfillGuard::new(
                         scheduler.clone(),
                         vec![(meta_key_owned.clone(), task_entry.clone())],

@@ -25,9 +25,11 @@ use micromegas_object_cache_srv::handlers::{
     get_range_handler, head_handler, post_ranges_handler, prefetch_handler,
 };
 use micromegas_object_cache_srv::prefetch_queue::spawn_prefetch_worker;
+use micromegas_object_cache_srv::shutdown_sequence;
 use object_store::prefix::PrefixStore;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,20 +114,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         buffer_pool_bytes: args.write_buffer_mb * 1024 * 1024,
         submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2,
     };
-    let foyer = FoyerBackend::new_with_shards(
-        &args.disk_path,
-        args.ram_mb * 1024 * 1024,
-        args.disk_gb * 1024 * 1024 * 1024,
-        8,
-        write_tuning,
-        prefix_labels.clone(),
-    )
-    .await
-    .with_context(|| "building FoyerBackend")?;
+    // Bound to a local `Arc` (rather than built inline into `RangeCache::new`)
+    // so `main()` retains a handle to close after the shutdown drain (Design
+    // §4 of the 1291 shutdown plan).
+    let foyer = Arc::new(
+        FoyerBackend::new_with_shards(
+            &args.disk_path,
+            args.ram_mb * 1024 * 1024,
+            args.disk_gb * 1024 * 1024 * 1024,
+            8,
+            write_tuning,
+            prefix_labels.clone(),
+        )
+        .await
+        .with_context(|| "building FoyerBackend")?,
+    );
 
     let cache = RangeCache::new(
         origin_store,
-        Arc::new(foyer),
+        foyer.clone(),
         args.block_size,
         ns,
         args.max_concurrent_fetches,
@@ -135,13 +142,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let cache = cache.with_prefix_labels(prefix_labels);
 
-    let (prefetch_tx, _prefetch_worker) = spawn_prefetch_worker(
+    // The handle is retained (rather than bound to `_prefetch_worker`) so the
+    // shutdown sequence below can abort and join it once axum's own drain
+    // finishes.
+    let (prefetch_tx, prefetch_worker) = spawn_prefetch_worker(
         cache.clone(),
         args.prefetch_queue_capacity,
         args.prefetch_worker_concurrency,
     );
 
     let state = AppState::new(cache, allowed_prefixes, args.memory_budget_mb, prefetch_tx);
+
+    // Taken here -- between `AppState::new` and `.with_state(state)`, the
+    // same gap the saturation-monitor clone below already uses -- since
+    // `state` is moved into the router by `.with_state(state)` further down.
+    // Kept alive past the shutdown sequence so the outstanding-task count is
+    // still readable for its elapsed-deadline warning even if the sequence
+    // itself was dropped mid-drain.
+    let cache_for_drain = state.cache.clone();
 
     // Periodic saturation gauges (fetch-budget occupancy, in-flight entries,
     // memory-budget occupancy, prefetch queue depth, host NIC throughput,
@@ -198,13 +216,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("object-cache-srv listening on {}", args.listen);
 
     let grace = args.common.grace();
+
+    // Stamped the instant the shutdown signal fires, so `remaining` below can
+    // measure from when shutdown actually started rather than from process
+    // boot. Wrapping `wait_for_sigterm()` this way means the stamp happens
+    // exactly once, inside the same future `serve_axum_with_graceful_shutdown`
+    // hands to its own internal `ShutdownFanout` -- no fanout is built here.
+    let signal_at: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
+    let shutdown_signal = {
+        let signal_at = signal_at.clone();
+        async move {
+            wait_for_sigterm().await;
+            let _ = signal_at.set(Instant::now());
+        }
+    };
+
+    // Awaited directly, outside any timeout, exactly as today: axum keeps the
+    // full `grace` for its own drain. This call always resolves `Ok(())`
+    // (axum 0.8.9's accept loop only exits via `break` on the shutdown
+    // signal), so the `?` here is inert and kept only for shape-consistency
+    // with this helper's other callers.
     serve_axum_with_graceful_shutdown(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
-        wait_for_sigterm(),
+        shutdown_signal,
         grace,
     )
     .await?;
+
+    // `signal_at` is always set by the time the call above returns:
+    // `serve_axum_with_graceful_shutdown`'s own `tokio::select!` can only
+    // resolve once its internal fanout has observed the same signal that sets
+    // it. `remaining`, not `grace`, is what bounds the three stages below,
+    // since axum may have already spent some (or all) of `grace` on its own
+    // drain.
+    let remaining = grace.saturating_sub(
+        signal_at
+            .get()
+            .expect("signal_at set before serve_axum_with_graceful_shutdown returns")
+            .elapsed(),
+    );
+
+    shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await;
 
     Ok(())
 }

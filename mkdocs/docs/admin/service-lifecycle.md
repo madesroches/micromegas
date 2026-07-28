@@ -15,7 +15,7 @@ Graceful shutdown applies to every long-running service:
 | FlightSQL | `flight-sql-srv` | In-flight query RPCs |
 | Analytics web app | `analytics-web-srv` | In-flight HTTP requests |
 | Maintenance daemon | `telemetry-maintenance-srv` | Running materialization / retention tasks |
-| Object cache | `micromegas-object-cache-srv` | In-flight range/object read requests |
+| Object cache | `micromegas-object-cache-srv` | In-flight range/object read requests, in-flight origin fetches, and (best-effort) disk-cache persistence — see the object-cache-specific note below |
 
 Each accepts a `--shutdown-grace-period-seconds` flag (default: **25**):
 
@@ -52,6 +52,25 @@ On `SIGTERM`:
 
 A clean drain logs `drain completed`; hitting the deadline logs
 `grace period of <N>s elapsed with work still in flight`.
+
+**Object cache runs three further stages after its own HTTP drain.** Origin fetches spawned by a
+request handler (a coalesced block-run GET, or a `size()` HEAD) run as detached tasks so a
+disconnected client can never strand another caller waiting on the same fetch — which means they
+aren't covered by the HTTP drain above. Once `micromegas-object-cache-srv`'s own HTTP drain
+finishes (using the *full* `--shutdown-grace-period-seconds`, same as every other service), it runs
+three more stages, bounded by a second deadline covering whatever of that same grace period the HTTP
+drain didn't use:
+
+1. Abort and join the prefetch-queue worker, so it can no longer spawn new origin fetches.
+2. Wait for every in-flight origin fetch task to finish.
+3. Close the disk cache, flushing its RAM tier to disk so a fetch that finished draining in step 2
+   survives the restart (best-effort — this only happens if the deadline still has time left).
+
+These stages log `origin fetch tasks drained` and `foyer cache closed` on success; if the deadline
+elapses first, a warning reports that the sequence was cut short, plus a count of any origin
+fetches still abandoned. See [Object Cache Deployment](object-cache.md#tuning-the-write-path) for
+the exact warnings and [Caching Architecture](../architecture/caching.md#l1-and-l2-are-the-same-subsystem)
+for why this applies only to the shared L2 server, not the in-process L1 cache.
 
 !!! note
     Graceful shutdown triggers on `SIGTERM`, which is what orchestrators send.

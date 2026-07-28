@@ -160,7 +160,10 @@ pub fn sample_once(
 /// Spawn the periodic saturation sampler, waking every `SAMPLE_INTERVAL`.
 /// Runs for the lifetime of the process; the returned handle is not expected
 /// to be awaited (the caller may drop it -- the spawned task keeps running
-/// detached, like `prefetch_queue::spawn_prefetch_worker`'s worker).
+/// detached, dying with the runtime at shutdown like today). Unlike
+/// `prefetch_queue::spawn_prefetch_worker`'s worker, this sampler takes no
+/// shutdown parameter and is never aborted: it produces no fetch work, so
+/// there's nothing for graceful shutdown to stop it from spawning.
 pub fn spawn_saturation_monitor(
     cache: RangeCache,
     mem_permits: Arc<Semaphore>,

@@ -17,7 +17,7 @@ use crate::metric_tags;
 
 use super::RangeCache;
 use super::scheduler::{
-    BatchState, FulfillGuard, InFlight, Ownership, Priority, acquire_run_permit,
+    BatchState, FetchScheduler, FulfillGuard, InFlight, Ownership, Priority, acquire_run_permit,
     effective_priority, reconstruct_shared_error,
 };
 
@@ -275,7 +275,14 @@ impl RangeCache {
         let block_size = self.block_size;
         let key_owned = key.to_string();
 
+        // Constructed before `tokio::spawn`, synchronously, so there is no
+        // window where a queued-but-not-yet-polled task is invisible to
+        // `wait_for_fetch_tasks_drain()`. Declared before `FulfillGuard`
+        // inside the async block so it's the last thing dropped, keeping the
+        // "outstanding" window a superset of the "not yet fulfilled" window.
+        let task_guard = FetchScheduler::track_task(&cache.scheduler);
         tokio::spawn(async move {
+            let _task_guard = task_guard;
             let guard = FulfillGuard::new(
                 cache.scheduler.clone(),
                 run.keys

@@ -45,7 +45,7 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be > 0 |
 | `MICROMEGAS_OBJECT_CACHE_NAMESPACE` | No | Cache namespace (default: derived from the origin URI) |
 | `MICROMEGAS_OBJECT_CACHE_PREFIX` | Yes | Allowed key prefixes, comma-separated (e.g. `blobs,views`); only keys equal to or under a prefix are served. Required unless `--allow-all-prefixes` is set (development only) |
-| `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`) |
+| `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`); covers axum's HTTP drain plus draining in-flight origin fetches and closing the disk cache -- see [How it works](service-lifecycle.md#how-it-works) |
 | `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | No | Total concurrent origin GETs (default `32`; NIC-sized starting point, tune against measurement) |
 | `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | No | Origin-GET slots always available to demand reads; prefetch is capped at `total - reserved` (default `8`); must be less than `MAX_CONCURRENT_FETCHES` |
 | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries |
@@ -74,7 +74,7 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--namespace` | derived from origin | Cache namespace |
 | `--prefix` | none | Restrict served keys to this prefix (repeatable) |
 | `--disable-auth` | off | Disable authentication (development only) |
-| `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
+| `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` -- covers axum's HTTP drain plus draining in-flight origin fetches and closing the disk cache -- see [How it works](service-lifecycle.md#how-it-works) |
 | `--max-concurrent-fetches` | `32` | Total concurrent origin GETs |
 | `--demand-reserved-fetches` | `8` | Origin-GET slots reserved for demand reads |
 | `--max-coalesced-get-bytes` | `8388608` | Max span of one coalesced run GET, in bytes |
@@ -121,6 +121,10 @@ prioritization, coalescing, and streaming work.
 - `dropped` — load-shed because the queue (`MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY`) was full. Prefetch is best-effort — a full queue never blocks the caller.
 
 Warmed blocks are admitted to the SSD tier only, so they don't evict hot demand data from RAM.
+
+On `SIGTERM`, the prefetch worker is aborted once axum's own drain finishes (see
+[Service Lifecycle](service-lifecycle.md#how-it-works)); any queued backlog, and any
+partially-warmed key, is abandoned rather than drained to completion.
 
 ## Write-time warming
 
@@ -169,6 +173,10 @@ L1 emits the same `range_cache_*` hit/miss metrics as this server (see [Monitori
 but without per-prefix labels — every L1 hit/miss reports `prefix="other"`, giving aggregate L1
 observability only.
 
+L1 lives inside the query process, not behind this server's `SIGTERM` handling, so none of the
+graceful-shutdown drain behavior in [Service Lifecycle](service-lifecycle.md#how-it-works) applies
+to it — an in-flight L1 origin fetch is simply dropped when the query process itself exits.
+
 ## What gets cached
 
 Only reads are cached, and the client falls back to a direct origin read on any cache error, so an unreachable or misbehaving cache degrades to direct reads rather than failing requests:
@@ -206,7 +214,7 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `range_cache_origin_block_bytes` (`+ prefix, class`) | cache server | Bytes pulled from the origin — the per-request S3 cost the cache exists to avoid. |
 | `range_cache_block_backend_hit` (`+ prefix`) | cache server | Block lookups served from the backend (foyer). The `tier="backend"` side of the hit-rate split. |
 | `object_cache_ram_tier_hit` / `object_cache_disk_tier_hit` (`+ prefix`) | cache server | Block-key gets served from the foyer RAM tier vs. the disk tier (known by construction from the two-step read, not sniffed from a `Source` enum). `meta:`-prefixed `size()` lookups are excluded from both, so `range_cache_block_request − (ram_tier_hit + disk_tier_hit)` is a valid block-only miss rate — a proper aggregate tiered hit rate, the primary input to RAM-sizing decisions. `{prefix}` currently always resolves to `"other"` for these two (the storage-prefixed `blk:...` key never matches a content `prefix` label), so only the aggregate is meaningful today. |
-| `object_cache_promotion_count` (`+ prefix`) | cache server | One per successful disk→RAM block promotion (the length-validated `Load::Entry`/`Load::Piece` promote arms). Equal by construction to `object_cache_disk_tier_hit`; paired with `object_cache_promotion_bytes` as the disk→RAM churn volume, weighed against `object_cache_ram_tier_eviction_*`. Same `{prefix}`-resolves-to-`"other"` caveat as `disk_tier_hit` above. |
+| `object_cache_promotion_count` (`+ prefix`) | cache server | One per successful disk→RAM block promotion (the length-validated `Load::Entry`/`Load::Piece` promote arms). Equal by construction to `object_cache_disk_tier_hit`; paired with `object_cache_promotion_bytes` as the disk→RAM churn volume, weighed against `object_cache_ram_tier_eviction_*`. Same `{prefix}`-resolves-to-`"other"` caveat as `disk_tier_hit` above. Note: the close-time full-tier flush on a clean `SIGTERM` (see [Service Lifecycle](service-lifecycle.md#how-it-works)) is intentionally excluded from `object_cache_ram_tier_eviction_*`, so it never appears as a spike there. |
 | `object_cache_promotion_bytes` (`+ prefix`) | cache server | Bytes promoted disk→RAM (the promoted block's length). With the count, gives mean promoted block size — the churn-volume half of the RAM-sizing signal. Same `{prefix}` caveat as above. |
 | `range_cache_size_backend_hit` (`+ prefix`) | cache server | `size()` lookups served from the backend. Fires exactly once per ranged GET (a prior double-counting bug on the handler's own pre-resolved size has been fixed). |
 | `range_cache_size_implausible` (`+ prefix`) | cache server | A cached `size()` value decoded above the plausibility ceiling (256 TiB) — a corrupt/misdecoded cache entry, rejected and re-resolved from origin rather than trusted. Should be ~0. |
@@ -277,3 +285,15 @@ Prefetch fills are force-admitted to the SSD tier (bypassing the admission picke
 - `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` — the flush buffer pool size; the submit-queue overflow threshold is set to 2x this value.
 
 If the overflow WARN is firing, check `object_cache_foyer_disk_write_bytes_per_sec` / `object_cache_foyer_disk_write_ios_per_sec` alongside it: a write rate that's flat while the WARN fires means the flushers are saturated and would benefit from a higher `MICROMEGAS_OBJECT_CACHE_FLUSHERS`, while a healthy rate with occasional bursts past the buffer suggests raising `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` instead. foyer does not expose submit-queue occupancy itself, so the WARN log remains the direct drop signal.
+
+Two more WARNs can fire during shutdown (see [Service Lifecycle](service-lifecycle.md#how-it-works)):
+
+- The shutdown grace period elapsed before the post-axum sequence (prefetch-worker abort, fetch-task
+  drain, disk-cache close) finished — whichever stage was still running was abandoned.
+- Alongside it, if any origin fetch tasks were still outstanding, a count of how many were abandoned.
+  Their callers see a synthesized error and must refetch after restart.
+
+If the elapsed-deadline WARN fires while the disk-cache close was the stage running, the flush was
+abandoned and the next restart will **not** reuse that warmth — see [same-format restarts reuse the
+store warm](#environment-variables) above; this is the direct, best-effort consequence of persisting
+the cache only if the grace period allows it.

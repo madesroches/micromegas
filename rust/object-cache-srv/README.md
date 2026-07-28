@@ -75,7 +75,7 @@ All flags can be set via the listed environment variables.
 | `--allow-all-prefixes`          |                                      | `false`        | Serve the entire bucket, bypassing prefix containment (development only). |
 | `--api-keys`                    | `MICROMEGAS_API_KEYS`                | _(none)_       | Key ring for request authentication.                             |
 | `--disable-auth`                |                                      | `false`        | Disable authentication (development only).                        |
-| `--shutdown-grace-period-seconds` | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | `25`  | Graceful-shutdown grace period on `SIGTERM`.                     |
+| `--shutdown-grace-period-seconds` | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | `25`  | Graceful-shutdown grace period on `SIGTERM`. Covers axum's HTTP drain, then (bounded by whatever of the same period the HTTP drain didn't use) aborting the prefetch worker, draining in-flight origin fetches, and closing the disk cache. |
 | `--max-concurrent-fetches`      | `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | `32` | Total concurrent origin GETs.                              |
 | `--demand-reserved-fetches`     | `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | `8` | Origin-GET slots always reserved for demand reads; must be less than `--max-concurrent-fetches`. |
 | `--max-coalesced-get-bytes`     | `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | `8388608` | Max byte span of one coalesced run GET.                |

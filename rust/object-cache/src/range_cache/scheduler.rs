@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use anyhow::{Result, anyhow};
@@ -165,6 +165,13 @@ pub(super) struct FetchScheduler {
     /// `shared_total`.
     prefetch_total: usize,
     promote_whole_batch: bool,
+    /// Count of detached fetch tasks (`spawn_run_fetch` runs + `size()` HEADs)
+    /// currently in flight, tracked by `FetchTaskGuard`. Used by graceful
+    /// shutdown to wait for in-flight origin GETs instead of letting the
+    /// tokio runtime drop them.
+    outstanding_tasks: AtomicUsize,
+    /// Notified when `outstanding_tasks` drops to zero. See `wait_drained`.
+    drained: Notify,
 }
 
 impl FetchScheduler {
@@ -184,6 +191,45 @@ impl FetchScheduler {
             prefetch_permits: Arc::new(Semaphore::new(prefetch_total)),
             prefetch_total,
             promote_whole_batch,
+            outstanding_tasks: AtomicUsize::new(0),
+            drained: Notify::new(),
+        }
+    }
+
+    /// Register one detached fetch task as outstanding. Call *before*
+    /// `tokio::spawn`, synchronously, so there is no window where a
+    /// queued-but-not-yet-polled task is invisible to `wait_drained()`.
+    pub(super) fn track_task(scheduler: &Arc<FetchScheduler>) -> FetchTaskGuard {
+        scheduler.outstanding_tasks.fetch_add(1, Ordering::AcqRel);
+        FetchTaskGuard(scheduler.clone())
+    }
+
+    /// Number of detached fetch tasks currently in flight to origin.
+    pub(super) fn outstanding_tasks(&self) -> usize {
+        self.outstanding_tasks.load(Ordering::Acquire)
+    }
+
+    /// Resolves once no detached fetch task is outstanding. Race-free by
+    /// construction: `Notified::enable`'s docs guarantee that a
+    /// `notify_waiters()` call is observed by a `Notified` future as long as
+    /// that call happens after the `Notified` was created, regardless of
+    /// whether `enable`/`poll` has run yet -- so creating the `Notified`
+    /// *before* re-checking the count (rather than after) means a
+    /// `notify_waiters()` racing the check in between is never missed. This
+    /// is a different guarantee than `any_entry_promoted`'s below, which
+    /// relies on `notify_one`'s stored-permit semantics; `notify_waiters`
+    /// stores no permit, so the ordering above -- not a permit -- is what
+    /// makes this race-free.
+    pub(super) async fn wait_drained(&self) {
+        loop {
+            if self.outstanding_tasks() == 0 {
+                return;
+            }
+            let notified = self.drained.notified();
+            if self.outstanding_tasks() == 0 {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -322,16 +368,47 @@ impl Drop for FulfillGuard {
         if !self.armed {
             return;
         }
-        warn!(
-            "fetch task exited without completing normally (likely a panic); \
-             fulfilling {} in-flight entries with an error",
-            self.entries.len()
-        );
+        let n = self.entries.len();
+        // `std::thread::panicking()` is `true` only while the current thread
+        // is unwinding from a real panic; it is `false` when a task future is
+        // simply dropped without being polled to completion (e.g. the tokio
+        // runtime shutting down), so it's exactly the signal needed to tell
+        // the two cases apart.
+        let panicking = std::thread::panicking();
+        if panicking {
+            warn!("fetch task panicked; fulfilling {n} in-flight entries with an error");
+        } else {
+            warn!(
+                "cache service shutting down; abandoning {n} in-flight fetch entries \
+                 (joiners see a synthesized error and must refetch after restart)"
+            );
+        }
+        let msg = if panicking {
+            "fetch task panicked before producing a result"
+        } else {
+            "fetch task was abandoned (cache service shutting down)"
+        };
         for (key, entry) in &self.entries {
-            entry.fulfill(Err(Arc::new(anyhow!(
-                "fetch task exited without producing a result (panic during fetch)"
-            ))));
+            entry.fulfill(Err(Arc::new(anyhow!(msg))));
             self.scheduler.remove_entry(key);
+        }
+    }
+}
+
+/// Scope guard tracking the lifetime of one detached fetch task, held for
+/// its whole body. Distinct from `FulfillGuard`, which tracks *entry
+/// fulfillment*, not task lifetime -- the two guards serve different
+/// purposes and both must survive a panicking OR shutdown-dropped task.
+/// Because this is a plain local variable inside the spawned async block,
+/// its `Drop` runs whether the task finishes normally, panics, or is dropped
+/// without being polled to completion, so `outstanding_tasks` stays accurate
+/// in all three cases without any special-casing.
+pub(super) struct FetchTaskGuard(Arc<FetchScheduler>);
+
+impl Drop for FetchTaskGuard {
+    fn drop(&mut self) {
+        if self.0.outstanding_tasks.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.drained.notify_waiters();
         }
     }
 }
