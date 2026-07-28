@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 
-def setup_nvm_and_node(repo_root: Path) -> bool:
+def setup_nvm_and_node(repo_root: Path) -> str | None:
     """Setup NVM and switch to the correct Node version."""
     # Look for .nvmrc in both repo root and grafana directory
     nvmrc_paths = [
@@ -31,16 +31,16 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
     else:
         # Create .nvmrc in grafana directory if it doesn't exist
         nvmrc_path = repo_root / "grafana" / ".nvmrc"
-        required_version = "20"  # Default to Node 20 LTS
+        required_version = "22"  # Default to Node 22 (react-router@8.3.0 requires >=22.22.0)
         print(f"No .nvmrc found, creating {nvmrc_path} with Node {required_version}")
         nvmrc_path.parent.mkdir(parents=True, exist_ok=True)
         with open(nvmrc_path, "w") as f:
             f.write(f"{required_version}\n")
 
     # Update .nvmrc to a compatible version if needed
-    # ESLint requires ^18.18.0 || ^20.9.0 || >=21.1.0
+    # react-router@8.3.0 requires Node >=22.22.0
     if required_version in ["16", "17", "19"]:
-        required_version = "20"
+        required_version = "22"
         print(
             f"Updating {nvmrc_path} to Node {required_version} (required by dependencies)"
         )
@@ -53,7 +53,7 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
 
     if not nvm_sh.exists():
         print(f"⚠️  NVM not found at {nvm_sh}, skipping Node version switch")
-        return True
+        return required_version
 
     print(f"\n=== Setting up Node.js version {required_version} with NVM ===")
 
@@ -71,13 +71,13 @@ def setup_nvm_and_node(repo_root: Path) -> bool:
 
     if result.returncode != 0:
         print(f"❌ Failed to switch Node version: {result.stderr}")
-        return False
+        return None
 
     print(result.stdout)
-    return True
+    return required_version
 
 
-def run_cmd(cmd: str, cwd: Path) -> int:
+def run_cmd(cmd: str, cwd: Path, node_version: str) -> int:
     """Run command with NVM environment."""
     print(f"Running: {cmd} in {cwd}")
 
@@ -86,8 +86,12 @@ def run_cmd(cmd: str, cwd: Path) -> int:
     nvm_sh = Path(nvm_dir) / "nvm.sh"
 
     if nvm_sh.exists():
-        # Run command with nvm sourced; corepack enable provisions yarn for the active Node.
-        full_cmd = f"source {nvm_sh} && nvm use && corepack enable && {cmd}"
+        # Run command with nvm sourced, pinning the explicit Node version resolved
+        # by setup_nvm_and_node(). A bare `nvm use` would instead resolve the
+        # nearest .nvmrc by walking up from `cwd`, which is wrong for steps that
+        # run with cwd=repo_root but need grafana/.nvmrc's version.
+        # corepack enable provisions yarn for the active Node.
+        full_cmd = f"source {nvm_sh} && nvm use {node_version} && corepack enable && {cmd}"
         result = subprocess.run(["bash", "-c", full_cmd], cwd=cwd, check=False)
     else:
         # Fall back to direct execution if nvm not found (e.g. GitHub Actions
@@ -106,32 +110,44 @@ def main():
     print("=== Grafana Plugin CI Validation ===\n")
 
     # Setup Node version first
-    if not setup_nvm_and_node(repo_root):
+    node_version = setup_nvm_and_node(repo_root)
+    if node_version is None:
         return 1
 
     # Install dependencies (must be done from root for yarn workspaces)
     # Set NODE_ENV=development to ensure devDependencies are installed
     print("\n=== Installing dependencies ===")
-    if run_cmd("NODE_ENV=development yarn install", repo_root) != 0:
+    if run_cmd("NODE_ENV=development yarn install", repo_root, node_version) != 0:
         print("❌ Dependency installation failed")
         return 1
 
     # Type checking
     print("\n=== Type checking ===")
-    if run_cmd("yarn typecheck", grafana_dir) != 0:
+    if run_cmd("yarn typecheck", grafana_dir, node_version) != 0:
         print("❌ Type checking failed")
         return 1
 
     # Linting
     print("\n=== Linting ===")
-    if run_cmd("yarn workspace micromegas-micromegas-datasource lint", repo_root) != 0:
+    if (
+        run_cmd(
+            "yarn workspace micromegas-micromegas-datasource lint",
+            repo_root,
+            node_version,
+        )
+        != 0
+    ):
         print("❌ Linting failed")
         return 1
 
     # Unit tests
     print("\n=== Unit tests ===")
     if (
-        run_cmd("yarn workspace micromegas-micromegas-datasource test:ci", repo_root)
+        run_cmd(
+            "yarn workspace micromegas-micromegas-datasource test:ci",
+            repo_root,
+            node_version,
+        )
         != 0
     ):
         print("❌ Unit tests failed")
@@ -139,7 +155,14 @@ def main():
 
     # Frontend build
     print("\n=== Frontend build ===")
-    if run_cmd("yarn workspace micromegas-micromegas-datasource build", repo_root) != 0:
+    if (
+        run_cmd(
+            "yarn workspace micromegas-micromegas-datasource build",
+            repo_root,
+            node_version,
+        )
+        != 0
+    ):
         print("❌ Frontend build failed")
         return 1
 
@@ -150,19 +173,19 @@ def main():
 
         # Go vet
         print("\n=== Go vet ===")
-        if run_cmd("go vet ./...", grafana_dir) != 0:
+        if run_cmd("go vet ./...", grafana_dir, node_version) != 0:
             print("❌ Go vet failed")
             return 1
 
         # Go test
         print("\n=== Go test ===")
-        if run_cmd("mage coverage", grafana_dir) != 0:
+        if run_cmd("mage coverage", grafana_dir, node_version) != 0:
             print("❌ Go tests failed")
             return 1
 
         # Go build
         print("\n=== Go build ===")
-        if run_cmd("mage build", grafana_dir) != 0:
+        if run_cmd("mage build", grafana_dir, node_version) != 0:
             print("❌ Go build failed")
             return 1
 

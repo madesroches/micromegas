@@ -1,0 +1,26 @@
+diff --git a/dist/development/lib/dom/ssr/routeModules.js b/dist/development/lib/dom/ssr/routeModules.js
+index 45a128617f6d936fb228762b0cc0408cc2a074ea..975b360137f2b110d0ea8ab73c9f87447cab07da 100644
+--- a/dist/development/lib/dom/ssr/routeModules.js
++++ b/dist/development/lib/dom/ssr/routeModules.js
+@@ -22,7 +22,7 @@ async function loadRouteModule(route, routeModulesCache) {
+ 	} catch (error) {
+ 		console.error(`Error loading route module \`${route.module}\`, reloading page...`);
+ 		console.error(error);
+-		if (window.__reactRouterContext && window.__reactRouterContext.isSpaMode && import.meta.hot) throw error;
++		if (window.__reactRouterContext && window.__reactRouterContext.isSpaMode && false) throw error;
+ 		window.location.reload();
+ 		return new Promise(() => {});
+ 	}
+diff --git a/dist/production/lib/dom/ssr/routeModules.js b/dist/production/lib/dom/ssr/routeModules.js
+index 45a128617f6d936fb228762b0cc0408cc2a074ea..975b360137f2b110d0ea8ab73c9f87447cab07da 100644
+--- a/dist/production/lib/dom/ssr/routeModules.js
++++ b/dist/production/lib/dom/ssr/routeModules.js
+@@ -22,7 +22,7 @@ async function loadRouteModule(route, routeModulesCache) {
+ 	} catch (error) {
+ 		console.error(`Error loading route module \`${route.module}\`, reloading page...`);
+ 		console.error(error);
+-		if (window.__reactRouterContext && window.__reactRouterContext.isSpaMode && import.meta.hot) throw error;
++		if (window.__reactRouterContext && window.__reactRouterContext.isSpaMode && false) throw error;
+ 		window.location.reload();
+ 		return new Promise(() => {});
+ 	}
