@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ChevronRight, FileText, Folder, FolderOpen, Home, MoreVertical, Plus } from 'lucide-react'
 import { FolderInfo } from '@/lib/folders-api'
 import { Screen } from '@/lib/screens-api'
@@ -129,6 +129,14 @@ export function FolderTree({
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deletingPath, setDeletingPath] = useState<string | null>(null)
+  // Set by Escape's keydown handler, checked (and reset) at the top of the
+  // paired commit function. Needed because unmounting the focused <input> on
+  // the next render fires a native blur that React replays through the
+  // *previous* render's onBlur closure — which still holds the pre-Escape
+  // typed value — so the blur-driven commit must be able to see that Escape
+  // just happened and bail out instead of saving.
+  const createCancelledRef = useRef(false)
+  const renameCancelledRef = useRef(false)
 
   const startCreating = (parentPath: string) => {
     setCreatingUnder(parentPath)
@@ -138,6 +146,10 @@ export function FolderTree({
   const normalizedNewFolderName = useMemo(() => normalizeFolderSegment(newFolderName), [newFolderName])
 
   const commitCreate = () => {
+    if (createCancelledRef.current) {
+      createCancelledRef.current = false
+      return
+    }
     if (normalizedNewFolderName && creatingUnder !== null) {
       onCreateFolder(creatingUnder, normalizedNewFolderName)
     }
@@ -154,6 +166,10 @@ export function FolderTree({
   const normalizedRenameValue = useMemo(() => normalizeFolderSegment(renameValue), [renameValue])
 
   const commitRename = (node: FolderTreeNode) => {
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false
+      return
+    }
     if (normalizedRenameValue && normalizedRenameValue !== node.name) {
       const newPath = parentOf(node.path) ? `${parentOf(node.path)}/${normalizedRenameValue}` : normalizedRenameValue
       onRenameFolder(node.path, newPath)
@@ -172,7 +188,10 @@ export function FolderTree({
         onBlur={() => commitRename(node)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commitRename(node)
-          if (e.key === 'Escape') setRenamingPath(null)
+          if (e.key === 'Escape') {
+            renameCancelledRef.current = true
+            setRenamingPath(null)
+          }
         }}
         className="flex-1 min-w-0 px-1.5 py-0.5 text-sm bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
       />
@@ -188,7 +207,10 @@ export function FolderTree({
         onBlur={commitCreate}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commitCreate()
-          if (e.key === 'Escape') setCreatingUnder(null)
+          if (e.key === 'Escape') {
+            createCancelledRef.current = true
+            setCreatingUnder(null)
+          }
         }}
         placeholder="Folder name"
         className="w-full px-2 py-1 text-xs bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"

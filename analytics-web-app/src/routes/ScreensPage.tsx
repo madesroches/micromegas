@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { Plus, MoreVertical, Folder, FolderPlus } from 'lucide-react'
@@ -99,8 +99,19 @@ function ScreensPageContent() {
   }
 
   const normalizedNewFolderName = useMemo(() => normalizeFolderSegment(newFolderName), [newFolderName])
+  // Set by Escape's keydown handler, checked (and reset) at the top of
+  // commitCreateFolder. Needed because unmounting the focused <input> on the
+  // next render fires a native blur that React replays through the
+  // *previous* render's onBlur closure — which still holds the pre-Escape
+  // typed value — so the blur-driven commit must be able to see that Escape
+  // just happened and bail out instead of saving.
+  const createFolderCancelledRef = useRef(false)
 
   const commitCreateFolder = async () => {
+    if (createFolderCancelledRef.current) {
+      createFolderCancelledRef.current = false
+      return
+    }
     if (!normalizedNewFolderName) {
       setCreatingFolder(false)
       setNewFolderName('')
@@ -361,6 +372,7 @@ function ScreensPageContent() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') commitCreateFolder()
                       if (e.key === 'Escape') {
+                        createFolderCancelledRef.current = true
                         setCreatingFolder(false)
                         setNewFolderName('')
                       }

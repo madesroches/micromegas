@@ -71,6 +71,35 @@ impl From<ValidationError> for ScreenError {
 
 type ScreenResult<T> = Result<T, ScreenError>;
 
+/// Expands `path` into itself and all of its non-root ancestors, shortest
+/// first (root-to-leaf), e.g. `"team/sub"` -> `["team", "team/sub"]`. Root
+/// (empty path) is excluded — it is never locked, matching `folder_exists`
+/// in folders.rs.
+///
+/// Locking every ancestor prefix (not just the exact destination path) is
+/// what makes `create_screen`/`update_screen` serialize against a concurrent
+/// `update_folder`/`delete_folder` on any ancestor folder: renaming/deleting
+/// "team" takes a lock on "team" alone, so a screen create/move into
+/// "team/sub" must also lock "team" (in addition to "team/sub") to contend
+/// on that same key — otherwise the two transactions target disjoint
+/// advisory-lock keys and can race under READ COMMITTED.
+fn ancestor_prefixes(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    let mut cur = String::new();
+    for segment in path.split('/') {
+        cur = if cur.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{cur}/{segment}")
+        };
+        result.push(cur.clone());
+    }
+    result
+}
+
 // ============================================================================
 // Screen Types (static)
 // ============================================================================
@@ -171,14 +200,16 @@ pub async fn create_screen(
 
     let mut tx = pool.begin().await?;
 
-    // Lock the destination folder path so a concurrent delete/rename of that
-    // folder (which takes the same lock in `folders.rs`) can't race past this
-    // create and leave the folder resurrected or the screen orphaned. Root
-    // (empty path) has no lock, matching `folder_exists`/`folders.rs`.
-    if !request.folder_path.is_empty() {
+    // Lock the destination folder path *and all of its ancestors* so a
+    // concurrent delete/rename of any ancestor folder (which locks only its
+    // own exact path in `folders.rs`) can't race past this create and leave
+    // the screen under a folder that was just renamed/deleted away. Locked
+    // shortest-prefix-first (root-to-leaf), matching `update_folder`'s
+    // sorted-order deadlock-avoidance convention.
+    for lock_path in ancestor_prefixes(&request.folder_path) {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-                .bind(&request.folder_path)
+                .bind(&lock_path)
                 .execute(&mut *tx),
             "sql_folder_advisory_lock"
         )
@@ -247,9 +278,10 @@ pub async fn update_screen(
     let mut tx = pool.begin().await?;
 
     // If the folder is changing, lock both the screen's current folder path
-    // and the destination folder path (sorted, to match `update_folder`'s
-    // deadlock-avoidance convention) so a concurrent delete/rename of either
-    // folder can't race past this move. Root (empty path) is never locked.
+    // and the destination folder path *and all of their ancestors* (sorted,
+    // to match `update_folder`'s deadlock-avoidance convention) so a
+    // concurrent delete/rename of any ancestor of either folder can't race
+    // past this move. Root (empty path) is never locked.
     if let Some(ref new_folder_path) = request.folder_path {
         let current_folder_path = instrument_named!(
             sqlx::query_scalar::<_, String>("SELECT folder_path FROM screens WHERE name = $1")
@@ -260,13 +292,8 @@ pub async fn update_screen(
         .await?
         .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
-        let mut lock_paths: Vec<&str> = Vec::new();
-        if !current_folder_path.is_empty() {
-            lock_paths.push(current_folder_path.as_str());
-        }
-        if !new_folder_path.is_empty() && new_folder_path.as_str() != current_folder_path.as_str() {
-            lock_paths.push(new_folder_path.as_str());
-        }
+        let mut lock_paths: Vec<String> = ancestor_prefixes(&current_folder_path);
+        lock_paths.extend(ancestor_prefixes(new_folder_path));
         lock_paths.sort_unstable();
         lock_paths.dedup();
 
