@@ -15,6 +15,7 @@ use analytics_web_srv::screens::create_screen;
 use axum::extract::{Extension, Json, Query};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use std::time::Duration;
 
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::PgPool::connect_lazy("postgres://localhost/unused")
@@ -188,6 +189,82 @@ async fn create_folder_is_idempotent() {
         .await
         .expect("counting folder rows");
     assert_eq!(count, 1);
+}
+
+// Proves create_folder actually takes a `pg_advisory_xact_lock(hashtext($1))`
+// on the destination path (not just on an ancestor prefix, and not skipped
+// altogether), by holding that lock key via a session-scoped advisory lock
+// on a separate connection and observing create_folder block until it's
+// released — same pattern as
+// `create_screen_serializes_on_destination_folder_advisory_lock` in
+// screens_tests.rs.
+#[ignore]
+#[tokio::test]
+async fn create_folder_serializes_on_destination_advisory_lock() {
+    let pool = connect().await;
+    clear_tables(&pool).await;
+
+    let mut lock_conn = pool.acquire().await.expect("acquiring lock connection");
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1))")
+        .bind("locked-folder")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("taking session advisory lock");
+
+    let pool_for_task = pool.clone();
+    let create_task = tokio::spawn(async move {
+        create_folder(
+            Extension(pool_for_task),
+            Extension(test_user()),
+            Json(CreateFolderRequest {
+                path: "locked-folder".to_string(),
+            }),
+        )
+        .await
+    });
+
+    // Poll (bounded) until the create_folder backend shows up waiting on a
+    // lock, proving it contends on our held advisory lock instead of racing
+    // past it.
+    let mut waiting = false;
+    for _ in 0..100 {
+        if create_task.is_finished() {
+            break;
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%pg_advisory_xact_lock%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("checking pg_stat_activity");
+        if count > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        waiting,
+        "create_folder must block waiting on the destination path's advisory lock"
+    );
+    assert!(
+        !create_task.is_finished(),
+        "create_folder must not complete while the folder lock is held"
+    );
+
+    sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+        .bind("locked-folder")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("releasing session advisory lock");
+    drop(lock_conn);
+
+    let (status, _) = tokio::time::timeout(Duration::from_secs(5), create_task)
+        .await
+        .expect("create_folder should complete promptly after the lock is released")
+        .expect("task join")
+        .expect("create_folder should succeed once unblocked");
+    assert_eq!(status, StatusCode::CREATED);
 }
 
 #[ignore]

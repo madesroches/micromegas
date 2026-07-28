@@ -227,16 +227,39 @@ pub async fn create_folder(
 
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
+    let mut tx = pool.begin().await?;
+
+    // Lock the destination path *and all of its ancestors* so a concurrent
+    // delete/rename of any ancestor folder can't race past this create and
+    // leave a folder that was just reported deleted/renamed reappearing
+    // implicitly (via `compute_folder_infos`'s prefix derivation). Locked
+    // shortest-prefix-first (root-to-leaf), matching `update_folder`'s
+    // deadlock-avoidance convention.
+    for lock_path in expand_prefixes(&request.path)
+        .into_iter()
+        .filter(|p| !p.is_empty())
+    {
+        instrument_named!(
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&lock_path)
+                .execute(&mut *tx),
+            "sql_folder_advisory_lock"
+        )
+        .await?;
+    }
+
     instrument_named!(
         sqlx::query(
             "INSERT INTO folders (path, created_by) VALUES ($1, $2) ON CONFLICT (path) DO NOTHING"
         )
         .bind(&request.path)
         .bind(user_id)
-        .execute(&pool),
+        .execute(&mut *tx),
         "sql_insert_folder"
     )
     .await?;
+
+    tx.commit().await?;
 
     info!("Created folder: {} by {}", request.path, user_id);
     Ok((StatusCode::CREATED, Json(Folder { path: request.path })))
@@ -269,13 +292,24 @@ pub async fn update_folder(
 
     let mut tx = pool.begin().await?;
 
-    // Lock both the source and destination paths so that two concurrent renames
-    // targeting the same destination (e.g. "team1" -> "target" and "team2" ->
-    // "target") serialize against each other instead of racing past the
-    // `folder_exists` check below. Lock in a fixed order (sorted) to avoid
-    // lock-order deadlocks between concurrent renames that cross paths.
-    let mut lock_paths = [request.path.as_str(), request.new_path.as_str()];
+    // Lock the source and destination paths *and all of their ancestors* so
+    // that two concurrent renames targeting the same destination (e.g.
+    // "team1" -> "target" and "team2" -> "target"), or a concurrent
+    // delete/rename of an ancestor of either path, serialize against this
+    // rename instead of racing past the `folder_exists` checks below. Lock
+    // in a fixed order (sorted, deduped) to avoid lock-order deadlocks
+    // between concurrent renames that cross paths.
+    let mut lock_paths: Vec<String> = expand_prefixes(&request.path)
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
+    lock_paths.extend(
+        expand_prefixes(&request.new_path)
+            .into_iter()
+            .filter(|p| !p.is_empty()),
+    );
     lock_paths.sort_unstable();
+    lock_paths.dedup();
     for lock_path in lock_paths {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
