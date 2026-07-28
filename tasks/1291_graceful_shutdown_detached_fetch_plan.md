@@ -493,8 +493,10 @@ in anything new — and one single deadline covers the three stages that come
 after it:
 
 ```rust
-// main() — unchanged shape, still awaited with `?` so a serve error still
-// aborts main() with a nonzero exit:
+// main() — unchanged shape, still awaited with `?` for consistency with
+// this helper's other callers. `serve_axum_with_graceful_shutdown` always
+// resolves `Ok(())` (see below), so this line can never itself produce a
+// nonzero exit:
 serve_axum_with_graceful_shutdown(listener, make_service, shutdown_signal, grace).await?;
 
 // `shutdown_signal` (an `async move` wrapper around `wait_for_sigterm()`,
@@ -516,6 +518,14 @@ shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await
 
 ```rust
 // inside shutdown_sequence::run (`async fn run(...) -> ()`):
+// Set first, before the early-return check below and outside the timeout
+// entirely, so every branch -- including the early return and the
+// timeout-abandoned branches, where `close()` never starts -- suppresses
+// the #1281 eviction gauges on foyer's drop-time close fallback (Design
+// §4). Calling this only right before `foyer.close()` would leave it unset
+// on exactly those branches.
+foyer.mark_shutting_down();
+
 // Below this, and not exactly zero, is treated as "not enough of the grace
 // period left to be worth attempting" -- see the `saturating_sub`
 // discussion below for why a strictly-positive-but-tiny `remaining` is just
@@ -560,14 +570,21 @@ block (including the still-running `serve_future`) gets dropped and the
 error is discarded, silently killing the server long before any real
 shutdown signal arrives. Keeping axum's own `await` outside any timeout
 (exactly as it works today) and measuring the *second* deadline from
-`signal_at` rather than from process start fixes both problems: axum's serve
-error still propagates via `?`, and the post-axum deadline actually reflects
-time remaining in the grace period, not time since boot.
+`signal_at` rather than from process start fixes the problem: the post-axum
+deadline actually reflects time remaining in the grace period, not time
+since boot. (Unlike the rejected draft, this fix has nothing to do with an
+error path surviving: `serve_axum_with_graceful_shutdown` always resolves
+`Ok(())` — see below — so the real fix is entirely about when the timeout's
+`Sleep` starts.)
 
 `serve_axum_with_graceful_shutdown` keeps the **full** `grace` it gets today
-(`object_cache_srv.rs:200-207`) — nothing changes about axum's own drain, its
-`?`-propagated error path, or the meaning of its existing log lines
-(`shutdown.rs:85,91,112`, `mkdocs/docs/admin/service-lifecycle.md:49-54`).
+(`object_cache_srv.rs:200-207`) — nothing changes about axum's own drain or
+the meaning of its existing log lines (`shutdown.rs:85,91,112`,
+`mkdocs/docs/admin/service-lifecycle.md:49-54`). (This helper's `.await?` can
+never itself produce a nonzero exit: `WithGracefulShutdown::into_future`
+always resolves `Ok(())` — axum 0.8.9's accept loop only exits via `break` on
+the shutdown signal, `serve/mod.rs:289,345-350` — so the `?` is inert, kept
+only for shape-consistency with this helper's other callers.)
 Because axum's own deadline arm always sleeps for the entire duration it's
 given before returning (`shutdown.rs:98-115`), a busy axum drain can by
 itself consume the whole outer `grace`, leaving little or nothing — or,
@@ -713,8 +730,9 @@ let cache_for_drain = state.cache.clone();
 ... // router construction, listener bind (unchanged)
 
 // Awaited directly, outside any timeout, exactly as today: axum keeps the
-// full `grace` for its own drain, and a serve error still aborts `main()`
-// via `?`.
+// full `grace` for its own drain. This call always resolves `Ok(())`
+// (Design §3), so the `?` here is inert and can't itself produce a
+// nonzero exit.
 serve_axum_with_graceful_shutdown(
     listener,
     app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -742,8 +760,9 @@ and the three handles it needs (`prefetch_worker`, `cache`, `foyer`) — no
 budget struct, and no axum inputs, since axum is awaited directly in
 `main()` above, outside `run` entirely. `run` returns `()`, not a
 `Result`: an elapsed deadline is logged at `warn` and swallowed inside
-`run` (Design §3's warning set), so it can never turn into the nonzero
-exit that axum's own `?`-propagated error still can.
+`run` (Design §3's warning set), so it can never turn into a nonzero exit —
+consistent with the axum stage above it, whose `.await?` also can't produce
+one, since `serve_axum_with_graceful_shutdown` always resolves `Ok(())`.
 
 `AppState::cache` (`app_state.rs`) is already `Clone` and cheap — every
 field is an `Arc` clone or a `Copy` scalar except `ns: String`, one small
@@ -859,10 +878,11 @@ claims. Two gaps must be closed for that to actually be true:
   unsaturated path; it does not exercise any of these four caveats.
 
 ```rust
-// Set immediately before `close()`'s eviction-to-zero sweep so
-// `RamEvictionListener::on_leave` (see below) can tell this flush apart
-// from capacity-driven thrashing.
-foyer.mark_shutting_down();
+// `mark_shutting_down()` already ran at the very top of
+// `shutdown_sequence::run`, before the `MIN_POST_AXUM_BUDGET` early return
+// (Design §3) -- not here -- so `RamEvictionListener::on_leave` (see below)
+// can tell this flush apart from capacity-driven thrashing even on a
+// branch where `close()` itself never gets called.
 match foyer.close().await {
     Ok(()) => info!("foyer cache closed"),
     Err(e) => warn!("foyer cache close failed: {e:#}"),
@@ -884,22 +904,34 @@ gates `object_cache_ram_tier_eviction_age_ms` on `Event::Evict` specifically
 — that's the one it treats as the capacity-driven thrashing signal (#1281).
 Left unguarded, every clean shutdown would emit both gauges for the *entire*
 RAM tier (default `--ram-mb` 512, `cli.rs:24`) — indistinguishable from real
-capacity thrashing. Making that check possible from `on_leave` requires more
-than a field on `FoyerBackend`: `RamEvictionListener` is a separate struct
-built and moved into the foyer builder (as an `Arc<dyn EventListener>`,
-`foyer_backend.rs:314,317`) *before* `FoyerBackend` itself is constructed
-(`:335-339`), and neither holds a reference to the other, so a plain
-`FoyerBackend` field would be unreachable from `on_leave`. Instead, create a
-`shutting_down: Arc<AtomicBool>` before the listener is built, clone it into
-both `RamEvictionListener` and `FoyerBackend` — mirroring the existing
-`tags: Arc<EvictionTagTable>` sharing between the same two constructs
-(`:313-314`/`:336`) — and have `on_leave` check it and skip emission when
-set, the same short-circuit shape already used for the `is_prefetch`
-phantom-record case just above it. Because `main()` lives in a different
-crate, the flag also needs a public setter — `FoyerBackend::mark_shutting_down()`
-— called immediately before `foyer.close()` (see the snippet above).
-`mkdocs/docs/admin/object-cache.md` notes that these two gauges go quiet
-during the final close step rather than spiking.
+capacity thrashing. This isn't limited to the branch where `run` explicitly
+calls `foyer.close()`: on the `remaining < MIN_POST_AXUM_BUDGET` early
+return, and on any branch where the overall deadline fires before
+`foyer.close()` starts, `run` returns without ever calling `close()` itself,
+and it's `Arc<FoyerBackend>`'s drop-time `impl Drop for Inner` (the
+Overview's baseline fallback) that ends up doing the full-tier flush instead
+— on exactly the saturated-shutdown branch where this matters most. Making
+the flag observable in time for that branch, not just the explicit-`close()`
+branch, is why it must be set at the very top of `run`, before either the
+early return or the timeout, rather than immediately before the `close()`
+call (see the `run` snippet in Design §3). Making that check possible from
+`on_leave` requires more than a field on `FoyerBackend`: `RamEvictionListener`
+is a separate struct built and moved into the foyer builder (as an
+`Arc<dyn EventListener>`, `foyer_backend.rs:314,317`) *before* `FoyerBackend`
+itself is constructed (`:335-339`), and neither holds a reference to the
+other, so a plain `FoyerBackend` field would be unreachable from `on_leave`.
+Instead, create a `shutting_down: Arc<AtomicBool>` before the listener is
+built, clone it into both `RamEvictionListener` and `FoyerBackend` —
+mirroring the existing `tags: Arc<EvictionTagTable>` sharing between the
+same two constructs (`:313-314`/`:336`) — and have `on_leave` check it and
+skip emission when set, the same short-circuit shape already used for the
+`is_prefetch` phantom-record case just above it. Because `main()` lives in a
+different crate, the flag also needs a public setter —
+`FoyerBackend::mark_shutting_down()` — called from the top of
+`shutdown_sequence::run`, not immediately before `foyer.close()` (see the
+snippet above and the `run` snippet in Design §3). `mkdocs/docs/admin/object-cache.md`
+notes that these two gauges go quiet during the final close step rather than
+spiking.
 
 This is what actually delivers the Overview's claim: a demand fetch's bytes
 are only recoverable after restart once this close step exists — and, per
@@ -1006,10 +1038,13 @@ No code change is made for this (see the matching Trade-offs note).
    timeout, is what actually skips the three stages outright whenever
    axum's drain has left too little of the grace period to be worth
    attempting.
-   Otherwise, `run` wraps its three stages (prefetch-worker await, fetch-task drain,
+   Before either the early-return check above or the timeout below, `run`
+   first calls `FoyerBackend::mark_shutting_down()` — so the flag is set on
+   every branch, including the early return and a timeout that fires before
+   `close()` starts, not only the branch that reaches `close()` itself
+   (Design §4). Otherwise, `run` wraps its three stages (prefetch-worker await, fetch-task drain,
    `foyer.close()`, in that order) in one `tokio::time::timeout(remaining,
-   ...)` (Design §3), calls `FoyerBackend::mark_shutting_down()`
-   immediately before `foyer.close()` (Design §4), and logs the surviving
+   ...)` (Design §3), and logs the surviving
    warnings from Design §3 (the elapsed-deadline warning, the
    abandoned-fetch-task count, a prefetch worker `JoinError`, a
    `foyer.close()` error) on whichever branch makes each observable; an
@@ -1021,7 +1056,9 @@ No code change is made for this (see the matching Trade-offs note).
    `fanout.receiver()` into the prefetch worker (gating both its channel
    `take_until` and `warm_item`'s per-window check) and one
    `fanout.subscribe()` into `serve_axum_with_graceful_shutdown`, which it
-   awaits directly with `?` exactly as today; retains the
+   awaits directly with `?` exactly as today — that call always resolves
+   `Ok(())` (Design §3), so the `?` is inert and kept only for
+   shape-consistency; retains the
    `Arc<FoyerBackend>` bound before it's passed into `RangeCache::new`; and,
    once axum's own drain returns, computes `remaining` from `signal_at` and
    calls `shutdown_sequence::run` once with it, letting `run` own the three
@@ -1102,7 +1139,11 @@ No code change is made for this (see the matching Trade-offs note).
   module so the integration-test crate can call it directly (Design
   §3/Step 6).
 - `rust/object-cache-srv/src/shutdown_sequence.rs` (new) — `pub async fn
-  run(remaining: Duration, prefetch_worker, cache, foyer) -> ()`. First
+  run(remaining: Duration, prefetch_worker, cache, foyer) -> ()`. First calls
+  `foyer.mark_shutting_down()`, before either of the checks below, so the
+  flag is set on every branch — including the early return and a timeout
+  that fires before `close()` starts — not just the branch that reaches
+  `close()` itself (Design §4). Then
   checks `if remaining < MIN_POST_AXUM_BUDGET { warn!(...); return; }` — a
   `tokio::time::timeout` with too little duration would still poll the
   wrapped future once, so this explicit early return, not the timeout, is
@@ -1120,7 +1161,8 @@ No code change is made for this (see the matching Trade-offs note).
   `signal_at: Arc<OnceLock<Instant>>` on fire; pass one `fanout.receiver()`
   into the prefetch worker and one `fanout.subscribe()` into
   `serve_axum_with_graceful_shutdown`, awaited directly with `?` exactly as
-  today; retain the `Arc<FoyerBackend>` bound before it's passed into
+  today — inertly, since that call always resolves `Ok(())` (Design §3);
+  retain the `Arc<FoyerBackend>` bound before it's passed into
   `RangeCache::new` so `close()` has something to call it on (Design §4);
   once axum's drain returns, compute `remaining` from `signal_at` and call
   `shutdown_sequence::run(remaining, ...)` once, letting it own the three
@@ -1129,10 +1171,13 @@ No code change is made for this (see the matching Trade-offs note).
   Arc<AtomicBool>`, created before `RamEvictionListener` is built and cloned
   into both it and `FoyerBackend` (mirroring the existing `tags:
   Arc<EvictionTagTable>` sharing), plus a public `FoyerBackend::mark_shutting_down()`
-  setter called from `shutdown_sequence` immediately before `close()`;
-  `RamEvictionListener::on_leave` checks the flag and skips emission, so
-  `close()`'s full-tier flush doesn't poison the #1281 eviction gauges
-  (Design §4).
+  setter called from the very top of `shutdown_sequence::run`, before its
+  `MIN_POST_AXUM_BUDGET` early-return check, not immediately before
+  `close()`, so the flag is set on every branch, including ones where
+  `close()` never runs; `RamEvictionListener::on_leave` checks the flag and
+  skips emission, so `close()`'s full-tier flush — and foyer's drop-time
+  close fallback on the branches where `run` never reaches `close()` itself
+  — doesn't poison the #1281 eviction gauges (Design §4).
 - `rust/object-cache/tests/range_cache_tests.rs` — drain/panic-distinction
   regression tests; new panic-on-`get_opts` `ObjectStore` double (panicking
   on the ranged-GET branch).
@@ -1160,6 +1205,15 @@ No code change is made for this (see the matching Trade-offs note).
   one observable post-condition standing in for "close ran after the drain":
   `FoyerBackend::ram_entry_count()` (already public, `foyer_backend.rs:356-358`)
   is nonzero while the gate holds the drain open and 0 once `run` returns.
+  That nonzero count has to come from a pre-population step, not from the
+  gated fetch itself: `CountingStore::with_gate` blocks every ranged GET
+  before it returns anything, and `RangeCache` only calls `FoyerBackend::put`
+  after the origin GET completes, so while the gate holds, nothing has been
+  produced for the cache to store. Before calling `run`, `put()` a
+  `FillHint::Demand` entry directly onto the same `Arc<FoyerBackend>` via
+  `RangeCacheBackend::put` — the idiom `saturation_tests.rs:128-134` already
+  uses in this test crate — independent of the gated fetch, so
+  `ram_entry_count()` is nonzero from the start.
   Also asserts overall-deadline behavior — no per-stage budget arithmetic to
   test (Step 6, Testing Strategy). The gated origin-store
   double follows the in-crate precedent at
@@ -1590,7 +1644,16 @@ No code change is made for this (see the matching Trade-offs note).
   "close ran only after the drain": `FoyerBackend::ram_entry_count()`
   (already public, `foyer_backend.rs:356-358`) is nonzero while the gate
   holds the drain open, and 0 once `run` returns (`close()`'s eviction-to-
-  zero sweep is what drives it there). Also assert that the whole sequence
+  zero sweep is what drives it there). The gated fetch itself cannot supply
+  that nonzero count: `CountingStore::with_gate` blocks every ranged GET
+  before it returns, and `RangeCache` only calls `FoyerBackend::put` after
+  the origin GET completes, so while the gate holds nothing has been
+  produced to store yet. Pre-populate a separate entry before calling `run`
+  instead: a direct `RangeCacheBackend::put(key, bytes, FillHint::Demand)`
+  call on the same `Arc<FoyerBackend>` (the idiom
+  `rust/object-cache-srv/tests/saturation_tests.rs:128-134` already uses in
+  this test crate), independent of the gated fetch, so `ram_entry_count()`
+  is nonzero from the start. Also assert that the whole sequence
   is bounded by the `remaining` duration passed to `shutdown_sequence::run`
   (a short `remaining` with the prefetch stand-in never notifying should
   time out rather than hang).
