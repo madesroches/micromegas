@@ -14,7 +14,6 @@ import { FolderPickerModal } from '@/components/FolderPickerModal'
 import {
   listScreens,
   getScreenTypes,
-  updateScreen,
   Screen,
   ScreenTypeInfo,
   ScreenTypeName,
@@ -23,6 +22,7 @@ import {
 } from '@/lib/screens-api'
 import { listFolders, FolderInfo } from '@/lib/folders-api'
 import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
+import { useMoveScreen } from '@/hooks/useMoveScreen'
 
 function parentPath(path: string): string {
   const idx = path.lastIndexOf('/')
@@ -124,21 +124,7 @@ function ScreensPageContent() {
     }
   }
 
-  const handleMoveScreen = useCallback(
-    async (screenName: string, destPath: string) => {
-      const screen = screens.find((s) => s.name === screenName)
-      if (!screen || screen.folder_path === destPath) return
-      setActionError(null)
-      try {
-        await updateScreen(screenName, { folder_path: destPath })
-        notifyFoldersChanged()
-        await loadData()
-      } catch (err) {
-        setActionError(err instanceof ScreenApiError ? `Failed to move: ${err.message}` : 'Failed to move screen')
-      }
-    },
-    [screens, loadData]
-  )
+  const handleMoveScreen = useMoveScreen(screens, loadData, setActionError)
 
   // Create lookup map for screen type info
   const screenTypeMap = useMemo(() => {

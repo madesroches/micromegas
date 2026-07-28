@@ -6,8 +6,9 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { useAuth } from '@/lib/auth'
 import { FolderTree, ancestorPaths, parentOf } from '@/components/FolderTree'
 import { listFolders, createFolder, moveFolder, deleteFolder, FolderInfo } from '@/lib/folders-api'
-import { listScreens, updateScreen, Screen, ScreenApiError } from '@/lib/screens-api'
+import { listScreens, Screen, ScreenApiError } from '@/lib/screens-api'
 import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
+import { useMoveScreen } from '@/hooks/useMoveScreen'
 
 interface NavItem {
   href: string
@@ -145,21 +146,7 @@ export function Sidebar() {
     [isScreensPage, searchParams, navigate]
   )
 
-  const handleMoveScreen = useCallback(
-    async (screenName: string, destPath: string) => {
-      const screen = screens.find((s) => s.name === screenName)
-      if (!screen || screen.folder_path === destPath) return
-      setActionError(null)
-      try {
-        await updateScreen(screenName, { folder_path: destPath })
-        notifyFoldersChanged()
-        await loadFolders()
-      } catch (err) {
-        setActionError(err instanceof ScreenApiError ? `Failed to move: ${err.message}` : 'Failed to move screen')
-      }
-    },
-    [screens, loadFolders]
-  )
+  const handleMoveScreen = useMoveScreen(screens, loadFolders, setActionError)
 
   const handleCreateFolder = useCallback(
     async (parent: string, name: string) => {
@@ -183,6 +170,15 @@ export function Sidebar() {
       setActionError(null)
       try {
         await moveFolder(path, newPath)
+        setExpandedPaths((prev) => {
+          const next = new Set<string>()
+          for (const p of prev) {
+            if (p === path) next.add(newPath)
+            else if (p.startsWith(`${path}/`)) next.add(`${newPath}${p.slice(path.length)}`)
+            else next.add(p)
+          }
+          return next
+        })
         if (selectedFolder === path) {
           goToFolder(newPath)
         } else if (selectedFolder && selectedFolder.startsWith(`${path}/`)) {

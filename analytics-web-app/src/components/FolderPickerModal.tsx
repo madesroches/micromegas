@@ -1,7 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Check, Folder, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { FolderInfo } from '@/lib/folders-api'
+import { normalizeFolderSegment } from '@/components/FolderTree'
+
+/** Applies FolderTree's per-segment normalization to a whole `/`-delimited path. */
+function normalizeFolderPath(path: string): string {
+  return path.split('/').map(normalizeFolderSegment).filter(Boolean).join('/')
+}
 
 interface FolderPickerModalProps {
   isOpen: boolean
@@ -49,6 +55,8 @@ export function FolderPickerModal({
     wasOpenRef.current = isOpen
   }, [isOpen])
 
+  const normalizedNewPath = useMemo(() => normalizeFolderPath(newPath), [newPath])
+
   if (!isOpen) return null
 
   const allPaths = ['', ...folders.map((f) => f.path).sort((a, b) => a.localeCompare(b))]
@@ -59,9 +67,8 @@ export function FolderPickerModal({
   }
 
   const handleMoveToNew = () => {
-    const cleaned = newPath.trim().replace(/^\/+|\/+$/g, '')
-    if (!cleaned) return
-    onSelect(cleaned)
+    if (!normalizedNewPath) return
+    onSelect(normalizedNewPath)
     setNewPath('')
     onClose()
   }
@@ -114,13 +121,18 @@ export function FolderPickerModal({
             placeholder="Or type a new folder path, e.g. team/reports"
             className="mt-3 w-full px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link"
           />
+          {normalizedNewPath && normalizedNewPath !== newPath && (
+            <p className="text-xs text-theme-text-muted mt-1">
+              Will be saved as: <span className="font-mono text-accent-link">{normalizedNewPath}</span>
+            </p>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-theme-border">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={handleMoveToNew} disabled={!newPath.trim()}>
+          <Button onClick={handleMoveToNew} disabled={!normalizedNewPath}>
             Move to new folder
           </Button>
         </div>
