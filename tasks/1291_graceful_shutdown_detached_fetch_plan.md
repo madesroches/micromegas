@@ -518,32 +518,13 @@ shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await
 
 ```rust
 // inside shutdown_sequence::run (`async fn run(...) -> ()`):
-// Set first, before the early-return check below and outside the timeout
-// entirely, so every branch -- including the early return and the
-// timeout-abandoned branches, where `close()` never starts -- suppresses
-// the #1281 eviction gauges on foyer's drop-time close fallback (Design
-// §4). Calling this only right before `foyer.close()` would leave it unset
-// on exactly those branches.
+// Set first, before the timeout below, so every branch -- including the
+// timeout-abandoned branch, where `close()` never starts -- suppresses the
+// #1281 eviction gauges on foyer's drop-time close fallback (Design §4).
+// Calling this only right before `foyer.close()` would leave it unset on
+// that branch.
 foyer.mark_shutting_down();
 
-// Below this, and not exactly zero, is treated as "not enough of the grace
-// period left to be worth attempting" -- see the `saturating_sub`
-// discussion below for why a strictly-positive-but-tiny `remaining` is just
-// as dangerous as exactly zero.
-const MIN_POST_AXUM_BUDGET: Duration = Duration::from_millis(50);
-
-if remaining < MIN_POST_AXUM_BUDGET {
-    // A `tokio::time::timeout` below still polls the wrapped future once,
-    // unconditionally, before ever consulting its deadline (see the
-    // `saturating_sub` discussion below) -- enough to latch foyer's
-    // `closed` flag and disable the drop-time close fallback even when
-    // `remaining` is a few milliseconds, not exactly zero. This early
-    // return is what actually skips the three stages outright.
-    warn!("axum drain left less than {MIN_POST_AXUM_BUDGET:?} of the grace \
-           period; skipping prefetch-worker await, fetch-task drain, and \
-           foyer close");
-    return;
-}
 if tokio::time::timeout(remaining, async {
     // `JoinHandle::Output` is `Result<(), JoinError>`, `#[must_use]`, so
     // this must be handled, not a bare `.await;` -- and the plan's own
@@ -591,32 +572,26 @@ itself consume the whole outer `grace`, leaving little or nothing — or,
 once scheduling overhead is accounted for, nothing at all — for the three
 stages that follow it. `remaining` is computed with `saturating_sub`
 specifically for that case: if axum's drain took `grace` or longer,
-`remaining` is `Duration::ZERO`. Skipping the three stages on exactly that
-value would not be enough: `Timeout::poll` polls the wrapped future
-unconditionally *before* checking its deadline
-(`tokio-1.52.3/src/time/timeout.rs:211-222`), so `tokio::time::timeout(d,
-..)` still polls the wrapped future once *regardless of how small `d` is* —
-enough for `prefetch_worker.await` or `wait_for_fetch_tasks_drain()` to
-resolve immediately if there's nothing to wait for, and, worse, for
+`remaining` is `Duration::ZERO`. That is not specially guarded against:
+`Timeout::poll` polls the wrapped future unconditionally *before* checking
+its deadline (`tokio-1.52.3/src/time/timeout.rs:211-222`), so
+`tokio::time::timeout(remaining, ..)` still polls the wrapped future once
+*regardless of how small (or zero) `remaining` is* — enough for
+`prefetch_worker.await` or `wait_for_fetch_tasks_drain()` to resolve
+immediately if there's nothing to wait for, and, worse, for
 `foyer.close()`'s first poll to reach `closed.fetch_or(true,
 Ordering::Relaxed)` (`foyer-0.22.3/src/hybrid/cache.rs:319-321`) *before*
 its first await point — latching `closed` and then abandoning the future,
 which permanently disables the drop-time `impl Drop for Inner` close
-fallback the Overview describes as today's baseline. That risk is exactly
-as real when `remaining` is a few milliseconds — axum's drain finishing
-just under `grace` on a busy shutdown — as when it's precisely zero: either
-way the timeout gets its one poll, and that's enough to do the damage. So
-the guard can't be `remaining.is_zero()`; it has to be a minimum viable
-budget below which attempting the three stages is strictly worse than
-skipping them. `shutdown_sequence::run` therefore checks for this case
-explicitly, before ever constructing the timeout — the `if remaining <
-MIN_POST_AXUM_BUDGET { ... return; }` guard shown at the top of the `run`
-snippet above. With that early return in place, a saturated (or
-near-saturated) axum drain genuinely means the prefetch-worker await, the
-fetch-task drain, and `foyer.close()` are skipped outright, not attempted
-and cut short. That is accepted, not engineered around: this design does
-not try to guarantee any minimum time for those three stages on a saturated
-shutdown.
+fallback the Overview describes as today's baseline. On a saturated
+shutdown this is accepted, best-effort loss, not something this design
+adds a threshold to protect against: the timeout takes its one poll
+regardless of how little of `grace` axum's drain left behind, and the three
+post-axum stages simply get whatever `remaining` gives them — one poll
+each, in the worst case. This is a best-effort cache, not a
+correctness-critical store: the cost of that is some cold reads after
+restart, not lost or corrupted data, and the Overview already describes the
+drop-time close fallback itself as a long shot.
 Cross-restart cache warmth — the benefit Design §4 adds — is therefore
 explicitly **best-effort**, never a guarantee, and the Overview and this
 section should be read that way.
@@ -624,10 +599,7 @@ section should be read that way.
 If the post-axum timeout fires, the `async` block wrapping the three stages
 is dropped mid-stage, and whatever it was doing is simply abandoned — the
 same fate every in-flight future has today at process-exit runtime teardown.
-(The `remaining < MIN_POST_AXUM_BUDGET` case is handled separately, by the
-early return shown above, before this timeout is ever constructed — see the
-`saturating_sub` discussion above for why a too-small-duration timeout can't
-be trusted to skip the block on its own.) Concretely:
+Concretely:
 - If it fires while awaiting `prefetch_worker`, the `JoinHandle` is dropped,
   which *detaches* the task rather than stopping it
   (`tokio-1.52.3/src/runtime/task/join.rs:18,35`); the worker keeps running,
@@ -652,22 +624,14 @@ collapses to what's actually observable from outside the dropped block
 (kept minimal and consistent with `mkdocs/docs/admin/object-cache.md:270`'s
 policy — routine conditions log at `debug`, genuinely unexpected ones at
 `warn`/`error`):
-- If the post-axum timeout elapses (only reachable when `remaining` was at
-  least `MIN_POST_AXUM_BUDGET` — the `remaining < MIN_POST_AXUM_BUDGET` case
-  returns early before this timeout is ever constructed, see above) — log
-  once at `warn` (an elapsed shutdown deadline is not routine — the same
-  level `serve_axum_with_graceful_shutdown`'s own deadline arm already uses)
-  that the grace period elapsed before the sequence finished, so whichever
-  stage was still running was abandoned.
-- On the `remaining < MIN_POST_AXUM_BUDGET` early-return branch, log once at
-  `warn` (same reasoning) that axum's drain left too little of the grace
-  period for the three stages to be worth attempting, and all three were
-  skipped outright before ever starting — the `warn!` shown in the
-  early-return snippet above.
-- On either of the two branches above, if `cache.outstanding_fetch_tasks()`
-  — read from a clone held outside the `async` block, since the block
-  itself was dropped (or, on the early-return branch, never constructed) —
-  is still nonzero, log a second `warn` reporting that count. This is the
+- If the post-axum timeout elapses, log once at `warn` (an elapsed shutdown
+  deadline is not routine — the same level
+  `serve_axum_with_graceful_shutdown`'s own deadline arm already uses) that
+  the grace period elapsed before the sequence finished, so whichever stage
+  was still running was abandoned.
+- On that same branch, if `cache.outstanding_fetch_tasks()` — read from a
+  clone held outside the `async` block, since the block itself was dropped
+  — is still nonzero, log a second `warn` reporting that count. This is the
   one per-stage-shaped warning worth keeping: "how many origin fetches were
   abandoned" is the one number an operator can actually act on.
 - A `prefetch_worker` `JoinError` (task panicked) and an `Err` from
@@ -752,8 +716,7 @@ let remaining = grace.saturating_sub(
 shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await;
 ```
 
-`shutdown_sequence::run` owns the `remaining < MIN_POST_AXUM_BUDGET` early return, the
-single `tokio::time::timeout(remaining,
+`shutdown_sequence::run` owns the single `tokio::time::timeout(remaining,
 ...)` wrapping these three post-axum stages, plus the
 elapsed-deadline/abandoned-fetch-count warnings; it takes only `remaining`
 and the three handles it needs (`prefetch_worker`, `cache`, `foyer`) — no
@@ -879,10 +842,10 @@ claims. Two gaps must be closed for that to actually be true:
 
 ```rust
 // `mark_shutting_down()` already ran at the very top of
-// `shutdown_sequence::run`, before the `MIN_POST_AXUM_BUDGET` early return
-// (Design §3) -- not here -- so `RamEvictionListener::on_leave` (see below)
-// can tell this flush apart from capacity-driven thrashing even on a
-// branch where `close()` itself never gets called.
+// `shutdown_sequence::run`, before the timeout (Design §3) -- not here --
+// so `RamEvictionListener::on_leave` (see below) can tell this flush apart
+// from capacity-driven thrashing even on a branch where `close()` itself
+// never gets called.
 match foyer.close().await {
     Ok(()) => info!("foyer cache closed"),
     Err(e) => warn!("foyer cache close failed: {e:#}"),
@@ -905,16 +868,15 @@ gates `object_cache_ram_tier_eviction_age_ms` on `Event::Evict` specifically
 Left unguarded, every clean shutdown would emit both gauges for the *entire*
 RAM tier (default `--ram-mb` 512, `cli.rs:24`) — indistinguishable from real
 capacity thrashing. This isn't limited to the branch where `run` explicitly
-calls `foyer.close()`: on the `remaining < MIN_POST_AXUM_BUDGET` early
-return, and on any branch where the overall deadline fires before
+calls `foyer.close()`: on any branch where the overall deadline fires before
 `foyer.close()` starts, `run` returns without ever calling `close()` itself,
 and it's `Arc<FoyerBackend>`'s drop-time `impl Drop for Inner` (the
 Overview's baseline fallback) that ends up doing the full-tier flush instead
 — on exactly the saturated-shutdown branch where this matters most. Making
 the flag observable in time for that branch, not just the explicit-`close()`
-branch, is why it must be set at the very top of `run`, before either the
-early return or the timeout, rather than immediately before the `close()`
-call (see the `run` snippet in Design §3). Making that check possible from
+branch, is why it must be set at the very top of `run`, before the timeout,
+rather than immediately before the `close()` call (see the `run` snippet in
+Design §3). Making that check possible from
 `on_leave` requires more than a field on `FoyerBackend`: `RamEvictionListener`
 is a separate struct built and moved into the foyer builder (as an
 `Arc<dyn EventListener>`, `foyer_backend.rs:314,317`) *before* `FoyerBackend`
@@ -1031,18 +993,11 @@ No code change is made for this (see the matching Trade-offs note).
    prefetch_worker: JoinHandle<()>, cache: RangeCache, foyer:
    Arc<FoyerBackend>) -> ()` — no budget struct, no per-stage arithmetic,
    and no axum inputs: axum is awaited directly in `main()`, outside `run`
-   entirely, so it keeps the full `grace` for its own drain. `run` first
-   checks `if remaining < MIN_POST_AXUM_BUDGET { warn!(...); return; }` — a
-   `tokio::time::timeout` with too little duration would still poll the
-   wrapped future once (Design §3), so this explicit early return, not the
-   timeout, is what actually skips the three stages outright whenever
-   axum's drain has left too little of the grace period to be worth
-   attempting.
-   Before either the early-return check above or the timeout below, `run`
-   first calls `FoyerBackend::mark_shutting_down()` — so the flag is set on
-   every branch, including the early return and a timeout that fires before
-   `close()` starts, not only the branch that reaches `close()` itself
-   (Design §4). Otherwise, `run` wraps its three stages (prefetch-worker await, fetch-task drain,
+   entirely, so it keeps the full `grace` for its own drain. Before the
+   timeout below, `run` first calls `FoyerBackend::mark_shutting_down()` —
+   so the flag is set on every branch, including a timeout that fires
+   before `close()` starts, not only the branch that reaches `close()`
+   itself (Design §4). Then `run` wraps its three stages (prefetch-worker await, fetch-task drain,
    `foyer.close()`, in that order) in one `tokio::time::timeout(remaining,
    ...)` (Design §3), and logs the surviving
    warnings from Design §3 (the elapsed-deadline warning, the
@@ -1140,16 +1095,10 @@ No code change is made for this (see the matching Trade-offs note).
   §3/Step 6).
 - `rust/object-cache-srv/src/shutdown_sequence.rs` (new) — `pub async fn
   run(remaining: Duration, prefetch_worker, cache, foyer) -> ()`. First calls
-  `foyer.mark_shutting_down()`, before either of the checks below, so the
-  flag is set on every branch — including the early return and a timeout
+  `foyer.mark_shutting_down()`, before the timeout below, so the
+  flag is set on every branch — including a timeout
   that fires before `close()` starts — not just the branch that reaches
-  `close()` itself (Design §4). Then
-  checks `if remaining < MIN_POST_AXUM_BUDGET { warn!(...); return; }` — a
-  `tokio::time::timeout` with too little duration would still poll the
-  wrapped future once, so this explicit early return, not the timeout, is
-  what actually skips the three stages outright whenever axum's drain has
-  left too little of the grace period to be worth attempting (Design §3).
-  Otherwise wraps the three post-axum stages (prefetch-worker await, fetch-task drain,
+  `close()` itself (Design §4). Then wraps the three post-axum stages (prefetch-worker await, fetch-task drain,
   `foyer.close()`, in that order) in one `tokio::time::timeout(remaining,
   ...)`, with no budget struct, no per-stage arithmetic, and no axum
   inputs — axum is awaited directly in `main()`, outside `run`; logs the
@@ -1172,7 +1121,7 @@ No code change is made for this (see the matching Trade-offs note).
   into both it and `FoyerBackend` (mirroring the existing `tags:
   Arc<EvictionTagTable>` sharing), plus a public `FoyerBackend::mark_shutting_down()`
   setter called from the very top of `shutdown_sequence::run`, before its
-  `MIN_POST_AXUM_BUDGET` early-return check, not immediately before
+  timeout, not immediately before
   `close()`, so the flag is set on every branch, including ones where
   `close()` never runs; `RamEvictionListener::on_leave` checks the flag and
   skips emission, so `close()`'s full-tier flush — and foyer's drop-time
@@ -1201,19 +1150,10 @@ No code change is made for this (see the matching Trade-offs note).
   for `close()` (no trait seam exists to make `foyer.close()` block);
   asserts stage order as negative liveness (`run` must not complete while
   the stub `JoinHandle` is un-notified, then must not complete while the
-  origin gate is closed — the `memory_budget_tests.rs:359-365` idiom) plus
-  one observable post-condition standing in for "close ran after the drain":
-  `FoyerBackend::ram_entry_count()` (already public, `foyer_backend.rs:356-358`)
-  is nonzero while the gate holds the drain open and 0 once `run` returns.
-  That nonzero count has to come from a pre-population step, not from the
-  gated fetch itself: `CountingStore::with_gate` blocks every ranged GET
-  before it returns anything, and `RangeCache` only calls `FoyerBackend::put`
-  after the origin GET completes, so while the gate holds, nothing has been
-  produced for the cache to store. Before calling `run`, `put()` a
-  `FillHint::Demand` entry directly onto the same `Arc<FoyerBackend>` via
-  `RangeCacheBackend::put` — the idiom `saturation_tests.rs:128-134` already
-  uses in this test crate — independent of the gated fetch, so
-  `ram_entry_count()` is nonzero from the start.
+  origin gate is closed — the `memory_budget_tests.rs:359-365` idiom). This
+  test covers stage *ordering* only; `foyer.close()`'s own flush behavior is
+  covered separately by the `foyer_backend_tests.rs` case Implementation
+  Step 8 already adds.
   Also asserts overall-deadline behavior — no per-stage budget arithmetic to
   test (Step 6, Testing Strategy). The gated origin-store
   double follows the in-crate precedent at
@@ -1298,18 +1238,16 @@ No code change is made for this (see the matching Trade-offs note).
   - *A per-stage budget split* (fixed percentages, or weighted with axum's
     share capped and `foyer.close()` absorbing the remainder, with or
     without letting an early-finishing stage donate its unused slack to a
-    later one) — rejected as accident-prone: it required an absolute floor
-    under every stage's `Duration` (`MIN_STAGE_BUDGET`, since a
-    zero-duration per-stage budget doesn't skip that stage — `Timeout::poll`
-    still polls the wrapped future once before reporting `Elapsed`
+    later one) — rejected as accident-prone: a zero-duration per-stage
+    budget doesn't skip that stage — `Timeout::poll` still polls the wrapped
+    future once before reporting `Elapsed`
     (`tokio-1.52.3/src/time/timeout.rs:211-222`), which for a stage like
     `foyer.close()` can do real, unrecoverable damage on a single poll (see
-    the `MIN_POST_AXUM_BUDGET` discussion in Design §3) — and
-    `--shutdown-grace-period-seconds` has no minimum-value validation), a
-    cap on axum's share, overflow-safe arithmetic splitting `grace` four
-    ways, and its own dedicated arithmetic tests — and successive design
-    reviews kept finding new holes in it (wrong percentages, floor
-    interactions, cap-vs-remainder edge cases). It also broke
+    Design §3) — so this approach needed a cap on axum's share, overflow-safe
+    arithmetic splitting `grace` four ways, and its own dedicated arithmetic
+    tests — and successive design reviews kept finding new holes in it
+    (wrong percentages, floor interactions, cap-vs-remainder edge cases). It
+    also broke
     `serve_axum_with_graceful_shutdown`'s existing log lines: they
     interpolate the `grace` value they're given (`shutdown.rs:85,91,112`),
     so handing axum a fraction of `grace` instead of the real value made
@@ -1640,20 +1578,9 @@ No code change is made for this (see the matching Trade-offs note).
   liveness instead, the `memory_budget_tests.rs:359-365` idiom: `run` must
   not complete while the stub `JoinHandle` sits un-notified, and, once it's
   notified, must not complete while the origin gate keeps the fetch-task
-  drain open. Pair that with one observable post-condition standing in for
-  "close ran only after the drain": `FoyerBackend::ram_entry_count()`
-  (already public, `foyer_backend.rs:356-358`) is nonzero while the gate
-  holds the drain open, and 0 once `run` returns (`close()`'s eviction-to-
-  zero sweep is what drives it there). The gated fetch itself cannot supply
-  that nonzero count: `CountingStore::with_gate` blocks every ranged GET
-  before it returns, and `RangeCache` only calls `FoyerBackend::put` after
-  the origin GET completes, so while the gate holds nothing has been
-  produced to store yet. Pre-populate a separate entry before calling `run`
-  instead: a direct `RangeCacheBackend::put(key, bytes, FillHint::Demand)`
-  call on the same `Arc<FoyerBackend>` (the idiom
-  `rust/object-cache-srv/tests/saturation_tests.rs:128-134` already uses in
-  this test crate), independent of the gated fetch, so `ram_entry_count()`
-  is nonzero from the start. Also assert that the whole sequence
+  drain open. This test covers stage *ordering* only; `foyer.close()`'s own
+  flush behavior is covered separately by the `foyer_backend_tests.rs` case
+  Implementation Step 8 already adds. Also assert that the whole sequence
   is bounded by the `remaining` duration passed to `shutdown_sequence::run`
   (a short `remaining` with the prefetch stand-in never notifying should
   time out rather than hang).
