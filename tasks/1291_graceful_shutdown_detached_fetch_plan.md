@@ -504,8 +504,23 @@ shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await
 
 ```rust
 // inside shutdown_sequence::run (`async fn run(...) -> ()`):
+if remaining.is_zero() {
+    // A zero-duration `tokio::time::timeout` below would still poll the
+    // wrapped future once (see the `saturating_sub` discussion below) --
+    // enough to latch foyer's `closed` flag and disable the drop-time
+    // close fallback. This early return is what actually skips the three
+    // stages outright.
+    warn!("axum drain consumed the full grace period; skipping \
+           prefetch-worker await, fetch-task drain, and foyer close");
+    return;
+}
 if tokio::time::timeout(remaining, async {
-    prefetch_worker.await;
+    // `JoinHandle::Output` is `Result<(), JoinError>`, `#[must_use]`, so
+    // this must be handled, not a bare `.await;` -- and the plan's own
+    // `-D warnings` gate would fail `unused_must_use` otherwise.
+    if let Err(e) = prefetch_worker.await {
+        warn!("prefetch worker panicked: {e:#}");
+    }
     cache.wait_for_fetch_tasks_drain().await;
     foyer.close().await;
 }).await.is_err() {
@@ -539,21 +554,37 @@ itself consume the whole outer `grace`, leaving little or nothing — or,
 once scheduling overhead is accounted for, nothing at all — for the three
 stages that follow it. `remaining` is computed with `saturating_sub`
 specifically for that case: if axum's drain took `grace` or longer,
-`remaining` is `Duration::ZERO`, and `tokio::time::timeout(Duration::ZERO,
-..)` fails on its very first poll without ever polling the wrapped future —
-so a saturated axum drain means the prefetch-worker await, the fetch-task
-drain, and `foyer.close()` are skipped outright, not attempted and cut
-short. That is accepted, not engineered around: this design does not try to
-guarantee any minimum time for those three stages on a saturated shutdown.
+`remaining` is `Duration::ZERO`. That does **not**, by itself, skip the three
+stages: `Timeout::poll` polls the wrapped future unconditionally *before*
+checking its deadline (`tokio-1.52.3/src/time/timeout.rs:211-222`), so
+`tokio::time::timeout(Duration::ZERO, ..)` still polls the wrapped future
+once even with a zero duration — enough for `prefetch_worker.await` or
+`wait_for_fetch_tasks_drain()` to resolve immediately if there's nothing to
+wait for, and, worse, for `foyer.close()`'s first poll to reach
+`closed.fetch_or(true, Ordering::Relaxed)` (`foyer-0.22.3/src/hybrid/cache.rs:319-321`)
+*before* its first await point — latching `closed` and then abandoning the
+future, which permanently disables the drop-time `impl Drop for Inner` close
+fallback the Overview describes as today's baseline. That would make the
+zero-remaining branch strictly worse than doing nothing, not merely no
+better. `shutdown_sequence::run` therefore checks for this case explicitly,
+before ever constructing the timeout — the `if remaining.is_zero() { ...
+return; }` guard shown at the top of the `run` snippet above. With that
+early return in place, a saturated axum drain genuinely means the
+prefetch-worker await, the fetch-task drain, and `foyer.close()` are skipped
+outright, not attempted and cut short. That is accepted, not engineered
+around: this design does not try to guarantee any minimum time for those
+three stages on a saturated shutdown.
 Cross-restart cache warmth — the benefit Design §4 adds — is therefore
 explicitly **best-effort**, never a guarantee, and the Overview and this
 section should be read that way.
 
-If the post-axum timeout fires (or is skipped outright because `remaining`
-was already zero), the `async` block wrapping the three stages is dropped
-mid-stage (or never polled), and whatever it was doing is simply abandoned —
-the same fate every in-flight future has today at process-exit runtime
-teardown. Concretely:
+If the post-axum timeout fires, the `async` block wrapping the three stages
+is dropped mid-stage, and whatever it was doing is simply abandoned — the
+same fate every in-flight future has today at process-exit runtime teardown.
+(The `remaining.is_zero()` case is handled separately, by the early return
+shown above, before this timeout is ever constructed — see the
+`saturating_sub` discussion above for why a zero-duration timeout can't be
+trusted to skip the block on its own.) Concretely:
 - If it fires while awaiting `prefetch_worker`, the `JoinHandle` is dropped,
   which *detaches* the task rather than stopping it
   (`tokio-1.52.3/src/runtime/task/join.rs:18,35`); the worker keeps running,
@@ -578,16 +609,21 @@ collapses to what's actually observable from outside the dropped block
 (kept minimal and consistent with `mkdocs/docs/admin/object-cache.md:270`'s
 policy — routine conditions log at `debug`, genuinely unexpected ones at
 `warn`/`error`):
-- If the post-axum timeout elapses — including the `remaining == ZERO` case,
-  where it elapses on its first poll without running any of the three stages
-  at all — log once at `warn` (an elapsed shutdown deadline is not routine —
-  the same level `serve_axum_with_graceful_shutdown`'s own deadline arm
-  already uses) that the grace period elapsed before the sequence finished,
-  so whichever stage was still running (or, on the zero-remaining branch, all
-  three) was abandoned.
-- On that same branch, if `cache.outstanding_fetch_tasks()` — read from a
-  clone held outside the `async` block, since the block itself was dropped
-  — is still nonzero, log a second `warn` reporting that count. This is the
+- If the post-axum timeout elapses (only reachable when `remaining` was
+  nonzero — the `remaining.is_zero()` case returns early before this
+  timeout is ever constructed, see above) — log once at `warn` (an elapsed
+  shutdown deadline is not routine — the same level
+  `serve_axum_with_graceful_shutdown`'s own deadline arm already uses) that
+  the grace period elapsed before the sequence finished, so whichever stage
+  was still running was abandoned.
+- On the `remaining.is_zero()` early-return branch, log once at `warn`
+  (same reasoning) that the axum drain consumed the full grace period and
+  all three stages were skipped outright before ever starting — the `warn!`
+  shown in the early-return snippet above.
+- On either of the two branches above, if `cache.outstanding_fetch_tasks()`
+  — read from a clone held outside the `async` block, since the block
+  itself was dropped (or, on the early-return branch, never constructed) —
+  is still nonzero, log a second `warn` reporting that count. This is the
   one per-stage-shaped warning worth keeping: "how many origin fetches were
   abandoned" is the one number an operator can actually act on.
 - A `prefetch_worker` `JoinError` (task panicked) and an `Err` from
@@ -671,7 +707,8 @@ let remaining = grace.saturating_sub(
 shutdown_sequence::run(remaining, prefetch_worker, cache_for_drain, foyer).await;
 ```
 
-`shutdown_sequence::run` owns the single `tokio::time::timeout(remaining,
+`shutdown_sequence::run` owns the `remaining.is_zero()` early return, the
+single `tokio::time::timeout(remaining,
 ...)` wrapping these three post-axum stages, plus the
 elapsed-deadline/abandoned-fetch-count warnings; it takes only `remaining`
 and the three handles it needs (`prefetch_worker`, `cache`, `foyer`) — no
@@ -754,13 +791,23 @@ claims. Two gaps must be closed for that to actually be true:
   `evict(0, ...)`) pops from the eviction container and stops on the first
   `None`, so entries still pinned by an outstanding `get`-derived handle are not
   swept — the sweep is therefore not *every* RAM entry, only every
-  evictable one; and (4) entries already on disk are intentionally not
-  rewritten — every disk->RAM promotion is stamped `Age::Young`
-  (`foyer_backend.rs:412-417`), and `BlockEngine::enqueue` skips (does not
-  write) any entry with that age (`engine/block/engine.rs:582-589`, bumping
+  evictable one; and (4) most, but not all, entries already on disk are
+  intentionally not rewritten: `FoyerBackend::put` forwards the caller's
+  `age` into `HybridCacheProperties::default().with_age(age)`
+  (`foyer_backend.rs:412-417`) rather than hardcoding it, and foyer's
+  disk-engine load path stamps `age = Age::Old` only for blocks marked
+  "probation" (`foyer-storage-0.22.3/src/engine/block/engine.rs:704-706`) —
+  a ~10% share under the default `FifoPicker`'s `probation_ratio = 0.1`
+  (`foyer-storage-0.22.3/src/engine/block/eviction.rs:66-69`), which
+  `FoyerBackend` never overrides. So roughly 90% of disk->RAM promotions are
+  stamped `Age::Young`, and `BlockEngine::enqueue` skips (does not write)
+  any entry with that age (`engine/block/engine.rs:582-589`, bumping
   `storage_block_engine_enqueue_skip`, no write) — correctly, since those
-  bytes are already durable, but it means a promoted entry's RAM residency
-  does not imply the close-time flush writes it again. Neither overflow
+  bytes are already durable — but the remaining ~10%, promoted from a
+  probation block and stamped `Age::Old`, *are* re-enqueued and rewritten by
+  the close-time flush. A promoted entry's RAM residency therefore usually,
+  but not always, means the close-time flush skips writing it again.
+  Neither overflow
   counter in (1)/(2) is wired into this repo's telemetry — `FoyerBackend`
   never calls foyer's `with_metrics_registry`, and neither counter is
   reflected in `BackendDiskStats`/`backend_disk_stats` — so today this loss
@@ -915,8 +962,12 @@ No code change is made for this (see the matching Trade-offs note).
    prefetch_worker: JoinHandle<()>, cache: RangeCache, foyer:
    Arc<FoyerBackend>) -> ()` — no budget struct, no per-stage arithmetic,
    and no axum inputs: axum is awaited directly in `main()`, outside `run`
-   entirely, so it keeps the full `grace` for its own drain. Internally
-   `run` wraps its three stages (prefetch-worker await, fetch-task drain,
+   entirely, so it keeps the full `grace` for its own drain. `run` first
+   checks `if remaining.is_zero() { warn!(...); return; }` — a
+   zero-duration `tokio::time::timeout` would still poll the wrapped future
+   once (Design §3), so this explicit early return, not the timeout, is
+   what actually skips the three stages outright on a saturated axum drain.
+   Otherwise, `run` wraps its three stages (prefetch-worker await, fetch-task drain,
    `foyer.close()`, in that order) in one `tokio::time::timeout(remaining,
    ...)` (Design §3), calls `FoyerBackend::mark_shutting_down()`
    immediately before `foyer.close()` (Design §4), and logs the surviving
@@ -1012,8 +1063,12 @@ No code change is made for this (see the matching Trade-offs note).
   module so the integration-test crate can call it directly (Design
   §3/Step 6).
 - `rust/object-cache-srv/src/shutdown_sequence.rs` (new) — `pub async fn
-  run(remaining: Duration, prefetch_worker, cache, foyer) -> ()` wrapping
-  the three post-axum stages (prefetch-worker await, fetch-task drain,
+  run(remaining: Duration, prefetch_worker, cache, foyer) -> ()`. First
+  checks `if remaining.is_zero() { warn!(...); return; }` — a
+  zero-duration `tokio::time::timeout` would still poll the wrapped future
+  once, so this explicit early return, not the timeout, is what actually
+  skips the three stages outright on a saturated axum drain (Design §3).
+  Otherwise wraps the three post-axum stages (prefetch-worker await, fetch-task drain,
   `foyer.close()`, in that order) in one `tokio::time::timeout(remaining,
   ...)`, with no budget struct, no per-stage arithmetic, and no axum
   inputs — axum is awaited directly in `main()`, outside `run`; logs the
@@ -1144,8 +1199,12 @@ No code change is made for this (see the matching Trade-offs note).
     share capped and `foyer.close()` absorbing the remainder, with or
     without letting an early-finishing stage donate its unused slack to a
     later one) — rejected as accident-prone: it required an absolute floor
-    under every stage's `Duration` (`MIN_STAGE_BUDGET`, since
-    `tokio::time::timeout(Duration::ZERO, fut)` fails on its first poll and
+    under every stage's `Duration` (`MIN_STAGE_BUDGET`, since a
+    zero-duration per-stage budget doesn't skip that stage — `Timeout::poll`
+    still polls the wrapped future once before reporting `Elapsed`
+    (`tokio-1.52.3/src/time/timeout.rs:211-222`), which for a stage like
+    `foyer.close()` can do real, unrecoverable damage on a single poll (see
+    the `remaining.is_zero()` discussion in Design §3) — and
     `--shutdown-grace-period-seconds` has no minimum-value validation), a
     cap on axum's share, overflow-safe arithmetic splitting `grace` four
     ways, and its own dedicated arithmetic tests — and successive design
@@ -1202,11 +1261,13 @@ No code change is made for this (see the matching Trade-offs note).
   is device I/O bytes (`foyer-storage-0.22.3/src/io/engine/monitor.rs:76-88`),
   and, more fundamentally, `BlockEngine::enqueue` intentionally *skips*
   writing any entry whose `Age` is `Young` (`engine/block/engine.rs:582-589`)
-  — the age this repo stamps on every disk->RAM promotion
-  (`foyer_backend.rs:412-417`) — because those bytes are already durable on
-  disk. Those already-durable bytes count fully against "RAM usage before"
-  and contribute nothing to "bytes written after," so on any warm process
-  the comparison reads as a shortfall even on a completely lossless close,
+  — the age this repo stamps on most (~90% at the default
+  `probation_ratio`) disk->RAM promotions (`foyer_backend.rs:412-417`; see
+  caveat (4) above for the probation-block minority that isn't skipped) —
+  because those bytes are already durable on disk. Those already-durable
+  bytes count fully against "RAM usage before" and contribute nothing to
+  "bytes written after," so on any warm process the comparison reads as a
+  shortfall even on a completely lossless close,
   and its message would assert a cause ("silently dropped ... or was not
   evictable") that isn't actually established. Design §4 identifies the two
   real loss paths (queue-level `storage_queue_channel_overflow` and
