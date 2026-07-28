@@ -235,7 +235,7 @@ cd analytics-web-app && yarn type-check  # TypeScript check (no emit)
 The Grafana plugin requires both Node.js and Go:
 
 **Prerequisites:**
-- Node.js 22+ (matches `.nvmrc` and all CI workflows; Yarn 4 requires ≥18.12)
+- Node.js 22+ (matches `grafana/.nvmrc` and the `grafana-plugin` CI workflow; Yarn 4 requires ≥18.12)
 - Go 1.23+ (for backend plugin)
 - `corepack enable` — activates the pinned Yarn version (run once per machine)
 - mage (for Go builds): `go install github.com/magefile/mage@latest`

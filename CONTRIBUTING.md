@@ -355,7 +355,7 @@ cd grafana && yarn lint:fix              # Grafana plugin only
 The Grafana plugin requires both Node.js and Go:
 
 **Prerequisites:**
-- Node.js 22+ (matches `.nvmrc` and all CI workflows; Yarn 4 requires ≥18.12)
+- Node.js 22+ (matches `grafana/.nvmrc` and the `grafana-plugin` CI workflow; Yarn 4 requires ≥18.12)
 - Go 1.23+ (for backend plugin)
 - Yarn 4 (Berry) — installed automatically via `corepack enable` once on a new machine
 - mage (for Go builds): `go install github.com/magefile/mage@latest`

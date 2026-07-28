@@ -29,7 +29,11 @@ all pass).
   shim used internally by `@grafana/ui`'s `Link`/`TextLink` components), which itself depends on
   `react-router@6.30.0` — a request the root `resolutions` entry hard-overrides to whatever the
   root key resolves to, in this case forcing the whole workspace onto `7.18.1` (or, after this
-  plan, a patched `8.3.0`) regardless of what any nested package asks for.
+  plan, a patched `8.3.0`) regardless of what any nested package asks for. After this plan,
+  that override forces `react-router-dom-v5-compat`'s pinned `react-router@6.30.0` (and
+  `react-router-dom@5.3.4`'s own pinned `react-router` request) two majors forward to `8.3.0`,
+  which drops several export names those packages statically import — see Trade-offs for why
+  this is currently inert.
 - **Why a plain bump to `^8.3.0` doesn't work**: confirmed by reproducing today's already-reverted
   attempt (commit `114bdd172` → revert `6d83fa29a`). `react-router@8.3.0`'s package.json declares
   `"type": "module"` with no `"require"` export condition — it is pure ESM, no CJS build at all.
@@ -89,10 +93,17 @@ all pass).
   `grafana/.nvmrc` for the self-hosted-runner path. This is the same floor `analytics-web-app`
   hit in #1351, resolved there by bumping its own `.nvmrc` to the floating major `22` — this plan
   does the same for `grafana/`. Yarn Berry does not hard-enforce `engines` at install time (a
-  plain `yarn install` under Node 20 completes with only the pre-existing, unrelated
-  react/react-dom peer-dependency warning, no engine error), so staying on Node 20 wouldn't
-  necessarily break the install — but running under an unsupported Node major is an unforced risk
-  for no benefit, since nothing else in `grafana/` requires staying on 20. The shared CI runner
+  plain `yarn install` under Node 20 completes with no engine error), so staying on Node 20
+  wouldn't necessarily break the install — but running under an unsupported Node major is an
+  unforced risk for no benefit, since nothing else in `grafana/` requires staying on 20. Separately,
+  this bump does add a new contributor to `yarn install`'s peer-dependency warning output:
+  `react-router@7.18.1` peer-required `react: ">=18"` (satisfied by this workspace's
+  `react@18.3.1`), but `react-router@8.3.0` requires `react: ">=19.2.7"` — unsatisfiable here since
+  `@grafana/ui`/`@grafana/data`/`@grafana/runtime`@12.4.6 all peer-require `^18.0.0` and the
+  workspace pins `react@^18`. This is not a pre-existing, unrelated warning — react-router
+  genuinely joins the non-overlapping peer-dependency warning set as a new contributor (see
+  Trade-offs for the related, currently-inert `react-router-dom-v5-compat` export skew this same
+  override introduces). The shared CI runner
   image (`docker/github-runner.Dockerfile`) already pre-installs both Node 20 and 22 via `nvm`
   (added for `analytics-web-app`'s #1351 bump), so no Docker image changes are needed here — only
   its explanatory comment needs a small update since grafana no longer pins 20. Verified: the full
@@ -256,6 +267,21 @@ Current State), or any other workspace.
   upstream code no longer needs it — react-router may eventually fix this at the source, e.g. by
   gating the check behind a proper environment detection instead of bare `import.meta.hot`).
   Acceptable one-line maintenance cost versus the alternatives above.
+- **Peer-dependency skew is real, not cosmetic**: forcing the resolution's target from `7.18.1`
+  to `8.3.0` doesn't change transparently for its dependents — it forces
+  `react-router-dom-v5-compat`'s pinned `react-router@6.30.0` and `react-router-dom@5.3.4`'s own
+  pinned `react-router` request two majors forward to `8.3.0`. `react-router@8.3.0` no longer
+  exports 7 names `react-router-dom-v5-compat` statically imports/re-exports
+  (`AbortedDeferredError`, `UNSAFE_logV6DeprecationWarnings`, `UNSAFE_mapRouteProperties`,
+  `UNSAFE_useRouteId`, `UNSAFE_useRoutesImpl`, `defer`, `json`), and internally imports React 19's
+  `useOptimistic`, on top of the unsatisfiable `react@>=19.2.7` peer requirement noted in Current
+  State. This is verified inert today: `react-router`/`react-router-dom`/`@grafana/ui` are all
+  configured as webpack externals in `grafana/.config/webpack/webpack.config.ts` (never bundled
+  into the shipped plugin), and Jest's swc→CJS interop degrades the missing export names to
+  `undefined` on code paths no test suite actually renders/exercises (`yarn test:ci` 47/47 and
+  `yarn typecheck` both pass under Node 22.22.2). It's a real tripwire, though — it would break the
+  moment grafana ever stops treating `@grafana/ui`/react-router as webpack externals, or migrates
+  its test runner off Jest's CJS interop (e.g. to Vitest/native ESM).
 - **Node 22 bump vs. staying on Node 20**: Yarn doesn't hard-enforce the `engines` floor, so
   staying on Node 20 would likely still install and run. Bumping to 22 was chosen instead of
   papering over the mismatch, since there's no reason to run an explicitly-unsupported Node major
