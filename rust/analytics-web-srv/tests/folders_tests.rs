@@ -383,6 +383,85 @@ async fn delete_empty_folder_succeeds() {
 
 #[ignore]
 #[tokio::test]
+async fn delete_ancestor_of_nested_explicit_folder_is_not_empty() {
+    let pool = connect().await;
+    clear_tables(&pool).await;
+
+    // Only "team/sub" is ever created explicitly — "team" itself has no
+    // `folders` row and no screens anywhere in its subtree. `GET /folders`
+    // (via `compute_folder_infos`) reports "team" as existing and non-empty
+    // because "team/sub" is a nested explicit folder; `delete_folder` must
+    // agree instead of 404ing on `folder_exists`.
+    let _ = create_folder(
+        Extension(pool.clone()),
+        Extension(test_user()),
+        Json(CreateFolderRequest {
+            path: "team/sub".to_string(),
+        }),
+    )
+    .await
+    .expect("create team/sub");
+
+    let result = delete_folder(
+        Extension(pool.clone()),
+        Query(DeleteFolderParams {
+            path: "team".to_string(),
+        }),
+    )
+    .await;
+    let code = error_code(
+        result
+            .expect_err("deleting an ancestor of a nested explicit folder must be rejected as non-empty, not 404")
+            .into_response(),
+    )
+    .await;
+    assert_eq!(code, "FOLDER_NOT_EMPTY");
+}
+
+#[ignore]
+#[tokio::test]
+async fn rename_ancestor_of_nested_explicit_folder_succeeds() {
+    let pool = connect().await;
+    clear_tables(&pool).await;
+
+    // Same setup as above, but exercised through rename: "team" only exists
+    // implicitly via the nested explicit "team/sub" row, so `folder_exists`
+    // must recognize it as present rather than 404ing.
+    let _ = create_folder(
+        Extension(pool.clone()),
+        Extension(test_user()),
+        Json(CreateFolderRequest {
+            path: "team/sub".to_string(),
+        }),
+    )
+    .await
+    .expect("create team/sub");
+
+    let renamed = update_folder(
+        Extension(pool.clone()),
+        Json(UpdateFolderRequest {
+            path: "team".to_string(),
+            new_path: "squad".to_string(),
+        }),
+    )
+    .await
+    .expect("renaming an ancestor that exists only via a nested explicit folder should succeed");
+    assert_eq!(renamed.0.path, "squad");
+
+    let subfolder_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM folders WHERE path = $1)")
+            .bind("squad/sub")
+            .fetch_one(&pool)
+            .await
+            .expect("checking descendant folder");
+    assert!(
+        subfolder_exists,
+        "nested explicit folder must be rewritten under the new path"
+    );
+}
+
+#[ignore]
+#[tokio::test]
 async fn delete_missing_folder_returns_not_found() {
     let pool = connect().await;
     clear_tables(&pool).await;

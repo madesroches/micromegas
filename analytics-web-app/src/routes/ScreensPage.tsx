@@ -22,7 +22,7 @@ import {
   deleteScreen,
   ScreenApiError,
 } from '@/lib/screens-api'
-import { listFolders, createFolder, FolderInfo } from '@/lib/folders-api'
+import { listFolders, createFolder, moveFolder, deleteFolder, FolderInfo } from '@/lib/folders-api'
 
 function parentPath(path: string): string {
   const idx = path.lastIndexOf('/')
@@ -195,6 +195,46 @@ function ScreensPageContent() {
       }
     },
     [loadData]
+  )
+
+  const handleRenameFolder = useCallback(
+    async (path: string, newPath: string) => {
+      setActionError(null)
+      try {
+        await moveFolder(path, newPath)
+        // Keep the current view pointed at the renamed folder (or a
+        // descendant of it) instead of a now-nonexistent path.
+        if (selectedFolder === path) {
+          selectFolder(newPath)
+        } else if (selectedFolder && selectedFolder.startsWith(`${path}/`)) {
+          selectFolder(`${newPath}${selectedFolder.slice(path.length)}`)
+        }
+        await loadData()
+      } catch (err) {
+        setActionError(
+          err instanceof ScreenApiError ? `Failed to rename folder: ${err.message}` : 'Failed to rename folder'
+        )
+      }
+    },
+    [loadData, selectedFolder, selectFolder]
+  )
+
+  const handleDeleteFolder = useCallback(
+    async (path: string) => {
+      setActionError(null)
+      try {
+        await deleteFolder(path)
+        if (selectedFolder === path) {
+          selectFolder(parentPath(path))
+        }
+        await loadData()
+      } catch (err) {
+        setActionError(
+          err instanceof ScreenApiError ? `Failed to delete folder: ${err.message}` : 'Failed to delete folder'
+        )
+      }
+    },
+    [loadData, selectedFolder, selectFolder]
   )
 
   // Create lookup map for screen type info
@@ -416,6 +456,8 @@ function ScreensPageContent() {
                     isSearching={isSearching}
                     onDropScreen={handleMoveScreen}
                     onCreateFolder={handleCreateFolder}
+                    onRenameFolder={handleRenameFolder}
+                    onDeleteFolder={handleDeleteFolder}
                   />
                 </div>
 

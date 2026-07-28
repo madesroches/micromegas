@@ -158,9 +158,9 @@ fn compute_folder_infos(
     result
 }
 
-/// Whether `path` "exists" — an explicit `folders` row, or a prefix of some
-/// `screens.folder_path` (covers folders that were never explicitly created
-/// but contain screens).
+/// Whether `path` "exists" — an explicit `folders` row (including a nested
+/// explicit subfolder of `path`), or a prefix of some `screens.folder_path`
+/// (covers folders that were never explicitly created but contain screens).
 async fn folder_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     path: &str,
@@ -168,15 +168,17 @@ async fn folder_exists(
     if path.is_empty() {
         return Ok(true);
     }
-    let explicit =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM folders WHERE path = $1)")
-            .bind(path)
-            .fetch_one(&mut **tx)
-            .await?;
+    let prefix_pattern = format!("{path}/%");
+    let explicit = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM folders WHERE path = $1 OR path LIKE $2)",
+    )
+    .bind(path)
+    .bind(&prefix_pattern)
+    .fetch_one(&mut **tx)
+    .await?;
     if explicit {
         return Ok(true);
     }
-    let prefix_pattern = format!("{path}/%");
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM screens WHERE folder_path = $1 OR folder_path LIKE $2)",
     )
@@ -267,13 +269,22 @@ pub async fn update_folder(
 
     let mut tx = pool.begin().await?;
 
-    instrument_named!(
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-            .bind(&request.path)
-            .execute(&mut *tx),
-        "sql_folder_advisory_lock"
-    )
-    .await?;
+    // Lock both the source and destination paths so that two concurrent renames
+    // targeting the same destination (e.g. "team1" -> "target" and "team2" ->
+    // "target") serialize against each other instead of racing past the
+    // `folder_exists` check below. Lock in a fixed order (sorted) to avoid
+    // lock-order deadlocks between concurrent renames that cross paths.
+    let mut lock_paths = [request.path.as_str(), request.new_path.as_str()];
+    lock_paths.sort_unstable();
+    for lock_path in lock_paths {
+        instrument_named!(
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(lock_path)
+                .execute(&mut *tx),
+            "sql_folder_advisory_lock"
+        )
+        .await?;
+    }
 
     if !folder_exists(&mut tx, &request.path).await? {
         return Err(FolderError::NotFound(request.path.clone()));

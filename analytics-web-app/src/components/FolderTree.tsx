@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, Folder, FolderOpen, Grid2x2, Home, Plus } from 'lucide-react'
+import { ChevronRight, Folder, FolderOpen, Grid2x2, Home, MoreVertical, Plus } from 'lucide-react'
 import { FolderInfo } from '@/lib/folders-api'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 export interface FolderTreeNode {
   name: string
@@ -79,6 +80,13 @@ interface FolderTreeProps {
   isSearching?: boolean
   onDropScreen: (screenName: string, destPath: string) => void
   onCreateFolder: (parentPath: string, name: string) => void
+  onRenameFolder: (path: string, newPath: string) => void
+  onDeleteFolder: (path: string) => void
+}
+
+function parentOf(path: string): string {
+  const idx = path.lastIndexOf('/')
+  return idx === -1 ? '' : path.slice(0, idx)
 }
 
 export function FolderTree({
@@ -92,11 +100,17 @@ export function FolderTree({
   isSearching,
   onDropScreen,
   onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
 }: FolderTreeProps) {
   const tree = useMemo(() => buildFolderTree(folders), [folders])
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [creatingUnder, setCreatingUnder] = useState<string | null>(null)
   const [newFolderName, setNewFolderName] = useState('')
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [renamingPath, setRenamingPath] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deletingPath, setDeletingPath] = useState<string | null>(null)
 
   const startCreating = (parentPath: string) => {
     setCreatingUnder(parentPath)
@@ -112,6 +126,40 @@ export function FolderTree({
     setCreatingUnder(null)
     setNewFolderName('')
   }
+
+  const startRenaming = (node: FolderTreeNode) => {
+    setMenuFor(null)
+    setRenamingPath(node.path)
+    setRenameValue(node.name)
+  }
+
+  const normalizedRenameValue = useMemo(() => normalizeFolderSegment(renameValue), [renameValue])
+
+  const commitRename = (node: FolderTreeNode) => {
+    if (normalizedRenameValue && normalizedRenameValue !== node.name) {
+      const newPath = parentOf(node.path) ? `${parentOf(node.path)}/${normalizedRenameValue}` : normalizedRenameValue
+      onRenameFolder(node.path, newPath)
+    }
+    setRenamingPath(null)
+    setRenameValue('')
+  }
+
+  const renameInput = (node: FolderTreeNode) => (
+    <>
+      <input
+        autoFocus
+        value={renameValue}
+        onChange={(e) => setRenameValue(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={() => commitRename(node)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commitRename(node)
+          if (e.key === 'Escape') setRenamingPath(null)
+        }}
+        className="flex-1 min-w-0 px-1.5 py-0.5 text-sm bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
+      />
+    </>
+  )
 
   const newFolderInput = () => (
     <>
@@ -186,7 +234,11 @@ export function FolderTree({
           ) : (
             <Folder className="w-4 h-4 flex-none text-accent-warning" />
           )}
-          <span className="flex-1 truncate">{node.name}</span>
+          {renamingPath === node.path ? (
+            renameInput(node)
+          ) : (
+            <span className="flex-1 truncate">{node.name}</span>
+          )}
           {hasMatch && <span className="w-1.5 h-1.5 rounded-full bg-accent-warning flex-none" />}
           <button
             onClick={(e) => {
@@ -199,6 +251,41 @@ export function FolderTree({
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setMenuFor(menuFor === node.path ? null : node.path)
+              }}
+              title="Folder actions"
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-opacity"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+            </button>
+            {menuFor === node.path && (
+              <div
+                role="menu"
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-0 top-full mt-1 w-32 bg-app-card border border-theme-border-hover rounded-md shadow-lg z-10 overflow-hidden"
+              >
+                <button
+                  onClick={() => startRenaming(node)}
+                  className="w-full text-left px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border"
+                >
+                  Rename
+                </button>
+                <button
+                  onClick={() => {
+                    setMenuFor(null)
+                    setDeletingPath(node.path)
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-theme-border"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         {creatingUnder === node.path && (
           <div style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }} className="py-1 pr-2">
@@ -211,7 +298,7 @@ export function FolderTree({
   }
 
   return (
-    <div className="flex flex-col gap-1 h-full">
+    <div className="flex flex-col gap-1 h-full" onClick={() => setMenuFor(null)}>
       <div
         role="button"
         tabIndex={0}
@@ -256,6 +343,19 @@ export function FolderTree({
         <Plus className="w-3.5 h-3.5" />
         New folder{selectedFolder ? ` in ${selectedFolder}` : ''}
       </button>
+
+      <ConfirmDialog
+        isOpen={deletingPath !== null}
+        onClose={() => setDeletingPath(null)}
+        onConfirm={() => {
+          if (deletingPath) onDeleteFolder(deletingPath)
+          setDeletingPath(null)
+        }}
+        title="Delete Folder"
+        message={`Are you sure you want to delete "${deletingPath}"? The folder must be empty (no screens, no subfolders).`}
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   )
 }
