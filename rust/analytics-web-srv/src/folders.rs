@@ -402,13 +402,22 @@ pub async fn delete_folder(
 
     let mut tx = pool.begin().await?;
 
-    instrument_named!(
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-            .bind(&path)
-            .execute(&mut *tx),
-        "sql_folder_advisory_lock"
-    )
-    .await?;
+    // Lock the path *and all of its ancestors* so a concurrent rename of any
+    // ancestor folder can't race past this delete and silently no-op it (the
+    // rename's UPDATE would relocate this path out from under the DELETE's
+    // WHERE clause, leaving the folder still existing under its new path
+    // while this handler reports it deleted). Locked shortest-prefix-first
+    // (root-to-leaf), matching `create_folder`'s and `update_folder`'s
+    // deadlock-avoidance convention.
+    for lock_path in expand_prefixes(&path).into_iter().filter(|p| !p.is_empty()) {
+        instrument_named!(
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&lock_path)
+                .execute(&mut *tx),
+            "sql_folder_advisory_lock"
+        )
+        .await?;
+    }
 
     if !folder_exists(&mut tx, &path).await? {
         return Err(FolderError::NotFound(path));

@@ -267,6 +267,94 @@ async fn create_folder_serializes_on_destination_advisory_lock() {
     assert_eq!(status, StatusCode::CREATED);
 }
 
+// Proves delete_folder locks the *ancestor* prefix chain, not just the exact
+// path being deleted — mirroring create_folder's/update_folder's ancestor-
+// chain locking. Without this, a concurrent rename of an ancestor (e.g.
+// "team" -> "x") could commit between delete_folder's existence check and its
+// DELETE, moving "team/sub" to "x/sub" and making the DELETE match zero rows
+// while delete_folder still reports success. We prove the lock is actually
+// taken on the ancestor "team" (not just on "team/sub") by holding a
+// session-scoped advisory lock on "team" and observing delete_folder block
+// until it's released.
+#[ignore]
+#[tokio::test]
+async fn delete_folder_serializes_on_ancestor_advisory_lock() {
+    let pool = connect().await;
+    clear_tables(&pool).await;
+
+    let (status, _) = create_folder(
+        Extension(pool.clone()),
+        Extension(test_user()),
+        Json(CreateFolderRequest {
+            path: "team/sub".to_string(),
+        }),
+    )
+    .await
+    .expect("creating folder to delete");
+    assert_eq!(status, StatusCode::CREATED);
+
+    let mut lock_conn = pool.acquire().await.expect("acquiring lock connection");
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1))")
+        .bind("team")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("taking session advisory lock on ancestor");
+
+    let pool_for_task = pool.clone();
+    let delete_task = tokio::spawn(async move {
+        delete_folder(
+            Extension(pool_for_task),
+            Query(DeleteFolderParams {
+                path: "team/sub".to_string(),
+            }),
+        )
+        .await
+    });
+
+    // Poll (bounded) until the delete_folder backend shows up waiting on a
+    // lock, proving it contends on the ancestor's advisory lock instead of
+    // racing past it.
+    let mut waiting = false;
+    for _ in 0..100 {
+        if delete_task.is_finished() {
+            break;
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%pg_advisory_xact_lock%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("checking pg_stat_activity");
+        if count > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        waiting,
+        "delete_folder must block waiting on the ancestor path's advisory lock"
+    );
+    assert!(
+        !delete_task.is_finished(),
+        "delete_folder must not complete while the ancestor lock is held"
+    );
+
+    sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+        .bind("team")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("releasing session advisory lock");
+    drop(lock_conn);
+
+    let status = tokio::time::timeout(Duration::from_secs(5), delete_task)
+        .await
+        .expect("delete_folder should complete promptly after the lock is released")
+        .expect("task join")
+        .expect("delete_folder should succeed once unblocked");
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
 #[ignore]
 #[tokio::test]
 async fn rename_folder_cascades_to_descendants_and_screens() {
