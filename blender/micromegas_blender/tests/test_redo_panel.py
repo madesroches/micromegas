@@ -60,6 +60,25 @@ def test_redo_update_detects_param_change_on_same_op(rec_lib, fake_bpy):
     assert "2.0" in msgs[0]
 
 
+def test_redo_update_survives_interleaved_poll(rec_lib, fake_bpy):
+    # Regression: an unrelated _poll_operators() call (backstop timer or
+    # another drain_operators() event) landing between the redo-panel edit
+    # and check_redo_update() must not overwrite the baseline with the
+    # already-edited value — the pointer hasn't changed, so the poll should
+    # leave the baseline alone.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
+
+    op._kw = {"value": (2.0, 2.0, 2.0)}  # redo-panel edit: same op, new params
+    actions._poll_operators()  # interleaved poll (same pointer, no-op expected)
+
+    assert actions.check_redo_update() is True
+    msgs = _redo_msgs(rec_lib)
+    assert len(msgs) == 1
+    assert "2.0" in msgs[0]
+
+
 def test_redo_update_no_change_returns_false(rec_lib, fake_bpy):
     op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
     _set_ops(fake_bpy, [op])

@@ -190,16 +190,23 @@ def _poll_operators() -> None:
         _metric_i("blender.action_captured", "count", n)
     _prev_op_ptrs = set(cur_ptrs)
 
-    # Baseline for check_redo_update() to diff against.
-    if ops:
+    # Baseline for check_redo_update() to diff against. Only (re)established
+    # when the newest pointer changes: refreshing it on every poll — even
+    # while the newest op is unchanged — would let a poll that lands between
+    # a redo-panel edit and the undo_post handler capture the *edited* value
+    # as the baseline, so check_redo_update() would see no diff and miss the
+    # edit. Leaving it untouched here means check_redo_update() is the only
+    # thing that advances it once an op is baselined, regardless of how many
+    # extra polls run before undo_post fires.
+    if not ops:
+        _last_op_ptr = None
+        _last_op_msg = None
+    elif cur_ptrs[-1] != _last_op_ptr:
         _last_op_ptr = cur_ptrs[-1]
         try:
             _last_op_msg = _format_op(ops[-1])
         except Exception:
             _last_op_msg = None
-    else:
-        _last_op_ptr = None
-        _last_op_msg = None
 
 
 def drain_operators() -> None:
