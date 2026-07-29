@@ -130,8 +130,12 @@ def test_redo_update_returns_false_when_newest_op_differs(rec_lib, fake_bpy):
     actions._poll_operators()  # baseline
 
     # A genuinely new op appeared (real undo/new action), not a redo-panel edit.
-    _set_ops(fake_bpy, [op, FakeOp("OBJECT_OT_delete")])
+    # Its params are readable and its message differs from the baseline, so the
+    # pointer-identity guard is the only thing that can reject it — with readable
+    # params left out, the `params is None` bail would pass this test on its own.
+    _set_ops(fake_bpy, [op, FakeOp("OBJECT_OT_delete", kw={"use_global": False})])
     assert actions.check_redo_update() is False
+    assert _redo_msgs(rec_lib) == []
 
 
 def test_redo_update_returns_false_with_no_ops(rec_lib, fake_bpy):
@@ -179,11 +183,18 @@ def test_poll_clears_baseline_when_ring_empties(rec_lib, fake_bpy):
 
 
 def test_redo_update_skips_macros(rec_lib, fake_bpy):
-    op = FakeOp("OBJECT_OT_duplicate_move", kw={"TRANSFORM_OT_translate": MacroSubOp()})
+    # The ordinary parameter changes alongside the sub-op ref, so the formatted
+    # message genuinely differs from the baseline and only the is_macro guard can
+    # reject the update. A sub-op ref alone would not exercise the guard: every
+    # ref formats to the same placeholder, so the message would compare equal.
+    op = FakeOp(
+        "OBJECT_OT_duplicate_move",
+        kw={"TRANSFORM_OT_translate": MacroSubOp(), "linked": False},
+    )
     _set_ops(fake_bpy, [op])
     actions._poll_operators()  # baseline
 
-    op._kw = {"TRANSFORM_OT_translate": MacroSubOp()}  # would-be "change"
+    op._kw = {"TRANSFORM_OT_translate": MacroSubOp(), "linked": True}
     assert actions.check_redo_update() is False
     assert _redo_msgs(rec_lib) == []
 

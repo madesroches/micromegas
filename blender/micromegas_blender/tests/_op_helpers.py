@@ -35,6 +35,18 @@ class MacroSubOp:
     bl_rna = object()
 
 
+class StaleRnaValue:
+    """Parameter value whose bl_rna access raises like a freed RNA struct.
+
+    hasattr() only swallows AttributeError, so this is what escapes
+    actions._is_macro_subop_ref if the sub-op scan is not itself guarded.
+    """
+
+    @property
+    def bl_rna(self):
+        raise ReferenceError("StructRNA of type Object has been removed")
+
+
 def set_ops(fake_bpy, ops) -> None:
     """Replace the fake operator-history ring, oldest -> newest."""
     fake_bpy.context.window_manager.operators = ops

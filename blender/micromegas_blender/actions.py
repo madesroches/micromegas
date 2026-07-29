@@ -128,15 +128,18 @@ def _params_of(op) -> "tuple[dict | None, bool]":
     with unreadable values (``check_redo_update``) bail out without walking the
     params a second time.
     """
+    # The sub-op scan is inside the try as well: hasattr() only swallows
+    # AttributeError, so touching a value's bl_rna on a stale RNA reference
+    # raises ReferenceError straight through it.
     try:
         params = dict(op.as_keywords())
+        is_macro = False
+        for key, value in list(params.items()):
+            if _is_macro_subop_ref(value):
+                params[key] = _MACRO_PARAM_PLACEHOLDER
+                is_macro = True
     except Exception:
         return None, False
-    is_macro = False
-    for key, value in list(params.items()):
-        if _is_macro_subop_ref(value):
-            params[key] = _MACRO_PARAM_PLACEHOLDER
-            is_macro = True
     return params, is_macro
 
 

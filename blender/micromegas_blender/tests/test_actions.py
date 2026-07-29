@@ -1,7 +1,7 @@
 """Tests for actions.py: operator-history drain (identity-based)."""
 
 import pytest
-from _op_helpers import FakeOp, MacroSubOp, set_ops as _set_ops
+from _op_helpers import FakeOp, MacroSubOp, StaleRnaValue, set_ops as _set_ops
 
 from micromegas_blender import actions
 
@@ -59,6 +59,16 @@ def test_poll_masks_macro_subop_params(rec_lib, fake_bpy):
     msgs = _action_msgs(rec_lib)
     assert len(msgs) == 1
     assert actions._MACRO_PARAM_PLACEHOLDER in msgs[0]
+
+
+def test_params_of_reports_unreadable_on_stale_value(fake_bpy):
+    # A value whose bl_rna access raises (freed RNA struct) must come back as the
+    # documented "unreadable" result rather than escaping the sub-op scan: the
+    # contract is what _format_op's _UNSET path and check_redo_update rely on.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": StaleRnaValue()})
+    assert actions._params_of(op) == (None, False)
+    # _format_op still yields the bounded part of the message.
+    assert actions._format_op(op) == "TRANSFORM_OT_resize"
 
 
 def test_poll_no_change_emits_nothing(rec_lib, fake_bpy):
