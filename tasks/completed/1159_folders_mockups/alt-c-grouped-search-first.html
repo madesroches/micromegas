@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Alt C — Grouped List, Search-first · Screens folders mockup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --app-bg:#0a0a0f; --header-bg:#12121a; --panel-bg:#12121a; --card-bg:#1a1a2e;
+    --border:#2a2a3e; --border-hover:#3a3a4e;
+    --text-primary:#e7e9ea; --text-secondary:#9ca3af; --text-muted:#6b7280;
+    --link:#1565c0; --link-hover:#1976d2;
+    --success:#22c55e; --gold:#ffb300; --error:#f87171; --rust:#bf360c;
+    --radius:0.5rem;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--app-bg); color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:14px; line-height:1.5;
+  }
+  a{color:inherit;}
+  .note-bar{
+    background:linear-gradient(90deg, rgba(191,54,12,.14), rgba(21,101,192,.14));
+    border-bottom:1px solid var(--border);
+    padding:.55rem 1rem; font-size:12.5px; color:var(--text-secondary);
+    display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+  }
+  .note-bar a{color:var(--link); text-decoration:none; font-weight:600;}
+  .note-bar a:hover{color:var(--link-hover); text-decoration:underline;}
+  .topheader{
+    height:52px; background:var(--header-bg); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:.6rem; padding:0 1rem;
+  }
+  .logo-mark{width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg, var(--rust), var(--gold)); flex:none;}
+  .logo-text{font-weight:700; letter-spacing:.02em; font-size:14px;}
+  .logo-text .sp{color:var(--text-muted); font-weight:400;}
+
+  .page{ padding:1.5rem; max-width:1100px; margin:0 auto; }
+  .page-head h1{font-size:1.5rem; font-weight:600; margin:0 0 .25rem;}
+  .page-head p{margin:0; color:var(--text-secondary);}
+
+  .new-row{display:flex; gap:.5rem; flex-wrap:wrap; margin:1.25rem 0;}
+  .btn{
+    display:inline-flex; align-items:center; gap:.4rem; font-size:13px; font-weight:500;
+    padding:.4rem .7rem; border-radius:calc(var(--radius) - 2px); border:1px solid var(--border);
+    background:transparent; color:var(--text-primary); cursor:pointer;
+  }
+  .btn:hover{border-color:var(--border-hover); background:var(--card-bg);}
+  .btn.primary{background:var(--link); border-color:var(--link); color:#fff;}
+  .btn.primary:hover{background:var(--link-hover); border-color:var(--link-hover);}
+  .btn.sm{padding:.3rem .5rem; font-size:12px;}
+  .icon{flex:none; display:inline-flex;}
+
+  .search-hero{
+    display:flex; align-items:center; gap:.6rem; border:1px solid var(--border); border-radius:var(--radius);
+    padding:.7rem .9rem; background:var(--panel-bg); margin-bottom:1.1rem;
+  }
+  .search-hero:focus-within{border-color:var(--link); box-shadow:0 0 0 3px rgba(21,101,192,.15);}
+  .search-hero svg{color:var(--text-muted); flex:none;}
+  .search-hero input{border:none; outline:none; background:transparent; color:var(--text-primary); font-size:15px; width:100%;}
+  .search-hero input::placeholder{color:var(--text-muted);}
+  .clear-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0;display:flex;}
+  .clear-btn:hover{color:var(--text-primary);}
+
+  .toolbar-row{display:flex; align-items:center; justify-content:space-between; margin-bottom:.75rem;}
+  .result-count{font-size:12.5px; color:var(--text-muted);}
+  .expand-all{font-size:12px; background:none; border:none; color:var(--link); cursor:pointer; padding:0;}
+  .expand-all:hover{color:var(--link-hover); text-decoration:underline;}
+
+  .group{border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-bg); margin-bottom:.6rem; overflow:hidden;}
+  .group-head{
+    display:flex; align-items:center; gap:.5rem; padding:.6rem .8rem; cursor:pointer; user-select:none;
+  }
+  .group-head:hover{background:var(--card-bg);}
+  .group-head .chev{width:14px; height:14px; display:flex; align-items:center; color:var(--text-muted); transition:transform .12s; flex:none;}
+  .group-head .chev.open{transform:rotate(90deg);}
+  .group-head svg.folder-ic{color:var(--gold); flex:none;}
+  .group-head .g-name{font-weight:600; font-size:13.5px;}
+  .group-head .g-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-muted); margin-left:.15rem;}
+  .group-head .g-count{margin-left:auto; font-size:12px; color:var(--text-muted);}
+  .group-body{border-top:1px solid var(--border);}
+
+  .row-item{
+    display:flex; align-items:center; gap:.65rem; padding:.55rem .8rem .55rem 2.1rem; cursor:pointer; position:relative;
+    border-top:1px solid transparent;
+  }
+  .row-item:not(:first-child){border-top:1px solid var(--border);}
+  .row-item:hover{background:var(--card-bg);}
+  .row-item svg.type-ic{color:var(--link); flex:none;}
+  .row-item .r-name{font-weight:500; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .row-item .r-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--text-muted); flex:none;}
+  .row-item .r-meta{font-size:11.5px; color:var(--text-muted); flex:none; width:150px; text-align:right;}
+  .row-item .kebab-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:3px;border-radius:5px;display:flex;opacity:0;transition:opacity .1s; flex:none;}
+  .row-item:hover .kebab-btn{opacity:1;}
+  .row-item .kebab-btn:hover{color:var(--text-primary); background:var(--border);}
+  mark{background:transparent; color:var(--gold); font-weight:600; padding:0;}
+
+  .empty{padding:2.5rem 1rem; text-align:center; color:var(--text-muted); border:1px dashed var(--border); border-radius:var(--radius);}
+
+  .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:50;}
+  .modal{width:100%; max-width:420px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 20px 60px rgba(0,0,0,.5);}
+  .modal-head{display:flex; align-items:center; justify-content:space-between; padding:.85rem 1rem; border-bottom:1px solid var(--border);}
+  .modal-head h2{font-size:15px; font-weight:600; margin:0;}
+  .modal-body{padding:1rem;}
+  .modal-foot{display:flex; justify-content:flex-end; gap:.5rem; padding:.85rem 1rem; border-top:1px solid var(--border);}
+  .field-label{font-size:12.5px; font-weight:600; color:var(--text-secondary); display:block; margin-bottom:.3rem;}
+  .text-input{width:100%; padding:.5rem .65rem; border-radius:6px; border:1px solid var(--border); background:var(--app-bg); color:var(--text-primary); font-size:13px; outline:none;}
+  .text-input:focus{border-color:var(--link);}
+  .location-picker{display:flex; align-items:center; gap:.5rem; margin-top:1rem;}
+  .location-chip{
+    flex:1; display:flex; align-items:center; gap:.4rem; font-size:12.5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    padding:.4rem .6rem; border:1px solid var(--border); border-radius:6px; color:var(--text-secondary); background:var(--app-bg);
+  }
+  .location-chip svg{color:var(--gold); flex:none;}
+  .picker-list{max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:8px; margin-top:.6rem;}
+  .picker-row{display:flex; align-items:center; gap:.4rem; padding:.4rem .6rem; font-size:12.5px; cursor:pointer;}
+  .picker-row:hover{background:var(--card-bg);}
+  .picker-row.selected{background:rgba(21,101,192,.16);}
+  .toast{
+    position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--card-bg); border:1px solid var(--success);
+    color:var(--text-primary); padding:.55rem .9rem; border-radius:8px; font-size:12.5px; display:flex; align-items:center; gap:.5rem;
+    box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:60;
+  }
+  .toast svg{color:var(--success);}
+</style>
+</head>
+<body>
+
+<div class="note-bar">
+  <span>Mockup C — Grouped flat list, search-first, for <strong>issue #1159</strong> (organize notebooks into folders). Not the live app.</span>
+  <a href="./index.html">&larr; Back to all alternatives</a>
+</div>
+
+<div class="topheader">
+  <div class="logo-mark"></div>
+  <div class="logo-text">micromegas<span class="sp"> / analytics</span></div>
+</div>
+
+<div class="page">
+  <div class="page-head">
+    <h1>Screens</h1>
+    <p>Create and manage custom screens with editable SQL queries.</p>
+  </div>
+
+  <div class="new-row">
+    <button class="btn" id="btn-save-preview">Preview: Save dialog with folder picker</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Notebook</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Log View</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Table</button>
+    <button class="btn"><span class="icon" data-icon="plus"></span> New Metrics</button>
+  </div>
+
+  <div class="search-hero">
+    <span data-icon="search"></span>
+    <input id="search-input" type="text" placeholder="Search all screens by name&hellip;" autofocus />
+    <button class="clear-btn" id="clear-search" style="display:none"></button>
+  </div>
+
+  <div class="toolbar-row">
+    <span class="result-count" id="result-count"></span>
+    <button class="expand-all" id="expand-toggle">Collapse all</button>
+  </div>
+
+  <div id="content"></div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const ICONS = {
+  chevron:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
+  folder:'<svg class="folder-ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>',
+  search:'<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+  notebook:'<svg class="type-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>',
+  terminal:'<svg class="type-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>',
+  table:'<svg class="type-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="3" x2="9" y2="21"></line></svg>',
+  activity:'<svg class="type-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>',
+  plus:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+  kebab:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>',
+  x:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+  check:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+};
+function ic(name){ return ICONS[name] || ''; }
+document.querySelectorAll('[data-icon]').forEach(n=>{ n.innerHTML = ic(n.dataset.icon); });
+
+const TYPE_ICON = { notebook:'notebook', log:'terminal', table:'table', metrics:'activity' };
+const TYPE_LABEL = { notebook:'Notebook', log:'Log', table:'Table', metrics:'Metrics' };
+
+let SCREENS = [
+  { name:'quick-check', type:'log', updated:'2026-07-25', folder:'' },
+  { name:'scratch', type:'notebook', updated:'2026-07-20', folder:'' },
+  { name:'latency-overview', type:'metrics', updated:'2026-07-24', folder:'team/dashboards' },
+  { name:'error-rates', type:'table', updated:'2026-07-22', folder:'team/dashboards' },
+  { name:'slo-burn-rate', type:'notebook', updated:'2026-07-26', folder:'team/dashboards' },
+  { name:'incident-2026-03-12', type:'notebook', updated:'2026-03-14', folder:'team/dashboards/incidents' },
+  { name:'incident-postmortem-checklist', type:'table', updated:'2026-03-15', folder:'team/dashboards/incidents' },
+  { name:'deploy-runbook', type:'notebook', updated:'2026-06-01', folder:'team/runbooks' },
+  { name:'rollback-steps', type:'notebook', updated:'2026-06-02', folder:'team/runbooks' },
+  { name:'my-scratchpad', type:'notebook', updated:'2026-07-27', folder:'personal' },
+  { name:'draft-weekly-report', type:'notebook', updated:'2026-07-10', folder:'personal/drafts' },
+  { name:'old-dashboard-v1', type:'metrics', updated:'2025-11-02', folder:'archive' },
+  { name:'deprecated-error-view', type:'log', updated:'2025-09-18', folder:'archive' },
+];
+let searchQuery = '';
+let collapsed = new Set();
+let allCollapsed = false;
+
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function highlight(text, q){
+  if(!q) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if(idx===-1) return escapeHtml(text);
+  return escapeHtml(text.slice(0,idx)) + '<mark>' + escapeHtml(text.slice(idx,idx+q.length)) + '</mark>' + escapeHtml(text.slice(idx+q.length));
+}
+function matchesQuery(s,q){ return s.name.toLowerCase().includes(q) || s.folder.toLowerCase().includes(q); }
+function folderLabel(path){ return path===''? '(no folder)' : path; }
+function allFolderPathsFromScreens(){
+  const set = new Set();
+  SCREENS.forEach(s=>set.add(s.folder));
+  return set;
+}
+
+function groupScreens(list){
+  const groups = new Map();
+  for(const s of list){
+    if(!groups.has(s.folder)) groups.set(s.folder, []);
+    groups.get(s.folder).push(s);
+  }
+  const paths = [...groups.keys()].sort((a,b)=>{
+    if(a==='') return -1;
+    if(b==='') return 1;
+    return a.localeCompare(b);
+  });
+  return paths.map(p=>({ path:p, screens: groups.get(p).sort((a,b)=>a.name.localeCompare(b.name)) }));
+}
+
+function renderContent(){
+  const el = document.getElementById('content');
+  const countEl = document.getElementById('result-count');
+  const q = searchQuery.trim().toLowerCase();
+  const list = q ? SCREENS.filter(s=>matchesQuery(s,q)) : SCREENS;
+
+  countEl.textContent = q
+    ? `${list.length} match${list.length===1?'':'es'} in ${new Set(list.map(s=>s.folder)).size} folder${new Set(list.map(s=>s.folder)).size===1?'':'s'}`
+    : `${SCREENS.length} screens in ${allFolderPathsFromScreens().size} folders`;
+
+  document.getElementById('expand-toggle').style.display = q ? 'none' : 'inline';
+
+  if(!list.length){
+    el.innerHTML = `<div class="empty">No screens match &ldquo;${escapeHtml(searchQuery)}&rdquo;.</div>`;
+    return;
+  }
+
+  const groups = groupScreens(list);
+  el.innerHTML = groups.map(g=>{
+    const isOpen = q ? true : !collapsed.has(g.path);
+    return `
+      <div class="group">
+        <div class="group-head" data-toggle="${g.path}">
+          <span class="chev ${isOpen?'open':''}">${q?'':ic('chevron')}</span>
+          ${ic('folder')}
+          <span class="g-name">${g.path===''?'Home':g.path.split('/').pop()}</span>
+          ${g.path.includes('/') ? `<span class="g-path">/${g.path}</span>` : (g.path!=='' ? `<span class="g-path">/${g.path}</span>` : '')}
+          <span class="g-count">${g.screens.length} screen${g.screens.length===1?'':'s'}</span>
+        </div>
+        ${isOpen ? `<div class="group-body">
+          ${g.screens.map(s=>`
+            <div class="row-item" data-open="${s.name}">
+              ${ic(TYPE_ICON[s.type])}
+              <span class="r-name">${q && matchesQuery(s,q) ? highlight(s.name, searchQuery) : escapeHtml(s.name)}</span>
+              ${q ? `<span class="r-path">${g.path===''?'/':'/'+g.path}</span>` : ''}
+              <span class="r-meta">${TYPE_LABEL[s.type]} · ${s.updated}</span>
+              <button class="kebab-btn" data-menu="${s.name}">${ic('kebab')}</button>
+            </div>`).join('')}
+        </div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  if(!q){
+    el.querySelectorAll('[data-toggle]').forEach(h=>h.addEventListener('click', ()=>{
+      const p = h.dataset.toggle;
+      if(collapsed.has(p)) collapsed.delete(p); else collapsed.add(p);
+      renderContent();
+    }));
+  }
+  el.querySelectorAll('[data-menu]').forEach(b=>b.addEventListener('click', (e)=>{
+    e.stopPropagation(); openMoveModal(b.dataset.menu);
+  }));
+  el.querySelectorAll('[data-open]').forEach(r=>r.addEventListener('click', (e)=>{
+    if(e.target.closest('[data-menu]')) return;
+    showToast(`Would open screen "${r.dataset.open}"`);
+  }));
+}
+
+function openMoveModal(screenName){
+  const s = SCREENS.find(x=>x.name===screenName);
+  const paths = [...allFolderPathsFromScreens()].sort((a,b)=>{ if(a==='') return -1; if(b==='') return 1; return a.localeCompare(b); });
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="mm-backdrop">
+      <div class="modal">
+        <div class="modal-head"><h2>Move "${escapeHtml(screenName)}"</h2><button class="clear-btn" id="mm-close">${ic('x')}</button></div>
+        <div class="modal-body">
+          <span class="field-label">Choose destination folder</span>
+          <div class="picker-list">
+            ${paths.map(p=>`
+              <div class="picker-row ${p===s.folder?'selected':''}" data-pick="${p}">
+                ${p===s.folder?ic('check'):'<span style="width:14px;display:inline-block"></span>'} ${ic('folder')} ${escapeHtml(p===''?'Home':p)}
+              </div>`).join('')}
+          </div>
+          <div style="margin-top:.75rem;"><input class="text-input" id="mm-new-folder" placeholder="Or type a new folder path, e.g. team/reports" /></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="mm-cancel">Cancel</button>
+          <button class="btn primary" id="mm-move-new">Move to new folder</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('mm-backdrop').addEventListener('click', (e)=>{ if(e.target.id==='mm-backdrop') closeModal(); });
+  document.getElementById('mm-close').addEventListener('click', closeModal);
+  document.getElementById('mm-cancel').addEventListener('click', closeModal);
+  modalRoot.querySelectorAll('[data-pick]').forEach(r=>r.addEventListener('click', ()=>{
+    s.folder = r.dataset.pick; closeModal(); renderContent(); showToast(`Moved to ${r.dataset.pick===''?'Home':r.dataset.pick}`);
+  }));
+  document.getElementById('mm-move-new').addEventListener('click', ()=>{
+    const v = document.getElementById('mm-new-folder').value.trim().replace(/^\/+|\/+$/g,'');
+    if(!v) return;
+    s.folder = v; closeModal(); renderContent(); showToast(`Moved to ${v}`);
+  });
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+function showToast(msg){
+  const root = document.getElementById('toast-root');
+  root.innerHTML = `<div class="toast">${ic('check')} ${escapeHtml(msg)}</div>`;
+  setTimeout(()=>{ root.innerHTML=''; }, 2200);
+}
+
+document.getElementById('search-input').addEventListener('input', (e)=>{
+  searchQuery = e.target.value;
+  document.getElementById('clear-search').style.display = searchQuery ? 'flex' : 'none';
+  renderContent();
+});
+document.getElementById('clear-search').innerHTML = ic('x');
+document.getElementById('clear-search').addEventListener('click', ()=>{
+  searchQuery=''; document.getElementById('search-input').value=''; document.getElementById('clear-search').style.display='none'; renderContent();
+});
+
+document.getElementById('expand-toggle').addEventListener('click', ()=>{
+  allCollapsed = !allCollapsed;
+  if(allCollapsed){ [...allFolderPathsFromScreens()].forEach(p=>collapsed.add(p)); }
+  else { collapsed.clear(); }
+  document.getElementById('expand-toggle').textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+  renderContent();
+});
+
+document.getElementById('btn-save-preview').addEventListener('click', ()=>{
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="sv-backdrop">
+      <div class="modal">
+        <div class="modal-head"><h2>Save Screen</h2><button class="clear-btn" id="sv-close">${ic('x')}</button></div>
+        <div class="modal-body">
+          <span class="field-label">Screen Name</span>
+          <input class="text-input" placeholder="e.g., My Error Logs" value="weekly-slo-review" />
+          <div class="location-picker">
+            <span class="field-label" style="margin:0;white-space:nowrap;">Location</span>
+            <div class="location-chip">${ic('folder')} team/dashboards</div>
+            <button class="btn sm" id="sv-change-loc">Change</button>
+          </div>
+        </div>
+        <div class="modal-foot"><button class="btn" id="sv-cancel">Cancel</button><button class="btn primary">Save</button></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('sv-backdrop').addEventListener('click', (e)=>{ if(e.target.id==='sv-backdrop') closeModal(); });
+  document.getElementById('sv-close').addEventListener('click', closeModal);
+  document.getElementById('sv-cancel').addEventListener('click', closeModal);
+  document.getElementById('sv-change-loc').addEventListener('click', ()=>openMoveModal('weekly-slo-review-DRAFT'));
+});
+SCREENS.push({name:'weekly-slo-review-DRAFT', type:'notebook', updated:'2026-07-27', folder:'team/dashboards'});
+
+renderContent();
+</script>
+</body>
+</html>

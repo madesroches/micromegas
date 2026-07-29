@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Outer sidebar B — tree only in outer bar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --app-bg:#0a0a0f; --header-bg:#12121a; --panel-bg:#12121a; --card-bg:#1a1a2e;
+    --border:#2a2a3e; --border-hover:#3a3a4e;
+    --text-primary:#e7e9ea; --text-secondary:#9ca3af; --text-muted:#6b7280;
+    --link:#1565c0; --link-hover:#1976d2;
+    --success:#22c55e; --gold:#ffb300; --error:#f87171; --rust:#bf360c;
+    --radius:0.5rem;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--app-bg); color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:14px; line-height:1.5; height:100vh; display:flex; flex-direction:column;
+  }
+  .banner{
+    background:var(--card-bg); border-bottom:1px solid var(--border); padding:.6rem 1rem;
+    font-size:12.5px; color:var(--text-secondary); display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;
+  }
+  .banner strong{color:var(--gold); font-weight:700;}
+  .sim-btn{
+    font-size:12px; padding:.3rem .65rem; border-radius:6px; border:1px solid var(--border);
+    background:var(--panel-bg); color:var(--text-secondary); cursor:pointer;
+  }
+  .sim-btn.active{background:rgba(21,101,192,.18); color:var(--link); border-color:var(--link);}
+
+  .topheader{
+    height:52px; background:var(--header-bg); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:.6rem; padding:0 1rem; flex:none;
+  }
+  .logo-mark{width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg, var(--rust), var(--gold)); flex:none;}
+  .logo-text{font-weight:700; letter-spacing:.02em; font-size:14px;}
+
+  .body-row{flex:1; min-height:0; display:flex;}
+
+  .outer-bar{
+    width:200px; flex:none; background:var(--header-bg); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .icon-rail{display:flex; gap:.35rem; padding:.6rem; border-bottom:1px solid var(--border);}
+  .icon-btn{
+    width:34px; height:34px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+    color:var(--text-secondary); cursor:pointer; border:1px solid transparent;
+  }
+  .icon-btn.active{background:var(--card-bg); color:var(--link); border-color:var(--border);}
+  .icon-btn svg{width:18px; height:18px;}
+
+  .nav-surface{flex:1; min-height:0; display:flex; flex-direction:column; overflow:auto; padding:.75rem;}
+  .tree-label{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin:0 .3rem .3rem;}
+  .tree-node{user-select:none;}
+  .tree-row{
+    display:flex; align-items:center; gap:.35rem; padding:.35rem .4rem; border-radius:6px; cursor:pointer;
+    color:var(--text-secondary); font-size:13px;
+  }
+  .tree-row:hover{background:var(--card-bg); color:var(--text-primary);}
+  .tree-row.active{background:rgba(21,101,192,.18); color:var(--link); font-weight:600;}
+  .tree-row .chev{width:12px; height:12px; flex:none; transition:transform .12s; opacity:.6;}
+  .tree-row.open .chev{transform:rotate(90deg);}
+  .tree-row svg.folder-icon{width:14px; height:14px; flex:none;}
+  .tree-row .cnt{margin-left:auto; font-size:11px; color:var(--text-muted);}
+  .tree-children{padding-left:1.1rem; display:none;}
+  .tree-children.open{display:block;}
+
+  .new-folder-btn{
+    margin-top:.5rem; padding:.4rem .6rem; border-radius:6px; border:1px dashed var(--border);
+    background:transparent; color:var(--text-muted); font-size:12.5px; cursor:pointer; text-align:left;
+  }
+  .new-folder-btn:hover{border-color:var(--border-hover); color:var(--text-secondary);}
+  .outer-empty{color:var(--text-muted); font-size:12px; padding:.5rem .3rem;}
+
+  main{flex:1; min-height:0; overflow:auto; padding:1.5rem;}
+  .page-title{font-size:1.3rem; font-weight:650; margin:0 0 .25rem;}
+  .page-sub{color:var(--text-secondary); font-size:13px; margin:0 0 1.25rem;}
+
+  .screens-header{
+    display:flex; align-items:center; gap:.75rem; margin-bottom:1.25rem; flex-wrap:wrap;
+  }
+  .page-nav-item{
+    display:flex; align-items:center; gap:.4rem; padding:.4rem .65rem; border-radius:6px; cursor:pointer;
+    color:var(--text-secondary); font-size:13px; border:1px solid var(--border); background:var(--card-bg);
+  }
+  .page-nav-item.active{color:var(--link); border-color:var(--link); background:rgba(21,101,192,.18);}
+  .page-search{
+    flex:1; min-width:200px; max-width:320px; padding:.4rem .6rem; border:1px solid var(--border); border-radius:6px;
+    background:var(--card-bg); color:var(--text-muted); font-size:12.5px; display:flex; align-items:center; gap:.4rem;
+  }
+
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th,td{text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--border);}
+  th{color:var(--text-muted); font-weight:600; font-size:11.5px; text-transform:uppercase;}
+  td{color:var(--text-secondary);}
+
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:.9rem;}
+  .card{
+    border:1px solid var(--border); border-radius:var(--radius); background:var(--card-bg);
+    padding:1rem; font-size:13px;
+  }
+  .card .name{font-weight:600; margin-bottom:.25rem;}
+  .card .meta{color:var(--text-muted); font-size:11.5px;}
+
+  .callout{
+    border:1px solid var(--border); border-left:3px solid var(--gold); border-radius:6px; background:var(--card-bg);
+    padding:.9rem 1.1rem; margin-top:1.5rem; font-size:13px; color:var(--text-secondary); max-width:62ch;
+  }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <strong>Mockup B — Tree only in outer bar.</strong>
+  <span>Only the folder tree is app-wide/persistent. "All Screens", "Home" and search stay inside the Screens page's own content header.</span>
+  <button class="sim-btn active" data-page="processes" onclick="setPage('processes', this)">Simulate: Processes page</button>
+  <button class="sim-btn" data-page="screens" onclick="setPage('screens', this)">Simulate: Screens page</button>
+</div>
+
+<div class="topheader">
+  <div class="logo-mark"></div>
+  <div class="logo-text">micromegas</div>
+</div>
+
+<div class="body-row">
+  <div class="outer-bar">
+    <div class="icon-rail">
+      <div class="icon-btn" id="icon-processes" title="Processes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </div>
+      <div class="icon-btn active" id="icon-screens" title="Screens">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+    </div>
+    <div class="nav-surface">
+      <div class="tree-label">Folders</div>
+      <div id="tree"></div>
+      <button class="new-folder-btn" onclick="alert('Would open the new-folder input, same as today')">+ New folder</button>
+      <div class="outer-empty">(No All Screens / Home / Search here &mdash; those live in the Screens page itself.)</div>
+    </div>
+  </div>
+
+  <main id="main"></main>
+</div>
+
+<script>
+const FOLDERS = [
+  { path:'team', screens:1, children:[
+    { path:'team/dashboards', screens:4, children:[] },
+    { path:'team/reports', screens:2, children:[] },
+  ]},
+  { path:'personal', screens:3, children:[] },
+];
+
+let currentPage = 'processes';
+let currentFolder = null; // null = All Screens
+
+function renderTree(){
+  const root = document.getElementById('tree');
+  root.innerHTML = '';
+  function row(node, depth){
+    const wrap = document.createElement('div');
+    wrap.className = 'tree-node';
+    const r = document.createElement('div');
+    r.className = 'tree-row' + (currentFolder===node.path ? ' active' : '');
+    r.style.paddingLeft = (0.4 + depth*0.9) + 'rem';
+    r.innerHTML = `
+      ${node.children.length ? '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 6 6 6-6 6"/></svg>' : '<span style="width:12px;display:inline-block"></span>'}
+      <svg class="folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+      ${node.path.split('/').pop()}
+      <span class="cnt">${node.screens}</span>
+    `;
+    r.onclick = (e)=>{ e.stopPropagation(); goToFolder(node.path); };
+    wrap.appendChild(r);
+    if(node.children.length){
+      const kids = document.createElement('div');
+      kids.className = 'tree-children open';
+      node.children.forEach(c=>kids.appendChild(row(c, depth+1)));
+      wrap.appendChild(kids);
+    }
+    return wrap;
+  }
+  FOLDERS.forEach(f=>root.appendChild(row(f,0)));
+}
+
+function goToFolder(path){
+  currentFolder = path;
+  currentPage = 'screens';
+  document.querySelectorAll('.sim-btn').forEach(b=>b.classList.toggle('active', b.dataset.page==='screens'));
+  render();
+}
+function selectPageNav(which){
+  currentFolder = which==='home' ? '' : null;
+  render();
+}
+function setPage(page, btn){
+  currentPage = page;
+  document.querySelectorAll('.sim-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  if(page==='screens' && currentFolder===undefined) currentFolder = null;
+  render();
+}
+
+function render(){
+  document.getElementById('icon-processes').classList.toggle('active', currentPage==='processes');
+  document.getElementById('icon-screens').classList.toggle('active', currentPage==='screens');
+  renderTree();
+  const main = document.getElementById('main');
+  if(currentPage==='processes'){
+    main.innerHTML = `
+      <div class="page-title">Processes</div>
+      <div class="page-sub">The folder tree is still visible in the outer bar, but there's no "All Screens"/"Home"/search here &mdash; those are Screens-page concepts, not global nav.</div>
+      <table>
+        <thead><tr><th>Process</th><th>Host</th><th>Started</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>game-server</td><td>host-01</td><td>09:12:03</td><td>running</td></tr>
+          <tr><td>editor</td><td>host-02</td><td>09:14:51</td><td>running</td></tr>
+          <tr><td>cook-worker</td><td>host-03</td><td>08:55:20</td><td>exited</td></tr>
+        </tbody>
+      </table>
+      <div class="callout"><strong>Trade-off:</strong> narrower outer bar (no room needed for All Screens/Home/search), but folder navigation now has two split entry points: the tree in the outer bar, and All Screens/Home/search inside the Screens page.</div>
+    `;
+  } else {
+    const label = currentFolder===null ? 'All Screens' : (currentFolder==='' ? 'Home' : currentFolder);
+    main.innerHTML = `
+      <div class="page-title">Screens</div>
+      <div class="screens-header">
+        <div class="page-nav-item ${currentFolder===null?'active':''}" onclick="selectPageNav('all')">All Screens</div>
+        <div class="page-nav-item ${currentFolder===''?'active':''}" onclick="selectPageNav('home')">Home</div>
+        <div class="page-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          Search screens &amp; folders
+        </div>
+      </div>
+      <div class="page-sub">Showing: <strong style="color:var(--text-primary)">${label}</strong></div>
+      <div class="grid">
+        <div class="card"><div class="name">latency-overview</div><div class="meta">Notebook &middot; updated 2d ago</div></div>
+        <div class="card"><div class="name">error-rates</div><div class="meta">Table &middot; updated 5h ago</div></div>
+        <div class="card"><div class="name">gc-pauses</div><div class="meta">Metrics &middot; updated 1d ago</div></div>
+      </div>
+    `;
+  }
+}
+
+render();
+</script>
+</body>
+</html>
