@@ -71,6 +71,12 @@ _ring_capacity: int = 32
 # misses them; check_redo_update() diffs against this baseline instead.
 _last_op_ptr: "int | None" = None
 _last_op_msg: "str | None" = None
+# Whether _last_op_msg was built from *readable* parameters. A baseline taken
+# while as_keywords() was failing carries no params section at all (or is None),
+# so it would differ from any later readable message purely because the section
+# appeared — indistinguishable from a real edit. check_redo_update() uses this
+# to re-baseline instead of reporting that non-difference as an update.
+_last_op_params_ok: bool = False
 
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
@@ -163,7 +169,7 @@ def _format_op(op, params=_UNSET) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_ptrs, _last_op_ptr, _last_op_msg
+    global _prev_op_ptrs, _last_op_ptr, _last_op_msg, _last_op_params_ok
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
@@ -203,13 +209,16 @@ def _poll_operators() -> None:
         _metric_i("blender.action_gap", "count", 1)
     n = 0
     newest_msg = None  # reused for the baseline below, so we format at most once
+    newest_params_ok = False
     for op, ptr in new_ops:
         try:
-            msg = _format_op(op)
+            params = _params_of(op)[0]
+            msg = _format_op(op, params)
             _log(_b.LEVEL_TRACE, "blender.action", msg)
             n += 1
             if ptr == cur_ptrs[-1]:
                 newest_msg = msg
+                newest_params_ok = params is not None
         except Exception:
             pass
     if n > 0:
@@ -227,15 +236,21 @@ def _poll_operators() -> None:
     if not ops:
         _last_op_ptr = None
         _last_op_msg = None
+        _last_op_params_ok = False
     elif cur_ptrs[-1] != _last_op_ptr:
         _last_op_ptr = cur_ptrs[-1]
         if newest_msg is not None:
-            _last_op_msg = newest_msg  # already formatted in the emit loop above
+            # already formatted in the emit loop above
+            _last_op_msg = newest_msg
+            _last_op_params_ok = newest_params_ok
         else:
             try:
-                _last_op_msg = _format_op(ops[-1])
+                params = _params_of(ops[-1])[0]
+                _last_op_msg = _format_op(ops[-1], params)
+                _last_op_params_ok = params is not None
             except Exception:
                 _last_op_msg = None
+                _last_op_params_ok = False
 
 
 def drain_operators() -> None:
@@ -257,11 +272,12 @@ def check_redo_update() -> bool:
     "undo" log, as before this function existed.
 
     Call from undo_post (and redo_post, in case some Blender version fires it
-    too) after _poll_operators has run for the poll. Returns True if a
-    redo-panel update was logged, so the caller skips the plain "undo" log
-    for the same event.
+    too). No preceding _poll_operators() call is required: the baseline only
+    ever advances when the newest pointer changes, so any number of interleaved
+    polls is safe. Returns True if a redo-panel update was logged, so the caller
+    skips the plain "undo" log for the same event.
     """
-    global _last_op_msg
+    global _last_op_msg, _last_op_params_ok
     try:
         ops = list(bpy.context.window_manager.operators)
     except Exception:
@@ -276,6 +292,14 @@ def check_redo_update() -> bool:
             return False
         msg = _format_op(newest, params)
     except Exception:
+        return False
+    if not _last_op_params_ok:
+        # The baseline was taken while the params were unreadable, so it carries
+        # no params section: any mismatch below would just be that section
+        # appearing, not a parameter change. Adopt the readable message as the
+        # baseline so subsequent edits *are* diffable, and report no update.
+        _last_op_msg = msg
+        _last_op_params_ok = True
         return False
     if msg == _last_op_msg:
         return False
@@ -367,7 +391,7 @@ def register() -> None:
 
 def unregister() -> None:
     global _prev_op_ptrs, _last_mode, _last_workspace, _last_tool, _last_addons
-    global _last_op_ptr, _last_op_msg
+    global _last_op_ptr, _last_op_msg, _last_op_params_ok
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
@@ -381,3 +405,4 @@ def unregister() -> None:
     _last_addons = None
     _last_op_ptr = None
     _last_op_msg = None
+    _last_op_params_ok = False

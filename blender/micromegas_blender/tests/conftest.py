@@ -13,12 +13,17 @@ import types
 
 import pytest
 
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # tests/ -> micromegas_blender/ -> blender/  (so `import micromegas_blender` works)
-_BLENDER_DIR = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+_BLENDER_DIR = os.path.dirname(os.path.dirname(_TESTS_DIR))
 if _BLENDER_DIR not in sys.path:
     sys.path.insert(0, _BLENDER_DIR)
+
+# This directory, so `import _op_helpers` works without relying on pytest's
+# default (prepend) import mode putting it there for us.
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
 
 
 def _make_fake_handlers() -> types.SimpleNamespace:
@@ -146,53 +151,23 @@ def fake_bpy():
     return bpy
 
 
-# --- operator-history helpers (shared by test_actions / test_redo_panel) ----
+# --- operator-history fixtures (shared by test_actions / test_redo_panel) ---
+# The test doubles themselves live in _op_helpers.py; only fixtures belong here.
 
 
-class FakeOp:
-    """Stand-in for a stored ``wm.operators`` history entry.
-
-    ``kw=None`` models the real case where a stored entry's parameters are
-    unreadable: ``as_keywords()`` raises rather than returning a dict.
-    """
-
-    def __init__(self, idname, name="", kw=None):
-        self.bl_idname = idname
-        self.name = name
-        self._kw = kw
-
-    def as_keywords(self):
-        if self._kw is None:
-            raise RuntimeError("params unavailable on stored history entry")
-        return self._kw
-
-    def as_pointer(self):
-        return id(self)
-
-
-class MacroSubOp:
-    """Stand-in for a macro's sub-operator reference: has bl_rna but not
-    as_keywords, per actions._is_macro_subop_ref."""
-
-    bl_rna = object()
-
-
-def set_ops(fake_bpy, ops) -> None:
-    """Replace the fake operator-history ring, oldest -> newest."""
-    fake_bpy.context.window_manager.operators = ops
-
-
-# Every cross-poll global in `actions`. Reset as a set so a test module can
-# never silently depend on state a sibling module left behind.
-_ACTIONS_POLL_STATE = (
-    "_prev_op_ptrs",
-    "_last_op_ptr",
-    "_last_op_msg",
-    "_last_mode",
-    "_last_workspace",
-    "_last_tool",
-    "_last_addons",
-)
+# Every cross-poll global in `actions`, with its module-level default. Reset as
+# a set so a test module can never silently depend on state a sibling module
+# left behind.
+_ACTIONS_POLL_STATE = {
+    "_prev_op_ptrs": None,
+    "_last_op_ptr": None,
+    "_last_op_msg": None,
+    "_last_op_params_ok": False,
+    "_last_mode": None,
+    "_last_workspace": None,
+    "_last_tool": None,
+    "_last_addons": None,
+}
 
 
 @pytest.fixture
@@ -205,7 +180,7 @@ def wired_actions(rec_lib, fake_bpy):
     from micromegas_blender import actions
 
     actions.set_context(rec_lib, object())
-    for name in _ACTIONS_POLL_STATE:
-        setattr(actions, name, None)
+    for name, default in _ACTIONS_POLL_STATE.items():
+        setattr(actions, name, default)
     yield actions
     actions.set_context(None, None)

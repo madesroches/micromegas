@@ -1,7 +1,7 @@
 """Tests for actions.py: operator-history drain (identity-based)."""
 
 import pytest
-from conftest import FakeOp, MacroSubOp, set_ops as _set_ops
+from _op_helpers import FakeOp, MacroSubOp, set_ops as _set_ops
 
 from micromegas_blender import actions
 

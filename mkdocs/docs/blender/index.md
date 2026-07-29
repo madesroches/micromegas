@@ -172,8 +172,7 @@ silently dropping them. Two metrics track capture health:
 - Undo / redo (DEBUG) — the "undo"/"redo" log is suppressed when the same event
   is instead recognized as a redo-panel edit and logged to
   `blender.action_redo` (see above)
-- Render start / complete / cancel
-- Frame change
+- Render start / complete — cancel is logged at WARN
 
 ### Python exceptions
 
