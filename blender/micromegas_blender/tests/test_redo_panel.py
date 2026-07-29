@@ -2,48 +2,20 @@
 undo_post (same wmOperator, new params) instead of redo_post."""
 
 import pytest
+from conftest import FakeOp, MacroSubOp, set_ops as _set_ops
 
 from micromegas_blender import actions, handlers
 
 
-class FakeOp:
-    def __init__(self, idname, name="", kw=None):
-        self.bl_idname = idname
-        self.name = name
-        self._kw = kw
-
-    def as_keywords(self):
-        if self._kw is None:
-            raise RuntimeError("params unavailable on stored history entry")
-        return self._kw
-
-    def as_pointer(self):
-        return id(self)
-
-
-class MacroSubOp:
-    """Stand-in for a macro's sub-operator reference: has bl_rna but not
-    as_keywords, per actions._is_macro_subop_ref."""
-
-    bl_rna = object()
-
-
 @pytest.fixture(autouse=True)
-def _wire(rec_lib, fake_bpy):
-    actions.set_context(rec_lib, object())
-    actions._prev_op_ptrs = None
-    actions._last_op_ptr = None
-    actions._last_op_msg = None
-    yield
-    actions.set_context(None, None)
-
-
-def _set_ops(fake_bpy, ops):
-    fake_bpy.context.window_manager.operators = ops
+def _wire(wired_actions):
+    pass
 
 
 def _redo_msgs(rec_lib):
-    return [msg for _lvl, target, msg in rec_lib.logs if target == "blender.action_redo"]
+    return [
+        msg for _lvl, target, msg in rec_lib.logs if target == "blender.action_redo"
+    ]
 
 
 def test_redo_update_detects_param_change_on_same_op(rec_lib, fake_bpy):
@@ -114,6 +86,19 @@ def test_redo_update_skips_macros(rec_lib, fake_bpy):
     assert _redo_msgs(rec_lib) == []
 
 
+def test_redo_update_skips_ops_with_unreadable_params(rec_lib, fake_bpy):
+    # kw=None -> as_keywords() raises, so there are no values to diff. Must not
+    # be mistaken for a parameter change even though the formatted message can
+    # differ from the baseline for unrelated reasons.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline, with params readable
+
+    op._kw = None  # params became unreadable
+    assert actions.check_redo_update() is False
+    assert _redo_msgs(rec_lib) == []
+
+
 def test_redo_update_emits_action_captured_metric(rec_lib, fake_bpy):
     op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
     _set_ops(fake_bpy, [op])
@@ -138,7 +123,9 @@ def test_on_undo_post_skips_plain_undo_log_on_redo_update(rec_lib, fake_bpy):
         op._kw = {"value": (5.0, 5.0, 5.0)}
         handlers._on_undo_post(fake_bpy.context.scene)
 
-        undo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"]
+        undo_logs = [
+            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"
+        ]
         assert undo_logs == []
         assert _redo_msgs(rec_lib)
     finally:
@@ -154,7 +141,9 @@ def test_on_undo_post_logs_plain_undo_when_no_redo_update(rec_lib, fake_bpy):
 
         handlers._on_undo_post(fake_bpy.context.scene)  # nothing changed
 
-        undo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"]
+        undo_logs = [
+            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"
+        ]
         assert undo_logs == ["undo"]
     finally:
         handlers.set_context(None, None)
@@ -170,7 +159,9 @@ def test_on_redo_post_skips_plain_redo_log_on_redo_update(rec_lib, fake_bpy):
         op._kw = {"value": (5.0, 5.0, 5.0)}
         handlers._on_redo_post(fake_bpy.context.scene)
 
-        redo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"]
+        redo_logs = [
+            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"
+        ]
         assert redo_logs == []
         assert _redo_msgs(rec_lib)
     finally:
@@ -186,7 +177,9 @@ def test_on_redo_post_logs_plain_redo_when_no_redo_update(rec_lib, fake_bpy):
 
         handlers._on_redo_post(fake_bpy.context.scene)  # nothing changed
 
-        redo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"]
+        redo_logs = [
+            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"
+        ]
         assert redo_logs == ["redo"]
     finally:
         handlers.set_context(None, None)

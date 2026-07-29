@@ -130,8 +130,9 @@ Two complementary streams:
   re-executes the same operator with new parameters via `undo_post` rather than
   `redo_post` — are detected separately and logged to `blender.action_redo` at
   TRACE level with the updated parameters. A detected redo-panel edit replaces
-  the `blender.lifecycle` "undo" log for that event (see below), since the
-  underlying fact is a parameter change, not an undo.
+  the `blender.lifecycle` "undo" log for that event — or the "redo" log, on any
+  Blender version that does route the edit through `redo_post` (see below) —
+  since the underlying fact is a parameter change, not an undo.
 - Mode / workspace / active-tool transitions → `blender.mode`,
   `blender.workspace`, `blender.tool` (TRACE).
 - Runtime add-on enable/disable → `blender.addon_state` (INFO) — a mid-session
@@ -165,10 +166,10 @@ silently dropping them. Two metrics track capture health:
     when parameters are unavailable the action is still logged with its `bl_idname`
     and name.
 
-### Lifecycle events (logged at INFO)
+### Lifecycle events (logged at INFO unless noted)
 
 - Blend file loaded / saved
-- Undo / redo — the "undo" log is suppressed when the same `undo_post` event
+- Undo / redo (DEBUG) — the "undo"/"redo" log is suppressed when the same event
   is instead recognized as a redo-panel edit and logged to
   `blender.action_redo` (see above)
 - Render start / complete / cancel

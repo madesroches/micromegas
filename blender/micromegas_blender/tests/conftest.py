@@ -144,3 +144,68 @@ def fake_bpy():
     bpy.context = _make_fake_context()
     bpy.data = types.SimpleNamespace(filepath="")
     return bpy
+
+
+# --- operator-history helpers (shared by test_actions / test_redo_panel) ----
+
+
+class FakeOp:
+    """Stand-in for a stored ``wm.operators`` history entry.
+
+    ``kw=None`` models the real case where a stored entry's parameters are
+    unreadable: ``as_keywords()`` raises rather than returning a dict.
+    """
+
+    def __init__(self, idname, name="", kw=None):
+        self.bl_idname = idname
+        self.name = name
+        self._kw = kw
+
+    def as_keywords(self):
+        if self._kw is None:
+            raise RuntimeError("params unavailable on stored history entry")
+        return self._kw
+
+    def as_pointer(self):
+        return id(self)
+
+
+class MacroSubOp:
+    """Stand-in for a macro's sub-operator reference: has bl_rna but not
+    as_keywords, per actions._is_macro_subop_ref."""
+
+    bl_rna = object()
+
+
+def set_ops(fake_bpy, ops) -> None:
+    """Replace the fake operator-history ring, oldest -> newest."""
+    fake_bpy.context.window_manager.operators = ops
+
+
+# Every cross-poll global in `actions`. Reset as a set so a test module can
+# never silently depend on state a sibling module left behind.
+_ACTIONS_POLL_STATE = (
+    "_prev_op_ptrs",
+    "_last_op_ptr",
+    "_last_op_msg",
+    "_last_mode",
+    "_last_workspace",
+    "_last_tool",
+    "_last_addons",
+)
+
+
+@pytest.fixture
+def wired_actions(rec_lib, fake_bpy):
+    """`actions` wired to the recording lib with all poll state reset.
+
+    Not autouse — modules that exercise `actions` opt in with a one-line autouse
+    fixture of their own, so unrelated test modules are left untouched.
+    """
+    from micromegas_blender import actions
+
+    actions.set_context(rec_lib, object())
+    for name in _ACTIONS_POLL_STATE:
+        setattr(actions, name, None)
+    yield actions
+    actions.set_context(None, None)
