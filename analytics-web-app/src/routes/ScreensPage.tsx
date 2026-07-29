@@ -11,7 +11,7 @@ import { AppLink } from '@/components/AppLink'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { FolderBreadcrumb } from '@/components/FolderBreadcrumb'
 import { FolderPickerModal } from '@/components/FolderPickerModal'
-import { normalizeFolderSegment } from '@/components/FolderTree'
+import { normalizeFolderSegment, parentOf } from '@/components/FolderTree'
 import {
   listScreens,
   getScreenTypes,
@@ -21,14 +21,9 @@ import {
   deleteScreen,
   ScreenApiError,
 } from '@/lib/screens-api'
-import { listFolders, createFolder, FolderInfo } from '@/lib/folders-api'
+import { listFolders, createFolder, screenMatchesQuery, FolderInfo } from '@/lib/folders-api'
 import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
 import { useMoveScreen } from '@/hooks/useMoveScreen'
-
-function parentPath(path: string): string {
-  const idx = path.lastIndexOf('/')
-  return idx === -1 ? '' : path.slice(0, idx)
-}
 
 function ScreensPageContent() {
   usePageTitle('Screens')
@@ -176,13 +171,11 @@ function ScreensPageContent() {
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q) return []
-    return screens
-      .filter((s) => s.name.toLowerCase().includes(q) || s.folder_path.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    return screens.filter((s) => screenMatchesQuery(s, q)).sort((a, b) => a.name.localeCompare(b.name))
   }, [screens, searchQuery])
 
   const directSubfolders = useMemo(
-    () => folders.filter((f) => parentPath(f.path) === selectedFolder).sort((a, b) => a.path.localeCompare(b.path)),
+    () => folders.filter((f) => parentOf(f.path) === selectedFolder).sort((a, b) => a.path.localeCompare(b.path)),
     [folders, selectedFolder]
   )
 

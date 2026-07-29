@@ -5,7 +5,7 @@
 
 use crate::app_db::{
     CreateFolderRequest, Folder, FolderInfo, UpdateFolderRequest, ValidationError,
-    validate_folder_path,
+    expand_path_prefixes, validate_folder_path,
 };
 use crate::auth::ValidatedUser;
 use axum::{
@@ -84,24 +84,6 @@ pub struct DeleteFolderParams {
 // Folder-info derivation (pure, DB-agnostic — takes flat query results)
 // ============================================================================
 
-/// Expands a path into the list of itself and all of its ancestors, including
-/// root (`""`). E.g. `"team/dashboards"` -> `["", "team", "team/dashboards"]`.
-fn expand_prefixes(path: &str) -> Vec<String> {
-    let mut result = vec![String::new()];
-    if !path.is_empty() {
-        let mut cur = String::new();
-        for segment in path.split('/') {
-            cur = if cur.is_empty() {
-                segment.to_string()
-            } else {
-                format!("{cur}/{segment}")
-            };
-            result.push(cur.clone());
-        }
-    }
-    result
-}
-
 fn ensure_entry(map: &mut HashMap<String, FolderInfo>, path: &str) {
     map.entry(path.to_string()).or_insert_with(|| FolderInfo {
         path: path.to_string(),
@@ -121,13 +103,13 @@ fn compute_folder_infos(
     ensure_entry(&mut map, "");
 
     for path in folder_paths {
-        for prefix in expand_prefixes(path) {
+        for prefix in expand_path_prefixes(path, true) {
             ensure_entry(&mut map, &prefix);
         }
     }
 
     for folder_path in screen_folder_paths {
-        for prefix in expand_prefixes(folder_path) {
+        for prefix in expand_path_prefixes(folder_path, true) {
             ensure_entry(&mut map, &prefix);
             map.get_mut(&prefix)
                 .expect("just inserted above")
@@ -137,7 +119,7 @@ fn compute_folder_infos(
 
     // subfolder_count: direct children only, over a snapshot of paths already
     // known at this point (every path's parent is guaranteed present, since
-    // expand_prefixes always walked down from root).
+    // expand_path_prefixes always walked down from root).
     let existing_paths: Vec<String> = map.keys().cloned().collect();
     for path in &existing_paths {
         if path.is_empty() {
@@ -235,10 +217,7 @@ pub async fn create_folder(
     // implicitly (via `compute_folder_infos`'s prefix derivation). Locked
     // shortest-prefix-first (root-to-leaf), matching `update_folder`'s
     // deadlock-avoidance convention.
-    for lock_path in expand_prefixes(&request.path)
-        .into_iter()
-        .filter(|p| !p.is_empty())
-    {
+    for lock_path in expand_path_prefixes(&request.path, false) {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
                 .bind(&lock_path)
@@ -299,15 +278,8 @@ pub async fn update_folder(
     // rename instead of racing past the `folder_exists` checks below. Lock
     // in a fixed order (sorted, deduped) to avoid lock-order deadlocks
     // between concurrent renames that cross paths.
-    let mut lock_paths: Vec<String> = expand_prefixes(&request.path)
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .collect();
-    lock_paths.extend(
-        expand_prefixes(&request.new_path)
-            .into_iter()
-            .filter(|p| !p.is_empty()),
-    );
+    let mut lock_paths: Vec<String> = expand_path_prefixes(&request.path, false);
+    lock_paths.extend(expand_path_prefixes(&request.new_path, false));
     lock_paths.sort_unstable();
     lock_paths.dedup();
     for lock_path in lock_paths {
@@ -409,7 +381,7 @@ pub async fn delete_folder(
     // while this handler reports it deleted). Locked shortest-prefix-first
     // (root-to-leaf), matching `create_folder`'s and `update_folder`'s
     // deadlock-avoidance convention.
-    for lock_path in expand_prefixes(&path).into_iter().filter(|p| !p.is_empty()) {
+    for lock_path in expand_path_prefixes(&path, false) {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
                 .bind(&lock_path)

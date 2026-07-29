@@ -5,7 +5,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useAuth } from '@/lib/auth'
 import { FolderTree, ancestorPaths, parentOf } from '@/components/FolderTree'
-import { listFolders, createFolder, moveFolder, deleteFolder, FolderInfo } from '@/lib/folders-api'
+import { listFolders, createFolder, moveFolder, deleteFolder, screenMatchesQuery, FolderInfo } from '@/lib/folders-api'
 import { listScreens, Screen, ScreenApiError } from '@/lib/screens-api'
 import { notifyFoldersChanged, useFoldersChangedListener } from '@/lib/folders-sync'
 import { useMoveScreen } from '@/hooks/useMoveScreen'
@@ -31,7 +31,7 @@ function computeMatchedFolders(screens: Screen[], query: string): Set<string> {
   const q = query.trim().toLowerCase()
   if (!q) return set
   for (const s of screens) {
-    if (s.name.toLowerCase().includes(q) || s.folder_path.toLowerCase().includes(q)) {
+    if (screenMatchesQuery(s, q)) {
       let cur = ''
       for (const part of s.folder_path.split('/')) {
         if (!part) continue

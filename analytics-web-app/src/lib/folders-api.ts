@@ -1,10 +1,15 @@
 import { authenticatedFetch, getApiBase } from './api'
-import { ApiErrorResponse, ScreenApiError } from './screens-api'
+import { ApiErrorResponse, Screen, ScreenApiError } from './screens-api'
 
 export interface FolderInfo {
   path: string
   screen_count: number
   subfolder_count: number
+}
+
+/** Whether `screen` matches a (lowercased, already-trimmed) search query by name or folder path. */
+export function screenMatchesQuery(screen: Screen, query: string): boolean {
+  return screen.name.toLowerCase().includes(query) || screen.folder_path.toLowerCase().includes(query)
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {

@@ -308,3 +308,29 @@ pub fn validate_folder_path(path: &str) -> Result<(), ValidationError> {
     }
     Ok(())
 }
+
+/// Expands `path` into itself and all of its ancestors, shortest first
+/// (root-to-leaf), e.g. `"team/sub"` -> `["team", "team/sub"]`. When
+/// `include_root` is true, the root (empty path) is prepended, e.g.
+/// `expand_path_prefixes("team/dashboards", true)` ->
+/// `["", "team", "team/dashboards"]`.
+pub fn expand_path_prefixes(path: &str, include_root: bool) -> Vec<String> {
+    let mut result = if include_root {
+        vec![String::new()]
+    } else {
+        Vec::new()
+    };
+    if path.is_empty() {
+        return result;
+    }
+    let mut cur = String::new();
+    for segment in path.split('/') {
+        cur = if cur.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{cur}/{segment}")
+        };
+        result.push(cur.clone());
+    }
+    result
+}

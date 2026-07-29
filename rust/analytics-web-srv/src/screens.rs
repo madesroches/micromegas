@@ -1,8 +1,8 @@
 //! Handlers for user-defined screens CRUD operations.
 
 use crate::app_db::{
-    CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_name,
-    validate_folder_path, validate_name,
+    CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, expand_path_prefixes,
+    normalize_name, validate_folder_path, validate_name,
 };
 use crate::auth::ValidatedUser;
 use crate::screen_types::ScreenType;
@@ -71,34 +71,15 @@ impl From<ValidationError> for ScreenError {
 
 type ScreenResult<T> = Result<T, ScreenError>;
 
-/// Expands `path` into itself and all of its non-root ancestors, shortest
-/// first (root-to-leaf), e.g. `"team/sub"` -> `["team", "team/sub"]`. Root
-/// (empty path) is excluded — it is never locked, matching `folder_exists`
-/// in folders.rs.
-///
-/// Locking every ancestor prefix (not just the exact destination path) is
-/// what makes `create_screen`/`update_screen` serialize against a concurrent
-/// `update_folder`/`delete_folder` on any ancestor folder: renaming/deleting
-/// "team" takes a lock on "team" alone, so a screen create/move into
-/// "team/sub" must also lock "team" (in addition to "team/sub") to contend
-/// on that same key — otherwise the two transactions target disjoint
-/// advisory-lock keys and can race under READ COMMITTED.
-fn ancestor_prefixes(path: &str) -> Vec<String> {
-    if path.is_empty() {
-        return Vec::new();
-    }
-    let mut result = Vec::new();
-    let mut cur = String::new();
-    for segment in path.split('/') {
-        cur = if cur.is_empty() {
-            segment.to_string()
-        } else {
-            format!("{cur}/{segment}")
-        };
-        result.push(cur.clone());
-    }
-    result
-}
+// Locking every ancestor prefix of a folder path (not just the exact
+// destination path, via `expand_path_prefixes(path, false)`) is what makes
+// `create_screen`/`update_screen` serialize against a concurrent
+// `update_folder`/`delete_folder` on any ancestor folder: renaming/deleting
+// "team" takes a lock on "team" alone, so a screen create/move into
+// "team/sub" must also lock "team" (in addition to "team/sub") to contend
+// on that same key — otherwise the two transactions target disjoint
+// advisory-lock keys and can race under READ COMMITTED. Root (empty path)
+// is excluded — it is never locked, matching `folder_exists` in folders.rs.
 
 // ============================================================================
 // Screen Types (static)
@@ -206,7 +187,7 @@ pub async fn create_screen(
     // the screen under a folder that was just renamed/deleted away. Locked
     // shortest-prefix-first (root-to-leaf), matching `update_folder`'s
     // sorted-order deadlock-avoidance convention.
-    for lock_path in ancestor_prefixes(&request.folder_path) {
+    for lock_path in expand_path_prefixes(&request.folder_path, false) {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
                 .bind(&lock_path)
@@ -292,8 +273,8 @@ pub async fn update_screen(
         .await?
         .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
-        let mut lock_paths: Vec<String> = ancestor_prefixes(&current_folder_path);
-        lock_paths.extend(ancestor_prefixes(new_folder_path));
+        let mut lock_paths: Vec<String> = expand_path_prefixes(&current_folder_path, false);
+        lock_paths.extend(expand_path_prefixes(new_folder_path, false));
         lock_paths.sort_unstable();
         lock_paths.dedup();
 
