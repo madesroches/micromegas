@@ -141,15 +141,31 @@ Scope identity (`name`, `version`, `schema_url`) and scope attributes land on pe
 
 ### Metrics → `measures`
 
-Sum and Gauge data points are materialized directly. Histogram, ExponentialHistogram, and Summary are skipped with a debug log in the current release — they will land in a follow-up that defines a histogram-aware schema.
+Sum, Gauge, and Summary data points are materialized. Sum/Gauge land as a single row each. Each Summary data point fans out into up to four rows — one per statistic (count, sum, min, max) — distinguished by a suffix on the metric **name** rather than a `properties` tag: `<metric>_count`, `<metric>_sum`, `<metric>_min`, `<metric>_max`. Any other `quantile_values` entry (a configured percentile like p90/p99) is skipped with a debug log, same as Histogram/ExponentialHistogram, which remain skipped entirely — a histogram-aware schema is future work.
 
 | OTel field | parquet column |
 |---|---|
-| `name` | `name` |
-| `unit` | `unit` |
+| `name` (Sum/Gauge), or `name` + `_count`/`_sum`/`_min`/`_max` (Summary) | `name` |
+| `unit` (`_count` rows always get `unit = ""`) | `unit` |
 | `value` (int widened to f64) | `value` |
 | `time_unix_nano` | `time` |
-| `aggregation_temporality`, `is_monotonic`, `otel.metric.kind` | `properties` |
+| `aggregation_temporality`, `is_monotonic`, `otel.metric.kind` (Sum/Gauge only — Summary rows add no `properties`) | `properties` |
+
+**Selecting one CloudWatch statistic:**
+
+```sql
+SELECT time, value
+FROM measures
+WHERE name = 'CPUUtilization_max'
+```
+
+**Grouping all statistics for a metric:**
+
+```sql
+SELECT time, name, value
+FROM measures
+WHERE name LIKE 'CPUUtilization\_%' ESCAPE '\'
+```
 
 ### Traces → `otel_spans`
 
@@ -384,6 +400,12 @@ the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose rout
 unwraps the envelope (gzip-aware, base64 records) and hands each record's bytes to the
 same decode/split/write path; records land in `measures`, same as native OTLP metrics.
 
+`opentelemetry1.0` output encodes every CloudWatch data point as an OTLP `Summary`, so each
+scrape of a metric lands as **4 rows under 4 distinct names** (`<metric>_count`, `_sum`,
+`_min`, `_max`) rather than 1 row under the base name — see
+[Metrics → `measures`](#metrics-measures) above. Any additional percentile statistics
+configured via `statistics_configuration` (p90, p99, ...) are not materialized.
+
 ### Requirement: OpenTelemetry 1.0.0 output format
 
 The Metric Stream **must** be configured with `OutputFormat: opentelemetry1.0` (or the
@@ -537,7 +559,7 @@ distinct log lines never collide.
 - **OTLP/HTTP only.** gRPC OTLP is not implemented; SDKs that default to gRPC need `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
 - **OTLP/JSON: string-encoded 64-bit fields required.** The OTLP/JSON spec mandates `"timeUnixNano"` and similar 64-bit integer fields as quoted strings (e.g. `"1700000000000000000"`). Bare JSON numbers are rejected. Conformant OTel SDKs and EventBridge input transformers produce the string form automatically.
 - **No mTLS / client certs.** Only bearer-token and OIDC auth.
-- **Histograms not yet materialized.** Sum and Gauge land in `measures`; Histogram, ExponentialHistogram, and Summary are skipped with a debug log.
+- **Histograms not yet materialized.** Sum, Gauge, and Summary (count/sum/min/max only) land in `measures`; Histogram and ExponentialHistogram are skipped with a debug log. Configured percentile statistics beyond min/max (e.g. p90/p99 from a CloudWatch `statistics_configuration`) are also skipped with a debug log.
 - **`otel_spans` is JIT-only and per-process.** Cross-process trace queries (`WHERE trace_id = X` across all services) need to UNION across each participating process.
 - **`parse_block` does not decode OTel payloads.** It returns a clean error on `format != "micromegas-transit"`.
 - **No per-tenant rate limiting.** Add at the load balancer if needed.

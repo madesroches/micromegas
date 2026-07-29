@@ -1,8 +1,11 @@
 //! `BlockProcessor` for OTLP `ResourceMetrics` payloads → `measures` rows.
 //!
-//! Handles Sum and Gauge data points; logs and skips Histogram, ExponentialHistogram,
-//! and Summary (deferred to v2 — see plan §"Histograms deferred"). Aggregation
-//! temporality and `is_monotonic` ride along on per-row properties.
+//! Handles Sum and Gauge data points directly, and Summary data points by fanning each
+//! one out into count/sum/min/max rows under suffixed metric names (`<metric>_count`,
+//! `_sum`, `_min`, `_max`); any other `quantile_values` entry (configured percentiles)
+//! is logged and dropped. Histogram and ExponentialHistogram are still logged and
+//! skipped — a histogram-aware schema is future work. Aggregation temporality and
+//! `is_monotonic` ride along on per-row properties for Sum/Gauge.
 
 use super::attrs::attrs_to_jsonb;
 use crate::lakehouse::{
@@ -23,8 +26,9 @@ use datafusion::arrow::record_batch::RecordBatch;
 use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
+use opentelemetry_proto::tonic::common::v1::KeyValue;
 use opentelemetry_proto::tonic::metrics::v1::{
-    NumberDataPoint, ResourceMetrics, metric::Data, number_data_point,
+    NumberDataPoint, ResourceMetrics, SummaryDataPoint, metric::Data, number_data_point,
 };
 use prost::Message;
 use std::borrow::Cow;
@@ -119,12 +123,9 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
                         );
                     }
                     Some(Data::Summary(s)) => {
-                        debug!(
-                            "OTel summary dropped (deprecated in OTel): name={} unit={} points={}",
-                            metric.name,
-                            metric.unit,
-                            s.data_points.len()
-                        );
+                        for dp in &s.data_points {
+                            builder.append_summary(&scope_name, &metric.name, &metric.unit, dp)?;
+                        }
                     }
                     None => {}
                 }
@@ -196,6 +197,43 @@ impl MeasuresRowBuilder {
         }
     }
 
+    /// Appends one `measures` row for an already-extracted point. Shared tail of
+    /// `append` (Sum/Gauge) and `append_summary` (Summary).
+    #[allow(clippy::too_many_arguments)]
+    fn append_row(
+        &mut self,
+        scope_name: &str,
+        metric_name: &str,
+        unit: &str,
+        time_nanos: i64,
+        attributes: &[KeyValue],
+        value: f64,
+        extras: &[(String, JsonbValue<'static>)],
+    ) -> Result<()> {
+        self.min_time = self.min_time.min(time_nanos);
+        self.max_time = self.max_time.max(time_nanos);
+
+        let props_jsonb = attrs_to_jsonb(attributes, extras);
+
+        self.process_ids.append(&self.process_id_str)?;
+        self.stream_ids.append(&self.stream_id_str)?;
+        self.block_ids.append(&self.block_id_str)?;
+        self.insert_times.append_value(self.insert_time_nanos);
+        self.exes.append(&self.process.exe)?;
+        self.usernames.append(&self.process.username)?;
+        self.computers.append(&self.process.computer)?;
+        self.times.append_value(time_nanos);
+        self.targets.append(scope_name)?;
+        self.names.append(metric_name)?;
+        self.units.append(unit)?;
+        self.values.append_value(value);
+        self.properties.append(&props_jsonb)?;
+        self.process_properties.append(&**self.process.properties)?;
+
+        self.nb_appended += 1;
+        Ok(())
+    }
+
     fn append(
         &mut self,
         scope_name: &str,
@@ -219,27 +257,83 @@ impl MeasuresRowBuilder {
             }
         };
 
-        self.min_time = self.min_time.min(time_nanos);
-        self.max_time = self.max_time.max(time_nanos);
+        self.append_row(
+            scope_name,
+            metric_name,
+            unit,
+            time_nanos,
+            &dp.attributes,
+            value,
+            extras,
+        )
+    }
 
-        let props_jsonb = attrs_to_jsonb(&dp.attributes, extras);
+    /// Fans a `SummaryDataPoint` out into rows for the four fixed statistics
+    /// (count, sum, min, max), each under its own suffixed metric name. Any
+    /// `quantile_values` entry other than `q=0.0`/`q=1.0` is logged and dropped —
+    /// configured percentiles are out of scope. No `properties`/`extras` are added
+    /// for Summary rows; the statistic lives entirely in `name`.
+    fn append_summary(
+        &mut self,
+        scope_name: &str,
+        metric_name: &str,
+        unit: &str,
+        dp: &SummaryDataPoint,
+    ) -> Result<()> {
+        let time_nanos = dp.time_unix_nano as i64;
+        if time_nanos == 0 {
+            debug!("OTel summary data point for {metric_name} dropped (time_unix_nano=0)");
+            return Ok(());
+        }
 
-        self.process_ids.append(&self.process_id_str)?;
-        self.stream_ids.append(&self.stream_id_str)?;
-        self.block_ids.append(&self.block_id_str)?;
-        self.insert_times.append_value(self.insert_time_nanos);
-        self.exes.append(&self.process.exe)?;
-        self.usernames.append(&self.process.username)?;
-        self.computers.append(&self.process.computer)?;
-        self.times.append_value(time_nanos);
-        self.targets.append(scope_name)?;
-        self.names.append(metric_name)?;
-        self.units.append(unit)?;
-        self.values.append_value(value);
-        self.properties.append(&props_jsonb)?;
-        self.process_properties.append(&**self.process.properties)?;
+        self.append_row(
+            scope_name,
+            &format!("{metric_name}_count"),
+            "",
+            time_nanos,
+            &dp.attributes,
+            dp.count as f64,
+            &[],
+        )?;
+        self.append_row(
+            scope_name,
+            &format!("{metric_name}_sum"),
+            unit,
+            time_nanos,
+            &dp.attributes,
+            dp.sum,
+            &[],
+        )?;
 
-        self.nb_appended += 1;
+        for q in &dp.quantile_values {
+            if q.quantile == 0.0 {
+                self.append_row(
+                    scope_name,
+                    &format!("{metric_name}_min"),
+                    unit,
+                    time_nanos,
+                    &dp.attributes,
+                    q.value,
+                    &[],
+                )?;
+            } else if q.quantile == 1.0 {
+                self.append_row(
+                    scope_name,
+                    &format!("{metric_name}_max"),
+                    unit,
+                    time_nanos,
+                    &dp.attributes,
+                    q.value,
+                    &[],
+                )?;
+            } else {
+                debug!(
+                    "OTel summary quantile dropped (only count/sum/min/max are materialized): \
+                     name={metric_name} quantile={}",
+                    q.quantile
+                );
+            }
+        }
         Ok(())
     }
 

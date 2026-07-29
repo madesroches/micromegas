@@ -98,10 +98,12 @@ fn spans_bounds(rs: &ResourceSpans) -> Option<(i64, i64, i32)> {
     }
 }
 
-/// Walks `ResourceMetrics` for min/max `time_unix_nano` across every Sum/Gauge/Histogram point.
-/// Histogram/ExponentialHistogram/Summary points still count toward bounds even though
-/// the v1 processor skips them — keeps block insert-time predicates consistent with
-/// payload contents.
+/// Walks `ResourceMetrics` for min/max `time_unix_nano` across every Sum/Gauge/Histogram/
+/// Summary point. Histogram/ExponentialHistogram points still count toward bounds even
+/// though the materialization processor drops them (bucket-level data doesn't fit a
+/// scalar `value` column); Summary now fans out count/sum/min/max (only non-min/max
+/// quantiles are dropped) — keeps block insert-time predicates consistent with payload
+/// contents either way.
 fn metrics_bounds(rm: &ResourceMetrics) -> Option<(i64, i64, i32)> {
     use crate::proto::metric::Data;
     let mut min = i64::MAX;

@@ -31,7 +31,8 @@ use micromegas_telemetry::types::block::BlockMetadata;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, any_value};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
-    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric, number_data_point,
+    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Summary, SummaryDataPoint,
+    metric, number_data_point, summary_data_point::ValueAtQuantile,
 };
 use prost::Message;
 use std::collections::HashMap;
@@ -416,4 +417,74 @@ async fn otel_metrics_block_processor_survives_target_dictionary_overflow() {
         .expect("process must not panic past the old Int16 dictionary cap");
     let row_set = result.expect("expected Some(row_set) for a non-empty block");
     assert_eq!(row_set.rows.num_rows(), OVERFLOW_COUNT);
+}
+
+/// Same as `otel_metrics_block_processor_survives_target_dictionary_overflow`, but drives
+/// the fan-out `append_summary`/`append_row` path (issue #1359) past the old Int16 cap:
+/// one distinct scope (→ `target`) per Summary data point, each fanning out to 4 rows
+/// (count/sum/min/max) under 4 distinct `name`s.
+#[tokio::test]
+async fn otel_metrics_block_processor_summary_survives_target_dictionary_overflow() {
+    let mut scope_metrics = Vec::with_capacity(OVERFLOW_COUNT);
+    for i in 0..OVERFLOW_COUNT {
+        scope_metrics.push(ScopeMetrics {
+            scope: Some(InstrumentationScope {
+                name: format!("scope-{i}"),
+                version: String::new(),
+                attributes: vec![],
+                dropped_attributes_count: 0,
+            }),
+            metrics: vec![Metric {
+                name: format!("metric-{i}"),
+                description: String::new(),
+                unit: "unit".to_string(),
+                metadata: vec![],
+                data: Some(metric::Data::Summary(Summary {
+                    data_points: vec![SummaryDataPoint {
+                        attributes: vec![],
+                        start_time_unix_nano: 0,
+                        time_unix_nano: i as u64 + 1,
+                        count: i as u64,
+                        sum: i as f64,
+                        quantile_values: vec![
+                            ValueAtQuantile {
+                                quantile: 0.0,
+                                value: 0.0,
+                            },
+                            ValueAtQuantile {
+                                quantile: 1.0,
+                                value: i as f64,
+                            },
+                        ],
+                        flags: 0,
+                    }],
+                })),
+            }],
+            schema_url: String::new(),
+        });
+    }
+    let resource_metrics = ResourceMetrics {
+        resource: None,
+        scope_metrics,
+        schema_url: String::new(),
+    };
+    let payload_bytes = resource_metrics.encode_to_vec();
+
+    let blob_storage = make_in_memory_blob_storage();
+    let src_block = make_source_block(
+        &blob_storage,
+        payload_bytes,
+        OVERFLOW_COUNT,
+        "otlp/v1/metrics",
+    )
+    .await
+    .expect("make_source_block");
+
+    let processor = OtelMetricsBlockProcessor {};
+    let result = processor
+        .process(blob_storage, src_block)
+        .await
+        .expect("process must not panic past the old Int16 dictionary cap");
+    let row_set = result.expect("expected Some(row_set) for a non-empty block");
+    assert_eq!(row_set.rows.num_rows(), OVERFLOW_COUNT * 4);
 }
