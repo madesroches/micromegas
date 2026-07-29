@@ -549,6 +549,47 @@ rule is unchanged either way — a HEAD that outruns the budget has equally stop
 optimization — but the percentiles differ and the env override exists so the default can be corrected
 without a redeploy.
 
+#### Calibrating `stall_timeout` (3s), and why it can't just be 500ms
+
+The obvious simplification is to delete `stall_timeout` and let the 500ms `abandon_timeout` bound the
+`/obj` body too — one budget instead of two. It doesn't work, and the reason is worth recording,
+because 500ms looks like ample headroom over a p50 of 36ms.
+
+`read_timeout` is sampled **once per response frame**, and a frame on this path is large:
+
+- One yielded chunk is one *demand window* — `DEMAND_WINDOW_BLOCKS` (8) × `DEFAULT_BLOCK_SIZE` (1 MiB)
+  = **8 MiB** (`range_cache/mod.rs:25-33`, `stream_ranges_inner` at `mod.rs:401-413`).
+- A window is fetched as one coalesced origin GET — 8 MiB is exactly
+  `DEFAULT_MAX_COALESCED_GET_BYTES` (`mod.rs:42`).
+- `stream_demand_windows` pipelines with `buffered(2)` (`mod.rs:445`), i.e. one window of lookahead.
+  That hides the fetch only while the client drains slower than the origin delivers; a local query
+  process drains faster, so in a large sequential read the gap is essentially exposed.
+
+So **every inter-frame gap in the `/obj` body is a full coalesced origin GET** — drawn from the very
+distribution above, whose observed max (575ms, in a 5-minute sample) *already* exceeds 500ms. Frame
+count then multiplies the exposure. Taking P(gap > 500ms) ≈ 0.5% (between the 311ms p99 and the 575ms
+max):
+
+| Read size | Frames | P(at least one gap > 500ms) |
+|---|---|---|
+| 64 MiB | 8 | ~4% |
+| 256 MiB | 32 | ~15% |
+| 1 GiB | 128 | ~47% |
+
+And past the first chunk each of those is a **hard query failure**, not a fallback (see "Why the `/obj`
+body's tail position is different"). That is the asymmetry that forbids reusing the 500ms here:
+`abandon_timeout` is sampled once per *request* and costs one direct read when it fires;
+a per-frame bound on this phase is sampled once per 8 MiB with nothing underneath it.
+
+At 3s the same arithmetic is negligible — 5.2x the observed max — and the bound reads as a throughput
+floor rather than a latency target: 8 MiB per 3s ≈ 2.7 MB/s. A cache delivering less than that has
+stopped streaming, which is exactly the liveness question this phase needs answered.
+
+The converse merge — 3s everywhere — is equally wrong: it would make hard-down detection 6x slower on
+every header phase, which is the whole point of issue #1360, and it would sit far above the direct-path
+cost the abandon rule is calibrated against. The two budgets measure different things (did the cache win
+the race? / is the cache still streaming?) and neither number serves both.
+
 #### The constants that are not env vars
 
 After dropping the backoff there are only two: `stall_timeout` (3s) and `total_timeout` (15s), plus the
