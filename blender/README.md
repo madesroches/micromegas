@@ -136,10 +136,12 @@ on every debug session.
 
 Turn on **Keep Alive (Dev Only)** in the add-on preferences to avoid it: on
 disable, the live session is parked instead of shut down, and the next enable
-in the same process reuses it (same `session_id`).  Once a session has been
-parked it is reused for the rest of the process's life even if the preference
-is later turned off, since there is no way to initialize a second one.  Leave
-the preference off for normal use.
+in the same process reuses it (same `session_id`).  A session that is already
+parked is reused on the next enable even if the preference has since been
+turned off, since a second one cannot be initialized.  Turning the preference
+off does still take effect, on the *following* disable — that one shuts the
+session down for good, and the add-on stays inactive until Blender is
+restarted.  Leave the preference off for normal use.
 
 ---
 
@@ -284,5 +286,5 @@ micromegas-query "SELECT time, level, target, msg FROM log_entries \
 | `native library not found` in console | `lib/` directory missing or wrong filename; rebuild and copy the `.so`/`.dll` |
 | `telemetry init failed` | `MICROMEGAS_TELEMETRY_URL` is unset or the server is unreachable at startup |
 | No rows in the server after a session | Server URL incorrect, or events are still buffered — wait 30 s for the periodic flush or restart Blender to trigger `mm_shutdown` |
-| Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender, or enable **Keep Alive (Dev Only)** in the add-on preferences to carry the session across a re-enable |
+| Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender. Turn on **Keep Alive (Dev Only)** in the add-on preferences *before* disabling to avoid it next time — enabling it after the fact does not bring the session back |
 | Add-on not listed after install | Zip wrapped the files in an extra parent directory; the zip must contain `blender_manifest.toml` and `__init__.py` at its root (not inside a `micromegas_blender/` folder) |

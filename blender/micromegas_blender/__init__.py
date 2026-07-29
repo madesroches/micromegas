@@ -295,8 +295,11 @@ def register():
         # A prior unregister() in this same process parked a live session
         # here (keep-alive) instead of shutting it down. Reuse it regardless
         # of the *current* keep_alive setting — mm_init cannot be called
-        # twice in one process, so once a session is parked it's the only
-        # working session for the rest of this process's life either way.
+        # twice in one process, so a parked session is the only one this
+        # process can ever have and reusing it always beats trying (and
+        # failing) to initialize a second. This does not make keep-alive
+        # sticky: turning the preference off still takes effect at the next
+        # unregister(), which shuts the session down for good.
         lib, handle, _session_id = cached
         delattr(sys, _STATE_ATTR)
     else:
@@ -314,14 +317,39 @@ def register():
                 "[Micromegas] telemetry init failed; add-on will be inactive. "
                 "If you just disabled and re-enabled the add-on, restart Blender — "
                 "the native telemetry layer initializes once per process and "
-                "cannot be reinitialized within the same session. Enable "
-                "Keep Alive in the add-on preferences to avoid this."
+                "cannot be reinitialized within the same session. Turning on "
+                "Keep Alive in the add-on preferences *before* disabling "
+                "avoids this; enabling it now will not bring the session back."
             )
             return
 
     _lib = lib
     _handle = handle
 
+    try:
+        _wire_up(lib, handle)
+    except Exception:
+        # The session above is live but this enable failed, and Blender will
+        # not call unregister() to clean it up: addon_utils.enable() sets
+        # __addon_enabled__ only after register() returns, disable() gates on
+        # that flag, and the failed module is dropped from sys.modules. Park
+        # the session so the *next* enable reuses it — mm_init cannot be
+        # called twice per process, so dropping it here would leave the add-on
+        # inactive until Blender restarts. That matters most in the dev-reload
+        # workflow keep-alive exists for, where _wire_up() freshly compiles
+        # every sub-module on each enable and one bad edit lands here.
+        setattr(sys, _STATE_ATTR, (lib, handle, _session_id))
+        _lib = None
+        _handle = None
+        raise
+
+
+def _wire_up(lib, handle) -> None:
+    """Point the sub-modules at the live session, install the hooks, arm the timer.
+
+    Split out of register() so a failure part-way through can re-park the live
+    session instead of losing it — see register()'s except branch.
+    """
     # Wire the sub-modules with the active lib + handle.
     from . import actions, crash_harvester, handlers, recorder
 

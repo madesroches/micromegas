@@ -84,9 +84,11 @@ inactive until Blender is restarted — which tooling that re-enables the add-on
 on every launch (notably the VS Code *Blender Development* extension) hits on
 every debug session.  With **Keep Alive** on, the live session is parked on
 disable instead of shut down and the next enable in the same process reuses it
-(same `session_id`).  Once a session has been parked it is reused for the rest
-of the process's life even if the preference is later turned off, since there is
-no way to initialize a second one.
+(same `session_id`).  A session that is already parked is reused on the next
+enable even if the preference has since been turned off, since a second one
+cannot be initialized.  Turning the preference off does still take effect, on
+the *following* disable — that one shuts the session down for good, and the
+add-on stays inactive until Blender is restarted.
 
 ## What is captured
 
@@ -273,8 +275,9 @@ manual install steps above.
 
 The native telemetry layer initializes once per process and cannot be
 reinitialized, so `telemetry init failed` is printed on the second enable.
-Restart Blender, or enable **Keep Alive (Dev Only)** in the add-on preferences
-to carry the session across a re-enable (see
+Restart Blender.  To avoid it next time, turn on **Keep Alive (Dev Only)** in
+the add-on preferences *before* disabling — enabling it after the session has
+already been shut down does not bring it back (see
 [Add-on preferences](#add-on-preferences)).
 
 **Multiple Blender instances — will they conflict?**

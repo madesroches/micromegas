@@ -11,6 +11,8 @@ __init__._is_keep_alive_enabled / _STATE_ATTR.
 import importlib
 import sys
 
+import pytest
+
 import micromegas_blender as mm
 
 _PKG = "micromegas_blender"
@@ -46,10 +48,25 @@ def _set_keep_alive(fake_bpy, enabled: bool) -> None:
     addons[mm.__package__] = prefs()
 
 
+@pytest.fixture(autouse=True)
+def _restore_excepthook():
+    """Keep a register()'s sys.excepthook swap from outliving the test.
+
+    register() installs the telemetry excepthook and not every test here pairs
+    it with an unregister(); the fresh-namespace test additionally purges the
+    module the installed hook belongs to, which would otherwise leave
+    sys.excepthook pointing into a dead namespace for the rest of the process.
+    """
+    saved = sys.excepthook
+    yield
+    sys.excepthook = saved
+
+
 def _clear_state():
     mm._lib = None
     mm._handle = None
     mm._session_id = ""
+    mm._prev_excepthook = None
     for attr in (mm._STATE_ATTR, mm._ATEXIT_HOOK_ATTR):
         if hasattr(sys, attr):
             delattr(sys, attr)
@@ -179,6 +196,94 @@ def test_shutdown_falls_back_to_sys_cache(fake_bpy, monkeypatch):
 
         assert lib.shutdown_calls == 1
         assert not hasattr(sys, mm._STATE_ATTR)
+    finally:
+        _clear_state()
+
+
+def _boom_load_lib():
+    raise AssertionError("_load_lib should not be called on cached re-register")
+
+
+def test_register_failure_reparks_the_session_for_the_next_enable(
+    fake_bpy, monkeypatch
+):
+    """A register() that raises after taking the session must not lose it.
+
+    Blender never calls unregister() for a failed enable — addon_utils.enable()
+    sets __addon_enabled__ only after register() returns, disable() gates on
+    that flag, and the failed module is dropped from sys.modules. So if
+    register() let go of the live session on its way out, mm_init could never
+    run again and the add-on would be dead until Blender restarts: exactly what
+    keep-alive exists to prevent. This is a live path in the dev-reload
+    workflow, where _wire_up() freshly compiles every sub-module on each enable
+    and one bad edit lands here.
+    """
+    _clear_state()
+    _set_keep_alive(fake_bpy, True)
+    lib = CountingLib()
+    real_wire_up = mm._wire_up
+    try:
+        _register_with_lib(monkeypatch, lib)
+        session_id = mm._session_id
+        mm.unregister()  # keep-alive: session parked on sys
+
+        def _boom(_lib, _handle):
+            raise RuntimeError("bad edit in a sub-module")
+
+        monkeypatch.setattr(mm, "_wire_up", _boom)
+        monkeypatch.setattr(mm, "_load_lib", _boom_load_lib)
+        with pytest.raises(RuntimeError):
+            mm.register()
+
+        # Session still live, re-parked, and the module globals left clean.
+        assert lib.shutdown_calls == 0
+        assert mm._lib is None
+        assert mm._handle is None
+        cached = getattr(sys, mm._STATE_ATTR, None)
+        assert cached is not None
+        assert cached[0] is lib
+        assert cached[2] == session_id
+
+        # The next enable picks it back up — no second mm_init.
+        monkeypatch.setattr(mm, "_wire_up", real_wire_up)
+        mm.register()
+        assert lib.init_calls == 1
+        assert mm._lib is lib
+        assert mm._session_id == session_id
+    finally:
+        _clear_state()
+
+
+def test_register_failure_parks_a_freshly_created_session(fake_bpy, monkeypatch):
+    """Same recovery when the failing enable is the one that created the session.
+
+    There is no prior park here — the session was just mm_init'd — but it is
+    still the only one this process can ever have, so it must be parked rather
+    than dropped.
+    """
+    _clear_state()
+    _set_keep_alive(fake_bpy, False)
+    lib = CountingLib()
+    real_wire_up = mm._wire_up
+    try:
+
+        def _boom(_lib, _handle):
+            raise RuntimeError("bad edit in a sub-module")
+
+        monkeypatch.setattr(mm, "_wire_up", _boom)
+        monkeypatch.setattr(mm, "_load_lib", lambda: lib)
+        with pytest.raises(RuntimeError):
+            mm.register()
+
+        assert lib.init_calls == 1
+        assert lib.shutdown_calls == 0
+        assert getattr(sys, mm._STATE_ATTR, None) is not None
+
+        monkeypatch.setattr(mm, "_wire_up", real_wire_up)
+        monkeypatch.setattr(mm, "_load_lib", _boom_load_lib)
+        mm.register()
+        assert lib.init_calls == 1  # reused, not re-initialized
+        assert mm._lib is lib
     finally:
         _clear_state()
 
