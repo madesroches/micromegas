@@ -337,6 +337,7 @@ def register() -> None:
 
 def unregister() -> None:
     global _prev_op_ptrs, _last_mode, _last_workspace, _last_tool, _last_addons
+    global _last_op_ptr, _last_op_msg
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
@@ -348,3 +349,5 @@ def unregister() -> None:
     _last_workspace = None
     _last_tool = None
     _last_addons = None
+    _last_op_ptr = None
+    _last_op_msg = None
