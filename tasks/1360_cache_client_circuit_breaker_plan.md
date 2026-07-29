@@ -68,12 +68,21 @@ convert cold-cache slowness into user-visible errors.
 
 ### Where the header phase spends its time
 
-The server commits before streaming — `get_range_handler_inner` resolves `size()`, waits for a
-memory-budget permit, then awaits the first chunk before building the response
-(`rust/object-cache-srv/src/handlers.rs:282-395`, "Commit-before-stream"). So time-to-headers is
-exactly the quantity that includes the origin fetch and permit wait, and it is what the client
-already measures as `range_cache_client_roundtrip_ms`. Bounding *that* is both the right signal and
-the safe place to abort, since aborting there lands in the existing fallback.
+The server commits before streaming, but only on the `GET /obj` path: `get_range_handler_inner`
+resolves `size()`, waits for a memory-budget permit, then awaits the first chunk before building the
+response (`rust/object-cache-srv/src/handlers.rs:282-395`, "Commit-before-stream"). So on that path
+time-to-headers is exactly the quantity that includes the origin fetch and permit wait, and it is what
+the client already measures as `range_cache_client_roundtrip_ms`. Bounding *that* is both the right
+signal and the safe place to abort, since aborting there lands in the existing fallback.
+
+`POST /ranges` does **not** share this property. `post_ranges_handler_inner` awaits `framed.next()`
+(`handlers.rs:~598`), but `frame_ranges_stream` (`handlers.rs:147-169`) yields the first range's 8-byte
+little-endian length prefix before it ever polls the underlying block stream, and `stream_ranges_inner`
+(`rust/object-cache/src/range_cache/mod.rs:381-414`) is a lazy `try_stream!` that fetches nothing until
+first polled. So `/ranges` time-to-headers is key validation + `size()` + memory-permit wait only — the
+block/origin fetch happens entirely after the length prefix has already been sent, i.e. in the body
+phase. A 500ms header-phase timeout on this path detects nothing about origin/backend health; the
+`get_ranges` client method has to be bounded end-to-end instead (see below).
 
 ### Single instance per process
 
@@ -89,14 +98,25 @@ sharding.
 | Phase | Budget | On expiry |
 |---|---|---|
 | Connect | 50ms (`connect_timeout`) | reqwest error → unresponsive → fallback |
-| Request → response headers | 500ms (`tokio::time::timeout` around `send()`) | future dropped → unresponsive → fallback |
-| Response body | 15s total deadline (`ClientBuilder::timeout`, unchanged) | stream error; recoverable only pre-first-chunk |
+| `get_opts`/`head_size`/`prefetch`: request → response headers | 500ms (`tokio::time::timeout` around `send()`) | future dropped → unresponsive → fallback |
+| `get_ranges`: request → fully-reassembled body | 500ms (`tokio::time::timeout` around `send()` **and** `read_framed_ranges`) | future dropped → unresponsive → fallback |
+| `get_opts`/`head_size`/`prefetch` response body | 15s total deadline (`ClientBuilder::timeout`, unchanged) | stream error; recoverable only pre-first-chunk |
 
 This deviates from the issue's wording ("total request timeout: 500ms") for the reason above: a 500ms
-`ClientBuilder::timeout` would kill every legitimate multi-megabyte read. Wrapping only `send()` in
-`tokio::time::timeout` bounds precisely the header phase — the phase the issue's latency measurements
-describe and the phase where abandoning is safe — while leaving body streaming on the existing 15s
+`ClientBuilder::timeout` would kill every legitimate multi-megabyte read. For the streaming `get_opts`/
+`head_size`/`prefetch` paths, wrapping only `send()` in `tokio::time::timeout` bounds precisely the
+header phase — the phase where abandoning is safe — while leaving body streaming on the existing 15s
 total deadline. Dropping the `send()` future cancels the request and releases the connection.
+
+`get_ranges` needs a different cut: as established above, `/ranges` commits its response headers
+*before* any origin fetch, so a header-only timeout gives it no fast-fail protection at all — the
+block/origin fetch lands entirely in the body phase, unbounded until the 15s total deadline. But
+`read_framed_ranges` (`client.rs:400-412`) is a plain `Future`, not a `Stream`: it exposes nothing to
+the caller until every range has been fully reassembled (`client.rs:613-624`), so aborting it mid-way is
+just as safe as aborting a header wait — nothing has been handed to the query engine yet. So for
+`get_ranges` the 500ms `tokio::time::timeout` wraps `send()` *and* `read_framed_ranges` together,
+covering the whole request including the origin fetch, and a timeout there reports `unresponsive` to
+the breaker exactly like a header-phase timeout on the other paths.
 
 ### The breaker
 
@@ -146,6 +166,14 @@ struct State {
     cooldown: Duration,
     /// `Some(t)` => open: bypass until `t`, then admit one probe.
     open_until: Option<Instant>,
+    /// Whether this open window has already doubled the cooldown once. Every
+    /// request admitted before the trip is still in flight when it opens, and
+    /// each one reports `unresponsive` shortly after; without this flag each
+    /// of those stale reports would be read as its own failed probe and the
+    /// cooldown would compound straight to `max_cooldown` before the real
+    /// probe is ever admitted. Reset to `false` whenever `admit_at` opens a
+    /// fresh window (a genuine trip or a newly-admitted probe).
+    backoff_applied: bool,
 }
 ```
 
@@ -174,27 +202,45 @@ admit_at(now):
     match open_until:
         None                 => Allow
         Some(t) if now < t   => Bypass
-        Some(_)              => { open_until = Some(now + cooldown); Probe }
+        Some(_)              => {
+            open_until = Some(now + cooldown);
+            backoff_applied = false;                    // fresh probe window
+            Probe
+        }
 
 record_responsive_at(_):
     let was_open = open_until.is_some();
     consecutive = 0; cooldown = initial_cooldown; open_until = None;
+    backoff_applied = false;
     if was_open { Closed } else { None }
 
 record_unresponsive_at(now):
-    if open_until.is_some() {                            // a probe failed
-        cooldown = min(cooldown * 2, max_cooldown);
-        open_until = Some(now + cooldown);
-        Backoff { cooldown }
+    if open_until.is_some() {
+        if backoff_applied {
+            None                                         // stale report, already handled this window
+        } else {
+            cooldown = min(cooldown * 2, max_cooldown);
+            open_until = Some(now + cooldown);
+            backoff_applied = true;
+            Backoff { cooldown }
+        }
     } else {
         consecutive += 1;
         if failure_threshold > 0 && consecutive >= failure_threshold {
             cooldown = initial_cooldown;
             open_until = Some(now + cooldown);
+            backoff_applied = false;                     // opening trip itself doesn't count as the probe's backoff
             Opened { cooldown }
         } else { None }
     }
 ```
+
+The flag makes the cooldown doubling idempotent per open window: the *first* unresponsive report that
+arrives while `open_until.is_some()` doubles the cooldown (whether it's a genuine probe failure or a
+stale pre-trip request still draining), but every other report arriving before the next probe is
+admitted is a no-op. This bounds the trip to exactly one doubling (100ms → 200ms) regardless of how
+many requests were in flight at the moment of the trip, instead of up to nine stale reports compounding
+straight to `max_cooldown`.
 
 Two properties worth calling out:
 
@@ -228,6 +274,15 @@ async fn send(&self, req: reqwest::RequestBuilder, what: &str) -> Result<reqwest
     }
 }
 ```
+
+`get_ranges` is the one caller that does **not** use `send` as-is: as established above, its response
+headers arrive before the origin fetch, so reporting `record_responsive` the moment `send()` resolves
+would tell the breaker the cache is healthy before the part that actually fails has even started. It
+instead calls a `send_ranges` variant that wraps `req.send()` *and* `read_framed_ranges` in one
+`tokio::time::timeout(self.config.header_timeout, ...)`, and reports `record_responsive` /
+`record_unresponsive` on that combined outcome — safe because `read_framed_ranges` exposes nothing to
+the caller until it fully resolves, so dropping the timed-out future is exactly as recoverable as
+dropping `send()`'s future, and falls back through the same existing `get_ranges` fallback arms.
 
 **One admission gate per public entry point** — `get_opts`, `get_ranges`, `prefetch`. Preconditioned
 requests keep short-circuiting to `direct` before the gate (they never use the cache anyway):
@@ -286,6 +341,21 @@ pub struct CacheClientConfig {
 `with_config(url, api_key, direct, CacheClientConfig::from_env())`, so `make_cache` and the existing
 tests are untouched.
 
+50ms is calibrated for the only deployment this client documents: `mkdocs/docs/admin/object-cache.md`'s
+**Client opt-in** section sets `MICROMEGAS_OBJECT_CACHE_URL=http://object-cache:8080` — plaintext,
+intra-VPC — and its **Authentication** section requires the cache be bound to a private network
+(security group / `NetworkPolicy`) with no public role at all; there is no TLS or cross-zone deployment
+anywhere in-tree for this client. A TLS or cross-zone deployment raises the budget via
+`MICROMEGAS_OBJECT_CACHE_CLIENT_CONNECT_TIMEOUT_MS`.
+
+`initial_cooldown` (100ms) and `max_cooldown` (30s) stay named constants backing
+`CircuitBreakerConfig::default()`, not env vars, mirroring `L1_TOTAL_FETCH_PERMITS` /
+`L1_DEMAND_RESERVED_FETCH_PERMITS` in `l1_store.rs:36-40`: that tier exposes only its one
+operator-meaningful knob (`MICROMEGAS_OBJECT_CACHE_L1_MB`) and keeps its secondary tuning private. Here
+too, one knob is operator-meaningful (the threshold — `..._BREAKER_THRESHOLD=0` is the escape hatch if
+the breaker misbehaves in production) while the cooldown schedule is a tuning-not-a-decision surface;
+tests construct `CircuitBreakerConfig` directly (zero/huge cooldowns) rather than needing the env path.
+
 Three operator overrides, parsed with the `warn`-and-default pattern from
 `l1_store.rs:49-57` (factored into a small private `env_millis`/`env_u32` helper rather than repeated
 three times):
@@ -329,9 +399,11 @@ State transitions log once (not once per request), so an outage doesn't flood:
 5. Add `with_config`; make `new` delegate to it. Store `config` and `breaker: CircuitBreaker` on
    `CacheClientStore`. Build the `reqwest::Client` with `connect_timeout(config.connect_timeout)` and
    `timeout(config.total_timeout)`.
-6. Add the `send` helper and route all five `.send()` sites through it. Note `get_ranges` currently
-   matches on `Ok(r)` / `Ok(r) if success` / `Err(e)`; it becomes a match on
-   `Result<reqwest::Response>` plus the status check.
+6. Add the `send` helper and route `get_range_stream`, `get_full_stream`, `head_size`, and `prefetch`
+   through it. Add the `send_ranges` variant (wraps `send()` + `read_framed_ranges` in one
+   `header_timeout` deadline, reports the combined outcome) and route `get_ranges` through it instead.
+   Note `get_ranges` currently matches on `Ok(r)` / `Ok(r) if success` / `Err(e)`; it becomes a match on
+   `Result<Vec<Bytes>>` plus the status check folded into `send_ranges`'s error.
 
 ### Phase 3 — the gate
 
@@ -378,7 +450,11 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
 - **A stale success can close the circuit early.** A request admitted before the trip, completing
   successfully after it, reports `Closed`. Tracking a probe epoch would prevent that, but a fresh
   response is genuine liveness evidence, and the cost of acting on it is one more 500ms detection
-  cycle. Symmetrically, a stale failure while open triggers a `Backoff` it didn't strictly earn.
+  cycle. Symmetrically, a stale failure while open can trigger a `Backoff` it didn't strictly earn —
+  but only the *first* one: `backoff_applied` makes the doubling idempotent per open window, so however
+  many pre-trip requests are still draining when the circuit opens, at most one unearned doubling
+  happens before the next real probe is admitted, rather than each of them compounding the cooldown in
+  turn.
 - **`Mutex` over atomics** — see above; correctness and readability over an unmeasurable win.
 - **Hand-rolled, not a crate.** `failsafe`/`circuitbreaker-rs` would add a dependency for ~80 lines,
   and neither offers the injected-clock testability this needs.
@@ -418,8 +494,10 @@ Synthetic clock (`let base = Instant::now()` then `base + Duration::from_millis(
 - Trips at exactly `failure_threshold` consecutive failures; `Transition::Opened` reported once.
 - `Bypass` for the whole cooldown; at `open_until` exactly one `Probe`, and an immediate second
   `admit_at` at the same instant returns `Bypass`.
-- Failed probe → `Backoff` with doubled cooldown; repeated failures saturate at `max_cooldown` and
-  never exceed it.
+- Failed probe → `Backoff` with doubled cooldown; repeated `admit_at`/fail cycles saturate at
+  `max_cooldown` and never exceed it.
+- A second `record_unresponsive_at` in the *same* open window (no intervening `admit_at`) is a no-op —
+  `Transition::None`, cooldown unchanged — covering the stale in-flight-failures case.
 - Successful probe → `Closed`, `Allow` afterwards, and the cooldown resets to `initial_cooldown`
   (verified by re-tripping and observing 100ms again, not 30s).
 - `failure_threshold: 0` → always `Allow`, never opens.
@@ -469,8 +547,3 @@ workspace.
    per cooldown, up to the 30s cap — the cache can only rewarm from prefetch/write-time warming, and
    demand-driven warming stalls. Acceptable, or should the max cooldown be lower (5s), or should
    prefetch requests be exempt from the gate so a bypassed cache still warms?
-3. **50ms connect timeout** assumes plaintext intra-VPC (`http://object-cache:8080`, sub-millisecond
-   RTT). A TLS or cross-zone deployment needs more; the env override covers it, but is 50ms the right
-   default to ship?
-4. Should `initial_cooldown` / `max_cooldown` also be env-tunable, or is the threshold plus the
-   timeouts enough operator surface?
