@@ -6,7 +6,7 @@
 
 CloudWatch Metric Streams configured for `opentelemetry1.0` output encode every data point as
 an OTLP `Summary`, which `OtelMetricsBlockProcessor` currently drops with a `debug!` log. The
-route added in #1299/#1300 therefore accepts CloudWatch metric payloads, acks 200, and writes
+route added in #1299 (PR #1304) therefore accepts CloudWatch metric payloads, acks 200, and writes
 zero rows to `measures` — silently. This plan makes `Summary` materialize: each
 `SummaryDataPoint` fans out into exactly four `measures` rows — count, sum, min, max — as four
 distinct metric **names** (`<metric>_count`, `<metric>_sum`, `<metric>_min`, `<metric>_max`), and
