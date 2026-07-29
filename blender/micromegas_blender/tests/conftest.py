@@ -184,3 +184,17 @@ def wired_actions(rec_lib, fake_bpy):
         setattr(actions, name, default)
     yield actions
     actions.set_context(None, None)
+
+
+@pytest.fixture
+def wired_handlers(rec_lib, fake_bpy):
+    """`handlers` wired to the recording lib, unwired again on teardown.
+
+    Separate from `wired_actions` so a test can wire either side alone; the
+    handler tests that cross into `actions` request both.
+    """
+    from micromegas_blender import handlers
+
+    handlers.set_context(rec_lib, object())
+    yield handlers
+    handlers.set_context(None, None)

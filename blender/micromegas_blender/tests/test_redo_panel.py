@@ -4,7 +4,7 @@ undo_post (same wmOperator, new params) instead of redo_post."""
 import pytest
 from _op_helpers import FakeOp, MacroSubOp, set_ops as _set_ops
 
-from micromegas_blender import actions, handlers
+from micromegas_blender import actions
 
 
 @pytest.fixture(autouse=True)
@@ -140,6 +140,44 @@ def test_redo_update_returns_false_with_no_ops(rec_lib, fake_bpy):
     assert actions.check_redo_update() is False
 
 
+def test_redo_update_survives_stale_rna_reference(rec_lib, fake_bpy, wired_handlers):
+    # check_redo_update() runs straight off undo_post, whose handler has no
+    # try/except of its own, so a stale RNA reference (as_pointer() raising
+    # ReferenceError) must be swallowed here rather than escaping into Blender.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
+
+    def _removed():
+        raise ReferenceError("StructRNA of type Operator has been removed")
+
+    op.as_pointer = _removed
+
+    assert actions.check_redo_update() is False
+    # The handler still logs the plain "undo" rather than blowing up.
+    wired_handlers._on_undo_post(fake_bpy.context.scene)
+    assert _lifecycle_msgs(rec_lib, "undo") == ["undo"]
+
+
+def test_poll_clears_baseline_when_ring_empties(rec_lib, fake_bpy):
+    # A cleared ring (e.g. on file load) must drop the baseline entirely, not
+    # leave it pointing at a freed wmOperator whose address a later entry could
+    # reuse — that would diff a new operator against a dead one's message.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
+    assert actions._last_op_ptr == op.as_pointer()
+    assert actions._last_op_msg is not None
+    assert actions._last_op_params_ok is True
+
+    _set_ops(fake_bpy, [])
+    actions._poll_operators()
+
+    assert actions._last_op_ptr is None
+    assert actions._last_op_msg is None
+    assert actions._last_op_params_ok is False
+
+
 def test_redo_update_skips_macros(rec_lib, fake_bpy):
     op = FakeOp("OBJECT_OT_duplicate_move", kw={"TRANSFORM_OT_translate": MacroSubOp()})
     _set_ops(fake_bpy, [op])
@@ -177,73 +215,57 @@ def test_redo_update_emits_action_captured_metric(rec_lib, fake_bpy):
     assert captured == [("blender.action_captured", "count", 1)]
 
 
-def test_on_undo_post_skips_plain_undo_log_on_redo_update(rec_lib, fake_bpy):
-    handlers.set_context(rec_lib, object())
-    try:
-        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
-        _set_ops(fake_bpy, [op])
-        actions._poll_operators()  # baseline
-
-        op._kw = {"value": (5.0, 5.0, 5.0)}
-        handlers._on_undo_post(fake_bpy.context.scene)
-
-        undo_logs = [
-            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"
-        ]
-        assert undo_logs == []
-        assert _redo_msgs(rec_lib)
-    finally:
-        handlers.set_context(None, None)
+def _lifecycle_msgs(rec_lib, msg):
+    return [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == msg]
 
 
-def test_on_undo_post_logs_plain_undo_when_no_redo_update(rec_lib, fake_bpy):
-    handlers.set_context(rec_lib, object())
-    try:
-        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
-        _set_ops(fake_bpy, [op])
-        actions._poll_operators()  # baseline
+def test_on_undo_post_skips_plain_undo_log_on_redo_update(
+    rec_lib, fake_bpy, wired_handlers
+):
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
 
-        handlers._on_undo_post(fake_bpy.context.scene)  # nothing changed
+    op._kw = {"value": (5.0, 5.0, 5.0)}
+    wired_handlers._on_undo_post(fake_bpy.context.scene)
 
-        undo_logs = [
-            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "undo"
-        ]
-        assert undo_logs == ["undo"]
-    finally:
-        handlers.set_context(None, None)
+    assert _lifecycle_msgs(rec_lib, "undo") == []
+    assert _redo_msgs(rec_lib)
 
 
-def test_on_redo_post_skips_plain_redo_log_on_redo_update(rec_lib, fake_bpy):
-    handlers.set_context(rec_lib, object())
-    try:
-        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
-        _set_ops(fake_bpy, [op])
-        actions._poll_operators()  # baseline
+def test_on_undo_post_logs_plain_undo_when_no_redo_update(
+    rec_lib, fake_bpy, wired_handlers
+):
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
 
-        op._kw = {"value": (5.0, 5.0, 5.0)}
-        handlers._on_redo_post(fake_bpy.context.scene)
+    wired_handlers._on_undo_post(fake_bpy.context.scene)  # nothing changed
 
-        redo_logs = [
-            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"
-        ]
-        assert redo_logs == []
-        assert _redo_msgs(rec_lib)
-    finally:
-        handlers.set_context(None, None)
+    assert _lifecycle_msgs(rec_lib, "undo") == ["undo"]
 
 
-def test_on_redo_post_logs_plain_redo_when_no_redo_update(rec_lib, fake_bpy):
-    handlers.set_context(rec_lib, object())
-    try:
-        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
-        _set_ops(fake_bpy, [op])
-        actions._poll_operators()  # baseline
+def test_on_redo_post_skips_plain_redo_log_on_redo_update(
+    rec_lib, fake_bpy, wired_handlers
+):
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
 
-        handlers._on_redo_post(fake_bpy.context.scene)  # nothing changed
+    op._kw = {"value": (5.0, 5.0, 5.0)}
+    wired_handlers._on_redo_post(fake_bpy.context.scene)
 
-        redo_logs = [
-            m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"
-        ]
-        assert redo_logs == ["redo"]
-    finally:
-        handlers.set_context(None, None)
+    assert _lifecycle_msgs(rec_lib, "redo") == []
+    assert _redo_msgs(rec_lib)
+
+
+def test_on_redo_post_logs_plain_redo_when_no_redo_update(
+    rec_lib, fake_bpy, wired_handlers
+):
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+    _set_ops(fake_bpy, [op])
+    actions._poll_operators()  # baseline
+
+    wired_handlers._on_redo_post(fake_bpy.context.scene)  # nothing changed
+
+    assert _lifecycle_msgs(rec_lib, "redo") == ["redo"]

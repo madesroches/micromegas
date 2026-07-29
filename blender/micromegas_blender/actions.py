@@ -117,7 +117,7 @@ def _is_macro_subop_ref(value) -> bool:
     return hasattr(value, "bl_rna") and not hasattr(value, "as_keywords")
 
 
-def _params_of(op) -> tuple:
+def _params_of(op) -> "tuple[dict | None, bool]":
     """``(params, is_macro)``: ``op.as_keywords()`` with macro sub-op refs
     replaced by a placeholder (real values unreachable, see
     ``_is_macro_subop_ref``) instead of misleading frozen-default scalars.
@@ -278,12 +278,16 @@ def check_redo_update() -> bool:
     skips the plain "undo" log for the same event.
     """
     global _last_op_msg, _last_op_params_ok
+    # Guarded together: unlike _poll_operators (whose only callers wrap it in
+    # try/except), this runs straight off an undo_post/redo_post handler, so a
+    # stale RNA reference here would escape into Blender instead of just costing
+    # us the "undo" log.
     try:
         ops = list(bpy.context.window_manager.operators)
+        if not ops or ops[-1].as_pointer() != _last_op_ptr:
+            return False  # no entries, or newest isn't the one we last saw
     except Exception:
         return False
-    if not ops or ops[-1].as_pointer() != _last_op_ptr:
-        return False  # no entries, or newest isn't the one we last saw
     newest = ops[-1]
     try:
         params, is_macro = _params_of(newest)
