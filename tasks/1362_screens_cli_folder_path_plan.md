@@ -45,20 +45,26 @@ No changes needed to `read_screen_file()`'s required-field check — `folder_pat
    - `cmd_import`: no change needed — this call's `client.update_screen(...)` at line 219 exists only to set `managed_by` during ownership transfer, so `folder_path` stays at its default `None` (leave unchanged); passing the server's just-fetched `folder_path` back would add a TOCTOU window with no benefit.
    - `cmd_apply` creates loop (~line 431): pass `folder_path=screen.get("folder_path")` to `client.create_screen(...)`.
    - `cmd_apply` updates loop (~line 446): pass `folder_path=screen.get("folder_path")` to `client.update_screen(...)`.
-   - `compute_plan()` (~lines 296-306): compare and diff `local_data` against `server_screen_to_file(server)` instead of the raw `server` dict (both in the `screens_equal(...)` check and the `strip_volatile_keys(server)` used to build the `updates` tuple). Also normalize `local_data` itself through the same "drop falsy `folder_path`/`managed_by`" step (e.g. reuse `server_screen_to_file`'s filtering logic on a copy of `local_data`) before passing it to `screens_equal`, so a local file with an explicit `"folder_path": ""`/`"managed_by": null` compares equal to the server's omitted key for a root/unmanaged screen.
+   - `compute_plan()` (~lines 296-306): compare and diff `local_data` against `server_screen_to_file(server)` instead of the raw `server` dict — use `server_screen_to_file(server)` directly (no extra `strip_volatile_keys(...)` wrap needed; it already excludes volatile keys) in both the `screens_equal(...)` check and the `updates` tuple. Also normalize `local_data` itself through the same "drop falsy `folder_path`/`managed_by`" step (e.g. reuse `server_screen_to_file`'s filtering logic on a copy of `local_data`), and use that normalized copy consistently in **both** the `screens_equal(...)` check **and** the `local_data` placed into the `updates` tuple (not the raw `local_data`) — so a local file with an explicit `"folder_path": ""`/`"managed_by": null` compares equal to the server's omitted key for a root/unmanaged screen, and doesn't reappear as spurious noise in `format_screen_diff`'s output when an unrelated field actually changed.
    - `cmd_list`'s `screen_status()` (~line 491): same normalization on both sides — compare `local[name]` against `server_screen_to_file(server_by_name[name])` instead of the raw dict, applying the same falsy-key-dropping normalization to `local[name]` so an explicit `folder_path: ""`/`managed_by: null` in the local file doesn't cause a false "modified" status.
    - `cmd_pull`: apply the same local-side normalization to `existing = read_screen_file(local_path)` before comparing it to `new_content = server_screen_to_file(screen)` (e.g. reuse the same falsy-key-dropping helper used for `local_data` in `compute_plan()`), so an explicit `"folder_path": ""`/`"managed_by": null` in the local file matches the server's omitted key instead of being reported as "updated" and rewritten on every pull.
 
-3. **Tests** — extend `python/micromegas/tests/test_screen_files.py`:
+3. **Tests**
+   - `python/micromegas/tests/test_web_client.py` (new file): stub the HTTP session (`unittest.mock`, matching the mocking pattern already used elsewhere in the test suite) and assert the JSON payload built by `create_screen`/`update_screen` includes/omits `"folder_path"` correctly when the argument is `None` (omitted), `""` (included, empty), and a real path (included) — this is the mechanism the whole `folder_path` round-trip depends on and isn't covered by the CLI-level tests below.
+   - Extend `python/micromegas/tests/test_screen_files.py`:
    - `TestServerScreenToFile`: add a case asserting `folder_path` is copied when present and non-empty, and stays absent when the server returns `""` or omits it.
    - `TestWriteReadRoundTrip`: add a case with `folder_path` set, asserting it round-trips through `write_screen_file`/`read_screen_file`.
    - `TestComputePlan`: add a case where local and server differ only by `folder_path` to confirm it now surfaces as an `update` (proving the round-trip bug is fixed — today this case doesn't exist because the field is dropped before comparison). Also add a case for an *unmodified root screen* — local file with no `folder_path` key vs. server returning `folder_path: ""` (and `managed_by: null`) — asserting it lands in `unchanged`, to confirm the normalization fix in `compute_plan()` covers the common root-level case, not just non-root folders. Also add a case where the local file explicitly sets `"folder_path": ""` for a root screen (the Testing Strategy step 5 workflow) and the server also returns root (`folder_path: ""`) — asserting it lands in `unchanged`, confirming the local-side normalization treats an explicit empty string the same as an omitted key.
+
+4. **Documentation** — `mkdocs/docs/web-app/notebooks/screens-as-code.md`, "File Format" section: add an optional `"folder_path"` key to the example JSON (or a note beside it), plus a bullet documenting the convention: key omitted = no folder / don't move; `""` = explicit root.
 
 ## Files to Modify
 
 - `python/micromegas/micromegas/web_client.py`
 - `python/micromegas/micromegas/cli/screens.py`
 - `python/micromegas/tests/test_screen_files.py`
+- `python/micromegas/tests/test_web_client.py` (new)
+- `mkdocs/docs/web-app/notebooks/screens-as-code.md`
 
 ## Trade-offs
 
