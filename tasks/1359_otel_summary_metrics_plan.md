@@ -56,10 +56,10 @@ pub struct SummaryDataPoint {
     pub time_unix_nano: u64,             // tag 3
     pub count: u64,                      // tag 4 — SampleCount
     pub sum: f64,                        // tag 5 — Sum
-    pub quantile_values: Vec<ValueAtQuantile>, // tag 6
+    pub quantile_values: Vec<summary_data_point::ValueAtQuantile>, // tag 6
     pub flags: u32,                      // tag 8
 }
-// ValueAtQuantile { quantile: f64, value: f64 }
+// summary_data_point::ValueAtQuantile { quantile: f64, value: f64 }
 ```
 
 Per the proto's documented convention (also quoted in the issue): `quantile == 0.0` is the
@@ -119,7 +119,7 @@ metric's `name`/`time` and the data point's own `attributes`, distinguished by t
 | `properties` key | Value |
 |---|---|
 | `otel.metric.kind` | `"summary"` (same slot Sum/Gauge already populate with `"sum"`/`"gauge"`) |
-| `otel.summary.statistic` | `"count"` \| `"sum"` \| `"min"` \| `"max"` |
+| `otel.metric.statistic` | `"count"` \| `"sum"` \| `"min"` \| `"max"` |
 
 Statistic tagging (not a name suffix) was chosen so `name` stays a clean grouping key across
 all metric kinds — see Trade-offs.
@@ -215,7 +215,7 @@ fn append_summary(
     let kind = ("otel.metric.kind".to_string(), JsonbValue::String(Cow::Borrowed("summary")));
 
     let stat = |s: &'static str| {
-        [kind.clone(), ("otel.summary.statistic".to_string(), JsonbValue::String(Cow::Borrowed(s)))]
+        [kind.clone(), ("otel.metric.statistic".to_string(), JsonbValue::String(Cow::Borrowed(s)))]
     };
     self.append_row(scope_name, metric_name, "", time_nanos, &dp.attributes, dp.count as f64, &stat("count"))?;
     self.append_row(scope_name, metric_name, unit, time_nanos, &dp.attributes, dp.sum, &stat("sum"))?;
@@ -276,20 +276,29 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
    `process`'s `Data::Summary` arm.
 3. **Wire the new arm** — replace the `Data::Summary` drop arm in `process` with the fan-out
    call; update the module doc comment at the top of the file.
-4. **Bump `SCHEMA_VERSION`** — `6` → `7` in `rust/analytics/src/lakehouse/metrics_view.rs`.
-5. **Unit tests** — extend `rust/analytics/tests/` (see Testing) with a Summary-specific test
+4. **Bump `SCHEMA_VERSION`** — `6` → `7` in `rust/analytics/src/lakehouse/metrics_view.rs`; update
+   the `metrics_processors()` doc comment at `metrics_view.rs:44` (currently "Sum/Gauge" only) to
+   mention Summary alongside them.
+5. **Update `otel-ingestion` doc comment** — `rust/otel-ingestion/src/block.rs:101-104`'s
+   `metrics_bounds()` comment currently says Summary points are skipped; update it to say
+   Histogram/ExponentialHistogram are dropped by the materialization processor while Summary now
+   fans out count/sum/min/max (only non-min/max quantiles are still dropped).
+6. **Unit tests** — extend `rust/analytics/tests/` (see Testing) with a Summary-specific test
    alongside the existing `otel_metrics_block_processor_survives_target_dictionary_overflow`
    pattern in `dictionary_key_overflow_tests.rs`, plus a focused fan-out test (new file or
    alongside `otel_attrs_tests.rs`).
-6. **Docs** — update `mkdocs/docs/otlp/index.md:144` and `:540` (see Documentation).
-7. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
+7. **Docs** — update `mkdocs/docs/otlp/index.md:144` and `:540` (see Documentation).
+8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
    `python3 build/rust_ci.py` (from `rust/`).
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/otel/metrics_block_processor.rs` — `append_row` extraction,
   `append_summary`, new `Data::Summary` arm, module doc comment.
-- `rust/analytics/src/lakehouse/metrics_view.rs` — `SCHEMA_VERSION` `6` → `7`.
+- `rust/analytics/src/lakehouse/metrics_view.rs` — `SCHEMA_VERSION` `6` → `7`; update the
+  `metrics_processors()` doc comment at `:44` to mention Summary alongside Sum/Gauge.
+- `rust/otel-ingestion/src/block.rs` — update the `metrics_bounds()` doc comment at `:101-104`
+  (currently says Summary is skipped) to reflect that Summary now fans out count/sum/min/max.
 - `rust/analytics/tests/dictionary_key_overflow_tests.rs` or a new test file — Summary fan-out
   coverage.
 - `mkdocs/docs/otlp/index.md` — Metrics mapping section (:144) and Limitations bullet (:540).
@@ -299,8 +308,8 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 - **Tag statistic in `properties` vs. suffix the metric `name`.** Tagging keeps `name` a stable
   grouping key identical across Sum/Gauge/Summary — a dashboard already filtering
   `WHERE name = 'CPUUtilization'` gets all statistics back and filters further on
-  `otel.summary.statistic`, rather than needing to know about `CPUUtilization.max` /
-  `CPUUtilization_max` naming. Cost: any query that doesn't filter on `otel.summary.statistic`
+  `otel.metric.statistic`, rather than needing to know about `CPUUtilization.max` /
+  `CPUUtilization_max` naming. Cost: any query that doesn't filter on `otel.metric.statistic`
   now gets 4 rows per timestamp per metric instead of 1 — must be called out prominently in
   docs (done below).
 - **Only count/sum/min/max; configured percentiles dropped.** CloudWatch's
@@ -323,7 +332,9 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 - **Deliberate `SCHEMA_VERSION` bump despite no schema change.** Ships no parquet column change,
   but the issue explicitly flags that skipping the bump would leave the pre-fix backlog
   permanently unrecoverable even though the raw bytes are retained. Bumping is a one-line,
-  low-risk way to opt into automatic backfill.
+  low-risk way to make historical Summary blocks *eligible* for backfill — actually backfilling
+  the CloudWatch backlog still requires the explicit `regenerate_partitions` deploy-time step
+  described in Current State.
 - **No special-casing for `count == 0` (where `sum` must be zero per spec).** Emitting the
   `sum` row unconditionally (value 0.0) is simpler than adding a conditional and matches
   "SampleCount/Sum/Min/Max each reachable from SQL" from the issue's acceptance criteria without
@@ -335,9 +346,9 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 - **:144** (Metrics → `measures` mapping) — replace "Sum and Gauge data points are materialized
   directly. Histogram, ExponentialHistogram, and Summary are skipped..." with: Sum, Gauge, and
   Summary (count/sum/min/max only) are materialized, via `otel.metric.kind = "summary"` +
-  `otel.summary.statistic`; Histogram/ExponentialHistogram, and any Summary quantile other than
+  `otel.metric.statistic`; Histogram/ExponentialHistogram, and any Summary quantile other than
   min/max, remain skipped with a debug log (bucket-level/arbitrary-percentile data doesn't fit
-  a scalar `value` column without further design). Add the `otel.summary.statistic` values to
+  a scalar `value` column without further design). Add the `otel.metric.statistic` values to
   the field-mapping table.
 - **:540** (Limitations) — update the bullet to reflect Summary now materializing
   count/sum/min/max; keep the Histogram/ExponentialHistogram limitation and add that configured
@@ -347,7 +358,7 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
   SELECT time, value
   FROM measures
   WHERE name = 'CPUUtilization'
-    AND jsonb_as_string(jsonb_get(properties, 'otel.summary.statistic')) = 'max'
+    AND jsonb_as_string(jsonb_get(properties, 'otel.metric.statistic')) = 'max'
   ```
 - In the existing "CloudWatch Metric Streams" section (`:373+`), add a line noting that
   `opentelemetry1.0` output is Summary-only and that each scrape now lands as 4 `measures` rows
@@ -362,7 +373,7 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
   `quantile_values = [{0.0, min}, {1.0, max}, {0.9, p90}]`; run it through
   `OtelMetricsBlockProcessor::process`; assert the resulting `RecordBatch` has exactly 4 rows
   (the `0.9` quantile is dropped), each sharing `name`/`time`, and that `properties` decodes to
-  the expected `otel.summary.statistic` (`"count"`, `"sum"`, `"min"`, `"max"`). Assert `value`
+  the expected `otel.metric.statistic` (`"count"`, `"sum"`, `"min"`, `"max"`). Assert `value`
   matches `count`/`sum`/min/max respectively, and that the `count` row's `unit` is empty while
   the others keep the metric's unit.
 - **Unit — non-min/max quantile dropped**: a `SummaryDataPoint` with only a `quantile_values`
