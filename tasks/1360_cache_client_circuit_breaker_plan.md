@@ -54,13 +54,20 @@ let http = Client::builder()
 `reqwest`'s `ClientBuilder::timeout` is a **total deadline**: "applied from when the request starts
 connecting until the response body has finished" (reqwest 0.12.28,
 `async_impl/client.rs:1434-1443`). It therefore covers body streaming, not just the handshake — which
-means today's 15s is also a *cumulative* bound, and a large read averaging under roughly 70 MB/s fails
-on size alone. This plan keeps `total_timeout` at 15s, unchanged, so that cliff is not removed — a large
-enough read still hits it. What Phase 0 changes is the *consequence*: hitting it now surfaces as a
-stream error that resumes the remainder from `direct` (see "The fix: resume from the delivered offset"),
-not a silent short read. The tighter `abandon_timeout`/`stall_timeout` bounds below make 15s a rare
-backstop for a healthy cache, but it stays the binding limit for a large, slowly-but-healthily streaming
-one.
+means today's 15s is also a *cumulative* bound: a request whose body takes the full 15s must average
+roughly 70 MB/s to avoid tripping it on size alone. That arithmetic models the caller that can actually
+issue a request that large: the L1-disabled path, where `CacheClientStore` is used directly and a single
+`GET /obj` can span an unbounded range. It is *not* the dominant, L1-fronted caller — in query processes
+`l1_wrap` (on by default, `MICROMEGAS_OBJECT_CACHE_L1_MB=200`) coalesces every miss into a run of at most
+`DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `l1_store.rs:76-110`), so every `/obj` request that caller
+issues is orders of magnitude short of the size this cliff requires. This plan keeps `total_timeout` at
+15s, unchanged, so the cliff is not removed for the caller it actually threatens — a large enough
+L1-disabled (or `analytics/src/payload.rs:26` block-payload) read still hits it. What Phase 0 changes is
+the *consequence*: hitting it now surfaces as a stream error that resumes the remainder from `direct`
+(see "The fix: resume from the delivered offset"), not a silent short read. The tighter
+`abandon_timeout`/`stall_timeout` bounds below make 15s a rare backstop for a healthy cache, but on that
+non-L1-fronted path it stays the binding limit for a large, slowly-but-healthily streaming read — and
+hitting it still reports `record_unresponsive` regardless (see "Abandon vs. unresponsive").
 
 ### Fallback paths
 
@@ -227,8 +234,8 @@ gone: aborting there now costs one ranged direct read, exactly like every other 
 | Connect (all endpoints) | 50ms `connect_timeout` | reqwest error → unresponsive → fallback |
 | All five `send()` sites (`head_size`, `prefetch`, `get_full_stream`, `get_range_stream`, `get_ranges`): request → response headers | 500ms `abandon_timeout` (`tokio::time::timeout` around `send()`) | abandoned → fallback |
 | `get_ranges` body reassembly (`read_framed_ranges`/`pull_exact`) | 3s `stall_timeout` *per chunk* | `RangesReadError::Stalled` → fallback |
-| `GET /obj` response body | 3s `stall_timeout`, per response frame via `ClientBuilder::read_timeout` | stream error → **resume remainder from `direct`**; reports `record_unresponsive` |
-| Whole request (all endpoints) | 15s `total_timeout` (`ClientBuilder::timeout`, unchanged) | For `/obj` body: same stream error → resume as the row above; elsewhere a rare backstop behind the tighter bounds above → fallback |
+| `GET /obj` response body | `read_timeout` = `stall_timeout` + `abandon_timeout` (3.5s), per response frame via `ClientBuilder::read_timeout` — deliberately looser than the `/ranges` row so its explicit wrap always fires first, see "`ClientBuilder::read_timeout` on the one client" | stream error → **resume remainder from `direct`**; reports `record_unresponsive` |
+| Whole request (all endpoints) | 15s `total_timeout` (`ClientBuilder::timeout`, unchanged) | For `/obj` body: same stream error → resume as the row above (reports `record_unresponsive`); elsewhere a rare backstop behind the tighter bounds above → fallback, also reporting `record_unresponsive` — see "Abandon vs. unresponsive" |
 
 Every "on expiry" column entry is a degradation, never an error. That is the invariant, mechanically.
 
@@ -238,7 +245,10 @@ Two constraints the table has to satisfy explicitly:
   detect "answered headers, then stuck on the origin," so the `/ranges` *body* carries its own
   per-chunk `stall_timeout` via `pull_exact` (`client.rs:419-443`) — the one place that path awaits
   a chunk — surfacing as a new `RangesReadError::Stalled` variant that `read_framed_ranges` propagates
-  exactly as it already propagates `Transport`. Directly unit-testable, no server needed.
+  exactly as it already propagates `Transport`. Directly unit-testable, no server needed. For this
+  explicit wrap to be the one that actually fires on a real response body, it has to be strictly tighter
+  than the client-level `read_timeout` racing it underneath — see "`ClientBuilder::read_timeout` on the
+  one client" for why `read_timeout` is deliberately set looser, not equal.
 - **(b) `/ranges` body size is unbounded.** Total bytes have no cap (`client.rs:613-624`; the server
   caps range *count* at `MAX_RANGES_PER_REQUEST` = 4096, not bytes), so the budget must be per chunk.
   A flat deadline would abort healthy large reads on cumulative size.
@@ -255,7 +265,24 @@ header phase, but the reason has changed completely. It is no longer protecting 
 unrecoverable abort — it is limiting **wasted origin traffic**, because a mid-stream abandon re-reads the
 entire remainder of the object (or the ranges not yet delivered) from the origin.
 
-`read_timeout` is sampled once per response **frame**, and a frame on this path is large:
+**Which caller this bounds depends on whether L1 is in front.** In query processes the lakehouse/static
+stores are wrapped by `l1_wrap` (on by default, `MICROMEGAS_OBJECT_CACHE_L1_MB=200`), whose `RangeCache`
+coalesces every miss into a run of at most `DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `l1_store.rs:76-110`)
+and fetches it as one `cache.origin.get_range(&path, byte_start..byte_end)` call
+(`range_cache/fetch.rs:109`, `:321`). So the dominant caller's `GET /obj` request carries **at most one**
+8 MiB demand window, and the server's commit-before-stream already awaits that window's origin GET before
+writing headers (`handlers.rs:389-395`) — the whole body is already resolved before streaming starts. For
+that caller there is no inter-frame origin gap to bound at all, and a mid-stream abandon costs at most the
+8 MiB already in flight, not the multi-hundred-MiB remainder the arithmetic below assumes. The
+multi-window exposure below instead models the caller that can issue a `/obj` request spanning more than
+one 8 MiB window: the L1-disabled path (`MICROMEGAS_OBJECT_CACHE_L1_MB=0`), where `CacheClientStore` is
+used directly and a single request can span an unbounded range. (The other non-L1 traffic —
+`analytics/src/payload.rs:26` block-payload reads, a few MB each, and `HEAD /obj` — is too small for this
+exposure to matter.) `POST /ranges` is likewise reached only from this non-L1-fronted position:
+`L1CacheStore::get_ranges` serves from its own cache, and its misses also go out as `get_range`, not
+`get_ranges` (`l1_store.rs:239-256`) — so `/ranges` only runs with L1 disabled or on an L1 cache error.
+
+`read_timeout` is sampled once per response **frame**, and on the non-L1-fronted path a frame is large:
 
 - One yielded chunk is one *demand window* — `DEMAND_WINDOW_BLOCKS` (8) × `DEFAULT_BLOCK_SIZE` (1 MiB)
   = **8 MiB** (`range_cache/mod.rs:25-33`, `stream_ranges_inner` at `mod.rs:401-413`).
@@ -265,11 +292,12 @@ entire remainder of the object (or the ranges not yet delivered) from the origin
   That hides the fetch only while the client drains slower than the origin delivers; a local query
   process drains faster, so in a large sequential read the gap is essentially exposed.
 
-So **every inter-frame gap is a full coalesced origin GET**, drawn from the distribution above — whose
-observed max (575ms in a 5-minute sample) already exceeds 500ms. Frame count then multiplies the
-exposure. Taking P(gap > 500ms) ≈ 0.5% (between the 311ms p99 and the 575ms max):
+So, on a `/obj` request that spans multiple windows, **every inter-frame gap is a full coalesced origin
+GET**, drawn from the distribution above — whose observed max (575ms in a 5-minute sample) already
+exceeds 500ms. Frame count then multiplies the exposure. Taking P(gap > 500ms) ≈ 0.5% (between the 311ms
+p99 and the 575ms max):
 
-| Read size | 8 MiB window boundaries | P(at least one gap > 500ms) |
+| Read size (non-L1-fronted `/obj`, or `/ranges`) | 8 MiB window boundaries | P(at least one gap > 500ms) |
 |---|---|---|
 | 64 MiB | 8 | ~4% |
 | 256 MiB | 32 | ~15% |
@@ -279,16 +307,16 @@ exposure. Taking P(gap > 500ms) ≈ 0.5% (between the 311ms p99 and the 575ms ma
 socket reads and there are far more than 8 of them in a 64 MiB read. The gap that matters occurs once
 per 8 MiB demand-window boundary, which is the quantity this table counts.)
 
-At 500ms, a 1 GiB read would resume-from-`direct` about half the time, and the average remainder is
-~512 MiB — so the tail re-read costs far more than the abandon saves. At 3s the same arithmetic is
-negligible (5.2x the observed max), and the bound reads as a throughput floor: 8 MiB per 3s ≈ 2.7 MB/s.
-A cache delivering less than that has stopped streaming.
+At 500ms, a 1 GiB non-L1-fronted read would resume-from-`direct` about half the time, and the average
+remainder is ~512 MiB — so the tail re-read costs far more than the abandon saves. At 3s the same
+arithmetic is negligible (5.2x the observed max), and the bound reads as a throughput floor: 8 MiB per 3s
+≈ 2.7 MB/s. A cache delivering less than that has stopped streaming.
 
 This structure is not unique to `/obj`: `/ranges`' body is produced by the same `stream_ranges_inner`
 windows and forwarded unchanged by `frame_ranges_stream` (`handlers.rs:147-169`), so `pull_exact`'s
-per-chunk read faces the identical inter-frame gap distribution. It therefore carries the same 3s
-`stall_timeout` bound, not the 500ms `abandon_timeout` used for every phase's header check (see
-constraint (a)).
+per-chunk read faces the identical inter-frame gap distribution whenever `/ranges` is reached at all (see
+above — only on the non-L1-fronted position). It therefore carries the same 3s `stall_timeout` bound, not
+the 500ms `abandon_timeout` used for every phase's header check (see constraint (a)).
 
 Note the asymmetry this rests on: `abandon_timeout` is sampled once per *request* and its worst case is
 one direct read the client would have done anyway. A per-frame bound is sampled once per 8 MiB and its
@@ -300,16 +328,46 @@ whole point of doing Phase 0 first.
 The converse merge — 3s everywhere — is wrong for the opposite reason: it makes hard-down detection 6x
 slower on every header phase, which is what issue #1360 exists to fix.
 
+**Honest caveat on 3s.** For the dominant, L1-fronted caller this section's arithmetic barely applies:
+exposure is already near zero because the single window is resolved before headers, so 3s there is
+essentially unused headroom, not a calibrated cost knob. Its calibration is really load-bearing only for
+the non-L1-fronted path (L1 disabled, or an L1 cache error), and this plan has no production read-size
+distribution for *that* path the way it does for `range_cache_origin_get_ms`. 3s is kept because it is
+conservative relative to the observed origin-latency tail and because, per the invariant, getting this
+number wrong costs only throughput — but if that path turns out to serve mostly small reads in practice, a
+tighter value would waste less origin traffic without giving up meaningful detection speed. Worth
+revisiting once `range_cache_client_stream_resumed` has production data (see "Metrics and logging").
+
 #### `ClientBuilder::read_timeout` on the one client
 
-The store keeps building exactly **one** `reqwest::Client`, now with `read_timeout(stall_timeout)`
-alongside `connect_timeout` and the unchanged total `timeout`. In reqwest 0.12.28, `read_timeout` is a
-per-frame timeout on the response body (`async_impl/body.rs:287-340` — `ReadTimeoutBody` resets its
-sleep per frame) plus a non-resetting bound on the header phase
-(`async_impl/client.rs:3053-3059`). Set to `stall_timeout` (3s) it is:
+The store keeps building exactly **one** `reqwest::Client`, now with
+`read_timeout(stall_timeout + abandon_timeout)` alongside `connect_timeout` and the unchanged total
+`timeout`. In reqwest 0.12.28, `read_timeout` is a per-frame timeout on the response body
+(`async_impl/body.rs:287-340` — `ReadTimeoutBody` resets its sleep per frame) plus a non-resetting bound
+on the header phase (`async_impl/client.rs:3053-3059`).
+
+**Why not set it to `stall_timeout` exactly.** `/ranges` wraps `pull_exact`'s `stream.next()` in its own
+`tokio::time::timeout(stall_timeout, ...)` (constraint (a)), racing the same underlying poll that
+`ReadTimeoutBody` is timing at the client level. `ReadTimeoutBody` clears its sleep on every ready frame
+and re-arms it lazily on the *next* poll, checking elapsed time before polling the inner body
+(`async_impl/body.rs:336-360`) — and `pull_exact`'s `tokio::time::timeout` does the same (`Timeout::poll`
+polls the inner future first). If both deadlines are set to the same `stall_timeout`, they land
+microseconds apart and, in practice, in the same tick, so which one fires on a real stall is not
+determined by the design: `RangesReadError::Stalled` might never surface, and the stall would report as
+plain `Transport` instead — silently defeating the log-granularity reason for keeping `Stalled` at all.
+Giving `read_timeout` a margin above `stall_timeout` makes `pull_exact`'s explicit wrap unambiguously the
+first to fire. The margin is expressed in existing config rather than as a new knob: `abandon_timeout`
+(500ms) is already the shortest meaningful gap this design reasons about, safely larger than any
+scheduling jitter between the two timers, so `read_timeout` is `stall_timeout + abandon_timeout` — 3.5s —
+with no dedicated constant of its own.
+
+Set to 3.5s, `read_timeout` is:
 
 - the **operative** bound in two places — the `/obj` response body, and `prefetch`'s `resp.json()` read
-  (`client.rs:233`), which takes no explicit wrap of its own;
+  (`client.rs:233`), which takes no explicit wrap of its own. `/obj`'s real per-frame bound is therefore
+  3.5s, not the 3s `stall_timeout` used for the throughput-floor arithmetic in "`stall_timeout` (3s) is
+  now a cost knob" — negligibly looser (8 MiB per 3.5s ≈ 2.3 MB/s), so that section's reasoning still
+  holds;
 - an inert **backstop** everywhere else, because every other phase already carries a strictly tighter
   500ms `tokio::time::timeout`.
 
@@ -319,20 +377,22 @@ client and split the connection pools. That reason was wrong and is dropped. The
 - **Error-classification granularity on `/obj`.** A body stall arrives as a generic `reqwest::Error`
   rather than a distinct "stalled" variant, so `/obj` stalls and `/obj` transport errors are
   indistinguishable in logs. Both are liveness signals, both resume from `direct`, and both report
-  `record_unresponsive`, so nothing downstream changes — only diagnosis is coarser. `/ranges`' body
-  bound is also 3s (see constraint (a) and "`stall_timeout` (3s) is now a cost knob"), so `read_timeout`
-  no longer has two conflicting values to express — its one value is 3s, covering both bodies. `/ranges`
-  keeps its explicit `Stalled` variant anyway, but for a different reason than an earlier draft gave: not
-  because it needs a tighter bound (it doesn't — both are 3s), but because `pull_exact` is directly
-  unit-testable with no server needed, and a named variant keeps `/ranges`' four failure arms
+  `record_unresponsive`, so nothing downstream changes — only diagnosis is coarser. `/ranges`' body has
+  its own tighter `stall_timeout` (3s) wrap, deliberately below `read_timeout` (3.5s) for the margin
+  reason above, so `read_timeout` never actually fires on `/ranges` — the explicit wrap always wins.
+  `/ranges` keeps that explicit `Stalled` variant for the same reason an earlier draft gave a different
+  justification for: not because `read_timeout` alone would be too loose to protect throughput (both
+  numbers are within the same cost-knob ballpark), but because `pull_exact` is directly unit-testable
+  with no server needed, and a named variant keeps `/ranges`' four failure arms
   (non-2xx/`Transport`/`Stalled`/`Truncated`) distinguishable in logs the way a bare `reqwest::Error`
-  cannot.
+  cannot — and, with the margin in place, that variant is now reliably the one that actually surfaces on
+  a real stall.
 - **The request-upload phase is folded into the header bound.** `read_timeout`'s header-phase bound
   spans request upload as well as time-to-headers, but `prefetch` also goes through `send`'s
   `abandon_timeout` wrap around the same `req.send()` call, so in practice the upload is bounded at
-  500ms, not 3s — `read_timeout`'s 3s is a looser backstop that only matters if `abandon_timeout` somehow
-  didn't apply. Irrelevant in production (batches are one item) and only visible in one existing test
-  (see Testing Strategy → Regression).
+  500ms, not 3.5s — `read_timeout`'s 3.5s is a looser backstop that only matters if `abandon_timeout`
+  somehow didn't apply. Irrelevant in production (batches are one item) and only visible in one existing
+  test (see Testing Strategy → Regression).
 
 ### Abandon vs. unresponsive
 
@@ -343,8 +403,17 @@ Two different facts arrive at the breaker, and the plan deliberately maps both o
    legitimately. Emits `range_cache_client_abandoned`.
 2. **Unresponsive** — a connect failure, a transport error, or a `stall_timeout` expiry (3s with no
    frame). Means "the cache is not answering at all." Emits `range_cache_client_unresponsive`.
+3. **A `total_timeout` expiry** (15s cumulative, `ClientBuilder::timeout`) is folded into the same
+   `record_unresponsive` report as case 2, even though it can be hit by a body that was streaming
+   perfectly healthily but slowly (see "Current State → Timeouts"). It arrives as an ordinary
+   `reqwest::Error`, indistinguishable at the error level from a stall, so there is no signal to classify
+   it differently on. This is deliberate, not an oversight: by the time it fires the read has already
+   taken 15s — roughly three orders of magnitude past the origin-fetch latencies (`range_cache_origin_get_ms`
+   p50 ~36ms) the direct path is racing against — so treating it as anything but unresponsive would be
+   arguing over which flavor of "lost the race badly" this is. And per the invariant, a wrong
+   classification here costs only the optimization for one cooldown, never correctness.
 
-Both call `CircuitBreaker::record_unresponsive`, because the question the breaker answers is not "is
+All three call `CircuitBreaker::record_unresponsive`, because the question the breaker answers is not "is
 the cache alive?" but "is routing through the cache still worth its cost?" — and by issue #1360's own
 rule, a cache that has lost five consecutive races against the direct path is not, whatever the reason.
 Bypassing it is then a latency *win* for those reads, not a degradation, and the probe schedule
@@ -616,8 +685,8 @@ does the metrics/logging that `#[must_use] Transition` requires, and a free `rep
 resume path calls this directly, since it is the one place a free function needs to report unresponsive
 at all. `CacheClientStore::report`/`report_unresponsive` are thin methods over these same two free
 helpers, so both call sites (the free function and the struct) agree on what fires. No `Duration` is
-threaded in: the body's per-frame bound is `read_timeout(stall_timeout)` on the client itself, so a
-stall surfaces through the same `Err` item as any other transport error.
+threaded in: the body's per-frame bound is `read_timeout(stall_timeout + abandon_timeout)` on the client
+itself, so a stall surfaces through the same `Err` item as any other transport error.
 
 The head-only path (`client.rs:486-509`) reports `record_responsive` itself on a successful `head_size`,
 since nothing follows it. `get_range_stream`'s no-`Content-Range` path (`client.rs:132-143`) is the same
@@ -637,11 +706,18 @@ all: `read_framed_ranges` exposes nothing to the caller until it fully resolves,
 report for this operation belongs there, not at `send`'s boundary. It calls a `send_ranges` variant that
 reuses `send` itself for the header phase — so the `abandon_timeout` wrap and its abandoned/unresponsive
 reporting aren't duplicated — then drives `read_framed_ranges` to completion with `pull_exact`'s single
-`stream.next()` wrapped in `tokio::time::timeout(stall_timeout, ...)` — per chunk (the same bound and
-justification as `/obj`'s `read_timeout`; see "`stall_timeout` (3s) is now a cost knob"), so cumulative
-body size is never bounded (constraint (b)). `send_ranges` returns a typed `Result<Vec<Bytes>,
-RangesSendError>` that keeps those four failure arms distinct instead of folding them into one. Only a
-`send()` timeout/connect error or `RangesReadError::{Transport,Stalled}` reports a failure; non-2xx
+`stream.next()` wrapped in `tokio::time::timeout(stall_timeout, ...)` — per chunk (the same cost-knob
+justification as `/obj`'s `read_timeout`, see "`stall_timeout` (3s) is now a cost knob", but a strictly
+tighter deadline: `stall_timeout` (3s) here against `read_timeout`'s `stall_timeout + abandon_timeout`
+(3.5s) on the client, so this explicit wrap — not `read_timeout` — is the one that actually fires on a
+real stall, see "`ClientBuilder::read_timeout` on the one client"), so cumulative body size is never
+bounded (constraint (b)). `send_ranges` returns a typed `Result<Vec<Bytes>, RangesSendError>` that keeps
+those four failure arms distinct instead of folding them into one. `RangesSendError` is `send_ranges`'s
+own enum, not a re-export: a `Send` arm wrapping the header-phase failure `send` already produces
+(timeout/connect error), a `Status` arm carrying a non-2xx response, and a `Body(RangesReadError)` arm
+carrying `read_framed_ranges`'s existing `Transport`/`Truncated` plus the new `Stalled` — so all five
+failure kinds (header failure, non-2xx, `Transport`, `Stalled`, `Truncated`) each have a named home. Only
+a `send()` timeout/connect error or `RangesReadError::{Transport,Stalled}` reports a failure; non-2xx
 status and `Truncated` report `record_responsive` per the "any HTTP response counts as responsive" rule,
 and `Truncated` keeps its `warn!`. All the failure kinds are exactly as safe to abort as dropping
 `send()`'s future, since `read_framed_ranges` exposes nothing to the caller until it fully resolves, and
@@ -702,11 +778,15 @@ pub struct CacheClientConfig {
     /// which after Phase 0 is all of them. Applied at the header (time-to-
     /// headers) phase of the five `send()` sites.
     pub abandon_timeout: Duration,  // 500ms
-    /// Per-frame bound on the `GET /obj` response body, via
-    /// `ClientBuilder::read_timeout`, and on `get_ranges`' `pull_exact`
-    /// per-chunk read. Looser than `abandon_timeout` because a mid-stream
-    /// abandon re-reads the remainder (of the object, or of the ranges not
-    /// yet delivered) — a cost knob, not a correctness bound. Reused as the
+    /// Per-chunk bound on `get_ranges`' `pull_exact` read. Looser than
+    /// `abandon_timeout` because a mid-stream abandon re-reads the ranges
+    /// not yet delivered — a cost knob, not a correctness bound. Also backs
+    /// the `GET /obj` response body's per-frame bound, but *not* directly:
+    /// the client's `ClientBuilder::read_timeout` is set to `stall_timeout +
+    /// abandon_timeout` (looser by a margin), so `/ranges`' own explicit
+    /// `pull_exact` wrap — set to `stall_timeout` exactly — is always the
+    /// one that fires first on a real stall, never `read_timeout`; see
+    /// "`ClientBuilder::read_timeout` on the one client". Reused as the
     /// breaker's `cooldown`.
     pub stall_timeout: Duration,    // 3s
     pub total_timeout: Duration,    // 15s (unchanged)
@@ -781,7 +861,7 @@ State transitions log once (not once per request), so an outage doesn't flood:
 |---|---|---|
 | `range_cache_client_abandoned` | An `abandon_timeout` expiry — the cache lost the race against the direct path | `debug!` |
 | `range_cache_client_unresponsive` | Connect failure, transport error, or a `stall_timeout` expiry — the cache is not answering | `debug!` |
-| `range_cache_client_stream_resumed` | A `/obj` body error/stall mid-stream; the remainder was read from `direct` | `debug!` with the resume offset |
+| `range_cache_client_stream_resumed` | A `/obj` body error at any position (including before the first chunk); the remainder — possibly the whole range — was read from `direct` | `debug!` with the resume offset |
 | `range_cache_client_circuit_opened` | `Transition::Opened` | `warn!` with the cooldown |
 | `range_cache_client_circuit_closed` | `Transition::Closed` | `info!` |
 | `range_cache_client_circuit_bypassed` | Each read/prefetch that skipped the cache | `debug!` |
@@ -790,9 +870,13 @@ State transitions log once (not once per request), so an outage doesn't flood:
 `CircuitBreaker::record_unresponsive`; they stay separate metrics so a dashboard can distinguish a slow
 cache from a dead one (see "Abandon vs. unresponsive").
 
-`range_cache_client_stream_resumed` is the one metric that quantifies wasted origin traffic: each
-occurrence means the remainder of an object was fetched twice. If it climbs on healthy caches,
-`stall_timeout` is too tight (see "`stall_timeout` (3s) is now a cost knob").
+`range_cache_client_stream_resumed` fires on a `/obj` body error at any position, including at
+`bytes_yielded == 0` — the collapsed pre-first-chunk fallback (today's `client.rs:324-346`) is the same
+code path — so a bare occurrence count mixes plain fallbacks (nothing delivered, nothing re-read) with
+genuine mid-stream resumes. Only occurrences with a **non-zero resume offset** mean the remainder of an
+object was fetched twice and quantify wasted origin traffic; the `debug!` already logs that offset, so if
+*those* climb on healthy caches, `stall_timeout` is too tight (see "`stall_timeout` (3s) is now a cost
+knob").
 
 There is no per-probe-failure transition to report: with a fixed cooldown a failed probe changes no
 state, so a sustained outage emits `circuit_opened` once and then only `bypassed` volume until
@@ -810,8 +894,12 @@ one per cooldown.
    fallback becomes `bytes_yielded == 0`. An empty remainder (all bytes already delivered) ends the
    stream cleanly instead of issuing a `Bounded(x..x)` read, which `object_store` rejects as an error.
 2. Add unit/integration coverage that a mid-stream failure yields **byte-identical** data to a direct
-   read (see Testing Strategy → Resume correctness). This step is independently valuable and could ship
-   as its own PR ahead of the rest.
+   read (see Testing Strategy → Resume correctness). As a standalone PR, ahead of Phase 2, induce the
+   failure by aborting the connection / dropping the response body outright — an immediate transport
+   error needing no sleep and no `stall_timeout` override, since `with_config`/`CacheClientConfig` don't
+   exist yet. The stall-based variants of these same tests (a handler that hangs past a short
+   `stall_timeout` override) land once Phase 2 makes that overridable. With the abort-based tests, this
+   step is independently valuable and could ship as its own PR ahead of the rest.
 
 ### Phase 1 — the breaker
 
@@ -834,8 +922,11 @@ one per cooldown.
    clone without borrowing `&self`). `CacheClientConfig::default`/`from_env` set
    `breaker.cooldown = stall_timeout`, so the two never drift; a test that overrides `stall_timeout`
    sets the cooldown it wants explicitly. Build the **one** `reqwest::Client` with
-   `connect_timeout(config.connect_timeout)`, `read_timeout(config.stall_timeout)` and
-   `timeout(config.total_timeout)` — no second client.
+   `connect_timeout(config.connect_timeout)`, `read_timeout(config.stall_timeout +
+   config.abandon_timeout)` and `timeout(config.total_timeout)` — no second client. The `read_timeout`
+   margin (`abandon_timeout` above `stall_timeout`) exists so `/ranges`' own `pull_exact` wrap, set to
+   `stall_timeout` exactly (step 9), is unambiguously the first of the two to fire on a real stall — see
+   "`ClientBuilder::read_timeout` on the one client".
 8. Add the `send(&self, req, what)` helper (no budget parameter; **failure reporting only**) and route
    `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. Wire the single
    success report per the "One outcome per logical operation" table: the head-only path reports on
@@ -849,18 +940,24 @@ one per cooldown.
    applies to its own non-2xx arm. `prefetch`'s non-2xx status check (`client.rs:230-232`) instead
    follows the admission value, per "Prefetch does not close the circuit": nothing on `Allow`,
    `record_responsive` only on `Probe`. Give `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
-   have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. `send`
+   have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Wire
+   `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error too — per "One
+   outcome per logical operation" it's the tail of its own operation, so a stall there is a failure
+   report, alongside the `range_cache_client_prefetch_error` bump it already does. `send`
    calls `report_abandoned`/`report_unresponsive`, which step 12 adds; this step lands with a
    temporarily-uncompiled `send` until step 12's helpers exist (or do step 12 first — either ordering is
    fine, this is the one place the two steps are interdependent).
 9. Add the `send_ranges` variant for `get_ranges`: reuse `send` (`abandon_timeout`) for the header
    phase, then drive `read_framed_ranges` to completion, with `pull_exact`'s `stream.next()` wrapped in
-   `tokio::time::timeout(stall_timeout, ...)` and a new `RangesReadError::Stalled` variant for the
-   elapsed case. Report `record_responsive` only once the framed body fully resolves. `send_ranges`
-   returns a typed `Result<Vec<Bytes>, RangesSendError>` keeping the four failure arms distinct —
-   non-2xx status, `Transport`, `Stalled`, `Truncated` — rather than folding them into one
-   `Result<Vec<Bytes>>`; `get_ranges` keeps matching all four (plus success) with their current
-   `debug!`/`warn!` logs, and only the timeout/connect/`Transport`/`Stalled` arms report a failure.
+   `tokio::time::timeout(stall_timeout, ...)` — deliberately tighter than the client's `read_timeout`
+   (`stall_timeout + abandon_timeout`, step 7) so this explicit wrap, not `read_timeout`, is the one that
+   fires on a real stall — and a new `RangesReadError::Stalled` variant for the elapsed case. Report
+   `record_responsive` only once the framed body fully resolves. `send_ranges` returns a typed
+   `Result<Vec<Bytes>, RangesSendError>` — `Send`/`Status`/`Body(RangesReadError)`, see the `get_ranges`
+   paragraph above — keeping the four failure arms distinct — non-2xx status, `Transport`, `Stalled`,
+   `Truncated` — rather than folding them into one `Result<Vec<Bytes>>`; `get_ranges` keeps matching all
+   four (plus success) with their current `debug!`/`warn!` logs, and only the
+   timeout/connect/`Transport`/`Stalled` arms report a failure.
 
 ### Phase 3 — the gate
 
@@ -935,16 +1032,20 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
   response is genuine liveness evidence, and the cost of acting on it is one more detection cycle.
   This is the only residual staleness effect: a stale failure while open is a plain no-op.
 - **`ClientBuilder::read_timeout` on the one client, plus an explicit `tokio::time::timeout` on
-  `/ranges` for error classification.** `read_timeout` is a single per-client value, and both bodies it
-  needs to bound — `/obj`'s and `/ranges`' — are 3s, so it has only one value to express and is set to
-  it directly: the operative bound on the `/obj` body (along with `prefetch`'s `resp.json()`), and an
-  inert backstop everywhere the explicit 500ms `abandon_timeout` wrap already applies. `/ranges` keeps
-  its own explicit `stall_timeout` wrap around `pull_exact` anyway, not because it needs a tighter
-  number than `read_timeout` already gives it, but for error-classification granularity (a named
-  `Stalled` variant instead of a bare `reqwest::Error`) and because it makes the per-chunk bound directly
-  unit-testable with no server needed. The remaining cost is the request-upload phase being folded into
-  the header bound. Not the "second hyper connection pool" cost an earlier draft claimed — that claim was
-  wrong; one client covers both paths.
+  `/ranges` for error classification.** `read_timeout` is a single per-client value, set to
+  `stall_timeout + abandon_timeout` (3.5s): the operative bound on the `/obj` body (along with
+  `prefetch`'s `resp.json()`), and an inert backstop everywhere the explicit 500ms `abandon_timeout` wrap
+  already applies. `/ranges` keeps its own explicit `stall_timeout` (3s) wrap around `pull_exact`
+  anyway — deliberately tighter than `read_timeout`, not equal to it, because both timers clear and
+  re-arm around the same poll and a tie would leave which one fires undetermined. The margin is what
+  makes `pull_exact`'s wrap the one that actually surfaces on a real stall, not merely a value that would
+  agree with `read_timeout` if it ever won the race. It also still buys error-classification granularity
+  (a named `Stalled` variant instead of a bare `reqwest::Error`) and direct unit-testability with no
+  server needed — reasons that hold regardless of which timer fires, but only matter in practice because
+  the margin now guarantees `pull_exact`'s does. The remaining cost is the request-upload phase being
+  folded into the header bound, and `/obj`'s real per-frame bound sitting at 3.5s rather than the 3s used
+  in the cost-knob arithmetic (negligible difference). Not the "second hyper connection pool" cost an
+  earlier draft claimed — that claim was wrong; one client covers both paths.
 - **Any HTTP response counts as "responsive".** A 5xx-ing cache stays in circuit, because it answers
   cheaply and doesn't cause the resource exhaustion this gate exists to prevent; reads still fall back
   per-request as they do today. The gate is about *responsiveness*, not correctness.
@@ -989,14 +1090,21 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
 These are the tests the invariant lives or dies on, and they belong with Phase 0 (in
 `client_circuit_breaker_tests.rs`, or its own file if Phase 0 ships separately). The `direct` store
 holds the **same** bytes as the cache path here (unlike the breaker tests below), because the assertion
-is byte-for-byte equality with a healthy read:
+is byte-for-byte equality with a healthy read.
 
-- **Mid-stream stall yields complete, correct data.** An `/obj` handler that writes headers and some
-  body chunks, then hangs past `stall_timeout` (short override). The read must return the **full**
-  object, byte-identical to a direct read — not a short buffer. Run it at several truncation points
-  (first chunk, middle, last-but-one) so the resume offset arithmetic is exercised, not just the happy
-  splice.
-- **Resume offset is right for every range shape.** The same stalling handler, driven through a full
+**How the failure is induced depends on which phase has landed.** In a standalone Phase 0 —
+before `with_config`/`CacheClientConfig` exist — the handler aborts the connection or drops the response
+body outright: an immediate transport error, needing no sleep and no timeout override, that still
+exercises the same resume arithmetic. Once Phase 2 lands and `stall_timeout` is overridable, each of
+these tests gains a stall-based variant (the same handler instead hangs past a short `stall_timeout`
+override) so the resume path is also exercised against a genuine stall, not just a hard abort:
+
+- **Mid-stream failure yields complete, correct data.** An `/obj` handler that writes headers and some
+  body chunks, then fails — aborts the connection (Phase 0) or hangs past `stall_timeout`, short override
+  (Phase 2 variant). The read must return the **full** object, byte-identical to a direct read — not a
+  short buffer. Run it at several truncation points (first chunk, middle, last-but-one) so the resume
+  offset arithmetic is exercised, not just the happy splice.
+- **Resume offset is right for every range shape.** The same failing handler, driven through a full
   read, a `Bounded` range, an `Offset` range, and a `Suffix` range. Each must return exactly the bytes
   the corresponding direct read returns. This is where a bug would silently corrupt data, so assert on
   content, never on length alone.
@@ -1004,13 +1112,14 @@ is byte-for-byte equality with a healthy read:
   mid-stream failure returning `Ok` with short bytes — must now fail. Concretely: assert
   `result.bytes().await?.len() == expected_len`, which is exactly the check `collect_bytes`
   (`object_store` `util.rs:52-75`) does not perform.
-- **A failing resume surfaces an error.** Stall the cache mid-stream *and* point `direct` at a store
-  that errors; the caller must see the direct store's error, not a silent short read.
+- **A failing resume surfaces an error.** Fail the cache mid-stream (abort in Phase 0, stall in the
+  Phase 2 variant) *and* point `direct` at a store that errors; the caller must see the direct store's
+  error, not a silent short read.
 - **A stream error exactly at the last byte ends cleanly.** An `/obj` handler that delivers the full
-  requested range and only then errors (e.g. stalls before its terminating chunk). The read must
-  complete successfully with exactly the requested bytes and must not call `direct` at all — this also
-  guards against ever constructing `GetRange::Bounded(x..x)`, which `object_store` rejects as
-  `InvalidGetRange::Inconsistent`.
+  requested range and only then errors (e.g. the connection drops, or in the Phase 2 variant hangs before
+  its terminating chunk). The read must complete successfully with exactly the requested bytes and must
+  not call `direct` at all — this also guards against ever constructing `GetRange::Bounded(x..x)`, which
+  `object_store` rejects as `InvalidGetRange::Inconsistent`.
 
 ### Unit — `rust/object-cache/tests/circuit_breaker_tests.rs`
 
@@ -1038,6 +1147,9 @@ An axum server whose handler increments an `AtomicUsize` and then parks on a
 `tokio::sync::watch::Receiver::changed()` — a controllable hang, released by the test rather than by
 elapsed time. Client built with `with_config` (`abandon_timeout`/`stall_timeout` both overridden to
 short values, e.g. ~50ms and ~200ms, so the test is fast and doesn't wait out the production defaults);
+`read_timeout` needs no override of its own — it's built from `config.stall_timeout +
+config.abandon_timeout` (step 7), so overriding the two inputs keeps the same margin and ordering as
+production automatically;
 `breaker.cooldown` is set per test — long where the test asserts a bypass, near-zero where it wants an
 immediate probe. The two "slow-but-progressing body stays closed" tests below are the exception: they
 override `stall_timeout` to something generous instead (e.g. >= 1s, with chunks every ~100ms), because
@@ -1082,11 +1194,16 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   hangs on the same `watch::Receiver::changed()` mechanism past `stall_timeout` before the test
   releases it. Asserts a single such call still returns correct direct-store bytes (the stall is
   recoverable — `read_framed_ranges` exposes nothing until it fully resolves), and that repeating it
-  `failure_threshold` times trips the breaker. This is the test for constraint (a).
+  `failure_threshold` times trips the breaker. Because `read_timeout` is configured with its margin
+  above `stall_timeout` (`stall_timeout + abandon_timeout`, see "`ClientBuilder::read_timeout` on the one
+  client"), this hang deterministically surfaces as `RangesReadError::Stalled`, not `Transport` — assert
+  that variant specifically, not just "some failure was reported". This is the test for constraint (a).
 - **`get_ranges` slow-but-progressing body stays closed**: same generous `stall_timeout` override as the
-  `get_opts` version above (e.g. >= 1s, chunks every ~100ms), for a total well past it. Asserts the call
-  returns the cache's bytes and the breaker never opens — confirming the `pull_exact` wrap is per chunk,
-  not cumulative (constraint (b)), with the same wall-clock headroom and for the same reason.
+  `get_opts` version above (e.g. >= 1s, chunks every ~100ms), for a total well past it — `read_timeout`
+  follows automatically at its derived margin (see above), keeping the two ordered the same way as
+  production. Asserts the call returns the cache's bytes and the breaker never opens — confirming the
+  `pull_exact` wrap is per chunk, not cumulative (constraint (b)), with the same wall-clock headroom and
+  for the same reason.
 - **`get_ranges` non-2xx / truncated stays closed**: a `/ranges` handler returning a 500, and separately
   one that truncates the framed body mid-range (mirroring `FailAtOffsetStore` / the mid-stream
   truncation case in `memory_budget_tests.rs:505-552`), each called past `failure_threshold`.
