@@ -54,8 +54,8 @@ let http = Client::builder()
 `reqwest`'s `ClientBuilder::timeout` is a **total deadline**: "applied from when the request starts
 connecting until the response body has finished" (reqwest 0.12.28,
 `async_impl/client.rs:1434-1443`). It therefore covers body streaming, not just the handshake — which
-means today's 15s is also a *cumulative* bound: a request whose body takes the full 15s must average
-roughly 70 MB/s to avoid tripping it on size alone. That arithmetic models the caller that can actually
+means today's 15s is also a *cumulative* bound: an ~1 GiB body must average roughly 70 MB/s to finish
+inside the 15s deadline. That arithmetic models the caller that can actually
 issue a request that large: the L1-disabled path, where `CacheClientStore` is used directly and a single
 `GET /obj` can span an unbounded range. It is *not* the dominant, L1-fronted caller — in query processes
 `l1_wrap` (on by default, `MICROMEGAS_OBJECT_CACHE_L1_MB=200`) coalesces every miss into a run of at most
@@ -97,18 +97,29 @@ an already-delivered prefix, so it "simply ends the stream."
 **That is not a clean failure.** In `object_store` 0.13.2, `GetResult::bytes()` (`lib.rs:1656-1672`)
 delegates to `collect_bytes(s, Some(len))`, and `collect_bytes` (`util.rs:52-75`) uses that length
 **only** as `Vec::with_capacity(size_hint)`. There is no length validation anywhere on the path. A
-stream that ends early therefore returns `Ok(short_bytes)`:
+stream that ends early therefore returns `Ok(short_bytes)`, and what that costs depends on which caller
+is on the other end:
 
-- the caller gets a success with fewer bytes than it asked for;
-- for a parquet footer or data page, the consequence is a misparse attributed to the *data*, not to the
-  cache;
-- nothing in the metrics distinguishes it from a healthy read.
+- **On the dominant, L1-fronted path** — query processes' parquet/static-table reads, which go through
+  `l1_wrap` (`lakehouse_context.rs:75`/`:93`, `static_tables_configurator.rs:76`) → `RangeCache` →
+  `origin.get_range` — the short read lands back inside `RangeCache::fetch_blocks`, not the query.
+  `fetch.rs:386-400` compares the delivered length against the requested run span, emits
+  `range_cache_origin_run_len_mismatch` (documented as a "should be ~0" signal), logs `warn!`, and
+  **fails the fetch** instead of under-yielding. So this path is not metrics-invisible — but it is
+  *misattributed*: the metric reads as "origin object changed size," not "cache truncated its response,"
+  and `L1CacheStore::fallback_get_opts` then retries through the same `CacheClientStore`, so a repeat
+  truncation can still reach the consumer short rather than surfacing as an honest error.
+- **On the non-L1-fronted callers** — L1 disabled (`MICROMEGAS_OBJECT_CACHE_L1_MB=0`), or the
+  `blobs/...` block-payload path via `BlobStorage::read_blob` — there is no intermediate length check at
+  all, so the caller gets a plain success with fewer bytes than it asked for and nothing in the metrics
+  distinguishes it from a healthy read. For a parquet footer or data page this surfaces as a misparse
+  attributed to the *data*; for a block payload it surfaces as a CBOR decode error instead.
 
-So the client can currently corrupt a read whenever the cache's `/obj` body stalls or drops mid-stream,
-and today's 15s total deadline is what triggers it. This violates the invariant, is independent of the
-circuit breaker, and is fixed first (Phase 0). It is arguably worth its own issue; the plan keeps it here
-because the timeout work below is what makes it fire more often, and because the fix reshapes the same
-function the breaker has to report from.
+So the client can currently corrupt or misattribute a read whenever the cache's `/obj` body stalls or
+drops mid-stream, and today's 15s total deadline is what triggers it. This violates the invariant, is
+independent of the circuit breaker, and is fixed first (Phase 0). It is arguably worth its own issue; the
+plan keeps it here because the timeout work below is what makes it fire more often, and because the fix
+reshapes the same function the breaker has to report from.
 
 #### The fix: resume from the delivered offset
 
@@ -441,10 +452,9 @@ keeps its `warn!` as a protocol violation from our own cache, not a health signa
 malformed-header arms are the same kind of protocol violation from our own cache and are treated
 identically. `prefetch`'s non-2xx status (`client.rs:230-232`) is deliberately **not** covered by this
 rule:
-per "Prefetch does not close the circuit" it reports nothing on an `Allow` admission and
-`record_responsive` only on a `Probe` admission. Folding it into the general rule would let a write-time
-warm's non-2xx response hold a 503-ing cache's circuit closed — exactly the failure mode that section
-exists to prevent.
+per "Prefetch does not close the circuit" it reports nothing, on any admission. Folding it into the
+general rule would let a write-time warm's non-2xx response hold a 503-ing cache's circuit closed —
+exactly the failure mode that section exists to prevent.
 
 **One outcome per logical operation.** A single read can touch the cache twice — `get_opts`'s Suffix arm
 issues `head_size` and then `get_range_stream` (`client.rs:531`). Reporting `record_responsive` at both
@@ -480,18 +490,29 @@ write-active, read-light process could then keep the circuit closed while every 
 
 So:
 
-- **Prefetch success does not report `record_responsive`** on a normal `Allow` admission.
-- **Prefetch's non-2xx status (`client.rs:230-232`) follows the same split as success**: nothing on
-  `Allow`, `record_responsive` only on `Probe`. A full-but-non-2xx response is no more evidence the
-  demand path is healthy than a full 2xx one is, so it stays out of the general "any HTTP response
-  counts as responsive" rule for the same reason prefetch success does.
-- **Prefetch failures do report** (`record_unresponsive` via abandon / transport / connect). A cache that
-  cannot even accept a one-item POST is real evidence of unresponsiveness.
-- **Prefetch success on a `Probe` admission does report `record_responsive`**, so a process that only
-  ever prefetches can still recover its circuit. The same holds for a `Probe`-admitted non-2xx.
+- **Prefetch treats a `Probe` admission exactly like `Bypass`.** It still calls `admit()` — it needs to
+  know whether to skip the cache — but on either `Bypass` or `Probe` it skips the cache and reports
+  nothing; only on `Allow` does it use the cache, and even then it reports nothing on success. Only a
+  demand read (`get_opts`/`get_ranges`) that itself receives `Probe` and completes a cache request can
+  report `record_responsive` and close the circuit.
+- **Prefetch's non-2xx status (`client.rs:230-232`) reports nothing**, for the same reason as success: a
+  full response having arrived cheaply is no more evidence the *demand* path is healthy than a 2xx one
+  is, so it stays out of the general "any HTTP response counts as responsive" rule regardless of
+  admission.
+- **Prefetch failures still report** (`record_unresponsive` via abandon / transport / connect). A cache
+  that cannot even accept a one-item POST is real evidence of unresponsiveness.
 
-This is the one place a caller must distinguish `Probe` from `Allow`; `get_opts` and `get_ranges` treat
-them identically.
+An earlier draft had a `Probe`-admitted prefetch report `record_responsive`, on the premise that "a
+process that only ever prefetches can still recover its circuit." That process doesn't exist: the only
+production caller of `prefetch` is `warm_object` (`rust/ingestion/src/data_lake_connection.rs:57-80`),
+called from `rust/analytics/src/lakehouse/write_partition.rs:746` — i.e. from the analytics/maintenance
+processes, which are also the heaviest demand-read callers; `telemetry-ingestion-srv` never calls
+`warm_object` at all. Letting a `Probe`-admitted prefetch close the circuit in a write-active process
+would let accept-loop liveness reopen the demand path on the fixed cooldown cadence regardless of whether
+demand reads are actually recovering — reintroducing, on a ~3s cycle, a fraction of exactly the
+parked-task exhaustion this plan exists to remove. Treating `prefetch`'s `Probe` like `Bypass` removes
+that path entirely, and as a side effect removes the one place a caller had to distinguish `Probe` from
+`Allow`: `get_opts`, `get_ranges`, and now `prefetch` all only ever need "cache or don't."
 
 Note this removes an accidental mitigation: prefetch traffic was implicitly holding the circuit closed
 during cold periods. That does not argue for exempting `prefetch` from the admission gate, though.
@@ -505,7 +526,8 @@ gate would therefore warm nothing that went cold, and cannot deliver the rewarmi
 would be proposed for. Demand-driven rewarming instead happens through the fixed 3s probe cadence (see
 "Why the cooldown is fixed"), and a warm skipped while the circuit is open is already declared acceptable
 by `warm_object`'s own doc comment ("a failed warm just means the first read is a cold miss") — it would
-have failed against a down cache anyway. So `prefetch` stays gated like every other entry point.
+have failed against a down cache anyway. So `prefetch` stays gated like every other entry point, and
+only ever bypasses or uses the cache silently — it never probes.
 
 ### The breaker
 
@@ -758,12 +780,13 @@ if matches!(self.breaker.admit(), Admission::Bypass) {
 }
 ```
 
-For `get_opts` and `get_ranges` a `Probe` admission behaves exactly like `Allow`. `prefetch` must keep
-the admission value, because it reports success only on `Probe` (see "Prefetch does not close the
-circuit").
+For `get_opts` and `get_ranges` a `Probe` admission behaves exactly like `Allow`. `prefetch` instead
+treats `Probe` exactly like `Bypass` (see "Prefetch does not close the circuit"), so none of the three
+entry points keeps the admission value around afterward — each only ever needs "cache or don't."
 
-For `prefetch`, a bypass returns `Ok(PrefetchResponse { accepted: 0, rejected: 0, dropped: items.len() })`
-rather than `Err` — it is semantically a load-shed, and callers already log `dropped` at debug
+For `prefetch`, both a `Bypass` and a `Probe` admission return
+`Ok(PrefetchResponse { accepted: 0, rejected: 0, dropped: items.len() })` rather than `Err` — it is
+semantically a load-shed, and callers already log `dropped` at debug
 (`data_lake_connection.rs:71-74`). This deliberately avoids inflating
 `range_cache_client_prefetch_error` with bypasses.
 
@@ -845,12 +868,26 @@ is the reasoning a future reviewer is most likely to invert: the ~575ms tail is 
 not a healthy-cache latency the budget must accommodate. Sizing `abandon_timeout` above it would make
 the client wait out a cache that has already lost.
 
-One signal to add before merge: the header phases of `HEAD /obj` and `POST /ranges` contain an origin
-**HEAD**, not an origin GET (see "Where the origin work actually lands"), so the budget should be
-sanity-checked against `range_cache_origin_head_latency` as well as `range_cache_origin_get_ms`. The
-rule is unchanged either way — a HEAD that outruns the budget has equally stopped being an
-optimization — but the percentiles differ and the env override exists so the default can be corrected
-without a redeploy.
+**`range_cache_origin_get_ms` doesn't cover the whole header phase, though.** Per its own documentation
+(`mkdocs/docs/admin/object-cache.md`), it measures the origin `get_range` call itself "once a permit was
+held" — it excludes both queueing stages that also sit inside the `GET /obj` header phase this budget
+bounds: the memory-budget permit wait (`object_cache_mem_permit_wait_ms`, `handlers.rs:349-359`) and,
+before the origin call is even attempted, the fetch-permit wait (`range_cache_fetch_permit_wait_ms`,
+`rust/object-cache/src/range_cache/fetch.rs`, emitted ahead of `origin.get_range`). Both distributions
+grow under exactly the concurrent load a 500ms header bound gets exercised against, so the p50/p90/p99/max
+figures above understate the phase they're anchored to. This is not a reason to raise the budget: queueing
+inside the cache is part of what the client is racing against the direct path, and a header phase that
+loses *because* the cache is saturated is exactly the case `abandon_timeout` is meant to shed — the cache
+has stopped being an optimization for that request, permit contention or not. But the percentiles still
+need checking so the default isn't accidentally shedding load under ordinary, non-saturated conditions.
+
+One signal to add before merge: sanity-check 500ms against `object_cache_mem_permit_wait_ms` and
+`range_cache_fetch_permit_wait_ms`, not just `range_cache_origin_get_ms`, for the reason above. Separately,
+the header phases of `HEAD /obj` and `POST /ranges` contain an origin **HEAD**, not an origin GET (see
+"Where the origin work actually lands"), so also check against `range_cache_origin_head_latency`. The rule
+is unchanged in every case — a header phase that outruns the budget has equally stopped being an
+optimization — but the percentiles differ per signal and the env override exists so the default can be
+corrected without a redeploy.
 
 #### The constants that are not env vars
 
@@ -985,13 +1022,15 @@ one per cooldown.
    paragraph above — keeping the four failure arms distinct — non-2xx status, `Transport`, `Stalled`,
    `Truncated` — rather than folding them into one `Result<Vec<Bytes>>`; `get_ranges` keeps matching all
    four (plus success) with their current `debug!`/`warn!` logs, and only the
-   timeout/connect/`Transport`/`Stalled` arms report a failure. Make `RangesReadError`, `RangesSendError`,
-   and `send_ranges` itself `pub`, re-exported from `rust/object-cache/src/lib.rs` alongside the
-   `CacheClientConfig` export (step 4) — the cross-crate integration test in
-   `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs` calls `send_ranges` directly (in addition
-   to the fallback-observing `get_ranges` call) so it can match on
-   `RangesSendError::Body(RangesReadError::Stalled)`, since `get_ranges`'s `ObjectStore`-trait return type
-   erases that classification into a fallback. `pull_exact` itself stays private; its behavior is
+   timeout/connect/`Transport`/`Stalled` arms report a failure. Make `send_ranges` `pub` — it becomes
+   reachable via the already-exported `CacheClientStore`, not via a `lib.rs` re-export, since it is an
+   inherent method rather than a free-standing type — and re-export `RangesReadError`/`RangesSendError`
+   from `rust/object-cache/src/lib.rs` alongside the `CacheClientConfig` export (step 4). Give both enums
+   a `thiserror` `Display`/`Error` impl now that they're public API surface, not just internal detail.
+   The cross-crate integration test in `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs`
+   calls `send_ranges` directly (in addition to the fallback-observing `get_ranges` call) so it can match
+   on `RangesSendError::Body(RangesReadError::Stalled)`, since `get_ranges`'s `ObjectStore`-trait return
+   type erases that classification into a fallback. `pull_exact` itself stays private; its behavior is
    exercised only indirectly, through `send_ranges`.
 
 ### Phase 3 — the gate
@@ -999,7 +1038,9 @@ one per cooldown.
 10. Add `direct_get_opts` / `direct_get_ranges` (+ the free `direct_get_opts_with_metrics`) and
     collapse the seven existing fallback blocks onto them.
 11. Add the `Admission` gate to `get_opts` (after the precondition short-circuit), `get_ranges`, and
-    `prefetch`. `prefetch` keeps the admission value so it can report success only on `Probe`.
+    `prefetch`. `get_opts`/`get_ranges` treat `Probe` like `Allow`; `prefetch` treats `Probe` like
+    `Bypass` (see "Prefetch does not close the circuit"), so it needs only the cache-or-not decision,
+    never the admission value itself.
 12. Add the transition reporting helper as a free `report_transition(t: Transition)` (metrics/logs
     above), a free `report_unresponsive(what: &str, breaker: &CircuitBreaker)` (emits
     `range_cache_client_unresponsive`, calls `breaker.record_unresponsive()`, and feeds the resulting
@@ -1015,10 +1056,13 @@ one per cooldown.
 14. Update `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/architecture/caching.md`, and
     `CHANGELOG.md`.
 15. Before merge, sanity-check `abandon_timeout` (500ms) against production
-    `range_cache_origin_head_latency` samples, not just `range_cache_origin_get_ms` — the `HEAD /obj` and
-    `POST /ranges` header phases block on an origin HEAD, not a GET (see "Where the origin work actually
-    lands"), and the two distributions can differ. Adjust the default via
-    `MICROMEGAS_OBJECT_CACHE_CLIENT_ABANDON_TIMEOUT_MS` if it doesn't.
+    `object_cache_mem_permit_wait_ms` and `range_cache_fetch_permit_wait_ms` samples in addition to
+    `range_cache_origin_get_ms` — both permit-wait stages sit inside the same header phase the budget
+    bounds but are excluded from that origin figure (see "Calibrating `abandon_timeout` (500ms)"). Also
+    check `range_cache_origin_head_latency` samples, since the `HEAD /obj` and `POST /ranges` header
+    phases block on an origin HEAD, not a GET (see "Where the origin work actually lands"), and the two
+    distributions can differ. Adjust the default via
+    `MICROMEGAS_OBJECT_CACHE_CLIENT_ABANDON_TIMEOUT_MS` if any of them don't support it.
 16. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 ../build/rust_ci.py`.
 
 ## Files to Modify
@@ -1061,9 +1105,14 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
   cadence rather than an exponential schedule — see "Cold-cache tripping" in "Prefetch does not close the
   circuit". The separate `abandoned`/`unresponsive` counters keep the two distinguishable operationally
   even though the breaker doesn't distinguish them.
-- **Prefetch success doesn't close the circuit.** Prevents accept-loop liveness from masking demand-path
-  slowness, at the cost of removing an accidental mitigation for cold-cache tripping, and of making
-  `prefetch` the one caller that must distinguish `Probe` from `Allow`.
+- **Prefetch never closes the circuit, including under a `Probe` admission.** Treating `Probe` exactly
+  like `Bypass` for `prefetch` prevents accept-loop liveness from masking demand-path slowness — the
+  oscillation a shared probe slot would otherwise allow: a write-active process's frequent prefetch
+  calls winning the single per-cooldown probe and reopening the demand path on a ~3s cadence regardless
+  of whether reads are actually recovering, echoing the parked-task exhaustion this plan removes. The
+  cost is removing an accidental mitigation for cold-cache tripping (see "Cold-cache tripping"); the
+  benefit, beyond avoiding that oscillation, is that no caller has to distinguish `Probe` from `Allow` at
+  all — all three entry points only need "cache or don't."
 - **A fixed cooldown instead of exponential backoff.** Costs more probe requests during a long outage
   (~600 vs ~60 over 30 minutes, at one outstanding probe at a time); buys a two-field state machine, no
   `max_cooldown`/`probe_budget`/`initial_cooldown` knobs, no window floor, no
@@ -1256,9 +1305,11 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   classified as responsive, not folded in with the read-stall/transport-error path.
 - **`prefetch` success does not close the circuit**: with the breaker at `failure_threshold - 1`
   consecutive failures, a successful `prefetch` must leave `consecutive` where it was — one more read
-  failure still trips. Then, while open, a `Probe`-admitted successful `prefetch` *does* close it.
-- **`prefetch` while open** returns `Ok` with `dropped == items.len()`, `accepted == 0`, and issues no
-  request.
+  failure still trips. Then, while open, a `Probe`-admitted `prefetch` also leaves it open and issues no
+  request — it is treated exactly like `Bypass` — confirming only a demand read that itself receives
+  `Probe` can close the circuit.
+- **`prefetch` while open (`Bypass` or `Probe`)** returns `Ok` with `dropped == items.len()`,
+  `accepted == 0`, and issues no request in either case.
 - **Breaker disabled** (`failure_threshold: 0`): the counter keeps climbing on every read against the
   hung server, confirming the escape hatch.
 
