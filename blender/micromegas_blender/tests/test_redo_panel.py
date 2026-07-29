@@ -158,3 +158,35 @@ def test_on_undo_post_logs_plain_undo_when_no_redo_update(rec_lib, fake_bpy):
         assert undo_logs == ["undo"]
     finally:
         handlers.set_context(None, None)
+
+
+def test_on_redo_post_skips_plain_redo_log_on_redo_update(rec_lib, fake_bpy):
+    handlers.set_context(rec_lib, object())
+    try:
+        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+        _set_ops(fake_bpy, [op])
+        actions._poll_operators()  # baseline
+
+        op._kw = {"value": (5.0, 5.0, 5.0)}
+        handlers._on_redo_post(fake_bpy.context.scene)
+
+        redo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"]
+        assert redo_logs == []
+        assert _redo_msgs(rec_lib)
+    finally:
+        handlers.set_context(None, None)
+
+
+def test_on_redo_post_logs_plain_redo_when_no_redo_update(rec_lib, fake_bpy):
+    handlers.set_context(rec_lib, object())
+    try:
+        op = FakeOp("TRANSFORM_OT_resize", kw={"value": (1.0, 1.0, 1.0)})
+        _set_ops(fake_bpy, [op])
+        actions._poll_operators()  # baseline
+
+        handlers._on_redo_post(fake_bpy.context.scene)  # nothing changed
+
+        redo_logs = [m for _l, t, m in rec_lib.logs if t == "blender.lifecycle" and m == "redo"]
+        assert redo_logs == ["redo"]
+    finally:
+        handlers.set_context(None, None)

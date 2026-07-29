@@ -86,7 +86,10 @@ def _on_undo_post(scene, depsgraph=None):
 
 @bpy.app.handlers.persistent
 def _on_redo_post(scene, depsgraph=None):
-    _log(_b.LEVEL_DEBUG, "blender.lifecycle", "redo")
+    # See _on_undo_post: some Blender versions may route redo-panel edits
+    # through redo_post instead of undo_post.
+    if not _actions.check_redo_update():
+        _log(_b.LEVEL_DEBUG, "blender.lifecycle", "redo")
 
 
 @bpy.app.handlers.persistent
