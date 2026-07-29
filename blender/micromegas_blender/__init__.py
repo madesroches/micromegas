@@ -27,6 +27,15 @@ import re
 import sys
 import uuid
 
+from .binding import (
+    LEVEL_FATAL,
+    LEVEL_ERROR,
+    LEVEL_WARN,
+    LEVEL_INFO,
+    LEVEL_DEBUG,
+    LEVEL_TRACE,
+)
+
 try:
     from . import _build_info
 
@@ -278,6 +287,22 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
     finally:
         if _prev_excepthook is not None:
             _prev_excepthook(exc_type, exc_value, exc_tb)
+
+
+def log(level: int, target: str, msg: object) -> None:
+    """Public API: log a message via the active telemetry session, if any.
+
+    No-ops silently if the add-on isn't registered/initialized, so other
+    add-ons can call this unconditionally without checking for our presence
+    first. `level` uses the LEVEL_* constants re-exported from this module
+    (mirrors the Rust log crate): LEVEL_FATAL=1, LEVEL_ERROR=2, LEVEL_WARN=3,
+    LEVEL_INFO=4, LEVEL_DEBUG=5, LEVEL_TRACE=6.
+    """
+    if _lib and _handle:
+        try:
+            _lib.log(_handle, level, target, str(msg))
+        except Exception:
+            pass
 
 
 def register():
