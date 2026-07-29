@@ -76,4 +76,4 @@ No changes needed to `read_screen_file()`'s required-field check — `folder_pat
 
 ## Open Questions
 
-- Should moving a screen back to root require an explicit `"folder_path": ""` in the local file, or should file-absence be treated as "move to root" instead of "no-op"? This plan follows the `managed_by`-style precedent (absence = no-op) since that matches the server's `Option<String>` semantics most directly, but it's worth confirming this matches user expectations before implementing.
+None. (Resolved: moving a screen back to root uses an explicit `"folder_path": ""` in the local file rather than treating absence as "move to root" — absence stays a no-op, matching the `managed_by` precedent. Explicit is preferred over implicit for this action.)
