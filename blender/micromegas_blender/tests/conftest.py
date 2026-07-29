@@ -13,12 +13,17 @@ import types
 
 import pytest
 
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # tests/ -> micromegas_blender/ -> blender/  (so `import micromegas_blender` works)
-_BLENDER_DIR = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+_BLENDER_DIR = os.path.dirname(os.path.dirname(_TESTS_DIR))
 if _BLENDER_DIR not in sys.path:
     sys.path.insert(0, _BLENDER_DIR)
+
+# This directory, so `import _op_helpers` works without relying on pytest's
+# default (prepend) import mode putting it there for us.
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
 
 
 def _make_fake_handlers() -> types.SimpleNamespace:
@@ -144,3 +149,52 @@ def fake_bpy():
     bpy.context = _make_fake_context()
     bpy.data = types.SimpleNamespace(filepath="")
     return bpy
+
+
+# --- operator-history fixtures (shared by test_actions / test_redo_panel) ---
+# The test doubles themselves live in _op_helpers.py; only fixtures belong here.
+
+
+# Every cross-poll global in `actions`, with its module-level default. Reset as
+# a set so a test module can never silently depend on state a sibling module
+# left behind.
+_ACTIONS_POLL_STATE = {
+    "_prev_op_ptrs": None,
+    "_last_op_ptr": None,
+    "_last_op_msg": None,
+    "_last_op_params_ok": False,
+    "_last_mode": None,
+    "_last_workspace": None,
+    "_last_tool": None,
+    "_last_addons": None,
+}
+
+
+@pytest.fixture
+def wired_actions(rec_lib, fake_bpy):
+    """`actions` wired to the recording lib with all poll state reset.
+
+    Not autouse — modules that exercise `actions` opt in with a one-line autouse
+    fixture of their own, so unrelated test modules are left untouched.
+    """
+    from micromegas_blender import actions
+
+    actions.set_context(rec_lib, object())
+    for name, default in _ACTIONS_POLL_STATE.items():
+        setattr(actions, name, default)
+    yield actions
+    actions.set_context(None, None)
+
+
+@pytest.fixture
+def wired_handlers(rec_lib, fake_bpy):
+    """`handlers` wired to the recording lib, unwired again on teardown.
+
+    Separate from `wired_actions` so a test can wire either side alone; the
+    handler tests that cross into `actions` request both.
+    """
+    from micromegas_blender import handlers
+
+    handlers.set_context(rec_lib, object())
+    yield handlers
+    handlers.set_context(None, None)

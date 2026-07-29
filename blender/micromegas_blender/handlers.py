@@ -12,6 +12,7 @@ import time
 
 import bpy
 
+from . import actions as _actions
 from . import binding as _b
 
 # Populated by __init__.py before handlers are registered.
@@ -76,12 +77,19 @@ def _on_save_post(scene, depsgraph=None):
 
 @bpy.app.handlers.persistent
 def _on_undo_post(scene, depsgraph=None):
-    _log(_b.LEVEL_DEBUG, "blender.lifecycle", "undo")
+    # Redo-panel edits fire undo_post, not redo_post (see
+    # actions.check_redo_update()); when it detects one, skip the "undo" log
+    # so we don't log two conflicting facts for one user action.
+    if not _actions.check_redo_update():
+        _log(_b.LEVEL_DEBUG, "blender.lifecycle", "undo")
 
 
 @bpy.app.handlers.persistent
 def _on_redo_post(scene, depsgraph=None):
-    _log(_b.LEVEL_DEBUG, "blender.lifecycle", "redo")
+    # See _on_undo_post: some Blender versions may route redo-panel edits
+    # through redo_post instead of undo_post.
+    if not _actions.check_redo_update():
+        _log(_b.LEVEL_DEBUG, "blender.lifecycle", "redo")
 
 
 @bpy.app.handlers.persistent

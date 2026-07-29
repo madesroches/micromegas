@@ -126,6 +126,13 @@ Two complementary streams:
   available) drained from `bpy.context.window_manager.operators` and logged to
   `blender.action` at TRACE level. This is the "what did the user click" stream
   — adding a cube, switching to edit mode, running a modifier.
+- Edits made via the redo panel (F9) after an operator has run — Blender
+  re-executes the same operator with new parameters via `undo_post` rather than
+  `redo_post` — are detected separately and logged to `blender.action_redo` at
+  TRACE level with the updated parameters. A detected redo-panel edit replaces
+  the `blender.lifecycle` "undo" log for that event — or the "redo" log, on any
+  Blender version that does route the edit through `redo_post` (see below) —
+  since the underlying fact is a parameter change, not an undo.
 - Mode / workspace / active-tool transitions → `blender.mode`,
   `blender.workspace`, `blender.tool` (TRACE).
 - Runtime add-on enable/disable → `blender.addon_state` (INFO) — a mid-session
@@ -148,7 +155,7 @@ silently dropping them. Two metrics track capture health:
 
 | Metric | Unit | Description |
 |---|---|---|
-| `blender.action_captured` | count | Operators successfully logged (emitted only when > 0) |
+| `blender.action_captured` | count | Operators successfully logged, including redo-panel updates (emitted only when > 0) |
 | `blender.action_gap` | count | Ring-overflow events between drains |
 
 !!! note "Coverage is high but not 100%"
@@ -159,12 +166,13 @@ silently dropping them. Two metrics track capture health:
     when parameters are unavailable the action is still logged with its `bl_idname`
     and name.
 
-### Lifecycle events (logged at INFO)
+### Lifecycle events (logged at INFO unless noted)
 
 - Blend file loaded / saved
-- Undo / redo
-- Render start / complete / cancel
-- Frame change
+- Undo / redo (DEBUG) — the "undo"/"redo" log is suppressed when the same event
+  is instead recognized as a redo-panel edit and logged to
+  `blender.action_redo` (see above)
+- Render start / complete — cancel is logged at WARN
 
 ### Python exceptions
 
@@ -247,12 +255,13 @@ WHERE target = 'blender.crash'
   AND level = 1  -- FATAL
 ORDER BY time DESC;
 
--- Reconstruct one session's action sequence (what the user clicked).
+-- Reconstruct one session's action sequence (what the user clicked),
+-- including redo-panel parameter edits.
 -- Scope to the process with view_instance so only that session's blocks are
 -- read, instead of scanning the whole log_entries view.
 SELECT time, msg
 FROM view_instance('log_entries', 'my_process_id')
-WHERE target = 'blender.action'
+WHERE target IN ('blender.action', 'blender.action_redo')
 ORDER BY time DESC
 LIMIT 100;
 ```

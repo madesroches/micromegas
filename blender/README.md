@@ -206,13 +206,23 @@ Semantic actions (operator-history drain, event-driven + 0.1 s backstop):
   Entries are tracked by stable per-entry identity (`op.as_pointer()`), not
   position, so a repeating operator history is captured exactly, with no
   duplicate re-emission.
-- `blender.action_captured` (count metric) — operators logged per drain (gated on n > 0)
+- Edits made via the redo panel (F9) after an operator has run — Blender
+  re-executes the same operator with new parameters via `undo_post` rather
+  than `redo_post` — are detected separately and logged to
+  `blender.action_redo`. A detected redo-panel edit replaces the
+  `blender.lifecycle` "undo" log for that event — or the "redo" log, on any
+  Blender version that does route the edit through `redo_post` — since the
+  underlying fact is a parameter change, not an undo.
+- `blender.action_captured` (count metric) — operators logged per drain,
+  including redo-panel updates (gated on n > 0)
 - `blender.action_gap` (count metric) — full-ring turnover between drains (genuine FIFO loss)
 - Mode / workspace / tool transitions → `blender.mode` / `.workspace` / `.tool`
 - Runtime add-on enable/disable → `blender.addon_state`
 
-Lifecycle (`bpy.app.handlers` + `bpy.msgbus`): file load/save, undo/redo,
-render start/complete/cancel, frame change, active-object type changes.
+Lifecycle (`bpy.app.handlers` + `bpy.msgbus`): file load/save, undo/redo (the
+"undo"/"redo" log is suppressed when the event is instead recognized as a
+redo-panel edit, see above), render start/complete/cancel, frame change,
+active-object type changes.
 
 ### Python exceptions
 

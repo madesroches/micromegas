@@ -47,6 +47,10 @@ _POLL_INTERVAL_S: float = 0.1
 # Cap on a single action log message (bl_idname + name + params).
 _MAX_MSG_LEN: int = 4096
 
+# Stands in for a macro sub-operator's parameters, whose real edited values are
+# unreachable from a stored history entry (see _is_macro_subop_ref).
+_MACRO_PARAM_PLACEHOLDER: str = "<sub-operator, values unavailable>"
+
 # Set of op.as_pointer() values seen on the previous poll. None until the first
 # poll. A pointer is the stable identity of a wm.operators history entry (the
 # underlying wmOperator* node), so set membership across polls tells us exactly
@@ -55,6 +59,19 @@ _prev_op_ptrs: "set[int] | None" = None
 
 # Blender hard-caps wm.operators at 32 entries; no Python API to resize.
 _ring_capacity: int = 32
+
+# Identity + formatted message of the newest ring entry as of the last poll.
+# Redo-panel edits re-execute an operator in place (same as_pointer(), new
+# params) via undo_post rather than redo_post, so the pointer-set diff above
+# misses them; check_redo_update() diffs against this baseline instead.
+_last_op_ptr: "int | None" = None
+_last_op_msg: "str | None" = None
+# Whether _last_op_msg was built from *readable* parameters. A baseline taken
+# while as_keywords() was failing carries no params section at all (or is None),
+# so it would differ from any later readable message purely because the section
+# appeared — indistinguishable from a real edit. check_redo_update() uses this
+# to re-baseline instead of reporting that non-difference as an update.
+_last_op_params_ok: bool = False
 
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
@@ -83,13 +100,51 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _format_op(op) -> str:
+def _is_macro_subop_ref(value) -> bool:
+    """True for a macro's sub-operator reference (e.g. the
+    ``TRANSFORM_OT_translate`` entry inside
+    ``OBJECT_OT_duplicate_move.as_keywords()``): a live bpy.types.<OT>
+    instance, not an OperatorProperties. Its bl_rna reads back frozen schema
+    defaults and its IDProperty group is empty — verified in the Python
+    console — so a stored wm.operators entry has no reachable API for the
+    macro sub-op's real edited values.
+    """
+    return hasattr(value, "bl_rna") and not hasattr(value, "as_keywords")
+
+
+def _params_of(op) -> "tuple[dict | None, bool]":
+    """``(params, is_macro)``: ``op.as_keywords()`` with macro sub-op refs
+    replaced by a placeholder (real values unreachable, see
+    ``_is_macro_subop_ref``) instead of misleading frozen-default scalars.
+
+    ``params`` is None when the stored entry's values are unreadable at all —
+    distinct from an operator that simply takes no parameters ({}). ``is_macro``
+    reports whether any sub-op ref was found. Both let callers that cannot work
+    with unreadable values (``check_redo_update``) bail out without walking the
+    params a second time.
+    """
+    # The sub-op scan is inside the try as well: hasattr() only swallows
+    # AttributeError, so touching a value's bl_rna on a stale RNA reference
+    # raises ReferenceError straight through it.
+    try:
+        params = dict(op.as_keywords())
+        is_macro = False
+        for key, value in list(params.items()):
+            if _is_macro_subop_ref(value):
+                params[key] = _MACRO_PARAM_PLACEHOLDER
+                is_macro = True
+    except Exception:
+        return None, False
+    return params, is_macro
+
+
+def _format_op(op, params) -> str:
     """`bl_idname (name) {params}` capped to _MAX_MSG_LEN.
 
-    bl_idname is always present and bounded. name is best-effort. Parameter
-    extraction on a *stored* history entry is not guaranteed (it is an
-    OperatorProperties/macro instance, not a live operator), so it runs in its
-    own try/except and is simply omitted when unavailable.
+    bl_idname is always present and bounded. name is best-effort. ``params`` is
+    the result of ``_params_of(op)[0]`` (None when unreadable) — callers pass it
+    explicitly since they've always already computed it, rather than this
+    function walking the operator's RNA a second time.
     """
     msg = op.bl_idname  # always available, bounded cardinality
     try:
@@ -99,7 +154,6 @@ def _format_op(op) -> str:
     except Exception:
         pass
     try:
-        params = dict(op.as_keywords())
         if params:
             msg = f"{msg} {params}"
     except Exception:
@@ -108,7 +162,7 @@ def _format_op(op) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_ptrs
+    global _prev_op_ptrs, _last_op_ptr, _last_op_msg, _last_op_params_ok
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
@@ -122,7 +176,7 @@ def _poll_operators() -> None:
     if prev is None:
         new_ops = []
     else:
-        new_ops = [op for op, p in zip(ops, cur_ptrs) if p not in prev]
+        new_ops = [(op, p) for op, p in zip(ops, cur_ptrs) if p not in prev]
 
     # Genuine loss (gap) — the ONLY real overflow condition: ring is full AND
     # none of last poll's entries survive, meaning entries were FIFO-dropped
@@ -147,20 +201,109 @@ def _poll_operators() -> None:
         )
         _metric_i("blender.action_gap", "count", 1)
     n = 0
-    for op in new_ops:
+    newest_msg = None  # reused for the baseline below, so we format at most once
+    newest_params_ok = False
+    for op, ptr in new_ops:
         try:
-            _log(_b.LEVEL_TRACE, "blender.action", _format_op(op))
+            params = _params_of(op)[0]
+            msg = _format_op(op, params)
+            _log(_b.LEVEL_TRACE, "blender.action", msg)
             n += 1
+            if ptr == cur_ptrs[-1]:
+                newest_msg = msg
+                newest_params_ok = params is not None
         except Exception:
             pass
     if n > 0:
         _metric_i("blender.action_captured", "count", n)
     _prev_op_ptrs = set(cur_ptrs)
 
+    # Baseline for check_redo_update() to diff against. Only (re)established
+    # when the newest pointer changes: refreshing it on every poll — even
+    # while the newest op is unchanged — would let a poll that lands between
+    # a redo-panel edit and the undo_post handler capture the *edited* value
+    # as the baseline, so check_redo_update() would see no diff and miss the
+    # edit. Leaving it untouched here means check_redo_update() is the only
+    # thing that advances it once an op is baselined, regardless of how many
+    # extra polls run before undo_post fires.
+    if not ops:
+        _last_op_ptr = None
+        _last_op_msg = None
+        _last_op_params_ok = False
+    elif cur_ptrs[-1] != _last_op_ptr:
+        _last_op_ptr = cur_ptrs[-1]
+        if newest_msg is not None:
+            # already formatted in the emit loop above
+            _last_op_msg = newest_msg
+            _last_op_params_ok = newest_params_ok
+        else:
+            try:
+                params = _params_of(ops[-1])[0]
+                _last_op_msg = _format_op(ops[-1], params)
+                _last_op_params_ok = params is not None
+            except Exception:
+                _last_op_msg = None
+                _last_op_params_ok = False
+
 
 def drain_operators() -> None:
     """Drain the operator-history ring; called by the recorder modal on each discrete event."""
     _poll_operators()
+
+
+def check_redo_update() -> bool:
+    """Catch redo-panel edits: Blender re-runs exec() on the same wmOperator
+    (same as_pointer(), new params) via undo_post rather than redo_post, so
+    _poll_operators' pointer-set diff treats it as already-seen. This diffs
+    the newest entry's formatted message against the baseline _poll_operators
+    recorded, and logs an update on mismatch.
+
+    Macros (e.g. OBJECT_OT_duplicate_move) are skipped: their sub-op values
+    are unreachable (see _is_macro_subop_ref), so there's nothing to diff, and
+    a plain Ctrl+Z undo of a macro would otherwise look identical to a redo
+    edit (same ptr, no readable param change). They fall through to a normal
+    "undo" log, as before this function existed.
+
+    Call from undo_post (and redo_post, in case some Blender version fires it
+    too). No preceding _poll_operators() call is required: the baseline only
+    ever advances when the newest pointer changes, so any number of interleaved
+    polls is safe. Returns True if a redo-panel update was logged, so the caller
+    skips the plain "undo" log for the same event.
+    """
+    global _last_op_msg, _last_op_params_ok
+    # Guarded together: unlike _poll_operators (whose only callers wrap it in
+    # try/except), this runs straight off an undo_post/redo_post handler, so a
+    # stale RNA reference here would escape into Blender instead of just costing
+    # us the "undo" log.
+    try:
+        ops = list(bpy.context.window_manager.operators)
+        if not ops or ops[-1].as_pointer() != _last_op_ptr:
+            return False  # no entries, or newest isn't the one we last saw
+    except Exception:
+        return False
+    newest = ops[-1]
+    try:
+        params, is_macro = _params_of(newest)
+        if is_macro or params is None:
+            # macro sub-op values, or params unreadable at all: nothing to diff
+            return False
+        msg = _format_op(newest, params)
+    except Exception:
+        return False
+    if not _last_op_params_ok:
+        # The baseline was taken while the params were unreadable, so it carries
+        # no params section: any mismatch below would just be that section
+        # appearing, not a parameter change. Adopt the readable message as the
+        # baseline so subsequent edits *are* diffable, and report no update.
+        _last_op_msg = msg
+        _last_op_params_ok = True
+        return False
+    if msg == _last_op_msg:
+        return False
+    _log(_b.LEVEL_TRACE, "blender.action_redo", msg)
+    _metric_i("blender.action_captured", "count", 1)
+    _last_op_msg = msg
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +388,7 @@ def register() -> None:
 
 def unregister() -> None:
     global _prev_op_ptrs, _last_mode, _last_workspace, _last_tool, _last_addons
+    global _last_op_ptr, _last_op_msg, _last_op_params_ok
     try:
         if bpy.app.timers.is_registered(_poll_timer):
             bpy.app.timers.unregister(_poll_timer)
@@ -256,3 +400,6 @@ def unregister() -> None:
     _last_workspace = None
     _last_tool = None
     _last_addons = None
+    _last_op_ptr = None
+    _last_op_msg = None
+    _last_op_params_ok = False

@@ -1,43 +1,18 @@
 """Tests for actions.py: operator-history drain (identity-based)."""
 
 import pytest
+from _op_helpers import FakeOp, MacroSubOp, StaleRnaValue, set_ops as _set_ops
 
 from micromegas_blender import actions
 
 
-class FakeOp:
-    def __init__(self, idname, name="", kw=None):
-        self.bl_idname = idname
-        self.name = name
-        self._kw = kw
-
-    def as_keywords(self):
-        if self._kw is None:
-            raise RuntimeError("params unavailable on stored history entry")
-        return self._kw
-
-    def as_pointer(self):
-        return id(self)
-
-
 @pytest.fixture(autouse=True)
-def _wire(rec_lib, fake_bpy):
-    actions.set_context(rec_lib, object())
-    actions._prev_op_ptrs = None
-    actions._last_mode = None
-    actions._last_workspace = None
-    actions._last_tool = None
-    actions._last_addons = None
-    yield
-    actions.set_context(None, None)
+def _wire(wired_actions):
+    pass
 
 
 def _action_msgs(rec_lib):
     return [msg for _lvl, target, msg in rec_lib.logs if target == "blender.action"]
-
-
-def _set_ops(fake_bpy, ops):
-    fake_bpy.context.window_manager.operators = ops
 
 
 # --- _poll_operators (integration over the fake ring) ----------------------
@@ -61,6 +36,40 @@ def test_poll_emits_new_actions_with_params(rec_lib, fake_bpy):
     assert "MESH_OT_primitive_cube_add" in msgs[0]
     assert "Add Cube" in msgs[0]
     assert "size" in msgs[0]  # parameters captured when available
+
+
+def test_poll_masks_macro_subop_params(rec_lib, fake_bpy):
+    # A macro's sub-op values read back as frozen schema defaults, so they are
+    # replaced by a placeholder rather than logged as if they were real.
+    select_all = FakeOp("OBJECT_OT_select_all")
+    _set_ops(fake_bpy, [select_all])
+    actions._poll_operators()  # baseline
+    _set_ops(
+        fake_bpy,
+        [
+            select_all,
+            FakeOp(
+                "OBJECT_OT_duplicate_move",
+                kw={"TRANSFORM_OT_translate": MacroSubOp()},
+            ),
+        ],
+    )
+    actions._poll_operators()
+
+    msgs = _action_msgs(rec_lib)
+    assert len(msgs) == 1
+    assert actions._MACRO_PARAM_PLACEHOLDER in msgs[0]
+
+
+def test_params_of_reports_unreadable_on_stale_value(fake_bpy):
+    # A value whose bl_rna access raises (freed RNA struct) must come back as the
+    # documented "unreadable" result rather than escaping the sub-op scan: the
+    # contract check_redo_update relies on.
+    op = FakeOp("TRANSFORM_OT_resize", kw={"value": StaleRnaValue()})
+    params, is_macro = actions._params_of(op)
+    assert (params, is_macro) == (None, False)
+    # _format_op still yields the bounded part of the message.
+    assert actions._format_op(op, params) == "TRANSFORM_OT_resize"
 
 
 def test_poll_no_change_emits_nothing(rec_lib, fake_bpy):
