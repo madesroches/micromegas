@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Fix `micromegas-screens` CLI silently dropping a screen's folder assignment on import/pull, and showing a spurious diff that would wipe it on apply: thread `folder_path` through `WebClient.create_screen`/`update_screen` and the CLI's file read/write/diff paths end-to-end (#1362)
   * Add folder organization for saved screens: a `folders` API (list/create/rename/move/delete) backed by a materialized-path `folder_path` column on `screens`, a sidebar folder tree with breadcrumbs and drag-and-drop move, a folder picker in the Save/Save As dialog, and search that also matches folder names; folder rename/move/delete and screen create/move are serialized with Postgres advisory locks to close TOCTOU races between concurrent operations on the same path (#1159)
   * Fix categorical bar charts clipping the first/last bars and off-centering their x-axis labels: pad the categorical x-scale by half a slot via a new `buildXScale` helper so every bar sits fully inside the plot area
   * Add currency-aware value formatting: a metric `unit` recognized as an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`) now renders as proper money (`"$1,234.56"`) in tooltips, the stats panel, and Y-axis ticks, instead of falling through to a bare number with the raw unit string appended (#1326)
