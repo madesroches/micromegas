@@ -280,6 +280,21 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
             _prev_excepthook(exc_type, exc_value, exc_tb)
 
 
+def log(level: int, target: str, msg: str) -> None:
+    """Public API: log a message via the active telemetry session, if any.
+
+    No-ops silently if the add-on isn't registered/initialized, so other
+    add-ons can call this unconditionally without checking for our presence
+    first. `level` uses the LEVEL_* constants from binding.py (mirrors the
+    Rust log crate): FATAL=1, ERROR=2, WARN=3, INFO=4, DEBUG=5, TRACE=6.
+    """
+    if _lib and _handle:
+        try:
+            _lib.log(_handle, level, target, str(msg))
+        except Exception:
+            pass
+
+
 def register():
     global _lib, _handle, _session_id, _prefs_registered
 
