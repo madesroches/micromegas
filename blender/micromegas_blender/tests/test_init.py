@@ -8,6 +8,7 @@ without keep-alive that second register() fails. See
 __init__._is_keep_alive_enabled / _STATE_ATTR.
 """
 
+import glob
 import importlib
 import sys
 
@@ -16,6 +17,22 @@ import pytest
 import micromegas_blender as mm
 
 _PKG = "micromegas_blender"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_crash_harvest(monkeypatch):
+    """Keep mm.register() from harvesting genuine crash files off this machine.
+
+    register() -> _wire_up() -> crash_harvester.register_startup_harvest()
+    unconditionally globs /tmp (and tempfile.gettempdir()) for *.crash.txt
+    files and os.rename()s any match — real Blender crash reports on a
+    developer machine included. Patched at the stdlib glob.glob level rather
+    than on crash_harvester's own functions: the fresh-module-reload test
+    below purges `micromegas_blender.crash_harvester` from sys.modules and
+    re-imports it, which would silently drop a monkeypatch on that module's
+    attributes, but `glob` is stdlib and never gets purged.
+    """
+    monkeypatch.setattr(glob, "glob", lambda *a, **k: [])
 
 
 class CountingLib:

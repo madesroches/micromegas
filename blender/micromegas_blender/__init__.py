@@ -338,6 +338,12 @@ def register():
         # inactive until Blender restarts. That matters most in the dev-reload
         # workflow keep-alive exists for, where _wire_up() freshly compiles
         # every sub-module on each enable and one bad edit lands here.
+        #
+        # Undo whatever _wire_up() managed to complete before failing: without
+        # this, the next (successful) enable wires a *second* copy of every
+        # handler/msgbus subscription from a fresh module instance, and the
+        # dead instance's copies are unreachable by any future unregister().
+        _teardown_wiring()
         setattr(sys, _STATE_ATTR, (lib, handle, _session_id))
         _lib = None
         _handle = None
@@ -408,6 +414,60 @@ def _wire_up(lib, handle) -> None:
     lib.log(handle, 4, "blender.addon", f"session_id={_session_id}")
 
 
+def _teardown_wiring() -> None:
+    """Undo whatever _wire_up() installed: hooks, sub-module registration.
+
+    Used both by unregister() (the expected, full teardown) and by
+    register()'s except branch (rollback after a partial _wire_up() failure).
+    In the rollback case some steps below may never have run — each step is
+    therefore independent and individually guarded, so one missing/failing
+    step neither raises nor prevents the others from running, and this helper
+    itself can never mask the caller's original exception.
+    """
+    global _prev_excepthook
+
+    if _prev_excepthook is not None:
+        try:
+            sys.excepthook = _prev_excepthook
+        except Exception:
+            pass
+        _prev_excepthook = None
+
+    try:
+        bpy.app.timers.unregister(_periodic_flush)
+    except Exception:
+        pass
+
+    try:
+        from . import actions
+
+        actions.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import recorder
+
+        recorder.set_event_callback(None)
+        recorder.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import handlers
+
+        handlers.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import crash_harvester
+
+        crash_harvester.unregister_startup_harvest()
+    except Exception:
+        pass
+
+
 def _shutdown():
     """Really shut down the native telemetry session (mm_shutdown).
 
@@ -436,29 +496,11 @@ def _shutdown():
 
 
 def unregister():
-    global _prev_excepthook, _lib, _handle
+    global _lib, _handle
 
     keep_alive = _is_keep_alive_enabled()
 
-    if _prev_excepthook is not None:
-        sys.excepthook = _prev_excepthook
-        _prev_excepthook = None
-
-    try:
-        bpy.app.timers.unregister(_periodic_flush)
-    except Exception:
-        pass
-
-    try:
-        from . import actions, crash_harvester, handlers, recorder
-
-        actions.unregister()
-        recorder.set_event_callback(None)
-        recorder.unregister()
-        handlers.unregister()
-        crash_harvester.unregister_startup_harvest()
-    except Exception:
-        pass
+    _teardown_wiring()
 
     if keep_alive and _lib is not None and _handle is not None:
         # Park the live session on sys instead of shutting it down, so a
