@@ -67,7 +67,7 @@ _ATEXIT_REGISTERED_ATTR = "_micromegas_addon_atexit_registered"
 class MicromegasAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
-    dev_mode: bpy.props.BoolProperty(
+    keep_alive: bpy.props.BoolProperty(
         name="Keep Alive (Dev Only)",
         description=(
             "Keep the telemetry session alive across add-on disable/enable "
@@ -81,12 +81,12 @@ class MicromegasAddonPreferences(bpy.types.AddonPreferences):
     )
 
     def draw(self, context):
-        self.layout.prop(self, "dev_mode")
+        self.layout.prop(self, "keep_alive")
 
 
-def _is_dev_mode() -> bool:
+def _is_keep_alive_enabled() -> bool:
     try:
-        return bool(bpy.context.preferences.addons[__package__].preferences.dev_mode)
+        return bool(bpy.context.preferences.addons[__package__].preferences.keep_alive)
     except Exception:
         return False
 
@@ -288,10 +288,13 @@ def register():
 
     cached = getattr(sys, _STATE_ATTR, None)
     if cached is not None:
-        # Dev mode: a prior unregister() in this same process parked a live
-        # session here instead of shutting it down. Reuse it — mm_init can't
-        # be called twice in one process.
+        # A prior unregister() in this same process parked a live session
+        # here (keep-alive) instead of shutting it down. Reuse it regardless
+        # of the *current* keep_alive setting — mm_init cannot be called
+        # twice in one process, so once a session is parked it's the only
+        # working session for the rest of this process's life either way.
         lib, handle, _session_id = cached
+        delattr(sys, _STATE_ATTR)
     else:
         _session_id = str(uuid.uuid4())
 
@@ -308,7 +311,7 @@ def register():
                 "If you just disabled and re-enabled the add-on, restart Blender — "
                 "the native telemetry layer initializes once per process and "
                 "cannot be reinitialized within the same session. Enable "
-                "Dev Mode in the add-on preferences to avoid this."
+                "Keep Alive in the add-on preferences to avoid this."
             )
             return
 
@@ -368,11 +371,11 @@ def _shutdown():
     """Really shut down the native telemetry session (mm_shutdown).
 
     Looks at the currently active module globals first; if those are empty
-    (dev-mode unregister moved the live session to the sys cache instead of
-    tearing it down), falls back to that cache. Either way, this is the one
-    place that finds "whatever session is still alive" and kills it for
-    real — used both at true process exit (atexit) and by a non-dev-mode
-    unregister().
+    (a keep-alive unregister moved the live session to the sys cache instead
+    of tearing it down), falls back to that cache. Either way, this is the
+    one place that finds "whatever session is still alive" and kills it for
+    real — used both at true process exit (atexit) and by an unregister()
+    with keep-alive off.
     """
     global _lib, _handle
     lib, handle = _lib, _handle
@@ -394,7 +397,7 @@ def _shutdown():
 def unregister():
     global _prev_excepthook, _lib, _handle
 
-    dev_mode = _is_dev_mode()
+    keep_alive = _is_keep_alive_enabled()
 
     if _prev_excepthook is not None:
         sys.excepthook = _prev_excepthook
@@ -416,7 +419,7 @@ def unregister():
     except Exception:
         pass
 
-    if dev_mode and _lib is not None and _handle is not None:
+    if keep_alive and _lib is not None and _handle is not None:
         # Park the live session on sys instead of shutting it down, so a
         # same-process re-register (e.g. VS Code Blender-Dev's re-enable on
         # every launch) can reuse it — mm_init can't be called twice in one

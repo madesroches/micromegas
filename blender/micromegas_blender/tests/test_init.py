@@ -1,11 +1,11 @@
-"""Tests for the dev-mode session-caching behavior in __init__.py.
+"""Tests for the keep-alive session-caching behavior in __init__.py.
 
-Dev mode exists because the VS Code Blender-Dev extension re-enables the
+Keep-alive exists because the VS Code Blender-Dev extension re-enables the
 add-on on every launch (bpy.ops.preferences.addon_enable on an
 already-enabled module -> Blender calls unregister() then register() again,
 same process). The native lib can only mm_init() once per process, so
-without dev mode that second register() fails. See __init__._is_dev_mode /
-_STATE_ATTR.
+without keep-alive that second register() fails. See
+__init__._is_keep_alive_enabled / _STATE_ATTR.
 """
 
 import sys
@@ -35,9 +35,11 @@ class CountingLib:
         pass
 
 
-def _set_dev_mode(fake_bpy, enabled: bool) -> None:
+def _set_keep_alive(fake_bpy, enabled: bool) -> None:
     addons = fake_bpy.context.preferences.addons
-    prefs = type("Prefs", (), {"preferences": type("P", (), {"dev_mode": enabled})()})
+    prefs = type(
+        "Prefs", (), {"preferences": type("P", (), {"keep_alive": enabled})()}
+    )
     addons[mm.__package__] = prefs()
 
 
@@ -55,11 +57,11 @@ def _register_with_lib(monkeypatch, lib):
     mm.register()
 
 
-def test_dev_mode_off_unregister_shuts_down_and_clears_state(
+def test_keep_alive_off_unregister_shuts_down_and_clears_state(
     fake_bpy, monkeypatch
 ):
     _clear_state()
-    _set_dev_mode(fake_bpy, False)
+    _set_keep_alive(fake_bpy, False)
     lib = CountingLib()
     try:
         _register_with_lib(monkeypatch, lib)
@@ -75,9 +77,9 @@ def test_dev_mode_off_unregister_shuts_down_and_clears_state(
         _clear_state()
 
 
-def test_dev_mode_on_unregister_parks_state_without_shutdown(fake_bpy, monkeypatch):
+def test_keep_alive_on_unregister_parks_state_without_shutdown(fake_bpy, monkeypatch):
     _clear_state()
-    _set_dev_mode(fake_bpy, True)
+    _set_keep_alive(fake_bpy, True)
     lib = CountingLib()
     try:
         _register_with_lib(monkeypatch, lib)
@@ -98,9 +100,9 @@ def test_dev_mode_on_unregister_parks_state_without_shutdown(fake_bpy, monkeypat
         _clear_state()
 
 
-def test_dev_mode_on_reregister_reuses_cached_session(fake_bpy, monkeypatch):
+def test_keep_alive_on_reregister_reuses_cached_session(fake_bpy, monkeypatch):
     _clear_state()
-    _set_dev_mode(fake_bpy, True)
+    _set_keep_alive(fake_bpy, True)
     lib = CountingLib()
     try:
         _register_with_lib(monkeypatch, lib)
@@ -122,14 +124,46 @@ def test_dev_mode_on_reregister_reuses_cached_session(fake_bpy, monkeypatch):
         assert lib.init_calls == 1  # unchanged: no second mm_init
         assert mm._lib is lib
         assert mm._session_id == first_session_id
+        # The consumed cache must not linger once it's back in module globals.
+        assert not hasattr(sys, mm._STATE_ATTR)
+    finally:
+        _clear_state()
+
+
+def test_keep_alive_on_reregister_reuses_session_even_if_toggled_off(
+    fake_bpy, monkeypatch
+):
+    """mm_init cannot be called twice in a process, so a parked session must
+    be reused on the next register() even if keep_alive was turned off in
+    between — there's no other way to keep telemetry working."""
+    _clear_state()
+    _set_keep_alive(fake_bpy, True)
+    lib = CountingLib()
+    try:
+        _register_with_lib(monkeypatch, lib)
+        mm.unregister()
+        assert hasattr(sys, mm._STATE_ATTR)
+
+        _set_keep_alive(fake_bpy, False)
+        monkeypatch.setattr(
+            mm,
+            "_load_lib",
+            lambda: (_ for _ in ()).throw(
+                AssertionError("_load_lib should not be called on cached re-register")
+            ),
+        )
+        mm.register()
+
+        assert lib.init_calls == 1
+        assert mm._lib is lib
     finally:
         _clear_state()
 
 
 def test_shutdown_falls_back_to_sys_cache(fake_bpy, monkeypatch):
-    """Simulates atexit firing after a dev-mode unregister parked the state."""
+    """Simulates atexit firing after a keep-alive unregister parked the state."""
     _clear_state()
-    _set_dev_mode(fake_bpy, True)
+    _set_keep_alive(fake_bpy, True)
     lib = CountingLib()
     try:
         _register_with_lib(monkeypatch, lib)
@@ -144,9 +178,9 @@ def test_shutdown_falls_back_to_sys_cache(fake_bpy, monkeypatch):
         _clear_state()
 
 
-def test_atexit_registered_only_once_across_dev_mode_cycle(fake_bpy, monkeypatch):
+def test_atexit_registered_only_once_across_keep_alive_cycle(fake_bpy, monkeypatch):
     _clear_state()
-    _set_dev_mode(fake_bpy, True)
+    _set_keep_alive(fake_bpy, True)
     lib = CountingLib()
     calls = []
     monkeypatch.setattr(

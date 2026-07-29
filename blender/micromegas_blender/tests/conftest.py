@@ -43,7 +43,7 @@ def _make_fake_handlers() -> types.SimpleNamespace:
 class _FakeAddonsCollection(dict):
     """Dict-like stand-in for bpy.context.preferences.addons: supports both
     `.keys()` (used for the enabled-addons fingerprint) and `[module_name]`
-    lookup (used by `_is_dev_mode()`)."""
+    lookup (used by `_is_keep_alive_enabled()`)."""
 
 
 def _make_fake_context() -> types.SimpleNamespace:
