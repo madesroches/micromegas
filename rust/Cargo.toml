@@ -47,7 +47,7 @@ clap = { version = "4", features = ["derive", "env"] }
 colored = { version = "3" }
 colorous = "1.0"
 ctrlc = "3.2.0"
-datafusion = "54.0"
+datafusion = "54.1"
 flate2 = "1.0"
 foyer = "0.22"
 foyer-common = "0.22"
