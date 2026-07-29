@@ -47,7 +47,7 @@ Some(Data::Summary(s)) => {
 `dp.attributes` + `extras` into `properties` via `attrs_to_jsonb`, and appends one row across
 all `measures` columns.
 
-### `SummaryDataPoint` shape (`opentelemetry-proto` v0.31, `metrics.v1.rs:656-706`)
+### `SummaryDataPoint` shape (`opentelemetry-proto` v0.32, `metrics.v1.rs:656-706`)
 
 ```rust
 pub struct SummaryDataPoint {
