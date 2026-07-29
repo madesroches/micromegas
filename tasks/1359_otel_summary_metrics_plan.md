@@ -86,11 +86,22 @@ rejected per the "why this isn't just a missing match arm" framing in the issue)
 `rust/analytics/src/lakehouse/metrics_view.rs:39` — `const SCHEMA_VERSION: u8 = 6;`, referenced
 by both `MetricsViewMaker::get_schema_hash` (:66-68) and `MetricsView::get_file_schema_hash`
 (:139-141). `verify_overlapping_partitions` matches existing partitions against this hash, so
-bumping it invalidates every existing `measures` partition and forces a rebuild from source
-blocks — which is exactly what's needed here, since the pre-fix backlog's raw
-`ResourceMetrics` bytes are already durably stored in lake blocks (only the *materialized* rows
-were dropped). Per the issue's "Backfill consequence" section: this plan ships **no parquet
-schema change**, so the version bump must be deliberate, not incidental.
+bumping it excludes every existing `measures` partition from future queries and makes any range
+that gets (re-)materialized pick up the fix — which is exactly what's needed here, since the
+pre-fix backlog's raw `ResourceMetrics` bytes are already durably stored in lake blocks (only the
+*materialized* rows were dropped). This is **not** an automatic backfill, though: `measures` is
+the "global" view instance, whose `MetricsView::jit_update` is a no-op (`metrics_view.rs:152-156`,
+"this view instance is updated using the deamon") — only the daemon's trailing-window tasks
+(`EveryDayTask`/`EveryHourTask`/`EveryMinuteTask`/`EverySecondTask` in
+`rust/public/src/servers/maintenance.rs`) re-materialize `measures`, and they only cover a
+short recent window (e.g. the day task is now − 2 days to now). Older ranges — including the
+CloudWatch backlog, which likely predates that window — stay invisible under the new hash until
+someone runs `regenerate_partitions('measures', <begin>, <end>, <delta>)` for the desired
+historical range (optionally followed by `retire_partitions` to drop the stale rows), same as
+the precedent in `tasks/completed/dictionary_key_overflow_plan.md` (PR #521, PR #934). That
+backfill is a deploy-time operational step, not part of this plan's code change. Per the issue's
+"Backfill consequence" section: this plan ships **no parquet schema change**, so the version
+bump must be deliberate, not incidental.
 
 ### Docs to update
 
@@ -373,10 +384,6 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 ## Open Questions
 
 None blocking. Noted for awareness:
-- **Backfill is automatic but not instant.** The `SCHEMA_VERSION` bump invalidates partitions;
-  they re-derive from source blocks on the next partition-generation pass (daemon or JIT), not
-  immediately on deploy. No action needed beyond the bump — flagging so it isn't mistaken for a
-  bug if old data doesn't appear the instant the fix ships.
 - **Configured percentiles (p90/p99/...) are silently out of `measures` today, and stay that
   way after this fix** — dropped at `debug!`, same as before. If a concrete need for querying
   those percentiles shows up, revisit as a follow-up (same `append_row` mechanism, one more
