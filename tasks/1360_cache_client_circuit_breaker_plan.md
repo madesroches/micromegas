@@ -19,9 +19,8 @@ This plan adds two things:
    delivered). See "The rule: abandon where falling back is free" for why the boundary sits there and
    nowhere else.
 2. **A circuit breaker** gating the whole client: after 5 consecutive unresponsive requests, reads
-   and prefetches skip the cache entirely (no connection, no timeout cost) for an
-   exponentially-backing-off cooldown, with exactly one probe request admitted per cooldown to detect
-   recovery.
+   and prefetches skip the cache entirely (no connection, no timeout cost) for a fixed 3s cooldown,
+   with one probe request admitted per cooldown to detect recovery.
 
 ## Current State
 
@@ -249,13 +248,12 @@ transitions are *returned* to the caller, which owns the metrics and logs.
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerConfig {
     /// Consecutive unresponsive requests that trip the breaker. `0` disables it.
-    pub failure_threshold: u32,     // 5
-    /// Longest an admitted request can run before it reports an outcome — the
-    /// client's `stall_timeout`. Every open window is at least this long (see
-    /// `admit_at`), which is what guarantees at most one probe in flight.
-    pub probe_budget: Duration,     // 3s (= CacheClientConfig::stall_timeout)
-    pub initial_cooldown: Duration, // 3s (must be >= probe_budget to be meaningful)
-    pub max_cooldown: Duration,     // 30s
+    pub failure_threshold: u32, // 5
+    /// How long the circuit stays open before one probe is admitted. Fixed, not
+    /// backed off — see "Why the cooldown is fixed". The client passes its
+    /// `stall_timeout`, so the cooldown is at least as long as a stalling
+    /// request takes to report, which keeps probes from piling up.
+    pub cooldown: Duration, // 3s (= CacheClientConfig::stall_timeout)
 }
 
 /// What a caller may do with the guarded resource right now.
@@ -276,8 +274,6 @@ pub enum Admission {
 pub enum Transition {
     None,
     Opened { cooldown: Duration },
-    /// A probe failed; cooldown doubled.
-    Backoff { cooldown: Duration },
     Closed,
 }
 
@@ -291,23 +287,14 @@ pub struct CircuitBreaker {
 struct State {
     /// Consecutive unresponsive requests while closed; any response resets it.
     consecutive: u32,
-    /// Current cooldown; doubles per failed probe, capped at `max_cooldown`.
-    cooldown: Duration,
     /// `Some(t)` => open: bypass until `t`, then admit one probe.
     open_until: Option<Instant>,
-    /// Whether the *current* open window has already doubled the cooldown
-    /// once. Every request admitted before the trip is still in flight when
-    /// it opens, and each one reports `unresponsive` shortly after; without
-    /// this flag each of those stale reports would be read as its own failed
-    /// probe and the cooldown would compound straight to `max_cooldown`
-    /// before the real probe is ever admitted. Reset to `false` whenever
-    /// `admit_at` opens a fresh window. Because every window is at least
-    /// `probe_budget` long, the drain of stale pre-trip reports concentrates
-    /// in the first window or two rather than spreading across dozens of
-    /// them. See the note below the pseudocode.
-    backoff_applied: bool,
 }
 ```
+
+Two fields, and that is the whole state. The earlier draft carried a mutable `cooldown` plus a
+`backoff_applied` flag to keep the exponential doubling idempotent within an open window; both existed
+solely to serve the doubling. See "Why the cooldown is fixed" for why it was dropped.
 
 Public API — each method has an `_at(now: Instant)` form (the real logic) plus a wrapper that passes
 `Instant::now()`, so the state machine is unit-testable with a synthetic clock and no sleeps:
@@ -330,80 +317,74 @@ impl CircuitBreaker {
 Logic:
 
 ```
-// Every open window lasts at least as long as an admitted request can take to
-// report an outcome. Without this floor the breaker admits a new probe every
-// `cooldown` while the previous one is still parked for up to `probe_budget`
-// (with a 100ms cooldown and a 3s budget: ~30 probes in flight at once), and
-// because each admission re-arms `backoff_applied`, each of those failures
-// doubles the cooldown — straight from 100ms to the 30s cap in ~8 steps, for a
-// cache that was only down for a second.
-window(): max(cooldown, probe_budget)
-
 admit_at(now):
     if failure_threshold == 0 { return Allow }          // breaker disabled
     match open_until:
         None                 => Allow
         Some(t) if now < t   => Bypass
         Some(_)              => {
-            open_until = Some(now + window());
-            backoff_applied = false;                    // fresh probe window
+            open_until = Some(now + cooldown);          // re-arm before probing
             Probe
         }
 
 record_responsive_at(_):
-    let was_open = open_until.is_some();
-    consecutive = 0; cooldown = initial_cooldown; open_until = None;
-    backoff_applied = false;
+    let was_open = open_until.take().is_some();
+    consecutive = 0;
     if was_open { Closed } else { None }
 
 record_unresponsive_at(now):
-    if open_until.is_some() {
-        if backoff_applied {
-            None                                         // stale report, already handled this window
-        } else {
-            cooldown = min(cooldown * 2, max_cooldown);
-            open_until = Some(now + window());
-            backoff_applied = true;
-            Backoff { cooldown }
-        }
-    } else {
-        if failure_threshold == 0 { return None }          // breaker disabled; never accumulate
-        consecutive = consecutive.saturating_add(1);
-        if consecutive >= failure_threshold {
-            cooldown = initial_cooldown;
-            open_until = Some(now + window());
-            backoff_applied = false;                     // opening trip itself doesn't count as the probe's backoff
-            Opened { cooldown }
-        } else { None }
-    }
+    if open_until.is_some() { return None }             // already open: a failed
+        // probe needs no action (admit_at re-armed the window when it handed the
+        // probe out), and a stale pre-trip report is a pure no-op.
+    if failure_threshold == 0 { return None }           // breaker disabled; never accumulate
+    consecutive = consecutive.saturating_add(1);
+    if consecutive >= failure_threshold {
+        open_until = Some(now + cooldown);
+        Opened { cooldown }
+    } else { None }
 ```
 
-The flag makes the cooldown doubling idempotent *within* a single open window, and the
-`max(cooldown, probe_budget)` floor makes windows long enough that this is close to a whole-trip
-guarantee. The *first* unresponsive report arriving while `open_until.is_some()` doubles the cooldown
-(whether it is a genuine probe failure or a stale pre-trip request still draining); every other report
-before the next probe is admitted is a no-op. Because a window is at least `probe_budget` long — the
-longest an admitted request can run before reporting — stale pre-trip reports land in the first window
-or two rather than spreading across dozens of them, so the drain costs at most a doubling or two
-instead of escalating straight to `max_cooldown`. A probe-epoch/generation counter (tag each open
-window, ignore reports tagged with an older one) would close the residual gap outright; deferred as a
-refinement, not required for correctness.
+Three properties worth calling out:
 
-Two properties worth calling out:
-
-- **Probe admission extends `open_until` by `max(cooldown, probe_budget)`**, instead of tracking a
-  "probe in flight" flag. Since that is at least as long as an admitted request can take to report,
-  at most one probe is outstanding at a time, and only a genuine probe failure doubles the cooldown.
-  Extending the window rather than holding a flag also keeps the breaker robust to a dropped or
-  cancelled probe future (a cancelled query): the next window simply admits another probe, and the
-  circuit can never get stuck open waiting for a result that will never be reported.
+- **`admit_at` re-arms the window when it hands out a `Probe`**, instead of tracking a "probe in
+  flight" flag. A failed probe therefore needs no bookkeeping at all — the window is already extended,
+  and the next `admit_at` past it admits the next probe. This also keeps the breaker robust to a
+  dropped or cancelled probe future (a cancelled query): the circuit can never get stuck open waiting
+  for a result that will never be reported.
+- **Reports arriving while open are no-ops.** Every request admitted before the trip is still in
+  flight when the circuit opens and reports `unresponsive` shortly after; those stale reports cannot
+  perturb anything, because there is no per-window state left for them to corrupt. This is the main
+  correctness dividend of dropping the backoff.
 - **A plain `std::sync::Mutex`**, never held across an `await`. Contention is a few nanoseconds
   against a network round trip; a lock-free atomics encoding would need a CAS loop for the same
   semantics and no measurable gain.
 
-Cooldown sequence after a trip: 3s → 6 → 12 → 24 → 30s (capped), reset to 3s on recovery. Setting
-`initial_cooldown` below `probe_budget` has no effect on the probe cadence — the floor dominates — so
-the default starts it *at* `probe_budget` rather than at an inert smaller value.
+#### Why the cooldown is fixed
+
+An earlier draft backed the cooldown off exponentially (3s → 6 → 12 → 24 → 30s cap). That is dropped.
+The backoff was paying for itself with a large fraction of the state machine, and buying very little:
+
+- **What it saved.** Fewer probes during a long outage — over 30 minutes, ~60 probes instead of 600.
+  But at most *one* probe is outstanding at a time, and a probe costs exactly one request a
+  stall-then-fallback penalty while every other request bypasses for free. 600 probes over 30 minutes
+  is 0.33 req/s from a query process. That is not the load this gate exists to prevent (see
+  "What this buys" — the failure mode is client-side resource exhaustion from parked tasks).
+- **What it cost.** A mutable `cooldown`, a `max_cooldown` knob, a `probe_budget` knob, an
+  `initial_cooldown` knob with a "must be >= `probe_budget`" invariant, a
+  `window() = max(cooldown, probe_budget)` floor to keep probes from overlapping, and a
+  `backoff_applied` flag whose *only* job was to stop stale pre-trip reports from compounding the
+  doubling straight to the cap. Every one of those exists to serve the doubling.
+- **The floor's premise was also not quite true.** `read_timeout` resets per response frame, so a
+  slow-but-progressing `/obj` body can keep an admitted request alive up to `total_timeout` (15s), not
+  `probe_budget` (3s) — so the floor never strictly guaranteed one probe at a time anyway. With no
+  doubling to corrupt, an occasional overlapping probe is simply harmless.
+- **It made the one open question worse.** Under backoff, a cold cache that trips gets retried on a
+  schedule decaying toward 30s, so demand-driven rewarming stalls for longer. A fixed 3s cooldown
+  re-probes steadily (see "Cold-cache tripping").
+
+So the cooldown is one value, fixed, and the client passes its `stall_timeout` (3s) for it — which
+keeps the cooldown at least as long as a stalling request takes to report, the property the floor was
+reaching for, without a second knob to express it. `Transition::Backoff` is gone with it.
 
 ### Wiring into `CacheClientStore`
 
@@ -515,7 +496,7 @@ fallbacks are happening.
 ```rust
 /// Tunables for `CacheClientStore`. `Default` carries the production values,
 /// `from_env` applies operator overrides, and tests construct one directly
-/// (short timeouts, zero/huge cooldowns) instead of sleeping.
+/// (short timeouts, near-zero or very long cooldown) instead of sleeping.
 #[derive(Debug, Clone)]
 pub struct CacheClientConfig {
     pub connect_timeout: Duration,  // 50ms
@@ -525,7 +506,7 @@ pub struct CacheClientConfig {
     pub abandon_timeout: Duration,  // 500ms
     /// Genuine-liveness bound for the one phase where giving up is a hard query
     /// failure: the `GET /obj` response body. Applied via
-    /// `ClientBuilder::read_timeout`, and reused as the breaker's `probe_budget`.
+    /// `ClientBuilder::read_timeout`, and reused as the breaker's `cooldown`.
     pub stall_timeout: Duration,    // 3s
     pub total_timeout: Duration,    // 15s (unchanged)
     pub breaker: CircuitBreakerConfig,
@@ -570,15 +551,19 @@ without a redeploy.
 
 #### The constants that are not env vars
 
-`stall_timeout` (3s), `probe_budget` (= `stall_timeout`), `initial_cooldown` (= `probe_budget`) and
-`max_cooldown` (30s) stay named constants backing `Default`, not env vars, mirroring
-`L1_TOTAL_FETCH_PERMITS` / `L1_DEMAND_RESERVED_FETCH_PERMITS` in `l1_store.rs:36-40`: that tier exposes
-only its one operator-meaningful knob (`MICROMEGAS_OBJECT_CACHE_L1_MB`) and keeps its secondary tuning
-private. Here the operator-meaningful knobs are the abandon budget, the connect budget, and the
-threshold (`..._BREAKER_THRESHOLD=0` is the escape hatch if the breaker misbehaves in production);
-`stall_timeout` is a liveness bound an order of magnitude above any observed origin latency and the
-cooldown schedule is a tuning-not-a-decision surface. Tests construct `CacheClientConfig` /
-`CircuitBreakerConfig` directly (short timeouts, zero/huge cooldowns) rather than needing the env path.
+After dropping the backoff there are only two: `stall_timeout` (3s) and `total_timeout` (15s), plus the
+breaker `cooldown` that is simply `stall_timeout` rather than a value of its own. They stay named
+constants backing `Default`, not env vars, mirroring `L1_TOTAL_FETCH_PERMITS` /
+`L1_DEMAND_RESERVED_FETCH_PERMITS` in `l1_store.rs:36-40`: that tier exposes only its one
+operator-meaningful knob (`MICROMEGAS_OBJECT_CACHE_L1_MB`) and keeps its secondary tuning private. Here
+the operator-meaningful knobs are the abandon budget, the connect budget, and the threshold
+(`..._BREAKER_THRESHOLD=0` is the escape hatch if the breaker misbehaves in production); `stall_timeout`
+is a liveness bound an order of magnitude above any observed origin latency. Tests construct
+`CacheClientConfig` / `CircuitBreakerConfig` directly (short timeouts, near-zero cooldown) rather than
+needing the env path.
+
+That leaves five configured values in total — `connect_timeout`, `abandon_timeout`, `stall_timeout`,
+`total_timeout`, `failure_threshold` — of which three are env-overridable.
 
 Three operator overrides, parsed with the `warn`-and-default pattern from
 `l1_store.rs:49-57` (factored into a small private `env_millis`/`env_u32` helper rather than repeated
@@ -598,7 +583,7 @@ State transitions log once (not once per request), so an outage doesn't flood:
 |---|---|---|
 | `range_cache_client_abandoned` | An `abandon_timeout` expiry — the cache lost the race against the direct path | `debug!` |
 | `range_cache_client_unresponsive` | Connect failure, transport error, or a `stall_timeout` expiry — the cache is not answering | `debug!` |
-| `range_cache_client_circuit_opened` | `Transition::Opened` | `warn!` with the cooldown |
+| `range_cache_client_circuit_opened` | `Transition::Opened` | `warn!` with the cooldown; re-emitted on each trip, not on each probe failure |
 | `range_cache_client_circuit_closed` | `Transition::Closed` | `info!` |
 | `range_cache_client_circuit_bypassed` | Each read/prefetch that skipped the cache | `debug!` |
 
@@ -606,8 +591,10 @@ State transitions log once (not once per request), so an outage doesn't flood:
 `CircuitBreaker::record_unresponsive`; they stay separate metrics so a dashboard can distinguish a slow
 cache from a dead one (see "Abandon vs. unresponsive").
 
-`Transition::Backoff` logs at `debug!` (bounded to one per cooldown, no separate counter — the
-`opened`/`closed` pair plus `bypassed` volume is enough to reconstruct it).
+There is no per-probe-failure transition to report: with a fixed cooldown a failed probe changes no
+state (see "Why the cooldown is fixed"), so a sustained outage emits `circuit_opened` once and then
+only `bypassed` volume until recovery. Probe failures are still visible as the `abandoned` /
+`unresponsive` counters ticking at roughly one per cooldown while `bypassed` climbs.
 
 ## Implementation Steps
 
@@ -630,7 +617,9 @@ cache from a dead one (see "Abandon vs. unresponsive").
    `Default`.
 5. Add `with_config`; make `new` delegate to it. Store `config` and `breaker: Arc<CircuitBreaker>` on
    `CacheClientStore` (an `Arc` so `full_stream_with_fallback`'s `'static` stream can hold its own clone
-   without borrowing `&self`). Build the **one** `reqwest::Client` with
+   without borrowing `&self`). `CacheClientConfig::default`/`from_env` set
+   `breaker.cooldown = stall_timeout`, so the two never drift; a test that overrides `stall_timeout`
+   sets the cooldown it wants explicitly. Build the **one** `reqwest::Client` with
    `connect_timeout(config.connect_timeout)`, `read_timeout(config.stall_timeout)` and
    `timeout(config.total_timeout)` — no second client.
 6. Add the `send(&self, req, what)` helper (no budget parameter — `abandon_timeout` for all of them) and
@@ -711,16 +700,16 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
 - **Any HTTP response counts as "responsive".** A 5xx-ing cache stays in circuit, because it answers
   cheaply and doesn't cause the resource exhaustion this gate exists to prevent; reads still fall back
   per-request as they do today. The gate is about *responsiveness*, not correctness.
+- **A fixed cooldown instead of exponential backoff.** Costs more probe requests during a long
+  outage (~600 vs ~60 over 30 minutes, at one outstanding probe at a time); buys a two-field state
+  machine, no `max_cooldown`/`probe_budget`/`initial_cooldown` knobs, no window floor, no
+  stale-report-compounds-the-doubling hazard, and steadier re-probing for a cold cache. See "Why the
+  cooldown is fixed".
 - **A stale success can close the circuit early.** A request admitted before the trip, completing
   successfully after it, reports `Closed`. Tracking a probe epoch would prevent that, but a fresh
   response is genuine liveness evidence, and the cost of acting on it is one more detection cycle.
-  Symmetrically, a stale failure while open can trigger a `Backoff` it didn't strictly earn.
-  `backoff_applied` makes the doubling idempotent within an open window, and the
-  `max(cooldown, probe_budget)` floor makes windows at least as long as any admitted request can run,
-  so the pre-trip drain concentrates in the first window or two instead of spreading across dozens of
-  100ms windows and escalating to `max_cooldown`. A probe-epoch/generation counter (tag each open
-  window, ignore reports tagged with an older one) would close the residual gap outright at the cost of
-  one more field; deferred as a refinement, not required for correctness.
+  This is now the *only* residual staleness effect: a stale failure while open is a plain no-op, since
+  the fixed cooldown leaves no per-window state for it to perturb.
 - **`Mutex` over atomics** — see above; correctness and readability over an unmeasurable win.
 - **Hand-rolled, not a crate.** `failsafe`/`circuitbreaker-rs` would add a dependency for ~80 lines,
   and neither offers the injected-clock testability this needs.
@@ -738,10 +727,11 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
     spans DNS resolution as well as the TCP/TLS handshake — clustered DNS (search-path expansion,
     resolver contention) is a reason to raise `..._CONNECT_TIMEOUT_MS`, not just TLS/cross-zone.
   - New subsection after **What gets cached** — "Failing fast when the cache is unresponsive": the
-    abandon-at-direct-cost rule and the one exception, the trip condition, the backoff/probe schedule,
+    abandon-at-direct-cost rule and the one exception, the trip condition, the fixed-cooldown probe schedule,
     and how to read the new metrics during an incident (`abandoned` vs `unresponsive` to tell slow from
     dead, `circuit_opened` once, `bypassed` climbing, `fallback` climbing with it, `circuit_closed` on
-    recovery), plus the `..._BREAKER_THRESHOLD=0` escape hatch.
+    recovery), plus the `..._BREAKER_THRESHOLD=0` escape hatch. State the probe cadence as a fixed 3s,
+    since that is what an operator will see in the `unresponsive` counter during an outage.
   - **Monitoring** table: the five new client metrics; amend the `range_cache_client_fallback` row to
     say it includes circuit-bypassed reads.
   - **Health and readiness**: the existing sentence about a cache outage surfacing as elevated
@@ -765,16 +755,12 @@ Synthetic clock (`let base = Instant::now()` then `base + Duration::from_millis(
 - Trips at exactly `failure_threshold` consecutive failures; `Transition::Opened` reported once.
 - `Bypass` for the whole cooldown; at `open_until` exactly one `Probe`, and an immediate second
   `admit_at` at the same instant returns `Bypass`.
-- Failed probe → `Backoff` with doubled cooldown; repeated `admit_at`/fail cycles saturate at
-  `max_cooldown` and never exceed it.
-- A second `record_unresponsive_at` in the *same* open window (no intervening `admit_at`) is a no-op —
-  `Transition::None`, cooldown unchanged — covering the stale in-flight-failures case.
-- Successful probe → `Closed`, `Allow` afterwards, and the cooldown resets to `initial_cooldown`
-  (verified by re-tripping and observing the initial cooldown again, not 30s).
-- **The `max(cooldown, probe_budget)` floor**: with `initial_cooldown` deliberately set *below*
-  `probe_budget` (e.g. 100ms vs 3s), `admit_at` at `open_until` returns one `Probe` and every
-  `admit_at` for the next `probe_budget` returns `Bypass` — not one probe per 100ms. Directly covers
-  the overlapping-probe escalation the floor exists to prevent.
+- Failed probe → `Transition::None`, and the next `Probe` is admitted exactly one `cooldown` later
+  (not sooner, and not on a doubled schedule) — the fixed-cadence property.
+- Any number of `record_unresponsive_at` calls while open are no-ops (`Transition::None`) and do not
+  move `open_until` — covering stale in-flight pre-trip reports draining after the trip.
+- Successful probe → `Closed`, `Allow` afterwards, and re-tripping opens with the same `cooldown` as
+  the first trip.
 - `failure_threshold: 0` → always `Allow`, never opens.
 - Cancelled probe (admit a `Probe`, never report) → next `admit_at` after the extended window returns
   `Probe` again, i.e. no permanently-stuck circuit.
@@ -785,8 +771,8 @@ An axum server whose handler increments an `AtomicUsize` and then parks on a
 `tokio::sync::watch::Receiver::changed()` — a controllable hang, released by the test rather than by
 elapsed time. Client built with `with_config` (`abandon_timeout`/`stall_timeout` both overridden to
 short values, e.g. ~50ms and ~200ms, so the test is fast and doesn't wait out the production defaults);
-`breaker.probe_budget` is overridden to match `stall_timeout` so the open-window floor stays consistent
-with the shortened budgets. Following the precedent in
+`breaker.cooldown` is set per test — long where the test asserts a bypass, near-zero where it wants an
+immediate probe. Following the precedent in
 `rust/object-cache-srv/tests/memory_budget_tests.rs:589-594`, the `direct` store holds *different* bytes
 from the cache path, so cache-vs-direct service is observable in the returned data.
 
@@ -794,10 +780,9 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   server — each returns the direct bytes (never an error). Snapshot the server's request counter,
   issue three more reads, assert the counter is unchanged: the cache was skipped without a
   connection. No sleeps.
-- **Probe and recovery**: with a zero cooldown *and* a zero `probe_budget` (so the floor doesn't
-  suppress the immediate probe), trip the breaker, release the hang, then read again — the next read is
-  admitted as a probe, returns the *cache's* bytes, and subsequent reads keep using the cache path
-  (counter climbing again).
+- **Probe and recovery**: with a near-zero cooldown, trip the breaker, release the hang, then read
+  again — the next read is admitted as a probe, returns the *cache's* bytes, and subsequent reads keep
+  using the cache path (counter climbing again).
 - **`get_ranges`** is gated too: same trip, then a `get_ranges` call returns correct direct data with
   no new server request.
 - **`get_opts` slow header abandons but stays recoverable**: an `/obj` handler held past the short
@@ -868,8 +853,10 @@ it exercises the oversized-body behavior it was written for without being gated 
 
 1. **Cold-cache tripping.** After a cache restart the whole working set is cold, so many *consecutive*
    requests can exceed `abandon_timeout` and open the circuit. Demand traffic then bypasses with one
-   probe per cooldown, up to the 30s cap — the cache can only rewarm from prefetch/write-time warming,
-   and demand-driven warming stalls. Note this is a direct consequence of folding "abandoned" into
+   probe per 3s cooldown — the cache can only rewarm from prefetch/write-time warming, and
+   demand-driven warming stalls. Note this is a direct consequence of folding "abandoned" into
    "unresponsive" (see "Abandon vs. unresponsive"): the reads themselves are correctly served direct
-   either way, but the bypass is what suppresses rewarming. Acceptable, or should the max cooldown be
-   lower (5s), or should prefetch requests be exempt from the gate so a bypassed cache still warms?
+   either way, but the bypass is what suppresses rewarming. The fixed cooldown bounds how bad this gets
+   (steady 3s re-probing rather than a schedule decaying to 30s), so the remaining question is narrower:
+   acceptable as is, or should prefetch requests be exempt from the gate so a bypassed cache still
+   warms?
