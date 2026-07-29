@@ -52,7 +52,9 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
-    def create_screen(self, name, screen_type, config, managed_by=None):
+    def create_screen(
+        self, name, screen_type, config, managed_by=None, folder_path=None
+    ):
         payload = {
             "name": name,
             "screen_type": screen_type,
@@ -60,6 +62,8 @@ class WebClient:
         }
         if managed_by is not None:
             payload["managed_by"] = managed_by
+        if folder_path is not None:
+            payload["folder_path"] = folder_path
         resp = self.session.post(
             self._api_url("screens"),
             headers=self._headers(),
@@ -69,10 +73,12 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
-    def update_screen(self, name, config, managed_by=None):
+    def update_screen(self, name, config, managed_by=None, folder_path=None):
         payload = {"config": config}
         if managed_by is not None:
             payload["managed_by"] = managed_by
+        if folder_path is not None:
+            payload["folder_path"] = folder_path
         resp = self.session.put(
             self._api_url(f"screens/{requests.utils.quote(name, safe='')}"),
             headers=self._headers(),

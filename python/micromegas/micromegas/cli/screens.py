@@ -56,7 +56,7 @@ def read_screen_file(path):
 def write_screen_file(path, screen_dict):
     """Write pretty-printed JSON with stable key order."""
     ordered = {}
-    for key in ("name", "screen_type", "config", "managed_by"):
+    for key in ("name", "screen_type", "config", "folder_path", "managed_by"):
         if key in screen_dict:
             ordered[key] = screen_dict[key]
     with open(path, "w") as f:
@@ -98,6 +98,8 @@ def server_screen_to_file(server_screen):
         "screen_type": server_screen["screen_type"],
         "config": server_screen["config"],
     }
+    if server_screen.get("folder_path"):
+        result["folder_path"] = server_screen["folder_path"]
     if server_screen.get("managed_by"):
         result["managed_by"] = server_screen["managed_by"]
     return result
@@ -262,7 +264,7 @@ def cmd_pull(args):
         if local_path.exists():
             try:
                 existing = read_screen_file(local_path)
-                if existing == new_content:
+                if server_screen_to_file(existing) == new_content:
                     unchanged += 1
                     continue
             except (json.JSONDecodeError, ValueError):
@@ -298,12 +300,12 @@ def compute_plan(config, client, names=None):
             creates.append(name)
         else:
             server = server_by_name[name]
-            if screens_equal(local_data, server):
+            normalized_local = server_screen_to_file(local_data)
+            normalized_server = server_screen_to_file(server)
+            if screens_equal(normalized_local, normalized_server):
                 unchanged.append(name)
             else:
-                updates.append(
-                    (name, strip_volatile_keys(local_data), strip_volatile_keys(server))
-                )
+                updates.append((name, normalized_local, normalized_server))
 
     # Check for deletions: server screens tracked by this repo but missing locally
     if not names:
@@ -433,6 +435,7 @@ def cmd_apply(args):
                 screen_type=screen["screen_type"],
                 config=screen["config"],
                 managed_by=managed_by,
+                folder_path=screen.get("folder_path"),
             )
             ensure_local_managed_by(name, screen)
             created += 1
@@ -447,6 +450,7 @@ def cmd_apply(args):
                 name=screen["name"],
                 config=screen["config"],
                 managed_by=managed_by,
+                folder_path=screen.get("folder_path"),
             )
             ensure_local_managed_by(name, screen)
             updated_count += 1
@@ -488,7 +492,10 @@ def cmd_list(args):
         if in_local and in_server:
             return (
                 "synced"
-                if screens_equal(local[name], server_by_name[name])
+                if screens_equal(
+                    server_screen_to_file(local[name]),
+                    server_screen_to_file(server_by_name[name]),
+                )
                 else "modified"
             )
         if in_local:
