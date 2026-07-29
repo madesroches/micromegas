@@ -60,6 +60,7 @@ _ADDON_VERSION = _read_addon_version()
 _lib = None
 _handle = None
 _session_id: str = ""
+_prefs_registered = False
 
 
 # sys attribute names used to smuggle live state across a module reload —
@@ -280,10 +281,11 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
 
 
 def register():
-    global _lib, _handle, _session_id
+    global _lib, _handle, _session_id, _prefs_registered
 
     try:
         bpy.utils.register_class(MicromegasAddonPreferences)
+        _prefs_registered = True
     except Exception as exc:
         # A registration leaked by an earlier register() that raised past this
         # point must not take the telemetry session down with it — without the
@@ -343,6 +345,12 @@ def register():
         # this, the next (successful) enable wires a *second* copy of every
         # handler/msgbus subscription from a fresh module instance, and the
         # dead instance's copies are unreachable by any future unregister().
+        # Same reasoning for the preferences class: Blender drops this module
+        # from sys.modules, so the class object registered above becomes
+        # unreachable and the next enable's unregister_class() would target a
+        # different (never-registered) class from the fresh namespace, leaving
+        # this one registered for the life of the process.
+        _unregister_prefs()
         _teardown_wiring()
         setattr(sys, _STATE_ATTR, (lib, handle, _session_id))
         _lib = None
@@ -513,7 +521,22 @@ def unregister():
     else:
         _shutdown()
 
+    _unregister_prefs()
+
+
+def _unregister_prefs() -> None:
+    """Drop the preferences class registration, if this module made it.
+
+    Guarded on _prefs_registered so a namespace whose register_class() lost the
+    duplicate-bl_idname race does not unregister the *other* namespace's live
+    class out from under it.
+    """
+    global _prefs_registered
+
+    if not _prefs_registered:
+        return
     try:
         bpy.utils.unregister_class(MicromegasAddonPreferences)
     except Exception:
         pass
+    _prefs_registered = False

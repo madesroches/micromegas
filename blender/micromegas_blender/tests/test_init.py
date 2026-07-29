@@ -191,6 +191,13 @@ def test_keep_alive_on_reregister_reuses_session_even_if_toggled_off(
 
         assert lib.init_calls == 1
         assert mm._lib is lib
+
+        # Reuse is not the same as sticky: the off setting still takes effect
+        # at the *next* disable, which shuts the session down for good rather
+        # than parking it again. Both docs promise this half explicitly.
+        mm.unregister()
+        assert lib.shutdown_calls == 1
+        assert not hasattr(sys, mm._STATE_ATTR)
     finally:
         _clear_state()
 
@@ -297,6 +304,38 @@ def test_register_failure_parks_a_freshly_created_session(fake_bpy, monkeypatch)
         mm.register()
         assert lib.init_calls == 1  # reused, not re-initialized
         assert mm._lib is lib
+    finally:
+        _clear_state()
+
+
+def test_register_failure_unregisters_preferences_class(fake_bpy, monkeypatch):
+    """A failed enable must not leak the preferences class registration.
+
+    Blender drops the failed module from sys.modules, so the class object
+    registered here becomes unreachable: the next enable's unregister_class()
+    targets a different class from the fresh namespace and this one would stay
+    registered for the life of the process, making every later register_class()
+    fail on the duplicate bl_idname.
+    """
+    _clear_state()
+    _set_keep_alive(fake_bpy, False)
+    lib = CountingLib()
+    registered: list = []
+    monkeypatch.setattr(fake_bpy.utils, "register_class", registered.append)
+    monkeypatch.setattr(fake_bpy.utils, "unregister_class", registered.remove)
+    try:
+
+        def _boom(_lib, _handle):
+            raise RuntimeError("bad edit in a sub-module")
+
+        monkeypatch.setattr(mm, "_wire_up", _boom)
+        monkeypatch.setattr(mm, "_load_lib", lambda: lib)
+        with pytest.raises(RuntimeError):
+            mm.register()
+
+        assert registered == []  # rolled back, nothing leaked
+        # ...and the session is still parked for the next enable.
+        assert getattr(sys, mm._STATE_ATTR, None) is not None
     finally:
         _clear_state()
 
