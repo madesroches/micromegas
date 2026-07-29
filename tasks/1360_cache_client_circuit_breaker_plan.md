@@ -132,16 +132,18 @@ two-arm match becomes one path: yield chunks, count bytes, and on `Err` resume t
 
 Details that matter for correctness:
 
-- **An empty remainder ends the stream cleanly, not with a read.** If `resume_start ==
-  resolved_range.end` (a stream error arrives after every requested byte has already been yielded), the
-  operation is done — end the stream successfully and never call `direct.get_opts` with
-  `GetRange::Bounded(x..x)`. That call is a hard error in `object_store` 0.13.2 (`GetRange::is_valid`,
-  `util.rs:225-239`, rejects `Bounded(r)` when `r.end <= r.start`), and the case is reachable:
-  `get_range_stream` accepts a 206 on `Content-Range` alone (`client.rs:110-130`) with no
-  `Content-Length` check, so a chunked body that delivers every byte and then stalls before its
-  terminating chunk trips `read_timeout` with `bytes_yielded == range length`. Without this guard a
-  cache failure at exactly the last byte would fail a read that had already fully succeeded — precisely
-  what the invariant forbids.
+- **An empty (or over-delivered) remainder ends the stream cleanly, not with a read.** If `resume_start
+  >= resolved_range.end` (a stream error arrives after every requested byte has already been yielded, or
+  after more bytes than requested), the operation is done — end the stream successfully and never call
+  `direct.get_opts` with `GetRange::Bounded(x..x)` or an inverted range. That call is a hard error in
+  `object_store` 0.13.2 (`GetRange::is_valid`, `util.rs:225-239`, rejects `Bounded(r)` when `r.end <=
+  r.start`), and both cases are reachable: `get_range_stream` accepts a 206 on `Content-Range` alone
+  (`client.rs:110-130`) with no `Content-Length` cross-check, so a chunked body that delivers every byte
+  and then stalls before its terminating chunk trips `read_timeout` with `bytes_yielded == range length`
+  (the `==` case), and a cache that over-delivers relative to its own declared `Content-Range` can push
+  `bytes_yielded` past it (the `>` case). Without this guard a cache failure at or past the last byte
+  would either fail a read that had already fully succeeded or construct an inverted `Bounded` range —
+  precisely what the invariant forbids.
 - **Use the resolved range, not the original `GetOptions::range`.** Re-passing a `Suffix` or `Offset`
   range would re-resolve against the object's current size; the resolved `Bounded` remainder is
   unambiguous. Clone the options and replace `range` with `GetRange::Bounded(remainder)`.
@@ -245,7 +247,9 @@ Two constraints the table has to satisfy explicitly:
   detect "answered headers, then stuck on the origin," so the `/ranges` *body* carries its own
   per-chunk `stall_timeout` via `pull_exact` (`client.rs:419-443`) — the one place that path awaits
   a chunk — surfacing as a new `RangesReadError::Stalled` variant that `read_framed_ranges` propagates
-  exactly as it already propagates `Transport`. Directly unit-testable, no server needed. For this
+  exactly as it already propagates `Transport`. `RangesReadError` and the `send_ranges` helper that
+  surfaces it as `RangesSendError` are made `pub` (step 9) precisely so this classification is directly
+  assertable from the cross-crate integration test, without inspecting logs or metrics. For this
   explicit wrap to be the one that actually fires on a real response body, it has to be strictly tighter
   than the client-level `read_timeout` racing it underneath — see "`ClientBuilder::read_timeout` on the
   one client" for why `read_timeout` is deliberately set looser, not equal.
@@ -382,8 +386,9 @@ client and split the connection pools. That reason was wrong and is dropped. The
   reason above, so `read_timeout` never actually fires on `/ranges` — the explicit wrap always wins.
   `/ranges` keeps that explicit `Stalled` variant for the same reason an earlier draft gave a different
   justification for: not because `read_timeout` alone would be too loose to protect throughput (both
-  numbers are within the same cost-knob ballpark), but because `pull_exact` is directly unit-testable
-  with no server needed, and a named variant keeps `/ranges`' four failure arms
+  numbers are within the same cost-knob ballpark), but because `send_ranges`'s typed `RangesSendError`
+  (public, re-exported — see step 9) is directly assertable from the cross-crate integration test without
+  inspecting logs, and a named variant keeps `/ranges`' four failure arms
   (non-2xx/`Transport`/`Stalled`/`Truncated`) distinguishable in logs the way a bare `reqwest::Error`
   cannot — and, with the margin in place, that variant is now reliably the one that actually surfaces on
   a real stall.
@@ -425,12 +430,17 @@ The invariant is what makes this fusion safe. If bypassing could fail work, conf
 decision is losing the optimization for one cooldown.
 
 **What does not feed the breaker as a failure:** a non-2xx status on a demand-read endpoint (`/obj`,
-`HEAD`, `/ranges`), and `RangesReadError::Truncated`. Both mean a full HTTP response arrived cheaply, so
-per the "any HTTP response on a demand-read endpoint counts as responsive" rule they report
-`record_responsive` — at the status check in each caller for `/obj`/`HEAD` (`client.rs:106-108`,
-`166-168`, `197-199`), and in `send_ranges` for `/ranges` (already specified below), each before falling
-back to `direct`. `Truncated` keeps its `warn!` as a protocol violation from our own cache, not a health
-signal. `prefetch`'s non-2xx status (`client.rs:230-232`) is deliberately **not** covered by this rule:
+`HEAD`, `/ranges`), the two malformed-response arms that follow a full 2xx response — a missing
+`Content-Length` in `get_full_stream` (`client.rs:169-171`) and a missing/unparseable `Content-Length` in
+`head_size` (`client.rs:200-204`) — and `RangesReadError::Truncated`. All of these mean a full HTTP
+response arrived cheaply, so per the "any HTTP response on a demand-read endpoint counts as responsive"
+rule they report `record_responsive` — at the status check in each caller for `/obj`/`HEAD`
+(`client.rs:106-108`, `166-168`, `197-199`), at the two malformed-header arms alongside it, and in
+`send_ranges` for `/ranges` (already specified below), each before falling back to `direct`. `Truncated`
+keeps its `warn!` as a protocol violation from our own cache, not a health signal; the two
+malformed-header arms are the same kind of protocol violation from our own cache and are treated
+identically. `prefetch`'s non-2xx status (`client.rs:230-232`) is deliberately **not** covered by this
+rule:
 per "Prefetch does not close the circuit" it reports nothing on an `Allow` admission and
 `record_responsive` only on a `Probe` admission. Folding it into the general rule would let a write-time
 warm's non-2xx response hold a 503-ing cache's circuit closed — exactly the failure mode that section
@@ -449,9 +459,9 @@ on a body stall at all. So:
 
 | Entry point | Where the single success report happens |
 |---|---|
-| `get_opts` head-only path (`client.rs:486-509`) | `head_size` — its completion *is* the whole operation |
+| `get_opts` head-only path (`client.rs:486-509`) | `head_size` — its completion (a successful parse, or the malformed-`Content-Length` arm) *is* the whole operation, and both report `record_responsive` |
 | `get_opts` main path (full / bounded / offset / suffix) | `full_stream_with_fallback`, when the body stream ends without error **and no resume occurred** — not the intermediate `head_size`, and not `send()`'s headers. A resumed operation reports `record_unresponsive` only, from the resume path, and nothing else |
-| `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | its own `head_size` — completion *is* the whole operation there too, since no stream follows |
+| `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | its own `head_size` — completion (successful parse or malformed-header arm) *is* the whole operation there too, since no stream follows, and both report `record_responsive` |
 | `get_ranges` | `send_ranges`, once the framed body fully resolves (already specified below) |
 | `prefetch` | see "Prefetch does not close the circuit" |
 
@@ -484,7 +494,18 @@ This is the one place a caller must distinguish `Probe` from `Allow`; `get_opts`
 them identically.
 
 Note this removes an accidental mitigation: prefetch traffic was implicitly holding the circuit closed
-during cold periods. See "Cold-cache tripping".
+during cold periods. That does not argue for exempting `prefetch` from the admission gate, though.
+
+**Cold-cache tripping.** The only production caller of `prefetch` is `warm_object`
+(`rust/ingestion/src/data_lake_connection.rs:57-80`), called from
+`rust/analytics/src/lakehouse/write_partition.rs:746` immediately after a partition file is written — so
+prefetch traffic warms only *freshly written* objects. After a cache restart the cold working set is the
+*existing* partitions, which write-time warming never touches. Exempting `prefetch` from the admission
+gate would therefore warm nothing that went cold, and cannot deliver the rewarming benefit an exemption
+would be proposed for. Demand-driven rewarming instead happens through the fixed 3s probe cadence (see
+"Why the cooldown is fixed"), and a warm skipped while the circuit is open is already declared acceptable
+by `warm_object`'s own doc comment ("a failed warm just means the first read is a cold miss") — it would
+have failed against a down cache anyway. So `prefetch` stays gated like every other entry point.
 
 ### The breaker
 
@@ -626,9 +647,10 @@ large fraction of the state machine, and buying very little:
   slow-but-progressing `/obj` body can keep an admitted request alive up to `total_timeout` (15s), not
   a 3s probe budget — so the floor never strictly guaranteed one probe at a time anyway. With no
   doubling to corrupt, an occasional overlapping probe is simply harmless.
-- **It made the one open question worse.** Under backoff, a cold cache that trips gets retried on a
-  schedule decaying toward 30s, so demand-driven rewarming stalls for longer. A fixed 3s cooldown
-  re-probes steadily (see "Cold-cache tripping").
+- **It made cold-cache rewarming slower.** Under backoff, a cache that trips after a restart gets
+  retried on a schedule decaying toward 30s, so demand-driven rewarming (the fixed probe cadence — see
+  "Cold-cache tripping" in "Prefetch does not close the circuit") stalls for longer. A fixed 3s cooldown
+  re-probes steadily instead.
 
 So the cooldown is one value, fixed, and the client passes its `stall_timeout` (3s) for it — which
 keeps the cooldown at least as long as a stalling request takes to report, the property the floor was
@@ -795,8 +817,8 @@ pub struct CacheClientConfig {
 ```
 
 `CacheClientStore::new(url, api_key, direct)` keeps its signature and delegates to a new
-`with_config(url, api_key, direct, CacheClientConfig::from_env())`, so `make_cache` and the existing
-tests are untouched.
+`with_config(url, api_key, direct, CacheClientConfig::from_env())`, so `make_cache` and every existing
+test but one are untouched — see Testing Strategy → Regression for the one exception.
 
 50ms is calibrated for the only deployment this client documents: `mkdocs/docs/admin/object-cache.md`'s
 **Client opt-in** section sets `MICROMEGAS_OBJECT_CACHE_URL=http://object-cache:8080` — plaintext,
@@ -846,7 +868,7 @@ That leaves five configured values in total — `connect_timeout`, `abandon_time
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MICROMEGAS_OBJECT_CACHE_CLIENT_TIMEOUT_MS` | `500` | `abandon_timeout` — the direct-path race budget, applied at the header phase of every request |
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_ABANDON_TIMEOUT_MS` | `500` | `abandon_timeout` — the direct-path race budget, applied at the header phase of every request |
 | `MICROMEGAS_OBJECT_CACHE_CLIENT_CONNECT_TIMEOUT_MS` | `50` | Connect budget (raise for TLS / cross-zone / clustered DNS) |
 | `MICROMEGAS_OBJECT_CACHE_CLIENT_BREAKER_THRESHOLD` | `5` | Consecutive failures to trip; `0` disables the breaker |
 
@@ -860,7 +882,7 @@ State transitions log once (not once per request), so an outage doesn't flood:
 | Metric | Emitted on | Log |
 |---|---|---|
 | `range_cache_client_abandoned` | An `abandon_timeout` expiry — the cache lost the race against the direct path | `debug!` |
-| `range_cache_client_unresponsive` | Connect failure, transport error, or a `stall_timeout` expiry — the cache is not answering | `debug!` |
+| `range_cache_client_unresponsive` | Connect failure, transport error, a `stall_timeout` expiry, or a `total_timeout` expiry — the cache is not answering | `debug!` |
 | `range_cache_client_stream_resumed` | A `/obj` body error at any position (including before the first chunk); the remainder — possibly the whole range — was read from `direct` | `debug!` with the resume offset |
 | `range_cache_client_circuit_opened` | `Transition::Opened` | `warn!` with the cooldown |
 | `range_cache_client_circuit_closed` | `Transition::Closed` | `info!` |
@@ -891,8 +913,10 @@ one per cooldown.
    from `direct` on a stream error at **any** position, per "The fix: resume from the delivered offset".
    It takes the resolved byte range (from the `GetResult` built at `client.rs:294-299`) in addition to
    its current arguments. The existing two-arm match collapses to one path — the pre-first-chunk
-   fallback becomes `bytes_yielded == 0`. An empty remainder (all bytes already delivered) ends the
-   stream cleanly instead of issuing a `Bounded(x..x)` read, which `object_store` rejects as an error.
+   fallback becomes `bytes_yielded == 0`. An empty-or-negative remainder (`resume_start >=
+   resolved_range.end`: all requested bytes already delivered, or a cache that over-delivered past its
+   own declared range) ends the stream cleanly instead of issuing an empty or inverted `Bounded` read,
+   which `object_store` rejects as an error.
 2. Add unit/integration coverage that a mid-stream failure yields **byte-identical** data to a direct
    read (see Testing Strategy → Resume correctness). As a standalone PR, ahead of Phase 2, induce the
    failure by aborting the connection / dropping the response body outright — an immediate transport
@@ -937,8 +961,12 @@ one per cooldown.
    since no stream follows there. Also report `record_responsive` at each caller's non-2xx status check
    (`client.rs:106-108`, `166-168`, `197-199`) before falling back to `direct`, per "Abandon vs.
    unresponsive" — a non-2xx there is a full response having arrived cheaply, the same rule `get_ranges`
-   applies to its own non-2xx arm. `prefetch`'s non-2xx status check (`client.rs:230-232`) instead
-   follows the admission value, per "Prefetch does not close the circuit": nothing on `Allow`,
+   applies to its own non-2xx arm. Extend the same rule to the two malformed-header arms that follow a
+   full 2xx response — `get_full_stream`'s missing-`Content-Length` check (`client.rs:169-171`) and
+   `head_size`'s missing/unparseable-`Content-Length` check (`client.rs:200-204`) — reporting
+   `record_responsive` there too before falling back, since a full response has already arrived; see
+   "What does not feed the breaker as a failure". `prefetch`'s non-2xx status check (`client.rs:230-232`)
+   instead follows the admission value, per "Prefetch does not close the circuit": nothing on `Allow`,
    `record_responsive` only on `Probe`. Give `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
    have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Wire
    `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error too — per "One
@@ -957,7 +985,14 @@ one per cooldown.
    paragraph above — keeping the four failure arms distinct — non-2xx status, `Transport`, `Stalled`,
    `Truncated` — rather than folding them into one `Result<Vec<Bytes>>`; `get_ranges` keeps matching all
    four (plus success) with their current `debug!`/`warn!` logs, and only the
-   timeout/connect/`Transport`/`Stalled` arms report a failure.
+   timeout/connect/`Transport`/`Stalled` arms report a failure. Make `RangesReadError`, `RangesSendError`,
+   and `send_ranges` itself `pub`, re-exported from `rust/object-cache/src/lib.rs` alongside the
+   `CacheClientConfig` export (step 4) — the cross-crate integration test in
+   `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs` calls `send_ranges` directly (in addition
+   to the fallback-observing `get_ranges` call) so it can match on
+   `RangesSendError::Body(RangesReadError::Stalled)`, since `get_ranges`'s `ObjectStore`-trait return type
+   erases that classification into a fallback. `pull_exact` itself stays private; its behavior is
+   exercised only indirectly, through `send_ranges`.
 
 ### Phase 3 — the gate
 
@@ -979,7 +1014,12 @@ one per cooldown.
 13. Add `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs`.
 14. Update `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/architecture/caching.md`, and
     `CHANGELOG.md`.
-15. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 ../build/rust_ci.py`.
+15. Before merge, sanity-check `abandon_timeout` (500ms) against production
+    `range_cache_origin_head_latency` samples, not just `range_cache_origin_get_ms` — the `HEAD /obj` and
+    `POST /ranges` header phases block on an origin HEAD, not a GET (see "Where the origin work actually
+    lands"), and the two distributions can differ. Adjust the default via
+    `MICROMEGAS_OBJECT_CACHE_CLIENT_ABANDON_TIMEOUT_MS` if it doesn't.
+16. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 ../build/rust_ci.py`.
 
 ## Files to Modify
 
@@ -1017,9 +1057,10 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
 - **Slow-but-alive is treated the same as dead by the breaker.** Both feed `record_unresponsive` (see
   "Abandon vs. unresponsive"). Justified by the issue's own rule — a cache that consistently loses to
   the direct path is not worth routing through — and made safe by the invariant, since a bypass is just
-  a direct read. It does mean a cold cache can be bypassed while warming: the "Cold-cache tripping"
-  open question. The separate `abandoned`/`unresponsive` counters keep the two distinguishable
-  operationally even though the breaker doesn't distinguish them.
+  a direct read. It does mean a cold cache can be bypassed while warming, retried on the fixed 3s probe
+  cadence rather than an exponential schedule — see "Cold-cache tripping" in "Prefetch does not close the
+  circuit". The separate `abandoned`/`unresponsive` counters keep the two distinguishable operationally
+  even though the breaker doesn't distinguish them.
 - **Prefetch success doesn't close the circuit.** Prevents accept-loop liveness from masking demand-path
   slowness, at the cost of removing an accidental mitigation for cold-cache tripping, and of making
   `prefetch` the one caller that must distinguish `Probe` from `Allow`.
@@ -1196,8 +1237,11 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   recoverable — `read_framed_ranges` exposes nothing until it fully resolves), and that repeating it
   `failure_threshold` times trips the breaker. Because `read_timeout` is configured with its margin
   above `stall_timeout` (`stall_timeout + abandon_timeout`, see "`ClientBuilder::read_timeout` on the one
-  client"), this hang deterministically surfaces as `RangesReadError::Stalled`, not `Transport` — assert
-  that variant specifically, not just "some failure was reported". This is the test for constraint (a).
+  client"), this hang deterministically surfaces as `RangesReadError::Stalled`, not `Transport`. Since
+  `get_ranges`'s public `ObjectStore` return type erases that classification into a fallback, assert it by
+  calling the now-`pub` `send_ranges` directly against the same handler and matching
+  `RangesSendError::Body(RangesReadError::Stalled)`, alongside the `get_ranges` call above — not just
+  "some failure was reported". This is the test for constraint (a).
 - **`get_ranges` slow-but-progressing body stays closed**: same generous `stall_timeout` override as the
   `get_opts` version above (e.g. >= 1s, chunks every ~100ms), for a total well past it — `read_timeout`
   follows automatically at its derived margin (see above), keeping the two ordered the same way as
@@ -1239,18 +1283,3 @@ Fix it in the test, not the design: have that one test build its client via `wit
 `abandon_timeout` (and `stall_timeout`, since `read_timeout`'s header bound also spans the upload), so
 it exercises the oversized-body behavior it was written for without being gated on the new default.
 `python3 build/rust_ci.py` for the workspace.
-
-## Open Questions
-
-1. **Cold-cache tripping.** After a cache restart the whole working set is cold, so many *consecutive*
-   requests can exceed `abandon_timeout` and open the circuit. Demand traffic then bypasses with one
-   probe per 3s cooldown — the cache can only rewarm from prefetch/write-time warming, and
-   demand-driven warming stalls. This is a direct consequence of folding "abandoned" into
-   "unresponsive" (see "Abandon vs. unresponsive"): the reads themselves are correctly served direct
-   either way, but the bypass is what suppresses rewarming. Two things narrow the question from the
-   earlier draft: the fixed cooldown bounds how bad it gets (steady 3s re-probing rather than a
-   schedule decaying to 30s), and "Prefetch does not close the circuit" removes the accidental
-   mitigation prefetch traffic was providing. So: acceptable as is, or should `prefetch` be exempt from
-   the admission gate so a bypassed cache still warms? Exempting it is safe with respect to the
-   invariant — `prefetch_handler` never blocks on the origin and a failed warm fails nothing — so the
-   question is purely whether to keep POSTing warms at a cache that is genuinely down.
