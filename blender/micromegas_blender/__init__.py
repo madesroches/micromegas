@@ -16,6 +16,7 @@ in the distributed extension zip.
 """
 
 import atexit
+import bpy
 import os
 import re
 import sys
@@ -54,6 +55,40 @@ _ADDON_VERSION = _read_addon_version()
 _lib = None
 _handle = None
 _session_id: str = ""
+
+
+# sys attribute names used to smuggle live state across a module reload —
+# sys is the one thing that survives disable/re-enable within the same
+# Blender process (module globals get reset on reload).
+_STATE_ATTR = "_micromegas_addon_state"  # (lib, handle, session_id) tuple
+_ATEXIT_REGISTERED_ATTR = "_micromegas_addon_atexit_registered"
+
+
+class MicromegasAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    dev_mode: bpy.props.BoolProperty(
+        name="Keep Alive (Dev Only)",
+        description=(
+            "Keep the telemetry session alive across add-on disable/enable "
+            "within the same Blender process. Needed when developing via the "
+            "VS Code Blender-Dev extension, which re-enables the add-on on "
+            "every launch — the native telemetry layer can only initialize "
+            "once per process, so without this the add-on would go inactive "
+            "on every debug launch. Leave off for normal use."
+        ),
+        default=False,
+    )
+
+    def draw(self, context):
+        self.layout.prop(self, "dev_mode")
+
+
+def _is_dev_mode() -> bool:
+    try:
+        return bool(bpy.context.preferences.addons[__package__].preferences.dev_mode)
+    except Exception:
+        return False
 
 
 def _build_process_properties() -> dict:
@@ -249,23 +284,33 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
 def register():
     global _lib, _handle, _session_id
 
-    _session_id = str(uuid.uuid4())
+    bpy.utils.register_class(MicromegasAddonPreferences)
 
-    lib = _load_lib()
-    if lib is None:
-        return
+    cached = getattr(sys, _STATE_ATTR, None)
+    if cached is not None:
+        # Dev mode: a prior unregister() in this same process parked a live
+        # session here instead of shutting it down. Reuse it — mm_init can't
+        # be called twice in one process.
+        lib, handle, _session_id = cached
+    else:
+        _session_id = str(uuid.uuid4())
 
-    props = _build_process_properties()
-    sink_url = os.environ.get("MICROMEGAS_TELEMETRY_URL")
-    handle = lib.init(sink_url=sink_url, properties=props)
-    if handle is None:
-        print(
-            "[Micromegas] telemetry init failed; add-on will be inactive. "
-            "If you just disabled and re-enabled the add-on, restart Blender — "
-            "the native telemetry layer initializes once per process and "
-            "cannot be reinitialized within the same session."
-        )
-        return
+        lib = _load_lib()
+        if lib is None:
+            return
+
+        props = _build_process_properties()
+        sink_url = os.environ.get("MICROMEGAS_TELEMETRY_URL")
+        handle = lib.init(sink_url=sink_url, properties=props)
+        if handle is None:
+            print(
+                "[Micromegas] telemetry init failed; add-on will be inactive. "
+                "If you just disabled and re-enabled the add-on, restart Blender — "
+                "the native telemetry layer initializes once per process and "
+                "cannot be reinitialized within the same session. Enable "
+                "Dev Mode in the add-on preferences to avoid this."
+            )
+            return
 
     _lib = lib
     _handle = handle
@@ -294,12 +339,14 @@ def register():
         sys.excepthook = _telemetry_excepthook
 
     # Flush on interpreter exit (belt-and-suspenders alongside mm_shutdown).
-    atexit.register(_shutdown)
+    # Guarded so a dev-mode reload cycle within the same process doesn't
+    # stack multiple atexit callbacks.
+    if not getattr(sys, _ATEXIT_REGISTERED_ATTR, False):
+        atexit.register(_shutdown)
+        setattr(sys, _ATEXIT_REGISTERED_ATTR, True)
 
     # Periodic flush timer.
     try:
-        import bpy
-
         if not bpy.app.timers.is_registered(_periodic_flush):
             bpy.app.timers.register(
                 _periodic_flush, first_interval=30.0, persistent=True
@@ -318,26 +365,42 @@ def register():
 
 
 def _shutdown():
+    """Really shut down the native telemetry session (mm_shutdown).
+
+    Looks at the currently active module globals first; if those are empty
+    (dev-mode unregister moved the live session to the sys cache instead of
+    tearing it down), falls back to that cache. Either way, this is the one
+    place that finds "whatever session is still alive" and kills it for
+    real — used both at true process exit (atexit) and by a non-dev-mode
+    unregister().
+    """
     global _lib, _handle
-    if _lib is None or _handle is None:
-        return
     lib, handle = _lib, _handle
+    if lib is None or handle is None:
+        cached = getattr(sys, _STATE_ATTR, None)
+        if cached is not None:
+            lib, handle, _cached_session_id = cached
     _lib = None
     _handle = None
+    if hasattr(sys, _STATE_ATTR):
+        delattr(sys, _STATE_ATTR)
+    if lib is None or handle is None:
+        return
     lib.log(handle, 4, "blender.addon", "Micromegas add-on shutting down")
     lib.flush(handle)
     lib.shutdown(handle)
 
 
 def unregister():
-    global _prev_excepthook
+    global _prev_excepthook, _lib, _handle
+
+    dev_mode = _is_dev_mode()
+
     if _prev_excepthook is not None:
         sys.excepthook = _prev_excepthook
         _prev_excepthook = None
 
     try:
-        import bpy
-
         bpy.app.timers.unregister(_periodic_flush)
     except Exception:
         pass
@@ -353,4 +416,18 @@ def unregister():
     except Exception:
         pass
 
-    _shutdown()
+    if dev_mode and _lib is not None and _handle is not None:
+        # Park the live session on sys instead of shutting it down, so a
+        # same-process re-register (e.g. VS Code Blender-Dev's re-enable on
+        # every launch) can reuse it — mm_init can't be called twice in one
+        # process.
+        setattr(sys, _STATE_ATTR, (_lib, _handle, _session_id))
+        _lib = None
+        _handle = None
+    else:
+        _shutdown()
+
+    try:
+        bpy.utils.unregister_class(MicromegasAddonPreferences)
+    except Exception:
+        pass
