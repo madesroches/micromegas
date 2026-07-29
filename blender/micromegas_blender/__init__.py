@@ -5,10 +5,15 @@ Captures Blender session telemetry — user actions, lifecycle events, and
 performance metrics — and ships them to a Micromegas ingestion server via
 the micromegas-capi native library.
 
-Configuration (all via environment variables):
+Configuration (environment variables):
     MICROMEGAS_TELEMETRY_URL        Ingestion server endpoint (required)
     MICROMEGAS_INGESTION_API_KEY    API key for authenticated ingestion (optional)
     MICROMEGAS_OIDC_*               OIDC client-credentials variables (alternative auth)
+
+One dev-only setting lives in the add-on preferences instead of the
+environment: "Keep Alive (Dev Only)" keeps the telemetry session alive across
+an add-on disable/enable within the same Blender process (see
+MicromegasAddonPreferences).
 
 The native library (libmicromegas_capi.so / micromegas_capi.dll) must be
 present in the add-on's lib/ subdirectory.  Pre-built binaries are bundled
@@ -16,6 +21,7 @@ in the distributed extension zip.
 """
 
 import atexit
+import bpy
 import os
 import re
 import sys
@@ -54,6 +60,41 @@ _ADDON_VERSION = _read_addon_version()
 _lib = None
 _handle = None
 _session_id: str = ""
+_prefs_registered = False
+
+
+# sys attribute names used to smuggle live state across a module reload —
+# sys is the one thing that survives disable/re-enable within the same
+# Blender process (module globals get reset on reload).
+_STATE_ATTR = "_micromegas_addon_state"  # (lib, handle, session_id) tuple
+_ATEXIT_HOOK_ATTR = "_micromegas_addon_atexit_hook"  # the registered _shutdown
+
+
+class MicromegasAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    keep_alive: bpy.props.BoolProperty(
+        name="Keep Alive (Dev Only)",
+        description=(
+            "Keep the telemetry session alive across add-on disable/enable "
+            "within the same Blender process. Needed when developing via the "
+            "VS Code Blender-Dev extension, which re-enables the add-on on "
+            "every launch — the native telemetry layer can only initialize "
+            "once per process, so without this the add-on would go inactive "
+            "on every debug launch. Leave off for normal use."
+        ),
+        default=False,
+    )
+
+    def draw(self, context):
+        self.layout.prop(self, "keep_alive")
+
+
+def _is_keep_alive_enabled() -> bool:
+    try:
+        return bool(bpy.context.preferences.addons[__package__].preferences.keep_alive)
+    except Exception:
+        return False
 
 
 def _build_process_properties() -> dict:
@@ -68,8 +109,6 @@ def _build_process_properties() -> dict:
         "addon_version": _ADDON_VERSION,
     }
     try:
-        import bpy
-
         props["blender_version"] = ".".join(str(v) for v in bpy.app.version)
         props["blender_version_hash"] = bpy.app.build_hash.decode(
             "utf-8", errors="replace"
@@ -115,14 +154,10 @@ def _gpu_call(fn_name: str) -> str:
 
 
 def _get_background() -> str:
-    import bpy
-
     return "true" if bpy.app.background else "false"
 
 
 def _get_render_engine() -> str:
-    import bpy
-
     return bpy.context.scene.render.engine
 
 
@@ -168,7 +203,6 @@ def _get_enabled_addons() -> str:
     dimensions, so cardinality stays controlled.
     """
     import addon_utils
-    import bpy
 
     enabled = set(bpy.context.preferences.addons.keys())
     entries: list[str] = []
@@ -247,29 +281,89 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
 
 
 def register():
-    global _lib, _handle, _session_id
+    global _lib, _handle, _session_id, _prefs_registered
 
-    _session_id = str(uuid.uuid4())
+    try:
+        bpy.utils.register_class(MicromegasAddonPreferences)
+        _prefs_registered = True
+    except Exception as exc:
+        # A registration leaked by an earlier register() that raised past this
+        # point must not take the telemetry session down with it — without the
+        # guard every later enable dies here until Blender is restarted.
+        print(f"[Micromegas] add-on preferences registration failed: {exc}")
 
-    lib = _load_lib()
-    if lib is None:
-        return
+    cached = getattr(sys, _STATE_ATTR, None)
+    if cached is not None:
+        # A prior unregister() in this same process parked a live session
+        # here (keep-alive) instead of shutting it down. Reuse it regardless
+        # of the *current* keep_alive setting — mm_init cannot be called
+        # twice in one process, so a parked session is the only one this
+        # process can ever have and reusing it always beats trying (and
+        # failing) to initialize a second. This does not make keep-alive
+        # sticky: turning the preference off still takes effect at the next
+        # unregister(), which shuts the session down for good.
+        lib, handle, _session_id = cached
+        delattr(sys, _STATE_ATTR)
+    else:
+        _session_id = str(uuid.uuid4())
 
-    props = _build_process_properties()
-    sink_url = os.environ.get("MICROMEGAS_TELEMETRY_URL")
-    handle = lib.init(sink_url=sink_url, properties=props)
-    if handle is None:
-        print(
-            "[Micromegas] telemetry init failed; add-on will be inactive. "
-            "If you just disabled and re-enabled the add-on, restart Blender — "
-            "the native telemetry layer initializes once per process and "
-            "cannot be reinitialized within the same session."
-        )
-        return
+        lib = _load_lib()
+        if lib is None:
+            return
+
+        props = _build_process_properties()
+        sink_url = os.environ.get("MICROMEGAS_TELEMETRY_URL")
+        handle = lib.init(sink_url=sink_url, properties=props)
+        if handle is None:
+            print(
+                "[Micromegas] telemetry init failed; add-on will be inactive. "
+                "If you just disabled and re-enabled the add-on, restart Blender — "
+                "the native telemetry layer initializes once per process and "
+                "cannot be reinitialized within the same session. Turning on "
+                "Keep Alive in the add-on preferences *before* disabling "
+                "avoids this; enabling it now will not bring the session back."
+            )
+            return
 
     _lib = lib
     _handle = handle
 
+    try:
+        _wire_up(lib, handle)
+    except Exception:
+        # The session above is live but this enable failed, and Blender will
+        # not call unregister() to clean it up: addon_utils.enable() sets
+        # __addon_enabled__ only after register() returns, disable() gates on
+        # that flag, and the failed module is dropped from sys.modules. Park
+        # the session so the *next* enable reuses it — mm_init cannot be
+        # called twice per process, so dropping it here would leave the add-on
+        # inactive until Blender restarts. That matters most in the dev-reload
+        # workflow keep-alive exists for, where _wire_up() freshly compiles
+        # every sub-module on each enable and one bad edit lands here.
+        #
+        # Undo whatever _wire_up() managed to complete before failing: without
+        # this, the next (successful) enable wires a *second* copy of every
+        # handler/msgbus subscription from a fresh module instance, and the
+        # dead instance's copies are unreachable by any future unregister().
+        # Same reasoning for the preferences class: Blender drops this module
+        # from sys.modules, so the class object registered above becomes
+        # unreachable and the next enable's unregister_class() would target a
+        # different (never-registered) class from the fresh namespace, leaving
+        # this one registered for the life of the process.
+        _unregister_prefs()
+        _teardown_wiring()
+        setattr(sys, _STATE_ATTR, (lib, handle, _session_id))
+        _lib = None
+        _handle = None
+        raise
+
+
+def _wire_up(lib, handle) -> None:
+    """Point the sub-modules at the live session, install the hooks, arm the timer.
+
+    Split out of register() so a failure part-way through can re-park the live
+    session instead of losing it — see register()'s except branch.
+    """
     # Wire the sub-modules with the active lib + handle.
     from . import actions, crash_harvester, handlers, recorder
 
@@ -294,12 +388,23 @@ def register():
         sys.excepthook = _telemetry_excepthook
 
     # Flush on interpreter exit (belt-and-suspenders alongside mm_shutdown).
-    atexit.register(_shutdown)
+    # Re-pointed at the current module instance on every register(), so a
+    # keep-alive reload cycle keeps exactly one hook (no stacking) and that
+    # hook always reads the namespace holding the live session. A reload that
+    # builds a *fresh* module namespace — what the VS Code Blender-Dev
+    # extension does by purging sys.modules before re-enabling — would
+    # otherwise leave atexit holding a _shutdown whose globals are dead and
+    # whose sys cache the new register() already consumed, so the exit flush
+    # would silently find nothing.
+    prev_hook = getattr(sys, _ATEXIT_HOOK_ATTR, None)
+    if prev_hook is not _shutdown:
+        if prev_hook is not None:
+            atexit.unregister(prev_hook)
+        atexit.register(_shutdown)
+        setattr(sys, _ATEXIT_HOOK_ATTR, _shutdown)
 
     # Periodic flush timer.
     try:
-        import bpy
-
         if not bpy.app.timers.is_registered(_periodic_flush):
             bpy.app.timers.register(
                 _periodic_flush, first_interval=30.0, persistent=True
@@ -317,40 +422,121 @@ def register():
     lib.log(handle, 4, "blender.addon", f"session_id={_session_id}")
 
 
+def _teardown_wiring() -> None:
+    """Undo whatever _wire_up() installed: hooks, sub-module registration.
+
+    Used both by unregister() (the expected, full teardown) and by
+    register()'s except branch (rollback after a partial _wire_up() failure).
+    In the rollback case some steps below may never have run — each step is
+    therefore independent and individually guarded, so one missing/failing
+    step neither raises nor prevents the others from running, and this helper
+    itself can never mask the caller's original exception.
+    """
+    global _prev_excepthook
+
+    if _prev_excepthook is not None:
+        try:
+            sys.excepthook = _prev_excepthook
+        except Exception:
+            pass
+        _prev_excepthook = None
+
+    try:
+        bpy.app.timers.unregister(_periodic_flush)
+    except Exception:
+        pass
+
+    try:
+        from . import actions
+
+        actions.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import recorder
+
+        recorder.set_event_callback(None)
+        recorder.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import handlers
+
+        handlers.unregister()
+    except Exception:
+        pass
+
+    try:
+        from . import crash_harvester
+
+        crash_harvester.unregister_startup_harvest()
+    except Exception:
+        pass
+
+
 def _shutdown():
+    """Really shut down the native telemetry session (mm_shutdown).
+
+    Looks at the currently active module globals first; if those are empty
+    (a keep-alive unregister moved the live session to the sys cache instead
+    of tearing it down), falls back to that cache. Either way, this is the
+    one place that finds "whatever session is still alive" and kills it for
+    real — used both at true process exit (atexit) and by an unregister()
+    with keep-alive off.
+    """
     global _lib, _handle
-    if _lib is None or _handle is None:
-        return
     lib, handle = _lib, _handle
+    if lib is None or handle is None:
+        cached = getattr(sys, _STATE_ATTR, None)
+        if cached is not None:
+            lib, handle = cached[0], cached[1]
     _lib = None
     _handle = None
+    if hasattr(sys, _STATE_ATTR):
+        delattr(sys, _STATE_ATTR)
+    if lib is None or handle is None:
+        return
     lib.log(handle, 4, "blender.addon", "Micromegas add-on shutting down")
     lib.flush(handle)
     lib.shutdown(handle)
 
 
 def unregister():
-    global _prev_excepthook
-    if _prev_excepthook is not None:
-        sys.excepthook = _prev_excepthook
-        _prev_excepthook = None
+    global _lib, _handle
 
+    keep_alive = _is_keep_alive_enabled()
+
+    _teardown_wiring()
+
+    if keep_alive and _lib is not None and _handle is not None:
+        # Park the live session on sys instead of shutting it down, so a
+        # same-process re-register (e.g. VS Code Blender-Dev's re-enable on
+        # every launch) can reuse it — mm_init can't be called twice in one
+        # process.
+        setattr(sys, _STATE_ATTR, (_lib, _handle, _session_id))
+        _lib = None
+        _handle = None
+    else:
+        _shutdown()
+
+    _unregister_prefs()
+
+
+def _unregister_prefs() -> None:
+    """Drop the preferences class registration, if this module made it.
+
+    Guarded on _prefs_registered so a namespace whose register_class() lost the
+    duplicate-bl_idname race does not unregister the *other* namespace's live
+    class out from under it.
+    """
+    global _prefs_registered
+
+    if not _prefs_registered:
+        return
     try:
-        import bpy
-
-        bpy.app.timers.unregister(_periodic_flush)
+        bpy.utils.unregister_class(MicromegasAddonPreferences)
     except Exception:
         pass
-
-    try:
-        from . import actions, crash_harvester, handlers, recorder
-
-        actions.unregister()
-        recorder.set_event_callback(None)
-        recorder.unregister()
-        handlers.unregister()
-        crash_harvester.unregister_startup_harvest()
-    except Exception:
-        pass
-
-    _shutdown()
+    _prefs_registered = False

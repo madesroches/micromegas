@@ -58,7 +58,7 @@ ln -s $(pwd)/../blender/micromegas_blender \
 
 ## Configuration
 
-All configuration is via environment variables set before launching Blender
+Runtime configuration is via environment variables set before launching Blender
 (system-wide or via the launcher script used in your studio pipeline).
 
 | Variable | Required | Description |
@@ -68,6 +68,27 @@ All configuration is via environment variables set before launching Blender
 | `MICROMEGAS_OIDC_TOKEN_ENDPOINT` | No | OIDC token endpoint (alternative auth) |
 | `MICROMEGAS_OIDC_CLIENT_ID` | No | OIDC client ID |
 | `MICROMEGAS_OIDC_CLIENT_SECRET` | No | OIDC client secret |
+
+### Add-on preferences
+
+One setting lives in **Edit → Preferences → Add-ons → Micromegas Telemetry**
+rather than in the environment:
+
+| Preference | Default | Description |
+|---|---|---|
+| **Keep Alive (Dev Only)** | off | Keep the telemetry session alive across an add-on disable/enable within the same Blender process. Leave off for normal use. |
+
+The native telemetry layer can only be initialized once per process, so
+disabling and re-enabling the add-on inside a running Blender normally leaves it
+inactive until Blender is restarted — which tooling that re-enables the add-on
+on every launch (notably the VS Code *Blender Development* extension) hits on
+every debug session.  With **Keep Alive** on, the live session is parked on
+disable instead of shut down and the next enable in the same process reuses it
+(same `session_id`).  A session that is already parked is reused on the next
+enable even if the preference has since been turned off, since a second one
+cannot be initialized.  Turning the preference off does still take effect, on
+the *following* disable — that one shuts the session down for good, and the
+add-on stays inactive until Blender is restarted.
 
 ## What is captured
 
@@ -249,6 +270,15 @@ LIMIT 100;
 The prebuilt `libmicromegas_capi.so` / `micromegas_capi.dll` is missing from the
 add-on's `lib/` directory.  Re-install from the extension zip, or follow the
 manual install steps above.
+
+**Add-on inactive after disabling then re-enabling it in the same Blender session**
+
+The native telemetry layer initializes once per process and cannot be
+reinitialized, so `telemetry init failed` is printed on the second enable.
+Restart Blender.  To avoid it next time, turn on **Keep Alive (Dev Only)** in
+the add-on preferences *before* disabling — enabling it after the session has
+already been shut down does not bring it back (see
+[Add-on preferences](#add-on-preferences)).
 
 **Multiple Blender instances — will they conflict?**
 

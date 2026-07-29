@@ -40,6 +40,12 @@ def _make_fake_handlers() -> types.SimpleNamespace:
     return ns
 
 
+class _FakeAddonsCollection(dict):
+    """Dict-like stand-in for bpy.context.preferences.addons: supports both
+    `.keys()` (used for the enabled-addons fingerprint) and `[module_name]`
+    lookup (used by `_is_keep_alive_enabled()`)."""
+
+
 def _make_fake_context() -> types.SimpleNamespace:
     return types.SimpleNamespace(
         scene=types.SimpleNamespace(
@@ -47,9 +53,7 @@ def _make_fake_context() -> types.SimpleNamespace:
             objects=[],
             frame_current=1,
         ),
-        preferences=types.SimpleNamespace(
-            addons=types.SimpleNamespace(keys=lambda: [])
-        ),
+        preferences=types.SimpleNamespace(addons=_FakeAddonsCollection()),
         mode="OBJECT",
         workspace=types.SimpleNamespace(
             name="Layout",
@@ -76,7 +80,10 @@ def _install_fake_modules() -> None:
         build_hash=b"deadbeef",
         background=False,
     )
-    bpy.types = types.SimpleNamespace(LayerObjects=object, Operator=object)
+    bpy.types = types.SimpleNamespace(
+        LayerObjects=object, Operator=object, AddonPreferences=object
+    )
+    bpy.props = types.SimpleNamespace(BoolProperty=lambda **kwargs: None)
     bpy.context = _make_fake_context()
     bpy.data = types.SimpleNamespace(filepath="")
     bpy.msgbus = types.SimpleNamespace(
