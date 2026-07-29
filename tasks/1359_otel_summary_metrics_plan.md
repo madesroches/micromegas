@@ -8,9 +8,10 @@ CloudWatch Metric Streams configured for `opentelemetry1.0` output encode every 
 an OTLP `Summary`, which `OtelMetricsBlockProcessor` currently drops with a `debug!` log. The
 route added in #1299/#1300 therefore accepts CloudWatch metric payloads, acks 200, and writes
 zero rows to `measures` — silently. This plan makes `Summary` materialize: each
-`SummaryDataPoint` fans out into exactly four `measures` rows — count, sum, min, max — tagged
-via `properties`, and bumps `SCHEMA_VERSION` so already-ingested (and previously dropped)
-Summary blocks re-materialize on next partition rebuild.
+`SummaryDataPoint` fans out into exactly four `measures` rows — count, sum, min, max — as four
+distinct metric **names** (`<metric>_count`, `<metric>_sum`, `<metric>_min`, `<metric>_max`), and
+bumps `SCHEMA_VERSION` so already-ingested (and previously dropped) Summary blocks
+re-materialize on next partition rebuild.
 
 Scope is deliberately narrow: only the four fixed statistics land. Any additional
 `quantile_values` entries beyond `q=0.0`/`q=1.0` (i.e. configured percentiles like p90/p99) are
@@ -110,28 +111,31 @@ bump must be deliberate, not incidental.
 
 ## Design
 
-### Fan out to four fixed statistics (issue Option 1, narrowed)
+### Fan out to four fixed statistics, as four metric names (issue Option 1, narrowed)
 
-Each `SummaryDataPoint` becomes exactly four rows — count, sum, min, max — all sharing the
-metric's `name`/`time` and the data point's own `attributes`, distinguished by two new
-`properties` keys:
+Each `SummaryDataPoint` becomes exactly four rows — count, sum, min, max — sharing the data
+point's own `time`/`attributes`, distinguished by **suffixing the metric name** rather than by
+tagging `properties`:
 
-| `properties` key | Value |
-|---|---|
-| `otel.metric.kind` | `"summary"` (same slot Sum/Gauge already populate with `"sum"`/`"gauge"`) |
-| `otel.metric.statistic` | `"count"` \| `"sum"` \| `"min"` \| `"max"` |
+| Row | Metric name | `unit` |
+|---|---|---|
+| count | `<metric.name>_count` | `""` |
+| sum | `<metric.name>_sum` | `metric.unit` |
+| min (`quantile == 0.0`) | `<metric.name>_min` | `metric.unit` |
+| max (`quantile == 1.0`) | `<metric.name>_max` | `metric.unit` |
 
-Statistic tagging (not a name suffix) was chosen so `name` stays a clean grouping key across
-all metric kinds — see Trade-offs.
+No new `properties`/`extras` keys are introduced for Summary at all — the statistic is fully
+encoded in `name`, so there's nothing left to tag. This was chosen over the properties-tagging
+approach originally considered — see Trade-offs.
 
 Mapping from `SummaryDataPoint` fields to rows:
 
-- `count` → one row, `value = count as f64`, `statistic = "count"`, `unit = ""` (a sample count
-  isn't a quantity in the metric's unit — see Trade-offs).
-- `sum` → one row, `value = sum`, `statistic = "sum"`, `unit = metric.unit`.
-- `quantile_values` entry with `quantile == 0.0` → one row, `statistic = "min"`,
+- `count` → one row, `name = "{metric.name}_count"`, `value = count as f64`, `unit = ""` (a
+  sample count isn't a quantity in the metric's unit — see Trade-offs).
+- `sum` → one row, `name = "{metric.name}_sum"`, `value = sum`, `unit = metric.unit`.
+- `quantile_values` entry with `quantile == 0.0` → one row, `name = "{metric.name}_min"`,
   `unit = metric.unit`.
-- `quantile_values` entry with `quantile == 1.0` → one row, `statistic = "max"`,
+- `quantile_values` entry with `quantile == 1.0` → one row, `name = "{metric.name}_max"`,
   `unit = metric.unit`.
 - any other `quantile_values` entry (configured percentiles, e.g. p90/p99) → dropped with a
   `debug!` log naming the metric and the quantile — same "logged, not silent-in-aggregate"
@@ -139,10 +143,10 @@ Mapping from `SummaryDataPoint` fields to rows:
   materialize from the same data point.
 
 A CloudWatch Metric Stream — with or without `statistics_configuration` — therefore always
-produces exactly 4 rows per scrape per metric (assuming `q=0.0`/`q=1.0` are present, which
-CloudWatch's default output guarantees). If a `SummaryDataPoint` is missing the `q=0.0` or
-`q=1.0` entry (non-CloudWatch producer), that statistic is simply absent for that row — no
-error, fewer than 4 rows.
+produces exactly 4 rows, under 4 distinct names, per scrape per metric (assuming `q=0.0`/
+`q=1.0` are present, which CloudWatch's default output guarantees). If a `SummaryDataPoint` is
+missing the `q=0.0` or `q=1.0` entry (non-CloudWatch producer), that name is simply absent for
+that scrape — no error, fewer than 4 rows/names.
 
 `time_unix_nano == 0` skips the whole data point (all its rows), same short-circuit the
 existing `append` uses for Sum/Gauge — one point, one timestamp, one skip check.
@@ -196,10 +200,10 @@ fn append(
 }
 
 /// Fans a `SummaryDataPoint` out into rows for the four fixed statistics
-/// (count, sum, min, max). Any `quantile_values` entry other than `q=0.0`/
-/// `q=1.0` is logged and dropped — configured percentiles are out of scope.
-/// `kind` is the shared `("otel.metric.kind", "summary")` pair; `statistic`
-/// is layered on per row.
+/// (count, sum, min, max), each under its own suffixed metric name. Any
+/// `quantile_values` entry other than `q=0.0`/`q=1.0` is logged and dropped —
+/// configured percentiles are out of scope. No `properties`/`extras` are
+/// added for Summary rows; the statistic lives entirely in `name`.
 fn append_summary(
     &mut self,
     scope_name: &str,
@@ -212,19 +216,15 @@ fn append_summary(
         debug!("OTel summary data point for {metric_name} dropped (time_unix_nano=0)");
         return Ok(());
     }
-    let kind = ("otel.metric.kind".to_string(), JsonbValue::String(Cow::Borrowed("summary")));
 
-    let stat = |s: &'static str| {
-        [kind.clone(), ("otel.metric.statistic".to_string(), JsonbValue::String(Cow::Borrowed(s)))]
-    };
-    self.append_row(scope_name, metric_name, "", time_nanos, &dp.attributes, dp.count as f64, &stat("count"))?;
-    self.append_row(scope_name, metric_name, unit, time_nanos, &dp.attributes, dp.sum, &stat("sum"))?;
+    self.append_row(scope_name, &format!("{metric_name}_count"), "", time_nanos, &dp.attributes, dp.count as f64, &[])?;
+    self.append_row(scope_name, &format!("{metric_name}_sum"), unit, time_nanos, &dp.attributes, dp.sum, &[])?;
 
     for q in &dp.quantile_values {
         if q.quantile == 0.0 {
-            self.append_row(scope_name, metric_name, unit, time_nanos, &dp.attributes, q.value, &stat("min"))?;
+            self.append_row(scope_name, &format!("{metric_name}_min"), unit, time_nanos, &dp.attributes, q.value, &[])?;
         } else if q.quantile == 1.0 {
-            self.append_row(scope_name, metric_name, unit, time_nanos, &dp.attributes, q.value, &stat("max"))?;
+            self.append_row(scope_name, &format!("{metric_name}_max"), unit, time_nanos, &dp.attributes, q.value, &[])?;
         } else {
             debug!(
                 "OTel summary quantile dropped (only count/sum/min/max are materialized): \
@@ -237,8 +237,8 @@ fn append_summary(
 }
 ```
 
-(Exact signatures/closures above are illustrative — implement with whatever's most idiomatic;
-the field-by-field mapping and the `append_row` extraction are the load-bearing parts.)
+(Exact signatures above are illustrative — implement with whatever's most idiomatic; the
+field-by-field mapping and the `append_row` extraction are the load-bearing parts.)
 
 ### `OtelMetricsBlockProcessor::process` — new `Data::Summary` arm
 
@@ -305,13 +305,19 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 
 ## Trade-offs
 
-- **Tag statistic in `properties` vs. suffix the metric `name`.** Tagging keeps `name` a stable
-  grouping key identical across Sum/Gauge/Summary — a dashboard already filtering
-  `WHERE name = 'CPUUtilization'` gets all statistics back and filters further on
-  `otel.metric.statistic`, rather than needing to know about `CPUUtilization.max` /
-  `CPUUtilization_max` naming. Cost: any query that doesn't filter on `otel.metric.statistic`
-  now gets 4 rows per timestamp per metric instead of 1 — must be called out prominently in
-  docs (done below).
+- **Suffix the metric `name` vs. tag statistic in `properties`.** An earlier revision of this
+  plan tagged the statistic via `properties` (`otel.metric.kind = "summary"` +
+  `otel.metric.statistic = "count"/"sum"/"min"/"max"`) so `name` stayed a single grouping key
+  across Sum/Gauge/Summary. Suffixing instead (`CPUUtilization_count`, `_sum`, `_min`, `_max`)
+  was chosen as simpler: no new `properties`/`extras` machinery for the Summary path at all, and
+  each statistic becomes independently and cheaply selectable/groupable by `name` alone —
+  `WHERE name = 'CPUUtilization_max'` needs no `jsonb_get`/`jsonb_as_string` unwrapping. Cost:
+  a query that wants "CPUUtilization, any statistic" must know the four suffixes (or match
+  `name LIKE 'CPUUtilization_%'`) rather than filtering `name = 'CPUUtilization'` and getting
+  4 rows back — must be called out prominently in docs (done below). Also means Summary-derived
+  names are indistinguishable at the `properties` level from a same-named native Sum/Gauge
+  metric that happens to end in `_count`/`_sum`/`_min`/`_max`; considered an acceptable,
+  unlikely collision.
 - **Only count/sum/min/max; configured percentiles dropped.** CloudWatch's
   `statistics_configuration` can add arbitrary extra `ValueAtQuantile` entries (p90, p99, ...).
   Fanning those out too was considered but deferred — count/sum/min/max covers the default
@@ -345,25 +351,31 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
 `mkdocs/docs/otlp/index.md`:
 - **:144** (Metrics → `measures` mapping) — replace "Sum and Gauge data points are materialized
   directly. Histogram, ExponentialHistogram, and Summary are skipped..." with: Sum, Gauge, and
-  Summary (count/sum/min/max only) are materialized, via `otel.metric.kind = "summary"` +
-  `otel.metric.statistic`; Histogram/ExponentialHistogram, and any Summary quantile other than
-  min/max, remain skipped with a debug log (bucket-level/arbitrary-percentile data doesn't fit
-  a scalar `value` column without further design). Add the `otel.metric.statistic` values to
-  the field-mapping table.
+  Summary (count/sum/min/max only) are materialized; each Summary statistic lands as its own
+  `measures` row under a suffixed metric name — `<metric>_count`, `_sum`, `_min`, `_max` — no
+  new `properties` keys involved. Histogram/ExponentialHistogram, and any Summary quantile
+  other than min/max, remain skipped with a debug log (bucket-level/arbitrary-percentile data
+  doesn't fit a scalar `value` column without further design). Add the four name-suffix
+  patterns to the field-mapping table.
 - **:540** (Limitations) — update the bullet to reflect Summary now materializing
-  count/sum/min/max; keep the Histogram/ExponentialHistogram limitation and add that configured
-  percentile statistics beyond min/max are not materialized.
+  count/sum/min/max as four suffixed names; keep the Histogram/ExponentialHistogram limitation
+  and add that configured percentile statistics beyond min/max are not materialized.
 - Add a short "Selecting one CloudWatch statistic" example under the Metrics section:
   ```sql
   SELECT time, value
   FROM measures
-  WHERE name = 'CPUUtilization'
-    AND jsonb_as_string(jsonb_get(properties, 'otel.metric.statistic')) = 'max'
+  WHERE name = 'CPUUtilization_max'
+  ```
+  and a "grouping all statistics for a metric" example:
+  ```sql
+  SELECT time, name, value
+  FROM measures
+  WHERE name LIKE 'CPUUtilization\_%' ESCAPE '\'
   ```
 - In the existing "CloudWatch Metric Streams" section (`:373+`), add a line noting that
   `opentelemetry1.0` output is Summary-only and that each scrape now lands as 4 `measures` rows
-  per metric (count/sum/min/max), not 1 — and that any additional configured percentile
-  statistics are not materialized.
+  per metric under 4 distinct names (`_count`/`_sum`/`_min`/`_max`), not 1 row under the base
+  name — and that any additional configured percentile statistics are not materialized.
 
 ## Testing Strategy
 
@@ -372,10 +384,10 @@ zero rows) are rebuilt from the still-retained source blocks and their rows fina
   `Metric { data: Some(Data::Summary(...)) }` containing `count`, `sum`, and
   `quantile_values = [{0.0, min}, {1.0, max}, {0.9, p90}]`; run it through
   `OtelMetricsBlockProcessor::process`; assert the resulting `RecordBatch` has exactly 4 rows
-  (the `0.9` quantile is dropped), each sharing `name`/`time`, and that `properties` decodes to
-  the expected `otel.metric.statistic` (`"count"`, `"sum"`, `"min"`, `"max"`). Assert `value`
-  matches `count`/`sum`/min/max respectively, and that the `count` row's `unit` is empty while
-  the others keep the metric's unit.
+  (the `0.9` quantile is dropped), all sharing `time`, and with `name` equal to
+  `"{metric_name}_count"`, `"_sum"`, `"_min"`, `"_max"` respectively (no new `properties` keys
+  expected). Assert `value` matches `count`/`sum`/min/max respectively, and that the `_count`
+  row's `unit` is empty while the others keep the metric's unit.
 - **Unit — non-min/max quantile dropped**: a `SummaryDataPoint` with only a `quantile_values`
   entry at `q=0.5` (no `q=0.0`/`q=1.0`) still produces `count`+`sum` rows, drops the `0.5`
   entry, and logs at `debug!` — mirrors the Histogram/ExponentialHistogram drop convention.
