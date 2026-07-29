@@ -8,9 +8,12 @@ without keep-alive that second register() fails. See
 __init__._is_keep_alive_enabled / _STATE_ATTR.
 """
 
+import importlib
 import sys
 
 import micromegas_blender as mm
+
+_PKG = "micromegas_blender"
 
 
 class CountingLib:
@@ -47,7 +50,7 @@ def _clear_state():
     mm._lib = None
     mm._handle = None
     mm._session_id = ""
-    for attr in (mm._STATE_ATTR, mm._ATEXIT_REGISTERED_ATTR):
+    for attr in (mm._STATE_ATTR, mm._ATEXIT_HOOK_ATTR):
         if hasattr(sys, attr):
             delattr(sys, attr)
 
@@ -84,6 +87,8 @@ def test_keep_alive_on_unregister_parks_state_without_shutdown(fake_bpy, monkeyp
     try:
         _register_with_lib(monkeypatch, lib)
         assert lib.init_calls == 1
+        session_id = mm._session_id
+        assert session_id
 
         mm.unregister()
 
@@ -95,7 +100,7 @@ def test_keep_alive_on_unregister_parks_state_without_shutdown(fake_bpy, monkeyp
         cached_lib, cached_handle, cached_session_id = cached
         assert cached_lib is lib
         assert cached_handle is not None
-        assert cached_session_id == mm._session_id or cached_session_id
+        assert cached_session_id == session_id
     finally:
         _clear_state()
 
@@ -178,19 +183,80 @@ def test_shutdown_falls_back_to_sys_cache(fake_bpy, monkeypatch):
         _clear_state()
 
 
+def _patch_atexit(monkeypatch) -> list:
+    """Capture the live atexit hooks in a list instead of the real registry."""
+    hooks: list = []
+    monkeypatch.setattr(mm.atexit, "register", lambda fn: hooks.append(fn))
+    monkeypatch.setattr(
+        mm.atexit,
+        "unregister",
+        lambda fn: hooks.remove(fn) if fn in hooks else None,
+    )
+    return hooks
+
+
 def test_atexit_registered_only_once_across_keep_alive_cycle(fake_bpy, monkeypatch):
     _clear_state()
     _set_keep_alive(fake_bpy, True)
     lib = CountingLib()
-    calls = []
-    monkeypatch.setattr(
-        mm.atexit, "register", lambda fn: calls.append(fn)
-    )
+    hooks = _patch_atexit(monkeypatch)
     try:
         _register_with_lib(monkeypatch, lib)
         mm.unregister()
         mm.register()
 
-        assert len(calls) == 1
+        assert len(hooks) == 1
     finally:
+        _clear_state()
+
+
+def test_atexit_hook_follows_a_fresh_module_namespace(fake_bpy, monkeypatch):
+    """The atexit hook must belong to the namespace holding the live session.
+
+    The VS Code Blender-Dev extension purges the add-on's modules from
+    sys.modules before re-enabling, so the second register() runs in a brand
+    new namespace. If atexit still held the *previous* namespace's _shutdown,
+    that hook would see its own `_lib`/`_handle` as None and find the sys cache
+    already consumed by the new register() — the exit flush would silently do
+    nothing and the tail of the session would be lost.
+    """
+    _clear_state()
+    _set_keep_alive(fake_bpy, True)
+    lib = CountingLib()
+    hooks = _patch_atexit(monkeypatch)
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == _PKG or name.startswith(_PKG + ".")
+    }
+    try:
+        _register_with_lib(monkeypatch, lib)
+        mm.unregister()  # keep-alive: session parked on sys, not shut down
+
+        for name in saved:
+            del sys.modules[name]
+        fresh = importlib.import_module(_PKG)
+        assert fresh is not mm
+        monkeypatch.setattr(
+            fresh,
+            "_load_lib",
+            lambda: (_ for _ in ()).throw(
+                AssertionError("_load_lib should not be called on cached re-register")
+            ),
+        )
+        fresh.register()
+        assert fresh._lib is lib  # the parked session was reused
+
+        assert len(hooks) == 1
+        hooks[0]()  # simulate interpreter exit
+
+        assert lib.shutdown_calls == 1
+    finally:
+        for name in [
+            name
+            for name in sys.modules
+            if name == _PKG or name.startswith(_PKG + ".")
+        ]:
+            del sys.modules[name]
+        sys.modules.update(saved)
         _clear_state()

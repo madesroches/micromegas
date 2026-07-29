@@ -5,10 +5,15 @@ Captures Blender session telemetry — user actions, lifecycle events, and
 performance metrics — and ships them to a Micromegas ingestion server via
 the micromegas-capi native library.
 
-Configuration (all via environment variables):
+Configuration (environment variables):
     MICROMEGAS_TELEMETRY_URL        Ingestion server endpoint (required)
     MICROMEGAS_INGESTION_API_KEY    API key for authenticated ingestion (optional)
     MICROMEGAS_OIDC_*               OIDC client-credentials variables (alternative auth)
+
+One dev-only setting lives in the add-on preferences instead of the
+environment: "Keep Alive (Dev Only)" keeps the telemetry session alive across
+an add-on disable/enable within the same Blender process (see
+MicromegasAddonPreferences).
 
 The native library (libmicromegas_capi.so / micromegas_capi.dll) must be
 present in the add-on's lib/ subdirectory.  Pre-built binaries are bundled
@@ -61,7 +66,7 @@ _session_id: str = ""
 # sys is the one thing that survives disable/re-enable within the same
 # Blender process (module globals get reset on reload).
 _STATE_ATTR = "_micromegas_addon_state"  # (lib, handle, session_id) tuple
-_ATEXIT_REGISTERED_ATTR = "_micromegas_addon_atexit_registered"
+_ATEXIT_HOOK_ATTR = "_micromegas_addon_atexit_hook"  # the registered _shutdown
 
 
 class MicromegasAddonPreferences(bpy.types.AddonPreferences):
@@ -103,8 +108,6 @@ def _build_process_properties() -> dict:
         "addon_version": _ADDON_VERSION,
     }
     try:
-        import bpy
-
         props["blender_version"] = ".".join(str(v) for v in bpy.app.version)
         props["blender_version_hash"] = bpy.app.build_hash.decode(
             "utf-8", errors="replace"
@@ -150,14 +153,10 @@ def _gpu_call(fn_name: str) -> str:
 
 
 def _get_background() -> str:
-    import bpy
-
     return "true" if bpy.app.background else "false"
 
 
 def _get_render_engine() -> str:
-    import bpy
-
     return bpy.context.scene.render.engine
 
 
@@ -203,7 +202,6 @@ def _get_enabled_addons() -> str:
     dimensions, so cardinality stays controlled.
     """
     import addon_utils
-    import bpy
 
     enabled = set(bpy.context.preferences.addons.keys())
     entries: list[str] = []
@@ -284,7 +282,13 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
 def register():
     global _lib, _handle, _session_id
 
-    bpy.utils.register_class(MicromegasAddonPreferences)
+    try:
+        bpy.utils.register_class(MicromegasAddonPreferences)
+    except Exception as exc:
+        # A registration leaked by an earlier register() that raised past this
+        # point must not take the telemetry session down with it — without the
+        # guard every later enable dies here until Blender is restarted.
+        print(f"[Micromegas] add-on preferences registration failed: {exc}")
 
     cached = getattr(sys, _STATE_ATTR, None)
     if cached is not None:
@@ -342,11 +346,20 @@ def register():
         sys.excepthook = _telemetry_excepthook
 
     # Flush on interpreter exit (belt-and-suspenders alongside mm_shutdown).
-    # Guarded so a dev-mode reload cycle within the same process doesn't
-    # stack multiple atexit callbacks.
-    if not getattr(sys, _ATEXIT_REGISTERED_ATTR, False):
+    # Re-pointed at the current module instance on every register(), so a
+    # keep-alive reload cycle keeps exactly one hook (no stacking) and that
+    # hook always reads the namespace holding the live session. A reload that
+    # builds a *fresh* module namespace — what the VS Code Blender-Dev
+    # extension does by purging sys.modules before re-enabling — would
+    # otherwise leave atexit holding a _shutdown whose globals are dead and
+    # whose sys cache the new register() already consumed, so the exit flush
+    # would silently find nothing.
+    prev_hook = getattr(sys, _ATEXIT_HOOK_ATTR, None)
+    if prev_hook is not _shutdown:
+        if prev_hook is not None:
+            atexit.unregister(prev_hook)
         atexit.register(_shutdown)
-        setattr(sys, _ATEXIT_REGISTERED_ATTR, True)
+        setattr(sys, _ATEXIT_HOOK_ATTR, _shutdown)
 
     # Periodic flush timer.
     try:
@@ -382,7 +395,7 @@ def _shutdown():
     if lib is None or handle is None:
         cached = getattr(sys, _STATE_ATTR, None)
         if cached is not None:
-            lib, handle, _cached_session_id = cached
+            lib, handle = cached[0], cached[1]
     _lib = None
     _handle = None
     if hasattr(sys, _STATE_ATTR):

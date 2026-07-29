@@ -126,11 +126,26 @@ New-Item -ItemType Junction `
 
 After linking, enable the extension in **Edit → Preferences → Extensions**.
 
+### Development workflow
+
+The native telemetry layer can only be initialized once per process, so
+disabling and re-enabling the add-on inside a running Blender normally leaves
+it inactive until Blender is restarted.  Tooling that re-enables the add-on on
+every launch — notably the VS Code *Blender Development* extension — hits this
+on every debug session.
+
+Turn on **Keep Alive (Dev Only)** in the add-on preferences to avoid it: on
+disable, the live session is parked instead of shut down, and the next enable
+in the same process reuses it (same `session_id`).  Once a session has been
+parked it is reused for the rest of the process's life even if the preference
+is later turned off, since there is no way to initialize a second one.  Leave
+the preference off for normal use.
+
 ---
 
 ## Configuration
 
-All configuration is via environment variables set **before** launching
+Runtime configuration is via environment variables set **before** launching
 Blender (system-wide, via the launcher, or shell profile):
 
 | Variable | Required | Description |
@@ -143,6 +158,15 @@ Blender (system-wide, via the launcher, or shell profile):
 
 If `MICROMEGAS_TELEMETRY_URL` is not set the add-on loads but remains inactive
 (it prints a warning to the Blender console).
+
+### Add-on preferences
+
+One setting lives in **Edit → Preferences → Add-ons → Micromegas Telemetry**
+rather than in the environment:
+
+| Preference | Default | Description |
+|------------|---------|-------------|
+| **Keep Alive (Dev Only)** | off | Keep the telemetry session alive across an add-on disable/enable within the same Blender process. Leave off for normal use — see [Development workflow](#development-workflow). |
 
 ### Quick local test
 
@@ -260,5 +284,5 @@ micromegas-query "SELECT time, level, target, msg FROM log_entries \
 | `native library not found` in console | `lib/` directory missing or wrong filename; rebuild and copy the `.so`/`.dll` |
 | `telemetry init failed` | `MICROMEGAS_TELEMETRY_URL` is unset or the server is unreachable at startup |
 | No rows in the server after a session | Server URL incorrect, or events are still buffered — wait 30 s for the periodic flush or restart Blender to trigger `mm_shutdown` |
-| Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender |
+| Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender, or enable **Keep Alive (Dev Only)** in the add-on preferences to carry the session across a re-enable |
 | Add-on not listed after install | Zip wrapped the files in an extra parent directory; the zip must contain `blender_manifest.toml` and `__init__.py` at its root (not inside a `micromegas_blender/` folder) |
