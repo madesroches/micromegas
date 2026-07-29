@@ -54,6 +54,18 @@ class TestWriteReadRoundTrip:
             content = f.read()
         assert content.endswith("\n")
 
+    def test_round_trip_with_folder_path(self, tmp_path):
+        path = tmp_path / "test-notebook.json"
+        data = {
+            "name": "test-notebook",
+            "screen_type": "notebook",
+            "config": {"cells": []},
+            "folder_path": "dashboards/team-a",
+        }
+        write_screen_file(path, data)
+        result = read_screen_file(path)
+        assert result == data
+
     def test_extra_keys_stripped(self, tmp_path):
         """Extra keys like created_by should not appear in output."""
         data = {
@@ -107,6 +119,35 @@ class TestServerScreenToFile:
         }
         result = server_screen_to_file(server)
         assert set(result.keys()) == {"name", "screen_type", "config", "managed_by"}
+
+    def test_copies_non_empty_folder_path(self):
+        server = {
+            "name": "test",
+            "screen_type": "notebook",
+            "config": {"cells": []},
+            "folder_path": "dashboards/team-a",
+        }
+        result = server_screen_to_file(server)
+        assert result["folder_path"] == "dashboards/team-a"
+
+    def test_omits_empty_folder_path(self):
+        server = {
+            "name": "test",
+            "screen_type": "notebook",
+            "config": {"cells": []},
+            "folder_path": "",
+        }
+        result = server_screen_to_file(server)
+        assert "folder_path" not in result
+
+    def test_omits_missing_folder_path(self):
+        server = {
+            "name": "test",
+            "screen_type": "notebook",
+            "config": {"cells": []},
+        }
+        result = server_screen_to_file(server)
+        assert "folder_path" not in result
 
 
 class TestListLocalScreens:
@@ -254,6 +295,97 @@ class TestComputePlan:
         client = self._make_client(server_screens)
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert unchanged == ["stable-screen"]
+
+    def test_folder_path_diff_surfaces_as_update(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        write_screen_file(
+            "my-screen.json",
+            {
+                "name": "my-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+                "folder_path": "dashboards/team-a",
+                "managed_by": managed_by,
+            },
+        )
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "my-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+                "folder_path": "dashboards/team-b",
+                "managed_by": managed_by,
+            }
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert len(updates) == 1
+        name, local_dict, server_dict = updates[0]
+        assert name == "my-screen"
+        assert local_dict["folder_path"] == "dashboards/team-a"
+        assert server_dict["folder_path"] == "dashboards/team-b"
+
+    def test_unmodified_root_screen_no_folder_path_key(self, tmp_path, monkeypatch):
+        """Local file omits folder_path; server returns folder_path/managed_by as
+        empty/null for a root, unmanaged screen. Should be unchanged, not modified."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        write_screen_file(
+            "root-screen.json",
+            {
+                "name": "root-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+            },
+        )
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "root-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+                "folder_path": "",
+                "managed_by": None,
+            }
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert unchanged == ["root-screen"]
+        assert updates == []
+
+    def test_explicit_empty_folder_path_matches_server_root(
+        self, tmp_path, monkeypatch
+    ):
+        """Local file explicitly sets folder_path="" (move-to-root intent); server
+        also reports root. Should compare equal, not spuriously diff."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        write_screen_file(
+            "root-screen.json",
+            {
+                "name": "root-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+                "folder_path": "",
+                "managed_by": managed_by,
+            },
+        )
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "root-screen",
+                "screen_type": "notebook",
+                "config": {"cells": []},
+                "folder_path": "",
+                "managed_by": managed_by,
+            }
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert unchanged == ["root-screen"]
+        assert updates == []
 
 
 class TestFormatScreenDiff:

@@ -83,13 +83,15 @@ Each screen is a single `.json` file:
     "timeRangeFrom": "now-5m",
     "timeRangeTo": "now",
     "cells": []
-  }
+  },
+  "folder_path": "dashboards/team-a"
 }
 ```
 
 - Filename must match the `name` field (e.g., `my-notebook.json`)
 - Pretty-printed with 2-space indent
 - Server metadata (`created_by`, `updated_by`, timestamps) is excluded
+- `folder_path` is optional: key omitted means "no folder / don't move it"; `""` explicitly means root. To move a screen back to root, set `"folder_path": ""` rather than removing the key.
 
 ## Commands
 
