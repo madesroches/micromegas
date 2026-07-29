@@ -29,6 +29,7 @@ Treat `folder_path` as an optional field, consistent with how `managed_by` is al
 - Server always returns `folder_path` (possibly `""`). The CLI only persists it locally when non-empty (root screens keep a clean file with no `folder_path` key, matching current behavior for screens without a folder).
 - `web_client.create_screen`/`update_screen` gain a `folder_path=None` param. When `None`, it's omitted from the JSON payload (server defaults to root on create / leaves unchanged on update — matches Rust's `#[serde(default)]` / `Option<String>` + `COALESCE` semantics). When set (including `""`, to support moving a screen back to root), it's included.
 - `cli/screens.py` passes `screen.get("folder_path")` through on create/update. `dict.get` returns `None` for local files that omit the key, which is exactly the "don't touch folder_path" signal `update_screen` needs, and `""` is fine for `create_screen` when a local file explicitly wants root.
+- `compute_plan()` and `cmd_list`'s `screen_status()` must diff against `server_screen_to_file(server)`, not the raw server dict — the server always includes `"folder_path": ""` and `"managed_by": null` for root/unmanaged screens, while local files omit those keys entirely, so comparing raw dicts would flag every unmodified root screen as "modified" forever.
 
 No changes needed to `read_screen_file()`'s required-field check — `folder_path` stays optional in the file format, same as `managed_by`.
 
@@ -44,11 +45,13 @@ No changes needed to `read_screen_file()`'s required-field check — `folder_pat
    - `cmd_import`: pass `folder_path=screen.get("folder_path")` to the `client.update_screen(...)` call at line 219.
    - `cmd_apply` creates loop (~line 431): pass `folder_path=screen.get("folder_path")` to `client.create_screen(...)`.
    - `cmd_apply` updates loop (~line 446): pass `folder_path=screen.get("folder_path")` to `client.update_screen(...)`.
+   - `compute_plan()` (~lines 296-306): compare and diff `local_data` against `server_screen_to_file(server)` instead of the raw `server` dict (both in the `screens_equal(...)` check and the `strip_volatile_keys(server)` used to build the `updates` tuple), so `folder_path`/`managed_by` are normalized the same way as in local files before comparison.
+   - `cmd_list`'s `screen_status()` (~line 491): same normalization — compare `local[name]` against `server_screen_to_file(server_by_name[name])` instead of the raw dict.
 
 3. **Tests** — extend `python/micromegas/tests/test_screen_files.py`:
    - `TestServerScreenToFile`: add a case asserting `folder_path` is copied when present and non-empty, and stays absent when the server returns `""` or omits it.
    - `TestWriteReadRoundTrip`: add a case with `folder_path` set, asserting it round-trips through `write_screen_file`/`read_screen_file`.
-   - `TestComputePlan`: add a case where local and server differ only by `folder_path` to confirm it now surfaces as an `update` (proving the round-trip bug is fixed — today this case doesn't exist because the field is dropped before comparison).
+   - `TestComputePlan`: add a case where local and server differ only by `folder_path` to confirm it now surfaces as an `update` (proving the round-trip bug is fixed — today this case doesn't exist because the field is dropped before comparison). Also add a case for an *unmodified root screen* — local file with no `folder_path` key vs. server returning `folder_path: ""` (and `managed_by: null`) — asserting it lands in `unchanged`, to confirm the normalization fix in `compute_plan()` covers the common root-level case, not just non-root folders.
 
 ## Files to Modify
 
