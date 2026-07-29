@@ -59,9 +59,7 @@ class CountingLib:
 
 def _set_keep_alive(fake_bpy, enabled: bool) -> None:
     addons = fake_bpy.context.preferences.addons
-    prefs = type(
-        "Prefs", (), {"preferences": type("P", (), {"keep_alive": enabled})()}
-    )
+    prefs = type("Prefs", (), {"preferences": type("P", (), {"keep_alive": enabled})()})
     addons[mm.__package__] = prefs()
 
 
@@ -94,9 +92,7 @@ def _register_with_lib(monkeypatch, lib):
     mm.register()
 
 
-def test_keep_alive_off_unregister_shuts_down_and_clears_state(
-    fake_bpy, monkeypatch
-):
+def test_keep_alive_off_unregister_shuts_down_and_clears_state(fake_bpy, monkeypatch):
     _clear_state()
     _set_keep_alive(fake_bpy, False)
     lib = CountingLib()
@@ -375,9 +371,7 @@ def test_atexit_hook_follows_a_fresh_module_namespace(fake_bpy, monkeypatch):
         assert lib.shutdown_calls == 1
     finally:
         for name in [
-            name
-            for name in sys.modules
-            if name == _PKG or name.startswith(_PKG + ".")
+            name for name in sys.modules if name == _PKG or name.startswith(_PKG + ".")
         ]:
             del sys.modules[name]
         sys.modules.update(saved)
