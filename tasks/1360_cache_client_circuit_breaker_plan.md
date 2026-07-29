@@ -259,6 +259,7 @@ pub struct CircuitBreakerConfig {
 }
 
 /// What a caller may do with the guarded resource right now.
+#[derive(Debug, PartialEq)]
 pub enum Admission {
     /// Closed: use it normally.
     Allow,
@@ -270,6 +271,7 @@ pub enum Admission {
 
 /// A state change worth reporting, returned so the caller emits its own
 /// metrics/logs and the breaker stays domain-agnostic.
+#[derive(Debug, PartialEq)]
 #[must_use]
 pub enum Transition {
     None,
@@ -279,11 +281,13 @@ pub enum Transition {
     Closed,
 }
 
+#[derive(Debug)]
 pub struct CircuitBreaker {
     config: CircuitBreakerConfig,
     state: Mutex<State>,
 }
 
+#[derive(Debug)]
 struct State {
     /// Consecutive unresponsive requests while closed; any response resets it.
     consecutive: u32,
@@ -363,8 +367,9 @@ record_unresponsive_at(now):
             Backoff { cooldown }
         }
     } else {
-        consecutive += 1;
-        if failure_threshold > 0 && consecutive >= failure_threshold {
+        if failure_threshold == 0 { return None }          // breaker disabled; never accumulate
+        consecutive = consecutive.saturating_add(1);
+        if consecutive >= failure_threshold {
             cooldown = initial_cooldown;
             open_until = Some(now + window());
             backoff_applied = false;                     // opening trip itself doesn't count as the probe's backoff
@@ -430,14 +435,25 @@ async fn send(&self, req: reqwest::RequestBuilder, what: &str) -> Result<reqwest
 (`range_cache_client_abandoned` vs `range_cache_client_unresponsive`); both feed
 `breaker.record_unresponsive()` (see "Abandon vs. unresponsive").
 
+`prefetch`'s `resp.json()` await, after `send()` resolves, needs no separate `tokio::time::timeout`
+wrap: it reads through the same one `reqwest::Client`, so `read_timeout(stall_timeout)`'s per-frame
+bound already caps it at 3s instead of the 15s total deadline — generous for a few-byte body, but a
+real bound, and adding a tighter wrapper here would be a second client-side budget for no measurable
+gain. Unlike `full_stream_with_fallback`, `prefetch` is a method with `&self`, so a stall there is
+reported with a plain `self.report(self.breaker.record_unresponsive())` alongside the existing
+`range_cache_client_prefetch_error` bookkeeping — no `Arc<CircuitBreaker>` needed.
+
 `get_opts`'s data-fetching paths report a second, later signal too: `full_stream_with_fallback` takes an
 `Arc<CircuitBreaker>` (cloned from `self.breaker`, since the `'static` stream can't borrow `&self`) and
 calls `record_unresponsive` on a stream error in *either* position — before the first chunk (where it
 also falls back, exactly as today) or after (where it still just ends the stream, but the breaker hears
-about it). No `Duration` is threaded in: the body's per-frame bound is `read_timeout(stall_timeout)` on
-the client itself, so a stall surfaces through the same `Some(Err(_))` arm as any other transport
-error. This is the only body-phase breaker feedback `get_opts` needs; the `send()` wrap above covers its
-header phase.
+about it). Being a free function, it cannot call `self.report`; a free `report_transition(t: Transition)`
+helper (mirroring the `direct_get_opts_with_metrics` free-function split below) does the metrics/logging
+that `record_unresponsive`'s `#[must_use] Transition` requires, and both `full_stream_with_fallback` and
+`CacheClientStore::report` call it. No `Duration` is threaded in: the body's per-frame bound is
+`read_timeout(stall_timeout)` on the client itself, so a stall surfaces through the same `Some(Err(_))`
+arm as any other transport error. This is the only body-phase breaker feedback `get_opts` needs; the
+`send()` wrap above covers its header phase.
 
 `get_ranges` is the one caller that does **not** use `send` as-is: as established above, its response
 headers are committed before any origin work, so reporting `record_responsive` the moment `send()`
@@ -601,7 +617,10 @@ cache from a dead one (see "Abandon vs. unresponsive").
    `Admission`, `Transition`, and `CircuitBreaker` with the `_at(now)` API above.
 2. Register `pub mod circuit_breaker;` in `rust/object-cache/src/lib.rs` (public — the `tests/`
    directory is a separate crate and needs it) and re-export `CircuitBreaker`/`CircuitBreakerConfig`
-   alongside the existing `pub use`s.
+   alongside the existing `pub use`s. Also re-export `CacheClientConfig` alongside the existing
+   `pub use client::CacheClientStore` — the cross-crate integration test in
+   `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs` builds its client via `with_config`,
+   so both `with_config` and `CacheClientConfig` must be `pub`.
 3. Add `rust/object-cache/tests/circuit_breaker_tests.rs` (see Testing Strategy).
 
 ### Phase 2 — client timeouts and config
@@ -615,7 +634,10 @@ cache from a dead one (see "Abandon vs. unresponsive").
    `connect_timeout(config.connect_timeout)`, `read_timeout(config.stall_timeout)` and
    `timeout(config.total_timeout)` — no second client.
 6. Add the `send(&self, req, what)` helper (no budget parameter — `abandon_timeout` for all of them) and
-   route `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. Give
+   route `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. `send` calls
+   `self.report(...)`/`report_abandoned`/`report_unresponsive`, which step 9 adds; this step lands
+   with a temporarily-uncompiled `send` until step 9's helpers exist (or do step 9's helpers first —
+   either ordering is fine, this is the one place the two steps are interdependent). Give
    `full_stream_with_fallback` an `Arc<CircuitBreaker>` and have it call `record_unresponsive` on a
    stream error in either the pre- or post-first-chunk position (only the pre-first-chunk one also falls
    back); no `Duration` is threaded in, since `read_timeout` supplies the per-frame bound. Add the
@@ -635,8 +657,10 @@ cache from a dead one (see "Abandon vs. unresponsive").
    collapse the six existing fallback blocks onto them.
 8. Add the `Admission::Bypass` gate to `get_opts` (after the precondition short-circuit),
    `get_ranges`, and `prefetch`.
-9. Add the transition reporting helper (`fn report(&self, t: Transition)`) plus the two outcome
-   helpers (`report_abandoned` / `report_unresponsive`) with the metrics/logs above.
+9. Add the transition reporting helper as a free `report_transition(t: Transition)` (metrics/logs above)
+   plus a thin `CacheClientStore::report(&self, t: Transition)` that calls it, and the two outcome
+   helpers (`report_abandoned` / `report_unresponsive`). `full_stream_with_fallback` calls
+   `report_transition` directly, since it can't call `self.report`.
 
 ### Phase 4 — tests and docs
 
@@ -724,7 +748,9 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
     client-side fallback traffic still holds; add that it now also surfaces as `circuit_opened`.
 - `mkdocs/docs/architecture/caching.md`: the "any error (fallback)" edge (line 31) and the
   transparent-fallback paragraph get a sentence that the L2 hop is additionally gated by a
-  fast-fail breaker.
+  fast-fail breaker. Its "Configuration summary" table (`caching.md:170-177`, currently listing
+  `MICROMEGAS_OBJECT_CACHE_URL`/`_API_KEY`/`_L1_MB`) gets a row pointing to the admin page's new
+  `MICROMEGAS_OBJECT_CACHE_CLIENT_*` table, so it doesn't go silent on the new variables.
 - `CHANGELOG.md`: one bullet under Unreleased → **Caching:**, referencing #1360.
 
 ## Testing Strategy
@@ -780,7 +806,11 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   repeating it `failure_threshold` times trips the breaker, since a cache that keeps losing to the
   direct path is exactly what the gate exists to skip.
 - **`get_opts` mid-body stall**: an `/obj` handler that writes headers and one body chunk immediately,
-  then hangs past `stall_timeout` (short override) before writing the rest. A single call surfaces as a
+  then hangs past `stall_timeout` (short override) before writing the rest. The handler must set
+  `Content-Length` explicitly (or answer as a 206 with `Content-Range`, matching the real
+  `get_range_handler`) — `get_full_stream`/`get_range_stream` require one of those to start streaming
+  at all (`client.rs:169-171`, `client.rs:110`), and a plain `Body::from_stream` response sets neither,
+  which would fail at the header stage and fall back instead of stalling mid-body. A single call surfaces as a
   stream error to the caller (unrecoverable once bytes have been delivered — see "Why the `/obj` body's
   tail position is different") but still reports `record_unresponsive`; repeating it
   `failure_threshold` times trips the breaker (a subsequent `/obj` read is served from `direct` with no
