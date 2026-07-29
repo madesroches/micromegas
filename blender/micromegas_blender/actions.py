@@ -56,6 +56,13 @@ _prev_op_ptrs: "set[int] | None" = None
 # Blender hard-caps wm.operators at 32 entries; no Python API to resize.
 _ring_capacity: int = 32
 
+# Identity + formatted message of the newest ring entry as of the last poll.
+# Redo-panel edits re-execute an operator in place (same as_pointer(), new
+# params) via undo_post rather than redo_post, so the pointer-set diff above
+# misses them; check_redo_update() diffs against this baseline instead.
+_last_op_ptr: "int | None" = None
+_last_op_msg: "str | None" = None
+
 # Last observed editor-state values; transitions are logged on change.
 _last_mode: "str | None" = None
 _last_workspace: "str | None" = None
@@ -83,6 +90,32 @@ def _metric_i(name: str, unit: str, value: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_macro_subop_ref(value) -> bool:
+    """True for a macro's sub-operator reference (e.g. the
+    ``TRANSFORM_OT_translate`` entry inside
+    ``OBJECT_OT_duplicate_move.as_keywords()``): a live bpy.types.<OT>
+    instance, not an OperatorProperties. Its bl_rna reads back frozen schema
+    defaults and its IDProperty group is empty — verified in the Python
+    console — so a stored wm.operators entry has no reachable API for the
+    macro sub-op's real edited values.
+    """
+    return hasattr(value, "bl_rna") and not hasattr(value, "as_keywords")
+
+
+def _params_of(op) -> dict:
+    """``op.as_keywords()`` with macro sub-op refs replaced by a placeholder
+    (real values unreachable, see ``_is_macro_subop_ref``) instead of
+    misleading frozen-default scalars."""
+    try:
+        params = dict(op.as_keywords())
+    except Exception:
+        return {}
+    for key, value in list(params.items()):
+        if _is_macro_subop_ref(value):
+            params[key] = "<sub-operator, values unavailable>"
+    return params
+
+
 def _format_op(op) -> str:
     """`bl_idname (name) {params}` capped to _MAX_MSG_LEN.
 
@@ -99,7 +132,7 @@ def _format_op(op) -> str:
     except Exception:
         pass
     try:
-        params = dict(op.as_keywords())
+        params = _params_of(op)
         if params:
             msg = f"{msg} {params}"
     except Exception:
@@ -108,7 +141,7 @@ def _format_op(op) -> str:
 
 
 def _poll_operators() -> None:
-    global _prev_op_ptrs
+    global _prev_op_ptrs, _last_op_ptr, _last_op_msg
     try:
         ops = list(bpy.context.window_manager.operators)  # oldest -> newest
     except Exception:
@@ -157,10 +190,62 @@ def _poll_operators() -> None:
         _metric_i("blender.action_captured", "count", n)
     _prev_op_ptrs = set(cur_ptrs)
 
+    # Baseline for check_redo_update() to diff against.
+    if ops:
+        _last_op_ptr = cur_ptrs[-1]
+        try:
+            _last_op_msg = _format_op(ops[-1])
+        except Exception:
+            _last_op_msg = None
+    else:
+        _last_op_ptr = None
+        _last_op_msg = None
+
 
 def drain_operators() -> None:
     """Drain the operator-history ring; called by the recorder modal on each discrete event."""
     _poll_operators()
+
+
+def check_redo_update() -> bool:
+    """Catch redo-panel edits: Blender re-runs exec() on the same wmOperator
+    (same as_pointer(), new params) via undo_post rather than redo_post, so
+    _poll_operators' pointer-set diff treats it as already-seen. This diffs
+    the newest entry's formatted message against the baseline _poll_operators
+    recorded, and logs an update on mismatch.
+
+    Macros (e.g. OBJECT_OT_duplicate_move) are skipped: their sub-op values
+    are unreachable (see _is_macro_subop_ref), so there's nothing to diff, and
+    a plain Ctrl+Z undo of a macro would otherwise look identical to a redo
+    edit (same ptr, no readable param change). They fall through to a normal
+    "undo" log, as before this function existed.
+
+    Call from undo_post (and redo_post, in case some Blender version fires it
+    too) after _poll_operators has run for the poll. Returns True if a
+    redo-panel update was logged, so the caller skips the plain "undo" log
+    for the same event.
+    """
+    global _last_op_msg
+    try:
+        ops = list(bpy.context.window_manager.operators)
+    except Exception:
+        return False
+    if not ops or ops[-1].as_pointer() != _last_op_ptr:
+        return False  # no entries, or newest isn't the one we last saw
+    newest = ops[-1]
+    try:
+        raw_params = dict(newest.as_keywords())
+        if any(_is_macro_subop_ref(v) for v in raw_params.values()):
+            return False  # macro: no reliable way to detect a redo-panel edit
+        msg = _format_op(newest)
+    except Exception:
+        return False
+    if msg == _last_op_msg:
+        return False
+    _log(_b.LEVEL_TRACE, "blender.action_redo", msg)
+    _metric_i("blender.action_captured", "count", 1)
+    _last_op_msg = msg
+    return True
 
 
 # ---------------------------------------------------------------------------
