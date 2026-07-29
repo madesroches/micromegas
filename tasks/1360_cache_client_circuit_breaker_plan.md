@@ -55,7 +55,12 @@ let http = Client::builder()
 connecting until the response body has finished" (reqwest 0.12.28,
 `async_impl/client.rs:1434-1443`). It therefore covers body streaming, not just the handshake — which
 means today's 15s is also a *cumulative* bound, and a large read averaging under roughly 70 MB/s fails
-on size alone. Replacing it as the operative body bound (see "The rule") removes that cliff.
+on size alone. This plan keeps `total_timeout` at 15s, unchanged, so that cliff is not removed — a large
+enough read still hits it. What Phase 0 changes is the *consequence*: hitting it now surfaces as a
+stream error that resumes the remainder from `direct` (see "The fix: resume from the delivered offset"),
+not a silent short read. The tighter `abandon_timeout`/`stall_timeout` bounds below make 15s a rare
+backstop for a healthy cache, but it stays the binding limit for a large, slowly-but-healthily streaming
+one.
 
 ### Fallback paths
 
@@ -120,6 +125,16 @@ two-arm match becomes one path: yield chunks, count bytes, and on `Err` resume t
 
 Details that matter for correctness:
 
+- **An empty remainder ends the stream cleanly, not with a read.** If `resume_start ==
+  resolved_range.end` (a stream error arrives after every requested byte has already been yielded), the
+  operation is done — end the stream successfully and never call `direct.get_opts` with
+  `GetRange::Bounded(x..x)`. That call is a hard error in `object_store` 0.13.2 (`GetRange::is_valid`,
+  `util.rs:225-239`, rejects `Bounded(r)` when `r.end <= r.start`), and the case is reachable:
+  `get_range_stream` accepts a 206 on `Content-Range` alone (`client.rs:110-130`) with no
+  `Content-Length` check, so a chunked body that delivers every byte and then stalls before its
+  terminating chunk trips `read_timeout` with `bytes_yielded == range length`. Without this guard a
+  cache failure at exactly the last byte would fail a read that had already fully succeeded — precisely
+  what the invariant forbids.
 - **Use the resolved range, not the original `GetOptions::range`.** Re-passing a `Suffix` or `Offset`
   range would re-resolve against the object's current size; the resolved `Bounded` remainder is
   unambiguous. Clone the options and replace `range` with `GetRange::Bounded(remainder)`.
@@ -211,9 +226,9 @@ gone: aborting there now costs one ranged direct read, exactly like every other 
 |---|---|---|
 | Connect (all endpoints) | 50ms `connect_timeout` | reqwest error → unresponsive → fallback |
 | All five `send()` sites (`head_size`, `prefetch`, `get_full_stream`, `get_range_stream`, `get_ranges`): request → response headers | 500ms `abandon_timeout` (`tokio::time::timeout` around `send()`) | abandoned → fallback |
-| `get_ranges` body reassembly (`read_framed_ranges`/`pull_exact`) | 500ms `abandon_timeout` *per chunk* | `RangesReadError::Stalled` → fallback |
+| `get_ranges` body reassembly (`read_framed_ranges`/`pull_exact`) | 3s `stall_timeout` *per chunk* | `RangesReadError::Stalled` → fallback |
 | `GET /obj` response body | 3s `stall_timeout`, per response frame via `ClientBuilder::read_timeout` | stream error → **resume remainder from `direct`**; reports `record_unresponsive` |
-| Whole request (all endpoints) | 15s `total_timeout` (`ClientBuilder::timeout`, unchanged) | Backstop only → fallback |
+| Whole request (all endpoints) | 15s `total_timeout` (`ClientBuilder::timeout`, unchanged) | For `/obj` body: same stream error → resume as the row above; elsewhere a rare backstop behind the tighter bounds above → fallback |
 
 Every "on expiry" column entry is a degradation, never an error. That is the invariant, mechanically.
 
@@ -221,7 +236,7 @@ Two constraints the table has to satisfy explicitly:
 
 - **(a) `/ranges` commits headers before any origin work.** A header-only bound there could never
   detect "answered headers, then stuck on the origin," so the `/ranges` *body* carries its own
-  per-chunk `abandon_timeout` via `pull_exact` (`client.rs:419-443`) — the one place that path awaits
+  per-chunk `stall_timeout` via `pull_exact` (`client.rs:419-443`) — the one place that path awaits
   a chunk — surfacing as a new `RangesReadError::Stalled` variant that `read_framed_ranges` propagates
   exactly as it already propagates `Transport`. Directly unit-testable, no server needed.
 - **(b) `/ranges` body size is unbounded.** Total bytes have no cap (`client.rs:613-624`; the server
@@ -235,10 +250,10 @@ the in-flight requests fail together.
 
 #### `stall_timeout` (3s) is now a cost knob, not a correctness bound
 
-The `/obj` body keeps a looser per-frame bound than everything else, but the reason has changed
-completely. It is no longer protecting queries from an unrecoverable abort — it is limiting **wasted
-origin traffic**, because a mid-stream abandon re-reads the entire remainder of the object from the
-origin.
+The `/obj` body — and, per constraint (a), `/ranges`' per-chunk body too — keeps a looser bound than the
+header phase, but the reason has changed completely. It is no longer protecting queries from an
+unrecoverable abort — it is limiting **wasted origin traffic**, because a mid-stream abandon re-reads the
+entire remainder of the object (or the ranges not yet delivered) from the origin.
 
 `read_timeout` is sampled once per response **frame**, and a frame on this path is large:
 
@@ -264,6 +279,12 @@ At 500ms, a 1 GiB read would resume-from-`direct` about half the time, and the a
 ~512 MiB — so the tail re-read costs far more than the abandon saves. At 3s the same arithmetic is
 negligible (5.2x the observed max), and the bound reads as a throughput floor: 8 MiB per 3s ≈ 2.7 MB/s.
 A cache delivering less than that has stopped streaming.
+
+This structure is not unique to `/obj`: `/ranges`' body is produced by the same `stream_ranges_inner`
+windows and forwarded unchanged by `frame_ranges_stream` (`handlers.rs:147-169`), so `pull_exact`'s
+per-chunk read faces the identical inter-frame gap distribution. It therefore carries the same 3s
+`stall_timeout` bound, not the 500ms `abandon_timeout` used for every phase's header check (see
+constraint (a)).
 
 Note the asymmetry this rests on: `abandon_timeout` is sampled once per *request* and its worst case is
 one direct read the client would have done anyway. A per-frame bound is sampled once per 8 MiB and its
@@ -298,9 +319,11 @@ client and split the connection pools. That reason was wrong and is dropped. The
   explicit `Stalled` variant because it needs the tighter 500ms bound anyway, which a single per-client
   `read_timeout` cannot express alongside the 3s `/obj` bound.
 - **The request-upload phase is folded into the header bound.** `read_timeout`'s header-phase bound
-  spans request upload as well as time-to-headers, so a `prefetch` upload is bounded at 3s rather than
-  15s. Irrelevant in production (batches are one item) and only visible in one existing test (see
-  Testing Strategy → Regression).
+  spans request upload as well as time-to-headers, but `prefetch` also goes through `send`'s
+  `abandon_timeout` wrap around the same `req.send()` call, so in practice the upload is bounded at
+  500ms, not 3s — `read_timeout`'s 3s is a looser backstop that only matters if `abandon_timeout` somehow
+  didn't apply. Irrelevant in production (batches are one item) and only visible in one existing test
+  (see Testing Strategy → Regression).
 
 ### Abandon vs. unresponsive
 
@@ -323,16 +346,18 @@ The invariant is what makes this fusion safe. If bypassing could fail work, conf
 "dead" would be dangerous; because a bypass is just a direct read, the worst case of a wrong breaker
 decision is losing the optimization for one cooldown.
 
-**What does not feed the breaker as a failure:** a non-2xx status and `RangesReadError::Truncated`.
-Both mean a full HTTP response arrived cheaply, so per the "any HTTP response counts as responsive" rule
-they report `record_responsive`; `Truncated` keeps its `warn!` as a protocol violation from our own
-cache, not a health signal.
+**What does not feed the breaker as a failure:** a non-2xx status, on any endpoint, and
+`RangesReadError::Truncated`. Both mean a full HTTP response arrived cheaply, so per the "any HTTP
+response counts as responsive" rule they report `record_responsive` — at the status check in each
+caller for `/obj`/`HEAD` (`client.rs:106-108`, `166-168`, `197-199`), and in `send_ranges` for `/ranges`
+(already specified below), each before falling back to `direct`. `Truncated` keeps its `warn!` as a
+protocol violation from our own cache, not a health signal.
 
 **One outcome per logical operation.** A single read can touch the cache twice — `get_opts`'s Suffix arm
-issues `head_size` and then `get_range_stream` (`client.rs:531`), and `get_range_stream`'s
-no-`Content-Range` path does the same (`client.rs:137`). Reporting `record_responsive` at each
-time-to-headers would zero `consecutive` on every request, so a failure in a *later* phase could never
-accumulate to `failure_threshold` and the breaker could never trip on a body stall at all. So:
+issues `head_size` and then `get_range_stream` (`client.rs:531`). Reporting `record_responsive` at both
+time-to-headers would zero `consecutive` on every such request, so a failure in the later
+`get_range_stream` phase could never accumulate to `failure_threshold` and the breaker could never trip
+on a body stall at all. So:
 
 - **`send()` reports failures only** (abandon / transport / connect). Those are terminal for the
   operation, so reporting them immediately is correct.
@@ -343,6 +368,7 @@ accumulate to `failure_threshold` and the breaker could never trip on a body sta
 |---|---|
 | `get_opts` head-only path (`client.rs:486-509`) | `head_size` — its completion *is* the whole operation |
 | `get_opts` main path (full / bounded / offset / suffix) | `full_stream_with_fallback`, when the body stream ends without error — **not** the intermediate `head_size`, and not `send()`'s headers |
+| `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | its own `head_size` — completion *is* the whole operation there too, since no stream follows |
 | `get_ranges` | `send_ranges`, once the framed body fully resolves (already specified below) |
 | `prefetch` | see "Prefetch does not close the circuit" |
 
@@ -568,24 +594,34 @@ call it. No `Duration` is threaded in: the body's per-frame bound is `read_timeo
 the client itself, so a stall surfaces through the same `Err` item as any other transport error.
 
 The head-only path (`client.rs:486-509`) reports `record_responsive` itself on a successful `head_size`,
-since nothing follows it. The Suffix and no-`Content-Range` paths do **not** — their `head_size` is an
-intermediate step and the success report belongs to the stream that follows.
+since nothing follows it. `get_range_stream`'s no-`Content-Range` path (`client.rs:132-143`) is the same
+shape: the server answered a plain 200 (no `Content-Range`) for a zero-byte object or an EOF-starting
+open range, and `head_size` there is the tail of the operation too — it returns a buffered empty
+`GetResult` built directly from the size, with no stream that follows. It reports `record_responsive` on
+that `head_size` exactly like the head-only path. Only the **Suffix** path's `head_size`
+(`client.rs:531`) is a genuine intermediate step — it feeds a `get_range_stream` call whose stream is
+what completes the operation — so it reports nothing on its own.
 
-**`get_ranges`** does not use `send` as-is: its response headers are committed before any origin work,
-so reporting success the moment `send()` resolves would call the cache healthy before the part that
-actually fails has even started. It calls a `send_ranges` variant that wraps `req.send()` in
-`tokio::time::timeout(abandon_timeout, ...)`, then drives `read_framed_ranges` to completion with
-`pull_exact`'s single `stream.next()` also wrapped in `tokio::time::timeout(abandon_timeout, ...)` — per
-chunk, so cumulative body size is never bounded (constraint (b)). `send_ranges` returns a typed
-`Result<Vec<Bytes>, RangesSendError>` that keeps the existing failure arms distinct (non-2xx status,
-`RangesReadError::Transport`, `RangesReadError::Truncated`) plus the new `RangesReadError::Stalled`
-(the per-chunk budget elapsing) instead of folding them into one. Only a `send()` timeout/connect error
-or `RangesReadError::{Transport,Stalled}` reports a failure; non-2xx status and `Truncated` report
-`record_responsive` per the "any HTTP response counts as responsive" rule, and `Truncated` keeps its
-`warn!`. All the failure kinds are exactly as safe to abort as dropping `send()`'s future, since
-`read_framed_ranges` exposes nothing to the caller until it fully resolves, and every arm falls back
-through the same existing `get_ranges` fallback path. The whole call is otherwise bounded only by the
-unchanged 15s total deadline, so a healthy multi-megabyte read is never aborted on size alone.
+**`get_ranges`** does not reuse `send` for the whole operation: `send` collapses every header-phase
+outcome into one `Result<reqwest::Response>`, but `get_ranges` has to keep four failure arms distinct —
+non-2xx status, `RangesReadError::Transport`, the new `RangesReadError::Stalled`, and
+`RangesReadError::Truncated` — each with its own `debug!`/`warn!` and its own responsive/unresponsive
+classification (see "Abandon vs. unresponsive"). It also can't report success at the header phase at
+all: `read_framed_ranges` exposes nothing to the caller until it fully resolves, so the single success
+report for this operation belongs there, not at `send`'s boundary. It calls a `send_ranges` variant that
+reuses `send` itself for the header phase — so the `abandon_timeout` wrap and its abandoned/unresponsive
+reporting aren't duplicated — then drives `read_framed_ranges` to completion with `pull_exact`'s single
+`stream.next()` wrapped in `tokio::time::timeout(stall_timeout, ...)` — per chunk (the same bound and
+justification as `/obj`'s `read_timeout`; see "`stall_timeout` (3s) is now a cost knob"), so cumulative
+body size is never bounded (constraint (b)). `send_ranges` returns a typed `Result<Vec<Bytes>,
+RangesSendError>` that keeps those four failure arms distinct instead of folding them into one. Only a
+`send()` timeout/connect error or `RangesReadError::{Transport,Stalled}` reports a failure; non-2xx
+status and `Truncated` report `record_responsive` per the "any HTTP response counts as responsive" rule,
+and `Truncated` keeps its `warn!`. All the failure kinds are exactly as safe to abort as dropping
+`send()`'s future, since `read_framed_ranges` exposes nothing to the caller until it fully resolves, and
+every arm falls back through the same existing `get_ranges` fallback path. The whole call is otherwise
+bounded only by the unchanged 15s total deadline, so a healthy multi-megabyte read is never aborted on
+size alone.
 
 **One admission gate per public entry point** — `get_opts`, `get_ranges`, `prefetch`. Preconditioned
 requests keep short-circuiting to `direct` before the gate (they never use the cache anyway):
@@ -637,13 +673,15 @@ are happening.
 pub struct CacheClientConfig {
     pub connect_timeout: Duration,  // 50ms
     /// The direct-path race budget: every phase where the cache can lose,
-    /// which after Phase 0 is all of them. Applied at the five `send()` sites
-    /// and at `pull_exact`'s per-chunk read.
+    /// which after Phase 0 is all of them. Applied at the header (time-to-
+    /// headers) phase of the five `send()` sites.
     pub abandon_timeout: Duration,  // 500ms
     /// Per-frame bound on the `GET /obj` response body, via
-    /// `ClientBuilder::read_timeout`. Looser than `abandon_timeout` because a
-    /// mid-stream abandon re-reads the object's remainder — a cost knob, not a
-    /// correctness bound. Reused as the breaker's `cooldown`.
+    /// `ClientBuilder::read_timeout`, and on `get_ranges`' `pull_exact`
+    /// per-chunk read. Looser than `abandon_timeout` because a mid-stream
+    /// abandon re-reads the remainder (of the object, or of the ranges not
+    /// yet delivered) — a cost knob, not a correctness bound. Reused as the
+    /// breaker's `cooldown`.
     pub stall_timeout: Duration,    // 3s
     pub total_timeout: Duration,    // 15s (unchanged)
     pub breaker: CircuitBreakerConfig,
@@ -702,7 +740,7 @@ That leaves five configured values in total — `connect_timeout`, `abandon_time
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MICROMEGAS_OBJECT_CACHE_CLIENT_TIMEOUT_MS` | `500` | `abandon_timeout` — the direct-path race budget, applied at every request phase |
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_TIMEOUT_MS` | `500` | `abandon_timeout` — the direct-path race budget, applied at the header phase of every request |
 | `MICROMEGAS_OBJECT_CACHE_CLIENT_CONNECT_TIMEOUT_MS` | `50` | Connect budget (raise for TLS / cross-zone / clustered DNS) |
 | `MICROMEGAS_OBJECT_CACHE_CLIENT_BREAKER_THRESHOLD` | `5` | Consecutive failures to trip; `0` disables the breaker |
 
@@ -743,7 +781,8 @@ one per cooldown.
    from `direct` on a stream error at **any** position, per "The fix: resume from the delivered offset".
    It takes the resolved byte range (from the `GetResult` built at `client.rs:294-299`) in addition to
    its current arguments. The existing two-arm match collapses to one path — the pre-first-chunk
-   fallback becomes `bytes_yielded == 0`.
+   fallback becomes `bytes_yielded == 0`. An empty remainder (all bytes already delivered) ends the
+   stream cleanly instead of issuing a `Bounded(x..x)` read, which `object_store` rejects as an error.
 2. Add unit/integration coverage that a mid-stream failure yields **byte-identical** data to a direct
    read (see Testing Strategy → Resume correctness). This step is independently valuable and could ship
    as its own PR ahead of the rest.
@@ -775,14 +814,18 @@ one per cooldown.
    `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. Wire the single
    success report per the "One outcome per logical operation" table: the head-only path reports on
    `head_size`; the main `get_opts` paths report from `full_stream_with_fallback` on clean stream end;
-   the Suffix and no-`Content-Range` paths report nothing at their intermediate `head_size`. Give
+   the Suffix path reports nothing at its intermediate `head_size`; the no-`Content-Range` path inside
+   `get_range_stream` reports `record_responsive` at its own `head_size`, since no stream follows there.
+   Also report `record_responsive` at each caller's non-2xx status check (`client.rs:106-108`, `166-168`,
+   `197-199`) before falling back to `direct`, per "Abandon vs. unresponsive" — a non-2xx there is a full
+   response having arrived cheaply, the same rule `get_ranges` applies to its own non-2xx arm. Give
    `full_stream_with_fallback` its `Arc<CircuitBreaker>` and have its resume path report
    `record_unresponsive`. `send` calls `report_abandoned`/`report_unresponsive`, which step 11 adds;
    this step lands with a temporarily-uncompiled `send` until step 11's helpers exist (or do step 11
    first — either ordering is fine, this is the one place the two steps are interdependent).
-9. Add the `send_ranges` variant for `get_ranges`: wrap `req.send()` in `abandon_timeout`, then drive
-   `read_framed_ranges` to completion, with `pull_exact`'s `stream.next()` wrapped in
-   `tokio::time::timeout(abandon_timeout, ...)` and a new `RangesReadError::Stalled` variant for the
+9. Add the `send_ranges` variant for `get_ranges`: reuse `send` (`abandon_timeout`) for the header
+   phase, then drive `read_framed_ranges` to completion, with `pull_exact`'s `stream.next()` wrapped in
+   `tokio::time::timeout(stall_timeout, ...)` and a new `RangesReadError::Stalled` variant for the
    elapsed case. Report `record_responsive` only once the framed body fully resolves. `send_ranges`
    returns a typed `Result<Vec<Bytes>, RangesSendError>` keeping the four failure arms distinct —
    non-2xx status, `Transport`, `Stalled`, `Truncated` — rather than folding them into one
@@ -925,6 +968,11 @@ is byte-for-byte equality with a healthy read:
   (`object_store` `util.rs:52-75`) does not perform.
 - **A failing resume surfaces an error.** Stall the cache mid-stream *and* point `direct` at a store
   that errors; the caller must see the direct store's error, not a silent short read.
+- **A stream error exactly at the last byte ends cleanly.** An `/obj` handler that delivers the full
+  requested range and only then errors (e.g. stalls before its terminating chunk). The read must
+  complete successfully with exactly the requested bytes and must not call `direct` at all — this also
+  guards against ever constructing `GetRange::Bounded(x..x)`, which `object_store` rejects as
+  `InvalidGetRange::Inconsistent`.
 
 ### Unit — `rust/object-cache/tests/circuit_breaker_tests.rs`
 
@@ -987,12 +1035,12 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   completes with the cache's bytes, no resume occurs, and the breaker never opens — confirming
   `read_timeout` resets per frame and never bounds cumulative size.
 - **`get_ranges` read-stall**: a `/ranges` handler that writes the framed length-prefix header, then
-  hangs on the same `watch::Receiver::changed()` mechanism past `abandon_timeout` before the test
+  hangs on the same `watch::Receiver::changed()` mechanism past `stall_timeout` before the test
   releases it. Asserts a single such call still returns correct direct-store bytes (the stall is
   recoverable — `read_framed_ranges` exposes nothing until it fully resolves), and that repeating it
   `failure_threshold` times trips the breaker. This is the test for constraint (a).
 - **`get_ranges` slow-but-progressing body stays closed**: the same handler emitting each framed range
-  at an interval shorter than `abandon_timeout`, for a total well past it. Asserts the call returns the
+  at an interval shorter than `stall_timeout`, for a total well past it. Asserts the call returns the
   cache's bytes and the breaker never opens — confirming the `pull_exact` wrap is per chunk, not
   cumulative (constraint (b)).
 - **`get_ranges` non-2xx / truncated stays closed**: a `/ranges` handler returning a 500, and separately
