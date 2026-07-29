@@ -64,11 +64,12 @@ def test_poll_masks_macro_subop_params(rec_lib, fake_bpy):
 def test_params_of_reports_unreadable_on_stale_value(fake_bpy):
     # A value whose bl_rna access raises (freed RNA struct) must come back as the
     # documented "unreadable" result rather than escaping the sub-op scan: the
-    # contract is what _format_op's _UNSET path and check_redo_update rely on.
+    # contract check_redo_update relies on.
     op = FakeOp("TRANSFORM_OT_resize", kw={"value": StaleRnaValue()})
-    assert actions._params_of(op) == (None, False)
+    params, is_macro = actions._params_of(op)
+    assert (params, is_macro) == (None, False)
     # _format_op still yields the bounded part of the message.
-    assert actions._format_op(op) == "TRANSFORM_OT_resize"
+    assert actions._format_op(op, params) == "TRANSFORM_OT_resize"
 
 
 def test_poll_no_change_emits_nothing(rec_lib, fake_bpy):

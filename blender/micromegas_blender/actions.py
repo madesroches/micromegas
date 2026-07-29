@@ -51,11 +51,6 @@ _MAX_MSG_LEN: int = 4096
 # unreachable from a stored history entry (see _is_macro_subop_ref).
 _MACRO_PARAM_PLACEHOLDER: str = "<sub-operator, values unavailable>"
 
-# "Caller passed nothing" marker for _format_op's params argument. A distinct
-# sentinel (not None) because None is a meaningful value there: _params_of
-# returns it when an entry's parameters are unreadable.
-_UNSET = object()
-
 # Set of op.as_pointer() values seen on the previous poll. None until the first
 # poll. A pointer is the stable identity of a wm.operators history entry (the
 # underlying wmOperator* node), so set membership across polls tells us exactly
@@ -143,16 +138,13 @@ def _params_of(op) -> "tuple[dict | None, bool]":
     return params, is_macro
 
 
-def _format_op(op, params=_UNSET) -> str:
+def _format_op(op, params) -> str:
     """`bl_idname (name) {params}` capped to _MAX_MSG_LEN.
 
-    bl_idname is always present and bounded. name is best-effort. Parameter
-    extraction on a *stored* history entry is not guaranteed (it is an
-    OperatorProperties/macro instance, not a live operator), so it runs in its
-    own try/except and is simply omitted when unavailable.
-
-    Pass ``params`` to reuse an already-computed ``_params_of`` result instead of
-    walking the operator's RNA a second time.
+    bl_idname is always present and bounded. name is best-effort. ``params`` is
+    the result of ``_params_of(op)[0]`` (None when unreadable) — callers pass it
+    explicitly since they've always already computed it, rather than this
+    function walking the operator's RNA a second time.
     """
     msg = op.bl_idname  # always available, bounded cardinality
     try:
@@ -162,8 +154,6 @@ def _format_op(op, params=_UNSET) -> str:
     except Exception:
         pass
     try:
-        if params is _UNSET:
-            params = _params_of(op)[0]
         if params:
             msg = f"{msg} {params}"
     except Exception:
