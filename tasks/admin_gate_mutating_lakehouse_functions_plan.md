@@ -62,12 +62,21 @@ admin arm, since it is a standalone fix for a pre-isolation hole.
     `export_log_view.rs:118,171`, `batch_partition_merger.rs:133` — internal materialization
     contexts that execute **caller-supplied** SQL (`count_src_query`/`extract_query`/
     `merge_partitions_query`) on `pub` types (`SqlBatchView`, `ExportLogView`,
-    `BatchPartitionMerger`, `QueryMerger`), all hardcoding `NoOpSessionConfigurator`. Never
-    reachable from a user session, but a downstream deployment could define a view whose
-    src/transform/merge query names a mutating function — none of the three in-repo view
-    constructors (`log_stats_view.rs`, `processes_view.rs`, `streams_view.rs`, wired by
-    `default_view_factory` at `view_factory.rs:269-340`) do this, but `SqlBatchView`,
-    `ExportLogView`, and `BatchPartitionMerger` are `pub` API with no in-repo constructor at all.
+    `BatchPartitionMerger`, `QueryMerger`), all hardcoding `NoOpSessionConfigurator`. These
+    `make_session_context` call sites are themselves internal, but `SqlBatchView`'s
+    `register_table` override (`sql_batch_view.rs:222-245`) is not: `make_session_context`
+    (`query.rs:222-232`) loops over `view_factory.get_global_views()` and calls the private
+    `register_table` helper (`query.rs:38-54`), which delegates to `View::register_table` —
+    and `SqlBatchView` executes `merge_partitions_query` there, **inside the session being
+    built**, i.e. inside every non-admin FlightSQL session too. So a downstream global
+    `SqlBatchView` whose merge query names a gated function would fail `make_session_context`
+    outright for every non-admin caller, not just that one query — this is an accepted risk
+    (see Design §5), not one ruled out by reachability. `ExportLogView` and
+    `BatchPartitionMerger` are `pub` API with no in-repo constructor at all; `SqlBatchView` does
+    have three in-repo constructors — `log_stats_view.rs:58`, `processes_view.rs:71`,
+    `streams_view.rs:57`, all wired as **global** views by `default_view_factory`
+    (`view_factory.rs:269-340`) — but none of their merge queries name a mutating function
+    today.
   - `rust/analytics/src/metadata.rs:182,282` — internal lookup contexts hardcoding
     `NoOpSessionConfigurator`, only ever issuing read-only SQL.
   - `parse_block_table_function.rs:81`, `process_spans_table_function.rs:254`,
@@ -87,17 +96,22 @@ admin arm, since it is a standalone fix for a pre-isolation hole.
   reaches FlightSQL. It doesn't cover `materialize_partitions`/`regenerate_partitions`, is
   trivially bypassed (comments, whitespace, aliasing), and only protects this one HTTP-to-
   FlightSQL proxy path, not FlightSQL clients directly. Out of scope to change, but worth noting:
-  once the FlightSQL-level gate lands, this becomes redundant (harmless) defense-in-depth for the
-  functions it does cover. `analytics-web-srv` forwards the *end user's own* OIDC token to
+  the blocklist has no admin carve-out, so it isn't rendered redundant by the FlightSQL-level
+  gate — it keeps denying *every* caller, including admins, the three functions it covers on the
+  web-app path specifically. `analytics-web-srv` forwards the *end user's own* OIDC token to
   FlightSQL, not a service credential — `rust/analytics-web-srv/src/auth/handlers.rs:504` inserts
   `AuthToken(id_token)` from the validated cookie/bearer token, and `stream_query.rs:244-248`
   hands that token to `BearerFlightSQLClientFactory`. So once the FlightSQL-level gate lands, an
-  admin web-app user is correctly recognized as admin at the FlightSQL layer and legitimately
-  retains `materialize_partitions`/`regenerate_partitions` access (neither is in today's
-  blocklist). The blocklist should stay as-is, unextended: the FlightSQL registration gate is the
-  actual control, and extending the substring blocklist to also cover these two functions would
-  take that access away from admins the gate legitimately allows, while adding nothing for
-  non-admins, who are already stopped by the registration gate.
+  admin web-app user is correctly recognized as admin at the FlightSQL layer and would legitimately
+  gain `materialize_partitions`/`regenerate_partitions` access there (neither is in today's
+  blocklist), while the same admin would still be denied `retire_partitions`/
+  `retire_partition_by_metadata`/`retire_partition_by_file` on that same path, purely because the
+  blocklist doesn't know about `is_admin`. That asymmetry is accepted here, not fixed: the
+  blocklist stays as-is, unextended, because the FlightSQL registration gate is the actual
+  control this plan adds, and extending the substring blocklist to also cover
+  `materialize_partitions`/`regenerate_partitions` would only widen the same admin-denial problem
+  rather than solve it. Teaching the blocklist about `is_admin` (or removing it once the
+  FlightSQL gate is trusted) is left for a follow-up, not this plan.
 
 ## Design
 
@@ -184,13 +198,27 @@ SQL that this repo controls.
 
 - Pass **`is_admin: true`** at the four internal-materialization sites that execute
   caller-supplied SQL: `merge.rs:101`, `sql_batch_view.rs:87,154`, `export_log_view.rs:118,171`,
-  `batch_partition_merger.rs:133`. These contexts are never reachable from a user session (they
-  only ever run inside the maintenance daemon's own materialization pipeline), so granting the
-  mutating set there costs nothing security-wise, and it avoids a downstream-breakage class: a
-  deployment defining a `SqlBatchView`/`ExportLogView`/custom merge query whose SQL happens to
-  name a mutating function would otherwise silently start failing under a hardcoded `false` (none
-  of the three in-repo view constructors do this today, but these three types are `pub` API with
-  no in-repo constructor at all, so nothing in this repo exercises the risk either way).
+  `batch_partition_merger.rs:133`. Each of these four sites' own `make_session_context` call is
+  internal — reached only from the maintenance daemon's materialization pipeline, or from the
+  `materialize_partitions`/`regenerate_partitions` UDTFs' in-process call into
+  `batch_update::materialize_partition_range` (`materialize_partitions_table_function.rs:56`) —
+  never directly from a raw user query, so granting the mutating set there costs nothing beyond
+  what those paths can already do. That is a separate question from `SqlBatchView::register_table`
+  (`sql_batch_view.rs:222-245`), which is *not* internal in the same sense: the
+  `view_factory.get_global_views()` loop in `make_session_context` calls it, via the private
+  `register_table` helper (`query.rs:38-54`), inside every session it builds — including the two
+  user-facing FlightSQL sites — so a global `SqlBatchView`'s `merge_partitions_query` runs under
+  the caller's real, per-request `is_admin`, not under the `is_admin: true` passed at the four
+  sites above. If a downstream global `SqlBatchView` named a gated function in its merge query,
+  that query would fail to plan for a non-admin caller, which would fail `make_session_context`
+  outright for every non-admin session, not just that one query. This is accepted as-is: none of
+  the three in-repo `SqlBatchView` constructors (`log_stats_view.rs`, `processes_view.rs`,
+  `streams_view.rs` — see Current State) do this today, and validating a view's SQL at
+  registration time to rule it out generally is out of scope for this plan. Passing
+  `is_admin: true` at the four sites above does avoid a related but distinct downstream-breakage
+  class: a deployment defining a custom `SqlBatchView`/`ExportLogView`/merge query whose *own*
+  `count_src_query`/`extract_query`/`merge_partitions_query` names a mutating function would
+  otherwise silently start failing under a hardcoded `false` there.
 - Keep **`is_admin: false`** at the genuinely user-reachable and internal-lookup sites: the
   UDTF-internal contexts recursively built to run an inner read-only query
   (`parse_block_table_function.rs:81`, `process_spans_table_function.rs:254`,
@@ -245,7 +273,14 @@ SQL that this repo controls.
    a note to `retire_incompatible_partitions()`'s docstring (around line 87) that it now requires
    `is_admin`, since it internally issues raw SQL calling `retire_partition_by_metadata()`
    (around line 173) on the caller's behalf and would otherwise start failing for non-admin
-   callers with no explanation.
+   callers with no explanation. **`mkdocs/docs/admin/functions-reference.md`**: also add the same
+   admin-required note to the `micromegas.admin.retire_incompatible_partitions(...)` section
+   (around line 275), since it's the doc a user reads before calling that now-gated helper.
+   **`mkdocs/docs/admin/authentication.md`**: since API keys can never be admin
+   (`rust/auth/src/api_key.rs:124` hardcodes `is_admin: false`), add a note to the "Admin
+   Privileges" section (lines 537-545) that admin status — and therefore the five gated
+   functions — is reachable only through OIDC plus `MICROMEGAS_ADMINS`, never through
+   `MICROMEGAS_API_KEYS`, so an API-key-only deployment has no way to call them.
 8. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
@@ -258,8 +293,8 @@ SQL that this repo controls.
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - `rust/analytics/src/lakehouse/merge.rs`, `sql_batch_view.rs`, `export_log_view.rs`,
   `batch_partition_merger.rs` (call-site signature updates only — pass `is_admin: true`; these
-  run caller-supplied SQL in internal-materialization contexts never reachable from a user
-  session — see Design §5)
+  sites' own `make_session_context` calls are internal-materialization contexts that run
+  caller-supplied SQL — see Design §5)
 - `rust/analytics/src/lakehouse/parse_block_table_function.rs`,
   `process_spans_table_function.rs`, `perfetto_trace_execution_plan.rs` (call-site signature
   updates only — pass `is_admin: false`)
@@ -269,7 +304,10 @@ SQL that this repo controls.
 - `rust/analytics/tests/sql_view_test.rs` (direct `query()` call-site signature updates, plus the
   new `#[ignore]`d admin-gate regression test — see Testing Strategy), `histo_view_test.rs`
   (direct `query()` call-site signature updates)
-- `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement)
+- `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement on the four
+  SQL functions and on the `micromegas.admin.retire_incompatible_partitions(...)` section)
+- `mkdocs/docs/admin/authentication.md` (note in "Admin Privileges" that API keys can never be
+  admin, so API-key callers cannot reach the gated functions)
 - `mkdocs/docs/query-guide/functions-reference.md` (document the new admin requirement on the
   five mutating entries and split the `🔧` legend so gated vs. non-gated functions are
   distinguishable)
@@ -313,8 +351,10 @@ SQL that this repo controls.
 - **Behavior change, not a compatibility-preserving default.** Before this change, every
   authenticated caller (including API keys) can call the five mutating functions; after, only
   admins can. This is the intended effect (closing a real hole), not an oversight — non-admin
-  callers relying on `retire_partitions`/`materialize_partitions`/etc. today will need
-  `is_admin` or must wait for #1371's opt-in knob.
+  callers relying on `retire_partitions`/`materialize_partitions`/etc. today will need to switch
+  to an OIDC-authenticated admin identity, since API keys can never be admin
+  (`rust/auth/src/api_key.rs:124`); an API-key-only deployment has no admin principal at all and
+  must wait for #1371's opt-in knob.
 - **`is_admin` extraction helper location.** Placed in `rust/auth/src/user_attribution.rs`
   (alongside the existing header-reading logic) rather than inline in
   `flight_sql_service_impl.rs`, so `rust/auth` stays the single place that knows the
@@ -340,7 +380,15 @@ SQL that this repo controls.
 - **`rust/auth/tests/tower_tests.rs`**: extend the existing `AuthService` tests (or add a new
   one) to assert `x-auth-is-admin` is set correctly from an `AuthContext` with `is_admin: true`
   and `is_admin: false`, and that a client-supplied `x-auth-is-admin: true` header is stripped
-  before an unauthenticated/non-admin `AuthContext` reaches the inner service.
+  before an unauthenticated/non-admin `AuthContext` reaches the inner service. This needs new
+  test scaffolding beyond what exists today: every current test builds `AuthService` with
+  `ApiKeyAuthProvider`, whose `AuthContext` hardcodes `is_admin: false`
+  (`rust/auth/src/api_key.rs:124`), and there is no mock `AuthProvider` in `rust/auth/tests` that
+  can yield `is_admin: true` (`OidcAuthProvider` needs a live JWKS) — so add a small mock
+  `AuthProvider` returning a configurable `AuthContext`. The existing `MockService::call` also
+  only checks `req.extensions().get::<AuthContext>().is_some()`, never headers, so also add a
+  header-capturing inner mock service (or extend `MockService`) to assert on the
+  `x-auth-is-admin` value and to confirm a client-supplied copy is stripped.
 - **`rust/auth/tests/user_attribution_tests.rs`**: add unit tests for the new `is_admin(metadata)`
   helper — present/absent header, `"true"`/`"false"`/garbage values, case sensitivity if any, and
   the disabled-auth case (no `x-auth-is-admin` header at all, i.e. an empty `MetadataMap`) asserting
