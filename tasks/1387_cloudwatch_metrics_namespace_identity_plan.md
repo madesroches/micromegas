@@ -82,16 +82,25 @@ meaningful value (Option B from the issue) while folding the exporter ARN into
 A resource is treated as a CloudWatch Metric Stream resource when `is_degenerate_resource`
 already flags it (no `host.id`/`host.name`/`process.pid`/`service.instance.id`) **and** it carries
 the AWS-specific marker attribute `aws.exporter.arn` with no `service.name`/`service.namespace` —
-the combination that lets us safely limit the rewrite to this one producer:
+the combination that lets us safely limit the rewrite to this one producer. The `service.name`/
+`service.namespace` conjuncts are gated on emptiness (via `identity::attr_norm`, trim +
+lowercase), not on `Option::is_none()`, to match the same-strength check `is_degenerate_resource`
+already applies to its own fields (`identity.rs:158-163`) — a present-but-empty
+`StringValue("")` must not be treated as "has a service name" here either:
 
 ```rust
 fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool {
     identity::attr(attrs, "aws.exporter.arn").is_some()
-        && identity::attr(attrs, "service.name").is_none()
-        && identity::attr(attrs, "service.namespace").is_none()
+        && identity::attr_norm(attrs, "service.name").is_empty()
+        && identity::attr_norm(attrs, "service.namespace").is_empty()
         && identity::is_degenerate_resource(attrs)
 }
 ```
+
+`attr_norm` is currently module-private (`fn attr_norm`, `identity.rs:110-114`), so this requires
+promoting it to `pub` — a one-word change that makes it a peer of the already-`pub` `attr` /
+`attr_to_string` / `is_degenerate_resource` it sits beside. Reimplementing trim+lowercase locally
+instead would risk the two checks drifting apart, which is exactly the bug this conjunct fixes.
 
 Any `ResourceMetrics` that doesn't match passes through completely untouched — this rewrite is
 purely additive for this one AWS-specific shape, not a change to the shared OTLP/metrics path.
@@ -114,18 +123,24 @@ fn metric_namespace(metric: &Metric) -> Option<String> {
     };
     identity::attr(attrs, "Namespace")
         .map(identity::attr_to_string)
-        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 ```
 
 A `Metric` with no first data point, no `Namespace` attribute on it, or an empty/whitespace-only
 `Namespace` value falls back to a shared fallback bucket (below) rather than being dropped —
 CloudWatch always sets this per the observed data, but a missing attribute must never lose the
-metric. The `.filter(...)` matters: `identity::attr` returns `Some` whenever the `KeyValue` has a
-value at all and `attr_to_string` maps an empty `StringValue` to `""` (`identity.rs:65-70,80-101`),
-so without it an empty `Namespace` would produce `Some("")` — a `BTreeMap` key distinct from
-`None`, yielding a separate block that nonetheless hashes to the same `process_id` (`attr_norm`,
-`identity.rs:192-194`) and renders as an empty `exe`.
+metric. The trim-then-filter matters twice over: `identity::attr` returns `Some` whenever the
+`KeyValue` has a value at all and `attr_to_string` maps an empty `StringValue` to `""`
+(`identity.rs:65-70,80-101`), so without the `.filter(...)` an empty `Namespace` would produce
+`Some("")` — a `BTreeMap` key distinct from `None`, yielding a separate block that nonetheless
+hashes to the same `process_id` (`attr_norm`, `identity.rs:192-194`) and renders as an empty
+`exe`. And the returned value is trimmed (not just tested for emptiness) because it flows
+untouched into both the bucket key and `service.name` below — `process_id_from_resource` folds
+`service.name` through `attr_norm` (trim + lowercase) before hashing, so an untrimmed
+`" AWS/RDS"` and a trimmed `"AWS/RDS"` would otherwise land in two different `BTreeMap` buckets
+(two blocks, two conflicting `exe` values) while still hashing to the same `process_id`.
 
 ### Partitioning a matching `ResourceMetrics`
 
@@ -155,6 +170,14 @@ set_attr(
 
 where `UNKNOWN_NAMESPACE` is the module constant `"AWS/Unknown"` — `service.name` is **always**
 set, so `exe` is never empty on this route.
+
+Every other field on the synthetic `ResourceMetrics`/`Resource` is carried over from the
+original unchanged — only `attributes` differs. Concretely: the new `ResourceMetrics.schema_url`
+is the original `ResourceMetrics.schema_url`, and the new `Resource`'s
+`dropped_attributes_count`/`entity_refs` are the original `Resource`'s
+`dropped_attributes_count`/`entity_refs`. `split_metrics` stores `rm.encode_to_vec()` verbatim as
+the block payload (`block.rs:376`), so any non-attribute field left as `Default::default()`
+instead of copied would be silently dropped from what the analytics layer reads back.
 
 `set_attr` replaces an existing key's value in place, pushing only when the key is absent — belt
 and suspenders alongside the tightened fingerprint above, since `identity::attr` (`identity.rs:
@@ -232,7 +255,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 1. **New module** — add `rust/otel-ingestion/src/cloudwatch_metrics.rs` with
    `UNKNOWN_NAMESPACE`, `is_cloudwatch_metric_stream_resource`, `metric_namespace`, the private
    replace-if-present `set_attr`, and `rewrite_cloudwatch_metric_streams` per Design above. Add
-   `pub mod cloudwatch_metrics;` to `rust/otel-ingestion/src/lib.rs`.
+   `pub mod cloudwatch_metrics;` to `rust/otel-ingestion/src/lib.rs`. Promote `attr_norm` in
+   `rust/otel-ingestion/src/identity.rs:110-114` from private to `pub` so the fingerprint can
+   reuse it.
 2. **Wire into the Firehose metrics path** — call `rewrite_cloudwatch_metric_streams` in
    `ingest_firehose_metrics` (`handler.rs:370-388`), right after
    `decode_next_length_delimited` and before `ingest_parsed_metrics`. Also correct the two
@@ -252,7 +277,15 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    `python/micromegas/tests/test_otlp_e2e.py` (alongside `test_firehose_metrics_e2e` and
    friends, using `FIREHOSE_ENDPOINT`): POST a record whose resource matches the
    fingerprint and whose datapoints carry `Namespace` attributes for two or more
-   namespaces, then assert one `processes` row per namespace with `exe` equal to that
+   namespaces, using a synthetic `aws.exporter.arn` that is unique to this test run
+   (e.g. suffixed with a fresh uuid, the same run-isolation approach
+   `_fresh_resource_attrs()` uses for `service.instance.id` elsewhere in this file — since
+   this route overwrites `service.instance.id` with the ARN, the ARN itself must be the
+   per-run-unique value). Look up the resulting processes by querying
+   `processes` filtered on `property_get(properties, 'otel.resource.aws.exporter.arn') =
+   '<the run's arn>'` (not `discover_process_id`, which resolves `service.instance.id` to
+   a single first-match row and can't disambiguate the N processes this one ARN now maps
+   to); assert the full returned set has one row per namespace with `exe` equal to that
    namespace and distinct `process_id`s.
 6. **Docs** — extend `mkdocs/docs/otlp/index.md`'s `## CloudWatch Metric Streams (Kinesis
    Firehose)` section (around line 391 — *not* the metric-name paragraph at line 154, which is in
@@ -271,6 +304,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - `rust/otel-ingestion/src/cloudwatch_metrics.rs` — **new**: fingerprint detection, namespace
   lookup, request rewrite.
 - `rust/otel-ingestion/src/lib.rs` — `pub mod cloudwatch_metrics;`.
+- `rust/otel-ingestion/src/identity.rs` — make `attr_norm` `pub` (currently module-private) so the
+  fingerprint's emptiness checks share `is_degenerate_resource`'s exact semantics. No behavior
+  change; `is_degenerate_resource` itself is untouched.
 - `rust/otel-ingestion/src/handler.rs` — call the rewrite in `ingest_firehose_metrics`; fix
   its doc comment's now-false "inherited unchanged" claim.
 - `rust/public/src/servers/firehose.rs` — fix the module doc's now-false "no new identity,
@@ -370,14 +406,20 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     is identical across the two rewrites — pins the `rewrite_cloudwatch_metric_streams`
     determinism that the Design section's `BTreeMap` rationale depends on for the route's
     Firehose-retry dedup guarantee (`mkdocs/docs/otlp/index.md` Idempotency section).
-- **Regression check:** existing `rust/otel-ingestion/tests/firehose_tests.rs` (synthetic, non-
-  CloudWatch-shaped fixtures) must keep passing unmodified — those resources always carry
-  `service.name` (or no attributes at all), so the fingerprint never matches and the rewrite is a
-  no-op for them.
+- **Regression check:** `rust/otel-ingestion/tests/firehose_tests.rs` is unaffected by this
+  change — it only exercises `decode_firehose_envelope`/`decode_next_length_delimited` (per its
+  own module doc, "No database: pure shape assertions") and never reaches
+  `rewrite_cloudwatch_metric_streams`, `split_metrics`, or `ingest_firehose_metrics`. The
+  guarantee that the rewrite is a no-op for non-CloudWatch-shaped resources is instead pinned by
+  the "passed through byte-for-byte unchanged" unit test above.
 - **E2E (`python/micromegas/tests/test_otlp_e2e.py`, against real services):** a
-  CloudWatch-shaped Firehose delivery with two or more namespaces produces one `processes`
-  row per namespace, `exe` equal to the namespace, and distinct `process_id`s — the only
-  test that exercises `write_blocks` → `register_otel_process` end to end for this route,
-  rather than stopping at in-memory `PreparedBlock`/`ProcessFromResource` structs.
+  CloudWatch-shaped Firehose delivery, tagged with a per-run-unique synthetic
+  `aws.exporter.arn`, with two or more namespaces produces one `processes` row per
+  namespace, `exe` equal to the namespace, and distinct `process_id`s — queried by
+  `property_get(properties, 'otel.resource.aws.exporter.arn')` matching the run's ARN and
+  asserting on the full returned row set (not `discover_process_id`, which returns only a
+  single first-match row and can't distinguish the N processes one ARN now maps to) — the
+  only test that exercises `write_blocks` → `register_otel_process` end to end for this
+  route, rather than stopping at in-memory `PreparedBlock`/`ProcessFromResource` structs.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
