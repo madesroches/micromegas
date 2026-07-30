@@ -110,13 +110,20 @@ fn metric_namespace(metric: &Metric) -> Option<String> {
         Data::ExponentialHistogram(h) => h.data_points.first()?.attributes.as_slice(),
         Data::Summary(s) => s.data_points.first()?.attributes.as_slice(),
     };
-    identity::attr(attrs, "Namespace").map(identity::attr_to_string)
+    identity::attr(attrs, "Namespace")
+        .map(identity::attr_to_string)
+        .filter(|s| !s.trim().is_empty())
 }
 ```
 
-A `Metric` with no first data point, or no `Namespace` attribute on it, falls back to a shared
-"unknown" bucket (below) rather than being dropped — CloudWatch always sets this per the observed
-data, but a missing attribute must never lose the metric.
+A `Metric` with no first data point, no `Namespace` attribute on it, or an empty/whitespace-only
+`Namespace` value falls back to a shared fallback bucket (below) rather than being dropped —
+CloudWatch always sets this per the observed data, but a missing attribute must never lose the
+metric. The `.filter(...)` matters: `identity::attr` returns `Some` whenever the `KeyValue` has a
+value at all and `attr_to_string` maps an empty `StringValue` to `""` (`identity.rs:65-70,80-101`),
+so without it an empty `Namespace` would produce `Some("")` — a `BTreeMap` key distinct from
+`None`, yielding a separate block that nonetheless hashes to the same `process_id` (`attr_norm`,
+`identity.rs:192-194`) and renders as an empty `exe`.
 
 ### Partitioning a matching `ResourceMetrics`
 
@@ -137,10 +144,15 @@ let arn = identity::attr(&original_attrs, "aws.exporter.arn")
     .unwrap_or_default();
 let mut resource_attrs = original_attrs.clone(); // cloud.account.id, cloud.provider, cloud.region, aws.exporter.arn
 set_attr(&mut resource_attrs, "service.instance.id", &arn); // replace-if-present, not push
-if let Some(ns) = &namespace {
-    set_attr(&mut resource_attrs, "service.name", ns);
-}
+set_attr(
+    &mut resource_attrs,
+    "service.name",
+    namespace.as_deref().unwrap_or(UNKNOWN_NAMESPACE),
+);
 ```
+
+where `UNKNOWN_NAMESPACE` is the module constant `"AWS/Unknown"` — `service.name` is **always**
+set, so `exe` is never empty on this route.
 
 `set_attr` replaces an existing key's value in place, pushing only when the key is absent — belt
 and suspenders alongside the tightened fingerprint above, since `identity::attr` (`identity.rs:
@@ -153,21 +165,20 @@ in the slice with no deduplication (a plain `push` on an already-present key wou
   `exe = "AWS/RDS"` (Option B, exactly as recommended in the issue).
 - `namespace = None` (the "unknown" bucket — e.g. AWS changes or omits the `Namespace` attribute
   on some future data point shape, or a non-CloudWatch OTLP producer happens to set
-  `aws.exporter.arn` without setting per-datapoint `Namespace`) → only `service.instance.id = <arn>`
-  is added, no `service.name` → `exe = ""` still, but `is_degenerate_resource` no longer trips
-  (service.instance.id is set) and the process no longer collapses across accounts/regions
-  (Option A's fix, applied as the fallback for whatever isn't confidently namespace-attributed).
-  No synthetic placeholder (e.g. `"aws.cloudwatch.metrics.unknown"`) is substituted for
-  `service.name`: the ingestion crate has no such convention anywhere — `push_attr_from_header`
-  (`rust/public/src/servers/webhook.rs:38-56`) simply omits `service.name` when a header is
-  absent, exactly as documented for the generic OTLP path
-  (`mkdocs/docs/otlp/index.md:336-338`: "a missing header behaves like an OTLP resource that
-  omits the attribute"), and `is_degenerate_resource` only *reports* missing identity rather than
-  substituting a value. These rows are materialized into `measures` like any other Summary metric
-  (per `mkdocs/docs/otlp/index.md:144`) — CloudWatch Metric Streams' `opentelemetry1.0` output
-  encodes every data point as an OTLP `Summary` (`mkdocs/docs/otlp/index.md:407`) — so
-  unknown-bucket rows are user-visible with `exe = ""`, not dropped, and remain fully queryable via
-  `otel.resource.aws.exporter.arn` in `processes.properties` (`block.rs:483-490`).
+  `aws.exporter.arn` without setting per-datapoint `Namespace`) → `service.instance.id = <arn>`
+  **and** `service.name = "AWS/Unknown"` → `exe = "AWS/Unknown"`. `exe` is never left empty:
+  these rows *are* user-visible — CloudWatch Metric Streams' `opentelemetry1.0` output encodes
+  every data point as an OTLP `Summary` (`mkdocs/docs/otlp/index.md:407`) and Summary metrics are
+  materialized into `measures` (`mkdocs/docs/otlp/index.md:144`) — so an empty `exe` would put
+  unattributed metrics behind a blank, unsearchable process name. `"AWS/Unknown"` keeps the same
+  `<Prefix>/<Name>` shape as the real namespaces (`AWS/RDS`, `ECS/ContainerInsights`), so the
+  bucket sorts and reads naturally next to them in a process list while still being obviously
+  distinguishable — AWS publishes no `AWS/Unknown` namespace, so there is no collision with a
+  real one. The `service.instance.id` = ARN folding still applies, so `is_degenerate_resource`
+  does not trip and the bucket does not collapse across accounts/regions (Option A's fix, applied
+  as the fallback for whatever isn't confidently namespace-attributed), and the originating stream
+  stays queryable via `otel.resource.aws.exporter.arn` in `processes.properties`
+  (`block.rs:483-490`).
 
 The resulting `ResourceMetrics` list replaces the original single entry in
 `req.resource_metrics` before the request reaches `ingest_parsed_metrics`/`split_metrics` — every
@@ -201,8 +212,10 @@ by a fingerprint match on the standard endpoint.
 
 Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_logs.rs`:
 
+- `UNKNOWN_NAMESPACE: &str = "AWS/Unknown"` — the `service.name` fallback so `exe` is never empty
 - `is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool`
 - `metric_namespace(metric: &Metric) -> Option<String>`
+- `set_attr(attrs: &mut Vec<KeyValue>, key: &str, value: &str)` — private, replace-if-present
 - `rewrite_cloudwatch_metric_streams(req: ExportMetricsServiceRequest) -> ExportMetricsServiceRequest`
   (the public entry point; iterates `req.resource_metrics`, leaves non-matching entries as-is,
   replaces matching ones in place with their partitioned set)
@@ -210,9 +223,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 ## Implementation Steps
 
 1. **New module** — add `rust/otel-ingestion/src/cloudwatch_metrics.rs` with
-   `is_cloudwatch_metric_stream_resource`, `metric_namespace`, and
-   `rewrite_cloudwatch_metric_streams` per Design above. Add `pub mod cloudwatch_metrics;` to
-   `rust/otel-ingestion/src/lib.rs`.
+   `UNKNOWN_NAMESPACE`, `is_cloudwatch_metric_stream_resource`, `metric_namespace`, the private
+   replace-if-present `set_attr`, and `rewrite_cloudwatch_metric_streams` per Design above. Add
+   `pub mod cloudwatch_metrics;` to `rust/otel-ingestion/src/lib.rs`.
 2. **Wire into the Firehose metrics path** — call `rewrite_cloudwatch_metric_streams` in
    `ingest_firehose_metrics` (`handler.rs:370-388`), right after
    `decode_next_length_delimited` and before `ingest_parsed_metrics`.
@@ -223,9 +236,12 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    datapoints carry `Namespace`/`MetricName`/`Dimensions` attributes, mirroring the issue's dev
    data (`AWS/RDS`, `AWS/ECS`, `ECS/ContainerInsights`, `AWS/S3`).
 4. **Unit tests** (see Testing Strategy) in `cloudwatch_metrics_tests.rs`.
-5. **Docs** — extend `mkdocs/docs/otlp/index.md`'s CloudWatch Metric Streams section (around
-   line 154) to document the per-namespace process split, the `service.instance.id` = ARN
-   folding, and the "unknown"-bucket fallback for metrics without a `Namespace` attribute.
+5. **Docs** — extend `mkdocs/docs/otlp/index.md`'s `## CloudWatch Metric Streams (Kinesis
+   Firehose)` section (around line 391 — *not* the metric-name paragraph at line 154, which is in
+   `### Metrics → measures`) to document the per-namespace process split, the
+   `service.instance.id` = ARN folding, and the `"AWS/Unknown"` fallback for metrics without a
+   `Namespace` attribute. Cross-reference the resource→`processes` mapping table
+   (lines 96-104) which documents `exe` derivation.
 6. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
    `cargo test -p micromegas-otel-ingestion`, then `python3 build/rust_ci.py`.
 
@@ -245,9 +261,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   reads the `Namespace` `KeyValue` attribute already present on every datapoint. Chosen because
   (a) it's already-structured data, not a string format that could change, and (b) the namespace
   itself contains a `/` (`AWS/RDS`), making prefix-parsing genuinely ambiguous without also
-  knowing the metric-name suffix scheme for every AWS namespace. Falls back to the "unknown"
-  bucket (Option A shape) rather than attempting name-parsing as a secondary source — one
-  well-defined extraction path, not two.
+  knowing the metric-name suffix scheme for every AWS namespace. Falls back to the `"AWS/Unknown"`
+  bucket rather than attempting name-parsing as a secondary source — one well-defined extraction
+  path, not two.
 - **Partition granularity: per-namespace (Option B) vs. per-stream (A) or per-resource (C).**
   Matches the issue's own recommendation. Per-stream (A) still merges unrelated services (RDS +
   ECS + S3) into one process; per-resource (C) requires regrouping individual datapoints by
@@ -282,9 +298,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 
 ## Documentation
 
-- `mkdocs/docs/otlp/index.md` — CloudWatch Metric Streams section: document the per-namespace
-  process split (`exe` = CloudWatch namespace, `service.instance.id` = exporter ARN), and the
-  fallback behavior for metrics without a `Namespace` datapoint attribute.
+- `mkdocs/docs/otlp/index.md` — CloudWatch Metric Streams section (line 391+): document the
+  per-namespace process split (`exe` = CloudWatch namespace, `service.instance.id` = exporter
+  ARN), and the `"AWS/Unknown"` fallback for metrics without a usable `Namespace` datapoint
+  attribute.
 
 ## Testing Strategy
 
@@ -293,15 +310,17 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     `service.name` or `service.namespace` is also present (regression guard against rewriting a
     resource that isn't actually this producer); false when `aws.exporter.arn` is present alongside
     a real `host.name`/`host.id`/`process.pid`/`service.instance.id` (regression guard for the
-    tightened `is_degenerate_resource` check — a non-degenerate resource that happens to carry
-    `aws.exporter.arn` must not be rewritten).
+    fingerprint's `is_degenerate_resource` conjunct — a non-degenerate resource that happens to
+    carry `aws.exporter.arn` must not be rewritten; `is_degenerate_resource` itself is unchanged).
   - `metric_namespace`: extracts `Namespace` from a `Sum`/`Gauge` metric's first data point;
-    returns `None` when the metric has no data points or the attribute is absent.
+    returns `None` when the metric has no data points, the attribute is absent, or its value is
+    empty/whitespace-only.
   - `rewrite_cloudwatch_metric_streams` on a `ResourceMetrics` with metrics from two namespaces
     (`AWS/RDS`, `AWS/ECS`) → two output `ResourceMetrics`, correct `service.name`/
     `service.instance.id` on each, metrics partitioned correctly (no metric duplicated or
-    dropped), a metric with no `Namespace` attribute lands in the "unknown" bucket alongside
-    only `service.instance.id`.
+    dropped), a metric with no `Namespace` attribute lands in the fallback bucket with
+    `service.name = "AWS/Unknown"` and `service.instance.id = <arn>` → `exe = "AWS/Unknown"`
+    (asserts `exe` is never empty on this route).
   - A non-CloudWatch `ResourceMetrics` (has `service.name` already, or no `aws.exporter.arn`) →
     passed through byte-for-byte unchanged.
   - Full pipeline: rewritten request → `split_metrics` → one `PreparedBlock` per namespace,
