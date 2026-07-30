@@ -542,8 +542,9 @@ pub struct CircuitBreakerConfig {
     pub failure_threshold: u32, // 5
     /// How long the circuit stays open before one probe is admitted. Fixed, not
     /// backed off — see "Why the cooldown is fixed". The client passes its
-    /// `stall_timeout`, so the cooldown is at least as long as a stalling
-    /// request takes to report, which keeps probes from piling up.
+    /// `stall_timeout`, reusing it rather than adding a second knob; an
+    /// occasional probe overlapping the next admitted request is harmless,
+    /// since there is no doubling for it to corrupt.
     pub cooldown: Duration, // 3s (= CacheClientConfig::stall_timeout)
 }
 
@@ -674,9 +675,10 @@ large fraction of the state machine, and buying very little:
   "Cold-cache tripping" in "Prefetch does not close the circuit") stalls for longer. A fixed 3s cooldown
   re-probes steadily instead.
 
-So the cooldown is one value, fixed, and the client passes its `stall_timeout` (3s) for it — which
-keeps the cooldown at least as long as a stalling request takes to report, the property the floor was
-reaching for, without a second knob to express it. `Transition::Backoff` is gone with it.
+So the cooldown is one value, fixed, and the client passes its `stall_timeout` (3s) for it — reusing an
+existing number instead of adding a second knob. This does not guarantee one probe at a time (the floor
+never did, per the point above); it doesn't need to, since an overlapping probe is simply harmless with
+no doubling left to corrupt. `Transition::Backoff` is gone with it.
 
 ### Wiring into `CacheClientStore`
 
@@ -1003,8 +1005,8 @@ one per cooldown.
    `head_size`'s missing/unparseable-`Content-Length` check (`client.rs:200-204`) — reporting
    `record_responsive` there too before falling back, since a full response has already arrived; see
    "What does not feed the breaker as a failure". `prefetch`'s non-2xx status check (`client.rs:230-232`)
-   instead follows the admission value, per "Prefetch does not close the circuit": nothing on `Allow`,
-   `record_responsive` only on `Probe`. Give `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
+   instead reports nothing on any admission, per "Prefetch does not close the circuit". Give
+   `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
    have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Wire
    `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error too — per "One
    outcome per logical operation" it's the tail of its own operation, so a stall there is a failure
@@ -1263,8 +1265,11 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   `abandon_timeout` override before writing headers. Asserts every such read still returns correct data
   (from `direct`, never an error) and that repeating it `failure_threshold` times trips the breaker.
 - **`get_opts` mid-body stall trips the breaker**: the mid-stream stalling handler from "Resume
-  correctness". The handler must set `Content-Length` explicitly (or answer as a 206 with
-  `Content-Range`, matching the real `get_range_handler`) — `get_full_stream`/`get_range_stream`
+  correctness", which — unlike the rest of the breaker tests below — points `direct` at the *same* bytes
+  as the cache path, for the same reason as the resume-correctness tests: the assertion here is
+  byte-identical resumed data, not cache-vs-direct service, so cache involvement is instead observed
+  through the server's request counter. The handler must set `Content-Length` explicitly (or answer as a
+  206 with `Content-Range`, matching the real `get_range_handler`) — `get_full_stream`/`get_range_stream`
   require one of those to start streaming at all (`client.rs:169-171`, `client.rs:110`), and a plain
   `Body::from_stream` response sets neither, which would fail at the header stage and fall back instead
   of stalling mid-body. Each call returns complete correct data (resumed from `direct`) *and* reports
