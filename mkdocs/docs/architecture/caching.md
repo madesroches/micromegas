@@ -28,7 +28,7 @@ flowchart LR
     L1 -->|miss| L2
     L2 -->|miss| Origin
     L1 -.->|"L2 not configured"| Origin
-    L2 -.->|"any error<br/>(fallback)"| Origin
+    L2 -.->|"any error, or<br/>circuit open<br/>(fallback)"| Origin
 
     classDef proc fill:#fff3e0
     classDef svc fill:#f3e5f5
@@ -42,7 +42,13 @@ flowchart LR
 2. That store is **L1-wrapped** — an L1 hit never leaves the process.
 3. On an L1 miss it falls through to **L2** (the shared `object-cache-srv`) when the cache is
    configured, otherwise straight to origin. The L2 client **falls back to a direct origin read
-   on any error** — cache unreachable, non-2xx, or a malformed response.
+   on any error** — cache unreachable, non-2xx, a malformed response, or a stream that fails or
+   ends short partway through (the client resumes the remainder from origin at the byte offset
+   already delivered, rather than surfacing the cache's error). The L2 hop is additionally gated by
+   a client-side fast-fail circuit breaker: once the cache has lost enough consecutive races against
+   a direct read, the client stops routing reads and prefetches through it for a fixed cooldown
+   rather than paying a per-request timeout on every one — see [Failing fast when the cache is
+   unresponsive](../admin/object-cache.md#failing-fast-when-the-cache-is-unresponsive).
 4. `object-cache-srv` serves from its RAM→SSD backend, fetching missing blocks from origin.
 
 Because every hop degrades to the next one down, a missing or misbehaving cache tier lowers hit
@@ -174,6 +180,7 @@ in part to leave room for it.
 | `MICROMEGAS_OBJECT_CACHE_L1_MB` | L1 in-process | 200 | In-process RAM range cache; `0` disables |
 | `MICROMEGAS_METADATA_CACHE_MB` | in-process | 50 | Parsed Parquet-footer metadata cache |
 | `MICROMEGAS_OBJECT_CACHE_URL` / `_API_KEY` | L2 client opt-in | — | Route reads through `object-cache-srv` |
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_*` | L2 client fast-fail | see admin page | Connect/abandon timeouts and circuit-breaker threshold — see [Client timeouts and fast-fail](../admin/object-cache.md#client-timeouts-and-fast-fail) |
 | (`object-cache-srv` server knobs) | L2 server | — | See [Object Cache Deployment](../admin/object-cache.md#environment-variables) |
 
 ## References

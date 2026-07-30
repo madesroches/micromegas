@@ -896,10 +896,23 @@ async fn body_larger_than_2mib_total_accepted_via_router() {
         "test body must exceed the old 2 MiB body limit"
     );
 
-    let client = micromegas::object_cache::CacheClientStore::new(
+    // The handler consumes and parses the whole 40k-item body before writing
+    // headers, so time-to-headers scales with payload size here (~0.29s on
+    // an idle dev machine) -- within ~2x of the default 500ms
+    // `abandon_timeout` and close enough to be flaky under CI contention.
+    // Not a design problem: production's only caller posts batches of one
+    // item, where the default is a real health signal (see the plan's
+    // Testing Strategy -> Regression). Relax the budget here instead of
+    // loosening the default.
+    let client = micromegas::object_cache::CacheClientStore::with_config(
         format!("http://{addr}"),
         None,
         Arc::new(InMemory::new()),
+        micromegas::object_cache::CacheClientConfig {
+            abandon_timeout: std::time::Duration::from_secs(30),
+            stall_timeout: std::time::Duration::from_secs(30),
+            ..Default::default()
+        },
     );
     let resp = client.prefetch(items).await.expect("prefetch over http");
     assert_eq!(resp.accepted, ITEM_COUNT);
