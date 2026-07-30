@@ -43,10 +43,12 @@ meaningful value (Option B from the issue) while folding the exporter ARN into
   here, so `exe = ""`.
 - **Split granularity**: `split_metrics` (`block.rs:365-387`) already creates one `PreparedBlock`
   (and therefore one `process_id`/`stream_id` pair) **per `ResourceMetrics` entry** in
-  `req.resource_metrics`. CloudWatch Metric Streams' OTel 1.0.0 output emits one `ResourceMetrics`
-  per delivered message (confirmed by the dev data: a single degenerate process absorbs
-  RDS+ECS+S3+ContainerInsights metrics together), so **splitting further requires rewriting
-  inside one `ResourceMetrics`**, not just passing more `ResourceMetrics` through unchanged.
+  `req.resource_metrics`. All namespaces in the dev data (RDS+ECS+S3+ContainerInsights) land on
+  one `process_id` because they share one degenerate resource — how many `ResourceMetrics` AWS
+  packs per delivered message doesn't change that, since every entry with the same degenerate
+  resource hashes to the same `process_id` regardless of grouping. So **splitting further
+  requires rewriting inside a `ResourceMetrics`**, not just passing more `ResourceMetrics`
+  through unchanged.
 - **Metric naming**: `mkdocs/docs/otlp/index.md:154` documents `Metric.name` as
   `amazonaws.com/<Namespace>/<MetricName>` (e.g. `amazonaws.com/AWS/EC2/CPUUtilization`), but
   **nothing in the repo parses this string** — grep across `rust/analytics/src`,
@@ -202,11 +204,13 @@ while let Some(req) =
 ```
 
 **Not** inside the shared `ingest_parsed_metrics`/`ingest_metrics` (`handler.rs:168-192`, also
-used by the plain `/v1/metrics` OTLP endpoint): CloudWatch Metric Streams can only physically
-arrive via Firehose delivery — there is no other transport for this exact resource shape — so
-scoping the rewrite to the Firehose-specific call site keeps the shared, generic OTLP metrics path
-untouched and avoids any chance of a real (non-CloudWatch) OTLP producer's resource being mutated
-by a fingerprint match on the standard endpoint.
+used by the plain `/v1/metrics` OTLP endpoint): Firehose delivery is the only transport
+micromegas supports for this exact resource shape — a collector that relayed a CloudWatch
+Metric Streams record over OTLP (e.g. via `awsfirehosereceiver`) to `/v1/metrics` would land
+the identical degenerate resource there unfixed, but that path is out of scope for this plan.
+Scoping the rewrite to the Firehose-specific call site keeps the shared, generic OTLP metrics
+path untouched and avoids any chance of a real (non-CloudWatch) OTLP producer's resource being
+mutated by a fingerprint match on the standard endpoint.
 
 ### New module: `rust/otel-ingestion/src/cloudwatch_metrics.rs`
 
@@ -215,7 +219,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - `UNKNOWN_NAMESPACE: &str = "AWS/Unknown"` — the `service.name` fallback so `exe` is never empty
 - `is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool`
 - `metric_namespace(metric: &Metric) -> Option<String>`
-- `set_attr(attrs: &mut Vec<KeyValue>, key: &str, value: &str)` — private, replace-if-present
+- `set_attr(attrs: &mut Vec<KeyValue>, key: &str, value: &str)` — private, replace-if-present;
+  builds/replaces with `KeyValue { key: key.to_string(), key_strindex: 0, value: Some(AnyValue
+  { value: Some(any_value::Value::StringValue(value.to_string())) }) }`, the same shape as
+  `cloudwatch_logs.rs:153-161`'s `kv` helper
 - `rewrite_cloudwatch_metric_streams(req: ExportMetricsServiceRequest) -> ExportMetricsServiceRequest`
   (the public entry point; iterates `req.resource_metrics`, leaves non-matching entries as-is,
   replaces matching ones in place with their partitioned set)
@@ -228,7 +235,12 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    `pub mod cloudwatch_metrics;` to `rust/otel-ingestion/src/lib.rs`.
 2. **Wire into the Firehose metrics path** — call `rewrite_cloudwatch_metric_streams` in
    `ingest_firehose_metrics` (`handler.rs:370-388`), right after
-   `decode_next_length_delimited` and before `ingest_parsed_metrics`.
+   `decode_next_length_delimited` and before `ingest_parsed_metrics`. Also correct the two
+   doc comments this falsifies: `rust/public/src/servers/firehose.rs:13-16`'s module doc
+   ("no new identity, block, split, or write logic") and `ingest_firehose_metrics`' own doc
+   comment (`handler.rs:362-364`, "Identity, content-addressed `block_id`, and idempotent
+   writes are inherited unchanged from the shared split/write path") — both need to describe
+   the CloudWatch-specific resource rewrite now inserted at that call site.
 3. **Test fixtures** — add CloudWatch-shaped fixture builders in a new
    `rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs` (not the shared `fixtures.rs`, to keep
    its general-purpose helpers' signatures unchanged): a resource with only
@@ -236,13 +248,22 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    datapoints carry `Namespace`/`MetricName`/`Dimensions` attributes, mirroring the issue's dev
    data (`AWS/RDS`, `AWS/ECS`, `ECS/ContainerInsights`, `AWS/S3`).
 4. **Unit tests** (see Testing Strategy) in `cloudwatch_metrics_tests.rs`.
-5. **Docs** — extend `mkdocs/docs/otlp/index.md`'s `## CloudWatch Metric Streams (Kinesis
+5. **E2E test** — add a CloudWatch-shaped Firehose delivery test to
+   `python/micromegas/tests/test_otlp_e2e.py` (alongside `test_firehose_metrics_e2e` and
+   friends, using `FIREHOSE_ENDPOINT`): POST a record whose resource matches the
+   fingerprint and whose datapoints carry `Namespace` attributes for two or more
+   namespaces, then assert one `processes` row per namespace with `exe` equal to that
+   namespace and distinct `process_id`s.
+6. **Docs** — extend `mkdocs/docs/otlp/index.md`'s `## CloudWatch Metric Streams (Kinesis
    Firehose)` section (around line 391 — *not* the metric-name paragraph at line 154, which is in
    `### Metrics → measures`) to document the per-namespace process split, the
    `service.instance.id` = ARN folding, and the `"AWS/Unknown"` fallback for metrics without a
    `Namespace` attribute. Cross-reference the resource→`processes` mapping table
-   (lines 96-104) which documents `exe` derivation.
-6. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
+   (lines 96-104) which documents `exe` derivation. Also update the `### Idempotency`
+   subsection (lines 461-472): partitioning turns one message into N blocks, so dedup
+   granularity is now per-namespace-block, not per-message — add this as its own
+   subsection, mirroring the `### How logGroup/logStream/owner surface` style (line 526).
+7. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
    `cargo test -p micromegas-otel-ingestion`, then `python3 build/rust_ci.py`.
 
 ## Files to Modify
@@ -250,8 +271,13 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - `rust/otel-ingestion/src/cloudwatch_metrics.rs` — **new**: fingerprint detection, namespace
   lookup, request rewrite.
 - `rust/otel-ingestion/src/lib.rs` — `pub mod cloudwatch_metrics;`.
-- `rust/otel-ingestion/src/handler.rs` — call the rewrite in `ingest_firehose_metrics`.
+- `rust/otel-ingestion/src/handler.rs` — call the rewrite in `ingest_firehose_metrics`; fix
+  its doc comment's now-false "inherited unchanged" claim.
+- `rust/public/src/servers/firehose.rs` — fix the module doc's now-false "no new identity,
+  block, split, or write logic" claim.
 - `rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs` — **new** unit tests + fixtures.
+- `python/micromegas/tests/test_otlp_e2e.py` — add an e2e test for the CloudWatch-shaped
+  Firehose delivery.
 - `mkdocs/docs/otlp/index.md` — document the per-namespace split and its fallback.
 
 ## Trade-offs
@@ -271,8 +297,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   1:1, and is deferred as a possible future refinement if per-namespace processes prove too
   coarse in practice.
 - **Rewrite scoped to `ingest_firehose_metrics`, not the shared `ingest_parsed_metrics`.** Keeps
-  the generic `/v1/metrics` OTLP endpoint's behavior completely unchanged; CloudWatch Metric
-  Streams cannot arrive any other way, so there's no coverage gap from scoping it here.
+  the generic `/v1/metrics` OTLP endpoint's behavior completely unchanged; Firehose is the only
+  transport micromegas itself supports for this shape, so within micromegas there's no coverage
+  gap from scoping it here — a collector-relayed copy of the same data arriving on `/v1/metrics`
+  would keep the degenerate identity, which is accepted as out of scope.
 - **`BTreeMap` over `HashMap` for namespace bucketing.** Deterministic iteration order matters
   for reproducible test assertions and stable output ordering across otherwise-identical inputs;
   the extra ordering cost is negligible at CloudWatch's namespace cardinality (single digits per
@@ -289,7 +317,11 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   uses the new one) — accepted per `process_id_from_resource`'s own doc comment
   (`identity.rs:1-6`): "Long-term stability of `process_id` values across upgrades is not a
   design goal." Same trade-off already taken for prior in-place hash-field additions (e.g. when
-  `process.owner` was added, per `identity.rs:181-183`).
+  `process.owner` was added, per `identity.rs:181-183`). `block_id` churns too, since
+  `split_metrics` derives it from `rm.encode_to_vec()` (`block.rs:376-377`) on the now-rewritten
+  `ResourceMetrics`: a batch that partially failed pre-deploy and is retried post-deploy no
+  longer dedups against its already-written blocks, producing transient duplicate `measures`
+  rows under a new process until the old batch's retry window passes.
 - **`is_degenerate_resource` stays unchanged (not extended with `aws.exporter.arn`).** No other
   producer in this codebase keys off `aws.exporter.arn` today (confirmed by grep across
   `rust/*/src`), so there is nothing else to generalize the degenerate-resource check for right
@@ -302,6 +334,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   per-namespace process split (`exe` = CloudWatch namespace, `service.instance.id` = exporter
   ARN), and the `"AWS/Unknown"` fallback for metrics without a usable `Namespace` datapoint
   attribute.
+- `mkdocs/docs/otlp/index.md` — `### Idempotency` subsection (lines 461-472), as its own new
+  subsection mirroring `### How logGroup/logStream/owner surface` (line 526): dedup
+  granularity is now per-namespace-block rather than per-message, since partitioning turns
+  one delivered message into N blocks.
 
 ## Testing Strategy
 
@@ -338,5 +374,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   CloudWatch-shaped fixtures) must keep passing unmodified — those resources always carry
   `service.name` (or no attributes at all), so the fingerprint never matches and the rewrite is a
   no-op for them.
+- **E2E (`python/micromegas/tests/test_otlp_e2e.py`, against real services):** a
+  CloudWatch-shaped Firehose delivery with two or more namespaces produces one `processes`
+  row per namespace, `exe` equal to the namespace, and distinct `process_id`s — the only
+  test that exercises `write_blocks` → `register_otel_process` end to end for this route,
+  rather than stopping at in-memory `PreparedBlock`/`ProcessFromResource` structs.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
