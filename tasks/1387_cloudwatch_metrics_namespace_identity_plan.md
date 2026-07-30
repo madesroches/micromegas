@@ -77,16 +77,17 @@ meaningful value (Option B from the issue) while folding the exporter ARN into
 
 ### Fingerprint detection
 
-A resource is treated as a CloudWatch Metric Stream resource when it carries `aws.exporter.arn`
-and has no `service.name`/`service.namespace` — i.e., it would otherwise be the exact
-degenerate case `is_degenerate_resource` already flags, plus the AWS-specific marker attribute
-that lets us safely limit the rewrite to this one producer:
+A resource is treated as a CloudWatch Metric Stream resource when `is_degenerate_resource`
+already flags it (no `host.id`/`host.name`/`process.pid`/`service.instance.id`) **and** it carries
+the AWS-specific marker attribute `aws.exporter.arn` with no `service.name`/`service.namespace` —
+the combination that lets us safely limit the rewrite to this one producer:
 
 ```rust
 fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool {
     identity::attr(attrs, "aws.exporter.arn").is_some()
         && identity::attr(attrs, "service.name").is_none()
         && identity::attr(attrs, "service.namespace").is_none()
+        && identity::is_degenerate_resource(attrs)
 }
 ```
 
@@ -135,20 +136,31 @@ let arn = identity::attr(&original_attrs, "aws.exporter.arn")
     .map(identity::attr_to_string)
     .unwrap_or_default();
 let mut resource_attrs = original_attrs.clone(); // cloud.account.id, cloud.provider, cloud.region, aws.exporter.arn
-resource_attrs.push(kv("service.instance.id", &arn));
+set_attr(&mut resource_attrs, "service.instance.id", &arn); // replace-if-present, not push
 if let Some(ns) = &namespace {
-    resource_attrs.push(kv("service.name", ns));
+    set_attr(&mut resource_attrs, "service.name", ns);
 }
 ```
 
+`set_attr` replaces an existing key's value in place, pushing only when the key is absent — belt
+and suspenders alongside the tightened fingerprint above, since `identity::attr` (`identity.rs:
+65-70`) is first-match-wins (a duplicate key's second value would be silently ignored on read) and
+`ProcessFromResource::build` (`block.rs:483-490`) emits one `otel.resource.*` property per attribute
+in the slice with no deduplication (a plain `push` on an already-present key would emit two
+`otel.resource.service.instance.id` properties).
+
 - `namespace = Some("AWS/RDS")` → `service.name = "AWS/RDS"`, `service.instance.id = <arn>` →
   `exe = "AWS/RDS"` (Option B, exactly as recommended in the issue).
-- `namespace = None` (the "unknown" bucket, e.g. Histogram/ExponentialHistogram metrics — which
-  the analytics layer doesn't materialize into `measures` yet anyway per
-  `mkdocs/docs/otlp/index.md:144`) → only `service.instance.id = <arn>` is added, no `service.name`
-  → `exe = ""` still, but `is_degenerate_resource` no longer trips (service.instance.id is set)
-  and the process no longer collapses across accounts/regions (Option A's fix, applied as the
-  fallback for whatever isn't confidently namespace-attributed).
+- `namespace = None` (the "unknown" bucket — e.g. AWS changes or omits the `Namespace` attribute
+  on some future data point shape, or a non-CloudWatch OTLP producer happens to set
+  `aws.exporter.arn` without setting per-datapoint `Namespace`) → only `service.instance.id = <arn>`
+  is added, no `service.name` → `exe = ""` still, but `is_degenerate_resource` no longer trips
+  (service.instance.id is set) and the process no longer collapses across accounts/regions
+  (Option A's fix, applied as the fallback for whatever isn't confidently namespace-attributed).
+  These rows are materialized into `measures` like any other Summary metric (per
+  `mkdocs/docs/otlp/index.md:144`) — CloudWatch Metric Streams' `opentelemetry1.0` output encodes
+  every data point as an OTLP `Summary` (`mkdocs/docs/otlp/index.md:407`) — so unknown-bucket rows
+  are user-visible with `exe = ""`, not dropped.
 
 The resulting `ResourceMetrics` list replaces the original single entry in
 `req.resource_metrics` before the request reaches `ingest_parsed_metrics`/`split_metrics` — every
@@ -248,6 +260,11 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   (`identity.rs:1-6`): "Long-term stability of `process_id` values across upgrades is not a
   design goal." Same trade-off already taken for #1386's logs-side fix and prior field additions
   to the hash.
+- **`is_degenerate_resource` stays unchanged (not extended with `aws.exporter.arn`).** No other
+  producer in this codebase keys off `aws.exporter.arn` today (confirmed by grep across
+  `rust/*/src`), so there is nothing else to generalize the degenerate-resource check for right
+  now; revisit only if a second AWS-shaped producer with the same degenerate-resource problem
+  appears.
 
 ## Documentation
 
@@ -260,7 +277,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - **Unit (`rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs`, no DB):**
   - `is_cloudwatch_metric_stream_resource`: true for `aws.exporter.arn`-only resource; false when
     `service.name` or `service.namespace` is also present (regression guard against rewriting a
-    resource that isn't actually this producer).
+    resource that isn't actually this producer); false when `aws.exporter.arn` is present alongside
+    a real `host.name`/`host.id`/`process.pid`/`service.instance.id` (regression guard for the
+    tightened `is_degenerate_resource` check — a non-degenerate resource that happens to carry
+    `aws.exporter.arn` must not be rewritten).
   - `metric_namespace`: extracts `Namespace` from a `Sum`/`Gauge` metric's first data point;
     returns `None` when the metric has no data points or the attribute is absent.
   - `rewrite_cloudwatch_metric_streams` on a `ResourceMetrics` with metrics from two namespaces
@@ -276,6 +296,11 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     different data → identical `process_id` (idempotent process identity across records/retries).
     Two requests with the same namespace but *different* `aws.exporter.arn` (simulating two
     accounts/regions) → distinct `process_id`s — the specific collapse this issue reports.
+    Rewriting the same input record twice → byte-identical output `ResourceMetrics` per namespace
+    bucket, so `split_metrics`'s `block_id` (derived from `rm.encode_to_vec()`, `block.rs:376-377`)
+    is identical across the two rewrites — pins the `rewrite_cloudwatch_metric_streams`
+    determinism that the Design section's `BTreeMap` rationale depends on for the route's
+    Firehose-retry dedup guarantee (`mkdocs/docs/otlp/index.md` Idempotency section).
 - **Regression check:** existing `rust/otel-ingestion/tests/firehose_tests.rs` (synthetic, non-
   CloudWatch-shaped fixtures) must keep passing unmodified — those resources always carry
   `service.name` (or no attributes at all), so the fingerprint never matches and the rewrite is a
@@ -287,12 +312,8 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 
 - Is the "unknown" bucket's exact shape (only `service.instance.id` = ARN, no `service.name`) the
   right fallback, or would a placeholder `service.name` (e.g. `"aws.cloudwatch.metrics.unknown"`)
-  be more useful for spotting these rows in practice? Low-stakes either way since (per
-  `mkdocs/docs/otlp/index.md:144`) Histogram/ExponentialHistogram metrics — the most likely
-  reason a `Namespace` attribute would be missing — aren't materialized into `measures` at all
-  yet.
-- Should `aws.exporter.arn` also be added to `is_degenerate_resource`'s check / a documented
-  identity field, so *other* AWS-shaped producers (not just Metric Streams) that key off it get
-  the same non-degenerate treatment automatically? Out of scope here — no other such producer
-  currently exists in this codebase — but worth flagging if a similar CloudWatch integration is
-  added later.
+  be more useful for spotting these rows in practice? Not low-stakes: these rows are materialized
+  into `measures` and are user-visible with `exe = ""` (every CloudWatch Metric Streams data point
+  is an OTLP `Summary` per `mkdocs/docs/otlp/index.md:407`, and Summaries are materialized per
+  `mkdocs/docs/otlp/index.md:144`), so the choice affects real query ergonomics, not just an
+  invisible edge case.
