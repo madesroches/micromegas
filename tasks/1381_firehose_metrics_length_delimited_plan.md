@@ -76,7 +76,7 @@ use bytes::Buf;
 /// protobuf messages: CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format packs
 /// one-or-more `[varint32 length][message bytes]` entries per record, not a single
 /// unframed message (see AWS's CloudWatch metric streams OpenTelemetry format docs).
-fn decode_length_delimited_messages<M: Message + Default>(
+pub fn decode_length_delimited_messages<M: Message + Default>(
     mut buf: &[u8],
     signal: Signal,
 ) -> Result<Vec<M>, OtelError> {
@@ -165,31 +165,43 @@ any of them is split or written — the case this issue reports as broken.
 1. **`rust/otel-ingestion/src/handler.rs`** — add `use bytes::Buf;`, add
    `decode_length_delimited_messages`, extract `ingest_parsed_metrics` from `ingest_metrics`,
    and rewrite `ingest_firehose_metrics` to loop record → messages → `ingest_parsed_metrics`
-   as shown above.
-2. **`rust/otel-ingestion/tests/firehose_tests.rs`** — add unit coverage for the new decode
+   as shown above. Also update `ingest_firehose_metrics`'s doc comment (currently "Reuses
+   `ingest_metrics` per record...") to describe the length-delimited, multi-message-per-record
+   decode path via `ingest_parsed_metrics` instead.
+2. **`rust/public/src/servers/firehose.rs`** — update the module doc comment (lines ~6-16),
+   which currently states each delivered record is "an OTLP `ExportMetricsServiceRequest`
+   protobuf" (singular) and that "no new identity, block, split, or write logic" is needed
+   referencing reuse of `handler::ingest_metrics`; correct it to describe a record as
+   one-or-more length-delimited messages, decoded via `handler::ingest_firehose_metrics`.
+4. **`rust/otel-ingestion/tests/firehose_tests.rs`** — add unit coverage for the new decode
    path (see Testing). The existing envelope-decode tests are unaffected (they exercise
    `decode_firehose_envelope`, which has no protobuf framing knowledge), so leave them as is.
-3. **`rust/public/tests/firehose_tests.rs`** — update
+5. **`rust/public/tests/firehose_tests.rs`** — update
    `full_multi_record_ingest_succeeds_against_a_live_stack`'s `make_record` helper to encode
    each message with `encode_length_delimited_to_vec()` instead of `encode_to_vec()` (real
    Firehose records are always length-delimited-framed, even for a single message), and add
    a case that packs two messages into one record.
-4. **`python/micromegas/tests/test_otlp_e2e.py`** — add a small varint-length-prefix helper
+6. **`python/micromegas/tests/test_otlp_e2e.py`** — add a small varint-length-prefix helper
    and use it to build every Firehose metrics record's bytes (both `test_firehose_metrics_e2e`
    and `test_firehose_multi_record_e2e` currently pass raw `SerializeToString()` output,
    which is not how real Firehose records are framed); add a new
    `test_firehose_multi_message_record_e2e` that packs two distinct
    `ExportMetricsServiceRequest` messages into a single Firehose record and asserts both
    land in `measures`.
-5. **`mkdocs/docs/otlp/index.md:399-403`** — correct the description from "delivers each
+7. **`mkdocs/docs/otlp/index.md:399-403`** — correct the description from "delivers each
    record as an OTLP `ExportMetricsServiceRequest` protobuf" to reflect that a record carries
    one-or-more length-delimited messages.
-6. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
+8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
    `python3 build/rust_ci.py`.
 
 ## Files to Modify
 
-- `rust/otel-ingestion/src/handler.rs` — decode fix (core change).
+- `rust/otel-ingestion/src/handler.rs` — decode fix (core change), plus updating the
+  `ingest_firehose_metrics` doc comment to drop the now-false "Reuses `ingest_metrics` per
+  record" description.
+- `rust/public/src/servers/firehose.rs` — correct the module doc comment's
+  single-message-per-record assumption and its "no new identity, block, split, or write
+  logic" / `handler::ingest_metrics`-reuse framing.
 - `rust/otel-ingestion/tests/firehose_tests.rs` — new unit tests for the length-delimited
   decode path.
 - `rust/public/tests/firehose_tests.rs` — length-delimited-frame the live-stack test's
@@ -218,6 +230,12 @@ any of them is split or written — the case this issue reports as broken.
 `mkdocs/docs/otlp/index.md:399-403` — update the CloudWatch Metric Streams section to state
 that a delivered record contains one-or-more length-delimited `ExportMetricsServiceRequest`
 messages (not a single unframed message), and that the Firehose route decodes all of them.
+
+`rust/public/src/servers/firehose.rs` (module doc, lines ~6-16) and
+`rust/otel-ingestion/src/handler.rs` (`ingest_firehose_metrics`'s doc comment) both currently
+describe the old single-message-per-record, reuse-`ingest_metrics` behavior; both need their
+prose updated to describe the length-delimited, multi-message-per-record decode path via
+`ingest_parsed_metrics` instead.
 
 ## Testing Strategy
 
