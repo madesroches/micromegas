@@ -10,6 +10,12 @@
 > are re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
 > change; and the code audit is refreshed (see Appendix B for drift found since 2026-07-21).
 
+> **Re-staged 2026-07-30**: the DB-backed key store is split out of Stage 4 into a new **Stage 0**
+> that depends on nothing and ships standalone operational value (revocation/rotation without
+> redeploy, no cleartext keys in env); Stage 4 keeps only the `audience` column, which genuinely
+> needs the policy seam. The env keyring's per-request full scan cannot scale to per-user keys, so
+> the store is a precondition for Stage 6, not a convenience.
+
 > **Renamed 2026-07-30** from "policy-based data isolation". The design was described as *RBAC*
 > throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
 > audience-based access control**; `Rbac*` identifiers become `Audience*`.
@@ -45,7 +51,8 @@ its own group, with `write(u → u)` and `read(u → u)` the only grants, and `a
 minter's own email. **Open (team-wide) deployments are the other end of the same model**: an
 implicit group `everyone` that every authenticated principal belongs to, with shared data stamped
 `group:everyone` — including the audience assigned to existing API keys when they are imported into
-the key store (see Stage 4). Every point on the spectrum runs the *same* code; only the
+the key store (Stage 0 imports them; Stage 4 assigns the audience). Every point on the
+spectrum runs the *same* code; only the
 configuration differs.
 
 ### Load-bearing property preserved
@@ -470,9 +477,54 @@ change.
 
 Re-ordered from the original Phases 1–5 around one constraint: **every stage ships with zero
 behavior change** until an operator sets config, so existing team-wide deployments upgrade
-untouched. Two tracks run in parallel after the seam lands — **enforcement** (Stages 1–3) and
-**keys/stamping** (Stages 4–6) — converging at activation (Stage 7). Each stage maps to one
-GitHub issue.
+untouched. Two tracks run in parallel — **enforcement** (Stages 1–3) and **keys/stamping**
+(Stages 0, 4–6) — converging at activation (Stage 7). Each stage maps to one GitHub issue.
+
+**Stage 0 depends on nothing** and is the only stage that delivers value on its own; everything
+else is inert until an operator configures it. Stages 2, 3 and 4 depend on Stage 1; Stages 5 and 6
+depend on Stage 0.
+
+### Stage 0 — DB-backed API key store (no audience yet; independent of the AbAC seam)
+
+Split out of the original Stage 4 (revised 2026-07-30). Moving the *key store* ahead of the policy
+seam, and leaving only the *audience column* behind it, for four reasons:
+
+- **Standalone value.** Stages 1–3 ship zero behavior change by design. This one fixes a live
+  operational problem: keys are plaintext JSON in `MICROMEGAS_API_KEYS`, so grant/revoke means an
+  env edit plus a redeploy of every service that validates keys — three construction sites
+  (`telemetry-ingestion-srv/src/main.rs:51`, `flight_sql_server.rs:226`,
+  `monolith/src/main.rs:193,207`). No revocation, no rotation, no per-key audit, no last-used.
+- **The env keyring cannot survive Stage 6.** `ApiKeyAuthProvider::validate_request` deliberately
+  scans **every** key with `ct_eq` on **every request** with no early exit
+  (`api_key.rs:100-129`) — correct for a handful of team keys, but Stage 6 mints one key per
+  user/machine, taking N from ~5 to thousands and charging ingestion N constant-time compares per
+  request. A hash-indexed lookup is O(1). The key store is therefore a *precondition* for the mint
+  endpoint, not a convenience.
+- **It is the long pole of the keys track** (Stages 5 and 6 both hang off it) and the migration
+  vehicle for open deployments — the earlier it lands, the longer it soaks before anything depends
+  on it.
+- **It does not shorten the path to enforcement.** This is parallel work, deliberately.
+
+Steps:
+
+0a. `api_keys` table in the telemetry DB (`sql_telemetry_db.rs` migration precedent, `:5-12`):
+    name, created_at, last_used_at, revoked_at, and a **hash** of the key. Do **not** store the key
+    in cleartext — a plaintext column is strictly worse than the env var (backups, replicas, read
+    access, query logs). Index on `sha256(key)` for an O(1) lookup. The import requirement (existing
+    key strings keep working, 0c) rules out imposing a `key_id.secret` shape, so lookup is by hash
+    of the whole string. SHA-256 without a KDF is safe **only** because these are high-entropy
+    random keys, not passwords — Argon2 would be both unindexable and too slow per request. Pair
+    this with rotating any legacy key that is not actually random.
+0b. `DbApiKeyAuthProvider` composed via the existing `MultiAuthProvider`; env keyring and DB keyring
+    compose during transition, so nothing breaks mid-migration. Requires threading a connection pool
+    into `default_provider::provider_with_prefix`, which is a pure env factory today
+    (`default_provider.rs:51`) — the first real API change in the auth crate; three call sites.
+    Cache lookups in a bounded `moka` with a short TTL (same pattern as the §4 caches): a per-request
+    DB hit on the ingestion hot path is not acceptable. **State the consequence as a property, not
+    an accident: revocation takes effect within the cache TTL.**
+0c. **Import tool** (python, per repo scripting convention) for existing `MICROMEGAS_API_KEYS`
+    entries — same key strings land in the DB, zero client changes. The audience they carry is
+    Stage 4's concern.
 
 ### Stage 1 — Policy seam + identity threading (no enforcement yet)
 1. **Policy traits + AbAC impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
@@ -524,14 +576,17 @@ GitHub issue.
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
    inherit the caller's scope (§5).
 
-### Stage 4 — DB-backed key store + import (the open-deployment migration vehicle)
-9. `api_keys` table (telemetry DB) with an `audience` column; `DbApiKeyAuthProvider` composed via
-   `MultiAuthProvider`; produces `AuthContext { bound_audience: Some(audience), email: Some(...),
-   allow_delegation: false, is_admin: false }`. Supports revocation/rotation without redeploy. Env
-   keyring and DB keyring compose during transition.
-10. **Import tool** for existing `MICROMEGAS_API_KEYS` entries: same key strings land in the DB
-    with audience `group:everyone` (or a per-key choice) — zero client changes; this is how open
-    deployments migrate.
+### Stage 4 — Audience on keys (the open-deployment migration vehicle)
+
+Reduced to the part that genuinely needs the AbAC seam (revised 2026-07-30); the key store itself
+is Stage 0. Depends on Stage 0 (the table) and Stage 1 (the audience shape).
+
+9. Add the `audience` column to the Stage 0 `api_keys` table; `DbApiKeyAuthProvider` now produces
+   `AuthContext { bound_audience: Some(audience), email: Some(...), allow_delegation: false,
+   is_admin: false }`.
+10. Extend the Stage 0 import tool to assign an audience: existing keys land as `group:everyone`
+    (or a per-key choice) — still zero client changes; this is how open deployments migrate.
+    Keys imported before this stage get the configured default on backfill.
 
 ### Stage 5 — Ingestion stamping
 11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
@@ -553,11 +608,12 @@ GitHub issue.
     hidden, maintenance functions present, `'global'` rows visible).
 
 **Deployment stories:**
-- *Team/open*: upgrade → import keys as `group:everyone` (Stage 4) → set the three knobs →
-  identical behavior forever; no flip, no backfill, nothing disappears.
-- *Privacy*: deploy key store + mint endpoint → users mint personal keys (data stamped
-  `user:<email>`) → set restrictive config (no implicit groups, no unstamped audience) → per-user
-  isolation; team sharing via the IdP groups claim.
+- *Team/open*: upgrade → import keys into the store (Stage 0) → stamp them `group:everyone`
+  (Stage 4) → set the three knobs → identical behavior forever; no flip, no backfill, nothing
+  disappears.
+- *Privacy*: key store (Stage 0) → audience on keys (Stage 4) → mint endpoint (Stage 6) → users
+  mint personal keys (data stamped `user:<email>`) → set restrictive config (no implicit groups, no
+  unstamped audience) → per-user isolation; team sharing via the IdP groups claim.
 
 ### Later — (optional) physical boundary
 15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
@@ -569,7 +625,7 @@ GitHub issue.
   traits + `Audience*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
   `rust/auth/src/oidc.rs` (groups claim, Stage 1), `rust/auth/src/user_attribution.rs` (never feed
   client-claimed identity into scope resolution, Stage 1), `rust/auth/src/api_key.rs` + new
-  `db_api_key.rs` (Stage 4).
+  `db_api_key.rs` (Stage 0; `audience` column Stage 4).
 - Analytics (Prong A): `rust/analytics/src/lakehouse/ownership_rewrite.rs` (new),
   `rust/analytics/src/lakehouse/query.rs` (`make_session_context` + `register_lakehouse_functions`
   signatures), `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted).
@@ -665,6 +721,13 @@ GitHub issue.
 
 ## Testing Strategy
 
+- **Key store (Stage 0, independent of everything below):** a DB key authenticates and an unknown
+  key is rejected; a revoked key stops authenticating within the cache TTL (assert the stated
+  revocation-latency property, don't leave it implicit); env keyring and DB keyring compose — a key
+  in either authenticates during the transition; the import tool round-trips existing
+  `MICROMEGAS_API_KEYS` entries so the *same key strings* still authenticate afterwards (this is
+  the zero-client-change claim, so it deserves a real test); no cleartext key is stored — assert
+  the column holds the hash.
 - **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set and defaults to
   `user:<email>`; `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
   singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
@@ -758,7 +821,9 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
   every deployment.
 - **Existing API keys are imported into the DB key store** (same key strings, audience
   `group:everyone`) — the migration vehicle for team deployments; zero client changes. The key
-  store therefore moves early in the ordering (Stage 4).
+  store therefore moves early in the ordering — **Stage 0**, ahead of the policy seam and
+  depending on nothing (revised 2026-07-30); only the `audience` column stays behind the seam,
+  as Stage 4.
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
 - **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
