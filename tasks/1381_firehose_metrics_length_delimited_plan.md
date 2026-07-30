@@ -195,10 +195,11 @@ retries" section).
    each message with `encode_length_delimited_to_vec()` instead of `encode_to_vec()` (real
    Firehose records are always length-delimited-framed, even for a single message), and add
    a case that packs two messages into one record.
-6. **`python/micromegas/tests/test_otlp_e2e.py`** — add a small varint-length-prefix helper
-   and use it to build every Firehose metrics record's bytes (both `test_firehose_metrics_e2e`
-   and `test_firehose_multi_record_e2e` currently pass raw `SerializeToString()` output,
-   which is not how real Firehose records are framed); add a new
+6. **`python/micromegas/tests/test_otlp_e2e.py`** — use
+   `google.protobuf.proto.serialize_length_prefixed(req, io.BytesIO())` (already available
+   via the pinned `protobuf` dependency) to build every Firehose metrics record's bytes (both
+   `test_firehose_metrics_e2e` and `test_firehose_multi_record_e2e` currently pass raw
+   `SerializeToString()` output, which is not how real Firehose records are framed); add a new
    `test_firehose_multi_message_record_e2e` that packs two distinct
    `ExportMetricsServiceRequest` messages into a single Firehose record and asserts both
    land in `measures`.
@@ -285,8 +286,9 @@ prose updated to describe the length-delimited, multi-message-per-record decode 
   fixture records and add a case with two messages packed into a single record, asserting
   both land in `measures`.
 - **Integration (Python e2e, `test_otlp_e2e.py`):** length-delimited-frame the existing
-  Firehose metrics fixtures; add `test_firehose_multi_message_record_e2e` packing two
-  `ExportMetricsServiceRequest` messages into one record and asserting both land.
+  Firehose metrics fixtures using `google.protobuf.proto.serialize_length_prefixed`; add
+  `test_firehose_multi_message_record_e2e` packing two `ExportMetricsServiceRequest`
+  messages into one record and asserting both land.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
 
