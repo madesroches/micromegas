@@ -1044,6 +1044,9 @@ fn frame_all(ranges: &[Range<u64>], data: &[u8]) -> Bytes {
 async fn get_ranges_read_stall_is_classified_as_stalled() {
     let total = 1000u64;
     let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    // Single-range vec is deliberate: the API takes `Vec<Range<u64>>`, and
+    // this test only needs one range.
+    #[allow(clippy::single_range_in_vec_init)]
     let ranges: Vec<Range<u64>> = vec![0..500];
     let calls = Arc::new(AtomicUsize::new(0));
 
@@ -1105,6 +1108,7 @@ async fn get_ranges_read_stall_is_classified_as_stalled() {
 async fn get_ranges_non_2xx_and_truncated_stay_closed() {
     let total = 1000u64;
     let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    #[allow(clippy::single_range_in_vec_init)]
     let ranges: Vec<Range<u64>> = vec![0..200];
     let calls = Arc::new(AtomicUsize::new(0));
 
@@ -1117,7 +1121,7 @@ async fn get_ranges_non_2xx_and_truncated_stay_closed() {
             let calls_h = calls_h.clone();
             async move {
                 let n = calls_h.fetch_add(1, Ordering::SeqCst);
-                if n % 2 == 0 {
+                if n.is_multiple_of(2) {
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body(Body::empty())
@@ -1174,6 +1178,7 @@ async fn get_ranges_non_2xx_and_truncated_stay_closed() {
 async fn get_ranges_slow_but_progressing_body_stays_closed() {
     let total = 2000u64;
     let data: Vec<u8> = (0u8..=255).cycle().take(total as usize).collect();
+    #[allow(clippy::single_range_in_vec_init)]
     let ranges: Vec<Range<u64>> = vec![0..total];
     let calls = Arc::new(AtomicUsize::new(0));
 

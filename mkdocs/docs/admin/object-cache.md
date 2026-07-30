@@ -177,7 +177,7 @@ Reading the signal during an incident:
 
 - `range_cache_client_abandoned` vs `range_cache_client_unresponsive` — a slow cache (lost the race but answered) vs one that isn't answering at all.
 - `range_cache_client_stream_resumed` — a `/obj` body failed or ended short partway through; the remainder was re-read from origin. A nonzero resume offset means wasted origin traffic, not just a plain fallback.
-- `range_cache_client_circuit_opened` (once) then `range_cache_client_circuit_bypassed` climbing — the client has stopped even trying the cache; `range_cache_client_fallback` climbs alongside it, since a bypass counts as a fallback too.
+- `range_cache_client_circuit_opened` (once) then `range_cache_client_circuit_bypassed` climbing — the client has stopped even trying the cache; for read bypasses, `range_cache_client_fallback` climbs alongside it, since a read bypass counts as a fallback too (prefetch bypasses have no read to fall back for, so they show up only in `circuit_bypassed`).
 - `range_cache_client_circuit_closed` — a probe succeeded and normal routing resumed.
 
 If the breaker itself misbehaves in production, set `MICROMEGAS_OBJECT_CACHE_CLIENT_BREAKER_THRESHOLD=0` to disable it without touching anything else.
@@ -258,7 +258,7 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `range_cache_client_stream_resumed` | each client | A `/obj` body stream failed or ended short of its declared range partway through; the remainder was transparently re-read from the direct store. Only a nonzero resume offset (logged alongside it) means data was actually re-read twice — see [Failing fast when the cache is unresponsive](#failing-fast-when-the-cache-is-unresponsive). |
 | `range_cache_client_circuit_opened` | each client | The client's circuit breaker tripped (consecutive unresponsive requests hit the threshold): reads and prefetches bypass the cache until the next probe succeeds. |
 | `range_cache_client_circuit_closed` | each client | A probe request succeeded and the client resumed routing normally through the cache. |
-| `range_cache_client_circuit_bypassed` | each client | A read or prefetch skipped the cache entirely because the circuit was open (no connection attempted). Counted in `range_cache_client_fallback` too. |
+| `range_cache_client_circuit_bypassed` | each client | A read or prefetch skipped the cache entirely because the circuit was open (no connection attempted). Read bypasses are also counted in `range_cache_client_fallback`; prefetch bypasses are not (there's no read to fall back for — a synthesized `PrefetchResponse` with `dropped` set is returned instead). |
 | `range_cache_block_len_mismatch` | cache server | A cached block's length didn't match its expected byte span (e.g. a poisoned entry from an undersized prefetch `size`, or the origin object changed size); the block is refetched and overwritten. Should be ~0. |
 | `range_cache_promotion_len_mismatch` | cache server | A foyer disk-tier hit's length didn't match the caller's expected length (the same poisoned-short-prefetch scenario as `range_cache_block_len_mismatch`, observed at the backend's disk->RAM promotion gate instead of at the block-cache layer): the backend refuses to promote it and reports a miss instead. Should be ~0. |
 | `range_cache_origin_run_len_mismatch` | cache server | An origin `get_range` fetch returned fewer bytes than the requested run span (the origin object shrank mid-flight). Surfaced as a fetch error rather than silently under-yielded. Should be ~0. |

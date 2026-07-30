@@ -4,7 +4,7 @@
 //! literal-name requirement doesn't leak into it) — state transitions are
 //! *returned* to the caller, which owns the metrics and logs.
 //!
-//! See `rust/tasks/1360_cache_client_circuit_breaker_plan.md` ("The breaker")
+//! See `tasks/1360_cache_client_circuit_breaker_plan.md` ("The breaker")
 //! for the full design rationale.
 
 use std::sync::Mutex;
