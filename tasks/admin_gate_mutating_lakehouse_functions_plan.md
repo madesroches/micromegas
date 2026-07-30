@@ -276,12 +276,22 @@ SQL that this repo controls.
    callers with no explanation. **`mkdocs/docs/admin/functions-reference.md`**: also add the same
    admin-required note to the `micromegas.admin.retire_incompatible_partitions(...)` section
    (around line 275), since it's the doc a user reads before calling that now-gated helper.
+   **`mkdocs/docs/admin/flight-sql.md`**: this page's "Authentication" section already documents
+   `--disable-auth` and points to "Admin SQL Functions" (`functions-reference.md`); extend it to
+   state that `--disable-auth` treats every FlightSQL caller as admin (development only, per
+   Design §2), and that API-key (`MICROMEGAS_API_KEYS`) callers are never admin.
    **`mkdocs/docs/admin/authentication.md`**: since API keys can never be admin
    (`rust/auth/src/api_key.rs:124` hardcodes `is_admin: false`), add a note to the "Admin
    Privileges" section (lines 537-545) that admin status — and therefore the five gated
-   functions — is reachable only through OIDC plus `MICROMEGAS_ADMINS`, never through
-   `MICROMEGAS_API_KEYS`, so an API-key-only deployment has no way to call them.
-8. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
+   functions — is reachable only through OIDC plus `MICROMEGAS_ADMINS` (or the role-scoped
+   `MICROMEGAS_ANALYTICS_ADMINS` in the monolith), never through `MICROMEGAS_API_KEYS`, so an
+   API-key-only deployment has no way to call them.
+8. **`CHANGELOG.md`**: add an `Unreleased` bullet covering the behavior change (non-admin
+   FlightSQL callers, including API keys, lose access to the five mutating functions unless
+   granted admin via `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`) and the breaking
+   `is_admin: bool` signature change to `register_lakehouse_functions`/`register_functions`/
+   `make_session_context`/`query` in the published `micromegas` crate (#1377).
+9. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
 
@@ -301,11 +311,14 @@ SQL that this repo controls.
 - `rust/analytics/src/metadata.rs` (call-site signature updates only — pass `is_admin: false`)
 - `rust/analytics/tests/thread_spans_ordering_db_test.rs` (call-site signature update for
   `make_session_context`, plus the direct `query()` call sites at lines 253, 263, 318)
-- `rust/analytics/tests/sql_view_test.rs` (direct `query()` call-site signature updates, plus the
-  new `#[ignore]`d admin-gate regression test — see Testing Strategy), `histo_view_test.rs`
-  (direct `query()` call-site signature updates)
+- `rust/analytics/tests/sql_view_test.rs` (direct `query()` call-site signature updates only),
+  `histo_view_test.rs` (direct `query()` call-site signature updates)
+- `rust/analytics/tests/lakehouse_admin_gate_test.rs` (new file: DB-free, non-`#[ignore]`d
+  registration-gate regression test — see Testing Strategy)
 - `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement on the four
   SQL functions and on the `micromegas.admin.retire_incompatible_partitions(...)` section)
+- `mkdocs/docs/admin/flight-sql.md` (extend the "Authentication" section: `--disable-auth` treats
+  every FlightSQL caller as admin, development only; API-key callers are never admin)
 - `mkdocs/docs/admin/authentication.md` (note in "Admin Privileges" that API keys can never be
   admin, so API-key callers cannot reach the gated functions)
 - `mkdocs/docs/query-guide/functions-reference.md` (document the new admin requirement on the
@@ -320,6 +333,8 @@ SQL that this repo controls.
   `retire_partitions()`, `materialize_partitions()`, and `regenerate_partitions()` docstrings)
 - `python/micromegas/micromegas/admin.py` (add a "requires admin" note to
   `retire_incompatible_partitions()`'s docstring)
+- `CHANGELOG.md` (`Unreleased` bullet for the behavior change and the breaking `query.rs` API
+  change; #1377)
 - `rust/auth/tests/tower_tests.rs` (extend `AuthService` tests for `x-auth-is-admin`)
 - `rust/auth/tests/user_attribution_tests.rs` (add unit tests for the new `is_admin(metadata)`
   helper)
@@ -393,15 +408,22 @@ SQL that this repo controls.
   helper — present/absent header, `"true"`/`"false"`/garbage values, case sensitivity if any, and
   the disabled-auth case (no `x-auth-is-admin` header at all, i.e. an empty `MetadataMap`) asserting
   `is_admin` returns `true`, mirroring `web_server.rs`'s existing `--disable-auth` behavior.
-- **`rust/analytics/tests/sql_view_test.rs`** (extend the existing test file; this remains a
-  `#[ignore]`d DB-and-object-store-backed test, same as its neighbors — see Current State, there
-  is no DB-free way to build a `LakehouseContext`/`make_session_context` today, so `cargo test` in
-  CI (`build/rust_ci.py:27`) won't run it, and the `rust/auth` unit tests above are what actually
-  cover this change in CI; this test is a manual/local regression check, not a CI gate): build a
-  session context with `make_session_context(..., is_admin: false)` and assert that well-formed
-  calls to all five mutating functions fail to *plan*, asserting on the error *message*, not just
-  that planning errored — for the three UDTFs, `ctx.sql("SELECT * FROM
-  retire_partitions('log_entries', 'i', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP
+- **`rust/analytics/tests/lakehouse_admin_gate_test.rs`** (new file, DB-free, **not**
+  `#[ignore]`d — runs under plain `cargo test` in CI, `build/rust_ci.py:27`): build the session
+  context with the same offline-context pattern already proven, non-`#[ignore]`d, in
+  `rust/analytics/tests/blocks_view_merge_ordering_tests.rs:239-251` (a private
+  `make_offline_lakehouse_context` helper — `sqlx::PgPool::connect_lazy` +
+  `object_store::memory::InMemory` + `ViewFactory::new(vec![])` + `NoOpSessionConfigurator`),
+  copied into the new file since the helper isn't `pub`. Neither the lazy Postgres pool nor the
+  in-memory object store is ever touched, because these tests only assert on `ctx.sql(...)`
+  *planning*, never on execution: DataFusion resolves `TableFunctionImpl::call_with_args`/scalar
+  UDF signatures against argument types during planning only, and (per Current State) the gated
+  functions' own `call_with_args` (e.g. `retire_partitions_table_function.rs:56`) only parses
+  arguments and returns a lazy provider — the DB work happens later, inside a spawned execution
+  task that these planning-only tests never run. Call `make_session_context(..., is_admin: false)`
+  and assert that well-formed calls to all five mutating functions fail to *plan*, asserting on
+  the error *message*, not just that planning errored — for the three UDTFs, `ctx.sql("SELECT *
+  FROM retire_partitions('log_entries', 'i', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP
   '2024-01-02T00:00:00Z')")`, the equivalent well-formed `materialize_partitions(...)` and
   `regenerate_partitions(...)` calls, expect an error whose message contains `"table function"`
   and `"not found"`; for the two scalar UDFs, `ctx.sql("SELECT
@@ -417,11 +439,14 @@ SQL that this repo controls.
   `local_test_env/ai_scripts/start_services.py`; that script passes `--disable-auth` to
   `flight-sql-srv` (line 192), so `is_admin` is always `true` there and the non-admin rejection
   path is untestable without new harness work (a test auth provider plus API-key/OIDC test
-  clients), which is out of scope for this plan. Scoping down to what exists: coverage for this
-  change is the tower-level `x-auth-is-admin` tests (`rust/auth/tests/tower_tests.rs`) plus the
-  `rust/analytics/tests/sql_view_test.rs` registration-gate test above — together they cover
-  header propagation end-to-end and the registration gate itself, just not a live FlightSQL
-  round-trip. This is a known, accepted coverage gap, not an oversight.
+  clients), which is out of scope for this plan. Scoping down to what exists: the registration
+  gate itself, and header propagation across the tower boundary, both run as ordinary,
+  non-`#[ignore]`d tests in CI — the tower-level `x-auth-is-admin` tests
+  (`rust/auth/tests/tower_tests.rs`) plus the new `lakehouse_admin_gate_test.rs` above. What is
+  *not* covered is a live, wired-together round-trip (a real FlightSQL client, through the tower
+  `AuthService`, into `execute_query`/`do_action_create_prepared_statement`, hitting the
+  registration gate under real auth) — that gap is what needs the missing harness, and is a known,
+  accepted coverage gap, not an oversight.
 - **`do_action_create_prepared_statement`**: for the same reason, this is covered at the unit
   level only — the `rust/auth` unit tests for `is_admin(metadata)` cover header parsing, and the
   `_request` → `request` signature change (so the handler stops discarding the request's
