@@ -190,7 +190,11 @@ any of them is split or written — the case this issue reports as broken.
    land in `measures`.
 7. **`mkdocs/docs/otlp/index.md:399-403`** — correct the description from "delivers each
    record as an OTLP `ExportMetricsServiceRequest` protobuf" to reflect that a record carries
-   one-or-more length-delimited messages.
+   one-or-more length-delimited messages. Also fix the "Buffering hints" bullet at
+   `mkdocs/docs/otlp/index.md:428-430`, which independently asserts "one JSON record per
+   underlying Metric Stream record" — the same false 1:1 assumption in different words —
+   to instead note that a JSON record's data may itself pack multiple length-delimited
+   messages.
 8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
    `python3 build/rust_ci.py`.
 
@@ -208,7 +212,9 @@ any of them is split or written — the case this issue reports as broken.
   fixture; add a packed-multi-message-record case.
 - `python/micromegas/tests/test_otlp_e2e.py` — length-delimited-frame existing Firehose
   metrics record fixtures; add a multi-message-per-record e2e test.
-- `mkdocs/docs/otlp/index.md` — correct the record-framing description.
+- `mkdocs/docs/otlp/index.md` — correct the record-framing description (lines 399-403) and
+  the "Buffering hints" bullet's matching single-message-per-record assumption (lines
+  428-430).
 
 ## Trade-offs
 
@@ -230,6 +236,12 @@ any of them is split or written — the case this issue reports as broken.
 `mkdocs/docs/otlp/index.md:399-403` — update the CloudWatch Metric Streams section to state
 that a delivered record contains one-or-more length-delimited `ExportMetricsServiceRequest`
 messages (not a single unframed message), and that the Firehose route decodes all of them.
+
+`mkdocs/docs/otlp/index.md:428-430` — the "Buffering hints" bullet currently claims "one
+JSON record per underlying Metric Stream record", the same single-message assumption in
+different words; update it to clarify that a buffered HTTP POST can carry multiple JSON
+records, and each JSON record's data may itself pack multiple length-delimited OTLP
+messages.
 
 `rust/public/src/servers/firehose.rs` (module doc, lines ~6-16) and
 `rust/otel-ingestion/src/handler.rs` (`ingest_firehose_metrics`'s doc comment) both currently
