@@ -52,13 +52,16 @@ admin arm, since it is a standalone fix for a pre-isolation hole.
   admin-gated SQL — the maintenance daemon calls the underlying Rust functions
   (`write_partition::retire_partitions`, etc.) directly rather than through registered SQL
   functions:
-  - `rust/analytics/src/lakehouse/view.rs:109`, `merge.rs:101`, `sql_batch_view.rs:87,154`,
-    `export_log_view.rs:118,171`, `batch_partition_merger.rs:133`, `metadata.rs:182,287` — internal
-    materialization/lookup contexts, all hardcoding `NoOpSessionConfigurator`.
+  - `rust/analytics/src/lakehouse/merge.rs:101`, `sql_batch_view.rs:87,154`,
+    `export_log_view.rs:118,171`, `batch_partition_merger.rs:133` and
+    `rust/analytics/src/metadata.rs:182,282` — internal materialization/lookup contexts, all
+    hardcoding `NoOpSessionConfigurator`.
   - `parse_block_table_function.rs:81`, `process_spans_table_function.rs:254`,
     `perfetto_trace_execution_plan.rs:232` — UDTF-internal contexts recursively built to run an
     inner query; reachable from user queries but only ever issue read-only SQL.
-  - `rust/analytics/tests/thread_spans_ordering_db_test.rs:294` — test helper.
+  - `rust/analytics/tests/thread_spans_ordering_db_test.rs:294` — test helper. The same file also
+    calls the free `query()` helper directly at lines 253, 263, 318 (via
+    `use micromegas_analytics::lakehouse::query::query`) — also need the new `is_admin` argument.
   - `rust/analytics/tests/sql_view_test.rs:419,444` and
     `rust/analytics/tests/histo_view_test.rs:197` call the free `query()` helper directly (via
     `use micromegas_analytics::lakehouse::query::{query, ...}`), not `make_session_context` — also
@@ -159,6 +162,7 @@ mutating set out of contexts that have no business granting it.
    `_request` parameter.
 6. Update all other `make_session_context` callers (internal engine code + the one test file) to
    pass `is_admin: false`, and update the direct `query()` call sites in
+   `rust/analytics/tests/thread_spans_ordering_db_test.rs` (lines 253, 263, 318),
    `rust/analytics/tests/sql_view_test.rs` (lines 419, 444) and
    `rust/analytics/tests/histo_view_test.rs` (line 197) to pass `is_admin: false`.
 7. **`mkdocs/docs/admin/functions-reference.md`**: note the new admin requirement on
@@ -179,11 +183,13 @@ mutating set out of contexts that have no business granting it.
 - `rust/auth/src/user_attribution.rs`
 - `rust/analytics/src/lakehouse/query.rs`
 - `rust/public/src/servers/flight_sql_service_impl.rs`
-- `rust/analytics/src/lakehouse/view.rs`, `merge.rs`, `sql_batch_view.rs`, `export_log_view.rs`,
-  `batch_partition_merger.rs`, `metadata.rs`, `parse_block_table_function.rs`,
+- `rust/analytics/src/lakehouse/merge.rs`, `sql_batch_view.rs`, `export_log_view.rs`,
+  `batch_partition_merger.rs`, `parse_block_table_function.rs`,
   `process_spans_table_function.rs`, `perfetto_trace_execution_plan.rs` (call-site signature
   updates only — pass `is_admin: false`)
-- `rust/analytics/tests/thread_spans_ordering_db_test.rs` (call-site signature update)
+- `rust/analytics/src/metadata.rs` (call-site signature updates only — pass `is_admin: false`)
+- `rust/analytics/tests/thread_spans_ordering_db_test.rs` (call-site signature update for
+  `make_session_context`, plus the direct `query()` call sites at lines 253, 263, 318)
 - `rust/analytics/tests/sql_view_test.rs`, `histo_view_test.rs` (direct `query()` call-site
   signature updates)
 - `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement)
