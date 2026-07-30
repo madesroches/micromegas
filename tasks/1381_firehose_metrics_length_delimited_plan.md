@@ -81,7 +81,7 @@ use bytes::Buf;
 /// CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format packs one-or-more
 /// `[varint32 length][message bytes]` entries per record, not a single unframed message
 /// (see AWS's CloudWatch metric streams OpenTelemetry format docs).
-fn decode_next_length_delimited<M: Message + Default>(
+pub fn decode_next_length_delimited<M: Message + Default>(
     buf: &mut &[u8],
     signal: Signal,
 ) -> Result<Option<M>, OtelError> {
