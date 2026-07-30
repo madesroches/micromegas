@@ -362,16 +362,26 @@ pub fn decode_firehose_envelope(
 /// already-written messages that precede it in the same record. Identity,
 /// content-addressed `block_id`, and idempotent writes are inherited unchanged from the
 /// shared split/write path.
+///
+/// Decode/ingest errors are tagged with `firehose record[{i}] message[{j}]: ...` (`i` the
+/// record index, `j` the ordinal of the message within that record) so a failure can be
+/// localized to the exact record and message, matching `decode_firehose_envelope`'s
+/// existing `firehose record[{i}]` error-tagging style.
 pub async fn ingest_firehose_metrics(
     service: Arc<WebIngestionService>,
     records: Vec<Vec<u8>>,
 ) -> Result<(), OtelError> {
-    for rec in records {
+    for (i, rec) in records.into_iter().enumerate() {
         let mut buf: &[u8] = &rec;
+        let mut j = 0usize;
         while let Some(req) =
-            decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)?
+            decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+                .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?
         {
-            ingest_parsed_metrics(&service, req).await?;
+            ingest_parsed_metrics(&service, req)
+                .await
+                .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?;
+            j += 1;
         }
     }
     Ok(())

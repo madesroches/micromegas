@@ -661,6 +661,42 @@ def _length_prefixed(*messages):
     return buf.getvalue()
 
 
+def _post_firehose_and_assert_measures(request_id, body, instance_ids):
+    """POST a Firehose envelope body, assert the 200 ack echoes request_id, then assert
+    each instance_id's process lands at least 2 measures rows. Shared tail for the
+    multi-record and multi-message-per-record e2e tests below, which only differ in how
+    the envelope's records are packed."""
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["requestId"] == request_id
+
+    begin, end = _query_window()
+    for instance_id in instance_ids:
+        pid_str = discover_process_id(
+            client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+        )
+
+        def query_count(pid=pid_str):
+            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
+            return client.query(sql, begin, end)
+
+        df = assert_eventually(
+            query_count,
+            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
+            timeout_s=POLL_TIMEOUT_S,
+            msg=f"waiting for 2 measures with process_id={pid_str}",
+        )
+        assert int(df.iloc[0]["c"]) >= 2
+
+
 def test_firehose_metrics_e2e():
     """POST a single OTLP metrics record wrapped in a Firehose envelope; assert
     the ack echoes X-Amz-Firehose-Request-Id and the metric lands in `measures`,
@@ -715,36 +751,7 @@ def test_firehose_multi_record_e2e():
     body = _firehose_envelope(
         request_id, [_length_prefixed(req1), _length_prefixed(req2)]
     )
-
-    resp = requests.post(
-        FIREHOSE_ENDPOINT,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-Amz-Firehose-Request-Id": request_id,
-        },
-        timeout=10,
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["requestId"] == request_id
-
-    begin, end = _query_window()
-    for instance_id in (instance_id1, instance_id2):
-        pid_str = discover_process_id(
-            client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
-        )
-
-        def query_count(pid=pid_str):
-            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
-            return client.query(sql, begin, end)
-
-        df = assert_eventually(
-            query_count,
-            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
-            timeout_s=POLL_TIMEOUT_S,
-            msg=f"waiting for 2 measures with process_id={pid_str}",
-        )
-        assert int(df.iloc[0]["c"]) >= 2
+    _post_firehose_and_assert_measures(request_id, body, (instance_id1, instance_id2))
 
 
 def test_firehose_multi_message_record_e2e():
@@ -759,36 +766,7 @@ def test_firehose_multi_message_record_e2e():
     req2 = _build_metrics_request(attrs2, base_ns + 1)
     request_id = f"firehose-multi-message-{uuid.uuid4()}"
     body = _firehose_envelope(request_id, [_length_prefixed(req1, req2)])
-
-    resp = requests.post(
-        FIREHOSE_ENDPOINT,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-Amz-Firehose-Request-Id": request_id,
-        },
-        timeout=10,
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["requestId"] == request_id
-
-    begin, end = _query_window()
-    for instance_id in (instance_id1, instance_id2):
-        pid_str = discover_process_id(
-            client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
-        )
-
-        def query_count(pid=pid_str):
-            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
-            return client.query(sql, begin, end)
-
-        df = assert_eventually(
-            query_count,
-            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
-            timeout_s=POLL_TIMEOUT_S,
-            msg=f"waiting for 2 measures with process_id={pid_str}",
-        )
-        assert int(df.iloc[0]["c"]) >= 2
+    _post_firehose_and_assert_measures(request_id, body, (instance_id1, instance_id2))
 
 
 def test_firehose_empty_records_ack_without_ingest():

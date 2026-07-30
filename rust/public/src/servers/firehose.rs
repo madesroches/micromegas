@@ -38,7 +38,7 @@ async fn firehose_handler(
     let envelope = match handler::decode_firehose_envelope(&body, Signal::Metrics) {
         Ok(e) => e,
         Err(err) => {
-            error!("firehose decode error: {err}");
+            error!("firehose decode error (request_id={request_id}): {err}");
             let status = StatusCode::from_u16(err.http_status())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             return firehose_response(status, &request_id, Some(&err.public_message()));
@@ -50,7 +50,7 @@ async fn firehose_handler(
     match handler::ingest_firehose_metrics(service, envelope.records).await {
         Ok(()) => firehose_response(StatusCode::OK, &request_id, None),
         Err(err) => {
-            error!("firehose ingest error: {err}");
+            error!("firehose ingest error (request_id={request_id}): {err}");
             let status = StatusCode::from_u16(err.http_status())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             firehose_response(status, &request_id, Some(&err.public_message()))

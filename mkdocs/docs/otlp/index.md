@@ -399,10 +399,10 @@ wraps each record in a small JSON envelope and expects a fixed ack shape back.
 This works because a Metric Stream configured with **OpenTelemetry 1.0.0** output format
 delivers each record as one-or-more length-delimited OTLP `ExportMetricsServiceRequest`
 protobuf messages (each prefixed with a varint byte length, back to back) — the same
-message the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose route
-unwraps the envelope (gzip-aware, base64 records), then decodes every length-delimited
-message in a record and hands each one to the same decode/split/write path; records land
-in `measures`, same as native OTLP metrics.
+message type the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose
+route unwraps the envelope (gzip-aware, base64 records), then decodes every
+length-delimited message in a record and hands each one to the same split/write path;
+records land in `measures`, same as native OTLP metrics.
 
 `opentelemetry1.0` output encodes every CloudWatch data point as an OTLP `Summary`, so each
 scrape of a metric lands as **4 rows under 4 distinct names** (`<metric>_count`, `_sum`,
@@ -463,9 +463,13 @@ Firehose HTTP Endpoint Delivery contract.
 Same content-addressed `block_id` scheme as the rest of OTLP ingestion (see
 [Idempotency](#idempotency)): a Firehose retry of a previously-succeeded batch
 re-computes identical `block_id`s and dedups on write. On a partial batch failure,
-Firehose retries the whole batch — already-written records dedup, the failed one is
-retried. CloudWatch Metric Streams stamp distinct timestamps per scrape, so genuinely
-distinct data never collides.
+Firehose retries the whole batch — already-written **messages** dedup, not just
+already-written records: each length-delimited message within a record is decoded and
+written as soon as it's read, so a malformed message partway through a record still
+leaves every message before it in that record ingested, while that message and the rest
+of the record (not yet reached) are retried along with the whole batch. CloudWatch
+Metric Streams stamp distinct timestamps per scrape, so genuinely distinct data never
+collides.
 
 ## CloudWatch Logs (Kinesis Firehose)
 

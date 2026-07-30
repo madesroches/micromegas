@@ -115,4 +115,24 @@ impl OtelError {
             IngestionServiceError::StorageError(m) => OtelError::Storage { signal, message: m },
         }
     }
+
+    /// Prepends a diagnostic prefix (e.g. `firehose record[i] message[j]`) to the
+    /// error's message, preserving its variant (and therefore HTTP status / retryability).
+    /// Used to localize which record/message failed within a multi-message batch.
+    pub fn with_context(self, prefix: impl std::fmt::Display) -> Self {
+        match self {
+            Self::Parse { signal, message } => Self::Parse {
+                signal,
+                message: format!("{prefix}: {message}"),
+            },
+            Self::Database { signal, message } => Self::Database {
+                signal,
+                message: format!("{prefix}: {message}"),
+            },
+            Self::Storage { signal, message } => Self::Storage {
+                signal,
+                message: format!("{prefix}: {message}"),
+            },
+        }
+    }
 }

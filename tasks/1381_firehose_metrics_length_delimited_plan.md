@@ -187,15 +187,15 @@ retries" section).
    protobuf" (singular) and that "no new identity, block, split, or write logic" is needed
    referencing reuse of `handler::ingest_metrics`; correct it to describe a record as
    one-or-more length-delimited messages, decoded via `handler::ingest_firehose_metrics`.
-4. **`rust/otel-ingestion/tests/firehose_tests.rs`** — add unit coverage for the new decode
+3. **`rust/otel-ingestion/tests/firehose_tests.rs`** — add unit coverage for the new decode
    path (see Testing). The existing envelope-decode tests are unaffected (they exercise
    `decode_firehose_envelope`, which has no protobuf framing knowledge), so leave them as is.
-5. **`rust/public/tests/firehose_tests.rs`** — update
+4. **`rust/public/tests/firehose_tests.rs`** — update
    `full_multi_record_ingest_succeeds_against_a_live_stack`'s `make_record` helper to encode
    each message with `encode_length_delimited_to_vec()` instead of `encode_to_vec()` (real
    Firehose records are always length-delimited-framed, even for a single message), and add
    a case that packs two messages into one record.
-6. **`python/micromegas/tests/test_otlp_e2e.py`** — use
+5. **`python/micromegas/tests/test_otlp_e2e.py`** — use
    `google.protobuf.proto.serialize_length_prefixed(req, io.BytesIO())` (already available
    via the pinned `protobuf` dependency) to build every Firehose metrics record's bytes (both
    `test_firehose_metrics_e2e` and `test_firehose_multi_record_e2e` currently pass raw
@@ -203,14 +203,14 @@ retries" section).
    `test_firehose_multi_message_record_e2e` that packs two distinct
    `ExportMetricsServiceRequest` messages into a single Firehose record and asserts both
    land in `measures`.
-7. **`mkdocs/docs/otlp/index.md:399-403`** — correct the description from "delivers each
+6. **`mkdocs/docs/otlp/index.md:399-403`** — correct the description from "delivers each
    record as an OTLP `ExportMetricsServiceRequest` protobuf" to reflect that a record carries
    one-or-more length-delimited messages. Also fix the "Buffering hints" bullet at
    `mkdocs/docs/otlp/index.md:428-430`, which independently asserts "one JSON record per
    underlying Metric Stream record" — the same false 1:1 assumption in different words —
    to instead note that a JSON record's data may itself pack multiple length-delimited
    messages.
-8. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
+7. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
    `python3 build/rust_ci.py`.
 
 ## Files to Modify

@@ -3,6 +3,13 @@
 //! No database: pure shape assertions on `decode_firehose_envelope`, plus a
 //! round-trip through `split_metrics` to prove a decoded record is a real
 //! `ExportMetricsServiceRequest` protobuf.
+//!
+//! `decode_firehose_envelope` only unwraps the Firehose JSON envelope (base64-decodes
+//! each record's `data`); it has no protobuf framing knowledge, so several fixtures below
+//! deliberately use an unframed `encode_to_vec()`/`decode()` round-trip — that shape is
+//! sufficient to exercise this decoder but does **not** match real Firehose wire data,
+//! which is always length-delimited (see the `decode_next_length_delimited` tests further
+//! down, which are the framing-aware ones added for issue #1381).
 
 mod fixtures;
 
@@ -33,6 +40,10 @@ fn envelope_json(request_id: Option<&str>, records: &[&[u8]]) -> String {
     )
 }
 
+// Unframed on purpose: `decode_firehose_envelope` has no protobuf framing knowledge, so
+// this only needs a real protobuf payload, not a length-delimited one. Real Firehose
+// wire records are always length-delimited — see `decode_next_length_delimited`'s tests
+// below for fixtures that model that.
 #[test]
 fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
     let req = make_metrics_request(
@@ -57,6 +68,9 @@ fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
     assert_eq!(blocks.len(), 1);
 }
 
+// Unframed on purpose, same rationale as above — this only asserts that
+// `decode_firehose_envelope` preserves per-record byte order, which doesn't require
+// length-delimited framing.
 #[test]
 fn multi_record_batch_preserves_order() {
     let req1 = make_metrics_request(
