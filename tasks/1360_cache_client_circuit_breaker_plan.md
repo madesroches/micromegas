@@ -124,8 +124,13 @@ reshapes the same function the breaker has to report from.
 #### The fix: resume from the delivered offset
 
 The "re-emitting a delivered prefix is unsound" objection applies only to restarting from **zero**. The
-helper knows how many bytes it has yielded, and the resolved absolute byte range is already in hand — it
-is the `range` field of the `GetResult` built at `client.rs:294-299`. So on *any* stream error — or the
+helper knows how many bytes it has yielded, and the resolved absolute byte range is already in hand —
+it is resolved before `full_stream_with_fallback` is ever called: `served_range` from
+`parse_content_range` on the ranged path (`client.rs:110`), or `0..size` from `Content-Length` on the
+full path (`client.rs:169`) (the `GetResult` itself, built at `client.rs:294-299`, is assembled by
+`stream_get_result` only *after* both callers have already invoked `full_stream_with_fallback` —
+`client.rs:119` then `:129`; `client.rs:179` then `:187` — so it isn't available at this point). So on
+*any* stream error — or the
 stream ending cleanly (`None`) with bytes still owed, e.g. a body that closes short of its declared
 range without ever producing an `Err` — it can read the remainder from `direct`:
 
@@ -181,7 +186,7 @@ in its header phase.
 
 - **`GET /obj`** commits before streaming: `get_range_handler_inner` resolves `size()`, waits for a
   memory-budget permit (`handlers.rs:349-359`), then awaits the first chunk — the per-block origin GET —
-  before building the response (`handlers.rs:282-395`, and `389-395` for the commit-before-stream
+  before building the response (`handlers.rs:271-395`, and `389-395` for the commit-before-stream
   await). Time-to-headers therefore *contains* an origin GET, and is what the client already measures as
   `range_cache_client_roundtrip_ms`.
 - **`HEAD /obj`** does too. `head_handler_inner` calls `state.cache.size(&key)`
@@ -196,7 +201,7 @@ in its header phase.
   `self.size(key)` (`range_cache/mod.rs:347-359`), as the handler's own comment notes
   (`handlers.rs:528-533`: "`stream_ranges` always does a `size()` lookup up front").
 - **`POST /prefetch`** is the only endpoint that never blocks on the origin (`prefetch_handler`,
-  `handlers.rs:710-779`, explicitly "never blocks on an origin fetch and never acquires a
+  `handlers.rs:721-779`, explicitly "never blocks on an origin fetch and never acquires a
   `mem_permit`") — it parses lines and `try_send`s them to a queue. Its time-to-headers is a function
   of payload size, not cache health. In production that payload is one item:
   `DataLakeConnection::warm_object` (`rust/ingestion/src/data_lake_connection.rs:57-80`) calls
@@ -306,7 +311,7 @@ exposure to matter.) `POST /ranges` is likewise reached only from this non-L1-fr
   = **8 MiB** (`range_cache/mod.rs:25-33`, `stream_ranges_inner` at `mod.rs:401-413`).
 - A window is fetched as one coalesced origin GET — 8 MiB is exactly
   `DEFAULT_MAX_COALESCED_GET_BYTES` (`mod.rs:42`).
-- `stream_demand_windows` pipelines with `buffered(2)` (`mod.rs:435-446`), i.e. one window of lookahead.
+- `stream_demand_windows` pipelines with `buffered(2)` (`mod.rs:423-447`), i.e. one window of lookahead.
   That hides the fetch only while the client drains slower than the origin delivers; a local query
   process drains faster, so in a large sequential read the gap is essentially exposed.
 
@@ -361,7 +366,7 @@ revisiting once `range_cache_client_stream_resumed` has production data (see "Me
 The store keeps building exactly **one** `reqwest::Client`, now with
 `read_timeout(stall_timeout + abandon_timeout)` alongside `connect_timeout` and the unchanged total
 `timeout`. In reqwest 0.12.28, `read_timeout` is a per-frame timeout on the response body
-(`async_impl/body.rs:287-340` — `ReadTimeoutBody` resets its sleep per frame) plus a non-resetting bound
+(`async_impl/body.rs:328-360` — `ReadTimeoutBody` resets its sleep per frame) plus a non-resetting bound
 on the header phase (`async_impl/client.rs:3053-3059`).
 
 **Why not set it to `stall_timeout` exactly.** `/ranges` wraps `pull_exact`'s `stream.next()` in its own
@@ -381,7 +386,7 @@ with no dedicated constant of its own.
 
 Set to 3.5s, `read_timeout` is:
 
-- the **operative** bound in two places — the `/obj` response body, and `prefetch`'s `resp.json()` read
+- the **operative** bound in two places — the `/obj` response body, and `prefetch`'s `resp.bytes()` read
   (`client.rs:233`), which takes no explicit wrap of its own. `/obj`'s real per-frame bound is therefore
   3.5s, not the 3s `stall_timeout` used for the throughput-floor arithmetic in "`stall_timeout` (3s) is
   now a cost knob" — negligibly looser (8 MiB per 3.5s ≈ 2.3 MB/s), so that section's reasoning still
@@ -483,7 +488,7 @@ on a body stall at all. So:
 | Entry point | Where the single success report happens |
 |---|---|
 | `get_opts` head-only path (`client.rs:486-509`) | Its own call site, immediately after `head_size` returns a successfully parsed size — `head_size`'s completion *is* the whole operation here. (`head_size`'s own two after-2xx failure arms — non-2xx and malformed-`Content-Length` — report `record_responsive` internally instead, terminal for every caller of `head_size`; see "Wiring into `CacheClientStore`" → `get_opts`.) |
-| `get_opts` main path (full / bounded / offset / suffix) | `full_stream_with_fallback`, when the body stream ends without error **and no resume occurred** — not the intermediate `head_size`, and not `send()`'s headers. A resumed operation reports `record_unresponsive` only, from the resume path, and nothing else |
+| `get_opts` main path (full / bounded / offset / suffix) | `full_stream_with_fallback`, when the stream ends — with or without error — **and no resume occurs** (every requested byte was already delivered) — not the intermediate `head_size`, and not `send()`'s headers. A resumed operation reports `record_unresponsive` only, from the resume path, and nothing else |
 | `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | Its own call site, immediately after `head_size` returns a successfully parsed size — no stream follows, so this is the whole operation. (`head_size`'s internal failure-arm reports are the same shared ones as above.) |
 | `get_ranges` | `send_ranges`, once the framed body fully resolves (already specified below) |
 | `prefetch` | see "Prefetch does not close the circuit" |
@@ -611,7 +616,7 @@ Two fields, and that is the whole state. The earlier draft carried a mutable `co
 `backoff_applied` flag to keep an exponential doubling idempotent within an open window; both existed
 solely to serve the doubling. See "Why the cooldown is fixed".
 
-Public API — each method has an `_at(now: Instant)` form (the real logic) plus a wrapper that passes
+Public API — each clock-dependent method has an `_at(now: Instant)` form (the real logic) plus a wrapper that passes
 `Instant::now()`, so the state machine is unit-testable with a synthetic clock and no sleeps:
 
 ```rust
@@ -754,13 +759,17 @@ async fn send(&self, req: reqwest::RequestBuilder, what: &str) -> Result<reqwest
 since the `'static` stream can't borrow `&self`), the resolved byte range, and the `direct` store. It:
 
 - counts bytes yielded;
-- on a stream error, or on the stream ending cleanly (`None`) with a non-empty remainder, at any
-  position, emits `range_cache_client_stream_resumed`, reports `record_unresponsive`, and resumes the
-  remainder from `direct` per "The fix: resume from the delivered offset". This is the *only* report a
-  resumed operation makes — see "One outcome per logical operation" — so it never also reports
-  `record_responsive` once the resumed remainder ends cleanly;
-- on a clean end of stream **with an empty (or over-delivered) remainder, so no resume**, reports
-  `record_responsive` — the single success report for this operation.
+- when the stream ends — via `Err` or cleanly via `None` — with a **non-empty** remainder still owed
+  (`resume_start < resolved_range.end`), emits `range_cache_client_stream_resumed`, reports
+  `record_unresponsive`, and resumes the remainder from `direct` per "The fix: resume from the delivered
+  offset". This is the *only* report a resumed operation makes — see "One outcome per logical
+  operation" — so it never also reports `record_responsive` once the resumed remainder ends cleanly;
+- when the stream ends — via `Err` or cleanly via `None` — with an **empty (or over-delivered)**
+  remainder (`resume_start >= resolved_range.end`, i.e. every requested byte was already delivered), no
+  resume occurs — the guard in "The fix: resume from the delivered offset" forbids issuing an empty or
+  inverted `direct.get_opts` call there. Every requested byte was served, so per "Abandon vs.
+  unresponsive"'s own classification this reports `record_responsive`, not `record_unresponsive`, even
+  when the terminal event was an `Err` — the single success report for this operation.
 
 Being a free function it cannot call `self.report` or `self.report_unresponsive`; a free
 `report_transition(t: Transition)` helper (mirroring the `direct_get_opts_with_metrics` split below)
@@ -818,7 +827,9 @@ and `Truncated` keeps its `warn!`. All the failure kinds are exactly as safe to 
 `send()`'s future, since `read_framed_ranges` exposes nothing to the caller until it fully resolves, and
 every arm falls back through the same existing `get_ranges` fallback path. The whole call is otherwise
 bounded only by the unchanged 15s total deadline, so a healthy multi-megabyte read is never aborted on
-size alone.
+size alone. `get_ranges` keeps timing the whole operation itself: `round_trip_start` starts before
+`send_ranges` is called (`client.rs:567` today) and `range_cache_client_ranges_ms` is emitted on
+`send_ranges`'s `Ok` arm, unchanged from today's placement (`client.rs:633-637`).
 
 **One admission gate per public entry point** — `get_opts`, `get_ranges`, `prefetch`. Preconditioned
 requests keep short-circuiting to `direct` before the gate (they never use the cache anyway):
@@ -973,7 +984,7 @@ State transitions log once (not once per request), so an outage doesn't flood:
 |---|---|---|
 | `range_cache_client_abandoned` | An `abandon_timeout` expiry — the cache lost the race against the direct path | `debug!` |
 | `range_cache_client_unresponsive` | Connect failure, transport error, a `stall_timeout` expiry, or a `total_timeout` expiry — the cache is not answering | `debug!` |
-| `range_cache_client_stream_resumed` | A `/obj` body error at any position (including before the first chunk); the remainder — possibly the whole range — was read from `direct` | `debug!` with the resume offset |
+| `range_cache_client_stream_resumed` | A `/obj` body error, or a clean stream end, with bytes still owed (including before the first chunk); the remainder — possibly the whole range — was read from `direct`. Does not fire when the stream ends, error or not, with nothing left owed | `debug!` with the resume offset |
 | `range_cache_client_circuit_opened` | `Transition::Opened` | `warn!` with the cooldown |
 | `range_cache_client_circuit_closed` | `Transition::Closed` | `info!` |
 | `range_cache_client_circuit_bypassed` | Each read/prefetch that skipped the cache | `debug!` |
@@ -1002,12 +1013,17 @@ one per cooldown.
 1. In `client.rs`, rewrite `full_stream_with_fallback` to count yielded bytes and resume the remainder
    from `direct` at **any** position, on a stream error or on the stream ending cleanly (`None`) with
    a non-empty remainder, per "The fix: resume from the delivered offset".
-   It takes the resolved byte range (from the `GetResult` built at `client.rs:294-299`) in addition to
-   its current arguments. The existing two-arm match collapses to one path — the pre-first-chunk
+   It takes the resolved byte range — `served_range` from `parse_content_range` at `client.rs:110` on
+   the ranged path, or `0..size` from `Content-Length` at `client.rs:169` on the full path — in addition
+   to its current arguments. The existing two-arm match collapses to one path — the pre-first-chunk
    fallback becomes `bytes_yielded == 0`. An empty-or-negative remainder (`resume_start >=
    resolved_range.end`: all requested bytes already delivered, or a cache that over-delivered past its
    own declared range) ends the stream cleanly instead of issuing an empty or inverted `Bounded` read,
-   which `object_store` rejects as an error.
+   which `object_store` rejects as an error. As a standalone form (see step 2), it keeps the existing
+   pre-first-chunk arm's `range_cache_client_fallback` counter and `range_cache_client_direct_ms` timing
+   inline (today's `client.rs:325-336`) rather than routing through `direct_get_opts_with_metrics`, which
+   step 10 introduces to fold this bookkeeping in later, and emits `range_cache_client_stream_resumed`
+   with the resume offset on every resume, including the collapsed `bytes_yielded == 0` case.
 2. Add unit/integration coverage that a mid-stream failure yields **byte-identical** data to a direct
    read (see Testing Strategy → Resume correctness). As a standalone PR, ahead of Phase 2, induce the
    failure by aborting the connection / dropping the response body outright — an immediate transport
@@ -1022,18 +1038,15 @@ one per cooldown.
    `Admission`, `Transition`, and `CircuitBreaker` with the `_at(now)` API above.
 4. Register `pub mod circuit_breaker;` in `rust/object-cache/src/lib.rs` (public — the `tests/`
    directory is a separate crate and needs it) and re-export `CircuitBreaker`/`CircuitBreakerConfig`
-   alongside the existing `pub use`s. Also re-export `CacheClientConfig` alongside the existing
-   `pub use client::CacheClientStore` — the cross-crate integration test in
-   `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs` builds its client via `with_config`,
-   so both `with_config` and `CacheClientConfig` must be `pub`.
+   alongside the existing `pub use`s.
 5. Add `rust/object-cache/tests/circuit_breaker_tests.rs` (see Testing Strategy).
 
 ### Phase 2 — client timeouts and config
 
 6. In `client.rs`, replace the two timeout constants with `CacheClientConfig` (+ `Default`,
    `from_env`, private env-parse helper). Keep the `Duration` values as named consts backing `Default`.
-7. Add `with_config`; make `new` delegate to it. Store `config` and `breaker: Arc<CircuitBreaker>` on
-   `CacheClientStore` (an `Arc` so `full_stream_with_fallback`'s `'static` stream can hold its own
+7. Add `with_config` (`pub`); make `new` delegate to it. Store `config` and `breaker: Arc<CircuitBreaker>`
+   on `CacheClientStore` (an `Arc` so `full_stream_with_fallback`'s `'static` stream can hold its own
    clone without borrowing `&self`). `CacheClientConfig::default`/`from_env` set
    `breaker.cooldown = stall_timeout`, so the two never drift; a test that overrides `stall_timeout`
    sets the cooldown it wants explicitly. Build the **one** `reqwest::Client` with
@@ -1041,12 +1054,16 @@ one per cooldown.
    config.abandon_timeout)` and `timeout(config.total_timeout)` — no second client. The `read_timeout`
    margin (`abandon_timeout` above `stall_timeout`) exists so `/ranges`' own `pull_exact` wrap, set to
    `stall_timeout` exactly (step 9), is unambiguously the first of the two to fire on a real stall — see
-   "`ClientBuilder::read_timeout` on the one client".
+   "`ClientBuilder::read_timeout` on the one client". Re-export `CacheClientConfig` from
+   `rust/object-cache/src/lib.rs` alongside the existing `pub use client::CacheClientStore` — the
+   cross-crate integration test in `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs` builds
+   its client via `with_config`, so both `with_config` and `CacheClientConfig` must be `pub`.
 8. Add the `send(&self, req, what)` helper (no budget parameter; **failure reporting only**) and route
    `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. Wire the single
    success report per the "One outcome per logical operation" table: the head-only path's call site
    reports on a successful `head_size` return; the main `get_opts` paths report from
-   `full_stream_with_fallback` on clean stream end **with no resume** — a resumed operation reports
+   `full_stream_with_fallback` when the stream ends, with or without error, **with no resume occurring**
+   — a resumed operation reports
    `record_unresponsive` only, from the resume path, and nothing else; the Suffix path's call site adds
    no success report of its own at its intermediate `head_size` call; the no-`Content-Range` path inside
    `get_range_stream` reports `record_responsive` at its own call site on a successful `head_size`
@@ -1087,10 +1104,13 @@ one per cooldown.
    paragraph above — keeping the four failure arms distinct — non-2xx status, `Transport`, `Stalled`,
    `Truncated` — rather than folding them into one `Result<Vec<Bytes>>`; `get_ranges` keeps matching all
    four (plus success) with their current `debug!`/`warn!` logs, and only the
-   timeout/connect/`Transport`/`Stalled` arms report a failure. Make `send_ranges` `pub` — it becomes
+   timeout/connect/`Transport`/`Stalled` arms report a failure. `get_ranges` itself keeps its existing
+   `round_trip_start` (started before calling `send_ranges`, `client.rs:567` today) and emits
+   `range_cache_client_ranges_ms` on `send_ranges`'s `Ok` arm, unchanged from today's placement
+   (`client.rs:633-637`). Make `send_ranges` `pub` — it becomes
    reachable via the already-exported `CacheClientStore`, not via a `lib.rs` re-export, since it is an
    inherent method rather than a free-standing type — and re-export `RangesReadError`/`RangesSendError`
-   from `rust/object-cache/src/lib.rs` alongside the `CacheClientConfig` export (step 4). Give both enums
+   from `rust/object-cache/src/lib.rs` alongside the `CacheClientConfig` export (step 7). Give both enums
    a `thiserror` `Display`/`Error` impl now that they're public API surface, not just internal detail.
    The cross-crate integration test in `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs`
    calls `send_ranges` directly (in addition to the fallback-observing `get_ranges` call) so it can match
@@ -1191,7 +1211,7 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
 - **`ClientBuilder::read_timeout` on the one client, plus an explicit `tokio::time::timeout` on
   `/ranges` for error classification.** `read_timeout` is a single per-client value, set to
   `stall_timeout + abandon_timeout` (3.5s): the operative bound on the `/obj` body (along with
-  `prefetch`'s `resp.json()`), and an inert backstop everywhere the explicit 500ms `abandon_timeout` wrap
+  `prefetch`'s `resp.bytes()`), and an inert backstop everywhere the explicit 500ms `abandon_timeout` wrap
   already applies. `/ranges` keeps its own explicit `stall_timeout` (3s) wrap around `pull_exact`
   anyway — deliberately tighter than `read_timeout`, not equal to it, because both timers clear and
   re-arm around the same poll and a tie would leave which one fires undetermined. The margin is what
@@ -1274,9 +1294,14 @@ override) so the resume path is also exercised against a genuine stall, not just
   error, not a silent short read.
 - **A stream error exactly at the last byte ends cleanly.** An `/obj` handler that delivers the full
   requested range and only then errors (e.g. the connection drops, or in the Phase 2 variant hangs before
-  its terminating chunk). The read must complete successfully with exactly the requested bytes and must
-  not call `direct` at all — this also guards against ever constructing `GetRange::Bounded(x..x)`, which
-  `object_store` rejects as `InvalidGetRange::Inconsistent`.
+  its terminating chunk). This requires a **chunked** response — a 206 with `Content-Range` and no
+  `Content-Length` (`client.rs:110-130`) — since a `Content-Length`-bearing response completes as a
+  full, error-free body the moment every byte is delivered, and the guard would never be exercised. The
+  read must complete successfully with exactly the requested bytes and must not call `direct` at all —
+  this also guards against ever constructing `GetRange::Bounded(x..x)`, which `object_store` rejects as
+  `InvalidGetRange::Inconsistent` — and it must report `record_responsive`, not `record_unresponsive`:
+  every requested byte was served, so per "Abandon vs. unresponsive" this is a success even though the
+  terminal event was an `Err`.
 
 ### Unit — `rust/object-cache/tests/circuit_breaker_tests.rs`
 
