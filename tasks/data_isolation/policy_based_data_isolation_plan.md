@@ -4,19 +4,27 @@
 > per-user case and remains the reference for the confidentiality/integrity analysis and the
 > current-state audit; this plan generalizes its mechanism. Where they disagree, this document wins.
 
+> **Revised 2026-07-30** for deployment staging (issue #1334 follow-up): the `self|rbac` mode enum
+> and its `self` default are replaced by a single grant-configured policy engine (open deployments
+> are an `everyone`-group configuration, not a query-side bypass); implementation steps are
+> re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
+> change; and the code audit is refreshed (see Appendix B for drift found since 2026-07-21).
+
 ## Overview
 
 Isolate telemetry so that data produced under one identity is only **readable** by principals
-authorized to read it. The mechanism is a small, general **RBAC seam**; the **default configuration
-makes it byte-for-byte equivalent to per-user isolation** (each user sees only their own data).
-Turning on group-based access is a config flip plus two additional policy implementations — no data
-migration, no API change, no rewrite of the enforcement rule.
+authorized to read it. The mechanism is a small, general **RBAC seam**. There is **no mode enum and
+no default policy**: one policy engine, configured by grants, spans the whole deployment spectrum —
+from an **open (team-wide) deployment**, where an implicit `everyone` group preserves today's
+everyone-reads-everything behavior with no data migration, to a **privacy deployment**, where each
+user reads only their own data and sharing happens through the IdP `groups` claim. Moving along
+that spectrum is configuration, not code — no API change, no rewrite of the enforcement rule.
 
 The design rests on one structural decision: model everything as a **generic principal stamped on
 data** (`audience`) plus a **set-valued read check** (`audience IN (readable principals)`), never an
-equality (`owner = caller`). With the default policy the readable set is always a singleton, so the
-executed query plan is identical to the simple per-user design — but the code is already the general
-form and never has to be reworked.
+equality (`owner = caller`). In a privacy deployment with no group grants the readable set is a
+singleton, so the executed query plan is identical to the simple per-user design — but the code is
+already the general form and never has to be reworked.
 
 ### The three-relation model
 
@@ -30,8 +38,11 @@ Authorization decomposes into three independent relations:
 
 **Per-user isolation is the restriction of this model to singleton self-groups**: every principal is
 its own group, with `write(u → u)` and `read(u → u)` the only grants, and `audience` always the
-minter's own email. The general and specific cases run the *same* code; only the policy objects
-differ.
+minter's own email. **Open (team-wide) deployments are the other end of the same model**: an
+implicit group `everyone` that every authenticated principal belongs to, with shared data stamped
+`group:everyone` — including the audience assigned to existing API keys when they are imported into
+the key store (see Stage 4). Every point on the spectrum runs the *same* code; only the
+configuration differs.
 
 ### Load-bearing property preserved
 
@@ -114,11 +125,12 @@ pub trait MintPolicy: Send + Sync + std::fmt::Debug {
 }
 ```
 
-Default impl (`SelfMintPolicy`) = identity:
-```rust
-// requested is ignored (or rejected if != caller email); audience is always the caller.
-Ok(caller.email.clone().ok_or_else(|| anyhow!("mint requires an authenticated email"))?)
-```
+The one shipped impl (`RbacMintPolicy`) permits `requested` iff it is in the caller's **mintable
+set**: `{user:<caller email>} ∪ {group:G : G ∈ caller's IdP groups claim} ∪ {group:G : G ∈
+MICROMEGAS_IMPLICIT_GROUPS}`. With `requested = None`, the audience defaults to
+`user:<caller email>`. In a privacy deployment with no implicit groups and no groups claim this
+degenerates to "you may only mint keys for yourself" — the per-user case, with no separate
+`SelfMintPolicy` implementation.
 
 ### 2. `ReadPolicy` — which audiences a caller may read (query-time, flight-sql side)
 
@@ -139,15 +151,22 @@ pub enum ReadScope {
 }
 ```
 
-Default impl (`SelfReadPolicy`) = identity:
-```rust
-Ok(ReadScope::Principals(vec![
-    caller.email.clone().ok_or_else(|| anyhow!("read requires an authenticated email"))?,
-]))
+The one shipped impl (`RbacReadPolicy`) returns the caller's **readable set**:
+
+```
+ReadScope::Principals(
+    {user:<caller email>}
+  ∪ {group:G : G ∈ caller's IdP groups claim}
+  ∪ {group:G : G ∈ MICROMEGAS_IMPLICIT_GROUPS}
+)
 ```
 
-`SelfReadPolicy` never inspects a `groups` claim, so **default mode needs no OIDC groups
-extraction** and adds no attack surface.
+`ReadScope::All` is **never** produced by this policy — it exists only for the internal maintenance
+daemon's contexts (§5). In a privacy deployment (no implicit groups, no groups claim) the readable
+set is the singleton `{user:<caller email>}` — per-user isolation with no separate `SelfReadPolicy`
+implementation. In an open deployment (`MICROMEGAS_IMPLICIT_GROUPS=everyone`) every caller's set
+includes `group:everyone`, which is what imported keys stamp and what unstamped data coalesces to
+(§4), so everyone keeps reading everything.
 
 ### 3. Ingestion stamps `audience`
 
@@ -194,10 +213,16 @@ text). Constructed with the resolved `ReadScope`.
 - `ReadScope::All` → no-op (bypass; see §5).
 - `ReadScope::Principals(ps)`:
   - **`processes` view** (carries `audience` as a property in v1): `audience IN (ps)` via
-    `property_get(properties, 'micromegas.audience') IN (ps)`.
+    `property_get(properties, 'micromegas.audience') IN (ps)`. When
+    `MICROMEGAS_UNSTAMPED_AUDIENCE` is configured, the effective audience is
+    `coalesce(property_get(properties,'micromegas.audience'), '<unstamped>')` — data ingested
+    before stamping existed is attributed to the configured audience at query time (the
+    zero-migration path for open deployments: set it to `group:everyone` and legacy data stays
+    visible with no backfill and no retention wait). Unset (privacy deployments), `NULL` audiences
+    fail the `IN` and unstamped data is hidden — fail-closed.
   - **`process_id`-keyed views** (`streams`, `blocks`, `log_entries`, `measures`, span views):
     semi-join, **not** a materialized id list —
-    `process_id IN (SELECT process_id FROM processes WHERE property_get(properties,'micromegas.audience') IN (ps))`.
+    `process_id IN (SELECT process_id FROM processes WHERE <same audience predicate as above>)`.
     No ceiling on owned processes (streaming-friendly; matches the project's no-hard-limits stance).
   - **`view_instance('<set>', <id>)`** already surfaces as a `TableScan<MaterializedView>` and is
     caught by this rule exactly like a named view — the same predicate applies. (This is why the
@@ -214,7 +239,10 @@ struct, then:
   captures `(named_process_id, ReadScope)`. Since `call_with_args` is **synchronous** and the
   process→audience mapping needs metadata, perform the actual check at **scan time** (async) inside
   the execution plan: resolve the process's `audience` and fail closed if `∉ ReadScope`. Fails at
-  plan time only if the check can be satisfied from already-resolved data.
+  plan time only if the check can be satisfied from already-resolved data. The **`get_payload` UDF**
+  (`query.rs:165` — added since the original audit) is the same shape in scalar form: it reads a raw
+  block payload by id, so it gets the identical async guard via the `block_id → process_id →
+  audience` cache chain (§4 "Prong B performance").
 - **Listing functions:** `list_partitions` has no owner arg but exposes a generic `view_instance_id`
   Utf8 column whose contents depend on the view set — per `view.rs:56`, "`view_instance_id` can be a
   process_id, a stream_id or 'global'" — leaking the existence/size/timing of other principals' data
@@ -227,28 +255,44 @@ struct, then:
     cache design below), then the same `process_id → audience` cache; same keep-iff-readable rule.
   - **`'global'` rows** (the unscoped aggregate partitions — `processes`, `streams`, `blocks`, and the
     global `log_entries`/`measures` instances): carry no single audience to check. Per the fail-closed
-    posture (§5), these rows are **hidden** from any `ReadScope::Principals` session — visible only
+    posture (§5), these rows are **hidden** from a `ReadScope::Principals` session — visible only
     under `ReadScope::All` (maintenance daemon), **or** when the row's view set is on the public
-    allowlist (§5b), in which case its `'global'` rows are shown to every authenticated caller.
+    allowlist (§5b), **or** when the configured `MICROMEGAS_UNSTAMPED_AUDIENCE` is in the caller's
+    `ReadScope` (a global aggregate has no single audience, so it is treated like unstamped data —
+    in an open deployment every caller reads `group:everyone`, so global rows stay visible, matching
+    today's behavior; in a privacy deployment the knob is unset and they stay hidden).
     Otherwise `list_partitions` never shows a row it cannot resolve to a readable audience.
 
   `list_view_sets` **stays unfiltered (decided):** it returns view-set schema/definitions only, which
   contain no PII or per-principal data.
-- **Mutating functions (decided): maintenance-only, excluded from user sessions.**
-  `retire_partitions` (`query.rs:119-122`) destructively deletes `lakehouse_partitions` rows for a
+- **Mutating functions (decided, revised 2026-07-30): maintenance-only unless the deployment opts
+  user sessions in.** The mutating set is now **five** entries: `retire_partitions`
+  (`query.rs:120`) destructively deletes `lakehouse_partitions` rows for a
   `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`), and `view_instance_id` is a
   `process_id` for process-scoped view sets — the same opaque, unchecked argument as `process_spans`,
   but destructive rather than read-only: naming another principal's id destroys their partitions (an
   integrity/availability hole, not a confidentiality one). `materialize_partitions`
-  (`query.rs:131-137`) takes no per-process id — it materializes a *global* view
+  (`query.rs:132`) takes no per-process id — it materializes a *global* view
   (`view_factory.get_global_view`) over an insert-time range, so it can't target another principal's
   data, but it is an unbounded write/compute operation with no legitimate use from a read session.
-  Neither is a read, so neither gets an audience filter; instead `register_lakehouse_functions` skips
-  registering both unless `ReadScope::All` (i.e. only for internal/maintenance session contexts, never
-  a user FlightSQL session, admin or not) — a user calling either gets "function not found".
+  `regenerate_partitions` (`query.rs:139` — added since the original audit) and the scalar UDFs
+  `retire_partition_by_file` / `retire_partition_by_metadata` (`query.rs:168,170` — the original
+  audit covered UDTFs only) are likewise mutating/destructive. None is a read, so none gets an
+  audience filter; instead `register_lakehouse_functions` registers the set only when the session
+  is an internal maintenance context (`ReadScope::All`), **or** the caller's authenticated
+  `AuthContext.is_admin` is set, **or** the operator sets
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` — the knob open deployments use to let
+  non-admins keep calling them. Otherwise a user calling any of them gets "function not found".
+  The admin arm is tracked independently as issue #1377 (it closes a hole that exists today,
+  before any isolation work: every authenticated caller can invoke these functions) and may land
+  ahead of this stage; `is_admin` must be threaded from the authenticated `AuthContext`, never
+  from client-claimed attribution. (Recorded caveat: the knob is deployment-wide — in a hybrid
+  deployment mixing an everyone-group with personal audiences, enabling it lets users retire
+  partitions of personal audiences too; tighten to per-audience checks if hybrid becomes real.)
 
-With `SelfReadPolicy`, `ps` is a singleton, so Prong A reduces to `… IN ('user:alice@…')` — the exact
-per-user filter, same DataFusion plan — and Prong B checks membership in a one-element set.
+In a privacy deployment (no implicit groups, no groups claim), `ps` is a singleton, so Prong A
+reduces to `… IN ('user:alice@…')` — the exact per-user filter, same DataFusion plan — and Prong B
+checks membership in a one-element set.
 
 **Prong B performance.** The scan-time check is fast because **`process_id → audience` is immutable**
 (stamped once at ingestion, never mutated). Add an in-memory `process_id → audience` cache — a
@@ -257,9 +301,9 @@ by `find_process` (`rust/analytics/src/metadata.rs:241`, a primary-key point que
 cache **needs no invalidation** — bound it by size (LRU) only. Warm hit = O(1) in-memory lookup;
 cold miss = one indexed PG query, at most once per process ever. An entry is ~60 B, so caching far
 more than the "thousands of users" population costs a few MB. The membership test itself is an O(1)
-hash lookup against `ReadScope`, which is resolved once per query from the JWT `groups` claim (no
-server-side lookup, independent of user count). `parse_block` adds one more immutable
-`block_id → process_id` resolution, cached the same way. `list_partitions`' `thread_spans` rows need
+hash lookup against `ReadScope`, which is resolved once per query from the JWT `groups` claim plus
+the configured implicit groups (no server-side lookup, independent of user count). `parse_block`
+and `get_payload` add one more immutable `block_id → process_id` resolution, cached the same way. `list_partitions`' `thread_spans` rows need
 one further immutable resolution, **`stream_id → process_id`** — a stream's owning process is fixed
 at stream creation and never mutated — backed on miss by a primary-key point query against `streams`
 (mirroring `find_process`); cache it the same size-bounded, invalidation-free way, then chain into the
@@ -269,11 +313,22 @@ existing `process_id → audience` cache to reach the audience for the membershi
 
 - **Maintenance daemon** materializing global views must run with `ReadScope::All` (internal
   materialization path, never a user session). This is the **only** producer of `ReadScope::All`.
+  **There is no single chokepoint** (drift vs. the original audit): the daemon never calls
+  `make_session_context` itself — internal session contexts are built per-view at ~10 sites, each
+  hardcoding `NoOpSessionConfigurator` (`view.rs:109`, `merge.rs:101`, `sql_batch_view.rs:87,154`,
+  `export_log_view.rs:118,171`, `batch_partition_merger.rs:133`, `metadata.rs:182,287`). All of
+  these are internal-only and get `ReadScope::All` at construction. Three further context-building
+  sites are **reachable from user queries** (`parse_block_table_function.rs:81`,
+  `process_spans_table_function.rs:254`, `perfetto_trace_execution_plan.rs:232` — UDTFs that
+  recursively build a context to run their inner query): these must **inherit the caller's
+  `ReadScope`**, never `All`, or they become bypasses.
 - **No human-admin query-path bypass (decided).** `is_admin` does **not** map to `ReadScope::All`; an
   admin's FlightSQL session is filtered like any other. Rationale: an operator with lakehouse/object-
   store access can read the raw parquet directly, so a query-path bypass adds attack surface and audit
   burden for no confidentiality gain. Admins needing cross-principal reads use direct storage access,
-  not the query path. (`is_admin` therefore needs no wiring into `ReadScope` in v1.)
+  not the query path. (`is_admin` never feeds `ReadScope`; it does get threaded to the
+  session for the mutating-function registration gate — §4 Prong B, issue #1377 — an
+  integrity/availability control, not a read bypass.)
 
 ### 5b. Public (audience-agnostic) views — optional, opt-in
 
@@ -307,9 +362,9 @@ Constraints (operator responsibility — the allowlist is a confidentiality deci
   byte-for-byte the design above (every view set private).
 
 Config: `MICROMEGAS_PUBLIC_VIEW_SETS` (comma-separated view-set names, default empty), resolved by
-the same factory as `MICROMEGAS_ISOLATION_POLICY`. This can be deferred past v1 with no rework — an
-empty allowlist is the current behavior, and the branch point (`get_view_set_name`) is already
-required by Prong A.
+the same factory as the isolation grant knobs (see Config surface). This can be deferred past v1
+with no rework — an empty allowlist is the current behavior, and the branch point
+(`get_view_set_name`) is already required by Prong A.
 
 ### 6. Threading identity into the session context
 
@@ -321,8 +376,21 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 ```
 
 - `flight_sql_service_impl` already resolves `attr.user_email` per request
-  (`flight_sql_service_impl.rs:317`); call `ReadPolicy::readable_principals` there and pass the
-  result into both `make_session_context` call sites (`:371`, `:841`).
+  (`flight_sql_service_impl.rs:318`); call `ReadPolicy::readable_principals` there and pass the
+  result into both `make_session_context` call sites (`:372`, `:842`).
+- **Two identity holes must be closed as part of this threading work** (found in the 2026-07-30
+  audit; either would be a full enforcement bypass):
+  - The **prepared-statement path** (`flight_sql_service_impl.rs:842`,
+    `do_action_create_prepared_statement`) builds its session context with **no identity
+    resolution at all**. It must resolve the caller and a `ReadScope` exactly like the
+    `do_get` path.
+  - `validate_and_resolve_user_attribution_grpc` (`rust/auth/src/user_attribution.rs:108`) **falls
+    back to client-claimed identity** when the `x-auth-subject` header is absent (`:125-133`).
+    That fallback is acceptable for audit attribution but must **never** feed `ReadScope`:
+    the scope is resolved from the authenticated `AuthContext` only. Note the tower `AuthService`
+    currently stringifies identity into gRPC metadata (`x-auth-subject`, `x-auth-email`,
+    `x-allow-delegation`); the `groups` claim must cross that boundary too (new header or,
+    better, the `AuthContext` request extension directly — it is in-process middleware).
 - **The scope must reach Prong B too.** `make_session_context` calls `register_functions` →
   `register_lakehouse_functions` (`query.rs:95-163`), which is where UDTFs are registered. Thread the
   `ReadScope` down that path so each `TableFunctionImpl` is constructed with it. `call_with_args` is
@@ -334,113 +402,156 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 
 ### Config surface
 
-One knob, defaulting to the per-user identity policy:
+**No mode enum, no default policy** (revised 2026-07-30 — replaces the former
+`MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and its `self` default). One rbac engine, configured
+by grants; every knob is fail-closed when empty/unset:
 
-```
-MICROMEGAS_ISOLATION_POLICY = self   # default → SelfMintPolicy + SelfReadPolicy (== per-user)
-                            = rbac   # RbacMintPolicy + RbacReadPolicy (+ groups claim, policy source)
-```
+| Knob | Meaning | Open deployment | Privacy deployment |
+|---|---|---|---|
+| `MICROMEGAS_IMPLICIT_GROUPS` | comma-separated groups every authenticated principal belongs to (added to both readable and mintable sets) | `everyone` | unset |
+| `MICROMEGAS_UNSTAMPED_AUDIENCE` | audience attributed at query time to data with no `micromegas.audience` property, and the visibility rule for `'global'` partition rows (§4) | `group:everyone` | unset (unstamped data hidden) |
+| `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` | register the five mutating UDTFs/UDFs (§4) for **non-admin** user sessions (admin sessions always get them — issue #1377) | `true` | unset/false |
+| `MICROMEGAS_PUBLIC_VIEW_SETS` | §5b public view-set allowlist | — | optional |
+
+`MICROMEGAS_UNSTAMPED_AUDIENCE` is the migration-pain killer: an open deployment can turn
+enforcement on **before any stamping exists** — legacy `NULL`-audience data coalesces to
+`group:everyone`, which every caller implicitly reads. No backfill, no retention wait, no
+mode flip, nothing ever disappears.
+
+**Activation story:** while the stages ship, absence of all isolation config = enforcement
+inactive (exactly today's behavior, plus a startup warning once the machinery exists). At the GA
+release the configuration becomes **required** — startup error if the operator has not chosen a
+posture (deliberately no default; every operator makes a conscious choice). Release notes document
+the two profiles above.
 
 Wiring lives next to `default_provider::provider_with_prefix` (a `mint_policy()` / `read_policy()`
-factory reading the env var). The seam permits splitting into `MINT_POLICY` / `READ_POLICY` later for
-asymmetric modes (e.g. RBAC reads, self-only mint) with no code change.
+factory reading the env vars; `from_env` precedent: `static_tables_configurator.rs:44-54`). The
+trait seam permits asymmetric policies later (e.g. group reads, self-only mint) with no code
+change.
 
-A second, independent knob controls public views (§5b), defaulting to none:
+## Implementation Steps — staged rollout (revised 2026-07-30)
 
-```
-MICROMEGAS_PUBLIC_VIEW_SETS =        # empty (default) → every view set private
-                            = <name>[,<name>…]   # named view sets readable by any authenticated caller
-```
+Re-ordered from the original Phases 1–5 around one constraint: **every stage ships with zero
+behavior change** until an operator sets config, so existing team-wide deployments upgrade
+untouched. Two tracks run in parallel after the seam lands — **enforcement** (Stages 1–3) and
+**keys/stamping** (Stages 4–6) — converging at activation (Stage 7). Each stage maps to one
+GitHub issue.
 
-## Implementation Steps
+### Stage 1 — Policy seam + identity threading (no enforcement yet)
+1. **Policy traits + rbac impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
+   (e.g. `policy.rs`); add `RbacMintPolicy` / `RbacReadPolicy` (§1–2). No `Self*` impls — per-user
+   is the rbac engine with empty grants.
+2. **AuthContext fields.** Add `bound_audience: Option<String>` and `groups: Vec<String>` to
+   `AuthContext` (`rust/auth/src/types.rs`); populate `None`/`[]` everywhere except the key path
+   (Stage 4) and OIDC. **Groups claim (low effort, confirmed):** add `groups: Option<Vec<String>>`
+   to the `Claims` struct (`oidc.rs:193-227`) — no `#[serde(deny_unknown_fields)]`, so it is
+   backward-compatible and absent-claim-safe; populate at the OIDC construction site
+   (`oidc.rs:536-545`). Flat top-level array covers Auth0/Azure AD/Google (the confirmed targets);
+   Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
+3. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs:194`) and feed
+   `register_lakehouse_functions` (`query.rs:96`). Resolve scope via `ReadPolicy` in
+   `flight_sql_service_impl` and pass through both call sites (`:372`, `:842`). **Close the two
+   identity holes** (§6): resolve identity on the prepared-statement path, and never derive
+   `ReadScope` from client-claimed attribution; carry `groups` across the `AuthService` boundary.
+4. **Config factory.** Parse the grant knobs (Config surface) next to
+   `default_provider::provider_with_prefix`; `from_env` precedent
+   `static_tables_configurator.rs:44-54`. Unset ⇒ enforcement inactive (transitional).
+5. **Policy source (decided): IdP `groups` claim + `MICROMEGAS_IMPLICIT_GROUPS` only.** No local
+   grants table in v1 — confidentiality rests solely on OIDC plus operator config; no TCB
+   additions. Precedent: the `MICROMEGAS_ADMINS` allowlist (`oidc.rs:264-394`).
+   **Consequence — write/read collapse to membership:** membership in `G` grants *both* `read:G`
+   and `write:G`. Separately grantable write-only/read-only needs a richer source (a second role
+   claim, or a Postgres grants table putting its editors in the TCB) and stays a **pure addition**
+   behind the same seams.
 
-### Phase 1 — General mechanics, per-user behavior (ship this)
-1. **Policy traits.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/` (e.g.
-   `policy.rs`). Add `SelfMintPolicy`, `SelfReadPolicy`.
-2. **AuthContext field.** Add `bound_audience: Option<String>` to `AuthContext`
-   (`rust/auth/src/types.rs`); populate `None` everywhere except the key path.
-3. **Enforcement — Prong A (analyzer rule).** Add `OwnershipRewrite` in
-   `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from `ReadScope`. Inject
-   `property_get(properties,'micromegas.audience') IN (ps)` on the `processes` view, the semi-join on
-   `process_id`-keyed views, and `view_instance` (caught as a `TableScan<MaterializedView>`). Branch
-   per view set via `MaterializedView::get_view_set_name()` so public view sets (§5b) can be skipped;
-   with the default-empty allowlist this branch is a no-op.
-3b. **Enforcement — Prong B (UDTF guards).** Thread `ReadScope` into `register_lakehouse_functions`
-   (`query.rs:95-163`) and each affected `TableFunctionImpl`. Arg-addressed functions
-   (`process_spans`, `perfetto_trace_chunks`, `parse_block`) verify the named process's audience at
-   async scan time, failing closed; listing functions (`list_partitions`) row-filter output by
-   readable audience; mutating functions (`retire_partitions`, `materialize_partitions`) are simply
-   not registered unless `ReadScope::All` (maintenance-only). See §4 Prong B and Appendix A.
-4. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs`) — used both to
-   register `OwnershipRewrite` (Prong A) when scope ≠ `All` and to feed `register_lakehouse_functions`
-   (Prong B). Resolve scope via `ReadPolicy` in `flight_sql_service_impl` and pass through both call
-   sites (`:371`, `:841`). Only the maintenance daemon uses `ReadScope::All`; user sessions
-   (admin or not) are always filtered.
-5. **Config factory.** `MICROMEGAS_ISOLATION_POLICY` → default `self`; wire `Self*` impls. Also parse
-   `MICROMEGAS_PUBLIC_VIEW_SETS` (default empty) and thread the resolved allowlist alongside
-   `ReadScope` into `OwnershipRewrite` (Prong A) and `register_lakehouse_functions` (Prong B).
-6. **Test with audience stamped manually** (before ingestion stamping exists): seed processes with a
-   `micromegas.audience` property and assert cross-audience queries return nothing; same-audience
-   returns its own rows; the daemon (`ReadScope::All`) returns everything.
+### Stage 2 — Enforcement Prong A (inactive until configured)
+6. Add `OwnershipRewrite` in `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from
+   `ReadScope` + the unstamped-audience + public-view-set config. Inject the audience predicate
+   (with `coalesce` semantics, §4) on the `processes` view, the semi-join on `process_id`-keyed
+   views, and `view_instance` (caught as a `TableScan<MaterializedView>`). Branch per view set via
+   `MaterializedView::get_view_set_name()` (§5b). **Register unconditionally** — unlike
+   `TableScanRewrite`, which is added only when `query_range.is_some()` (`query.rs:206`).
+7. **Test with audience stamped manually** (before ingestion stamping exists): seed processes with
+   a `micromegas.audience` property; assert cross-audience queries return nothing, same-audience
+   returns its own rows, unstamped rows follow the `MICROMEGAS_UNSTAMPED_AUDIENCE` rule, and the
+   daemon (`ReadScope::All`) returns everything.
 
-### Phase 2 — Ingestion stamping
-7. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto the
-   process; demote client-supplied owner fields to display metadata.
+### Stage 3 — Enforcement Prong B (inactive until configured)
+8. Thread `ReadScope` into each affected function. Arg-addressed (`process_spans`,
+   `perfetto_trace_chunks`, `parse_block`, **`get_payload`**) verify the named process's audience
+   at async scan time, failing closed; `list_partitions` row-filters by readable audience incl.
+   the `'global'`-row rule (§4); the five mutating functions are registered only for maintenance
+   contexts, admin sessions, or under `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` (the admin arm
+   is issue #1377 and may land ahead of this stage). Build the `moka` caches
+   (`process_id → audience`, `stream_id → process_id`, `block_id → process_id`). Internal
+   maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
+   inherit the caller's scope (§5).
 
-### Phase 3 — DB-backed key store + mint endpoint (enables real per-user keys)
-8. `api_keys` table (telemetry DB) with an `audience` column; `DbApiKeyAuthProvider` composed via
+### Stage 4 — DB-backed key store + import (the open-deployment migration vehicle)
+9. `api_keys` table (telemetry DB) with an `audience` column; `DbApiKeyAuthProvider` composed via
    `MultiAuthProvider`; produces `AuthContext { bound_audience: Some(audience), email: Some(...),
-   allow_delegation: false, is_admin: false }`. Supports revocation/rotation without redeploy.
-9. OIDC-authenticated `POST /auth/api_keys` mint endpoint running `MintPolicy::resolve_audience`.
-   `SelfMintPolicy` binds the caller's own email.
-10. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
+   allow_delegation: false, is_admin: false }`. Supports revocation/rotation without redeploy. Env
+   keyring and DB keyring compose during transition.
+10. **Import tool** for existing `MICROMEGAS_API_KEYS` entries: same key strings land in the DB
+    with audience `group:everyone` (or a per-key choice) — zero client changes; this is how open
+    deployments migrate.
+
+### Stage 5 — Ingestion stamping
+11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
+    the process; demote client-supplied owner fields to display metadata. **Defines the OTLP /
+    Firehose auth story**: OTLP handlers currently have no auth wiring at all, and Firehose routes
+    are merged outside the protected router (`ingestion.rs:151-156`) — both must carry an
+    authenticated `bound_audience` before stamping is meaningful there.
+
+### Stage 6 — Mint endpoint + setup script (enables real per-user keys)
+12. OIDC-authenticated `POST /auth/api_keys` mint endpoint running `MintPolicy::resolve_audience`
+    (`RbacMintPolicy`, §1).
+13. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
-### Phase 4 — RBAC mode (pure additions, no rewrites)
-11. **Groups claim (low effort, confirmed).** Add `groups: Option<Vec<String>>` to the `Claims`
-    struct (`oidc.rs:193-227`) — no `#[serde(deny_unknown_fields)]`, so it is backward-compatible and
-    absent-claim-safe. Add a `groups: Vec<String>` field to `AuthContext` (`types.rs`) and populate it
-    at the OIDC construction site (`oidc.rs:536-545`); default `[]` in the API-key and other
-    construction sites. Flat top-level array covers Auth0/Azure AD/Google (the confirmed targets);
-    Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
-12. `RbacReadPolicy`: `{user:caller.email} ∪ {group:G : G ∈ caller.groups}` — the readable set is the
-    token's `groups` claim (prefixed) plus the caller's own `user:` audience.
-13. `RbacMintPolicy`: permit `requested` iff `requested` is `user:caller.email` or `group:G` with
-    `G ∈ caller.groups`.
-14. **Policy source (decided): IdP `groups` claim only.** No local grants table in v1 — this keeps
-    confidentiality resting solely on OIDC (the confidentiality statement stays literally true) and
-    adds no TCB members. Precedent: the `MICROMEGAS_ADMINS` allowlist (`oidc.rs:264-394`).
-    **Consequence — write/read collapse to membership:** with a single `groups` claim, membership in
-    `G` grants *both* `read:G` and `write:G`. The three-relation model's extra expressiveness
-    (write-only producer, read-only consumer — separately grantable `write`/`read`) is **deferred**;
-    it needs a richer source (a second role claim, or a Postgres grants table putting its editors in
-    the TCB). Both remain **pure additions** behind the same `MintPolicy`/`ReadPolicy` seams — no
-    rewrite of the data model, enforcement, or endpoints.
-15. Flip `MICROMEGAS_ISOLATION_POLICY=rbac`. **No change** to the data model, `OwnershipRewrite`,
-    the UDTF guards, ingestion stamping, or the mint endpoint API.
+### Stage 7 — Activation, docs, integration tests
+14. Make the isolation config **required at startup** (no default — startup error if unset);
+    mkdocs isolation page + deployment/migration guide for the two profiles; two-audience
+    integration tests per Testing Strategy, including **open-profile equivalence** (nothing
+    hidden, maintenance functions present, `'global'` rows visible).
 
-### Phase 5 — (optional) physical boundary
-16. Promote `micromegas.audience` to a first-class `audience` column; propagate through views; enable
-    partition pruning and per-audience object-storage prefixing.
+**Deployment stories:**
+- *Team/open*: upgrade → import keys as `group:everyone` (Stage 4) → set the three knobs →
+  identical behavior forever; no flip, no backfill, nothing disappears.
+- *Privacy*: deploy key store + mint endpoint → users mint personal keys (data stamped
+  `user:<email>`) → set restrictive config (no implicit groups, no unstamped audience) → per-user
+  isolation; team sharing via the IdP groups claim.
+
+### Later — (optional) physical boundary
+15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
+    enable partition pruning and per-audience object-storage prefixing.
 
 ## Files to Modify
 
-- Auth: `rust/auth/src/types.rs` (`bound_audience`), `rust/auth/src/policy.rs` (new — traits +
-  `Self*`), `rust/auth/src/default_provider.rs` (policy factory / config knob),
-  `rust/auth/src/api_key.rs` + new `db_api_key.rs` (Phase 3), `rust/auth/src/oidc.rs` (groups claim,
-  Phase 4).
+- Auth: `rust/auth/src/types.rs` (`bound_audience`, `groups`), `rust/auth/src/policy.rs` (new —
+  traits + `Rbac*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
+  `rust/auth/src/oidc.rs` (groups claim, Stage 1), `rust/auth/src/user_attribution.rs` (never feed
+  client-claimed identity into scope resolution, Stage 1), `rust/auth/src/api_key.rs` + new
+  `db_api_key.rs` (Stage 4).
 - Analytics (Prong A): `rust/analytics/src/lakehouse/ownership_rewrite.rs` (new),
   `rust/analytics/src/lakehouse/query.rs` (`make_session_context` + `register_lakehouse_functions`
   signatures), `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted).
-- Analytics (Prong B — UDTF guards): `rust/analytics/src/lakehouse/process_spans_table_function.rs`,
+- Analytics (Prong B — UDTF/UDF guards): `rust/analytics/src/lakehouse/process_spans_table_function.rs`,
   `perfetto_trace_table_function.rs`, `parse_block_table_function.rs`,
   `list_partitions_table_function.rs`, and their execution plans (scan-time audience check);
-  `retire_partitions_table_function.rs` and `materialize_partitions_table_function.rs` (gate
-  registration on `ReadScope::All` instead of an audience check).
-- Query service: `rust/public/src/servers/flight_sql_service_impl.rs` (resolve scope, pass through).
-- Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs`,
-  `rust/ingestion/src/sql_telemetry_db.rs` (audience storage).
-- Mint endpoint + monolith wiring: `rust/public/src/servers/…`, `rust/monolith/src/main.rs`.
+  the `get_payload` UDF (same guard, scalar form); `retire_partitions_table_function.rs`,
+  `materialize_partitions_table_function.rs`, `regenerate_partitions` and the
+  `retire_partition_by_file` / `retire_partition_by_metadata` UDFs (registration gate instead of an
+  audience check). Internal-context sites in `view.rs`, `merge.rs`, `sql_batch_view.rs`,
+  `export_log_view.rs`, `batch_partition_merger.rs`, `metadata.rs` (`ReadScope::All`); recursive
+  context sites in the three UDTF execution plans (inherit caller scope).
+- Query service: `rust/public/src/servers/flight_sql_service_impl.rs` (resolve scope, pass through
+  both call sites incl. prepared statements).
+- Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs` (incl.
+  auth wiring; Firehose route placement), `rust/ingestion/src/sql_telemetry_db.rs` (audience
+  storage).
+- Key store, import tool, mint endpoint + monolith wiring: `rust/public/src/servers/…`,
+  `rust/monolith/src/main.rs`, import script (python, per repo scripting convention).
 
 ## Trade-offs
 
@@ -449,16 +560,32 @@ MICROMEGAS_PUBLIC_VIEW_SETS =        # empty (default) → every view set privat
   boolean `owner = caller` special-case is exactly the corner to avoid.
 - **`ReadScope::All` variant** vs. a wildcard principal string. Chosen: explicit enum — no sentinel
   that could collide with a real audience or be forged into a filter.
+- **Everyone-group over a wildcard read grant** (decided 2026-07-30) for open deployments. A
+  user-grantable `ReadScope::All` would be exactly today's behavior, but it forks the model into
+  "filtered" and "unfiltered" deployments. Chosen instead: open = `group:everyone` implicit
+  membership + `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` — one uniform data model where every
+  deployment runs the same filtered path. The behavioral deltas that choice creates (unstamped
+  legacy data, `'global'` partition rows, mutating functions) are each closed by a dedicated knob
+  (Config surface) so open deployments still see byte-for-byte today's behavior.
+- **No default policy / required config at GA** (decided 2026-07-30) vs. defaulting to `self` or to
+  open. A `self` default breaks every existing deployment on upgrade (all data invisible); an open
+  default makes the privacy posture opt-in forever. Chosen: no default — transitional
+  "unset = inactive" while stages ship, then a startup error forcing a conscious operator choice.
+- **Query-time coalesce for unstamped data** vs. a backfill script vs. waiting out retention.
+  Chosen: `MICROMEGAS_UNSTAMPED_AUDIENCE` (query-time attribution). No data mutation, no
+  re-materialization of `processes` partitions (which a property backfill would require), works the
+  instant enforcement turns on. Privacy deployments leave it unset (fail-closed).
 - **Eternal write keys / no `minted_by` in v1.** Accepts that revoking a subject's `write(→G)` does
   not retroactively invalidate keys already minted for G — the key *is* the frozen grant; to undo it
   you revoke the key. This matches the stated use case. If retroactive write-revocation is ever
   needed, add `minted_by` to `api_keys` and revoke by `(minted_by, audience)` — an additive change.
-- **Policy source in RBAC mode (decided): IdP `groups` claim only.** Keeps confidentiality resting
-  solely on OIDC; no TCB additions. Trade-off accepted: membership grants both read and write for a
-  group (no independent write-only/read-only). A local grants table (more expressive, but its editors
-  join the TCB) is a deferred pure addition, not part of v1.
-- **Reserved property vs. first-class column** for the audience (v1 vs Phase 5): row-level filter now
-  with zero migration, physical pruning later.
+- **Policy source (decided): IdP `groups` claim + implicit-groups config only.** Keeps
+  confidentiality resting on OIDC plus operator config; no TCB additions. Trade-off accepted:
+  membership grants both read and write for a group (no independent write-only/read-only). A local
+  grants table (more expressive, but its editors join the TCB) is a deferred pure addition, not
+  part of v1.
+- **Reserved property vs. first-class column** for the audience (v1 vs the later physical
+  boundary): row-level filter now with zero migration, physical pruning later.
 - **Public views opt-in (§5b)** vs. keeping every aggregate private. Chosen: opt-in allowlist,
   default empty. Reuses Prong A's existing per-view-set branch (`get_view_set_name`), so it adds a
   config knob rather than a new enforcement seam, and stays fail-closed until an operator names a
@@ -472,16 +599,28 @@ MICROMEGAS_PUBLIC_VIEW_SETS =        # empty (default) → every view set privat
   machine names, and `otel.resource.*` properties even while log bodies are hidden. Prong A covers the
   views; Prong B covers the span/metadata UDTFs the analyzer physically cannot filter. This is the
   primary correctness risk and the focus of testing.
-- `retire_partitions` and `materialize_partitions` are not read paths; they are excluded from user
-  sessions entirely (maintenance-only, `ReadScope::All`-gated) rather than audience-filtered — an
+- The five mutating functions (`retire_partitions`, `materialize_partitions`,
+  `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are not read
+  paths; they are excluded from user sessions (registered only for maintenance contexts, admin
+  sessions — issue #1377, which also closes the pre-isolation hole where every authenticated
+  caller can invoke them — or under the explicit `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`
+  opt-in that open deployments use to keep them for non-admins) rather than audience-filtered — an
   integrity/availability control, not a confidentiality one. Without it, a non-admin could name
   another principal's `process_id` via `retire_partitions`' `view_instance_id` argument to destroy
   their partitions.
+- **Identity holes closed in Stage 1** (would otherwise be full enforcement bypasses): the
+  prepared-statement path resolves no identity (`flight_sql_service_impl.rs:842`), and
+  `validate_and_resolve_user_attribution_grpc` falls back to client-claimed identity when the
+  `x-auth-subject` header is absent (`user_attribution.rs:125-133`) — `ReadScope` is derived from
+  the authenticated `AuthContext` only, never from client-claimed attribution.
+- `MICROMEGAS_IMPLICIT_GROUPS` and `MICROMEGAS_UNSTAMPED_AUDIENCE` are deliberate, operator-owned
+  confidentiality relaxations (like §5b): setting them widens what every authenticated caller can
+  read. Both are unset in a privacy deployment; the engine is fail-closed without them.
 - No admin query-path read bypass — admin FlightSQL sessions are filtered like any other. Cross-
   principal reads for operators are an out-of-band capability (direct object-store/parquet access),
   intentionally outside the query path. API keys can never be admin.
-- RBAC mode (v1) adds a single trust dependency: the IdP's `groups` claim. No local policy store, so
-  the TCB is unchanged from `self` mode.
+- Group grants add a single trust dependency: the IdP's `groups` claim (plus operator-set implicit
+  groups). No local policy store, so the TCB gains no new members.
 - Public views (§5b) are an explicit, opt-in confidentiality relaxation: a listed view set is
   readable by every authenticated caller, so only genuinely aggregated / non-PII view sets may be
   listed. The default allowlist is empty (fail-closed); the raw global `log_entries` / `measures`
@@ -489,32 +628,45 @@ MICROMEGAS_PUBLIC_VIEW_SETS =        # empty (default) → every view set privat
 
 ## Testing Strategy
 
-- **Unit:** `SelfMintPolicy` rejects non-self `requested`; `SelfReadPolicy` returns the singleton.
-  Prong A: `OwnershipRewrite` injects the expected predicate per table kind (snapshot the rewritten
-  logical plan), including `view_instance`. Prong B: each guarded UDTF rejects an unowned
-  `process_id`/`block_id` and `list_partitions` row-filters — assert both fail closed; assert
-  `retire_partitions` and `materialize_partitions` are absent ("function not found") from a
-  registration built with any non-`All` `ReadScope`, admin or not. Public views (§5b): with a view
+- **Unit:** `RbacMintPolicy` rejects `requested` outside the mintable set and defaults to
+  `user:<email>`; `RbacReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
+  singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
+  predicate per table kind (snapshot the rewritten logical plan), including `view_instance` and the
+  `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
+  (incl. `get_payload`) rejects an unowned `process_id`/`block_id` and `list_partitions`
+  row-filters — assert both fail closed; assert all five mutating functions are absent
+  ("function not found") from a registration built with any non-`All` `ReadScope` for a non-admin
+  session unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`, and present for an admin session
+  regardless of the knob (#1377). Public views (§5b): with a view
   set on the allowlist, `OwnershipRewrite` injects no predicate for it and `list_partitions` shows
   its `'global'` rows; with an empty allowlist behavior is unchanged (every set filtered).
-- **Integration (default/self mode):** two audiences seeded; assert each sees only its own rows
+- **Integration (privacy profile):** two audiences seeded; assert each sees only its own rows
   across `processes`, `log_entries`, `measures`, spans, `view_instance`, `list_partitions`; assert
-  the `process_id` semi-join blocks naming another audience's process directly; assert the daemon
-  (`ReadScope::All`) sees everything and that an **admin user session is still filtered** (no bypass).
-- **Equivalence:** confirm the executed plan in `self` mode matches the intended per-user filter (a
-  singleton `IN`), i.e. no behavioral difference from a hand-written per-user design.
-- **RBAC mode (Phase 4):** group member reads group data; write-only producer (`write(→G)`,
-  no `read(→G)`) cannot read G including its own writes; membership change reflected on next query.
+  the `process_id` semi-join blocks naming another audience's process directly; assert unstamped
+  rows are hidden; assert the daemon (`ReadScope::All`) sees everything and that an **admin user
+  session is still filtered** (no bypass); assert the prepared-statement path is filtered
+  identically to `do_get`.
+- **Integration (open profile — equivalence with today):** with `MICROMEGAS_IMPLICIT_GROUPS=everyone`,
+  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` and
+  a mix of stamped (`group:everyone`) and unstamped data: every caller sees every row, `'global'`
+  partition rows are listed, and the mutating functions are registered — byte-for-byte the
+  pre-isolation behavior.
+- **Equivalence (per-user plan):** confirm the executed plan in the privacy profile matches the
+  intended per-user filter (a singleton `IN`), i.e. no behavioral difference from a hand-written
+  per-user design.
+- **Group grants:** group member reads group data; write-only producer (`write(→G)`, no
+  `read(→G)`) cannot read G including its own writes; membership change reflected on next query.
 - Rust: `cargo test`, `cargo clippy --workspace -- -D warnings`, `cargo fmt`; CI via
   `python3 build/rust_ci.py`.
 
 ## Documentation
 
-- New page under `mkdocs/docs/` for the isolation model: the three-relation model, the `self` default,
-  the `MICROMEGAS_ISOLATION_POLICY` knob, the `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its
-  non-PII caveat), and the confidentiality/integrity properties.
-- Update any auth/deployment docs to mention the mint endpoint, the setup script, and (Phase 4) the
-  groups-claim / policy-store configuration.
+- New page under `mkdocs/docs/` for the isolation model: the three-relation model, the grant knobs
+  and the two deployment profiles (open / privacy), the required-at-GA activation story, the
+  `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its non-PII caveat), and the
+  confidentiality/integrity properties.
+- Update any auth/deployment docs to mention the key store + import tool, the mint endpoint, the
+  setup script, and the groups-claim configuration.
 
 ## Resolved Decisions
 
@@ -529,13 +681,13 @@ Resolved by research (kept here for the record; details in Appendix A):
 - ~~**Audience storage for v1.**~~ **Resolved:** reserved property `micromegas.audience`; in-tree
   usage of `property_get` in WHERE predicates is equality only; the `IN (...)` form relies on
   DataFusion's dictionary-type coercion (`property_get` returns `Dictionary(Int32, Utf8)`). Promote to
-  a column in Phase 5.
+  a column in the later physical-boundary stage.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
-- ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim only** (no local grants table in v1).
-  Keeps confidentiality on OIDC and the TCB unchanged; accepted trade-off is that membership grants
-  both read and write for a group. A grants table (or a second write-role claim) is a deferred pure
-  addition. See Phase 4 step 14.
+- ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
+  local grants table in v1). Keeps confidentiality on OIDC and the TCB unchanged; accepted
+  trade-off is that membership grants both read and write for a group. A grants table (or a second
+  write-role claim) is a deferred pure addition. See Stage 1 step 5.
 - ~~**Admin read bypass.**~~ **Decided: no query-path bypass.** `is_admin` does not map to
   `ReadScope::All`; admin sessions are filtered like any other. Operators needing cross-principal
   reads use direct object-store/parquet access, which they already have — a query bypass would add
@@ -543,18 +695,48 @@ Resolved by research (kept here for the record; details in Appendix A):
   unfiltered. See §5.
 - ~~**`list_view_sets` exposure.**~~ **Decided: stays unfiltered** — view-set schema/definitions only,
   no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
-- ~~**`retire_partitions` / `materialize_partitions` exposure.**~~ **Decided: maintenance-only,
-  gated on `ReadScope::All`.** Both were missing from the original Prong B audit despite being
-  registered unconditionally alongside the other UDTFs; both mutate lakehouse state, so neither gets
-  an audience read-filter — instead `register_lakehouse_functions` skips registering them for any
-  user session. See §4 Prong B and Appendix A.
+- ~~**`retire_partitions` / `materialize_partitions` exposure.**~~ **Decided (revised 2026-07-30):
+  registered for maintenance contexts, admin sessions (issue #1377), or under
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`.** Both were missing from
+  the original Prong B audit despite being registered unconditionally alongside the other UDTFs;
+  the 2026-07-30 audit added `regenerate_partitions` and the `retire_partition_by_file` /
+  `retire_partition_by_metadata` UDFs to the set. All mutate lakehouse state, so none gets an
+  audience read-filter — instead `register_lakehouse_functions` skips registering them for
+  non-admin user sessions unless the deployment opts in (the knob open deployments set to keep
+  them for non-admins). The admin arm also closes a pre-isolation hole (today every authenticated
+  caller can invoke them) and may land first. See §4 Prong B and Appendices A–B.
 - ~~**Scan-time check cost.**~~ **Resolved:** `process_id → audience` is immutable, so an
   invalidation-free size-bounded `moka` cache (backed by `find_process`) makes the check an O(1)
   in-memory lookup on warm hits, one indexed PG query per process ever on cold miss. `ReadScope` is
   free (from the JWT `groups` claim). See §4 "Prong B performance".
 
-All design decisions are closed. Remaining work is implementation (start with Phase 1: general
-mechanics, `self` default).
+Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up discussion):
+- **No mode enum, no default policy.** The former `MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and
+  its `self` default are gone. One rbac engine configured by grants; per-user isolation is the
+  empty-grants configuration, not a separate mode. Transitional unset-config = enforcement
+  inactive; at GA the config is required at startup.
+- **Open deployments = everyone-group configuration** (chosen over a user-grantable
+  `ReadScope::All` wildcard): implicit `everyone` membership, imported keys stamp
+  `group:everyone`, unstamped data coalesces to `group:everyone`. One uniform filtered path for
+  every deployment.
+- **Existing API keys are imported into the DB key store** (same key strings, audience
+  `group:everyone`) — the migration vehicle for team deployments; zero client changes. The key
+  store therefore moves early in the ordering (Stage 4).
+- **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
+  and not a retention wait. Unset = hidden (fail-closed, privacy profile).
+- **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
+  (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) rather than unconditionally maintenance-only. Admin
+  sessions always get them (issue #1377 — standalone, closes today's
+  any-authenticated-caller hole, may land before the isolation stages); the knob keeps them
+  available to non-admins in open deployments.
+- **Prong B coverage extended** after the 2026-07-30 drift audit: `regenerate_partitions`,
+  `retire_partition_by_file`, `retire_partition_by_metadata` join the mutating set; `get_payload`
+  gets the arg-addressed read guard. See Appendix B.
+- **Identity holes are in scope for Stage 1**: prepared-statement path identity resolution and the
+  client-claimed-attribution fallback (never feeds `ReadScope`).
+
+All design decisions are closed. Remaining work is implementation, staged per the Implementation
+Steps (start with Stage 1: policy seam + identity threading).
 
 ## Appendix A — Research findings (2026-07-21)
 
@@ -604,3 +786,45 @@ codebase (e.g. `rust/public/src/client/query_processes.rs:73`). No
 namespace (`otel-ingestion/src/block.rs:467-475`); OTel `process.owner`/`host.name` already land as
 `otel.resource.*` properties (demote to display-only). No user/group value discriminator exists ⇒
 adopt `user:`/`group:` prefixes.
+
+## Appendix B — Drift audit (2026-07-30)
+
+Re-verification of Appendix A against HEAD `2e95770` (branch `privacy`). Confirmed unchanged unless
+listed. Nothing from the design vocabulary (`ReadScope`, `MintPolicy`, `micromegas.audience`,
+`bound_audience`, …) is implemented yet — zero hits in `rust/`.
+
+- **Function registry grew.** `register_lakehouse_functions` is now `query.rs:96-180` and registers
+  **nine** UDTFs, not eight: `view_instance` (:103), `list_partitions` (:112), `list_view_sets`
+  (:116), `retire_partitions` (:120), `perfetto_trace_chunks` (:124), `materialize_partitions`
+  (:132), **`regenerate_partitions` (:139 — new, mutating)**, `parse_block` (:146), `process_spans`
+  (:155). It also registers three UDFs the original audit didn't cover: **`get_payload` (:165)** —
+  an async raw-payload **read** by block id, needing the same audience guard as `parse_block` — and
+  the destructive **`retire_partition_by_file` / `retire_partition_by_metadata` (:168, :170)**,
+  which join the mutating set.
+- **Identity holes.** The prepared-statement path (`flight_sql_service_impl.rs:842`,
+  `do_action_create_prepared_statement`) builds its session context with **no identity resolution**
+  and passes `query_range = None`. `validate_and_resolve_user_attribution_grpc`
+  (`rust/auth/src/user_attribution.rs:108`) **falls back to client-claimed identity** when
+  `x-auth-subject` is absent (`:125-133`). Identity crosses the tower `AuthService` boundary as
+  stringified gRPC metadata (`x-auth-subject`, `x-auth-email`, `x-allow-delegation`) — no
+  groups/audience carried today.
+- **No maintenance chokepoint.** The daemon (`telemetry-maintenance-srv/src/main.rs:40` →
+  `servers/maintenance.rs:296`) never calls `make_session_context`; internal contexts are built
+  per-view at ~10 sites hardcoding `NoOpSessionConfigurator` (`view.rs:109` — with an empty
+  `ViewFactory` at :107, `merge.rs:101`, `sql_batch_view.rs:87,154`, `export_log_view.rs:118,171`,
+  `batch_partition_merger.rs:133`, `metadata.rs:182,287`). Three context-building sites are
+  reachable from user queries and must inherit the caller's scope:
+  `parse_block_table_function.rs:81`, `process_spans_table_function.rs:254`,
+  `perfetto_trace_execution_plan.rs:232`.
+- **`TableScanRewrite` registration is conditional** on `query_range.is_some()` (`query.rs:206`);
+  `OwnershipRewrite` must be unconditional.
+- **Ingestion auth gaps.** No ingestion handler extracts `Extension<AuthContext>` (available since
+  `rust/auth/src/axum.rs:75` inserts it); `otlp.rs` has no auth wiring at all; Firehose routes are
+  merged outside the protected router (`ingestion.rs:151-156`). Stamping (Stage 5) must define
+  their auth story.
+- **Line-ref updates.** `validate_and_resolve_user_attribution_grpc` at
+  `flight_sql_service_impl.rs:318` (was :317); `make_session_context` call sites at :372 and :842
+  (were :371/:841); `make_session_context` itself at `query.rs:194`; `retire_partitions` at
+  `query.rs:120`, `materialize_partitions` at `query.rs:132`.
+- **Config factory precedent** for the grant knobs: `static_tables_configurator.rs:44-54`
+  (`from_env` returning a no-op when unset).
