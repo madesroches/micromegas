@@ -3,6 +3,13 @@
 //! No database: pure shape assertions on `decode_firehose_envelope`, plus a
 //! round-trip through `split_metrics` to prove a decoded record is a real
 //! `ExportMetricsServiceRequest` protobuf.
+//!
+//! `decode_firehose_envelope` only unwraps the Firehose JSON envelope (base64-decodes
+//! each record's `data`); it has no protobuf framing knowledge, so several fixtures below
+//! deliberately use an unframed `encode_to_vec()`/`decode()` round-trip — that shape is
+//! sufficient to exercise this decoder but does **not** match real Firehose wire data,
+//! which is always length-delimited (see the `decode_next_length_delimited` tests further
+//! down, which are the framing-aware ones added for issue #1381).
 
 mod fixtures;
 
@@ -10,7 +17,7 @@ use base64::Engine as _;
 use fixtures::{gauge_metric, make_metrics_request};
 use micromegas_otel_ingestion::block::split_metrics;
 use micromegas_otel_ingestion::error::{OtelError, Signal};
-use micromegas_otel_ingestion::handler::decode_firehose_envelope;
+use micromegas_otel_ingestion::handler::{decode_firehose_envelope, decode_next_length_delimited};
 use micromegas_otel_ingestion::proto::ExportMetricsServiceRequest;
 use prost::Message;
 
@@ -33,6 +40,10 @@ fn envelope_json(request_id: Option<&str>, records: &[&[u8]]) -> String {
     )
 }
 
+// Unframed on purpose: `decode_firehose_envelope` has no protobuf framing knowledge, so
+// this only needs a real protobuf payload, not a length-delimited one. Real Firehose
+// wire records are always length-delimited — see `decode_next_length_delimited`'s tests
+// below for fixtures that model that.
 #[test]
 fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
     let req = make_metrics_request(
@@ -57,6 +68,9 @@ fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
     assert_eq!(blocks.len(), 1);
 }
 
+// Unframed on purpose, same rationale as above — this only asserts that
+// `decode_firehose_envelope` preserves per-record byte order, which doesn't require
+// length-delimited framing.
 #[test]
 fn multi_record_batch_preserves_order() {
     let req1 = make_metrics_request(
@@ -122,4 +136,117 @@ fn missing_request_id_defaults_to_empty_string() {
     let envelope =
         decode_firehose_envelope(body.as_bytes(), Signal::Metrics).expect("decode envelope");
     assert_eq!(envelope.request_id, "");
+}
+
+// ---------------------------------------------------------------------------
+// `decode_next_length_delimited` — CloudWatch Metric Streams packs one-or-more
+// `[varint32 length][message bytes]` entries per record; these tests cover that framing
+// directly (issue #1381: a fresh `M::decode` per record misreads the second message's
+// length-prefix byte as a protobuf tag once a record carries more than one message).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn single_length_delimited_message_decodes_then_exhausts() {
+    let req = make_metrics_request(
+        "svc-single",
+        "host-single",
+        1,
+        vec![gauge_metric("cpu.usage", "percent", 1_000, 42)],
+    );
+    let record = req.encode_length_delimited_to_vec();
+
+    let mut buf: &[u8] = &record;
+    let decoded =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("decode first message")
+            .expect("first message present");
+    assert_eq!(decoded, req);
+
+    let second =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("second call must not error");
+    assert!(second.is_none(), "record has exactly one message");
+}
+
+#[test]
+fn two_concatenated_length_delimited_messages_decode_in_order() {
+    let req1 = make_metrics_request(
+        "svc-1",
+        "host-1",
+        1,
+        vec![gauge_metric("metric.one", "1", 100, 1)],
+    );
+    let req2 = make_metrics_request(
+        "svc-2",
+        "host-2",
+        2,
+        vec![gauge_metric("metric.two", "1", 200, 2)],
+    );
+    let mut record = req1.encode_length_delimited_to_vec();
+    record.extend(req2.encode_length_delimited_to_vec());
+
+    let mut buf: &[u8] = &record;
+    let first =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("decode first message")
+            .expect("first message present");
+    assert_eq!(first, req1);
+
+    let second =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("decode second message")
+            .expect("second message present");
+    assert_eq!(second, req2);
+
+    let third =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("third call must not error");
+    assert!(third.is_none(), "record has exactly two messages");
+}
+
+#[test]
+fn zero_length_record_yields_none_on_first_call() {
+    let record: Vec<u8> = vec![];
+    let mut buf: &[u8] = &record;
+    let result =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("empty record is not an error");
+    assert!(result.is_none());
+}
+
+#[test]
+fn valid_message_followed_by_malformed_framing_keeps_the_valid_message() {
+    let req = make_metrics_request(
+        "svc-valid",
+        "host-valid",
+        1,
+        vec![gauge_metric("metric.valid", "1", 100, 1)],
+    );
+    let mut record = req.encode_length_delimited_to_vec();
+    // Append a length prefix (varint 50) claiming 50 bytes of message body that don't exist.
+    record.push(50);
+
+    let mut buf: &[u8] = &record;
+    let first =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
+            .expect("decode first (valid) message")
+            .expect("first message present");
+    assert_eq!(first, req);
+
+    let second =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics);
+    assert!(
+        matches!(second, Err(OtelError::Parse { .. })),
+        "truncated second message must error, not silently discard the first: {second:?}"
+    );
+}
+
+#[test]
+fn malformed_framing_on_first_message_is_parse_error() {
+    // Length prefix (varint 100) claiming far more bytes than are actually present.
+    let record: Vec<u8> = vec![100, 1, 2, 3];
+    let mut buf: &[u8] = &record;
+    let result =
+        decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics);
+    assert!(matches!(result, Err(OtelError::Parse { .. })));
 }
