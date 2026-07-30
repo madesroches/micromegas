@@ -98,12 +98,19 @@ fn spans_bounds(rs: &ResourceSpans) -> Option<(i64, i64, i32)> {
     }
 }
 
+/// Upper bound on the number of `measures` rows `OtelMetricsBlockProcessor::append_summary`
+/// (rust/analytics/src/lakehouse/otel/metrics_block_processor.rs) materializes per
+/// `SummaryDataPoint`: `count` and `sum` unconditionally, plus `min`/`max` only when a
+/// quantile 0.0/1.0 entry is present. Used to keep `count` (and thus `block.nb_objects`)
+/// a safe over-estimate rather than an exact count.
+const SUMMARY_MAX_ROWS_PER_POINT: i32 = 4;
+
 /// Walks `ResourceMetrics` for min/max `time_unix_nano` across every Sum/Gauge/Histogram/
 /// Summary point. Histogram/ExponentialHistogram points still count toward bounds even
 /// though the materialization processor drops them (bucket-level data doesn't fit a
-/// scalar `value` column); Summary now fans out count/sum/min/max (only non-min/max
-/// quantiles are dropped) — keeps block insert-time predicates consistent with payload
-/// contents either way.
+/// scalar `value` column); Summary now fans out into up to `SUMMARY_MAX_ROWS_PER_POINT`
+/// rows (count/sum/min/max; only non-min/max quantiles are dropped) — keeps block
+/// insert-time predicates consistent with payload contents either way.
 fn metrics_bounds(rm: &ResourceMetrics) -> Option<(i64, i64, i32)> {
     use crate::proto::metric::Data;
     let mut min = i64::MAX;
@@ -154,7 +161,13 @@ fn metrics_bounds(rm: &ResourceMetrics) -> Option<(i64, i64, i32)> {
                 }
                 Some(Data::Summary(s)) => {
                     for dp in &s.data_points {
-                        count += 1;
+                        // `OtelMetricsBlockProcessor::append_summary` fans a single
+                        // SummaryDataPoint out into up to `SUMMARY_MAX_ROWS_PER_POINT`
+                        // `measures` rows (count, sum, and — only when a quantile
+                        // 0.0/1.0 entry is present — min/max). Count the upper bound
+                        // here rather than 1-per-point so `block.nb_objects` stays a
+                        // safe over-estimate for JIT partition splitting.
+                        count += SUMMARY_MAX_ROWS_PER_POINT;
                         let t = dp.time_unix_nano as i64;
                         if t != 0 {
                             min = min.min(t);
