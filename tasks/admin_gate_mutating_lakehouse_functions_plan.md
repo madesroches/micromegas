@@ -164,7 +164,11 @@ mutating set out of contexts that have no business granting it.
 7. **`mkdocs/docs/admin/functions-reference.md`**: note the new admin requirement on
    `retire_partitions`, `regenerate_partitions`, `retire_partition_by_metadata`, and
    `retire_partition_by_file` (the fifth mutating function, `materialize_partitions`, isn't
-   documented on this page).
+   documented on this page). **`mkdocs/docs/query-guide/python-api.md`**: add the same "requires
+   admin — see Admin SQL Functions" note to its `materialize_partitions()`,
+   `regenerate_partitions()`, and `retire_partitions()` sections (around lines 474-528), since
+   these are the worked Python client examples users read before calling the now-gated
+   functions.
 8. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
@@ -183,6 +187,9 @@ mutating set out of contexts that have no business granting it.
 - `rust/analytics/tests/sql_view_test.rs`, `histo_view_test.rs` (direct `query()` call-site
   signature updates)
 - `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement)
+- `mkdocs/docs/query-guide/python-api.md` (note the new admin requirement on the
+  `materialize_partitions()`, `regenerate_partitions()`, and `retire_partitions()` client
+  wrapper sections)
 
 ## Trade-offs
 
