@@ -27,7 +27,8 @@ use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use opentelemetry_proto::tonic::metrics::v1::{
-    NumberDataPoint, ResourceMetrics, SummaryDataPoint, metric::Data, number_data_point,
+    DataPointFlags, NumberDataPoint, ResourceMetrics, SummaryDataPoint, metric::Data,
+    number_data_point,
 };
 use prost::Message;
 use std::borrow::Cow;
@@ -281,6 +282,10 @@ impl MeasuresRowBuilder {
     /// configured percentiles are out of scope. No derived `otel.metric.*` extras
     /// (aggregation_temporality/is_monotonic/kind) are added for Summary rows; the
     /// per-point `dp.attributes` still populate `properties` the same as Sum/Gauge.
+    ///
+    /// A point flagged `NO_RECORDED_VALUE` is dropped entirely: `count`/`sum` are
+    /// non-optional proto scalars, so materializing it would inject real 0.0 samples
+    /// where the series actually has a gap.
     fn append_summary(
         &mut self,
         scope_name: &str,
@@ -288,6 +293,11 @@ impl MeasuresRowBuilder {
         unit: &str,
         dp: &SummaryDataPoint,
     ) -> Result<()> {
+        if dp.flags & DataPointFlags::NoRecordedValueMask as u32 != 0 {
+            debug!("OTel summary data point dropped (NO_RECORDED_VALUE): name={metric_name}");
+            return Ok(());
+        }
+
         let Some(time_nanos) = nonzero_time_nanos("summary", metric_name, dp.time_unix_nano) else {
             return Ok(());
         };

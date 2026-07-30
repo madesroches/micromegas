@@ -141,7 +141,7 @@ Scope identity (`name`, `version`, `schema_url`) and scope attributes land on pe
 
 ### Metrics → `measures`
 
-Sum, Gauge, and Summary data points are materialized. Sum/Gauge land as a single row each. Each Summary data point fans out into up to four rows — one per statistic (count, sum, min, max) — distinguished by a suffix on the metric **name** rather than a `properties` tag: `<metric>_count`, `<metric>_sum`, `<metric>_min`, `<metric>_max`. Any other `quantile_values` entry (a configured percentile like p90/p99) is skipped with a debug log, same as Histogram/ExponentialHistogram, which remain skipped entirely — a histogram-aware schema is future work.
+Sum, Gauge, and Summary data points are materialized. Sum/Gauge land as a single row each. Each Summary data point fans out into up to four rows — one per statistic (count, sum, min, max) — distinguished by a suffix on the metric **name** rather than a `properties` tag: `<metric>_count`, `<metric>_sum`, `<metric>_min`, `<metric>_max`. Any other `quantile_values` entry (a configured percentile like p90/p99) is skipped with a debug log, same as Histogram/ExponentialHistogram, which remain skipped entirely — a histogram-aware schema is future work. A Summary point flagged `NO_RECORDED_VALUE` is dropped whole, since `count`/`sum` are non-optional proto scalars and materializing it would inject real `0.0` samples where the series has a gap; an *unflagged* `count = 0` point is a genuine observation and is still materialized.
 
 | OTel field | parquet column |
 |---|---|

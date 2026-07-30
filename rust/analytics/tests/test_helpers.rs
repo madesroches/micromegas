@@ -4,7 +4,7 @@
 
 use micromegas_analytics::arrow_properties::serialize_properties_to_jsonb;
 use micromegas_analytics::lakehouse::partition_source_data::PartitionSourceBlock;
-use micromegas_analytics::metadata::ProcessMetadata;
+use micromegas_analytics::metadata::{ProcessMetadata, StreamMetadata};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::block_wire_format::BlockPayload;
 use micromegas_telemetry::types::block::BlockMetadata;
@@ -81,7 +81,7 @@ pub async fn make_source_block(
         object_offset: 0,
         insert_time: now,
     };
-    let stream = Arc::new(micromegas_analytics::metadata::StreamMetadata {
+    let stream = Arc::new(StreamMetadata {
         process_id,
         stream_id,
         dependencies_metadata: vec![],
