@@ -551,10 +551,19 @@ Write credentials and read credentials live in **separate tables** — `ingestio
   therefore either a migration artifact or exist purely for the delegation path. Separate tables make
   that outcome cheap: the read table can be deprecated or dropped without touching the ingestion hot
   path.
-- **Open item:** `object-cache-srv` is a fourth key-validating surface (`cli.rs:59`, same
-  `parse_key_ring`). It is read-class — it serves raw payload ranges, and Prong B guards
-  `get_payload` — but its keys are service-held rather than user-held. Decide whether it validates
-  against `analytics_api_keys` or gets its own table before implementing 0a.
+- **`object-cache-srv` stays on env vars (decided 2026-07-30).** It is a fourth key-validating
+  surface (`cli.rs:59`, same `parse_key_ring`) but it has **no database access at all** — no `sqlx`
+  dependency, no connection string in its CLI — and giving a cache service a Postgres pool purely to
+  read a key table is not worth it. It keeps the env keyring and is out of the key-store scope
+  entirely. Two consequences to record rather than rediscover:
+  - **The env keyring is permanent, not transitional.** `ApiKeyAuthProvider` and `parse_key_ring`
+    (`api_key.rs`) must not be deleted once the DB store lands — 0b's "compose during transition"
+    applies to ingestion and analytics only. `object-cache-srv` remains a legitimate consumer
+    indefinitely.
+  - **Its keys are not revocable without a redeploy.** Accepted: they are service-held (flight-sql
+    and the daemon hold them, per `CacheClientStore`), few, and never distributed to users or
+    machines, so the operational pressure that motivates this stage does not apply. If it ever does,
+    the fix is a mechanism for that service specifically, not a reshaping of these tables.
 
 #### Key management is an HTTP API, not SQL (decided 2026-07-30)
 
@@ -771,9 +780,8 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   storage).
 - Key store, key-management routes (create/revoke/list) + monolith wiring:
   `rust/ingestion/src/sql_telemetry_db.rs` (the two tables), `rust/public/src/servers/…`,
-  `rust/monolith/src/main.rs`, import script (python, per repo scripting convention). Possibly
-  `rust/object-cache-srv/src/object_cache_srv.rs` + `cli.rs`, pending the open item in Stage 0 on
-  which table that service validates against.
+  `rust/monolith/src/main.rs`, import script (python, per repo scripting convention).
+  **Not** `rust/object-cache-srv/` — it has no DB access and keeps the env keyring (Stage 0).
 
 ## Trade-offs
 
@@ -979,6 +987,10 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
   on the analytics table. Only ingestion keys carry an `audience`. Consequence: a key currently used
   for both ingestion and queries (the unprefixed `MICROMEGAS_API_KEYS` fallback) must split into two
   at import — the one place zero-client-change does not hold.
+- **`object-cache-srv` keeps the env keyring** (decided 2026-07-30): it has no DB access, and a cache
+  service does not earn a Postgres pool just to read a key table. Therefore `ApiKeyAuthProvider` /
+  `parse_key_ring` are **permanent**, not transitional, and that service's keys stay
+  redeploy-to-revoke — acceptable because they are service-held and never distributed.
 - **Key management is an OIDC-authenticated HTTP API on the ingestion service**, not admin-gated
   lakehouse UDFs (decided 2026-07-30). Create/revoke/list move into **Stage 0**, since the table
   alone does not deliver the revoke-without-redeploy value; Stage 6 only adds audience resolution to
@@ -998,10 +1010,8 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Identity holes are in scope for Stage 1**: prepared-statement path identity resolution and the
   client-claimed-attribution fallback (never feeds `ReadScope`).
 
-All design decisions are closed but one: **which key table `object-cache-srv` validates against**
-(its own, or `analytics_api_keys`) — see the open item in Stage 0; it needs an answer before 0a is
-implemented, and it does not block any other stage. Remaining work is implementation, staged per the
-Implementation Steps (Stage 0 and Stage 1 are both unblocked and independent of each other).
+All design decisions are closed. Remaining work is implementation, staged per the Implementation
+Steps (Stage 0 and Stage 1 are both unblocked and independent of each other).
 
 ## Appendix A — Research findings (2026-07-21)
 
