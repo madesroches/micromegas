@@ -59,6 +59,10 @@ admin arm, since it is a standalone fix for a pre-isolation hole.
     `perfetto_trace_execution_plan.rs:232` — UDTF-internal contexts recursively built to run an
     inner query; reachable from user queries but only ever issue read-only SQL.
   - `rust/analytics/tests/thread_spans_ordering_db_test.rs:294` — test helper.
+  - `rust/analytics/tests/sql_view_test.rs:419,444` and
+    `rust/analytics/tests/histo_view_test.rs:197` call the free `query()` helper directly (via
+    `use micromegas_analytics::lakehouse::query::{query, ...}`), not `make_session_context` — also
+    need the new `is_admin` argument.
 - A second, unrelated, and incomplete defense already exists in `analytics-web-srv`'s own
   streaming query proxy: `contains_blocked_function`
   (`rust/analytics-web-srv/src/stream_query.rs:86-99`) substring-blocks `retire_partitions`,
@@ -89,10 +93,10 @@ plumbing.)
 
 ### 2. Extract `is_admin` on the FlightSQL side
 
-Add a small helper (next to `validate_and_resolve_user_attribution_grpc`, in
-`rust/auth/src/user_attribution.rs`, or as a `fn is_admin(metadata: &MetadataMap) -> bool` in
-`flight_sql_service_impl.rs` — whichever keeps the header-parsing logic co-located; lean toward
-`user_attribution.rs` since it already owns "read auth headers back out of metadata"):
+Add a small helper in `rust/auth/src/user_attribution.rs`, next to
+`validate_and_resolve_user_attribution_grpc` — that module already owns "read auth headers back
+out of metadata" (it does the same for `x-auth-subject`/`x-auth-email`/`x-allow-delegation`), so
+`is_admin` belongs alongside it rather than inline in `flight_sql_service_impl.rs`:
 
 ```rust
 pub fn is_admin(metadata: &MetadataMap) -> bool {
@@ -154,8 +158,14 @@ mutating set out of contexts that have no business granting it.
    call sites (`execute_query`, `do_action_create_prepared_statement`), fixing the latter's unused
    `_request` parameter.
 6. Update all other `make_session_context` callers (internal engine code + the one test file) to
-   pass `is_admin: false`.
-7. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
+   pass `is_admin: false`, and update the direct `query()` call sites in
+   `rust/analytics/tests/sql_view_test.rs` (lines 419, 444) and
+   `rust/analytics/tests/histo_view_test.rs` (line 197) to pass `is_admin: false`.
+7. **`mkdocs/docs/admin/functions-reference.md`**: note the new admin requirement on
+   `retire_partitions`, `regenerate_partitions`, `retire_partition_by_metadata`, and
+   `retire_partition_by_file` (the fifth mutating function, `materialize_partitions`, isn't
+   documented on this page).
+8. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
 
@@ -170,6 +180,9 @@ mutating set out of contexts that have no business granting it.
   `process_spans_table_function.rs`, `perfetto_trace_execution_plan.rs` (call-site signature
   updates only — pass `is_admin: false`)
 - `rust/analytics/tests/thread_spans_ordering_db_test.rs` (call-site signature update)
+- `rust/analytics/tests/sql_view_test.rs`, `histo_view_test.rs` (direct `query()` call-site
+  signature updates)
+- `mkdocs/docs/admin/functions-reference.md` (document the new admin requirement)
 
 ## Trade-offs
 
@@ -221,9 +234,6 @@ mutating set out of contexts that have no business granting it.
 
 ## Open Questions
 
-- Where exactly should the `is_admin(metadata)` extraction helper live —
-  `auth::user_attribution` (proposed above) or directly in `flight_sql_service_impl.rs`? Either
-  works; the plan defaults to the former for symmetry with the existing attribution helpers.
 - Should `retire_partition_by_file`/`retire_partition_by_metadata`'s existing
   `analytics-web-srv` substring blocklist (`stream_query.rs::BLOCKED_FUNCTIONS`) be extended to
   also cover `materialize_partitions`/`regenerate_partitions` while we're touching this area, or
