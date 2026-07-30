@@ -24,10 +24,11 @@ request reaches its fallback.
 
 Three changes, in dependency order:
 
-1. **Close the one hole in the invariant.** `full_stream_with_fallback` (`client.rs:302-348`) silently
-   truncates a `GET /obj` body that fails after the first chunk. Fixed by resuming the remainder from
-   the direct store at the byte offset already delivered. See "The hole: silent truncation past the
-   first chunk".
+1. **Close the one hole in the invariant.** `full_stream_with_fallback` (`client.rs:302-348`) surfaces
+   the cache's own error to the consumer when a `GET /obj` body fails after the first chunk — and would
+   silently truncate on a clean short stream, a latent variant today's server cannot produce. Fixed by
+   resuming the remainder from the direct store at the byte offset already delivered. See "The hole: a
+   mid-stream failure surfaces the cache's error".
 2. **A much shorter detection budget** — 50ms connect, 500ms `abandon_timeout` on every request phase.
    With the hole closed, every phase is recoverable, so one rule covers all of them: abandon as soon as
    the cache has lost the race against a direct read. See "The rule: abandon everywhere".
@@ -59,12 +60,12 @@ inside the 15s deadline. That arithmetic models the caller that can actually
 issue a request that large: the L1-disabled path, where `CacheClientStore` is used directly and a single
 `GET /obj` can span an unbounded range. It is *not* the dominant, L1-fronted caller — in query processes
 `l1_wrap` (on by default, `MICROMEGAS_OBJECT_CACHE_L1_MB=200`) coalesces every miss into a run of at most
-`DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `l1_store.rs:76-110`), so every `/obj` request that caller
+`DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `range_cache/mod.rs:42`; wrap at `l1_store.rs:76-110`), so every `/obj` request that caller
 issues is orders of magnitude short of the size this cliff requires. This plan keeps `total_timeout` at
 15s, unchanged, so the cliff is not removed for the caller it actually threatens — a large enough
 L1-disabled (or `analytics/src/payload.rs:26` block-payload) read still hits it. What Phase 0 changes is
 the *consequence*: hitting it now surfaces as a stream error that resumes the remainder from `direct`
-(see "The fix: resume from the delivered offset"), not a silent short read. The tighter
+(see "The fix: resume from the delivered offset"), not a cache error surfaced to the caller. The tighter
 `abandon_timeout`/`stall_timeout` bounds below make 15s a rare backstop for a healthy cache, but on that
 non-L1-fronted path it stays the binding limit for a large, slowly-but-healthily streaming read — and
 hitting it still reports `record_unresponsive` regardless (see "Abandon vs. unresponsive").
@@ -86,40 +87,45 @@ nothing depends on it succeeding. It counts `range_cache_client_prefetch_error` 
 callers treat as "the warm didn't happen" (`rust/ingestion/src/data_lake_connection.rs:70-79`). A failed
 prefetch does not fail real work, so it satisfies the invariant as it stands.
 
-### The hole: silent truncation past the first chunk
+### The hole: a mid-stream failure surfaces the cache's error
 
 `full_stream_with_fallback` has two arms (`client.rs:315-347`). A stream error *before* the first chunk
-falls back to a full direct read. A stream error *after* it has no arm at all — the `while let` at
-`client.rs:320-322` yields items until the stream ends, and an `Err` item ends the generator. The
-function's own doc comment states the reasoning (`client.rs:302-308`): retrying from zero would re-emit
-an already-delivered prefix, so it "simply ends the stream."
+falls back to a full direct read. A stream error *after* it has no fallback arm at all — the `while let`
+at `client.rs:320-322` forwards every item, `Err` included, so the cache's own transport error is
+yielded straight to the consumer and the stream ends. The function's own doc comment states the
+reasoning (`client.rs:302-308`): retrying from zero would re-emit an already-delivered prefix, so it
+gives up instead.
 
-**That is not a clean failure.** In `object_store` 0.13.2, `GetResult::bytes()` (`lib.rs:1656-1672`)
-delegates to `collect_bytes(s, Some(len))`, and `collect_bytes` (`util.rs:52-75`) uses that length
-**only** as `Vec::with_capacity(size_hint)`. There is no length validation anywhere on the path. A
-stream that ends early therefore returns `Ok(short_bytes)`, and what that costs depends on which caller
-is on the other end:
+**That violates the invariant directly** — the only errors the client may surface are the direct
+store's own, and this arm surfaces the *cache's*. What it costs depends on which caller is on the other
+end:
 
 - **On the dominant, L1-fronted path** — query processes' parquet/static-table reads, which go through
   `l1_wrap` (`lakehouse_context.rs:75`/`:93`, `static_tables_configurator.rs:76`) → `RangeCache` →
-  `origin.get_range` — the short read lands back inside `RangeCache::fetch_blocks`, not the query.
-  `fetch.rs:386-400` compares the delivered length against the requested run span, emits
-  `range_cache_origin_run_len_mismatch` (documented as a "should be ~0" signal), logs `warn!`, and
-  **fails the fetch** instead of under-yielding. So this path is not metrics-invisible — but it is
-  *misattributed*: the metric reads as "origin object changed size," not "cache truncated its response,"
-  and `L1CacheStore::fallback_get_opts` then retries through the same `CacheClientStore`, so a repeat
-  truncation can still reach the consumer short rather than surfacing as an honest error.
+  `origin.get_range` — the error fails the in-flight run fetch and every waiter joined to it, and
+  `L1CacheStore::fallback_get_opts` (`l1_store.rs:118-127`) retries the read through the same
+  `CacheClientStore` — so the caller is usually rescued, at the cost of refetching, and a repeated
+  mid-stream failure fails the query with a cache error.
 - **On the non-L1-fronted callers** — L1 disabled (`MICROMEGAS_OBJECT_CACHE_L1_MB=0`), or the
-  `blobs/...` block-payload path via `BlobStorage::read_blob` — there is no intermediate length check at
-  all, so the caller gets a plain success with fewer bytes than it asked for and nothing in the metrics
-  distinguishes it from a healthy read. For a parquet footer or data page this surfaces as a misparse
-  attributed to the *data*; for a block payload it surfaces as a CBOR decode error instead.
+  `blobs/...` block-payload path via `BlobStorage::read_blob` — there is no retry layer at all: the
+  read fails outright with the cache's error, so a mid-stream cache failure fails real work.
 
-So the client can currently corrupt or misattribute a read whenever the cache's `/obj` body stalls or
-drops mid-stream, and today's 15s total deadline is what triggers it. This violates the invariant, is
-independent of the circuit breaker, and is fixed first (Phase 0). It is arguably worth its own issue; the
-plan keeps it here because the timeout work below is what makes it fire more often, and because the fix
-reshapes the same function the breaker has to report from.
+There is also a **latent silent-truncation variant**, closed by the same fix: if the body stream ends
+*cleanly* (`None`) short of the declared range, nothing client-side validates length — in `object_store`
+0.13.2, `GetResult::bytes()` (`lib.rs:1656-1672`) delegates to `collect_bytes(s, Some(len))`, and
+`collect_bytes` (`util.rs:52-75`) uses that length **only** as `Vec::with_capacity(size_hint)`, so a
+short stream returns `Ok(short_bytes)`. Today's server cannot produce that stream: it always sets
+`Content-Length` on its 206s (`handlers.rs:427`), which hyper enforces client-side — a body that closes
+early arrives as an error, not a clean end. Reaching it would take a proxy or a future server change
+(e.g. a chunked body ending short of its `Content-Range`) — but the resume fix below treats a clean end
+with bytes owed identically to an `Err`, so it costs nothing to close this for real rather than leave it
+to that assumption.
+
+So the client currently fails the caller's read — and would, latently, truncate it — whenever the
+cache's `/obj` body stalls or drops mid-stream, and today's 15s total deadline is what triggers it. This
+violates the invariant, is independent of the circuit breaker, and is fixed first (Phase 0). It is
+arguably worth its own issue; the plan keeps it here because the timeout work below is what makes it
+fire more often, and because the fix reshapes the same function the breaker has to report from.
 
 #### The fix: resume from the delivered offset
 
@@ -220,10 +226,12 @@ after the response headers have been committed — a header-only bound there cou
 
 ### Single instance per process
 
-`make_cache` (`rust/ingestion/src/data_lake_connection.rs:86-108`) is the only construction site: one
-`Arc<CacheClientStore>` per process, shared as both `Arc<dyn ObjectStore>` and
-`Arc<dyn ObjectPrefetch>`. Breaker state therefore lives on the struct — no statics, no per-endpoint
-sharding.
+`make_cache` (`rust/ingestion/src/data_lake_connection.rs:86-108`) is the only construction site,
+reached from `connect_to_data_lake` (`data_lake_connection.rs:118`) and `connect_to_remote_data_lake`
+(`remote_data_lake.rs:52`) — one `Arc<CacheClientStore>` per `DataLakeConnection`, which is one per
+process in practice since every production binary connects once. The same `Arc` is shared as both
+`Arc<dyn ObjectStore>` and (wrapped in `PrefixPrefetch`) `Arc<dyn ObjectPrefetch>`. Breaker state
+therefore lives on the struct — no statics, no per-endpoint sharding.
 
 ## Design
 
@@ -242,7 +250,7 @@ would have, the cache has stopped being an optimization and abandoning it is the
 a false abort. Raising the budget above the origin tail defeats the purpose: it makes the client wait
 out a cache that has already lost the race.
 
-Because Phase 0 closes the truncation hole, this applies **uniformly**:
+Because Phase 0 closes the mid-stream hole, this applies **uniformly**:
 
 > **Abandon at the direct-path cost, everywhere. There is no phase that has to be waited out.**
 
@@ -290,7 +298,7 @@ entire remainder of the object (or the ranges not yet delivered) from the origin
 
 **Which caller this bounds depends on whether L1 is in front.** In query processes the lakehouse/static
 stores are wrapped by `l1_wrap` (on by default, `MICROMEGAS_OBJECT_CACHE_L1_MB=200`), whose `RangeCache`
-coalesces every miss into a run of at most `DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `l1_store.rs:76-110`)
+coalesces every miss into a run of at most `DEFAULT_MAX_COALESCED_GET_BYTES` (8 MiB, `range_cache/mod.rs:42`; wrap at `l1_store.rs:76-110`)
 and fetches it as one `cache.origin.get_range(&path, byte_start..byte_end)` call
 (`range_cache/fetch.rs:109`, `:321`). So the dominant caller's `GET /obj` request carries **at most one**
 8 MiB demand window, and the server's commit-before-stream already awaits that window's origin GET before
@@ -530,9 +538,10 @@ So:
 An earlier draft had a `Probe`-admitted prefetch report `record_responsive`, on the premise that "a
 process that only ever prefetches can still recover its circuit." That process doesn't exist: the only
 production caller of `prefetch` is `warm_object` (`rust/ingestion/src/data_lake_connection.rs:57-80`),
-called from `rust/analytics/src/lakehouse/write_partition.rs:746` — i.e. from the analytics/maintenance
-processes, which are also the heaviest demand-read callers; `telemetry-ingestion-srv` never calls
-`warm_object` at all. Letting a `Probe`-admitted prefetch close the circuit in a write-active process
+called from `rust/analytics/src/lakehouse/write_partition.rs:746` — reached from every process that
+materializes partitions: the maintenance daemon's batch updates and the query servers' JIT view
+materialization (`materialized_view.rs:72`) alike, i.e. exactly the heaviest demand-read callers;
+`telemetry-ingestion-srv` never calls `warm_object` at all. Letting a `Probe`-admitted prefetch close the circuit in a write-active process
 would let accept-loop liveness reopen the demand path on the fixed cooldown cadence regardless of whether
 demand reads are actually recovering — reintroducing, on a ~3s cycle, a fraction of exactly the
 parked-task exhaustion this plan exists to remove. Gating `prefetch` on `admit_bypass_only()` — which
@@ -1164,7 +1173,7 @@ one per cooldown.
 | `rust/object-cache-srv/tests/prefetch_tests.rs` | `body_larger_than_2mib_total_accepted_via_router` builds its client with a relaxed budget (see Testing Strategy → Regression) |
 | `mkdocs/docs/admin/object-cache.md` | Client env vars, fast-fail section, 6 new metrics, amended `fallback` row |
 | `mkdocs/docs/architecture/caching.md` | Note the fast-fail gate on the fallback edge |
-| `CHANGELOG.md` | Entries under Unreleased → **Caching:** (the truncation fix, and the fast-fail gate) |
+| `CHANGELOG.md` | Entries under Unreleased → **Caching:** (the mid-stream resume fix, and the fast-fail gate) |
 
 No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps its signature and
 `from_env` reads the overrides.
@@ -1257,7 +1266,7 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
   breaker, and that fallback now covers mid-stream failures too. Its "Configuration summary" table
   (`caching.md:170-177`, currently listing `MICROMEGAS_OBJECT_CACHE_URL`/`_API_KEY`/`_L1_MB`) gets a row
   pointing to the admin page's new `MICROMEGAS_OBJECT_CACHE_CLIENT_*` table.
-- `CHANGELOG.md`: two bullets under Unreleased → **Caching:** — the silent-truncation fix and the
+- `CHANGELOG.md`: two bullets under Unreleased → **Caching:** — the mid-stream resume fix and the
   fast-fail gate — referencing #1360.
 
 ## Testing Strategy
@@ -1285,10 +1294,15 @@ override) so the resume path is also exercised against a genuine stall, not just
   read, a `Bounded` range, an `Offset` range, and a `Suffix` range. Each must return exactly the bytes
   the corresponding direct read returns. This is where a bug would silently corrupt data, so assert on
   content, never on length alone.
-- **Regression guard for the old behavior.** A test that would have passed before Phase 0 — a
-  mid-stream failure returning `Ok` with short bytes — must now fail. Concretely: assert
-  `result.bytes().await?.len() == expected_len`, which is exactly the check `collect_bytes`
-  (`object_store` `util.rs:52-75`) does not perform.
+- **Regression guard for the silent-truncation variant.** An `/obj` handler that answers a 206 with
+  `Content-Range` but no `Content-Length` and ends its body **cleanly** short of the declared range —
+  the one shape the old code passed through silently: the stream ends `None` early and `collect_bytes`
+  (`object_store` `util.rs:52-75`) returns `Ok(short_bytes)` with no length check. (This takes a
+  deliberately misbehaving test server — the real one always sets `Content-Length` (`handlers.rs:427`),
+  which hyper enforces, so a mid-stream `Err` was never silent: the old code yielded the error to the
+  consumer, and the resume tests above cover that case.) The read must now return the full range,
+  byte-identical to a direct read, through the `None`-with-bytes-owed resume arm; assert on content,
+  plus `len == expected_len` — exactly the check `collect_bytes` does not perform.
 - **A failing resume surfaces an error.** Fail the cache mid-stream (abort in Phase 0, stall in the
   Phase 2 variant) *and* point `direct` at a store that errors; the caller must see the direct store's
   error, not a silent short read.
