@@ -11,7 +11,7 @@ The ingestion service exposes the following HTTP ingestion routes. The first thr
 | `POST /ingestion/otlp/v1/logs` | `ExportLogsServiceRequest` | `log_entries` |
 | `POST /ingestion/otlp/v1/metrics` | `ExportMetricsServiceRequest` | `measures` |
 | `POST /ingestion/otlp/v1/traces` | `ExportTraceServiceRequest` | `otel_spans` (per-process JIT view) |
-| `POST /ingestion/otlp/v1/metrics/firehose` | `ExportMetricsServiceRequest` per Firehose record | `measures` (see [CloudWatch Metric Streams](#cloudwatch-metric-streams-kinesis-firehose)) |
+| `POST /ingestion/otlp/v1/metrics/firehose` | one-or-more length-delimited `ExportMetricsServiceRequest` messages per Firehose record | `measures` (see [CloudWatch Metric Streams](#cloudwatch-metric-streams-kinesis-firehose)) |
 | `POST /ingestion/cloudwatch/v1/logs/firehose` | CloudWatch Logs subscription-filter record per Firehose record (**not OTLP-framed** — see [CloudWatch Logs](#cloudwatch-logs-kinesis-firehose)) | `log_entries` |
 
 Routes share the existing listener (default `127.0.0.1:9000`) and authentication chain. OTLP payloads are stored as-is in object storage; decoding into parquet rows happens lazily at the analytics layer.
