@@ -70,7 +70,7 @@ meaningful value (Option B from the issue) while folding the exporter ARN into
 - `crate::identity::attr(attrs: &[KeyValue], key: &str) -> Option<&AnyValue>`
   (`identity.rs:65-70`) is generic over any `&[KeyValue]` slice — already reusable for reading a
   datapoint's `Namespace` attribute, not just resource attributes.
-- No existing test fixture (`rust/otel-ingestion/tests/fixtures.rs:161-199`'s `sum_metric`/
+- No existing test fixture (`rust/otel-ingestion/tests/fixtures.rs:161-222`'s `sum_metric`/
   `gauge_metric`/`summary_metric` helpers) sets datapoint `attributes` — all built with
   `attributes: vec![]`. This is genuinely new territory; realistic CloudWatch-shaped fixtures
   need to be added from scratch.
@@ -175,7 +175,7 @@ set_attr(
     "service.name",
     namespace.as_deref().unwrap_or(UNKNOWN_NAMESPACE),
 );
-set_attr(&mut resource_attrs, "service.namespace", ""); // clear so exe = service.name, not "{ns}/{service.name}"
+clear_attr_if_present(&mut resource_attrs, "service.namespace"); // so exe = service.name, not "{ns}/{service.name}"
 ```
 
 where `UNKNOWN_NAMESPACE` is the module constant `"AWS/Unknown"` — `service.name` is **always**
@@ -189,13 +189,23 @@ that whitespace-only value would survive into the synthetic resource and produce
 `exe = "  /AWS/RDS"` instead of `exe = "AWS/RDS"`. Setting it to `""` guarantees `svc_ns.is_empty()`
 is true downstream regardless of what (if anything) the original resource carried.
 
+`clear_attr_if_present` mutates the existing `KeyValue`'s value to `""` in place when the key is
+already present and is a no-op otherwise — unlike `set_attr`, it never pushes a new attribute, so
+the normal case (CloudWatch resources carry no `service.namespace` at all) leaves `resource_attrs`
+without a spurious empty `otel.resource.service.namespace` property. Either outcome still
+guarantees `svc_ns.is_empty()` is true downstream.
+
 Every other field on the synthetic `ResourceMetrics`/`Resource` is carried over from the
 original unchanged — only `attributes` differs. Concretely: the new `ResourceMetrics.schema_url`
 is the original `ResourceMetrics.schema_url`, and the new `Resource`'s
 `dropped_attributes_count`/`entity_refs` are the original `Resource`'s
 `dropped_attributes_count`/`entity_refs`. `split_metrics` stores `rm.encode_to_vec()` verbatim as
 the block payload (`block.rs:376`), so any non-attribute field left as `Default::default()`
-instead of copied would be silently dropped from what the analytics layer reads back.
+instead of copied would be silently lost from the stored proto's fidelity/round-trippability —
+not from what the analytics layer reads back: `OtelMetricsBlockProcessor::process`
+(`rust/analytics/src/lakehouse/otel/metrics_block_processor.rs:69-85`) only ever touches
+`resource_metrics.scope_metrics` when decoding this payload; process identity/properties come
+from `src_block.process` metadata written at ingestion, not from the payload's `Resource`.
 
 `set_attr` replaces an existing key's value in place, pushing only when the key is absent — belt
 and suspenders alongside the tightened fingerprint above, since `identity::attr` (`identity.rs:
@@ -259,9 +269,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 
 - `pub const UNKNOWN_NAMESPACE: &str = "AWS/Unknown"` — the `service.name` fallback so `exe` is
   never empty. Public (rather than private) so `tests/cloudwatch_metrics_tests.rs` can assert
-  against it directly, matching the `cloudwatch_logs.rs` precedent (`identity.rs`-adjacent doc
-  comments there: "Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert
-  ... directly"). This project prefers `pub` over `pub(crate)`.
+  against it directly, matching the `cloudwatch_logs.rs` precedent (`cloudwatch_logs.rs:21-22`:
+  "Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert ... directly,
+  matching the `build_webhook_request` precedent in `handler.rs`"). This project prefers `pub`
+  over `pub(crate)`.
 - `pub fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool` — same rationale:
   public so the unit tests below can call it directly from `tests/cloudwatch_metrics_tests.rs`.
 - `pub fn metric_namespace(metric: &Metric) -> Option<String>` — same rationale: public so the
@@ -270,6 +281,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   builds/replaces with `KeyValue { key: key.to_string(), key_strindex: 0, value: Some(AnyValue
   { value: Some(any_value::Value::StringValue(value.to_string())) }) }`, the same shape as
   `cloudwatch_logs.rs:153-161`'s `kv` helper
+- `clear_attr_if_present(attrs: &mut Vec<KeyValue>, key: &str)` — private; sets the existing
+  entry's value to `""` in place when `key` is already present, and is a no-op otherwise (never
+  pushes) — used to clear `service.namespace` without adding a spurious empty attribute to
+  resources that never carried one
 - `rewrite_cloudwatch_metric_streams(req: ExportMetricsServiceRequest) -> ExportMetricsServiceRequest`
   (the public entry point; iterates `req.resource_metrics`, leaves non-matching entries as-is,
   replaces matching ones in place with their partitioned set)
@@ -292,9 +307,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    the CloudWatch-specific resource rewrite now inserted at that call site.
 3. **Test fixtures** — add CloudWatch-shaped fixture builders in a new
    `rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs` (not the shared `fixtures.rs`),
-   following the `cloudwatch_logs_tests.rs` precedent — the one metrics/logs test file that
-   does not `mod fixtures;`, keeping CloudWatch-shaped fixtures self-contained alongside the
-   CloudWatch-specific tests that use them: a resource with only
+   following the `cloudwatch_logs_tests.rs` / `block_tests.rs` precedent of test files that
+   keep their own fixtures local rather than `mod fixtures;`, keeping CloudWatch-shaped fixtures
+   self-contained alongside the CloudWatch-specific tests that use them: a resource with only
    `cloud.account.id`/`cloud.provider`/`cloud.region`/`aws.exporter.arn`, and metrics built as
    `Summary` data points (the shape CloudWatch Metric Streams' `opentelemetry1.0` output actually
    produces, per `mkdocs/docs/otlp/index.md:407`) carrying `Namespace`/`MetricName`/`Dimensions`
@@ -312,13 +327,18 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    this route overwrites `service.instance.id` with the ARN, the ARN itself must be the
    per-run-unique value). Look up the resulting processes by wrapping the query for
    `processes` filtered on `property_get(properties, 'otel.resource.aws.exporter.arn') =
-   '<the run's arn>'` in `assert_eventually` (`python/micromegas/tests/otlp_helpers.py:13-55`),
+   '<the run's arn>'` in `assert_eventually` (`python/micromegas/tests/otlp_helpers.py:58+`),
    polling until the expected per-namespace row count is present — a single immediate query can
    race the write path and return 0 or a partial set, the same reason every other e2e test in
    `test_otlp_e2e.py` polls after the 200 ack — rather than `discover_process_id`, which resolves
    `service.instance.id` to a single first-match row and can't disambiguate the N processes this
    one ARN now maps to; once the row count matches, assert the full returned set has one row per
-   namespace with `exe` equal to that namespace and distinct `process_id`s.
+   namespace with `exe` equal to that namespace and distinct `process_id`s. Then, for each
+   discovered per-namespace `process_id`, poll (via `assert_eventually`, matching the
+   `_post_firehose_and_assert_measures` precedent at `test_otlp_e2e.py:664-698`) that
+   `SELECT count(*) FROM measures WHERE process_id = '<that process_id>'` is `>= 1`, so the
+   partitioned Summary datapoints' materialization into `measures` and their per-namespace
+   process attribution are both covered, not just the `processes` row set.
 6. **Docs** — two separate deliverables under `mkdocs/docs/otlp/index.md`'s
    `## CloudWatch Metric Streams (Kinesis Firehose)` section (around line 391 — *not* the
    metric-name paragraph at line 154, which is in `### Metrics → measures`):
@@ -330,6 +350,11 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    (b) **in place**, edit the existing `### Idempotency` subsection (lines 461-472) to note that
    dedup granularity is now per-namespace-block, not per-message, since partitioning turns one
    delivered message into N blocks.
+   (c) **in place**, amend the route-intro paragraph at `index.md:402-405` ("hands each one to
+   the same split/write path; records land in `measures`, same as native OTLP metrics") with a
+   one-line pointer to the new `### How CloudWatch namespaces surface` subsection, since a
+   CloudWatch-specific resource rewrite is now inserted before that path runs — the same
+   "unchanged shared path" claim step 2 corrects in the two Rust doc comments.
 7. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
    `cargo test -p micromegas-otel-ingestion`, then `python3 build/rust_ci.py`.
 
@@ -408,6 +433,9 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - `mkdocs/docs/otlp/index.md` — **in-place edit** to the existing `### Idempotency` subsection
   (lines 461-472): dedup granularity is now per-namespace-block rather than per-message, since
   partitioning turns one delivered message into N blocks.
+- `mkdocs/docs/otlp/index.md` — **in-place edit** to the route-intro paragraph at lines 402-405,
+  which still claims records "hand each one to the same split/write path" unmodified; add a
+  one-line pointer to the new `### How CloudWatch namespaces surface` subsection.
 
 ## Testing Strategy
 
@@ -465,7 +493,7 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   not because it avoids `split_metrics`, but because (a) it never reaches
   `rewrite_cloudwatch_metric_streams`, which lives in `ingest_firehose_metrics`
   (`handler.rs:370-388`), one layer above where this test calls `split_metrics` directly, and (b)
-  its fixture (`fixtures::make_metrics_request`, `fixtures.rs:134-149`) sets `service.name`/
+  its fixture (`fixtures::make_metrics_request`, `fixtures.rs:134-158`) sets `service.name`/
   `host.name`/`process.pid`, so `is_cloudwatch_metric_stream_resource` would return `false` on it
   even if the rewrite were in scope. The guarantee that the rewrite is a no-op for
   non-CloudWatch-shaped resources is instead pinned by the "passed through byte-for-byte
@@ -474,13 +502,17 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   CloudWatch-shaped Firehose delivery, tagged with a per-run-unique synthetic
   `aws.exporter.arn`, with two or more namespaces produces one `processes` row per
   namespace, `exe` equal to the namespace, and distinct `process_id`s — queried via
-  `assert_eventually` (`otlp_helpers.py:13-55`) polling `property_get(properties,
+  `assert_eventually` (`otlp_helpers.py:58+`) polling `property_get(properties,
   'otel.resource.aws.exporter.arn')` matching the run's ARN until the expected per-namespace
   row count appears, then asserting on the full returned row set (not `discover_process_id`,
   which returns only a single first-match row and can't distinguish the N processes one ARN now
   maps to, and not a one-shot query, which can race the write path the same way every other
   polled e2e test in this file does) — the only test that exercises `write_blocks` →
   `register_otel_process` end to end for this route, rather than stopping at in-memory
-  `PreparedBlock`/`ProcessFromResource` structs.
+  `PreparedBlock`/`ProcessFromResource` structs. For each discovered per-namespace `process_id`,
+  also poll (`assert_eventually`, matching `_post_firehose_and_assert_measures`,
+  `test_otlp_e2e.py:664-698`) that `measures` has `count(*) >= 1` for that `process_id`, so the
+  Summary datapoints' materialization into `measures` — not just `processes` row creation — is
+  covered under the new per-namespace attribution.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
