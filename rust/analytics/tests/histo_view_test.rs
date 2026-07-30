@@ -206,6 +206,7 @@ async fn test_cpu_usage_view(
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
     let pretty_results_view =

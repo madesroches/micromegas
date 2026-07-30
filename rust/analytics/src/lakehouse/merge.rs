@@ -104,6 +104,7 @@ impl PartitionMerger for QueryMerger {
             Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
+            true,
         )
         .await?;
         let src_table = PartitionedTableProvider::with_ordering(

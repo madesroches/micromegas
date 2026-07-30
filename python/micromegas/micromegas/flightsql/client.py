@@ -639,6 +639,10 @@ class FlightSQLClient:
         Note:
             This operation cannot be undone. Retired partitions must be re-materialized
             if the data is needed again.
+
+        Requires admin:
+            Only callable by an authenticated admin. Non-admin callers, including API
+            keys, get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -691,6 +695,10 @@ class FlightSQLClient:
             require additional storage. Choose partition size based on query patterns:
             - Hourly (3600): For high-frequency queries on recent data
             - Daily (86400): For historical analysis and reporting
+
+        Requires admin:
+            Only callable by an authenticated admin. Non-admin callers, including API
+            keys, get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -753,6 +761,10 @@ class FlightSQLClient:
             `regenerate_partitions` is an admin/rollout tool, not a steady-state path.
             Operators should run calls serially, never with overlapping ranges in flight
             concurrently.
+
+        Requires admin:
+            Only callable by an authenticated admin. Non-admin callers, including API
+            keys, get a "function not found" error.
         """
         sql = """
           SELECT time, msg

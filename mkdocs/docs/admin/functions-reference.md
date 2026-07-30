@@ -86,6 +86,9 @@ GROUP BY view_set_name;
 
 ### `retire_partitions(view_set, view_instance, start_time, end_time)`
 
+!!! note "Requires admin"
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get "function not found".
+
 **Description**: Retires partitions within a specified time range.
 
 **Parameters**:
@@ -109,6 +112,9 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 ---
 
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
+
+!!! note "Requires admin"
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get "function not found".
 
 **Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)).
 
@@ -136,6 +142,9 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 ## Scalar Functions (UDFs)
 
 ### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
+
+!!! note "Requires admin"
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get an "Invalid function" error.
 
 **Description**: Surgically retires a single partition by its metadata identifiers. This is the preferred method for retiring partitions as it works for both empty partitions (file_path=NULL) and non-empty partitions.
 
@@ -198,6 +207,9 @@ LIMIT 10;
 ---
 
 ### `retire_partition_by_file(file_path)`
+
+!!! note "Requires admin"
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get an "Invalid function" error.
 
 **Description**: Retires a single partition by exact file path match.
 
@@ -273,6 +285,9 @@ print(f"Empty partitions: {len(empty_partitions)}")
 ---
 
 ### `micromegas.admin.retire_incompatible_partitions(client, view_set_name=None)`
+
+!!! note "Requires admin"
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, will see this fail with an "Invalid function" error.
 
 **Description**: Safely retires partitions with incompatible schemas using metadata-based retirement. This handles both empty partitions (file_path=NULL) and non-empty partitions.
 

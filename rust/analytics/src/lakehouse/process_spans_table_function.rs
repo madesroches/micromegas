@@ -257,6 +257,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                 query_range,
                 view_factory,
                 Arc::new(NoOpSessionConfigurator),
+                false,
             )
             .await
             .map_err(|e| datafusion::error::DataFusionError::Execution(

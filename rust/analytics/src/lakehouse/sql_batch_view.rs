@@ -90,6 +90,7 @@ impl SqlBatchView {
             None,
             view_factory.clone(),
             session_configurator.clone(),
+            true,
         )
         .await
         .with_context(|| "make_session_context")?;
@@ -157,6 +158,7 @@ impl View for SqlBatchView {
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
+            true,
         )
         .await
         .with_context(|| "make_session_context")?;

@@ -108,6 +108,7 @@ where
                         parts.headers.remove("x-auth-email");
                         parts.headers.remove("x-auth-issuer");
                         parts.headers.remove("x-allow-delegation");
+                        parts.headers.remove("x-auth-is-admin");
 
                         // Inject auth context into gRPC metadata headers
                         parts.headers.insert(
@@ -130,6 +131,11 @@ where
                             "x-allow-delegation",
                             http::HeaderValue::from_str(&auth_ctx.allow_delegation.to_string())
                                 .expect("valid allow_delegation header"),
+                        );
+                        parts.headers.insert(
+                            "x-auth-is-admin",
+                            http::HeaderValue::from_str(&auth_ctx.is_admin.to_string())
+                                .expect("valid is_admin header"),
                         );
 
                         parts.extensions.insert(auth_ctx);

@@ -1250,7 +1250,7 @@ WHERE time &gt;= NOW() - INTERVAL '1 hour'
 | <code>file_schema_hash</code> | <code>Binary</code> | Schema hash |
 | <code>source_data_hash</code> | <code>Binary</code> | Source data hash |</p>
 <h4 id="retire_partitions"><code>retire_partitions</code></h4>
-<p>Administrative function for retiring old partitions.</p>
+<p>Administrative function for retiring old partitions. Requires an authenticated admin — non-admin callers, including API keys, get "function not found".</p>
 <pre><code class="language-sql">SELECT * FROM retire_partitions()
 </code></pre>
 <p><strong>Returns:</strong>
@@ -1259,7 +1259,7 @@ WHERE time &gt;= NOW() - INTERVAL '1 hour'
 | <code>time</code> | <code>Timestamp(Nanosecond)</code> | Log entry timestamp |
 | <code>msg</code> | <code>Utf8</code> | Log message |</p>
 <h4 id="materialize_partitions"><code>materialize_partitions</code></h4>
-<p>Administrative function for materializing view partitions.</p>
+<p>Administrative function for materializing view partitions. Requires an authenticated admin — non-admin callers, including API keys, get "function not found".</p>
 <pre><code class="language-sql">SELECT * FROM materialize_partitions()
 </code></pre>
 <p><strong>Returns:</strong>

@@ -487,7 +487,7 @@ SELECT * FROM list_partitions()
 
 #### `retire_partitions`
 
-Administrative function for retiring old partitions.
+Administrative function for retiring old partitions. Requires an authenticated admin — non-admin callers, including API keys, get "function not found".
 
 ```sql
 SELECT * FROM retire_partitions()
@@ -501,7 +501,7 @@ SELECT * FROM retire_partitions()
 
 #### `materialize_partitions`
 
-Administrative function for materializing view partitions.
+Administrative function for materializing view partitions. Requires an authenticated admin — non-admin callers, including API keys, get "function not found".
 
 ```sql
 SELECT * FROM materialize_partitions()

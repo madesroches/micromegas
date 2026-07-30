@@ -84,6 +84,7 @@ async fn fetch_block_metadata(
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
 

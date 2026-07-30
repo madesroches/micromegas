@@ -238,6 +238,7 @@ async fn generate_streaming_perfetto_trace(
         }),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
 

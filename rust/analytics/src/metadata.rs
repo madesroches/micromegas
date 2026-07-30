@@ -185,6 +185,7 @@ pub async fn find_stream_from_view(
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await
     .with_context(|| "creating DataFusion session context")?;
@@ -285,6 +286,7 @@ pub async fn find_process_with_latest_timing(
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await
     .with_context(|| "creating DataFusion session context")?;

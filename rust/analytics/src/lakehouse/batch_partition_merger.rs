@@ -136,6 +136,7 @@ impl PartitionMerger for BatchPartitionMerger {
             Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
+            true,
         )
         .await?;
         let src_table =

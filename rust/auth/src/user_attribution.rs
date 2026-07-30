@@ -61,6 +61,25 @@ fn get_header_string_lossy(metadata: &MetadataMap, key: &str) -> Option<String> 
     }
 }
 
+/// Extract the authenticated caller's admin status from gRPC metadata.
+///
+/// A missing `x-auth-is-admin` header means no `AuthService` is configured at all (e.g.
+/// `--disable-auth`) — `AuthService::call` rejects the request before it reaches the inner
+/// service when a provider is configured but validation fails, so the header is otherwise
+/// always present. Treat this case as trusted admin, matching the existing `--disable-auth`
+/// convention in `analytics-web-srv/src/web_server.rs`. An unparseable value fails closed to
+/// non-admin.
+pub fn is_admin(metadata: &MetadataMap) -> bool {
+    match metadata.get("x-auth-is-admin") {
+        None => true,
+        Some(v) => v
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+    }
+}
+
 /// Validate and resolve user attribution from gRPC metadata
 ///
 /// This function prevents user impersonation by validating x-user-id and x-user-email
