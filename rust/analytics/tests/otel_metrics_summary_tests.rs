@@ -270,6 +270,72 @@ async fn summary_without_min_max_quantiles_still_produces_count_and_sum() {
     );
 }
 
+/// A `SummaryDataPoint` with duplicate `q=0.0`/`q=1.0` entries must still produce exactly
+/// one `_min` and one `_max` row (the first occurrence of each), not one per entry.
+#[tokio::test]
+async fn summary_with_duplicate_min_max_quantiles_emits_one_row_each() {
+    let dp = SummaryDataPoint {
+        attributes: vec![],
+        start_time_unix_nano: 0,
+        time_unix_nano: 1_000,
+        count: 7,
+        sum: 10.0,
+        quantile_values: vec![
+            ValueAtQuantile {
+                quantile: 0.0,
+                value: 1.0,
+            },
+            ValueAtQuantile {
+                quantile: 0.0,
+                value: 2.0,
+            },
+            ValueAtQuantile {
+                quantile: 1.0,
+                value: 9.0,
+            },
+            ValueAtQuantile {
+                quantile: 1.0,
+                value: 8.0,
+            },
+        ],
+        flags: 0,
+    };
+    let resource_metrics = resource_metrics_with_one_summary(dp);
+    let payload_bytes = resource_metrics.encode_to_vec();
+
+    let blob_storage = make_in_memory_blob_storage();
+    let src_block = make_source_block(&blob_storage, payload_bytes, 1)
+        .await
+        .expect("make_source_block");
+
+    let processor = OtelMetricsBlockProcessor {};
+    let result = processor
+        .process(blob_storage, src_block)
+        .await
+        .expect("process must not fail");
+    let row_set = result.expect("expected Some(row_set)");
+    let batch = row_set.rows;
+
+    assert_eq!(
+        batch.num_rows(),
+        4,
+        "count/sum + one min + one max, duplicates dropped"
+    );
+
+    let mut rows: Vec<(String, f64)> = names(&batch).into_iter().zip(values_f64(&batch)).collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+
+    assert_eq!(
+        rows,
+        vec![
+            ("CPUUtilization_count".to_string(), 7.0),
+            ("CPUUtilization_max".to_string(), 9.0),
+            ("CPUUtilization_min".to_string(), 1.0),
+            ("CPUUtilization_sum".to_string(), 10.0),
+        ]
+    );
+}
+
 /// `time_unix_nano == 0` skips the whole data point — zero rows, mirroring the existing
 /// Sum/Gauge zero-timestamp skip.
 #[tokio::test]

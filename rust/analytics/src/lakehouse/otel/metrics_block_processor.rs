@@ -305,8 +305,18 @@ impl MeasuresRowBuilder {
             &[],
         )?;
 
+        let mut min_emitted = false;
+        let mut max_emitted = false;
         for q in &dp.quantile_values {
             if q.quantile == 0.0 {
+                if min_emitted {
+                    debug!(
+                        "OTel summary quantile dropped (duplicate q=0.0, _min already emitted): \
+                         name={metric_name}"
+                    );
+                    continue;
+                }
+                min_emitted = true;
                 self.append_row(
                     scope_name,
                     &format!("{metric_name}_min"),
@@ -317,6 +327,14 @@ impl MeasuresRowBuilder {
                     &[],
                 )?;
             } else if q.quantile == 1.0 {
+                if max_emitted {
+                    debug!(
+                        "OTel summary quantile dropped (duplicate q=1.0, _max already emitted): \
+                         name={metric_name}"
+                    );
+                    continue;
+                }
+                max_emitted = true;
                 self.append_row(
                     scope_name,
                     &format!("{metric_name}_max"),
