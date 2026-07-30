@@ -263,7 +263,11 @@ SQL that this repo controls.
    with the `functions-reference.md`/`how_to_query` mkdocs pages per `CHANGELOG.md:50`) also
    documents `retire_partitions` and `materialize_partitions` as ordinary query functions, under
    `#### retire_partitions` / `#### materialize_partitions` (around lines 488-510) — add the same
-   admin-required note to both sections. **`mkdocs/docs/admin/maintenance.md:165-168`**: this page also lists
+   admin-required note to both sections, then regenerate the checked-in HTML build artifact by
+   running `python3 doc/build-html.py` from the repo root, which reads this README
+   (`doc/build-html.py:71`) and writes `doc/how_to_query/html/index.html`
+   (`doc/build-html.py:376`) — these two files are always edited together (see git history for
+   `1af7a749`, `80a50b69`). **`mkdocs/docs/admin/maintenance.md:165-168`**: this page also lists
    `materialize_partitions()`, `regenerate_partitions()`, `retire_partitions()`, and
    `retire_partition_by_metadata()` as the ad-hoc administration path — add the same
    admin-required note there. **`mkdocs/docs/query-guide/python-api.md`**: add the same "requires
@@ -335,6 +339,9 @@ SQL that this repo controls.
 - `doc/how_to_query/README.md` (note the admin requirement on the `#### retire_partitions` and
   `#### materialize_partitions` sections, lines ~488-510 — kept in sync with the mkdocs
   `functions-reference.md`/`how_to_query` pages per `CHANGELOG.md:50`)
+- `doc/how_to_query/html/index.html` (regenerated, checked-in build artifact of the README above
+  — run `python3 doc/build-html.py` after editing it; the two files are always committed together,
+  see git history for `1af7a749`, `80a50b69`)
 - `mkdocs/docs/admin/maintenance.md` (note the admin requirement in the "Ad-hoc administration"
   section, lines 165-168)
 - `mkdocs/docs/query-guide/python-api.md` (note the new admin requirement on the
@@ -449,15 +456,25 @@ SQL that this repo controls.
   `python/micromegas/tests/`, which runs against
   `local_test_env/ai_scripts/start_services.py`; that script passes `--disable-auth` to
   `flight-sql-srv` (line 192), so `is_admin` is always `true` there and the non-admin rejection
-  path is untestable without new harness work (a test auth provider plus API-key/OIDC test
-  clients), which is out of scope for this plan. Scoping down to what exists: the registration
-  gate itself, and header propagation across the tower boundary, both run as ordinary,
-  non-`#[ignore]`d tests in CI — the tower-level `x-auth-is-admin` tests
-  (`rust/auth/tests/tower_tests.rs`) plus the new `lakehouse_admin_gate_test.rs` above. What is
-  *not* covered is a live, wired-together round-trip (a real FlightSQL client, through the tower
-  `AuthService`, into `execute_query`/`do_action_create_prepared_statement`, hitting the
-  registration gate under real auth) — that gap is what needs the missing harness, and is a known,
-  accepted coverage gap, not an oversight.
+  path has no e2e coverage today. This is *not* because a test auth provider is missing —
+  `ApiKeyAuthProvider` is production code that already yields `AuthContext { is_admin: false, .. }`
+  unconditionally (`rust/auth/src/api_key.rs:124`), exactly the principal the gate must deny, and
+  `flight-sql-srv` already accepts it via `MICROMEGAS_API_KEYS` with no code change
+  (`rust/public/src/servers/flight_sql_server.rs:230-236`, `rust/auth/src/default_provider.rs`);
+  the Python client also already has a pluggable bearer-token hook
+  (`DynamicAuthMiddleware`/`DynamicAuthMiddlewareFactory`,
+  `python/micromegas/micromegas/flightsql/client.py:34-61`) that a few-line static-key provider
+  satisfies. The only missing piece is test-env wiring: a second, API-key-authenticated
+  `flight-sql-srv` instance started by `start_services.py` alongside the existing
+  `--disable-auth` one, plus a small static-token Python auth provider to drive it. Standing that
+  up is out of scope for this plan — the registration gate itself, and header propagation across
+  the tower boundary, both run as ordinary, non-`#[ignore]`d tests in CI — the tower-level
+  `x-auth-is-admin` tests (`rust/auth/tests/tower_tests.rs`) plus the new
+  `lakehouse_admin_gate_test.rs` above. What is *not* covered is a live, wired-together round-trip
+  (a real FlightSQL client, through the tower `AuthService`, into
+  `execute_query`/`do_action_create_prepared_statement`, hitting the registration gate under real
+  auth) — that gap is what needs the missing test-env wiring, and is a known, accepted coverage
+  gap, not an oversight.
 - **`do_action_create_prepared_statement`**: for the same reason, this is covered at the unit
   level only — the `rust/auth` unit tests for `is_admin(metadata)` cover header parsing, and the
   `_request` → `request` signature change (so the handler stops discarding the request's
