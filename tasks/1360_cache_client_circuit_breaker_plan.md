@@ -503,9 +503,8 @@ So:
 - **Prefetch never sees a `Probe` at all.** It calls `admit_bypass_only()` instead of `admit()` — a
   query that only ever returns `Allow`/`Bypass` and, critically, never re-arms `open_until` the way
   `admit_at`'s cooldown-elapsed arm does. Calling plain `admit()` here would let a `prefetch` burn the
-  single per-cooldown probe slot with no cache request made (it skips the cache on `Probe` just like on
-  `Bypass`), pushing every demand read's recovery out another full cooldown; `admit_bypass_only()` removes
-  that possibility structurally rather than by convention. On `Bypass` it skips the cache and reports
+  single per-cooldown probe slot, pushing every demand read's recovery out another full cooldown;
+  `admit_bypass_only()` removes that possibility structurally rather than by convention. On `Bypass` it skips the cache and reports
   nothing; on `Allow` it uses the cache and still reports nothing on success. Only a demand read
   (`get_opts`/`get_ranges`) that itself receives `Probe` from `admit_at` and completes a cache request can
   report `record_responsive` and close the circuit.
@@ -528,9 +527,8 @@ parked-task exhaustion this plan exists to remove. Gating `prefetch` on `admit_b
 never hands out a `Probe` and never re-arms `open_until` — removes that path entirely, rather than
 merely discarding a `Probe` after receiving one: `admit()`'s cooldown-elapsed arm re-arms the window as
 part of handing out the `Probe`, so calling `admit()` and then discarding the result would already have
-burned the slot. As a side effect this also removes the one place a caller had to distinguish `Probe`
-from `Allow`: `get_opts` and `get_ranges` still do, via `admit()`, but `prefetch` now only ever needs
-"cache or don't."
+burned the slot. As a side effect this also means `prefetch` never has to distinguish `Probe` from
+`Allow` at all — it only ever needs "cache or don't."
 
 Note this removes an accidental mitigation: prefetch traffic was implicitly holding the circuit closed
 during cold periods. That does not argue for exempting `prefetch` from the admission gate, though.
@@ -1370,12 +1368,13 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   classified as responsive, not folded in with the read-stall/transport-error path.
 - **`prefetch` success does not close the circuit**: with the breaker at `failure_threshold - 1`
   consecutive failures, a successful `prefetch` must leave `consecutive` where it was — one more read
-  failure still trips. Then, with a near-zero cooldown, trip the breaker and issue several `prefetch`
-  calls while open — each returns `Ok` with `dropped == items.len()`, issues no server request, and (the
-  regression this issue exists to catch) leaves the circuit's probe slot untouched: a subsequent demand
-  read is still admitted as the `Probe` and, on completing a cache request, closes the circuit — exactly
-  as if no `prefetch` calls had happened in between. This confirms `prefetch` is gated on
-  `admit_bypass_only()`, not `admit()`, and cannot itself consume or re-arm the probe slot.
+  failure still trips. Then, with a long cooldown, trip the breaker and issue several `prefetch` calls
+  while open — each returns `Ok` with `dropped == items.len()` and issues no server request, confirming
+  `prefetch` stays gated (`Bypass`, no cache access) rather than closing the circuit on success. (A real
+  clock can't discriminate `admit()` from `admit_bypass_only()` here — both leave the probe slot
+  untouched on a fast-forgotten near-zero cooldown by the time the next call runs. That property —
+  that a burst of `prefetch` calls cannot consume or re-arm the demand path's probe slot — is what the
+  `admit_bypass_only` synthetic-clock unit test above covers instead.)
 - **`prefetch` while open** returns `Ok` with `dropped == items.len()`, `accepted == 0`, and issues no
   request.
 - **Breaker disabled** (`failure_threshold: 0`): the counter keeps climbing on every read against the
