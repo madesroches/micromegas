@@ -16,29 +16,25 @@ use micromegas_analytics::images_table::ImagesRecordBuilder;
 use micromegas_analytics::lakehouse::block_partition_spec::BlockProcessor;
 use micromegas_analytics::lakehouse::otel::logs_block_processor::OtelLogsBlockProcessor;
 use micromegas_analytics::lakehouse::otel::metrics_block_processor::OtelMetricsBlockProcessor;
-use micromegas_analytics::lakehouse::partition_source_data::PartitionSourceBlock;
 use micromegas_analytics::log_entries_table::LogEntriesRecordBuilder;
 use micromegas_analytics::log_entry::LogEntry;
 use micromegas_analytics::measure::Measure;
-use micromegas_analytics::metadata::StreamMetadata;
 use micromegas_analytics::metrics_table::MetricsRecordBuilder;
 use micromegas_analytics::net_spans_table::{NetSpanRecord, NetSpanRecordBuilder};
 use micromegas_analytics::properties::property_set::PropertySet;
 use micromegas_analytics::span_table::{SpanRecordBuilder, SpanRow};
-use micromegas_telemetry::blob_storage::BlobStorage;
-use micromegas_telemetry::block_wire_format::BlockPayload;
-use micromegas_telemetry::types::block::BlockMetadata;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, any_value};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
-    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric, number_data_point,
+    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Summary, SummaryDataPoint,
+    metric, number_data_point, summary_data_point::ValueAtQuantile,
 };
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 mod test_helpers;
-use test_helpers::make_process_metadata;
+use test_helpers::{make_in_memory_blob_storage, make_process_metadata, make_source_block};
 
 /// Comfortably above the old `Int16Type` dictionary-key ceiling (32,767).
 const OVERFLOW_COUNT: usize = 33_000;
@@ -242,68 +238,6 @@ fn images_record_builder_overflow() {
     assert_eq!(batch.num_rows(), OVERFLOW_COUNT);
 }
 
-/// Builds an in-memory `BlobStorage` with no path prefix, so `blobs/{process_id}/...`
-/// paths written directly onto the store are exactly what `fetch_block_payload` reads.
-fn make_in_memory_blob_storage() -> Arc<BlobStorage> {
-    Arc::new(BlobStorage::new(
-        Arc::new(object_store::memory::InMemory::new()),
-        object_store::path::Path::from(""),
-    ))
-}
-
-/// Builds a `PartitionSourceBlock` for a single block carrying `payload_bytes` under a
-/// fresh random process/stream/block id, and writes the CBOR-wrapped `BlockPayload` to
-/// `blob_storage` at the path `fetch_block_payload` expects.
-async fn make_source_block(
-    blob_storage: &BlobStorage,
-    payload_bytes: Vec<u8>,
-    nb_objects: usize,
-    format: &str,
-) -> anyhow::Result<Arc<PartitionSourceBlock>> {
-    let process_id = uuid::Uuid::new_v4();
-    let stream_id = uuid::Uuid::new_v4();
-    let block_id = uuid::Uuid::new_v4();
-    let now = chrono::Utc::now();
-
-    let block_payload = BlockPayload {
-        dependencies: vec![],
-        objects: payload_bytes,
-    };
-    let mut buf = Vec::new();
-    ciborium::into_writer(&block_payload, &mut buf)?;
-    let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-    blob_storage.put(&obj_path, buf.into()).await?;
-
-    let block = BlockMetadata {
-        block_id,
-        stream_id,
-        process_id,
-        begin_time: now,
-        end_time: now,
-        begin_ticks: 0,
-        end_ticks: 0,
-        nb_objects: nb_objects as i32,
-        payload_size: block_payload.objects.len() as i64,
-        object_offset: 0,
-        insert_time: now,
-    };
-    let stream = Arc::new(StreamMetadata {
-        process_id,
-        stream_id,
-        dependencies_metadata: vec![],
-        objects_metadata: vec![],
-        tags: vec![],
-        properties: Arc::new(vec![]),
-    });
-    let process = Arc::new(make_process_metadata(process_id, None, HashMap::new()));
-    Ok(Arc::new(PartitionSourceBlock {
-        block,
-        stream,
-        process,
-        format: format.to_string(),
-    }))
-}
-
 /// The "mandatory companions" fix (plan §"Companion OTLP processors"): OTel processors
 /// build their own local `Int16Type` dictionary builders instead of reusing
 /// `LogEntriesRecordBuilder`/`MetricsRecordBuilder`, so they need the exact same widening.
@@ -416,4 +350,74 @@ async fn otel_metrics_block_processor_survives_target_dictionary_overflow() {
         .expect("process must not panic past the old Int16 dictionary cap");
     let row_set = result.expect("expected Some(row_set) for a non-empty block");
     assert_eq!(row_set.rows.num_rows(), OVERFLOW_COUNT);
+}
+
+/// Same as `otel_metrics_block_processor_survives_target_dictionary_overflow`, but drives
+/// the fan-out `append_summary`/`append_row` path (issue #1359) past the old Int16 cap:
+/// one distinct scope (→ `target`) per Summary data point, each fanning out to 4 rows
+/// (count/sum/min/max) under 4 distinct `name`s.
+#[tokio::test]
+async fn otel_metrics_block_processor_summary_survives_target_dictionary_overflow() {
+    let mut scope_metrics = Vec::with_capacity(OVERFLOW_COUNT);
+    for i in 0..OVERFLOW_COUNT {
+        scope_metrics.push(ScopeMetrics {
+            scope: Some(InstrumentationScope {
+                name: format!("scope-{i}"),
+                version: String::new(),
+                attributes: vec![],
+                dropped_attributes_count: 0,
+            }),
+            metrics: vec![Metric {
+                name: format!("metric-{i}"),
+                description: String::new(),
+                unit: "unit".to_string(),
+                metadata: vec![],
+                data: Some(metric::Data::Summary(Summary {
+                    data_points: vec![SummaryDataPoint {
+                        attributes: vec![],
+                        start_time_unix_nano: 0,
+                        time_unix_nano: i as u64 + 1,
+                        count: i as u64,
+                        sum: i as f64,
+                        quantile_values: vec![
+                            ValueAtQuantile {
+                                quantile: 0.0,
+                                value: 0.0,
+                            },
+                            ValueAtQuantile {
+                                quantile: 1.0,
+                                value: i as f64,
+                            },
+                        ],
+                        flags: 0,
+                    }],
+                })),
+            }],
+            schema_url: String::new(),
+        });
+    }
+    let resource_metrics = ResourceMetrics {
+        resource: None,
+        scope_metrics,
+        schema_url: String::new(),
+    };
+    let payload_bytes = resource_metrics.encode_to_vec();
+
+    let blob_storage = make_in_memory_blob_storage();
+    let src_block = make_source_block(
+        &blob_storage,
+        payload_bytes,
+        OVERFLOW_COUNT,
+        "otlp/v1/metrics",
+    )
+    .await
+    .expect("make_source_block");
+
+    let processor = OtelMetricsBlockProcessor {};
+    let result = processor
+        .process(blob_storage, src_block)
+        .await
+        .expect("process must not panic past the old Int16 dictionary cap");
+    let row_set = result.expect("expected Some(row_set) for a non-empty block");
+    assert_eq!(row_set.rows.num_rows(), OVERFLOW_COUNT * 4);
 }

@@ -1,8 +1,11 @@
 //! `BlockProcessor` for OTLP `ResourceMetrics` payloads → `measures` rows.
 //!
-//! Handles Sum and Gauge data points; logs and skips Histogram, ExponentialHistogram,
-//! and Summary (deferred to v2 — see plan §"Histograms deferred"). Aggregation
-//! temporality and `is_monotonic` ride along on per-row properties.
+//! Handles Sum and Gauge data points directly, and Summary data points by fanning each
+//! one out into count/sum/min/max rows under suffixed metric names (`<metric>_count`,
+//! `_sum`, `_min`, `_max`); any other `quantile_values` entry (configured percentiles)
+//! is logged and dropped. Histogram and ExponentialHistogram are still logged and
+//! skipped — a histogram-aware schema is future work. Aggregation temporality and
+//! `is_monotonic` ride along on per-row properties for Sum/Gauge.
 
 use super::attrs::attrs_to_jsonb;
 use crate::lakehouse::{
@@ -24,11 +27,24 @@ use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use opentelemetry_proto::tonic::metrics::v1::{
-    NumberDataPoint, ResourceMetrics, metric::Data, number_data_point,
+    DataPointFlags, NumberDataPoint, ResourceMetrics, SummaryDataPoint, metric::Data,
+    number_data_point,
 };
 use prost::Message;
 use std::borrow::Cow;
 use std::sync::Arc;
+
+/// Returns `time_unix_nano` as `i64` unless it's zero, in which case the data point is
+/// logged and skipped. Shared by `append` (Sum/Gauge) and `append_summary`, which only
+/// differ in the `kind` word used in the log message.
+fn nonzero_time_nanos(kind: &str, metric_name: &str, time_unix_nano: u64) -> Option<i64> {
+    let time_nanos = time_unix_nano as i64;
+    if time_nanos == 0 {
+        debug!("OTel {kind} data point for {metric_name} dropped (time_unix_nano=0)");
+        return None;
+    }
+    Some(time_nanos)
+}
 
 #[derive(Debug)]
 pub struct OtelMetricsBlockProcessor {}
@@ -119,12 +135,9 @@ impl BlockProcessor for OtelMetricsBlockProcessor {
                         );
                     }
                     Some(Data::Summary(s)) => {
-                        debug!(
-                            "OTel summary dropped (deprecated in OTel): name={} unit={} points={}",
-                            metric.name,
-                            metric.unit,
-                            s.data_points.len()
-                        );
+                        for dp in &s.data_points {
+                            builder.append_summary(&scope_name, &metric.name, &metric.unit, dp)?;
+                        }
                     }
                     None => {}
                 }
@@ -196,33 +209,22 @@ impl MeasuresRowBuilder {
         }
     }
 
-    fn append(
+    /// Appends one `measures` row for an already-extracted point. Shared tail of
+    /// `append` (Sum/Gauge) and `append_summary` (Summary). `props_jsonb` is the
+    /// already-serialized `properties` payload — attributes and derived extras
+    /// merged by `attrs_to_jsonb` — so a caller fanning one data point out into
+    /// several rows serializes it once.
+    fn append_row(
         &mut self,
         scope_name: &str,
         metric_name: &str,
         unit: &str,
-        dp: &NumberDataPoint,
-        extras: &[(String, JsonbValue<'static>)],
+        time_nanos: i64,
+        value: f64,
+        props_jsonb: &[u8],
     ) -> Result<()> {
-        let time_nanos = dp.time_unix_nano as i64;
-        if time_nanos == 0 {
-            debug!("OTel metric data point for {metric_name} dropped (time_unix_nano=0)");
-            return Ok(());
-        }
-
-        let value = match dp.value.as_ref() {
-            Some(number_data_point::Value::AsDouble(d)) => *d,
-            Some(number_data_point::Value::AsInt(i)) => *i as f64,
-            None => {
-                debug!("OTel data point for {metric_name} has no value, skipping");
-                return Ok(());
-            }
-        };
-
         self.min_time = self.min_time.min(time_nanos);
         self.max_time = self.max_time.max(time_nanos);
-
-        let props_jsonb = attrs_to_jsonb(&dp.attributes, extras);
 
         self.process_ids.append(&self.process_id_str)?;
         self.stream_ids.append(&self.stream_id_str)?;
@@ -236,10 +238,135 @@ impl MeasuresRowBuilder {
         self.names.append(metric_name)?;
         self.units.append(unit)?;
         self.values.append_value(value);
-        self.properties.append(&props_jsonb)?;
+        self.properties.append(props_jsonb)?;
         self.process_properties.append(&**self.process.properties)?;
 
         self.nb_appended += 1;
+        Ok(())
+    }
+
+    fn append(
+        &mut self,
+        scope_name: &str,
+        metric_name: &str,
+        unit: &str,
+        dp: &NumberDataPoint,
+        extras: &[(String, JsonbValue<'static>)],
+    ) -> Result<()> {
+        let Some(time_nanos) = nonzero_time_nanos("metric", metric_name, dp.time_unix_nano) else {
+            return Ok(());
+        };
+
+        let value = match dp.value.as_ref() {
+            Some(number_data_point::Value::AsDouble(d)) => *d,
+            Some(number_data_point::Value::AsInt(i)) => *i as f64,
+            None => {
+                debug!("OTel data point for {metric_name} has no value, skipping");
+                return Ok(());
+            }
+        };
+
+        self.append_row(
+            scope_name,
+            metric_name,
+            unit,
+            time_nanos,
+            value,
+            &attrs_to_jsonb(&dp.attributes, extras),
+        )
+    }
+
+    /// Fans a `SummaryDataPoint` out into rows for the four fixed statistics
+    /// (count, sum, min, max), each under its own suffixed metric name. Any
+    /// `quantile_values` entry other than `q=0.0`/`q=1.0` is logged and dropped —
+    /// configured percentiles are out of scope. No derived `otel.metric.*` extras
+    /// (aggregation_temporality/is_monotonic/kind) are added for Summary rows; the
+    /// per-point `dp.attributes` still populate `properties` the same as Sum/Gauge.
+    ///
+    /// A point flagged `NO_RECORDED_VALUE` is dropped entirely: `count`/`sum` are
+    /// non-optional proto scalars, so materializing it would inject real 0.0 samples
+    /// where the series actually has a gap.
+    fn append_summary(
+        &mut self,
+        scope_name: &str,
+        metric_name: &str,
+        unit: &str,
+        dp: &SummaryDataPoint,
+    ) -> Result<()> {
+        if dp.flags & DataPointFlags::NoRecordedValueMask as u32 != 0 {
+            debug!("OTel summary data point dropped (NO_RECORDED_VALUE): name={metric_name}");
+            return Ok(());
+        }
+
+        let Some(time_nanos) = nonzero_time_nanos("summary", metric_name, dp.time_unix_nano) else {
+            return Ok(());
+        };
+
+        // All four statistics share the same attribute map, so serialize it once.
+        let props_jsonb = attrs_to_jsonb(&dp.attributes, &[]);
+
+        self.append_row(
+            scope_name,
+            &format!("{metric_name}_count"),
+            "",
+            time_nanos,
+            dp.count as f64,
+            &props_jsonb,
+        )?;
+        self.append_row(
+            scope_name,
+            &format!("{metric_name}_sum"),
+            unit,
+            time_nanos,
+            dp.sum,
+            &props_jsonb,
+        )?;
+
+        let mut min_emitted = false;
+        let mut max_emitted = false;
+        for q in &dp.quantile_values {
+            if q.quantile == 0.0 {
+                if min_emitted {
+                    debug!(
+                        "OTel summary quantile dropped (duplicate q=0.0, _min already emitted): \
+                         name={metric_name}"
+                    );
+                    continue;
+                }
+                min_emitted = true;
+                self.append_row(
+                    scope_name,
+                    &format!("{metric_name}_min"),
+                    unit,
+                    time_nanos,
+                    q.value,
+                    &props_jsonb,
+                )?;
+            } else if q.quantile == 1.0 {
+                if max_emitted {
+                    debug!(
+                        "OTel summary quantile dropped (duplicate q=1.0, _max already emitted): \
+                         name={metric_name}"
+                    );
+                    continue;
+                }
+                max_emitted = true;
+                self.append_row(
+                    scope_name,
+                    &format!("{metric_name}_max"),
+                    unit,
+                    time_nanos,
+                    q.value,
+                    &props_jsonb,
+                )?;
+            } else {
+                debug!(
+                    "OTel summary quantile dropped (only count/sum/min/max are materialized): \
+                     name={metric_name} quantile={}",
+                    q.quantile
+                );
+            }
+        }
         Ok(())
     }
 

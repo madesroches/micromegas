@@ -36,12 +36,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
-const SCHEMA_VERSION: u8 = 6;
+const SCHEMA_VERSION: u8 = 7;
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
 }
 
-/// Block-processor map covering native transit + OTel Sum/Gauge metric blocks.
+/// Block-processor map covering native transit + OTel Sum/Gauge/Summary metric blocks.
 fn metrics_processors() -> Arc<BlockProcessorMap> {
     let mut m: BlockProcessorMap = HashMap::new();
     m.insert(
