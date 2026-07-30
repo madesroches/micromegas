@@ -259,14 +259,22 @@ SQL that this repo controls.
    note to the five mutating entries, and split the marker (e.g. keep 🔧 as a general
    "administrative-flavored function" marker, add a new 🔒 "requires admin" marker for the five
    gated entries, and add a short legend explaining both) so gated and non-gated functions are
-   visually distinguishable. **`mkdocs/docs/admin/maintenance.md:165-168`**: this page also lists
+   visually distinguishable. **`doc/how_to_query/README.md`**: this live docs page (kept in sync
+   with the `functions-reference.md`/`how_to_query` mkdocs pages per `CHANGELOG.md:50`) also
+   documents `retire_partitions` and `materialize_partitions` as ordinary query functions, under
+   `#### retire_partitions` / `#### materialize_partitions` (around lines 488-510) — add the same
+   admin-required note to both sections. **`mkdocs/docs/admin/maintenance.md:165-168`**: this page also lists
    `materialize_partitions()`, `regenerate_partitions()`, `retire_partitions()`, and
    `retire_partition_by_metadata()` as the ad-hoc administration path — add the same
    admin-required note there. **`mkdocs/docs/query-guide/python-api.md`**: add the same "requires
    admin — see Admin SQL Functions" note to its `materialize_partitions()`,
    `regenerate_partitions()`, and `retire_partitions()` sections (around lines 474-528), since
    these are the worked Python client examples users read before calling the now-gated
-   functions. **`python/micromegas/micromegas/flightsql/client.py`**: add the same "requires
+   functions. Also add the same note to this page's own
+   `### retire_incompatible_partitions(client, view_set_name=None)` section (around line 552),
+   which the line range above doesn't cover, since that helper issues raw
+   `retire_partition_by_metadata(...)` SQL (`python/micromegas/micromegas/admin.py:173`) and is
+   gated the same way. **`python/micromegas/micromegas/flightsql/client.py`**: add the same "requires
    admin" note to the docstrings of `retire_partitions()`, `materialize_partitions()`, and
    `regenerate_partitions()` (around lines 607-733) — these are a separate hand-written source
    from `python-api.md`, not generated from it. **`python/micromegas/micromegas/admin.py`**: add
@@ -324,11 +332,14 @@ SQL that this repo controls.
 - `mkdocs/docs/query-guide/functions-reference.md` (document the new admin requirement on the
   five mutating entries and split the `🔧` legend so gated vs. non-gated functions are
   distinguishable)
+- `doc/how_to_query/README.md` (note the admin requirement on the `#### retire_partitions` and
+  `#### materialize_partitions` sections, lines ~488-510 — kept in sync with the mkdocs
+  `functions-reference.md`/`how_to_query` pages per `CHANGELOG.md:50`)
 - `mkdocs/docs/admin/maintenance.md` (note the admin requirement in the "Ad-hoc administration"
   section, lines 165-168)
 - `mkdocs/docs/query-guide/python-api.md` (note the new admin requirement on the
   `materialize_partitions()`, `regenerate_partitions()`, and `retire_partitions()` client
-  wrapper sections)
+  wrapper sections, and on its own `retire_incompatible_partitions()` section at line ~552)
 - `python/micromegas/micromegas/flightsql/client.py` (add "requires admin" notes to the
   `retire_partitions()`, `materialize_partitions()`, and `regenerate_partitions()` docstrings)
 - `python/micromegas/micromegas/admin.py` (add a "requires admin" note to
