@@ -186,7 +186,14 @@ mutating set out of contexts that have no business granting it.
    admin — see Admin SQL Functions" note to its `materialize_partitions()`,
    `regenerate_partitions()`, and `retire_partitions()` sections (around lines 474-528), since
    these are the worked Python client examples users read before calling the now-gated
-   functions.
+   functions. **`python/micromegas/micromegas/flightsql/client.py`**: add the same "requires
+   admin" note to the docstrings of `retire_partitions()`, `materialize_partitions()`, and
+   `regenerate_partitions()` (around lines 607-733) — these are a separate hand-written source
+   from `python-api.md`, not generated from it. **`python/micromegas/micromegas/admin.py`**: add
+   a note to `retire_incompatible_partitions()`'s docstring (around line 87) that it now requires
+   `is_admin`, since it internally issues raw SQL calling `retire_partition_by_metadata()`
+   (around line 173) on the caller's behalf and would otherwise start failing for non-admin
+   callers with no explanation.
 8. `cargo fmt` and `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
@@ -210,6 +217,13 @@ mutating set out of contexts that have no business granting it.
 - `mkdocs/docs/query-guide/python-api.md` (note the new admin requirement on the
   `materialize_partitions()`, `regenerate_partitions()`, and `retire_partitions()` client
   wrapper sections)
+- `python/micromegas/micromegas/flightsql/client.py` (add "requires admin" notes to the
+  `retire_partitions()`, `materialize_partitions()`, and `regenerate_partitions()` docstrings)
+- `python/micromegas/micromegas/admin.py` (add a "requires admin" note to
+  `retire_incompatible_partitions()`'s docstring)
+- `rust/auth/tests/tower_tests.rs` (extend `AuthService` tests for `x-auth-is-admin`)
+- `rust/auth/tests/user_attribution_tests.rs` (add unit tests for the new `is_admin(metadata)`
+  helper)
 
 ## Trade-offs
 
