@@ -473,6 +473,9 @@ if result:
 
 ### `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
+!!! note "Requires admin"
+    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+
 Create materialized partitions for performance optimization:
 
 ```python
@@ -490,6 +493,9 @@ client.materialize_partitions(
 ```
 
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
+
+!!! note "Requires admin"
+    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced):
 
@@ -512,6 +518,9 @@ client.regenerate_partitions(
 **Warning:** `(begin, end, partition_delta_seconds)` must exactly cover an existing partition's boundaries, or the call fails loudly instead of silently creating a duplicate partition. This is an admin/rollout tool -- run calls serially, never with overlapping ranges in flight concurrently.
 
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
+
+!!! note "Requires admin"
+    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Remove materialized partitions to free up storage:
 
@@ -550,6 +559,9 @@ print(f"Total size: {incompatible['file_size'].sum() / (1024**3):.2f} GB")
 **Returns:** `view_set_name`, `view_instance_id`, `begin_insert_time`, `end_insert_time`, `incompatible_schema_hash`, `current_schema_hash`, `file_path`, `file_size`
 
 ### `retire_incompatible_partitions(client, view_set_name=None)`
+
+!!! note "Requires admin"
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Retires partitions with incompatible schemas using metadata-based retirement (works for empty and non-empty partitions).
 

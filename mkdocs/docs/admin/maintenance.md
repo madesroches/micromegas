@@ -165,8 +165,10 @@ binary:
 - **SQL functions** such as `materialize_partitions()` (backfill a time range),
   `regenerate_partitions()` (force-rebuild existing partitions directly from
   source data, bypassing the freshness check `materialize_partitions()` stops
-  at), `retire_partitions()`, and `retire_partition_by_metadata()`.
+  at), `retire_partitions()`, and `retire_partition_by_metadata()`. All four
+  require an authenticated admin — see [Authentication](flight-sql.md#authentication).
 - **Python helpers** such as `micromegas.admin.list_incompatible_partitions()` and
-  `micromegas.admin.retire_incompatible_partitions()`.
+  `micromegas.admin.retire_incompatible_partitions()` (the latter internally calls
+  `retire_partition_by_metadata()` and so also requires admin).
 
 Both are documented in [Admin SQL Functions](functions-reference.md).

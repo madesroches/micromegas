@@ -257,6 +257,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         &format!(r#"SELECT "begin", "end" FROM view_instance('thread_spans', '{stream_id_str}');"#),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
 
@@ -270,6 +271,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         ),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
     let partition_count = get_single_row_primitive_value_by_name::<
@@ -297,6 +299,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         Some(query_range),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
     let df = ctx
@@ -322,6 +325,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         &format!(r#"SELECT "begin" FROM view_instance('thread_spans', '{stream_id_str}') ORDER BY "begin";"#),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
 

@@ -1,4 +1,4 @@
-use micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
+use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
 use tonic::metadata::MetadataMap;
 
 /// Helper to create metadata with auth and user attribution headers
@@ -327,4 +327,52 @@ fn test_user_name_with_delegation() {
     assert_eq!(attr.user_email, "alice@example.com");
     assert_eq!(attr.user_name, Some("Alice Smith".to_string()));
     assert_eq!(attr.service_account, Some("backend-service".to_string()));
+}
+
+// ============================================================================
+// is_admin tests
+// ============================================================================
+
+#[test]
+fn test_is_admin_missing_header_means_trusted_admin() {
+    // No AuthService configured at all (e.g. --disable-auth) never sets any x-auth-* header,
+    // matching the existing --disable-auth convention in web_server.rs.
+    let metadata = MetadataMap::new();
+    assert!(is_admin(&metadata));
+}
+
+#[test]
+fn test_is_admin_true() {
+    let mut metadata = MetadataMap::new();
+    metadata.insert("x-auth-is-admin", "true".parse().unwrap());
+    assert!(is_admin(&metadata));
+}
+
+#[test]
+fn test_is_admin_false() {
+    let mut metadata = MetadataMap::new();
+    metadata.insert("x-auth-is-admin", "false".parse().unwrap());
+    assert!(!is_admin(&metadata));
+}
+
+#[test]
+fn test_is_admin_garbage_value_fails_closed() {
+    let mut metadata = MetadataMap::new();
+    metadata.insert("x-auth-is-admin", "not-a-bool".parse().unwrap());
+    assert!(!is_admin(&metadata));
+}
+
+#[test]
+fn test_is_admin_empty_value_fails_closed() {
+    let mut metadata = MetadataMap::new();
+    metadata.insert("x-auth-is-admin", "".parse().unwrap());
+    assert!(!is_admin(&metadata));
+}
+
+#[test]
+fn test_is_admin_case_sensitive() {
+    // bool::from_str only accepts lowercase "true"/"false" — anything else fails closed.
+    let mut metadata = MetadataMap::new();
+    metadata.insert("x-auth-is-admin", "True".parse().unwrap());
+    assert!(!is_admin(&metadata));
 }

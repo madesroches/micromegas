@@ -2,6 +2,8 @@
 
 This page provides a complete reference to all SQL functions available in Micromegas queries, including both standard DataFusion functions and Micromegas-specific extensions.
 
+**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error. See [Authentication](../admin/flight-sql.md#authentication).
+
 ## Micromegas Extensions
 
 ### Table Functions
@@ -44,19 +46,19 @@ WHERE duration > 1000000;  -- > 1ms
 
 See [Admin Functions Reference](../admin/functions-reference.md#list_partitions) for details.
 
-#### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧
+#### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
 **Administrative Function** - Retires data partitions from the lakehouse for a specified time range.
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partitionsview_set-view_instance-start_time-end_time) for details.
 
-#### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧
+#### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
 **Administrative Function** - Materializes data partitions for a view over a specified time range.
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
-#### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧
+#### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
 **Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at.
 
@@ -68,13 +70,13 @@ See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) for details.
 
-#### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧
+#### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
 **Administrative Function** - Retires a single partition by its metadata identifiers.
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time) for details.
 
-#### `retire_partition_by_file(file_path)` 🔧
+#### `retire_partition_by_file(file_path)` 🔧🔒
 
 **Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code.
 

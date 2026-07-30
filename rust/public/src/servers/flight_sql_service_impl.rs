@@ -40,7 +40,7 @@ use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
-use micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
+use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -375,6 +375,7 @@ impl FlightSqlServiceImpl {
             query_range,
             self.view_factory.clone(),
             self.session_configurator.clone(),
+            is_admin(metadata),
         )
         .await
         .map_err(|e| {
@@ -835,7 +836,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
@@ -845,6 +846,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
+            is_admin(request.metadata()),
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;

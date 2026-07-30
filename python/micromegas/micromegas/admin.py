@@ -99,6 +99,10 @@ def retire_incompatible_partitions(
     **WARNING**: This operation is irreversible. Retired partitions will be
     permanently deleted from metadata and their data files removed from object storage.
 
+    **Requires admin**: internally calls `retire_partition_by_metadata()`, which requires
+    an authenticated admin. Non-admin callers, including API keys, will see this fail
+    with an "Invalid function" error.
+
     Args:
         client: FlightSQLClient instance for executing queries.
         view_set_name (str, optional): Retire incompatible partitions only for

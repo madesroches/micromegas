@@ -103,6 +103,7 @@ pub(crate) async fn firehose_auth_middleware(
             req.headers_mut().remove("x-auth-email");
             req.headers_mut().remove("x-auth-issuer");
             req.headers_mut().remove("x-allow-delegation");
+            req.headers_mut().remove("x-auth-is-admin");
             next.run(req).await
         }
         Err(e) => {

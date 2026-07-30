@@ -99,6 +99,7 @@ pub fn register_lakehouse_functions(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
+    is_admin: bool,
 ) {
     ctx.register_udtf(
         "view_instance",
@@ -118,29 +119,11 @@ pub fn register_lakehouse_functions(
         Arc::new(ListViewSetsTableFunction::new(view_factory.clone())),
     );
     ctx.register_udtf(
-        "retire_partitions",
-        Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
-    );
-    ctx.register_udtf(
         "perfetto_trace_chunks",
         Arc::new(PerfettoTraceTableFunction::new(
             lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
-        )),
-    );
-    ctx.register_udtf(
-        "materialize_partitions",
-        Arc::new(MaterializePartitionsTableFunction::new(
-            lakehouse.clone(),
-            view_factory.clone(),
-        )),
-    );
-    ctx.register_udtf(
-        "regenerate_partitions",
-        Arc::new(RegeneratePartitionsTableFunction::new(
-            lakehouse.clone(),
-            view_factory.clone(),
         )),
     );
     ctx.register_udtf(
@@ -164,10 +147,32 @@ pub fn register_lakehouse_functions(
     ctx.register_udf(
         AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake().clone()))).into_scalar_udf(),
     );
-    ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake().clone()).into_scalar_udf());
-    ctx.register_udf(
-        make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
-    );
+    if is_admin {
+        ctx.register_udtf(
+            "retire_partitions",
+            Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
+        );
+        ctx.register_udtf(
+            "materialize_partitions",
+            Arc::new(MaterializePartitionsTableFunction::new(
+                lakehouse.clone(),
+                view_factory.clone(),
+            )),
+        );
+        ctx.register_udtf(
+            "regenerate_partitions",
+            Arc::new(RegeneratePartitionsTableFunction::new(
+                lakehouse.clone(),
+                view_factory.clone(),
+            )),
+        );
+        ctx.register_udf(
+            make_retire_partition_by_file_udf(lakehouse.lake().clone()).into_scalar_udf(),
+        );
+        ctx.register_udf(
+            make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
+        );
+    }
 }
 
 /// register functions that are not depended on the lakehouse architecture
@@ -185,8 +190,16 @@ pub fn register_functions(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
+    is_admin: bool,
 ) {
-    register_lakehouse_functions(ctx, lakehouse, part_provider, query_range, view_factory);
+    register_lakehouse_functions(
+        ctx,
+        lakehouse,
+        part_provider,
+        query_range,
+        view_factory,
+        is_admin,
+    );
     register_extension_functions(ctx);
 }
 
@@ -197,6 +210,7 @@ pub async fn make_session_context(
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
+    is_admin: bool,
 ) -> Result<SessionContext> {
     // Disable page index reading for backward compatibility with legacy Parquet files
     // Legacy files may have incomplete ColumnIndex metadata (missing null_pages field)
@@ -218,6 +232,7 @@ pub async fn make_session_context(
         part_provider.clone(),
         query_range,
         view_factory.clone(),
+        is_admin,
     );
     for view in view_factory.get_global_views() {
         register_table(
@@ -243,6 +258,7 @@ pub async fn query(
     sql: &str,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
+    is_admin: bool,
 ) -> Result<Answer> {
     info!("query sql={sql}");
     let ctx = make_session_context(
@@ -251,6 +267,7 @@ pub async fn query(
         query_range,
         view_factory,
         configurator,
+        is_admin,
     )
     .await
     .with_context(|| "make_session_context")?;

@@ -435,6 +435,7 @@ async fn test_log_summary_view(
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
     let pretty_results_view =
@@ -471,6 +472,7 @@ async fn test_log_summary_view(
         ORDER BY time_bin, process_id;",
         view_factory,
         Arc::new(NoOpSessionConfigurator),
+        false,
     )
     .await?;
     let pretty_results_ref =

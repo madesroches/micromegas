@@ -52,6 +52,11 @@ refuses to start unless `--disable-auth` is passed. Admin users (via
 [Admin SQL Functions](functions-reference.md). For provider configuration and
 precedence, see [Authentication](authentication.md).
 
+`--disable-auth` treats every FlightSQL caller as admin — it is a development-only
+flag, never for production use. API-key (`MICROMEGAS_API_KEYS`) callers are never
+admin, so they cannot call the [admin SQL functions](functions-reference.md); admin
+access requires an OIDC identity matched against `MICROMEGAS_ADMINS`.
+
 ## Health and readiness
 
 The gRPC server does not itself serve HTTP. Pass `--health-listen-addr` to start

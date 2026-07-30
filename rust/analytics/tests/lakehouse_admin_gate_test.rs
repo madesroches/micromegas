@@ -1,0 +1,117 @@
+//! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
+//! `make_session_context`'s `is_admin` parameter gates registration of the five mutating
+//! lakehouse UDTFs/UDFs (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
+//! `retire_partition_by_file`, `retire_partition_by_metadata`). These tests only assert on
+//! DataFusion *planning*, never execution: the gated functions' own `call_with_args`
+//! implementations only parse arguments and return a lazy provider, so planning-only assertions
+//! never touch the lazy Postgres pool or the in-memory object store below.
+
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
+use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::runtime::make_runtime_env;
+use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::blob_storage::BlobStorage;
+use std::sync::Arc;
+
+async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
+    let db_pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("connect_lazy should not touch the network");
+    let object_store: Arc<dyn object_store::ObjectStore> =
+        Arc::new(object_store::memory::InMemory::new());
+    let blob_storage = Arc::new(BlobStorage::new(
+        object_store,
+        object_store::path::Path::from("lakehouse"),
+    ));
+    let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
+    let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
+    Arc::new(LakehouseContext::new(lake, runtime))
+}
+
+async fn make_gated_session_context(
+    is_admin: bool,
+) -> datafusion::execution::context::SessionContext {
+    let lakehouse = make_offline_lakehouse_context().await;
+    make_session_context(
+        lakehouse,
+        Arc::new(NullPartitionProvider {}),
+        None,
+        Arc::new(ViewFactory::new(vec![])),
+        Arc::new(NoOpSessionConfigurator),
+        is_admin,
+    )
+    .await
+    .expect("make_session_context")
+}
+
+const MUTATING_UDTF_CALLS: &[&str] = &[
+    "SELECT * FROM retire_partitions('log_entries', 'i', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z')",
+    "SELECT * FROM materialize_partitions('log_entries', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', 86400)",
+    "SELECT * FROM regenerate_partitions('log_entries', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', 86400)",
+];
+
+const MUTATING_UDF_CALLS: &[&str] = &[
+    "SELECT retire_partition_by_file('s3://bucket/x/file.parquet')",
+    "SELECT retire_partition_by_metadata('log_entries', 'global', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z')",
+];
+
+const NON_MUTATING_CALLS: &[&str] = &[
+    "SELECT * FROM list_partitions()",
+    "SELECT * FROM list_view_sets()",
+];
+
+#[tokio::test]
+async fn non_admin_session_cannot_plan_mutating_udtfs() {
+    let ctx = make_gated_session_context(false).await;
+    for sql in MUTATING_UDTF_CALLS {
+        let err = ctx
+            .sql(sql)
+            .await
+            .expect_err(&format!("expected planning to fail for non-admin: {sql}"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("table function") && msg.contains("not found"),
+            "expected a 'table function ... not found' error for {sql}, got: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn non_admin_session_cannot_plan_mutating_udfs() {
+    let ctx = make_gated_session_context(false).await;
+    for sql in MUTATING_UDF_CALLS {
+        let err = ctx
+            .sql(sql)
+            .await
+            .expect_err(&format!("expected planning to fail for non-admin: {sql}"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Invalid function"),
+            "expected an 'Invalid function' error for {sql}, got: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn admin_session_can_plan_all_mutating_functions() {
+    let ctx = make_gated_session_context(true).await;
+    for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
+        ctx.sql(sql)
+            .await
+            .unwrap_or_else(|e| panic!("expected admin session to plan {sql}, got: {e}"));
+    }
+}
+
+#[tokio::test]
+async fn non_mutating_functions_plan_identically_for_admin_and_non_admin() {
+    for is_admin in [false, true] {
+        let ctx = make_gated_session_context(is_admin).await;
+        for sql in NON_MUTATING_CALLS {
+            ctx.sql(sql).await.unwrap_or_else(|e| {
+                panic!("expected {sql} to plan with is_admin={is_admin}, got: {e}")
+            });
+        }
+    }
+}

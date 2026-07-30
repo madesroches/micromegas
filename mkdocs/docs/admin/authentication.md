@@ -544,6 +544,13 @@ Admin users (configured via `MICROMEGAS_ADMINS`) have elevated privileges for ad
 - Schema migration operations
 - Administrative SQL functions
 
+Admin status is reachable only through an OIDC identity matched against
+`MICROMEGAS_ADMINS` (or the role-scoped `MICROMEGAS_ANALYTICS_ADMINS` in the
+monolith) — never through `MICROMEGAS_API_KEYS`. API keys always resolve to
+`is_admin: false`, so an API-key-only deployment has no admin principal and cannot
+call the five gated admin SQL functions (see
+[Admin SQL Functions](functions-reference.md)).
+
 ### HTTPS/TLS
 
 Always use TLS for production deployments:
