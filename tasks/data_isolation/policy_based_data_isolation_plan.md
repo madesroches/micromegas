@@ -278,11 +278,15 @@ struct, then:
   `regenerate_partitions` (`query.rs:139` — added since the original audit) and the scalar UDFs
   `retire_partition_by_file` / `retire_partition_by_metadata` (`query.rs:168,170` — the original
   audit covered UDTFs only) are likewise mutating/destructive. None is a read, so none gets an
-  audience filter; instead `register_lakehouse_functions` registers the set only for internal
-  maintenance contexts (`ReadScope::All`) **or** when the operator sets
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` — the knob open deployments use to preserve today's
-  behavior, where any authenticated user can call them. In a restricted deployment a user calling
-  any of them gets "function not found". (Recorded caveat: the knob is deployment-wide — in a hybrid
+  audience filter; instead `register_lakehouse_functions` registers the set only when the session
+  is an internal maintenance context (`ReadScope::All`), **or** the caller's authenticated
+  `AuthContext.is_admin` is set, **or** the operator sets
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` — the knob open deployments use to let
+  non-admins keep calling them. Otherwise a user calling any of them gets "function not found".
+  The admin arm is tracked independently as issue #1377 (it closes a hole that exists today,
+  before any isolation work: every authenticated caller can invoke these functions) and may land
+  ahead of this stage; `is_admin` must be threaded from the authenticated `AuthContext`, never
+  from client-claimed attribution. (Recorded caveat: the knob is deployment-wide — in a hybrid
   deployment mixing an everyone-group with personal audiences, enabling it lets users retire
   partitions of personal audiences too; tighten to per-audience checks if hybrid becomes real.)
 
@@ -322,7 +326,9 @@ existing `process_id → audience` cache to reach the audience for the membershi
   admin's FlightSQL session is filtered like any other. Rationale: an operator with lakehouse/object-
   store access can read the raw parquet directly, so a query-path bypass adds attack surface and audit
   burden for no confidentiality gain. Admins needing cross-principal reads use direct storage access,
-  not the query path. (`is_admin` therefore needs no wiring into `ReadScope` in v1.)
+  not the query path. (`is_admin` never feeds `ReadScope`; it does get threaded to the
+  session for the mutating-function registration gate — §4 Prong B, issue #1377 — an
+  integrity/availability control, not a read bypass.)
 
 ### 5b. Public (audience-agnostic) views — optional, opt-in
 
@@ -404,7 +410,7 @@ by grants; every knob is fail-closed when empty/unset:
 |---|---|---|---|
 | `MICROMEGAS_IMPLICIT_GROUPS` | comma-separated groups every authenticated principal belongs to (added to both readable and mintable sets) | `everyone` | unset |
 | `MICROMEGAS_UNSTAMPED_AUDIENCE` | audience attributed at query time to data with no `micromegas.audience` property, and the visibility rule for `'global'` partition rows (§4) | `group:everyone` | unset (unstamped data hidden) |
-| `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` | register the five mutating UDTFs/UDFs (§4) in user sessions | `true` | unset/false |
+| `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` | register the five mutating UDTFs/UDFs (§4) for **non-admin** user sessions (admin sessions always get them — issue #1377) | `true` | unset/false |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | §5b public view-set allowlist | — | optional |
 
 `MICROMEGAS_UNSTAMPED_AUDIENCE` is the migration-pain killer: an open deployment can turn
@@ -475,7 +481,8 @@ GitHub issue.
    `perfetto_trace_chunks`, `parse_block`, **`get_payload`**) verify the named process's audience
    at async scan time, failing closed; `list_partitions` row-filters by readable audience incl.
    the `'global'`-row rule (§4); the five mutating functions are registered only for maintenance
-   contexts or under `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`. Build the `moka` caches
+   contexts, admin sessions, or under `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` (the admin arm
+   is issue #1377 and may land ahead of this stage). Build the `moka` caches
    (`process_id → audience`, `stream_id → process_id`, `block_id → process_id`). Internal
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
    inherit the caller's scope (§5).
@@ -594,11 +601,13 @@ GitHub issue.
   primary correctness risk and the focus of testing.
 - The five mutating functions (`retire_partitions`, `materialize_partitions`,
   `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are not read
-  paths; they are excluded from user sessions (registered only for maintenance contexts, or under
-  the explicit `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` opt-in that open deployments use to
-  keep today's behavior) rather than audience-filtered — an integrity/availability control, not a
-  confidentiality one. Without it, a non-admin could name another principal's `process_id` via
-  `retire_partitions`' `view_instance_id` argument to destroy their partitions.
+  paths; they are excluded from user sessions (registered only for maintenance contexts, admin
+  sessions — issue #1377, which also closes the pre-isolation hole where every authenticated
+  caller can invoke them — or under the explicit `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`
+  opt-in that open deployments use to keep them for non-admins) rather than audience-filtered — an
+  integrity/availability control, not a confidentiality one. Without it, a non-admin could name
+  another principal's `process_id` via `retire_partitions`' `view_instance_id` argument to destroy
+  their partitions.
 - **Identity holes closed in Stage 1** (would otherwise be full enforcement bypasses): the
   prepared-statement path resolves no identity (`flight_sql_service_impl.rs:842`), and
   `validate_and_resolve_user_attribution_grpc` falls back to client-claimed identity when the
@@ -626,8 +635,9 @@ GitHub issue.
   `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
   (incl. `get_payload`) rejects an unowned `process_id`/`block_id` and `list_partitions`
   row-filters — assert both fail closed; assert all five mutating functions are absent
-  ("function not found") from a registration built with any non-`All` `ReadScope` unless
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`, admin or not. Public views (§5b): with a view
+  ("function not found") from a registration built with any non-`All` `ReadScope` for a non-admin
+  session unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`, and present for an admin session
+  regardless of the knob (#1377). Public views (§5b): with a view
   set on the allowlist, `OwnershipRewrite` injects no predicate for it and `list_partitions` shows
   its `'global'` rows; with an empty allowlist behavior is unchanged (every set filtered).
 - **Integration (privacy profile):** two audiences seeded; assert each sees only its own rows
@@ -686,13 +696,15 @@ Resolved by research (kept here for the record; details in Appendix A):
 - ~~**`list_view_sets` exposure.**~~ **Decided: stays unfiltered** — view-set schema/definitions only,
   no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
 - ~~**`retire_partitions` / `materialize_partitions` exposure.**~~ **Decided (revised 2026-07-30):
-  maintenance-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`.** Both were missing from
+  registered for maintenance contexts, admin sessions (issue #1377), or under
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`.** Both were missing from
   the original Prong B audit despite being registered unconditionally alongside the other UDTFs;
   the 2026-07-30 audit added `regenerate_partitions` and the `retire_partition_by_file` /
   `retire_partition_by_metadata` UDFs to the set. All mutate lakehouse state, so none gets an
-  audience read-filter — instead `register_lakehouse_functions` skips registering them for user
-  sessions unless the deployment opts in (the knob open deployments set to preserve today's
-  behavior). See §4 Prong B and Appendices A–B.
+  audience read-filter — instead `register_lakehouse_functions` skips registering them for
+  non-admin user sessions unless the deployment opts in (the knob open deployments set to keep
+  them for non-admins). The admin arm also closes a pre-isolation hole (today every authenticated
+  caller can invoke them) and may land first. See §4 Prong B and Appendices A–B.
 - ~~**Scan-time check cost.**~~ **Resolved:** `process_id → audience` is immutable, so an
   invalidation-free size-bounded `moka` cache (backed by `find_process`) makes the check an O(1)
   in-memory lookup on warm hits, one indexed PG query per process ever on cold miss. `ReadScope` is
@@ -712,9 +724,11 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
   store therefore moves early in the ordering (Stage 4).
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
-- **Mutating functions: registration gate with deployment opt-in**
-  (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) rather than unconditionally maintenance-only, so open
-  deployments keep today's behavior.
+- **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
+  (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) rather than unconditionally maintenance-only. Admin
+  sessions always get them (issue #1377 — standalone, closes today's
+  any-authenticated-caller hole, may land before the isolation stages); the knob keeps them
+  available to non-admins in open deployments.
 - **Prong B coverage extended** after the 2026-07-30 drift audit: `regenerate_partitions`,
   `retire_partition_by_file`, `retire_partition_by_metadata` join the mutating set; `get_payload`
   gets the arg-addressed read guard. See Appendix B.
