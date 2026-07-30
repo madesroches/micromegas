@@ -450,11 +450,17 @@ rule they report `record_responsive` — at the status check in each caller for 
 `send_ranges` for `/ranges` (already specified below), each before falling back to `direct`. `Truncated`
 keeps its `warn!` as a protocol violation from our own cache, not a health signal; the two
 malformed-header arms are the same kind of protocol violation from our own cache and are treated
-identically. `prefetch`'s non-2xx status (`client.rs:230-232`) is deliberately **not** covered by this
-rule:
-per "Prefetch does not close the circuit" it reports nothing, on any admission. Folding it into the
-general rule would let a write-time warm's non-2xx response hold a 503-ing cache's circuit closed —
-exactly the failure mode that section exists to prevent.
+identically. `prefetch`'s `resp.json::<PrefetchResponse>()` (`client.rs:233`) belongs to the same family
+when it fails with a decode error (`reqwest::Error::is_decode()`): the response arrived as a full, cheap
+2xx, and the body simply doesn't parse as a `PrefetchResponse` — a protocol violation from our own cache,
+not evidence the demand path is unresponsive — so it reports nothing, exactly like the other two
+malformed-response arms, rather than `record_unresponsive`. A `resp.json()` failure that is instead a
+body/transport/timeout error (`is_body()`/`is_timeout()`) is a genuine liveness signal and still reports
+`record_unresponsive` (see "One outcome per logical operation"). `prefetch`'s non-2xx status
+(`client.rs:230-232`) is deliberately **not** covered by this rule: per "Prefetch does not close the
+circuit" it reports nothing, on any admission. Folding it into the general rule would let a write-time
+warm's non-2xx response hold a 503-ing cache's circuit closed — exactly the failure mode that section
+exists to prevent.
 
 **One outcome per logical operation.** A single read can touch the cache twice — `get_opts`'s Suffix arm
 issues `head_size` and then `get_range_stream` (`client.rs:531`). Reporting `record_responsive` at both
@@ -469,14 +475,18 @@ on a body stall at all. So:
 
 | Entry point | Where the single success report happens |
 |---|---|
-| `get_opts` head-only path (`client.rs:486-509`) | `head_size` — its completion (a successful parse, or the malformed-`Content-Length` arm) *is* the whole operation, and both report `record_responsive` |
+| `get_opts` head-only path (`client.rs:486-509`) | Its own call site, immediately after `head_size` returns a successfully parsed size — `head_size`'s completion *is* the whole operation here. (`head_size`'s own two after-2xx failure arms — non-2xx and malformed-`Content-Length` — report `record_responsive` internally instead, terminal for every caller of `head_size`; see "Wiring into `CacheClientStore`" → `get_opts`.) |
 | `get_opts` main path (full / bounded / offset / suffix) | `full_stream_with_fallback`, when the body stream ends without error **and no resume occurred** — not the intermediate `head_size`, and not `send()`'s headers. A resumed operation reports `record_unresponsive` only, from the resume path, and nothing else |
-| `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | its own `head_size` — completion (successful parse or malformed-header arm) *is* the whole operation there too, since no stream follows, and both report `record_responsive` |
+| `get_range_stream`'s no-`Content-Range` branch (`client.rs:132-143`) | Its own call site, immediately after `head_size` returns a successfully parsed size — no stream follows, so this is the whole operation. (`head_size`'s internal failure-arm reports are the same shared ones as above.) |
 | `get_ranges` | `send_ranges`, once the framed body fully resolves (already specified below) |
 | `prefetch` | see "Prefetch does not close the circuit" |
 
-`prefetch`'s `resp.json()` (`client.rs:233`) is the tail of its own operation, so a stall there is a
-failure report; its success is governed by the prefetch rule below.
+`prefetch`'s `resp.json()` (`client.rs:233`) is the tail of its own operation. A body/transport/timeout
+error there (`reqwest::Error::is_body()`/`is_timeout()`) is a failure report; a decode error
+(`reqwest::Error::is_decode()`) instead reports nothing, per "What does not feed the breaker as a
+failure" — the same treatment as `get_full_stream`'s and `head_size`'s malformed-response arms, since a
+`PrefetchResponse` that fails to parse still arrived as a full, cheap 2xx. Its success is governed by the
+prefetch rule below.
 
 ### Prefetch does not close the circuit
 
@@ -490,10 +500,14 @@ write-active, read-light process could then keep the circuit closed while every 
 
 So:
 
-- **Prefetch treats a `Probe` admission exactly like `Bypass`.** It still calls `admit()` — it needs to
-  know whether to skip the cache — but on either `Bypass` or `Probe` it skips the cache and reports
-  nothing; only on `Allow` does it use the cache, and even then it reports nothing on success. Only a
-  demand read (`get_opts`/`get_ranges`) that itself receives `Probe` and completes a cache request can
+- **Prefetch never sees a `Probe` at all.** It calls `admit_bypass_only()` instead of `admit()` — a
+  query that only ever returns `Allow`/`Bypass` and, critically, never re-arms `open_until` the way
+  `admit_at`'s cooldown-elapsed arm does. Calling plain `admit()` here would let a `prefetch` burn the
+  single per-cooldown probe slot with no cache request made (it skips the cache on `Probe` just like on
+  `Bypass`), pushing every demand read's recovery out another full cooldown; `admit_bypass_only()` removes
+  that possibility structurally rather than by convention. On `Bypass` it skips the cache and reports
+  nothing; on `Allow` it uses the cache and still reports nothing on success. Only a demand read
+  (`get_opts`/`get_ranges`) that itself receives `Probe` from `admit_at` and completes a cache request can
   report `record_responsive` and close the circuit.
 - **Prefetch's non-2xx status (`client.rs:230-232`) reports nothing**, for the same reason as success: a
   full response having arrived cheaply is no more evidence the *demand* path is healthy than a 2xx one
@@ -510,9 +524,13 @@ processes, which are also the heaviest demand-read callers; `telemetry-ingestion
 `warm_object` at all. Letting a `Probe`-admitted prefetch close the circuit in a write-active process
 would let accept-loop liveness reopen the demand path on the fixed cooldown cadence regardless of whether
 demand reads are actually recovering — reintroducing, on a ~3s cycle, a fraction of exactly the
-parked-task exhaustion this plan exists to remove. Treating `prefetch`'s `Probe` like `Bypass` removes
-that path entirely, and as a side effect removes the one place a caller had to distinguish `Probe` from
-`Allow`: `get_opts`, `get_ranges`, and now `prefetch` all only ever need "cache or don't."
+parked-task exhaustion this plan exists to remove. Gating `prefetch` on `admit_bypass_only()` — which
+never hands out a `Probe` and never re-arms `open_until` — removes that path entirely, rather than
+merely discarding a `Probe` after receiving one: `admit()`'s cooldown-elapsed arm re-arms the window as
+part of handing out the `Probe`, so calling `admit()` and then discarding the result would already have
+burned the slot. As a side effect this also removes the one place a caller had to distinguish `Probe`
+from `Allow`: `get_opts` and `get_ranges` still do, via `admit()`, but `prefetch` now only ever needs
+"cache or don't."
 
 Note this removes an accidental mitigation: prefetch traffic was implicitly holding the circuit closed
 during cold periods. That does not argue for exempting `prefetch` from the admission gate, though.
@@ -596,6 +614,11 @@ impl CircuitBreaker {
     pub fn new(config: CircuitBreakerConfig) -> Self;
     pub fn admit(&self) -> Admission;
     pub fn admit_at(&self, now: Instant) -> Admission;
+    /// Same read of state as `admit`, but never returns `Probe` and never
+    /// mutates `open_until` — for a caller (`prefetch`) that must not be able
+    /// to consume the single per-cooldown probe slot a demand read would
+    /// otherwise receive.
+    pub fn admit_bypass_only(&self) -> Admission;
     /// The resource completed an operation (any HTTP status counts — it's alive).
     pub fn record_responsive(&self) -> Transition;
     pub fn record_responsive_at(&self, now: Instant) -> Transition;
@@ -618,6 +641,12 @@ admit_at(now):
             open_until = Some(now + cooldown);          // re-arm before probing
             Probe
         }
+
+admit_bypass_only():
+    if failure_threshold == 0 { return Allow }
+    match open_until:
+        None    => Allow
+        Some(_) => Bypass    // never Probe; reads state only, mutates nothing
 
 record_responsive_at(_):
     let was_open = open_until.take().is_some();
@@ -649,6 +678,11 @@ Three properties worth calling out:
 - **A plain `std::sync::Mutex`**, never held across an `await`. Contention is a few nanoseconds
   against a network round trip; a lock-free atomics encoding would need a CAS loop for the same
   semantics and no measurable gain.
+- **`admit_bypass_only` never re-arms `open_until`.** Only `admit_at`'s cooldown-elapsed arm does
+  that, and only because it is handing out the one `Probe` that arm exists to gate. A caller that can
+  never usefully receive a `Probe` (`prefetch`) must not trigger that re-arm just by asking, or a burst
+  of such calls while open would keep pushing the next demand read's probe further out — see "Prefetch
+  does not close the circuit".
 
 #### Why the cooldown is fixed
 
@@ -734,14 +768,24 @@ helpers, so both call sites (the free function and the struct) agree on what fir
 threaded in: the body's per-frame bound is `read_timeout(stall_timeout + abandon_timeout)` on the client
 itself, so a stall surfaces through the same `Err` item as any other transport error.
 
-The head-only path (`client.rs:486-509`) reports `record_responsive` itself on a successful `head_size`,
-since nothing follows it. `get_range_stream`'s no-`Content-Range` path (`client.rs:132-143`) is the same
-shape: the server answered a plain 200 (no `Content-Range`) for a zero-byte object or an EOF-starting
-open range, and `head_size` there is the tail of the operation too — it returns a buffered empty
-`GetResult` built directly from the size, with no stream that follows. It reports `record_responsive` on
-that `head_size` exactly like the head-only path. Only the **Suffix** path's `head_size`
+`head_size` (`client.rs:190-205`) is one function shared by three call sites (the head-only path, the
+no-`Content-Range` path, and the Suffix path below), and it reports `record_responsive` internally only
+on its own two after-2xx failure arms — non-2xx status and malformed/missing `Content-Length`
+(`client.rs:197-199`, `200-204`) — because both are terminal for every caller: whichever site called
+`head_size`, a failure there always falls back to `direct` without going any further. Those two internal
+reports therefore fire identically no matter which of the three sites is calling. The *success* report —
+`head_size` returning a parsed size — is not made inside `head_size` at all; it is made by whichever call
+site owns the whole logical operation. The head-only path (`client.rs:486-509`) reports
+`record_responsive` itself on a successful `head_size` return, since nothing follows it.
+`get_range_stream`'s no-`Content-Range` path (`client.rs:132-143`) is the same shape: the server answered
+a plain 200 (no `Content-Range`) for a zero-byte object or an EOF-starting open range, and `head_size`
+there is the tail of the operation too — it returns a buffered empty `GetResult` built directly from the
+size, with no stream that follows. It reports `record_responsive` at its own call site on a successful
+`head_size` return, exactly like the head-only path. Only the **Suffix** path's `head_size`
 (`client.rs:531`) is a genuine intermediate step — it feeds a `get_range_stream` call whose stream is
-what completes the operation — so it reports nothing on its own.
+what completes the operation — so its call site adds no success report of its own; `head_size`'s internal
+failure-arm reports still fire there exactly as they do for the other two callers, since a `head_size`
+failure on the Suffix path also falls back to `direct` before `get_range_stream` is ever reached.
 
 **`get_ranges`** does not reuse `send` for the whole operation: `send` collapses every header-phase
 outcome into one `Result<reqwest::Response>`, but `get_ranges` has to keep four failure arms distinct —
@@ -782,13 +826,15 @@ if matches!(self.breaker.admit(), Admission::Bypass) {
 }
 ```
 
-For `get_opts` and `get_ranges` a `Probe` admission behaves exactly like `Allow`. `prefetch` instead
-treats `Probe` exactly like `Bypass` (see "Prefetch does not close the circuit"), so none of the three
-entry points keeps the admission value around afterward — each only ever needs "cache or don't."
+`get_opts` and `get_ranges` use this `admit()` gate, where a `Probe` admission behaves exactly like
+`Allow`. `prefetch` instead gates on `self.breaker.admit_bypass_only()`, which only ever returns
+`Allow`/`Bypass` (see "Prefetch does not close the circuit") — so none of the three entry points keeps
+the admission value around afterward, each only ever needs "cache or don't," and `prefetch` structurally
+cannot consume the single per-cooldown probe slot a demand read would otherwise receive.
 
-For `prefetch`, both a `Bypass` and a `Probe` admission return
-`Ok(PrefetchResponse { accepted: 0, rejected: 0, dropped: items.len() })` rather than `Err` — it is
-semantically a load-shed, and callers already log `dropped` at debug
+For `prefetch`, a `Bypass` admission (the only non-`Allow` outcome `admit_bypass_only()` can produce)
+returns `Ok(PrefetchResponse { accepted: 0, rejected: 0, dropped: items.len() })` rather than `Err` — it
+is semantically a load-shed, and callers already log `dropped` at debug
 (`data_lake_connection.rs:71-74`). This deliberately avoids inflating
 `range_cache_client_prefetch_error` with bypasses.
 
@@ -992,12 +1038,16 @@ one per cooldown.
    "`ClientBuilder::read_timeout` on the one client".
 8. Add the `send(&self, req, what)` helper (no budget parameter; **failure reporting only**) and route
    `head_size`, `prefetch`, `get_range_stream` and `get_full_stream` through it. Wire the single
-   success report per the "One outcome per logical operation" table: the head-only path reports on
-   `head_size`; the main `get_opts` paths report from `full_stream_with_fallback` on clean stream end
-   **with no resume** — a resumed operation reports `record_unresponsive` only, from the resume path,
-   and nothing else; the Suffix path reports nothing at its intermediate `head_size`; the
-   no-`Content-Range` path inside `get_range_stream` reports `record_responsive` at its own `head_size`,
-   since no stream follows there. Also report `record_responsive` at each caller's non-2xx status check
+   success report per the "One outcome per logical operation" table: the head-only path's call site
+   reports on a successful `head_size` return; the main `get_opts` paths report from
+   `full_stream_with_fallback` on clean stream end **with no resume** — a resumed operation reports
+   `record_unresponsive` only, from the resume path, and nothing else; the Suffix path's call site adds
+   no success report of its own at its intermediate `head_size` call; the no-`Content-Range` path inside
+   `get_range_stream` reports `record_responsive` at its own call site on a successful `head_size`
+   return, since no stream follows there. (`head_size`'s own two after-2xx failure arms report
+   `record_responsive` internally instead, identically for all three callers — see below and "Wiring
+   into `CacheClientStore`" → `get_opts`.) Also report `record_responsive` at each caller's non-2xx
+   status check
    (`client.rs:106-108`, `166-168`, `197-199`) before falling back to `direct`, per "Abandon vs.
    unresponsive" — a non-2xx there is a full response having arrived cheaply, the same rule `get_ranges`
    applies to its own non-2xx arm. Extend the same rule to the two malformed-header arms that follow a
@@ -1008,9 +1058,13 @@ one per cooldown.
    instead reports nothing on any admission, per "Prefetch does not close the circuit". Give
    `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
    have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Wire
-   `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error too — per "One
-   outcome per logical operation" it's the tail of its own operation, so a stall there is a failure
-   report, alongside the `range_cache_client_prefetch_error` bump it already does. `send`
+   `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error, but only for a
+   body/transport/timeout error (`reqwest::Error::is_body()`/`is_timeout()`); on a decode error
+   (`reqwest::Error::is_decode()`) report nothing, since a `PrefetchResponse` that fails to parse still
+   arrived as a full, cheap 2xx — the same "malformed response after a cheap 2xx is not a failure" rule
+   applied to `get_full_stream`'s and `head_size`'s malformed-`Content-Length` arms (see "What does not
+   feed the breaker as a failure"). Both arms still get the `range_cache_client_prefetch_error` bump they
+   already do. `send`
    calls `report_abandoned`/`report_unresponsive`, which step 12 adds; this step lands with a
    temporarily-uncompiled `send` until step 12's helpers exist (or do step 12 first — either ordering is
    fine, this is the one place the two steps are interdependent).
@@ -1039,10 +1093,12 @@ one per cooldown.
 
 10. Add `direct_get_opts` / `direct_get_ranges` (+ the free `direct_get_opts_with_metrics`) and
     collapse the seven existing fallback blocks onto them.
-11. Add the `Admission` gate to `get_opts` (after the precondition short-circuit), `get_ranges`, and
-    `prefetch`. `get_opts`/`get_ranges` treat `Probe` like `Allow`; `prefetch` treats `Probe` like
-    `Bypass` (see "Prefetch does not close the circuit"), so it needs only the cache-or-not decision,
-    never the admission value itself.
+11. Add the `Admission` gate to `get_opts` (after the precondition short-circuit) and `get_ranges` via
+    `self.breaker.admit()`, where `Probe` behaves like `Allow`. Gate `prefetch` on
+    `self.breaker.admit_bypass_only()` instead — a query that only ever returns `Allow`/`Bypass` and never
+    re-arms `open_until` (see "Prefetch does not close the circuit") — so `prefetch` needs only the
+    cache-or-not decision and cannot consume the single per-cooldown probe slot a demand read would
+    otherwise receive.
 12. Add the transition reporting helper as a free `report_transition(t: Transition)` (metrics/logs
     above), a free `report_unresponsive(what: &str, breaker: &CircuitBreaker)` (emits
     `range_cache_client_unresponsive`, calls `breaker.record_unresponsive()`, and feeds the resulting
@@ -1107,14 +1163,14 @@ No changes needed in `rust/ingestion/src/data_lake_connection.rs`: `new` keeps i
   cadence rather than an exponential schedule — see "Cold-cache tripping" in "Prefetch does not close the
   circuit". The separate `abandoned`/`unresponsive` counters keep the two distinguishable operationally
   even though the breaker doesn't distinguish them.
-- **Prefetch never closes the circuit, including under a `Probe` admission.** Treating `Probe` exactly
-  like `Bypass` for `prefetch` prevents accept-loop liveness from masking demand-path slowness — the
-  oscillation a shared probe slot would otherwise allow: a write-active process's frequent prefetch
-  calls winning the single per-cooldown probe and reopening the demand path on a ~3s cadence regardless
-  of whether reads are actually recovering, echoing the parked-task exhaustion this plan removes. The
-  cost is removing an accidental mitigation for cold-cache tripping (see "Cold-cache tripping"); the
-  benefit, beyond avoiding that oscillation, is that no caller has to distinguish `Probe` from `Allow` at
-  all — all three entry points only need "cache or don't."
+- **Prefetch never closes the circuit, and structurally cannot consume a `Probe`.** Gating `prefetch` on
+  `admit_bypass_only()` instead of `admit()` prevents accept-loop liveness from masking demand-path
+  slowness — the oscillation a shared probe slot would otherwise allow: a write-active process's frequent
+  prefetch calls winning the single per-cooldown probe and reopening the demand path on a ~3s cadence
+  regardless of whether reads are actually recovering, echoing the parked-task exhaustion this plan
+  removes. The cost is removing an accidental mitigation for cold-cache tripping (see "Cold-cache
+  tripping"); the benefit, beyond avoiding that oscillation, is that neither `prefetch` nor its callers
+  ever have to reason about `Probe` at all — it only ever gets "cache or don't."
 - **A fixed cooldown instead of exponential backoff.** Costs more probe requests during a long outage
   (~600 vs ~60 over 30 minutes, at one outstanding probe at a time); buys a two-field state machine, no
   `max_cooldown`/`probe_budget`/`initial_cooldown` knobs, no window floor, no
@@ -1232,6 +1288,10 @@ Synthetic clock (`let base = Instant::now()` then `base + Duration::from_millis(
 - `failure_threshold: 0` → always `Allow`, never opens.
 - Cancelled probe (admit a `Probe`, never report) → next `admit_at` after the extended window returns
   `Probe` again, i.e. no permanently-stuck circuit.
+- `admit_bypass_only` never returns `Probe` and never mutates `open_until`: while open, past the
+  cooldown instant, any number of calls to it return `Bypass` and leave the state such that the very
+  next `admit_at` call still returns `Probe` — i.e. a burst of `admit_bypass_only` calls cannot consume
+  or delay the demand path's probe slot.
 
 ### Integration — `rust/object-cache-srv/tests/client_circuit_breaker_tests.rs`
 
@@ -1310,11 +1370,14 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   classified as responsive, not folded in with the read-stall/transport-error path.
 - **`prefetch` success does not close the circuit**: with the breaker at `failure_threshold - 1`
   consecutive failures, a successful `prefetch` must leave `consecutive` where it was — one more read
-  failure still trips. Then, while open, a `Probe`-admitted `prefetch` also leaves it open and issues no
-  request — it is treated exactly like `Bypass` — confirming only a demand read that itself receives
-  `Probe` can close the circuit.
-- **`prefetch` while open (`Bypass` or `Probe`)** returns `Ok` with `dropped == items.len()`,
-  `accepted == 0`, and issues no request in either case.
+  failure still trips. Then, with a near-zero cooldown, trip the breaker and issue several `prefetch`
+  calls while open — each returns `Ok` with `dropped == items.len()`, issues no server request, and (the
+  regression this issue exists to catch) leaves the circuit's probe slot untouched: a subsequent demand
+  read is still admitted as the `Probe` and, on completing a cache request, closes the circuit — exactly
+  as if no `prefetch` calls had happened in between. This confirms `prefetch` is gated on
+  `admit_bypass_only()`, not `admit()`, and cannot itself consume or re-arm the probe slot.
+- **`prefetch` while open** returns `Ok` with `dropped == items.len()`, `accepted == 0`, and issues no
+  request.
 - **Breaker disabled** (`failure_threshold: 0`): the counter keeps climbing on every read against the
   hung server, confirming the escape hatch.
 
