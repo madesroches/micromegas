@@ -175,10 +175,19 @@ set_attr(
     "service.name",
     namespace.as_deref().unwrap_or(UNKNOWN_NAMESPACE),
 );
+set_attr(&mut resource_attrs, "service.namespace", ""); // clear so exe = service.name, not "{ns}/{service.name}"
 ```
 
 where `UNKNOWN_NAMESPACE` is the module constant `"AWS/Unknown"` — `service.name` is **always**
-set, so `exe` is never empty on this route.
+set, so `exe` is never empty on this route. The `service.namespace` clear matters even though the
+fingerprint already requires `attr_norm(service.namespace)` to be empty to match: `attr_norm` trims
+and lowercases before comparing, so a present-but-whitespace-only value (e.g. `"  "`) satisfies the
+fingerprint's emptiness gate but is not itself empty. `ProcessFromResource::build`
+(`block.rs:444-455`) reads `service.namespace` with raw `attr_to_string` — no trim — and builds
+`exe = format!("{svc_ns}/{svc_name}")` whenever `svc_ns` is a non-empty raw string. Left uncleared,
+that whitespace-only value would survive into the synthetic resource and produce
+`exe = "  /AWS/RDS"` instead of `exe = "AWS/RDS"`. Setting it to `""` guarantees `svc_ns.is_empty()`
+is true downstream regardless of what (if anything) the original resource carried.
 
 Every other field on the synthetic `ResourceMetrics`/`Resource` is carried over from the
 original unchanged — only `attributes` differs. Concretely: the new `ResourceMetrics.schema_url`
@@ -286,9 +295,12 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    following the `cloudwatch_logs_tests.rs` precedent — the one metrics/logs test file that
    does not `mod fixtures;`, keeping CloudWatch-shaped fixtures self-contained alongside the
    CloudWatch-specific tests that use them: a resource with only
-   `cloud.account.id`/`cloud.provider`/`cloud.region`/`aws.exporter.arn`, and metrics whose
-   datapoints carry `Namespace`/`MetricName`/`Dimensions` attributes, mirroring the issue's dev
-   data (`AWS/RDS`, `AWS/ECS`, `ECS/ContainerInsights`, `AWS/S3`).
+   `cloud.account.id`/`cloud.provider`/`cloud.region`/`aws.exporter.arn`, and metrics built as
+   `Summary` data points (the shape CloudWatch Metric Streams' `opentelemetry1.0` output actually
+   produces, per `mkdocs/docs/otlp/index.md:407`) carrying `Namespace`/`MetricName`/`Dimensions`
+   attributes, mirroring the issue's dev data (`AWS/RDS`, `AWS/ECS`, `ECS/ContainerInsights`,
+   `AWS/S3`); include one `Sum`/`Gauge`-shaped fixture as well to cover `metric_namespace`'s other
+   match arms.
 4. **Unit tests** (see Testing Strategy) in `cloudwatch_metrics_tests.rs`.
 5. **E2E test** — add a CloudWatch-shaped Firehose delivery test to
    `python/micromegas/tests/test_otlp_e2e.py` (alongside `test_firehose_metrics_e2e` and
@@ -298,12 +310,15 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    (e.g. suffixed with a fresh uuid, the same run-isolation approach
    `_fresh_resource_attrs()` uses for `service.instance.id` elsewhere in this file — since
    this route overwrites `service.instance.id` with the ARN, the ARN itself must be the
-   per-run-unique value). Look up the resulting processes by querying
+   per-run-unique value). Look up the resulting processes by wrapping the query for
    `processes` filtered on `property_get(properties, 'otel.resource.aws.exporter.arn') =
-   '<the run's arn>'` (not `discover_process_id`, which resolves `service.instance.id` to
-   a single first-match row and can't disambiguate the N processes this one ARN now maps
-   to); assert the full returned set has one row per namespace with `exe` equal to that
-   namespace and distinct `process_id`s.
+   '<the run's arn>'` in `assert_eventually` (`python/micromegas/tests/otlp_helpers.py:13-55`),
+   polling until the expected per-namespace row count is present — a single immediate query can
+   race the write path and return 0 or a partial set, the same reason every other e2e test in
+   `test_otlp_e2e.py` polls after the 200 ack — rather than `discover_process_id`, which resolves
+   `service.instance.id` to a single first-match row and can't disambiguate the N processes this
+   one ARN now maps to; once the row count matches, assert the full returned set has one row per
+   namespace with `exe` equal to that namespace and distinct `process_id`s.
 6. **Docs** — two separate deliverables under `mkdocs/docs/otlp/index.md`'s
    `## CloudWatch Metric Streams (Kinesis Firehose)` section (around line 391 — *not* the
    metric-name paragraph at line 154, which is in `### Metrics → measures`):
@@ -409,17 +424,30 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     `aws.exporter.arn` is present but empty/whitespace-only (pins the same emptiness gate on the
     marker attribute itself — an empty ARN is not a real marker and must fall through untouched
     rather than match a still-degenerate resource).
-  - `metric_namespace`: extracts `Namespace` from a `Sum`/`Gauge` metric's first data point;
+  - `metric_namespace`: extracts `Namespace` from a `Summary` metric's first data point — this is
+    the arm real CloudWatch traffic exercises, since CloudWatch Metric Streams'
+    `opentelemetry1.0` output encodes every data point as an OTLP `Summary`
+    (`mkdocs/docs/otlp/index.md:407`) — plus one `Sum`/`Gauge` case for the generic match arms;
     returns `None` when the metric has no data points, the attribute is absent, or its value is
     empty/whitespace-only.
-  - `rewrite_cloudwatch_metric_streams` on a `ResourceMetrics` with metrics from two namespaces
-    (`AWS/RDS`, `AWS/ECS`) → two output `ResourceMetrics`, correct `service.name`/
+  - `rewrite_cloudwatch_metric_streams` on a `ResourceMetrics` with `Summary` metrics (the shape
+    real CloudWatch traffic uses) from two namespaces (`AWS/RDS`, `AWS/ECS`) → two output
+    `ResourceMetrics`, correct `service.name`/
     `service.instance.id` on each, metrics partitioned correctly (no metric duplicated or
     dropped), a metric with no `Namespace` attribute lands in the fallback bucket with
     `service.name = "AWS/Unknown"` and `service.instance.id = <arn>` → `exe = "AWS/Unknown"`
-    (asserts `exe` is never empty on this route).
+    (asserts `exe` is never empty on this route); on a matching resource whose input
+    `service.namespace` is present but whitespace-only, the rewritten resource's
+    `service.namespace` is cleared and `ProcessFromResource::build` on it yields `exe` equal to
+    exactly the namespace string (e.g. `"AWS/RDS"`, not `"  /AWS/RDS"`) — pins the
+    `service.namespace`-clearing fix above.
   - A non-CloudWatch `ResourceMetrics` (has `service.name` already, or no `aws.exporter.arn`) →
     passed through byte-for-byte unchanged.
+  - The same namespace (e.g. `AWS/RDS`) split across two distinct original `ScopeMetrics` in one
+    `ResourceMetrics` → a single output `ResourceMetrics` for that namespace containing both
+    scopes' metrics (not two separate `ResourceMetrics`/blocks) — pins the cross-`ScopeMetrics`
+    `BTreeMap` merge the Design section specifies; correspondingly, `split_metrics` on the
+    rewritten request yields exactly one `PreparedBlock` for that namespace.
   - Full pipeline: rewritten request → `split_metrics` → one `PreparedBlock` per namespace,
     distinct `process_id`s; `ProcessFromResource::build` on each → `exe` equals the expected
     namespace string; two requests with the same `aws.exporter.arn` + same namespace but
@@ -445,11 +473,14 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 - **E2E (`python/micromegas/tests/test_otlp_e2e.py`, against real services):** a
   CloudWatch-shaped Firehose delivery, tagged with a per-run-unique synthetic
   `aws.exporter.arn`, with two or more namespaces produces one `processes` row per
-  namespace, `exe` equal to the namespace, and distinct `process_id`s — queried by
-  `property_get(properties, 'otel.resource.aws.exporter.arn')` matching the run's ARN and
-  asserting on the full returned row set (not `discover_process_id`, which returns only a
-  single first-match row and can't distinguish the N processes one ARN now maps to) — the
-  only test that exercises `write_blocks` → `register_otel_process` end to end for this
-  route, rather than stopping at in-memory `PreparedBlock`/`ProcessFromResource` structs.
+  namespace, `exe` equal to the namespace, and distinct `process_id`s — queried via
+  `assert_eventually` (`otlp_helpers.py:13-55`) polling `property_get(properties,
+  'otel.resource.aws.exporter.arn')` matching the run's ARN until the expected per-namespace
+  row count appears, then asserting on the full returned row set (not `discover_process_id`,
+  which returns only a single first-match row and can't distinguish the N processes one ARN now
+  maps to, and not a one-shot query, which can race the write path the same way every other
+  polled e2e test in this file does) — the only test that exercises `write_blocks` →
+  `register_otel_process` end to end for this route, rather than stopping at in-memory
+  `PreparedBlock`/`ProcessFromResource` structs.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
