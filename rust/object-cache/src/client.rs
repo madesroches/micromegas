@@ -242,7 +242,7 @@ impl CacheClientStore {
             Err(_) => {
                 self.report_abandoned(what);
                 Err(anyhow!(
-                    "cache {what} did not beat the direct path within {budget:?}"
+                    "cache {what} abandoned: no response headers within {budget:?}"
                 ))
             }
         }
@@ -264,7 +264,7 @@ impl CacheClientStore {
     /// expiry). Called only from `send`.
     fn report_abandoned(&self, what: &str) {
         imetric!("range_cache_client_abandoned", "count", 1_u64);
-        debug!("cache {what} abandoned: did not beat the direct path");
+        debug!("cache {what} abandoned: no response headers within the abandon budget");
         report_transition(self.breaker.record_unresponsive());
     }
 
