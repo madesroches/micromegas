@@ -125,8 +125,9 @@ reshapes the same function the breaker has to report from.
 
 The "re-emitting a delivered prefix is unsound" objection applies only to restarting from **zero**. The
 helper knows how many bytes it has yielded, and the resolved absolute byte range is already in hand — it
-is the `range` field of the `GetResult` built at `client.rs:294-299`. So on *any* stream error it can
-read the remainder from `direct`:
+is the `range` field of the `GetResult` built at `client.rs:294-299`. So on *any* stream error — or the
+stream ending cleanly (`None`) with bytes still owed, e.g. a body that closes short of its declared
+range without ever producing an `Err` — it can read the remainder from `direct`:
 
 ```
 resume_start = resolved_range.start + bytes_yielded
@@ -138,14 +139,16 @@ involved.
 
 **This collapses the function rather than growing it.** At `bytes_yielded == 0` the remainder *is* the
 whole requested range, so the pre-first-chunk fallback is the degenerate case of the same formula. The
-two-arm match becomes one path: yield chunks, count bytes, and on `Err` resume the remainder from
-`direct`. The `Some(Err(e))` arm at `client.rs:324-346` disappears into it.
+two-arm match becomes one path: yield chunks, count bytes, and on `Err`, or on the stream exhausting
+(`None`) with a non-empty remainder, resume the remainder from `direct`. The `Some(Err(e))` arm at
+`client.rs:324-346` disappears into it.
 
 Details that matter for correctness:
 
 - **An empty (or over-delivered) remainder ends the stream cleanly, not with a read.** If `resume_start
-  >= resolved_range.end` (a stream error arrives after every requested byte has already been yielded, or
-  after more bytes than requested), the operation is done — end the stream successfully and never call
+  >= resolved_range.end` (the stream ends — via `Err` or `None` — after every requested byte has already
+  been yielded, or after more bytes than requested), the operation is done — end the stream successfully
+  and never call
   `direct.get_opts` with `GetRange::Bounded(x..x)` or an inverted range. That call is a hard error in
   `object_store` 0.13.2 (`GetRange::is_valid`, `util.rs:225-239`, rejects `Bounded(r)` when `r.end <=
   r.start`), and both cases are reachable: `get_range_stream` accepts a 206 on `Content-Range` alone
@@ -450,13 +453,17 @@ rule they report `record_responsive` — at the status check in each caller for 
 `send_ranges` for `/ranges` (already specified below), each before falling back to `direct`. `Truncated`
 keeps its `warn!` as a protocol violation from our own cache, not a health signal; the two
 malformed-header arms are the same kind of protocol violation from our own cache and are treated
-identically. `prefetch`'s `resp.json::<PrefetchResponse>()` (`client.rs:233`) belongs to the same family
-when it fails with a decode error (`reqwest::Error::is_decode()`): the response arrived as a full, cheap
-2xx, and the body simply doesn't parse as a `PrefetchResponse` — a protocol violation from our own cache,
-not evidence the demand path is unresponsive — so it reports nothing, exactly like the other two
-malformed-response arms, rather than `record_unresponsive`. A `resp.json()` failure that is instead a
-body/transport/timeout error (`is_body()`/`is_timeout()`) is a genuine liveness signal and still reports
-`record_unresponsive` (see "One outcome per logical operation"). `prefetch`'s non-2xx status
+identically. `prefetch`'s response body (`client.rs:233`) is read as two explicit steps rather than via the combined
+`resp.json::<PrefetchResponse>()` helper, precisely to keep this discrimination sound: in reqwest 0.12.28
+`json()` re-wraps every error from its internal body read as `Kind::Decode` (`async_impl/response.rs:269-297`),
+so `is_body()`/`is_decode()` cannot tell a transport failure from a parse failure on that path.
+`resp.bytes().await` is read first — any error there is a body/transport/timeout failure and a genuine
+liveness signal, so it still reports `record_unresponsive` (see "One outcome per logical operation").
+Only once the bytes are in hand does `serde_json::from_slice::<PrefetchResponse>` run; its error is the
+pure malformed-response case — the response arrived as a full, cheap 2xx and the body simply doesn't
+parse as a `PrefetchResponse`, a protocol violation from our own cache, not evidence the demand path is
+unresponsive — so it reports nothing, exactly like the other two malformed-response arms, rather than
+`record_unresponsive`. `prefetch`'s non-2xx status
 (`client.rs:230-232`) is deliberately **not** covered by this rule: per "Prefetch does not close the
 circuit" it reports nothing, on any admission. Folding it into the general rule would let a write-time
 warm's non-2xx response hold a 503-ing cache's circuit closed — exactly the failure mode that section
@@ -481,12 +488,12 @@ on a body stall at all. So:
 | `get_ranges` | `send_ranges`, once the framed body fully resolves (already specified below) |
 | `prefetch` | see "Prefetch does not close the circuit" |
 
-`prefetch`'s `resp.json()` (`client.rs:233`) is the tail of its own operation. A body/transport/timeout
-error there (`reqwest::Error::is_body()`/`is_timeout()`) is a failure report; a decode error
-(`reqwest::Error::is_decode()`) instead reports nothing, per "What does not feed the breaker as a
-failure" — the same treatment as `get_full_stream`'s and `head_size`'s malformed-response arms, since a
-`PrefetchResponse` that fails to parse still arrived as a full, cheap 2xx. Its success is governed by the
-prefetch rule below.
+`prefetch`'s body read (`client.rs:233`) is the tail of its own operation, split into `resp.bytes()` then
+`serde_json::from_slice::<PrefetchResponse>` (see "What does not feed the breaker as a failure" for why
+the combined `resp.json()` can't be used here). A `bytes()` error is a failure report; a `from_slice`
+error instead reports nothing, per "What does not feed the breaker as a failure" — the same treatment as
+`get_full_stream`'s and `head_size`'s malformed-response arms, since a `PrefetchResponse` that fails to
+parse still arrived as a full, cheap 2xx. Its success is governed by the prefetch rule below.
 
 ### Prefetch does not close the circuit
 
@@ -747,13 +754,13 @@ async fn send(&self, req: reqwest::RequestBuilder, what: &str) -> Result<reqwest
 since the `'static` stream can't borrow `&self`), the resolved byte range, and the `direct` store. It:
 
 - counts bytes yielded;
-- on a stream error at any position, emits `range_cache_client_stream_resumed`, reports
-  `record_unresponsive`, and resumes the remainder from `direct` per "The fix: resume from the
-  delivered offset". This is the *only* report a resumed operation makes — see "One outcome per
-  logical operation" — so it never also reports `record_responsive` once the resumed remainder ends
-  cleanly;
-- on a clean end of stream **with no resume**, reports `record_responsive` — the single success report
-  for this operation.
+- on a stream error, or on the stream ending cleanly (`None`) with a non-empty remainder, at any
+  position, emits `range_cache_client_stream_resumed`, reports `record_unresponsive`, and resumes the
+  remainder from `direct` per "The fix: resume from the delivered offset". This is the *only* report a
+  resumed operation makes — see "One outcome per logical operation" — so it never also reports
+  `record_responsive` once the resumed remainder ends cleanly;
+- on a clean end of stream **with an empty (or over-delivered) remainder, so no resume**, reports
+  `record_responsive` — the single success report for this operation.
 
 Being a free function it cannot call `self.report` or `self.report_unresponsive`; a free
 `report_transition(t: Transition)` helper (mirroring the `direct_get_opts_with_metrics` split below)
@@ -993,7 +1000,8 @@ one per cooldown.
 ### Phase 0 — close the invariant hole
 
 1. In `client.rs`, rewrite `full_stream_with_fallback` to count yielded bytes and resume the remainder
-   from `direct` on a stream error at **any** position, per "The fix: resume from the delivered offset".
+   from `direct` at **any** position, on a stream error or on the stream ending cleanly (`None`) with
+   a non-empty remainder, per "The fix: resume from the delivered offset".
    It takes the resolved byte range (from the `GetResult` built at `client.rs:294-299`) in addition to
    its current arguments. The existing two-arm match collapses to one path — the pre-first-chunk
    fallback becomes `bytes_yielded == 0`. An empty-or-negative remainder (`resume_start >=
@@ -1055,14 +1063,17 @@ one per cooldown.
    "What does not feed the breaker as a failure". `prefetch`'s non-2xx status check (`client.rs:230-232`)
    instead reports nothing on any admission, per "Prefetch does not close the circuit". Give
    `full_stream_with_fallback` its `Arc<CircuitBreaker>` and
-   have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Wire
-   `prefetch`'s `resp.json()` read (`client.rs:233`) to `report_unresponsive` on error, but only for a
-   body/transport/timeout error (`reqwest::Error::is_body()`/`is_timeout()`); on a decode error
-   (`reqwest::Error::is_decode()`) report nothing, since a `PrefetchResponse` that fails to parse still
-   arrived as a full, cheap 2xx — the same "malformed response after a cheap 2xx is not a failure" rule
-   applied to `get_full_stream`'s and `head_size`'s malformed-`Content-Length` arms (see "What does not
-   feed the breaker as a failure"). Both arms still get the `range_cache_client_prefetch_error` bump they
-   already do. `send`
+   have its resume path report `record_unresponsive` via the free `report_unresponsive` helper. Replace
+   `prefetch`'s combined `resp.json::<PrefetchResponse>()` read (`client.rs:233`) with two explicit
+   steps — `resp.bytes().await`, then `serde_json::from_slice` on the result — because in reqwest 0.12.28
+   `json()` re-wraps every error from its internal body read as `Kind::Decode`, making
+   `is_body()`/`is_decode()` unable to distinguish a transport failure from a parse failure on that path
+   (see "What does not feed the breaker as a failure"). Wire the `bytes()` step to `report_unresponsive`
+   on error — a body/transport/timeout failure. The subsequent `from_slice` step reports nothing on
+   error, since a `PrefetchResponse` that fails to parse still arrived as a full, cheap 2xx — the same
+   "malformed response after a cheap 2xx is not a failure" rule applied to `get_full_stream`'s and
+   `head_size`'s malformed-`Content-Length` arms. Both arms still get the `range_cache_client_prefetch_error`
+   bump they already do. `send`
    calls `report_abandoned`/`report_unresponsive`, which step 12 adds; this step lands with a
    temporarily-uncompiled `send` until step 12's helpers exist (or do step 12 first — either ordering is
    fine, this is the one place the two steps are interdependent).
@@ -1361,11 +1372,14 @@ from the cache path, so cache-vs-direct service is observable in the returned da
   `pull_exact` wrap is per chunk, not cumulative (constraint (b)), with the same wall-clock headroom and
   for the same reason.
 - **`get_ranges` non-2xx / truncated stays closed**: a `/ranges` handler returning a 500, and separately
-  one that truncates the framed body mid-range (mirroring `FailAtOffsetStore` / the mid-stream
-  truncation case in `memory_budget_tests.rs:505-552`), each called past `failure_threshold`.
-  `get_ranges` falls back to direct bytes every time, but the server's request counter keeps climbing on
-  every subsequent call (no `Bypass`, breaker never opens) — confirming non-2xx and `Truncated` are
-  classified as responsive, not folded in with the read-stall/transport-error path.
+  one purpose-built to trigger `Truncated` rather than `Transport` — it writes the 8-byte little-endian
+  length prefix declaring N bytes, then fewer than N bytes of frame body, then ends the body cleanly
+  (not the `FailAtOffsetStore` / mid-stream-failure construction in `memory_budget_tests.rs:505-552`,
+  which aborts the underlying stream and therefore yields `Transport`, not `Truncated`) — each called
+  past `failure_threshold`. `get_ranges` falls back to direct bytes every time, but the server's request
+  counter keeps climbing on every subsequent call (no `Bypass`, breaker never opens) — confirming
+  non-2xx and `Truncated` are classified as responsive, not folded in with the read-stall/transport-error
+  path.
 - **`prefetch` success does not close the circuit**: with the breaker at `failure_threshold - 1`
   consecutive failures, a successful `prefetch` must leave `consecutive` where it was — one more read
   failure still trips. Then, with a long cooldown, trip the breaker and issue several `prefetch` calls
