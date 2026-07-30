@@ -1,19 +1,23 @@
-# Policy-based data isolation for telemetry
+# AbAC: audience-based access control for telemetry
 
 > **Supersedes** [`per_user_data_isolation_plan.SUPERSEDED.md`](per_user_data_isolation_plan.SUPERSEDED.md). That document analyzed the
 > per-user case and remains the reference for the confidentiality/integrity analysis and the
 > current-state audit; this plan generalizes its mechanism. Where they disagree, this document wins.
 
-> **Revised 2026-07-30** for deployment staging (issue #1334 follow-up): the `self|rbac` mode enum
-> and its `self` default are replaced by a single grant-configured policy engine (open deployments
-> are an `everyone`-group configuration, not a query-side bypass); implementation steps are
-> re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
+> **Revised 2026-07-30** for deployment staging (issue #1334 follow-up): the `self|audience` mode
+> enum and its `self` default are replaced by a single grant-configured policy engine (open
+> deployments are an `everyone`-group configuration, not a query-side bypass); implementation steps
+> are re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
 > change; and the code audit is refreshed (see Appendix B for drift found since 2026-07-21).
+
+> **Renamed 2026-07-30** from "policy-based data isolation". The design was described as *RBAC*
+> throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
+> audience-based access control**; `Rbac*` identifiers become `Audience*`.
 
 ## Overview
 
 Isolate telemetry so that data produced under one identity is only **readable** by principals
-authorized to read it. The mechanism is a small, general **RBAC seam**. There is **no mode enum and
+authorized to read it. The mechanism is a small, general **AbAC seam**. There is **no mode enum and
 no default policy**: one policy engine, configured by grants, spans the whole deployment spectrum —
 from an **open (team-wide) deployment**, where an implicit `everyone` group preserves today's
 everyone-reads-everything behavior with no data migration, to a **privacy deployment**, where each
@@ -59,6 +63,39 @@ key governs **integrity only**:
 Because the write grant is frozen into the key at mint and ingestion never re-checks it, **write
 keys can be eternal** (the current use case). No per-write policy lookup; no `minted_by` bookkeeping
 in v1 (see Deferred / Trade-offs for when that changes).
+
+### Naming
+
+This model is **AbAC — audience-based access control**. Earlier revisions called it RBAC, which was
+wrong: there is no role anywhere in the design. RBAC's defining feature is the indirection
+`subject → role → permission`, where a role is a named, reusable bundle of permissions. Nothing
+here bundles permissions. A subject carries a set of audiences; data carries one audience; access
+is set membership.
+
+Structurally the closest industry analogue is AWS-style **ABAC** (attribute-based access control):
+a tag on the resource matched against a tag on the principal, exactly like
+`aws:PrincipalTag/team == aws:ResourceTag/team`. This design is that pattern degenerated to a
+single attribute — hence the distinct casing **AbAC**, and hence *audience*-based rather than
+*attribute*-based: naming the one attribute is more honest than implying a general attribute
+engine with conditions and a deny effect, none of which exist here.
+
+Vocabulary used throughout:
+
+| Term | Meaning |
+|---|---|
+| **audience** | the label stamped on data at ingestion — `user:<email>` or `group:<id>`. Distinct from `AuthContext.audience` (the OIDC token audience); see "Naming collision to avoid" below. |
+| **grant** | one of the two relations — `write(subject → group)` at mint, `read(subject → group)` at query. In v1 both derive from IdP group membership. |
+| **readable set** | the audiences a caller may read; the `ReadScope` resolved per request. |
+| **role** | reserved for the *capability* axis (`is_admin`, issues #1376/#1377), which is orthogonal to audience scope. Not used for data isolation. |
+
+Two names deliberately **not** used: *RBAC* (no roles — and reserving the word keeps the admin
+capability axis distinct), and the bare acronym *ABAC* (taken by attribute-based access control;
+write "audience-based access control" or `AbAC`, never `ABAC`).
+
+Roles would become meaningful here if read and write ever separate: today group membership grants
+both, so there is nothing for a role to bundle. If the deferred grants table or a second write-role
+claim lands (see Deferred / Trade-offs), `viewer`/`minter` per group becomes a real role and the
+term earns its place.
 
 ## Current State
 
@@ -125,7 +162,7 @@ pub trait MintPolicy: Send + Sync + std::fmt::Debug {
 }
 ```
 
-The one shipped impl (`RbacMintPolicy`) permits `requested` iff it is in the caller's **mintable
+The one shipped impl (`AudienceMintPolicy`) permits `requested` iff it is in the caller's **mintable
 set**: `{user:<caller email>} ∪ {group:G : G ∈ caller's IdP groups claim} ∪ {group:G : G ∈
 MICROMEGAS_IMPLICIT_GROUPS}`. With `requested = None`, the audience defaults to
 `user:<caller email>`. In a privacy deployment with no implicit groups and no groups claim this
@@ -151,7 +188,7 @@ pub enum ReadScope {
 }
 ```
 
-The one shipped impl (`RbacReadPolicy`) returns the caller's **readable set**:
+The one shipped impl (`AudienceReadPolicy`) returns the caller's **readable set**:
 
 ```
 ReadScope::Principals(
@@ -403,7 +440,7 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 ### Config surface
 
 **No mode enum, no default policy** (revised 2026-07-30 — replaces the former
-`MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and its `self` default). One rbac engine, configured
+`MICROMEGAS_ISOLATION_POLICY=self|audience` knob and its `self` default). One AbAC engine, configured
 by grants; every knob is fail-closed when empty/unset:
 
 | Knob | Meaning | Open deployment | Privacy deployment |
@@ -438,9 +475,9 @@ untouched. Two tracks run in parallel after the seam lands — **enforcement** (
 GitHub issue.
 
 ### Stage 1 — Policy seam + identity threading (no enforcement yet)
-1. **Policy traits + rbac impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
-   (e.g. `policy.rs`); add `RbacMintPolicy` / `RbacReadPolicy` (§1–2). No `Self*` impls — per-user
-   is the rbac engine with empty grants.
+1. **Policy traits + AbAC impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
+   (e.g. `policy.rs`); add `AudienceMintPolicy` / `AudienceReadPolicy` (§1–2). No `Self*` impls — per-user
+   is the AbAC engine with empty grants.
 2. **AuthContext fields.** Add `bound_audience: Option<String>` and `groups: Vec<String>` to
    `AuthContext` (`rust/auth/src/types.rs`); populate `None`/`[]` everywhere except the key path
    (Stage 4) and OIDC. **Groups claim (low effort, confirmed):** add `groups: Option<Vec<String>>`
@@ -505,7 +542,7 @@ GitHub issue.
 
 ### Stage 6 — Mint endpoint + setup script (enables real per-user keys)
 12. OIDC-authenticated `POST /auth/api_keys` mint endpoint running `MintPolicy::resolve_audience`
-    (`RbacMintPolicy`, §1).
+    (`AudienceMintPolicy`, §1).
 13. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
@@ -529,7 +566,7 @@ GitHub issue.
 ## Files to Modify
 
 - Auth: `rust/auth/src/types.rs` (`bound_audience`, `groups`), `rust/auth/src/policy.rs` (new —
-  traits + `Rbac*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
+  traits + `Audience*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
   `rust/auth/src/oidc.rs` (groups claim, Stage 1), `rust/auth/src/user_attribution.rs` (never feed
   client-claimed identity into scope resolution, Stage 1), `rust/auth/src/api_key.rs` + new
   `db_api_key.rs` (Stage 4).
@@ -628,8 +665,8 @@ GitHub issue.
 
 ## Testing Strategy
 
-- **Unit:** `RbacMintPolicy` rejects `requested` outside the mintable set and defaults to
-  `user:<email>`; `RbacReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
+- **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set and defaults to
+  `user:<email>`; `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
   singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
   predicate per table kind (snapshot the rewritten logical plan), including `view_instance` and the
   `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
@@ -684,7 +721,7 @@ Resolved by research (kept here for the record; details in Appendix A):
   a column in the later physical-boundary stage.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
-- ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
+- ~~**Grant source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
   local grants table in v1). Keeps confidentiality on OIDC and the TCB unchanged; accepted
   trade-off is that membership grants both read and write for a group. A grants table (or a second
   write-role claim) is a deferred pure addition. See Stage 1 step 5.
@@ -711,8 +748,8 @@ Resolved by research (kept here for the record; details in Appendix A):
   free (from the JWT `groups` claim). See §4 "Prong B performance".
 
 Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up discussion):
-- **No mode enum, no default policy.** The former `MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and
-  its `self` default are gone. One rbac engine configured by grants; per-user isolation is the
+- **No mode enum, no default policy.** The former `MICROMEGAS_ISOLATION_POLICY=self|audience` knob and
+  its `self` default are gone. One AbAC engine configured by grants; per-user isolation is the
   empty-grants configuration, not a separate mode. Transitional unset-config = enforcement
   inactive; at GA the config is required at startup.
 - **Open deployments = everyone-group configuration** (chosen over a user-grantable
@@ -775,7 +812,7 @@ see them. But:
 absent-safe. `is_admin` = allowlist match on `sub`/email from `MICROMEGAS_ADMINS`
 (`load_admin_users` `:264-269`, check `:390-394`) — the precedent for group→capability config.
 Targets: Auth0, Azure AD, Google (Keycloak nested claims not currently targeted). `AuthContext`
-(`types.rs:14-37`) has no groups field yet — must be added for RBAC.
+(`types.rs:14-37`) has no groups field yet — must be added for AbAC grants.
 
 **Properties.** `micromegas_property = (key TEXT, value TEXT)` (`sql_telemetry_db.rs:17`),
 `processes.properties micromegas_property[]` (`:39`) — arbitrary strings, no per-key typing.
