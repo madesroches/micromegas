@@ -4,16 +4,16 @@
 //! push metrics into micromegas as **Metric Stream → Firehose → micromegas**, with no
 //! Lambda, no Kinesis Data Stream, and no collector process in between. Firehose is a
 //! dumb managed pipe: it wraps each delivered record (in OpenTelemetry 1.0.0 output mode,
-//! an OTLP `ExportMetricsServiceRequest` protobuf) in a small JSON envelope and expects a
-//! fixed ack shape back.
+//! one-or-more length-delimited OTLP `ExportMetricsServiceRequest` protobuf messages) in
+//! a small JSON envelope and expects a fixed ack shape back.
 //!
 //! Shared Firehose transport plumbing (auth, ack shape, request-id parsing) lives in
 //! `firehose_common` — this module only knows about the metrics-specific decode/ingest
 //! calls.
 //!
-//! Once a record's bytes are extracted from the envelope, they are the exact protobuf the
-//! existing `handler::ingest_metrics` already handles — no new identity, block, split, or
-//! write logic.
+//! Once a record's bytes are extracted from the envelope, `handler::ingest_firehose_metrics`
+//! decodes each length-delimited message in turn and reuses the existing split/write
+//! logic per message — no new identity, block, split, or write logic.
 
 use super::firehose_common::{firehose_auth_middleware, firehose_response, request_id_from};
 use super::ingestion_limits::apply_ingestion_body_limits;

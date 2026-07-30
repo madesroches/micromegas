@@ -12,12 +12,14 @@ Assumes services are already running:
 
 import base64
 import datetime
+import io
 import json
 import os
 import time
 import uuid
 
 import requests
+from google.protobuf import proto
 from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
 from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
 from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
@@ -649,6 +651,16 @@ def _firehose_envelope(request_id, records):
     )
 
 
+def _length_prefixed(*messages):
+    """Pack one-or-more protobuf messages into a single length-delimited byte string,
+    matching CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format: each message is
+    prefixed with an UnsignedVarInt32 byte length, back-to-back in the record body."""
+    buf = io.BytesIO()
+    for message in messages:
+        proto.serialize_length_prefixed(message, buf)
+    return buf.getvalue()
+
+
 def test_firehose_metrics_e2e():
     """POST a single OTLP metrics record wrapped in a Firehose envelope; assert
     the ack echoes X-Amz-Firehose-Request-Id and the metric lands in `measures`,
@@ -657,7 +669,7 @@ def test_firehose_metrics_e2e():
     base_ns = _now_ns()
     req = _build_metrics_request(attrs, base_ns)
     request_id = f"firehose-{uuid.uuid4()}"
-    body = _firehose_envelope(request_id, [req.SerializeToString()])
+    body = _firehose_envelope(request_id, [_length_prefixed(req)])
 
     resp = requests.post(
         FIREHOSE_ENDPOINT,
@@ -701,8 +713,52 @@ def test_firehose_multi_record_e2e():
     req2 = _build_metrics_request(attrs2, base_ns + 1)
     request_id = f"firehose-multi-{uuid.uuid4()}"
     body = _firehose_envelope(
-        request_id, [req1.SerializeToString(), req2.SerializeToString()]
+        request_id, [_length_prefixed(req1), _length_prefixed(req2)]
     )
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["requestId"] == request_id
+
+    begin, end = _query_window()
+    for instance_id in (instance_id1, instance_id2):
+        pid_str = discover_process_id(
+            client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+        )
+
+        def query_count(pid=pid_str):
+            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
+            return client.query(sql, begin, end)
+
+        df = assert_eventually(
+            query_count,
+            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 2,
+            timeout_s=POLL_TIMEOUT_S,
+            msg=f"waiting for 2 measures with process_id={pid_str}",
+        )
+        assert int(df.iloc[0]["c"]) >= 2
+
+
+def test_firehose_multi_message_record_e2e():
+    """A single Firehose *record* can itself pack two length-delimited OTLP messages
+    back to back (CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format allows
+    this once a delivery batches more than a trivial amount of data). Both must decode
+    and land, distinct from `test_firehose_multi_record_e2e`'s multiple-records case."""
+    attrs1, instance_id1 = _fresh_resource_attrs()
+    attrs2, instance_id2 = _fresh_resource_attrs()
+    base_ns = _now_ns()
+    req1 = _build_metrics_request(attrs1, base_ns)
+    req2 = _build_metrics_request(attrs2, base_ns + 1)
+    request_id = f"firehose-multi-message-{uuid.uuid4()}"
+    body = _firehose_envelope(request_id, [_length_prefixed(req1, req2)])
 
     resp = requests.post(
         FIREHOSE_ENDPOINT,

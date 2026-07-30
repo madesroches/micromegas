@@ -169,8 +169,8 @@ async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
     let provider = make_auth_provider();
     let app = firehose_router(service, Some(provider));
 
-    let make_record = |name: &str, value: i64| -> Vec<u8> {
-        let req = ExportMetricsServiceRequest {
+    let make_request = |name: &str, value: i64| -> ExportMetricsServiceRequest {
+        ExportMetricsServiceRequest {
             resource_metrics: vec![ResourceMetrics {
                 resource: Some(Resource {
                     attributes: vec![KeyValue {
@@ -205,8 +205,12 @@ async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
                 }],
                 schema_url: String::new(),
             }],
-        };
-        req.encode_to_vec()
+        }
+    };
+    // Real Firehose records are always length-delimited-framed (CloudWatch Metric Streams'
+    // OpenTelemetry 1.0.0 output format), even for a single message per record.
+    let make_record = |name: &str, value: i64| -> Vec<u8> {
+        make_request(name, value).encode_length_delimited_to_vec()
     };
 
     let engine = base64::engine::general_purpose::STANDARD;
@@ -232,6 +236,27 @@ async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
         .body(Body::from(body))
         .expect("build request");
 
-    let response = app.oneshot(request).await.expect("call service");
+    let response = app.clone().oneshot(request).await.expect("call service");
     assert_eq!(response.status(), StatusCode::OK);
+
+    // A single Firehose record can also pack two length-delimited messages back to back
+    // (issue #1381) — assert both decode and land as separate blocks.
+    let mut packed_record = make_request("metric.c", 3).encode_length_delimited_to_vec();
+    packed_record.extend(make_request("metric.d", 4).encode_length_delimited_to_vec());
+    let packed_body = format!(
+        r#"{{"requestId":"req-live-packed","timestamp":1,"records":[{{"data":"{}"}}]}}"#,
+        engine.encode(packed_record)
+    );
+
+    let packed_request = Request::builder()
+        .method("POST")
+        .uri(ENDPOINT)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("X-Amz-Firehose-Request-Id", "req-live-packed")
+        .header("X-Amz-Firehose-Access-Key", ACCESS_KEY)
+        .body(Body::from(packed_body))
+        .expect("build request");
+
+    let packed_response = app.oneshot(packed_request).await.expect("call service");
+    assert_eq!(packed_response.status(), StatusCode::OK);
 }

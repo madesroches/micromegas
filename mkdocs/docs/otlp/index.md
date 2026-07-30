@@ -397,10 +397,12 @@ Stream, and no collector process in between. Firehose is just a dumb managed pip
 wraps each record in a small JSON envelope and expects a fixed ack shape back.
 
 This works because a Metric Stream configured with **OpenTelemetry 1.0.0** output format
-delivers each record as an OTLP `ExportMetricsServiceRequest` protobuf — the exact message
-the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose route only
-unwraps the envelope (gzip-aware, base64 records) and hands each record's bytes to the
-same decode/split/write path; records land in `measures`, same as native OTLP metrics.
+delivers each record as one-or-more length-delimited OTLP `ExportMetricsServiceRequest`
+protobuf messages (each prefixed with a varint byte length, back to back) — the same
+message the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose route
+unwraps the envelope (gzip-aware, base64 records), then decodes every length-delimited
+message in a record and hands each one to the same decode/split/write path; records land
+in `measures`, same as native OTLP metrics.
 
 `opentelemetry1.0` output encodes every CloudWatch data point as an OTLP `Summary`, so each
 scrape of a metric lands as **4 rows under 4 distinct names** (`<metric>_count`, `_sum`,
@@ -426,8 +428,8 @@ Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination
 - **Content encoding**: gzip (recommended — reduces wire bytes; the route decompresses
   transparently, same as the other OTLP routes).
 - **Buffering hints**: tune buffer size/interval for your metric volume; every buffered
-  batch arrives as one HTTP POST carrying one JSON record per underlying Metric Stream
-  record.
+  batch arrives as one HTTP POST carrying one-or-more JSON records, and each JSON record's
+  data may itself pack multiple length-delimited OTLP messages.
 - **S3 backup**: configure "backup all records" or "backup failed data only" — Firehose
   retries non-200 responses and eventually spills to the configured S3 bucket, so no data
   is silently lost even during an extended micromegas outage.

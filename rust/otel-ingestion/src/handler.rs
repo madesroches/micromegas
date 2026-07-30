@@ -19,6 +19,7 @@ use crate::{
     TAG_METRICS, TAG_TRACES,
 };
 use base64::Engine as _;
+use bytes::Buf;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
 use prost::Message;
@@ -47,6 +48,28 @@ fn parse<M: Message + Default + DeserializeOwned>(
             message: format!("decoding {} (json): {e}", signal.as_str()),
         }),
     }
+}
+
+/// Decode the next length-delimited protobuf message from `buf`, advancing `buf` past it.
+/// Returns `Ok(None)` once `buf` is exhausted (no more messages in this record).
+/// CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format packs one-or-more
+/// `[varint32 length][message bytes]` entries per record, not a single unframed message
+/// (see AWS's CloudWatch metric streams OpenTelemetry format docs).
+pub fn decode_next_length_delimited<M: Message + Default>(
+    buf: &mut &[u8],
+    signal: Signal,
+) -> Result<Option<M>, OtelError> {
+    if !buf.has_remaining() {
+        return Ok(None);
+    }
+    let message = M::decode_length_delimited(buf).map_err(|e| OtelError::Parse {
+        signal,
+        message: format!(
+            "decoding {} (length-delimited protobuf): {e}",
+            signal.as_str()
+        ),
+    })?;
+    Ok(Some(message))
 }
 
 fn signal_tag(signal: Signal) -> &'static str {
@@ -138,6 +161,25 @@ pub async fn ingest_logs(
     Ok(ExportLogsServiceResponse::default())
 }
 
+/// Splits and writes an already-decoded `ExportMetricsServiceRequest`. Factored out of
+/// `ingest_metrics` so `ingest_firehose_metrics` can reuse the split/write half per
+/// length-delimited message it decodes, without re-serializing back to bytes just to
+/// re-decode via `ingest_metrics`.
+async fn ingest_parsed_metrics(
+    service: &WebIngestionService,
+    req: ExportMetricsServiceRequest,
+) -> Result<(), OtelError> {
+    if req.resource_metrics.is_empty() {
+        return Ok(());
+    }
+    let blocks = split_metrics(req).map_err(|e| OtelError::Parse {
+        signal: Signal::Metrics,
+        message: format!("split_metrics: {e}"),
+    })?;
+    write_blocks(service, Signal::Metrics, blocks).await?;
+    Ok(())
+}
+
 /// OTLP/HTTP `POST /v1/metrics` handler.
 pub async fn ingest_metrics(
     service: Arc<WebIngestionService>,
@@ -145,14 +187,7 @@ pub async fn ingest_metrics(
     encoding: Encoding,
 ) -> Result<ExportMetricsServiceResponse, OtelError> {
     let req: ExportMetricsServiceRequest = parse(&body, Signal::Metrics, encoding)?;
-    if req.resource_metrics.is_empty() {
-        return Ok(ExportMetricsServiceResponse::default());
-    }
-    let blocks = split_metrics(req).map_err(|e| OtelError::Parse {
-        signal: Signal::Metrics,
-        message: format!("split_metrics: {e}"),
-    })?;
-    write_blocks(&service, Signal::Metrics, blocks).await?;
+    ingest_parsed_metrics(&service, req).await?;
     Ok(ExportMetricsServiceResponse::default())
 }
 
@@ -317,15 +352,27 @@ pub fn decode_firehose_envelope(
     })
 }
 
-/// Feed each Firehose record (an OTLP `ExportMetricsServiceRequest` protobuf) into the
-/// existing metrics decode/split/write path. Reuses `ingest_metrics` per record so identity,
-/// content-addressed `block_id`, and idempotent writes are inherited unchanged.
+/// Feed each Firehose record into the metrics decode/split/write path. Per AWS's
+/// CloudWatch Metric Streams OpenTelemetry 1.0.0 output format, a record is **not** a
+/// single unframed protobuf message — it packs one-or-more length-delimited
+/// `[varint32 length][message bytes]` entries back to back. Each message is decoded via
+/// `decode_next_length_delimited` and immediately split + written via
+/// `ingest_parsed_metrics` before the next message's length prefix is even read, so a
+/// malformed message later in a record can't retroactively discard already-decoded,
+/// already-written messages that precede it in the same record. Identity,
+/// content-addressed `block_id`, and idempotent writes are inherited unchanged from the
+/// shared split/write path.
 pub async fn ingest_firehose_metrics(
     service: Arc<WebIngestionService>,
     records: Vec<Vec<u8>>,
 ) -> Result<(), OtelError> {
     for rec in records {
-        ingest_metrics(service.clone(), bytes::Bytes::from(rec), Encoding::Protobuf).await?;
+        let mut buf: &[u8] = &rec;
+        while let Some(req) =
+            decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)?
+        {
+            ingest_parsed_metrics(&service, req).await?;
+        }
     }
     Ok(())
 }
