@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod blocks;
 pub mod bounded_memory_backend;
+pub mod circuit_breaker;
 pub mod client;
 pub mod l1_store;
 pub mod memory_backend;
@@ -13,6 +14,7 @@ pub mod validation;
 pub mod foyer_backend;
 
 pub use bounded_memory_backend::BoundedMemoryBackend;
-pub use client::CacheClientStore;
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
+pub use client::{CacheClientConfig, CacheClientStore, RangesReadError, RangesSendError};
 pub use l1_store::{L1CacheStore, l1_wrap};
 pub use prefetch::PrefixPrefetch;

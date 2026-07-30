@@ -157,6 +157,31 @@ Set the same two variables in the monolith's environment to enable them; leave t
 default) and the monolith reads directly from origin and every `warm_object` call is a harmless
 no-op.
 
+### Client timeouts and fast-fail
+
+Set in the *client's* own environment (FlightSQL, the maintenance daemon, or the monolith — whichever process opts in above):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_CONNECT_TIMEOUT_MS` | `50` | Connect budget. Spans DNS resolution as well as the TCP/TLS handshake, so a clustered/contended resolver — not just TLS or a cross-zone deployment — is a reason to raise it. |
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_ABANDON_TIMEOUT_MS` | `500` | The direct-path race budget: applied to every request's time-to-headers. Past this, the cache has stopped being an optimization for that request. |
+| `MICROMEGAS_OBJECT_CACHE_CLIENT_BREAKER_THRESHOLD` | `5` | Consecutive unresponsive requests before the client stops routing reads/prefetches through the cache for a fixed cooldown. `0` disables the breaker — the escape hatch if it misbehaves in production. |
+
+## Failing fast when the cache is unresponsive
+
+**No cache failure mode may fail or corrupt a read.** Every way the cache can misbehave — slow, hung, 5xx-ing, hard down, truncating its own framing — degrades to a direct origin read that the caller cannot distinguish from a normal one; the only errors a client surfaces are the direct store's own, including a stream that fails partway through (the client resumes the remainder from origin at the byte offset already delivered, rather than surfacing the cache's error or returning a short read).
+
+Because every position is recoverable, one rule covers the whole client: **abandon the cache as soon as it has lost the race against a direct read**, at `..._ABANDON_TIMEOUT_MS` (default 500ms, calibrated against production origin-fetch latency — p99 ~311ms, max ~575ms). A cache that keeps losing that race isn't worth the connection anymore: after `..._BREAKER_THRESHOLD` (default 5) consecutive unresponsive requests, the client stops routing reads and prefetches through the cache entirely — no connection, no timeout cost — for a fixed 3s cooldown, then admits exactly one probe request to test recovery. Prefetch (write-time cache warming) is gated the same way but can never consume that probe or close the circuit on success: a write-active, read-light process must not be able to hold the circuit closed while its actual demand reads are failing.
+
+Reading the signal during an incident:
+
+- `range_cache_client_abandoned` vs `range_cache_client_unresponsive` — a slow cache (lost the race but answered) vs one that isn't answering at all.
+- `range_cache_client_stream_resumed` — a `/obj` body failed or ended short partway through; the remainder was re-read from origin. A nonzero resume offset means wasted origin traffic, not just a plain fallback.
+- `range_cache_client_circuit_opened` (once) then `range_cache_client_circuit_bypassed` climbing — the client has stopped even trying the cache; for read bypasses, `range_cache_client_fallback` climbs alongside it, since a read bypass counts as a fallback too (prefetch bypasses have no read to fall back for, so they show up only in `circuit_bypassed`).
+- `range_cache_client_circuit_closed` — a probe succeeded and normal routing resumed.
+
+If the breaker itself misbehaves in production, set `MICROMEGAS_OBJECT_CACHE_CLIENT_BREAKER_THRESHOLD=0` to disable it without touching anything else.
+
 ## In-process L1 cache
 
 Query processes (FlightSQL, the monolith) also carry a small **in-process L1 cache** in front of
@@ -199,7 +224,7 @@ Apply defense in depth: API keys are the application-layer check, but the cache 
 
 ## Health and readiness
 
-`/health` and `/ready` both return an unconditional `200`; unlike the other services (see [Readiness probes](service-lifecycle.md#readiness-probes)), `/ready` does not probe the origin store. A load balancer can use either endpoint as a liveness check, but neither will catch the cache being unable to reach its origin — that surfaces as elevated client-side fallback-to-direct traffic instead.
+`/health` and `/ready` both return an unconditional `200`; unlike the other services (see [Readiness probes](service-lifecycle.md#readiness-probes)), `/ready` does not probe the origin store. A load balancer can use either endpoint as a liveness check, but neither will catch the cache being unable to reach its origin — that surfaces as elevated client-side fallback-to-direct traffic instead, and, once a client's circuit breaker trips, as `range_cache_client_circuit_opened` on that client (see [Failing fast when the cache is unresponsive](#failing-fast-when-the-cache-is-unresponsive)).
 
 ## Monitoring
 
@@ -227,7 +252,13 @@ The cache emits metrics through the standard micromegas tracing sink (queryable 
 | `object_cache_head_requests` (`status, prefix`) | cache server | Every `HEAD /obj/{key}` outcome — success and failure alike. Slice by `status` for the error-rate breakdown. |
 | `object_cache_ranges_count` | cache server | Number of ranges in a `POST /ranges` request (success path only). |
 | `object_cache_get_bytes_served` / `object_cache_ranges_bytes_served` | cache server | Bytes served to clients over the wire. Fires once per fully-produced response; a response cut short by a mid-stream origin error or an early consumer disconnect is excluded, so this can slightly under-count relative to raw egress. |
-| `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, or bad response). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
+| `range_cache_client_fallback` | each client | Reads that fell back to the direct store (cache unreachable, non-2xx, bad response, or a circuit-breaker bypass). **A rising rate is the primary "cache unhealthy" alert** — routine fallback logs at `debug` precisely so it doesn't flood, leaving this metric as the signal. |
+| `range_cache_client_abandoned` | each client | A request's time-to-headers exceeded `..._ABANDON_TIMEOUT_MS` — for reads, the cache lost the race against a direct read (prefetch requests are held to the same budget and count here too). Not by itself evidence the cache is broken (a cold cache legitimately loses this race). |
+| `range_cache_client_unresponsive` | each client | A connect failure, transport error, or stall/total-timeout expiry — the cache isn't answering at all. Feeds the circuit breaker's consecutive-failure count, same as `abandoned`. |
+| `range_cache_client_stream_resumed` | each client | A `/obj` body stream failed or ended short of its declared range partway through; the remainder was transparently re-read from the direct store. Only a nonzero resume offset (logged alongside it) means data was actually re-read twice — see [Failing fast when the cache is unresponsive](#failing-fast-when-the-cache-is-unresponsive). |
+| `range_cache_client_circuit_opened` | each client | The client's circuit breaker tripped (consecutive unresponsive requests hit the threshold): reads and prefetches bypass the cache until the next probe succeeds. |
+| `range_cache_client_circuit_closed` | each client | A probe request succeeded and the client resumed routing normally through the cache. |
+| `range_cache_client_circuit_bypassed` | each client | A read or prefetch skipped the cache entirely because the circuit was open (no connection attempted). Read bypasses are also counted in `range_cache_client_fallback`; prefetch bypasses are not (there's no read to fall back for — a synthesized `PrefetchResponse` with `dropped` set is returned instead). |
 | `range_cache_block_len_mismatch` | cache server | A cached block's length didn't match its expected byte span (e.g. a poisoned entry from an undersized prefetch `size`, or the origin object changed size); the block is refetched and overwritten. Should be ~0. |
 | `range_cache_promotion_len_mismatch` | cache server | A foyer disk-tier hit's length didn't match the caller's expected length (the same poisoned-short-prefetch scenario as `range_cache_block_len_mismatch`, observed at the backend's disk->RAM promotion gate instead of at the block-cache layer): the backend refuses to promote it and reports a miss instead. Should be ~0. |
 | `range_cache_origin_run_len_mismatch` | cache server | An origin `get_range` fetch returned fewer bytes than the requested run span (the origin object shrank mid-flight). Surfaced as a fetch error rather than silently under-yielded. Should be ~0. |
