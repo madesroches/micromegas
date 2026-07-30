@@ -1,16 +1,16 @@
 # Crypto-based data isolation for telemetry ("strong" plan)
 
-> **Alternative to** [`policy_based_data_isolation_plan.md`](policy_based_data_isolation_plan.md), not a
+> **Alternative to** [`audience_based_access_control_plan.md`](audience_based_access_control_plan.md), not a
 > supersession. Both are candidate designs; this document is the stronger-threat-model option and has
-> not been chosen over the policy plan. It **reuses that plan's vocabulary** — `audience`, `ReadScope`,
+> not been chosen over the AbAC plan. It **reuses that plan's vocabulary** — `audience`, `ReadScope`,
 > `ReadPolicy`/`MintPolicy`, the `user:`/`group:` value shape — and where it needs query-path access
 > control on cleartext data it **layers on top of** that plan rather than replacing it. Where they
-> differ: the policy plan rests confidentiality entirely on OIDC + a per-query filter over *plaintext*
+> differ: the AbAC plan rests confidentiality entirely on OIDC + a per-query filter over *plaintext*
 > parquet; this plan additionally makes the **bytes at rest useless without keys**.
 
 ## Motivating threat
 
-The policy plan states plainly (its §5): *"an operator with lakehouse/object-store access can read the
+The AbAC plan states plainly (its §5): *"an operator with lakehouse/object-store access can read the
 raw parquet directly."* That is the assumption this plan removes. **Assume the parquet files and raw
 blocks comprising the lakehouse leak** (public-bucket misconfig, a copied backup, an RMA'd disk, a
 stolen snapshot). Can we make that leak useless? For **bodies** (log message text, metric values):
@@ -20,7 +20,7 @@ leaks of data at rest, not to withstand an attacker who controls the server.
 
 ### Threat model — three rows, defended differently
 
-| Threat | Policy plan | This plan |
+| Threat | AbAC plan | This plan |
 |---|---|---|
 | Storage/backup/bucket leak — attacker holds ciphertext only | **not defended** (plaintext at rest) | **defended** for bodies (encrypted); metadata still readable |
 | Authenticated user reading another audience via SQL | defended (ReadPolicy per query) | defended (same ReadPolicy; for bodies, key-gating adds defense in depth) |
@@ -56,7 +56,7 @@ Two structural moves, then encryption:
 3. **Envelope-encrypt the body plane** under a per-audience KEK held in a KMS (§3–4). A leaked body
    file is ciphertext whose DEK is wrapped by a key the attacker doesn't have.
 
-The metadata plane stays cleartext at rest, so **the policy plan's query-path filtering (Prong A — a
+The metadata plane stays cleartext at rest, so **the AbAC plan's query-path filtering (Prong A — a
 direct property filter on `processes`, a `processes`-subquery semi-join on the other process-keyed
 views — plus Prong B on `list_partitions`) is still required for metadata** — this plan does not make
 it redundant, it narrows what it has to protect (§6).
@@ -114,7 +114,7 @@ enum InstanceKind { Global, Process(Uuid), Audience(String) }
 ```
 
 Classification is unambiguous: `"global"` → `Global`; a `user:`/`group:`-prefixed string → `Audience`;
-otherwise parse as a `Process(Uuid)`. The `user:`/`group:` prefix (already mandated by the policy plan
+otherwise parse as a `Process(Uuid)`. The `user:`/`group:` prefix (already mandated by the AbAC plan
 to prevent user/group collisions) is exactly what makes this parse-free to disambiguate. The same
 UUID-parse assumption lives in the span makers (`thread_spans_view.rs:86`) but they gain no audience
 kind, so they're untouched.
@@ -129,7 +129,7 @@ process_id IN (SELECT process_id FROM processes
 ```
 
 There is no process→audience mapping table today, so v1 reuses the `micromegas.audience` **property**
-(exactly as the policy plan's v1 does); Phase 5 promotes it to a column for pruning. This is the one
+(exactly as the AbAC plan's v1 does); Phase 5 promotes it to a column for pruning. This is the one
 place that needs a "set of processes" abstraction the single-`process_id` path lacks.
 
 **v1 re-scans `blocks` filtered by audience** (this is a decided point, not an open fork) — it matches
@@ -192,7 +192,7 @@ pre-built `'global'` instance today (`query.rs:214` iterates `get_global_views()
 `view.rs:90-99` registers the bare name). With no all-audience global body instance, the bare name must
 resolve to the **union of the caller's readable audience instances**:
 `log_entries → UNION ALL over view_instance('log_entries', A) for A ∈ ReadScope`. Implement as an
-analyzer rewrite (fits alongside the policy plan's Prong A) or a custom table provider for the bare
+analyzer rewrite (fits alongside the AbAC plan's Prong A) or a custom table provider for the bare
 `log_entries`/`measures` names. This is the main *new* query-planning piece.
 
 **e. Fate of the `'global'` body instance.** Retire the persisted all-audience `'global'` instance for
@@ -203,7 +203,7 @@ instances — never persist a mixed-audience body file. `'global'` stays only fo
 views (`processes`/`streams`/`blocks`).
 
 **f. Enforcement simplifies for body scans.** Because an `Audience(A)` instance *is* single-audience,
-the policy plan's Prong A semi-join over the mixed global `log_entries` collapses to an O(1) check on
+the AbAC plan's Prong A semi-join over the mixed global `log_entries` collapses to an O(1) check on
 the scan: **allow `view_instance('log_entries', A)` iff `A ∈ ReadScope`, else empty** — no
 `property_get`, no per-row join, no in-partition filtering. The expensive semi-join existed only to
 cope with the mixed artifact.
@@ -216,12 +216,12 @@ cope with the mixed artifact.
 - **Materialized parquet** uses **Parquet Modular Encryption (PME)** — parquet-rs's native
   column/footer AES-GCM with a KMS-client key-retrieval abstraction that is built for exactly this
   double-wrapping model. AES-GCM also gives **tamper-evidence** (a modified-and-reinjected file fails
-  auth), which incidentally hardens the write-key integrity concern from the policy plan.
+  auth), which incidentally hardens the write-key integrity concern from the AbAC plan.
 - **Raw block payloads** are (likely) a custom transit format, not parquet, so PME does not apply —
   envelope-encrypt the block object under the same audience KEK at the ingestion write path.
 - **Rotation:** rotate the KEK (re-wrap DEKs, cheap); avoid DEK rotation (would re-encrypt data).
 - **Fan-out cost:** cache unwrapped DEKs in memory, mirroring the immutable `process_id → audience`
-  cache the policy plan already specifies. Cold miss = one KMS unwrap (~ms); warm = O(1).
+  cache the AbAC plan already specifies. Cold miss = one KMS unwrap (~ms); warm = O(1).
 
 ## §4 — Key seams (where encryption/decryption actually wire in)
 
@@ -246,11 +246,11 @@ cope with the mixed artifact.
   `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed` (lines 142-214, `put` at 163-166),
   which CBOR-encodes
   `block.payload` and `put`s it to `blobs/{process_id}/{stream_id}/{block_id}`. Both native and OTLP
-  ingestion funnel through `WebIngestionService`, so thread `bound_audience` (per the policy plan's
+  ingestion funnel through `WebIngestionService`, so thread `bound_audience` (per the AbAC plan's
   key model) down to `insert_block_typed` and encrypt the payload under that audience's KEK there,
   rather than in the handler files.
 - **Read / decrypt:** `MaterializedView::scan` is where partitions are read and already carries the
-  per-request `ReadScope` (the policy plan threads it there). Configure the parquet reader's
+  per-request `ReadScope` (the AbAC plan threads it there). Configure the parquet reader's
   decryption key-retriever here; raw-block reads (during JIT materialization) decrypt via the same
   KEK. **ReadScope-gated unwrap:** only request the DEK for a partition whose audience `∈ ReadScope`.
   A caller naming another audience's process/instance → the key is never fetched → the ciphertext is
@@ -284,17 +284,17 @@ Encryption concentrates trust rather than eliminating it — state this plainly:
   inside an attested enclave and the *operator* can't peek at the transient plaintext. This plan does
   **not** pursue that — it is not end-to-end encryption. Recorded only so the trust boundary is explicit.
 
-## §6 — Composition with the policy plan (not a replacement)
+## §6 — Composition with the AbAC plan (not a replacement)
 
 - **Body plane:** protected by keys + the simplified `A ∈ ReadScope` instance check (§2f). Defense in
   depth: even a query-path enforcement bug can't leak bodies whose key was never unwrapped.
-- **Metadata plane:** cleartext at rest, so it **still needs the policy plan's query-path filtering** —
+- **Metadata plane:** cleartext at rest, so it **still needs the AbAC plan's query-path filtering** —
   Prong A (a direct property filter on `processes`, a `processes`-subquery semi-join on the other
   process-keyed views) and Prong B row-filtering `list_partitions` — or an authenticated
   user (and a storage leak) sees every audience's process names, host names, and volume/timing. This
-  plan therefore *includes* the policy plan's enforcement for metadata; it only removes the need for
+  plan therefore *includes* the AbAC plan's enforcement for metadata; it only removes the need for
   the body-view semi-join.
-- **`retire_partitions`/`materialize_partitions`:** unchanged from the policy plan — maintenance-only,
+- **`retire_partitions`/`materialize_partitions`:** unchanged from the AbAC plan — maintenance-only,
   `ReadScope::All`-gated. Note `materialize_partitions` takes no instance-id arg today
   (`materialize_partitions_table_function.rs:47-49`); if the daemon ever needs to pre-warm a specific
   audience instance it must gain one, but JIT (§2c) means v1 doesn't require it.
@@ -311,7 +311,7 @@ plan can't offer.
 
 - **Metadata cleartext at rest.** Process/host/owner names, `otel.resource.*` properties, and
   per-process event counts/sizes/timing are readable from a metadata-plane leak. The last set is a
-  volume/activity **side channel** — and it is in tension with the effort the policy plan's §4 spends
+  volume/activity **side channel** — and it is in tension with the effort the AbAC plan's §4 spends
   row-filtering `list_partitions` to hide exactly that from authenticated callers. The at-rest and
   query-time postures should be a conscious pair. If metadata sensitivity matters, column-encrypt the
   process `properties` (and owner/host) — a further step, not v1 (deferred, not an open fork — see
@@ -321,7 +321,7 @@ plan can't offer.
 - **Daemon full-trust** (§5) — unavoidable without a TEE.
 - **Load shifts daemon → query time** for bodies (JIT), first-query latency per audience/range.
 - **Bare-table semantics change** — `SELECT * FROM log_entries` becomes "your audiences' union"; an
-  API/UX change (the access-control behavior already matches the policy plan's semi-join).
+  API/UX change (the access-control behavior already matches the AbAC plan's semi-join).
 
 ## Parquet Modular Encryption + DataFusion read integration (confirmed supported)
 
@@ -359,7 +359,7 @@ through the standard scan/write paths.
 - **Decryption read seam:** `rust/analytics/src/lakehouse/materialized_view.rs` (key-retriever,
   ReadScope-gated unwrap).
 - **KMS/DEK cache:** new module mirroring `metadata_cache.rs` (moka).
-- **Shared with policy plan:** `ReadScope`/`ReadPolicy`, audience value shape, `bound_audience`,
+- **Shared with the AbAC plan:** `ReadScope`/`ReadPolicy`, audience value shape, `bound_audience`,
   Prong A/B for the metadata plane.
 
 ## Open forks (undecided)
@@ -383,7 +383,7 @@ granularity + hot-reload.)
 
 ## Relationship summary
 
-| | Policy plan | This (strong) plan |
+| | AbAC plan | This (strong) plan |
 |---|---|---|
 | Confidentiality root | OIDC + per-query filter over plaintext | + per-audience keys; bodies useless without KMS |
 | Parquet/block leak | readable | bodies ciphertext; metadata readable |

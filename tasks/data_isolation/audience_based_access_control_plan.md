@@ -1,19 +1,29 @@
-# Policy-based data isolation for telemetry
+# AbAC: audience-based access control for telemetry
 
 > **Supersedes** [`per_user_data_isolation_plan.SUPERSEDED.md`](per_user_data_isolation_plan.SUPERSEDED.md). That document analyzed the
 > per-user case and remains the reference for the confidentiality/integrity analysis and the
 > current-state audit; this plan generalizes its mechanism. Where they disagree, this document wins.
 
-> **Revised 2026-07-30** for deployment staging (issue #1334 follow-up): the `self|rbac` mode enum
-> and its `self` default are replaced by a single grant-configured policy engine (open deployments
-> are an `everyone`-group configuration, not a query-side bypass); implementation steps are
-> re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
+> **Revised 2026-07-30** for deployment staging (issue #1334 follow-up): the `self|audience` mode
+> enum and its `self` default are replaced by a single grant-configured policy engine (open
+> deployments are an `everyone`-group configuration, not a query-side bypass); implementation steps
+> are re-ordered into deployment stages so existing team-wide deployments migrate with zero behavior
 > change; and the code audit is refreshed (see Appendix B for drift found since 2026-07-21).
+
+> **Re-staged 2026-07-30**: the DB-backed key store is split out of Stage 4 into a new **Stage 0**
+> that depends on nothing and ships standalone operational value (revocation/rotation without
+> redeploy, no cleartext keys in env); Stage 4 keeps only the `audience` column, which genuinely
+> needs the policy seam. The env keyring's per-request full scan cannot scale to per-user keys, so
+> the store is a precondition for Stage 6, not a convenience.
+
+> **Renamed 2026-07-30** from "policy-based data isolation". The design was described as *RBAC*
+> throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
+> audience-based access control**; `Rbac*` identifiers become `Audience*`.
 
 ## Overview
 
 Isolate telemetry so that data produced under one identity is only **readable** by principals
-authorized to read it. The mechanism is a small, general **RBAC seam**. There is **no mode enum and
+authorized to read it. The mechanism is a small, general **AbAC seam**. There is **no mode enum and
 no default policy**: one policy engine, configured by grants, spans the whole deployment spectrum —
 from an **open (team-wide) deployment**, where an implicit `everyone` group preserves today's
 everyone-reads-everything behavior with no data migration, to a **privacy deployment**, where each
@@ -41,7 +51,8 @@ its own group, with `write(u → u)` and `read(u → u)` the only grants, and `a
 minter's own email. **Open (team-wide) deployments are the other end of the same model**: an
 implicit group `everyone` that every authenticated principal belongs to, with shared data stamped
 `group:everyone` — including the audience assigned to existing API keys when they are imported into
-the key store (see Stage 4). Every point on the spectrum runs the *same* code; only the
+the key store (Stage 0 imports them; Stage 4 assigns the audience). Every point on the
+spectrum runs the *same* code; only the
 configuration differs.
 
 ### Load-bearing property preserved
@@ -59,6 +70,39 @@ key governs **integrity only**:
 Because the write grant is frozen into the key at mint and ingestion never re-checks it, **write
 keys can be eternal** (the current use case). No per-write policy lookup; no `minted_by` bookkeeping
 in v1 (see Deferred / Trade-offs for when that changes).
+
+### Naming
+
+This model is **AbAC — audience-based access control**. Earlier revisions called it RBAC, which was
+wrong: there is no role anywhere in the design. RBAC's defining feature is the indirection
+`subject → role → permission`, where a role is a named, reusable bundle of permissions. Nothing
+here bundles permissions. A subject carries a set of audiences; data carries one audience; access
+is set membership.
+
+Structurally the closest industry analogue is AWS-style **ABAC** (attribute-based access control):
+a tag on the resource matched against a tag on the principal, exactly like
+`aws:PrincipalTag/team == aws:ResourceTag/team`. This design is that pattern degenerated to a
+single attribute — hence the distinct casing **AbAC**, and hence *audience*-based rather than
+*attribute*-based: naming the one attribute is more honest than implying a general attribute
+engine with conditions and a deny effect, none of which exist here.
+
+Vocabulary used throughout:
+
+| Term | Meaning |
+|---|---|
+| **audience** | the label stamped on data at ingestion — `user:<email>` or `group:<id>`. Distinct from `AuthContext.audience` (the OIDC token audience); see "Naming collision to avoid" below. |
+| **grant** | one of the two relations — `write(subject → group)` at mint, `read(subject → group)` at query. In v1 both derive from IdP group membership. |
+| **readable set** | the audiences a caller may read; the `ReadScope` resolved per request. |
+| **role** | reserved for the *capability* axis (`is_admin`, issues #1376/#1377), which is orthogonal to audience scope. Not used for data isolation. |
+
+Two names deliberately **not** used: *RBAC* (no roles — and reserving the word keeps the admin
+capability axis distinct), and the bare acronym *ABAC* (taken by attribute-based access control;
+write "audience-based access control" or `AbAC`, never `ABAC`).
+
+Roles would become meaningful here if read and write ever separate: today group membership grants
+both, so there is nothing for a role to bundle. If the deferred grants table or a second write-role
+claim lands (see Deferred / Trade-offs), `viewer`/`minter` per group becomes a real role and the
+term earns its place.
 
 ## Current State
 
@@ -125,7 +169,7 @@ pub trait MintPolicy: Send + Sync + std::fmt::Debug {
 }
 ```
 
-The one shipped impl (`RbacMintPolicy`) permits `requested` iff it is in the caller's **mintable
+The one shipped impl (`AudienceMintPolicy`) permits `requested` iff it is in the caller's **mintable
 set**: `{user:<caller email>} ∪ {group:G : G ∈ caller's IdP groups claim} ∪ {group:G : G ∈
 MICROMEGAS_IMPLICIT_GROUPS}`. With `requested = None`, the audience defaults to
 `user:<caller email>`. In a privacy deployment with no implicit groups and no groups claim this
@@ -151,7 +195,7 @@ pub enum ReadScope {
 }
 ```
 
-The one shipped impl (`RbacReadPolicy`) returns the caller's **readable set**:
+The one shipped impl (`AudienceReadPolicy`) returns the caller's **readable set**:
 
 ```
 ReadScope::Principals(
@@ -403,7 +447,7 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 ### Config surface
 
 **No mode enum, no default policy** (revised 2026-07-30 — replaces the former
-`MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and its `self` default). One rbac engine, configured
+`MICROMEGAS_ISOLATION_POLICY=self|audience` knob and its `self` default). One AbAC engine, configured
 by grants; every knob is fail-closed when empty/unset:
 
 | Knob | Meaning | Open deployment | Privacy deployment |
@@ -433,14 +477,59 @@ change.
 
 Re-ordered from the original Phases 1–5 around one constraint: **every stage ships with zero
 behavior change** until an operator sets config, so existing team-wide deployments upgrade
-untouched. Two tracks run in parallel after the seam lands — **enforcement** (Stages 1–3) and
-**keys/stamping** (Stages 4–6) — converging at activation (Stage 7). Each stage maps to one
-GitHub issue.
+untouched. Two tracks run in parallel — **enforcement** (Stages 1–3) and **keys/stamping**
+(Stages 0, 4–6) — converging at activation (Stage 7). Each stage maps to one GitHub issue.
+
+**Stage 0 depends on nothing** and is the only stage that delivers value on its own; everything
+else is inert until an operator configures it. Stages 2, 3 and 4 depend on Stage 1; Stages 5 and 6
+depend on Stage 0.
+
+### Stage 0 — DB-backed API key store (no audience yet; independent of the AbAC seam)
+
+Split out of the original Stage 4 (revised 2026-07-30). Moving the *key store* ahead of the policy
+seam, and leaving only the *audience column* behind it, for four reasons:
+
+- **Standalone value.** Stages 1–3 ship zero behavior change by design. This one fixes a live
+  operational problem: keys are plaintext JSON in `MICROMEGAS_API_KEYS`, so grant/revoke means an
+  env edit plus a redeploy of every service that validates keys — three construction sites
+  (`telemetry-ingestion-srv/src/main.rs:51`, `flight_sql_server.rs:226`,
+  `monolith/src/main.rs:193,207`). No revocation, no rotation, no per-key audit, no last-used.
+- **The env keyring cannot survive Stage 6.** `ApiKeyAuthProvider::validate_request` deliberately
+  scans **every** key with `ct_eq` on **every request** with no early exit
+  (`api_key.rs:100-129`) — correct for a handful of team keys, but Stage 6 mints one key per
+  user/machine, taking N from ~5 to thousands and charging ingestion N constant-time compares per
+  request. A hash-indexed lookup is O(1). The key store is therefore a *precondition* for the mint
+  endpoint, not a convenience.
+- **It is the long pole of the keys track** (Stages 5 and 6 both hang off it) and the migration
+  vehicle for open deployments — the earlier it lands, the longer it soaks before anything depends
+  on it.
+- **It does not shorten the path to enforcement.** This is parallel work, deliberately.
+
+Steps:
+
+0a. `api_keys` table in the telemetry DB (`sql_telemetry_db.rs` migration precedent, `:5-12`):
+    name, created_at, last_used_at, revoked_at, and a **hash** of the key. Do **not** store the key
+    in cleartext — a plaintext column is strictly worse than the env var (backups, replicas, read
+    access, query logs). Index on `sha256(key)` for an O(1) lookup. The import requirement (existing
+    key strings keep working, 0c) rules out imposing a `key_id.secret` shape, so lookup is by hash
+    of the whole string. SHA-256 without a KDF is safe **only** because these are high-entropy
+    random keys, not passwords — Argon2 would be both unindexable and too slow per request. Pair
+    this with rotating any legacy key that is not actually random.
+0b. `DbApiKeyAuthProvider` composed via the existing `MultiAuthProvider`; env keyring and DB keyring
+    compose during transition, so nothing breaks mid-migration. Requires threading a connection pool
+    into `default_provider::provider_with_prefix`, which is a pure env factory today
+    (`default_provider.rs:51`) — the first real API change in the auth crate; three call sites.
+    Cache lookups in a bounded `moka` with a short TTL (same pattern as the §4 caches): a per-request
+    DB hit on the ingestion hot path is not acceptable. **State the consequence as a property, not
+    an accident: revocation takes effect within the cache TTL.**
+0c. **Import tool** (python, per repo scripting convention) for existing `MICROMEGAS_API_KEYS`
+    entries — same key strings land in the DB, zero client changes. The audience they carry is
+    Stage 4's concern.
 
 ### Stage 1 — Policy seam + identity threading (no enforcement yet)
-1. **Policy traits + rbac impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
-   (e.g. `policy.rs`); add `RbacMintPolicy` / `RbacReadPolicy` (§1–2). No `Self*` impls — per-user
-   is the rbac engine with empty grants.
+1. **Policy traits + AbAC impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
+   (e.g. `policy.rs`); add `AudienceMintPolicy` / `AudienceReadPolicy` (§1–2). No `Self*` impls — per-user
+   is the AbAC engine with empty grants.
 2. **AuthContext fields.** Add `bound_audience: Option<String>` and `groups: Vec<String>` to
    `AuthContext` (`rust/auth/src/types.rs`); populate `None`/`[]` everywhere except the key path
    (Stage 4) and OIDC. **Groups claim (low effort, confirmed):** add `groups: Option<Vec<String>>`
@@ -487,14 +576,17 @@ GitHub issue.
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
    inherit the caller's scope (§5).
 
-### Stage 4 — DB-backed key store + import (the open-deployment migration vehicle)
-9. `api_keys` table (telemetry DB) with an `audience` column; `DbApiKeyAuthProvider` composed via
-   `MultiAuthProvider`; produces `AuthContext { bound_audience: Some(audience), email: Some(...),
-   allow_delegation: false, is_admin: false }`. Supports revocation/rotation without redeploy. Env
-   keyring and DB keyring compose during transition.
-10. **Import tool** for existing `MICROMEGAS_API_KEYS` entries: same key strings land in the DB
-    with audience `group:everyone` (or a per-key choice) — zero client changes; this is how open
-    deployments migrate.
+### Stage 4 — Audience on keys (the open-deployment migration vehicle)
+
+Reduced to the part that genuinely needs the AbAC seam (revised 2026-07-30); the key store itself
+is Stage 0. Depends on Stage 0 (the table) and Stage 1 (the audience shape).
+
+9. Add the `audience` column to the Stage 0 `api_keys` table; `DbApiKeyAuthProvider` now produces
+   `AuthContext { bound_audience: Some(audience), email: Some(...), allow_delegation: false,
+   is_admin: false }`.
+10. Extend the Stage 0 import tool to assign an audience: existing keys land as `group:everyone`
+    (or a per-key choice) — still zero client changes; this is how open deployments migrate.
+    Keys imported before this stage get the configured default on backfill.
 
 ### Stage 5 — Ingestion stamping
 11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
@@ -505,7 +597,7 @@ GitHub issue.
 
 ### Stage 6 — Mint endpoint + setup script (enables real per-user keys)
 12. OIDC-authenticated `POST /auth/api_keys` mint endpoint running `MintPolicy::resolve_audience`
-    (`RbacMintPolicy`, §1).
+    (`AudienceMintPolicy`, §1).
 13. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
@@ -516,11 +608,12 @@ GitHub issue.
     hidden, maintenance functions present, `'global'` rows visible).
 
 **Deployment stories:**
-- *Team/open*: upgrade → import keys as `group:everyone` (Stage 4) → set the three knobs →
-  identical behavior forever; no flip, no backfill, nothing disappears.
-- *Privacy*: deploy key store + mint endpoint → users mint personal keys (data stamped
-  `user:<email>`) → set restrictive config (no implicit groups, no unstamped audience) → per-user
-  isolation; team sharing via the IdP groups claim.
+- *Team/open*: upgrade → import keys into the store (Stage 0) → stamp them `group:everyone`
+  (Stage 4) → set the three knobs → identical behavior forever; no flip, no backfill, nothing
+  disappears.
+- *Privacy*: key store (Stage 0) → audience on keys (Stage 4) → mint endpoint (Stage 6) → users
+  mint personal keys (data stamped `user:<email>`) → set restrictive config (no implicit groups, no
+  unstamped audience) → per-user isolation; team sharing via the IdP groups claim.
 
 ### Later — (optional) physical boundary
 15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
@@ -529,10 +622,10 @@ GitHub issue.
 ## Files to Modify
 
 - Auth: `rust/auth/src/types.rs` (`bound_audience`, `groups`), `rust/auth/src/policy.rs` (new —
-  traits + `Rbac*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
+  traits + `Audience*` impls), `rust/auth/src/default_provider.rs` (policy factory / grant knobs),
   `rust/auth/src/oidc.rs` (groups claim, Stage 1), `rust/auth/src/user_attribution.rs` (never feed
   client-claimed identity into scope resolution, Stage 1), `rust/auth/src/api_key.rs` + new
-  `db_api_key.rs` (Stage 4).
+  `db_api_key.rs` (Stage 0; `audience` column Stage 4).
 - Analytics (Prong A): `rust/analytics/src/lakehouse/ownership_rewrite.rs` (new),
   `rust/analytics/src/lakehouse/query.rs` (`make_session_context` + `register_lakehouse_functions`
   signatures), `rust/analytics/src/lakehouse/processes_view.rs` (audience exposure if promoted).
@@ -628,8 +721,15 @@ GitHub issue.
 
 ## Testing Strategy
 
-- **Unit:** `RbacMintPolicy` rejects `requested` outside the mintable set and defaults to
-  `user:<email>`; `RbacReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
+- **Key store (Stage 0, independent of everything below):** a DB key authenticates and an unknown
+  key is rejected; a revoked key stops authenticating within the cache TTL (assert the stated
+  revocation-latency property, don't leave it implicit); env keyring and DB keyring compose — a key
+  in either authenticates during the transition; the import tool round-trips existing
+  `MICROMEGAS_API_KEYS` entries so the *same key strings* still authenticate afterwards (this is
+  the zero-client-change claim, so it deserves a real test); no cleartext key is stored — assert
+  the column holds the hash.
+- **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set and defaults to
+  `user:<email>`; `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
   singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
   predicate per table kind (snapshot the rewritten logical plan), including `view_instance` and the
   `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
@@ -684,7 +784,7 @@ Resolved by research (kept here for the record; details in Appendix A):
   a column in the later physical-boundary stage.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
-- ~~**RBAC policy source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
+- ~~**Grant source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
   local grants table in v1). Keeps confidentiality on OIDC and the TCB unchanged; accepted
   trade-off is that membership grants both read and write for a group. A grants table (or a second
   write-role claim) is a deferred pure addition. See Stage 1 step 5.
@@ -711,8 +811,8 @@ Resolved by research (kept here for the record; details in Appendix A):
   free (from the JWT `groups` claim). See §4 "Prong B performance".
 
 Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up discussion):
-- **No mode enum, no default policy.** The former `MICROMEGAS_ISOLATION_POLICY=self|rbac` knob and
-  its `self` default are gone. One rbac engine configured by grants; per-user isolation is the
+- **No mode enum, no default policy.** The former `MICROMEGAS_ISOLATION_POLICY=self|audience` knob and
+  its `self` default are gone. One AbAC engine configured by grants; per-user isolation is the
   empty-grants configuration, not a separate mode. Transitional unset-config = enforcement
   inactive; at GA the config is required at startup.
 - **Open deployments = everyone-group configuration** (chosen over a user-grantable
@@ -721,7 +821,9 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
   every deployment.
 - **Existing API keys are imported into the DB key store** (same key strings, audience
   `group:everyone`) — the migration vehicle for team deployments; zero client changes. The key
-  store therefore moves early in the ordering (Stage 4).
+  store therefore moves early in the ordering — **Stage 0**, ahead of the policy seam and
+  depending on nothing (revised 2026-07-30); only the `audience` column stays behind the seam,
+  as Stage 4.
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
 - **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
@@ -775,7 +877,7 @@ see them. But:
 absent-safe. `is_admin` = allowlist match on `sub`/email from `MICROMEGAS_ADMINS`
 (`load_admin_users` `:264-269`, check `:390-394`) — the precedent for group→capability config.
 Targets: Auth0, Azure AD, Google (Keycloak nested claims not currently targeted). `AuthContext`
-(`types.rs:14-37`) has no groups field yet — must be added for RBAC.
+(`types.rs:14-37`) has no groups field yet — must be added for AbAC grants.
 
 **Properties.** `micromegas_property = (key TEXT, value TEXT)` (`sql_telemetry_db.rs:17`),
 `processes.properties micromegas_property[]` (`:39`) — arbitrary strings, no per-key typing.

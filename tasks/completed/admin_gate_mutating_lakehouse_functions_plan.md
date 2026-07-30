@@ -18,7 +18,7 @@ existing `--disable-auth` convention already shipped in `web_server.rs` (see Des
 This is issue #1377, tracked independently of the broader data-isolation rollout (#1334) so it
 can land now with today's `MICROMEGAS_ADMINS`-derived flag. It composes with — but does not
 block on — #1369 (identity threading for `ReadScope`) and #1371 (UDTF/UDF read guards): per
-`tasks/data_isolation/policy_based_data_isolation_plan.md` §4, the eventual registration
+`tasks/data_isolation/audience_based_access_control_plan.md` §4, the eventual registration
 condition is *maintenance context ∨ admin ∨ `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`*, but
 the maintenance-context and opt-in knob arms belong to #1371. This plan implements only the
 admin arm, since it is a standalone fix for a pre-isolation hole.
