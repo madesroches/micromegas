@@ -82,15 +82,19 @@ meaningful value (Option B from the issue) while folding the exporter ARN into
 A resource is treated as a CloudWatch Metric Stream resource when `is_degenerate_resource`
 already flags it (no `host.id`/`host.name`/`process.pid`/`service.instance.id`) **and** it carries
 the AWS-specific marker attribute `aws.exporter.arn` with no `service.name`/`service.namespace` —
-the combination that lets us safely limit the rewrite to this one producer. The `service.name`/
-`service.namespace` conjuncts are gated on emptiness (via `identity::attr_norm`, trim +
-lowercase), not on `Option::is_none()`, to match the same-strength check `is_degenerate_resource`
-already applies to its own fields (`identity.rs:158-163`) — a present-but-empty
-`StringValue("")` must not be treated as "has a service name" here either:
+the combination that lets us safely limit the rewrite to this one producer. All three conjuncts —
+`aws.exporter.arn`, `service.name`, `service.namespace` — are gated on emptiness (via
+`identity::attr_norm`, trim + lowercase), not on `Option::is_some()`/`is_none()`, to match the
+same-strength check `is_degenerate_resource` already applies to its own fields
+(`identity.rs:158-163`) — a present-but-empty `StringValue("")` must not be treated as "has a
+value" for any of the three: an empty `aws.exporter.arn` is not a real marker (and would otherwise
+still leave the resource degenerate, collapsing every account/region onto one `process_id` again —
+the exact bug this rewrite exists to fix), and a present-but-empty `service.name`/
+`service.namespace` must not be treated as "has a service name" either:
 
 ```rust
-fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool {
-    identity::attr(attrs, "aws.exporter.arn").is_some()
+pub fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool {
+    !identity::attr_norm(attrs, "aws.exporter.arn").is_empty()
         && identity::attr_norm(attrs, "service.name").is_empty()
         && identity::attr_norm(attrs, "service.namespace").is_empty()
         && identity::is_degenerate_resource(attrs)
@@ -109,10 +113,15 @@ purely additive for this one AWS-specific shape, not a change to the shared OTLP
 
 Read the `Namespace` attribute off a `Metric`'s **first** data point, across whichever OTel data
 type it holds (`Sum`/`Gauge`/`Histogram`/`ExponentialHistogram`/`Summary` — same match shape as
-`metrics_bounds` in `block.rs:114-189`):
+`metrics_bounds` in `block.rs:114-189`). Sampling only the first data point is sufficient because
+the namespace is constant per `Metric` — CloudWatch encodes it directly in `Metric.name`
+(`amazonaws.com/<Namespace>/<MetricName>`, `mkdocs/docs/otlp/index.md:154`), so every data point
+under one `Metric` carries the same `Namespace` value in practice; if a first data point ever
+lacked the attribute while later ones had it, the whole `Metric` would still route to the
+`"AWS/Unknown"` fallback bucket rather than being inspected point-by-point:
 
 ```rust
-fn metric_namespace(metric: &Metric) -> Option<String> {
+pub fn metric_namespace(metric: &Metric) -> Option<String> {
     use crate::proto::metric::Data;
     let attrs: &[KeyValue] = match metric.data.as_ref()? {
         Data::Sum(s) => s.data_points.first()?.attributes.as_slice(),
@@ -239,9 +248,15 @@ mutated by a fingerprint match on the standard endpoint.
 
 Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_logs.rs`:
 
-- `UNKNOWN_NAMESPACE: &str = "AWS/Unknown"` — the `service.name` fallback so `exe` is never empty
-- `is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool`
-- `metric_namespace(metric: &Metric) -> Option<String>`
+- `pub const UNKNOWN_NAMESPACE: &str = "AWS/Unknown"` — the `service.name` fallback so `exe` is
+  never empty. Public (rather than private) so `tests/cloudwatch_metrics_tests.rs` can assert
+  against it directly, matching the `cloudwatch_logs.rs` precedent (`identity.rs`-adjacent doc
+  comments there: "Public (rather than private) so `tests/cloudwatch_logs_tests.rs` can assert
+  ... directly"). This project prefers `pub` over `pub(crate)`.
+- `pub fn is_cloudwatch_metric_stream_resource(attrs: &[KeyValue]) -> bool` — same rationale:
+  public so the unit tests below can call it directly from `tests/cloudwatch_metrics_tests.rs`.
+- `pub fn metric_namespace(metric: &Metric) -> Option<String>` — same rationale: public so the
+  unit tests below can call it directly from `tests/cloudwatch_metrics_tests.rs`.
 - `set_attr(attrs: &mut Vec<KeyValue>, key: &str, value: &str)` — private, replace-if-present;
   builds/replaces with `KeyValue { key: key.to_string(), key_strindex: 0, value: Some(AnyValue
   { value: Some(any_value::Value::StringValue(value.to_string())) }) }`, the same shape as
@@ -267,8 +282,10 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    writes are inherited unchanged from the shared split/write path") — both need to describe
    the CloudWatch-specific resource rewrite now inserted at that call site.
 3. **Test fixtures** — add CloudWatch-shaped fixture builders in a new
-   `rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs` (not the shared `fixtures.rs`, to keep
-   its general-purpose helpers' signatures unchanged): a resource with only
+   `rust/otel-ingestion/tests/cloudwatch_metrics_tests.rs` (not the shared `fixtures.rs`),
+   following the `cloudwatch_logs_tests.rs` precedent — the one metrics/logs test file that
+   does not `mod fixtures;`, keeping CloudWatch-shaped fixtures self-contained alongside the
+   CloudWatch-specific tests that use them: a resource with only
    `cloud.account.id`/`cloud.provider`/`cloud.region`/`aws.exporter.arn`, and metrics whose
    datapoints carry `Namespace`/`MetricName`/`Dimensions` attributes, mirroring the issue's dev
    data (`AWS/RDS`, `AWS/ECS`, `ECS/ContainerInsights`, `AWS/S3`).
@@ -287,15 +304,17 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
    a single first-match row and can't disambiguate the N processes this one ARN now maps
    to); assert the full returned set has one row per namespace with `exe` equal to that
    namespace and distinct `process_id`s.
-6. **Docs** — extend `mkdocs/docs/otlp/index.md`'s `## CloudWatch Metric Streams (Kinesis
-   Firehose)` section (around line 391 — *not* the metric-name paragraph at line 154, which is in
-   `### Metrics → measures`) to document the per-namespace process split, the
-   `service.instance.id` = ARN folding, and the `"AWS/Unknown"` fallback for metrics without a
-   `Namespace` attribute. Cross-reference the resource→`processes` mapping table
-   (lines 96-104) which documents `exe` derivation. Also update the `### Idempotency`
-   subsection (lines 461-472): partitioning turns one message into N blocks, so dedup
-   granularity is now per-namespace-block, not per-message — add this as its own
-   subsection, mirroring the `### How logGroup/logStream/owner surface` style (line 526).
+6. **Docs** — two separate deliverables under `mkdocs/docs/otlp/index.md`'s
+   `## CloudWatch Metric Streams (Kinesis Firehose)` section (around line 391 — *not* the
+   metric-name paragraph at line 154, which is in `### Metrics → measures`):
+   (a) add a **new** `### How CloudWatch namespaces surface` subsection, mirroring the
+   `### How logGroup/logStream/owner surface` style (line 526), documenting the per-namespace
+   process split, the `service.instance.id` = ARN folding, and the `"AWS/Unknown"` fallback for
+   metrics without a `Namespace` attribute. Cross-reference the resource→`processes` mapping
+   table (lines 95-103), which documents `exe` derivation.
+   (b) **in place**, edit the existing `### Idempotency` subsection (lines 461-472) to note that
+   dedup granularity is now per-namespace-block, not per-message, since partitioning turns one
+   delivered message into N blocks.
 7. **CI** — `cargo fmt`, `cargo clippy --workspace -- -D warnings`,
    `cargo test -p micromegas-otel-ingestion`, then `python3 build/rust_ci.py`.
 
@@ -366,14 +385,14 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 
 ## Documentation
 
-- `mkdocs/docs/otlp/index.md` — CloudWatch Metric Streams section (line 391+): document the
-  per-namespace process split (`exe` = CloudWatch namespace, `service.instance.id` = exporter
-  ARN), and the `"AWS/Unknown"` fallback for metrics without a usable `Namespace` datapoint
-  attribute.
-- `mkdocs/docs/otlp/index.md` — `### Idempotency` subsection (lines 461-472), as its own new
-  subsection mirroring `### How logGroup/logStream/owner surface` (line 526): dedup
-  granularity is now per-namespace-block rather than per-message, since partitioning turns
-  one delivered message into N blocks.
+- `mkdocs/docs/otlp/index.md` — **new** `### How CloudWatch namespaces surface` subsection under
+  `## CloudWatch Metric Streams (Kinesis Firehose)` (line 391+), mirroring
+  `### How logGroup/logStream/owner surface` (line 526): document the per-namespace process
+  split (`exe` = CloudWatch namespace, `service.instance.id` = exporter ARN), and the
+  `"AWS/Unknown"` fallback for metrics without a usable `Namespace` datapoint attribute.
+- `mkdocs/docs/otlp/index.md` — **in-place edit** to the existing `### Idempotency` subsection
+  (lines 461-472): dedup granularity is now per-namespace-block rather than per-message, since
+  partitioning turns one delivered message into N blocks.
 
 ## Testing Strategy
 
@@ -383,7 +402,13 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     resource that isn't actually this producer); false when `aws.exporter.arn` is present alongside
     a real `host.name`/`host.id`/`process.pid`/`service.instance.id` (regression guard for the
     fingerprint's `is_degenerate_resource` conjunct — a non-degenerate resource that happens to
-    carry `aws.exporter.arn` must not be rewritten; `is_degenerate_resource` itself is unchanged).
+    carry `aws.exporter.arn` must not be rewritten; `is_degenerate_resource` itself is unchanged);
+    **true** when `service.name`/`service.namespace` are present but hold empty or
+    whitespace-only `StringValue`s (pins the `attr_norm`-over-`is_none()` design decision — a
+    present-but-empty value must not be treated as "has a service name"); **false** when
+    `aws.exporter.arn` is present but empty/whitespace-only (pins the same emptiness gate on the
+    marker attribute itself — an empty ARN is not a real marker and must fall through untouched
+    rather than match a still-degenerate resource).
   - `metric_namespace`: extracts `Namespace` from a `Sum`/`Gauge` metric's first data point;
     returns `None` when the metric has no data points, the attribute is absent, or its value is
     empty/whitespace-only.
@@ -406,12 +431,17 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
     is identical across the two rewrites — pins the `rewrite_cloudwatch_metric_streams`
     determinism that the Design section's `BTreeMap` rationale depends on for the route's
     Firehose-retry dedup guarantee (`mkdocs/docs/otlp/index.md` Idempotency section).
-- **Regression check:** `rust/otel-ingestion/tests/firehose_tests.rs` is unaffected by this
-  change — it only exercises `decode_firehose_envelope`/`decode_next_length_delimited` (per its
-  own module doc, "No database: pure shape assertions") and never reaches
-  `rewrite_cloudwatch_metric_streams`, `split_metrics`, or `ingest_firehose_metrics`. The
-  guarantee that the rewrite is a no-op for non-CloudWatch-shaped resources is instead pinned by
-  the "passed through byte-for-byte unchanged" unit test above.
+- **Regression check:** `rust/otel-ingestion/tests/firehose_tests.rs` does exercise
+  `split_metrics` directly (`use micromegas_otel_ingestion::block::split_metrics;` plus a
+  `split_metrics(decoded)` call asserting `blocks.len() == 1`) — it is unaffected by this change
+  not because it avoids `split_metrics`, but because (a) it never reaches
+  `rewrite_cloudwatch_metric_streams`, which lives in `ingest_firehose_metrics`
+  (`handler.rs:370-388`), one layer above where this test calls `split_metrics` directly, and (b)
+  its fixture (`fixtures::make_metrics_request`, `fixtures.rs:134-149`) sets `service.name`/
+  `host.name`/`process.pid`, so `is_cloudwatch_metric_stream_resource` would return `false` on it
+  even if the rewrite were in scope. The guarantee that the rewrite is a no-op for
+  non-CloudWatch-shaped resources is instead pinned by the "passed through byte-for-byte
+  unchanged" unit test above.
 - **E2E (`python/micromegas/tests/test_otlp_e2e.py`, against real services):** a
   CloudWatch-shaped Firehose delivery, tagged with a per-run-unique synthetic
   `aws.exporter.arn`, with two or more namespaces produces one `processes` row per
