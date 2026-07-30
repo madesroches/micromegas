@@ -11,7 +11,10 @@ use micromegas_otel_ingestion::proto::{
     ScopeMetrics, ScopeSpans, Span, any_value::Value as AnyVal, metric,
 };
 use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
-use opentelemetry_proto::tonic::metrics::v1::{Gauge, NumberDataPoint, Sum, number_data_point};
+use opentelemetry_proto::tonic::metrics::v1::{
+    Gauge, NumberDataPoint, Sum, Summary, SummaryDataPoint, number_data_point,
+    summary_data_point::ValueAtQuantile,
+};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::span;
 
@@ -190,6 +193,29 @@ pub fn gauge_metric(name: &str, unit: &str, time: u64, value: i64) -> Metric {
                 exemplars: vec![],
                 flags: 0,
                 value: Some(number_data_point::Value::AsInt(value)),
+            }],
+        })),
+    }
+}
+
+pub fn summary_metric(name: &str, unit: &str, time: u64, count: u64, sum: f64) -> Metric {
+    Metric {
+        name: name.into(),
+        description: String::new(),
+        unit: unit.into(),
+        metadata: vec![],
+        data: Some(metric::Data::Summary(Summary {
+            data_points: vec![SummaryDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: time,
+                count,
+                sum,
+                quantile_values: vec![ValueAtQuantile {
+                    quantile: 0.0,
+                    value: 0.0,
+                }],
+                flags: 0,
             }],
         })),
     }

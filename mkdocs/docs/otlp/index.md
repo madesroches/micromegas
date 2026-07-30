@@ -149,7 +149,7 @@ Sum, Gauge, and Summary data points are materialized. Sum/Gauge land as a single
 | `unit` (`_count` rows always get `unit = ""`) | `unit` |
 | `value` (int widened to f64) | `value` |
 | `time_unix_nano` | `time` |
-| `aggregation_temporality`, `is_monotonic`, `otel.metric.kind` (Sum/Gauge only — Summary rows add no `properties`) | `properties` |
+| `aggregation_temporality`, `is_monotonic`, `otel.metric.kind` (Sum/Gauge only — Summary rows add no derived `otel.metric.*` extras, though per-point attributes still populate `properties` same as Sum/Gauge) | `properties` |
 
 **Selecting one CloudWatch statistic:**
 

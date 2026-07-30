@@ -114,6 +114,38 @@ fn metrics_split_emits_one_block_for_a_mixed_kind_resource() {
 }
 
 #[test]
+fn metrics_split_bounds_a_summary_data_point_by_max_rows_per_point() {
+    let req = make_metrics_request(
+        "claude-code",
+        "macbook",
+        1234,
+        vec![summary_metric(
+            "claude_code.request.duration",
+            "ms",
+            1_700_000_002_000_000_000,
+            7,
+            123.5,
+        )],
+    );
+    let blocks = split_metrics(req).unwrap();
+    assert_eq!(blocks.len(), 1);
+    let b = &blocks[0];
+    // `metrics_bounds` counts a Summary data point as `SUMMARY_MAX_ROWS_PER_POINT` (4)
+    // rows — the upper bound `OtelMetricsBlockProcessor::append_summary` can fan it out
+    // into (count/sum/min/max) — rather than 1-per-point.
+    assert_eq!(b.nb_records, 4);
+    assert!(matches!(b.signal, SignalKey::Metrics));
+    assert_eq!(
+        b.begin_time.timestamp_nanos_opt().unwrap(),
+        1_700_000_002_000_000_000
+    );
+    assert_eq!(
+        b.end_time.timestamp_nanos_opt().unwrap(),
+        1_700_000_002_000_000_000
+    );
+}
+
+#[test]
 fn traces_split_carries_proto_in_payload() {
     let trace_id = [0x11u8; 16];
     let span_id = [0x22u8; 8];

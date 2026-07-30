@@ -5,77 +5,15 @@
 use datafusion::arrow::array::{Array, StringArray};
 use micromegas_analytics::lakehouse::block_partition_spec::BlockProcessor;
 use micromegas_analytics::lakehouse::otel::metrics_block_processor::OtelMetricsBlockProcessor;
-use micromegas_analytics::lakehouse::partition_source_data::PartitionSourceBlock;
-use micromegas_telemetry::blob_storage::BlobStorage;
-use micromegas_telemetry::block_wire_format::BlockPayload;
-use micromegas_telemetry::types::block::BlockMetadata;
 use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
 use opentelemetry_proto::tonic::metrics::v1::{
     Metric, ResourceMetrics, ScopeMetrics, Summary, SummaryDataPoint, metric,
     summary_data_point::ValueAtQuantile,
 };
 use prost::Message;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 mod test_helpers;
-use test_helpers::make_process_metadata;
-
-fn make_in_memory_blob_storage() -> Arc<BlobStorage> {
-    Arc::new(BlobStorage::new(
-        Arc::new(object_store::memory::InMemory::new()),
-        object_store::path::Path::from(""),
-    ))
-}
-
-async fn make_source_block(
-    blob_storage: &BlobStorage,
-    payload_bytes: Vec<u8>,
-    nb_objects: usize,
-) -> anyhow::Result<Arc<PartitionSourceBlock>> {
-    let process_id = uuid::Uuid::new_v4();
-    let stream_id = uuid::Uuid::new_v4();
-    let block_id = uuid::Uuid::new_v4();
-    let now = chrono::Utc::now();
-
-    let block_payload = BlockPayload {
-        dependencies: vec![],
-        objects: payload_bytes,
-    };
-    let mut buf = Vec::new();
-    ciborium::into_writer(&block_payload, &mut buf)?;
-    let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-    blob_storage.put(&obj_path, buf.into()).await?;
-
-    let block = BlockMetadata {
-        block_id,
-        stream_id,
-        process_id,
-        begin_time: now,
-        end_time: now,
-        begin_ticks: 0,
-        end_ticks: 0,
-        nb_objects: nb_objects as i32,
-        payload_size: block_payload.objects.len() as i64,
-        object_offset: 0,
-        insert_time: now,
-    };
-    let stream = Arc::new(micromegas_analytics::metadata::StreamMetadata {
-        process_id,
-        stream_id,
-        dependencies_metadata: vec![],
-        objects_metadata: vec![],
-        tags: vec![],
-        properties: Arc::new(vec![]),
-    });
-    let process = Arc::new(make_process_metadata(process_id, None, HashMap::new()));
-    Ok(Arc::new(PartitionSourceBlock {
-        block,
-        stream,
-        process,
-        format: "otlp/v1/metrics".to_string(),
-    }))
-}
+use test_helpers::{make_in_memory_blob_storage, make_source_block};
 
 fn resource_metrics_with_one_summary(dp: SummaryDataPoint) -> ResourceMetrics {
     ResourceMetrics {
@@ -185,7 +123,7 @@ async fn summary_fans_out_to_four_suffixed_rows_and_drops_non_min_max_quantiles(
     let payload_bytes = resource_metrics.encode_to_vec();
 
     let blob_storage = make_in_memory_blob_storage();
-    let src_block = make_source_block(&blob_storage, payload_bytes, 1)
+    let src_block = make_source_block(&blob_storage, payload_bytes, 1, "otlp/v1/metrics")
         .await
         .expect("make_source_block");
 
@@ -246,7 +184,7 @@ async fn summary_without_min_max_quantiles_still_produces_count_and_sum() {
     let payload_bytes = resource_metrics.encode_to_vec();
 
     let blob_storage = make_in_memory_blob_storage();
-    let src_block = make_source_block(&blob_storage, payload_bytes, 1)
+    let src_block = make_source_block(&blob_storage, payload_bytes, 1, "otlp/v1/metrics")
         .await
         .expect("make_source_block");
 
@@ -304,7 +242,7 @@ async fn summary_with_duplicate_min_max_quantiles_emits_one_row_each() {
     let payload_bytes = resource_metrics.encode_to_vec();
 
     let blob_storage = make_in_memory_blob_storage();
-    let src_block = make_source_block(&blob_storage, payload_bytes, 1)
+    let src_block = make_source_block(&blob_storage, payload_bytes, 1, "otlp/v1/metrics")
         .await
         .expect("make_source_block");
 
@@ -362,7 +300,7 @@ async fn summary_data_point_with_zero_timestamp_produces_no_rows() {
     let payload_bytes = resource_metrics.encode_to_vec();
 
     let blob_storage = make_in_memory_blob_storage();
-    let src_block = make_source_block(&blob_storage, payload_bytes, 1)
+    let src_block = make_source_block(&blob_storage, payload_bytes, 1, "otlp/v1/metrics")
         .await
         .expect("make_source_block");
 

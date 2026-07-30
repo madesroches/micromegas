@@ -16,18 +16,13 @@ use micromegas_analytics::images_table::ImagesRecordBuilder;
 use micromegas_analytics::lakehouse::block_partition_spec::BlockProcessor;
 use micromegas_analytics::lakehouse::otel::logs_block_processor::OtelLogsBlockProcessor;
 use micromegas_analytics::lakehouse::otel::metrics_block_processor::OtelMetricsBlockProcessor;
-use micromegas_analytics::lakehouse::partition_source_data::PartitionSourceBlock;
 use micromegas_analytics::log_entries_table::LogEntriesRecordBuilder;
 use micromegas_analytics::log_entry::LogEntry;
 use micromegas_analytics::measure::Measure;
-use micromegas_analytics::metadata::StreamMetadata;
 use micromegas_analytics::metrics_table::MetricsRecordBuilder;
 use micromegas_analytics::net_spans_table::{NetSpanRecord, NetSpanRecordBuilder};
 use micromegas_analytics::properties::property_set::PropertySet;
 use micromegas_analytics::span_table::{SpanRecordBuilder, SpanRow};
-use micromegas_telemetry::blob_storage::BlobStorage;
-use micromegas_telemetry::block_wire_format::BlockPayload;
-use micromegas_telemetry::types::block::BlockMetadata;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, any_value};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
@@ -39,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod test_helpers;
-use test_helpers::make_process_metadata;
+use test_helpers::{make_in_memory_blob_storage, make_process_metadata, make_source_block};
 
 /// Comfortably above the old `Int16Type` dictionary-key ceiling (32,767).
 const OVERFLOW_COUNT: usize = 33_000;
@@ -241,68 +236,6 @@ fn images_record_builder_overflow() {
         .finish()
         .expect("finish must not panic past the old Int16 dictionary cap");
     assert_eq!(batch.num_rows(), OVERFLOW_COUNT);
-}
-
-/// Builds an in-memory `BlobStorage` with no path prefix, so `blobs/{process_id}/...`
-/// paths written directly onto the store are exactly what `fetch_block_payload` reads.
-fn make_in_memory_blob_storage() -> Arc<BlobStorage> {
-    Arc::new(BlobStorage::new(
-        Arc::new(object_store::memory::InMemory::new()),
-        object_store::path::Path::from(""),
-    ))
-}
-
-/// Builds a `PartitionSourceBlock` for a single block carrying `payload_bytes` under a
-/// fresh random process/stream/block id, and writes the CBOR-wrapped `BlockPayload` to
-/// `blob_storage` at the path `fetch_block_payload` expects.
-async fn make_source_block(
-    blob_storage: &BlobStorage,
-    payload_bytes: Vec<u8>,
-    nb_objects: usize,
-    format: &str,
-) -> anyhow::Result<Arc<PartitionSourceBlock>> {
-    let process_id = uuid::Uuid::new_v4();
-    let stream_id = uuid::Uuid::new_v4();
-    let block_id = uuid::Uuid::new_v4();
-    let now = chrono::Utc::now();
-
-    let block_payload = BlockPayload {
-        dependencies: vec![],
-        objects: payload_bytes,
-    };
-    let mut buf = Vec::new();
-    ciborium::into_writer(&block_payload, &mut buf)?;
-    let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-    blob_storage.put(&obj_path, buf.into()).await?;
-
-    let block = BlockMetadata {
-        block_id,
-        stream_id,
-        process_id,
-        begin_time: now,
-        end_time: now,
-        begin_ticks: 0,
-        end_ticks: 0,
-        nb_objects: nb_objects as i32,
-        payload_size: block_payload.objects.len() as i64,
-        object_offset: 0,
-        insert_time: now,
-    };
-    let stream = Arc::new(StreamMetadata {
-        process_id,
-        stream_id,
-        dependencies_metadata: vec![],
-        objects_metadata: vec![],
-        tags: vec![],
-        properties: Arc::new(vec![]),
-    });
-    let process = Arc::new(make_process_metadata(process_id, None, HashMap::new()));
-    Ok(Arc::new(PartitionSourceBlock {
-        block,
-        stream,
-        process,
-        format: format.to_string(),
-    }))
 }
 
 /// The "mandatory companions" fix (plan §"Companion OTLP processors"): OTel processors

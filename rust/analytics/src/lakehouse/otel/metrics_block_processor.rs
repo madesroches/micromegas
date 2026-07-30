@@ -34,6 +34,18 @@ use prost::Message;
 use std::borrow::Cow;
 use std::sync::Arc;
 
+/// Returns `time_unix_nano` as `i64` unless it's zero, in which case the data point is
+/// logged and skipped. Shared by `append` (Sum/Gauge) and `append_summary`, which only
+/// differ in the `kind` word used in the log message.
+fn nonzero_time_nanos(kind: &str, metric_name: &str, time_unix_nano: u64) -> Option<i64> {
+    let time_nanos = time_unix_nano as i64;
+    if time_nanos == 0 {
+        debug!("OTel {kind} data point for {metric_name} dropped (time_unix_nano=0)");
+        return None;
+    }
+    Some(time_nanos)
+}
+
 #[derive(Debug)]
 pub struct OtelMetricsBlockProcessor {}
 
@@ -242,11 +254,9 @@ impl MeasuresRowBuilder {
         dp: &NumberDataPoint,
         extras: &[(String, JsonbValue<'static>)],
     ) -> Result<()> {
-        let time_nanos = dp.time_unix_nano as i64;
-        if time_nanos == 0 {
-            debug!("OTel metric data point for {metric_name} dropped (time_unix_nano=0)");
+        let Some(time_nanos) = nonzero_time_nanos("metric", metric_name, dp.time_unix_nano) else {
             return Ok(());
-        }
+        };
 
         let value = match dp.value.as_ref() {
             Some(number_data_point::Value::AsDouble(d)) => *d,
@@ -271,8 +281,9 @@ impl MeasuresRowBuilder {
     /// Fans a `SummaryDataPoint` out into rows for the four fixed statistics
     /// (count, sum, min, max), each under its own suffixed metric name. Any
     /// `quantile_values` entry other than `q=0.0`/`q=1.0` is logged and dropped —
-    /// configured percentiles are out of scope. No `properties`/`extras` are added
-    /// for Summary rows; the statistic lives entirely in `name`.
+    /// configured percentiles are out of scope. No derived `otel.metric.*` extras
+    /// (aggregation_temporality/is_monotonic/kind) are added for Summary rows; the
+    /// per-point `dp.attributes` still populate `properties` the same as Sum/Gauge.
     fn append_summary(
         &mut self,
         scope_name: &str,
@@ -280,11 +291,9 @@ impl MeasuresRowBuilder {
         unit: &str,
         dp: &SummaryDataPoint,
     ) -> Result<()> {
-        let time_nanos = dp.time_unix_nano as i64;
-        if time_nanos == 0 {
-            debug!("OTel summary data point for {metric_name} dropped (time_unix_nano=0)");
+        let Some(time_nanos) = nonzero_time_nanos("summary", metric_name, dp.time_unix_nano) else {
             return Ok(());
-        }
+        };
 
         self.append_row(
             scope_name,
