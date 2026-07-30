@@ -157,10 +157,17 @@ in the slice with no deduplication (a plain `push` on an already-present key wou
   is added, no `service.name` → `exe = ""` still, but `is_degenerate_resource` no longer trips
   (service.instance.id is set) and the process no longer collapses across accounts/regions
   (Option A's fix, applied as the fallback for whatever isn't confidently namespace-attributed).
-  These rows are materialized into `measures` like any other Summary metric (per
-  `mkdocs/docs/otlp/index.md:144`) — CloudWatch Metric Streams' `opentelemetry1.0` output encodes
-  every data point as an OTLP `Summary` (`mkdocs/docs/otlp/index.md:407`) — so unknown-bucket rows
-  are user-visible with `exe = ""`, not dropped.
+  No synthetic placeholder (e.g. `"aws.cloudwatch.metrics.unknown"`) is substituted for
+  `service.name`: the ingestion crate has no such convention anywhere — `push_attr_from_header`
+  (`rust/public/src/servers/webhook.rs:38-56`) simply omits `service.name` when a header is
+  absent, exactly as documented for the generic OTLP path
+  (`mkdocs/docs/otlp/index.md:336-338`: "a missing header behaves like an OTLP resource that
+  omits the attribute"), and `is_degenerate_resource` only *reports* missing identity rather than
+  substituting a value. These rows are materialized into `measures` like any other Summary metric
+  (per `mkdocs/docs/otlp/index.md:144`) — CloudWatch Metric Streams' `opentelemetry1.0` output
+  encodes every data point as an OTLP `Summary` (`mkdocs/docs/otlp/index.md:407`) — so
+  unknown-bucket rows are user-visible with `exe = ""`, not dropped, and remain fully queryable via
+  `otel.resource.aws.exporter.arn` in `processes.properties` (`block.rs:483-490`).
 
 The resulting `ResourceMetrics` list replaces the original single entry in
 `req.resource_metrics` before the request reaches `ingest_parsed_metrics`/`split_metrics` — every
@@ -254,12 +261,19 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   for reproducible test assertions and stable output ordering across otherwise-identical inputs;
   the extra ordering cost is negligible at CloudWatch's namespace cardinality (single digits per
   stream in practice).
+- **Per-message write fan-out.** Partitioning multiplies `write_blocks`' per-`PreparedBlock` work
+  (`handler.rs:94-144`) by the namespace count: one message that used to yield a single block
+  (one object-store `put` + `register_otel_process`/`register_otel_stream`/`insert_block_typed`)
+  now yields one block per namespace bucket, so a message spanning the dev data's 4 namespaces
+  becomes 4 object-store PUTs + 12 sequential SQL round-trips instead of 1 + 3. Accepted because
+  CloudWatch namespace cardinality per stream is single digits in practice, bounding the
+  multiplier; revisit if Firehose delivery-timeout pressure shows up under real load.
 - **`process_id` changes for existing CloudWatch-metrics processes.** Every process derived from
   this route gets a new `process_id` once this ships (old rows keep their old id; new ingestion
   uses the new one) — accepted per `process_id_from_resource`'s own doc comment
   (`identity.rs:1-6`): "Long-term stability of `process_id` values across upgrades is not a
-  design goal." Same trade-off already taken for #1386's logs-side fix and prior field additions
-  to the hash.
+  design goal." Same trade-off already taken for prior in-place hash-field additions (e.g. when
+  `process.owner` was added, per `identity.rs:181-183`).
 - **`is_degenerate_resource` stays unchanged (not extended with `aws.exporter.arn`).** No other
   producer in this codebase keys off `aws.exporter.arn` today (confirmed by grep across
   `rust/*/src`), so there is nothing else to generalize the degenerate-resource check for right
@@ -307,13 +321,3 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
   no-op for them.
 - **CI:** `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
   `python3 build/rust_ci.py`.
-
-## Open Questions
-
-- Is the "unknown" bucket's exact shape (only `service.instance.id` = ARN, no `service.name`) the
-  right fallback, or would a placeholder `service.name` (e.g. `"aws.cloudwatch.metrics.unknown"`)
-  be more useful for spotting these rows in practice? Not low-stakes: these rows are materialized
-  into `measures` and are user-visible with `exe = ""` (every CloudWatch Metric Streams data point
-  is an OTLP `Summary` per `mkdocs/docs/otlp/index.md:407`, and Summaries are materialized per
-  `mkdocs/docs/otlp/index.md:144`), so the choice affects real query ergonomics, not just an
-  invisible edge case.
