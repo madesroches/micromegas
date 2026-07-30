@@ -26,7 +26,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use jsonb::Value as JsonbValue;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
-use opentelemetry_proto::tonic::common::v1::KeyValue;
 use opentelemetry_proto::tonic::metrics::v1::{
     NumberDataPoint, ResourceMetrics, SummaryDataPoint, metric::Data, number_data_point,
 };
@@ -210,22 +209,21 @@ impl MeasuresRowBuilder {
     }
 
     /// Appends one `measures` row for an already-extracted point. Shared tail of
-    /// `append` (Sum/Gauge) and `append_summary` (Summary).
-    #[allow(clippy::too_many_arguments)]
+    /// `append` (Sum/Gauge) and `append_summary` (Summary). `props_jsonb` is the
+    /// already-serialized `properties` payload — attributes and derived extras
+    /// merged by `attrs_to_jsonb` — so a caller fanning one data point out into
+    /// several rows serializes it once.
     fn append_row(
         &mut self,
         scope_name: &str,
         metric_name: &str,
         unit: &str,
         time_nanos: i64,
-        attributes: &[KeyValue],
         value: f64,
-        extras: &[(String, JsonbValue<'static>)],
+        props_jsonb: &[u8],
     ) -> Result<()> {
         self.min_time = self.min_time.min(time_nanos);
         self.max_time = self.max_time.max(time_nanos);
-
-        let props_jsonb = attrs_to_jsonb(attributes, extras);
 
         self.process_ids.append(&self.process_id_str)?;
         self.stream_ids.append(&self.stream_id_str)?;
@@ -239,7 +237,7 @@ impl MeasuresRowBuilder {
         self.names.append(metric_name)?;
         self.units.append(unit)?;
         self.values.append_value(value);
-        self.properties.append(&props_jsonb)?;
+        self.properties.append(props_jsonb)?;
         self.process_properties.append(&**self.process.properties)?;
 
         self.nb_appended += 1;
@@ -272,9 +270,8 @@ impl MeasuresRowBuilder {
             metric_name,
             unit,
             time_nanos,
-            &dp.attributes,
             value,
-            extras,
+            &attrs_to_jsonb(&dp.attributes, extras),
         )
     }
 
@@ -295,23 +292,24 @@ impl MeasuresRowBuilder {
             return Ok(());
         };
 
+        // All four statistics share the same attribute map, so serialize it once.
+        let props_jsonb = attrs_to_jsonb(&dp.attributes, &[]);
+
         self.append_row(
             scope_name,
             &format!("{metric_name}_count"),
             "",
             time_nanos,
-            &dp.attributes,
             dp.count as f64,
-            &[],
+            &props_jsonb,
         )?;
         self.append_row(
             scope_name,
             &format!("{metric_name}_sum"),
             unit,
             time_nanos,
-            &dp.attributes,
             dp.sum,
-            &[],
+            &props_jsonb,
         )?;
 
         let mut min_emitted = false;
@@ -331,9 +329,8 @@ impl MeasuresRowBuilder {
                     &format!("{metric_name}_min"),
                     unit,
                     time_nanos,
-                    &dp.attributes,
                     q.value,
-                    &[],
+                    &props_jsonb,
                 )?;
             } else if q.quantile == 1.0 {
                 if max_emitted {
@@ -349,9 +346,8 @@ impl MeasuresRowBuilder {
                     &format!("{metric_name}_max"),
                     unit,
                     time_nanos,
-                    &dp.attributes,
                     q.value,
-                    &[],
+                    &props_jsonb,
                 )?;
             } else {
                 debug!(
