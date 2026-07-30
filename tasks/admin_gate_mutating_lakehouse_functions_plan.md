@@ -449,10 +449,16 @@ SQL that this repo controls.
   `retire_partition_by_metadata(...)` call, expect an error whose message contains `"Invalid
   function"`. With `is_admin: true`, assert the same five well-formed calls plan successfully
   (`ctx.sql(...).await.is_ok()`) — do not assert on execution, which needs a live lakehouse and is
-  out of scope here. Also assert non-mutating functions (`list_partitions`, `view_instance`, etc.)
-  are unaffected by the flag either way.
-- **Integration**: no existing harness starts an in-process `FlightSqlServer` for tests —
-  `rust/*/tests/` has no such fixture, and the only e2e coverage is the Python suite in
+  out of scope here. Also assert non-mutating functions that need no view-set lookup at plan
+  time — `list_partitions()`, `list_view_sets()` — plan successfully identically under both
+  `is_admin: false` and `is_admin: true` (not `view_instance`: with the empty `ViewFactory::new(vec![])`
+  this helper uses, `ViewInstanceTableFunction::call_with_args` resolves the view at plan time via
+  `ViewFactory::make_view`, which errors with "view set {name} not found" regardless of `is_admin`
+  — see `view_instance_table_function.rs:71-74` and `view_factory.rs:259-265`).
+- **Integration**: no existing harness starts an in-process `FlightSqlServiceImpl` (wrapped in the
+  real `AuthService` tower layer) for tests — `rust/public/tests/large_message_tests.rs` starts an
+  in-process Flight server, but a bespoke mock `FlightService`, not `FlightSqlServiceImpl` behind
+  `AuthService` — and the only e2e coverage is the Python suite in
   `python/micromegas/tests/`, which runs against
   `local_test_env/ai_scripts/start_services.py`; that script passes `--disable-auth` to
   `flight-sql-srv` (line 192), so `is_admin` is always `true` there and the non-admin rejection
@@ -464,22 +470,35 @@ SQL that this repo controls.
   the Python client also already has a pluggable bearer-token hook
   (`DynamicAuthMiddleware`/`DynamicAuthMiddlewareFactory`,
   `python/micromegas/micromegas/flightsql/client.py:34-61`) that a few-line static-key provider
-  satisfies. The only missing piece is test-env wiring: a second, API-key-authenticated
-  `flight-sql-srv` instance started by `start_services.py` alongside the existing
-  `--disable-auth` one, plus a small static-token Python auth provider to drive it. Standing that
-  up is out of scope for this plan — the registration gate itself, and header propagation across
-  the tower boundary, both run as ordinary, non-`#[ignore]`d tests in CI — the tower-level
-  `x-auth-is-admin` tests (`rust/auth/tests/tower_tests.rs`) plus the new
-  `lakehouse_admin_gate_test.rs` above. What is *not* covered is a live, wired-together round-trip
-  (a real FlightSQL client, through the tower `AuthService`, into
-  `execute_query`/`do_action_create_prepared_statement`, hitting the registration gate under real
-  auth) — that gap is what needs the missing test-env wiring, and is a known, accepted coverage
-  gap, not an oversight.
+  satisfies. This is *not*, however, blocked on any test-env wiring: `rust/public/tests/
+  large_message_tests.rs:141-177` already shows the pattern for a DB-free, in-process round-trip —
+  a tonic `FlightServiceServer` served over a local socket and driven by the real
+  `micromegas::client::flightsql_client::Client` — and `FlightSqlServiceImpl::new`
+  (`flight_sql_service_impl.rs:253-258`) takes only `(LakehouseContext, part_provider, view_factory,
+  session_configurator)`, all constructible offline via the same `connect_lazy` +
+  `object_store::memory::InMemory` pattern used for `lakehouse_admin_gate_test.rs` above, wrapped in
+  the real `AuthService` tower layer (a plain `layer_fn`, `flight_sql_server.rs:242-245`) in front of
+  it with `ApiKeyAuthProvider` supplying a non-admin `AuthContext`. So a full Rust-only round-trip
+  (API-key caller → `AuthService` → `execute_query`/`do_action_create_prepared_statement` →
+  registration-gate denial) is buildable today with no second service, no `start_services.py`
+  changes, and no Python auth provider — the actual blocker is only the one-time cost of assembling
+  that offline fixture (server plus tower layer plus in-process client) in
+  `rust/public/tests/`, which this plan defers as additional test-authoring effort beyond its
+  minimal fix, not as a missing-infrastructure gap. Standing it up remains out of scope for this
+  plan — the registration gate itself, and header propagation across the tower boundary, both run
+  as ordinary, non-`#[ignore]`d tests in CI — the tower-level `x-auth-is-admin` tests
+  (`rust/auth/tests/tower_tests.rs`) plus the new `lakehouse_admin_gate_test.rs` above. What is
+  *not* covered is a live, wired-together round-trip (a real FlightSQL client, through the tower
+  `AuthService`, into `execute_query`/`do_action_create_prepared_statement`, hitting the
+  registration gate under real auth) — that gap is a known, accepted coverage gap left for a
+  follow-up, not an oversight and not one blocked by missing test-env infrastructure.
 - **`do_action_create_prepared_statement`**: for the same reason, this is covered at the unit
   level only — the `rust/auth` unit tests for `is_admin(metadata)` cover header parsing, and the
   `_request` → `request` signature change (so the handler stops discarding the request's
-  metadata) is verified by code review, not a new integration test. A live "prepare as non-admin,
-  expect rejection" test needs the same missing FlightSQL-server-with-auth harness as the
-  Integration bullet above and is not added here.
+  metadata) is verified by code review, not a new integration test. The Rust client exposes this
+  path via `prepare_statement` (`rust/public/src/client/flightsql_client.rs:104`), so a live
+  "prepare as non-admin, expect rejection" test is buildable with the same in-process
+  server-plus-`AuthService` fixture described in the Integration bullet above; it is deferred here
+  as the same additional test-authoring effort, not because any harness or wiring is missing.
 - Run `cargo test` from `rust/` for the affected crates (`auth`, `analytics`, `public`) plus the
   full `cargo clippy --workspace -- -D warnings`.
