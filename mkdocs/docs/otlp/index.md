@@ -151,12 +151,14 @@ Sum, Gauge, and Summary data points are materialized. Sum/Gauge land as a single
 | `time_unix_nano` | `time` |
 | `aggregation_temporality`, `is_monotonic`, `otel.metric.kind` (Sum/Gauge only — Summary rows add no derived `otel.metric.*` extras, though per-point attributes still populate `properties` same as Sum/Gauge) | `properties` |
 
+CloudWatch Metric Streams' `opentelemetry1.0` output prefixes every metric name with `amazonaws.com/<Namespace>/`, so a `CPUUtilization` metric on `AWS/EC2` arrives as `amazonaws.com/AWS/EC2/CPUUtilization` — the examples below use the real, prefixed names.
+
 **Selecting one CloudWatch statistic:**
 
 ```sql
 SELECT time, value
 FROM measures
-WHERE name = 'CPUUtilization_max'
+WHERE name = 'amazonaws.com/AWS/EC2/CPUUtilization_max'
 ```
 
 **Grouping all statistics for a metric:**
@@ -164,7 +166,7 @@ WHERE name = 'CPUUtilization_max'
 ```sql
 SELECT time, name, value
 FROM measures
-WHERE name LIKE 'CPUUtilization\_%' ESCAPE '\'
+WHERE name LIKE 'amazonaws.com/AWS/EC2/CPUUtilization\_%' ESCAPE '\'
 ```
 
 ### Traces → `otel_spans`
