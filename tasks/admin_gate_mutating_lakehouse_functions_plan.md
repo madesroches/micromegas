@@ -11,7 +11,9 @@ FlightSQL caller — including a static API key, which is never admin — can in
 routes, but it is only *logged*, never checked, on the FlightSQL query path, and it doesn't
 even cross the tower `AuthService` process boundary. This closes that hole: register the
 mutating set only when the session's authenticated `is_admin` is true; everyone else gets
-"function not found".
+"function not found" — except when no `AuthService` is configured at all (`--disable-auth`,
+the documented local-dev/monolith mode), which is treated as trusted/admin, matching the
+existing `--disable-auth` convention already shipped in `web_server.rs` (see Design §2).
 
 This is issue #1377, tracked independently of the broader data-isolation rollout (#1334) so it
 can land now with today's `MICROMEGAS_ADMINS`-derived flag. It composes with — but does not
@@ -103,16 +105,28 @@ out of metadata" (it does the same for `x-auth-subject`/`x-auth-email`/`x-allow-
 
 ```rust
 pub fn is_admin(metadata: &MetadataMap) -> bool {
-    metadata
-        .get("x-auth-is-admin")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<bool>().ok())
-        .unwrap_or(false)
+    match metadata.get("x-auth-is-admin") {
+        // No `AuthService` configured (e.g. `--disable-auth`) never sets any `x-auth-*`
+        // header — this is the only way the header can be absent, since `AuthService::call`
+        // rejects the request with `Unauthenticated` before it reaches the inner service
+        // when a provider *is* configured but validation fails. Treat this case as trusted
+        // admin, matching the existing `--disable-auth` convention in
+        // `analytics-web-srv/src/web_server.rs` (which injects `ValidatedUser { is_admin:
+        // true, .. }` when auth is disabled).
+        None => true,
+        Some(v) => v
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+    }
 }
 ```
 
-Fails closed: missing header, unparseable value, or unauthenticated request (no `AuthService`
-configured) all resolve to `false`.
+Fails closed only for an authenticated-but-non-admin caller: an unparseable value resolves to
+`false`. A missing header resolves to `true`, since (per `rust/auth/src/tower.rs`) the header is
+only ever absent when no `AuthService` is configured at all — the same "no auth configured means
+trusted" case `web_server.rs` already handles for its HTTP admin routes.
 
 ### 3. Add an `is_admin: bool` parameter to the registration/session-context functions
 
@@ -219,6 +233,13 @@ mutating set out of contexts that have no business granting it.
   (alongside the existing header-reading logic) rather than inline in
   `flight_sql_service_impl.rs`, so `rust/auth` stays the single place that knows the
   `x-auth-*` header contract.
+- **Missing header means trusted, not denied.** This matches the existing `--disable-auth`
+  convention already shipped in `web_server.rs` (which synthesizes `ValidatedUser { is_admin:
+  true, .. }` when auth is disabled), and keeps the documented local-dev/monolith workflow
+  (`--disable-auth`, as started by `local_test_env/ai_scripts/start_services.py`) working: without
+  this carve-out, `is_admin(metadata)` would always return `false` under `--disable-auth` and every
+  local invocation of the mutating functions via `micromegas-query`/the Python client would start
+  failing with "function not found".
 
 ## Testing Strategy
 
@@ -227,7 +248,9 @@ mutating set out of contexts that have no business granting it.
   and `is_admin: false`, and that a client-supplied `x-auth-is-admin: true` header is stripped
   before an unauthenticated/non-admin `AuthContext` reaches the inner service.
 - **`rust/auth/tests/user_attribution_tests.rs`**: add unit tests for the new `is_admin(metadata)`
-  helper — present/absent header, `"true"`/`"false"`/garbage values, case sensitivity if any.
+  helper — present/absent header, `"true"`/`"false"`/garbage values, case sensitivity if any, and
+  the disabled-auth case (no `x-auth-is-admin` header at all, i.e. an empty `MetadataMap`) asserting
+  `is_admin` returns `true`, mirroring `web_server.rs`'s existing `--disable-auth` behavior.
 - **`rust/analytics` tests** (new or extended, near `sql_view_test.rs`/`histo_view_test.rs`):
   build a session context with `make_session_context(..., is_admin: false)` and assert
   `ctx.sql("SELECT * FROM retire_partitions()")` (and the other four) fails with a
