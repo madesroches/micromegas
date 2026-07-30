@@ -65,41 +65,47 @@ route was built on (`tasks/completed/1299_firehose_otlp_metrics_ingestion_plan.m
 
 ## Design
 
-### New helper: decode a record as a stream of length-delimited messages
+### New helper: decode one length-delimited message at a time
 
-Add to `rust/otel-ingestion/src/handler.rs`, next to `parse`:
+Add to `rust/otel-ingestion/src/handler.rs`, next to `parse`. This decodes and returns a
+single message per call instead of collecting a whole record into a `Vec` first — the
+caller (`ingest_firehose_metrics`, below) writes each message immediately after it decodes,
+so a malformed message later in a record can't retroactively discard already-decoded,
+already-written messages that precede it:
 
 ```rust
 use bytes::Buf;
 
-/// Decode a Firehose record's bytes as zero-or-more back-to-back length-delimited
-/// protobuf messages: CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format packs
-/// one-or-more `[varint32 length][message bytes]` entries per record, not a single
-/// unframed message (see AWS's CloudWatch metric streams OpenTelemetry format docs).
-pub fn decode_length_delimited_messages<M: Message + Default>(
-    mut buf: &[u8],
+/// Decode the next length-delimited protobuf message from `buf`, advancing `buf` past it.
+/// Returns `Ok(None)` once `buf` is exhausted (no more messages in this record).
+/// CloudWatch Metric Streams' OpenTelemetry 1.0.0 output format packs one-or-more
+/// `[varint32 length][message bytes]` entries per record, not a single unframed message
+/// (see AWS's CloudWatch metric streams OpenTelemetry format docs).
+fn decode_next_length_delimited<M: Message + Default>(
+    buf: &mut &[u8],
     signal: Signal,
-) -> Result<Vec<M>, OtelError> {
-    let mut messages = Vec::new();
-    while buf.has_remaining() {
-        let message = M::decode_length_delimited(&mut buf).map_err(|e| OtelError::Parse {
-            signal,
-            message: format!(
-                "decoding {} (length-delimited protobuf): {e}",
-                signal.as_str()
-            ),
-        })?;
-        messages.push(message);
+) -> Result<Option<M>, OtelError> {
+    if !buf.has_remaining() {
+        return Ok(None);
     }
-    Ok(messages)
+    let message = M::decode_length_delimited(buf).map_err(|e| OtelError::Parse {
+        signal,
+        message: format!(
+            "decoding {} (length-delimited protobuf): {e}",
+            signal.as_str()
+        ),
+    })?;
+    Ok(Some(message))
 }
 ```
 
-A zero-length record decodes to an empty `Vec` (loop body never runs), matching
+A zero-length (or fully-consumed) record returns `Ok(None)` on the first call, matching
 `ingest_metrics`'s existing no-op behavior for an empty request. Malformed framing (a bad
 length prefix, or trailing bytes that don't form a complete message) surfaces as
-`OtelError::Parse`, mapped by the caller to a non-200 Firehose response — same
-retry-on-failure contract as every other decode error on this path.
+`OtelError::Parse` from that call — mapped by the caller to a non-200 Firehose response,
+same retry-on-failure contract as every other decode error on this path — but only after
+every message earlier in the same record has already been decoded and written by the
+caller's loop.
 
 ### Factor the parsed-request pipeline out of `ingest_metrics`
 
@@ -146,9 +152,11 @@ pub async fn ingest_firehose_metrics(
     records: Vec<Vec<u8>>,
 ) -> Result<(), OtelError> {
     for rec in records {
-        let messages: Vec<ExportMetricsServiceRequest> =
-            decode_length_delimited_messages(&rec, Signal::Metrics)?;
-        for req in messages {
+        let mut buf: &[u8] = &rec;
+        while let Some(req) = decode_next_length_delimited::<ExportMetricsServiceRequest>(
+            &mut buf,
+            Signal::Metrics,
+        )? {
             ingest_parsed_metrics(&service, req).await?;
         }
     }
@@ -156,18 +164,24 @@ pub async fn ingest_firehose_metrics(
 }
 ```
 
-Each Firehose record is now unpacked into however many `ExportMetricsServiceRequest`
-messages it actually contains (one, in the simple case; many, in the batched case) before
-any of them is split or written — the case this issue reports as broken.
+Each Firehose record's messages are now decoded and written one at a time: as soon as a
+message decodes, it's split and written via `ingest_parsed_metrics` before the next
+message's length prefix is even read. If message *N* in a record is malformed, messages
+`1..N-1` in that same record — already decoded and already written — are unaffected; only
+the remainder of that record is lost, preserving the partial-batch-retry-safety guarantee
+this route relies on (content-addressed `block_id` dedup, per
+`tasks/completed/1299_firehose_otlp_metrics_ingestion_plan.md`'s "Idempotency & partial-batch
+retries" section).
 
 ## Implementation Steps
 
 1. **`rust/otel-ingestion/src/handler.rs`** — add `use bytes::Buf;`, add
-   `decode_length_delimited_messages`, extract `ingest_parsed_metrics` from `ingest_metrics`,
-   and rewrite `ingest_firehose_metrics` to loop record → messages → `ingest_parsed_metrics`
-   as shown above. Also update `ingest_firehose_metrics`'s doc comment (currently "Reuses
-   `ingest_metrics` per record...") to describe the length-delimited, multi-message-per-record
-   decode path via `ingest_parsed_metrics` instead.
+   `decode_next_length_delimited`, extract `ingest_parsed_metrics` from `ingest_metrics`,
+   and rewrite `ingest_firehose_metrics` to loop record → decode one message → immediately
+   call `ingest_parsed_metrics` → repeat, as shown above. Also update
+   `ingest_firehose_metrics`'s doc comment (currently "Reuses `ingest_metrics` per
+   record...") to describe the length-delimited, multi-message-per-record decode-and-write
+   path via `ingest_parsed_metrics` instead.
 2. **`rust/public/src/servers/firehose.rs`** — update the module doc comment (lines ~6-16),
    which currently states each delivered record is "an OTLP `ExportMetricsServiceRequest`
    protobuf" (singular) and that "no new identity, block, split, or write logic" is needed
@@ -252,13 +266,20 @@ prose updated to describe the length-delimited, multi-message-per-record decode 
 ## Testing Strategy
 
 - **Unit (`rust/otel-ingestion/tests/firehose_tests.rs`, no DB):**
-  - A record containing a **single** length-delimited message decodes to one
-    `ExportMetricsServiceRequest`, byte-identical to the source.
-  - A record containing **two concatenated** length-delimited messages decodes to two
-    messages, in order — this is the exact scenario issue #1381 reports as broken.
-  - A **zero-length** record decodes to zero messages (no-op, matching empty-`records`
-    behavior).
-  - Malformed framing (e.g. a length prefix longer than the remaining bytes) → parse error.
+  - A record containing a **single** length-delimited message: the first call to
+    `decode_next_length_delimited` returns it (byte-identical to the source), and the
+    second call returns `Ok(None)`.
+  - A record containing **two concatenated** length-delimited messages: two successive
+    calls each return one message, in order, before a third call returns `Ok(None)` — this
+    is the exact scenario issue #1381 reports as broken.
+  - A **zero-length** record: the first call returns `Ok(None)` (no-op, matching
+    empty-`records` behavior).
+  - A record with a **valid message followed by malformed framing**: the first call
+    returns the valid message successfully, and only the second call errors —
+    demonstrating that a later malformed message can't retroactively discard an earlier,
+    validly-decoded one.
+  - Malformed framing on the first message (e.g. a length prefix longer than the remaining
+    bytes) → parse error on the first call.
 - **HTTP (`rust/public/tests/firehose_tests.rs`, `#[ignore]`d, live stack):** update
   `full_multi_record_ingest_succeeds_against_a_live_stack` to length-delimited-frame its
   fixture records and add a case with two messages packed into a single record, asserting
