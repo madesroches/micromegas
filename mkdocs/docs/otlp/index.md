@@ -400,9 +400,11 @@ This works because a Metric Stream configured with **OpenTelemetry 1.0.0** outpu
 delivers each record as one-or-more length-delimited OTLP `ExportMetricsServiceRequest`
 protobuf messages (each prefixed with a varint byte length, back to back) — the same
 message type the native `/ingestion/otlp/v1/metrics` route already decodes. The Firehose
-route unwraps the envelope (gzip-aware, base64 records), then decodes every
-length-delimited message in a record and hands each one to the same split/write path;
-records land in `measures`, same as native OTLP metrics.
+route unwraps the envelope (gzip-aware, base64 records), decodes every length-delimited
+message in a record, rewrites the CloudWatch-specific resource shape (see
+[How CloudWatch namespaces surface](#how-cloudwatch-namespaces-surface) below), then hands
+each one to the same split/write path; records land in `measures`, same as native OTLP
+metrics.
 
 `opentelemetry1.0` output encodes every CloudWatch data point as an OTLP `Summary`, so each
 scrape of a metric lands as **4 rows under 4 distinct names** (`<metric>_count`, `_sum`,
@@ -437,6 +439,36 @@ Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination
 Then point a CloudWatch Metric Stream at the delivery stream, with output format set to
 OpenTelemetry 1.0.0.
 
+### How CloudWatch namespaces surface
+
+A CloudWatch Metric Stream's `Resource` carries no `service.*`/`host.*`/`process.*` identity
+at all — only `cloud.account.id`, `cloud.provider`, `cloud.region`, and `aws.exporter.arn`.
+Left as-is, every stream from every AWS account/region would hash to the same fully
+degenerate `process_id` (see [Process identity](#process-identity) above) and `exe` would be
+empty. Before handing a decoded message to the shared split/write path, this route detects
+that exact fingerprint and rewrites it:
+
+- Every metric's **first** data point carries a `Namespace` attribute (`AWS/RDS`, `AWS/ECS`,
+  `ECS/ContainerInsights`, `AWS/S3`, …) — CloudWatch encodes this directly in `Metric.name`
+  too (`amazonaws.com/<Namespace>/<MetricName>`), so the value is stable across all of a
+  metric's data points. The rewrite reads it straight from the datapoint attribute rather
+  than parsing `Metric.name`, since the namespace itself contains a `/`, making prefix-parsing
+  ambiguous.
+- The metrics in one delivered message are partitioned by namespace into one synthetic
+  `Resource` per namespace: `service.name` = the namespace string, so `exe` (see the
+  resource→`processes` mapping table under [Process identity](#process-identity)) equals the
+  namespace exactly — `AWS/RDS`, `AWS/ECS`, and so on each resolve to their own `process_id`.
+- `service.instance.id` is set to the record's `aws.exporter.arn`, folding the exporting
+  stream's identity into the hash so distinct AWS accounts/regions never collapse onto the
+  same `process_id` even when they share a namespace.
+- A metric with no usable `Namespace` attribute (missing, or empty/whitespace-only) falls
+  back to `service.name = "AWS/Unknown"` rather than being dropped — `exe` is never left
+  empty on this route, since these rows are still fully queryable via `measures`.
+
+One delivered message can therefore fan out into several blocks — one per namespace bucket —
+where it used to produce exactly one; see [Idempotency](#idempotency_1) below for what that
+means for retry dedup.
+
 ### Ack contract
 
 Success is `200 OK` with `Content-Type: application/json` and body:
@@ -470,6 +502,14 @@ leaves every message before it in that record ingested, while that message and t
 of the record (not yet reached) are retried along with the whole batch. CloudWatch
 Metric Streams stamp distinct timestamps per scrape, so genuinely distinct data never
 collides.
+
+Dedup granularity is per-**namespace-block**, not per-message: the [namespace
+partitioning](#how-cloudwatch-namespaces-surface) above turns one decoded message into one
+block per CloudWatch namespace, each with its own content-addressed `block_id` derived from
+that namespace's own (post-rewrite) bytes. A retry reproduces the same partitioning
+deterministically, so every namespace's block still dedups independently — a retried message
+doesn't need every one of its namespace blocks to have failed identically, just each one that
+did.
 
 ## CloudWatch Logs (Kinesis Firehose)
 

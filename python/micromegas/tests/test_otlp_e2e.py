@@ -812,3 +812,132 @@ def test_firehose_dev_mode_open_without_access_key():
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["requestId"] == request_id
+
+
+# ---------------------------------------------------------------------------
+# CloudWatch Metric Streams per-namespace process identity (issue #1387)
+# ---------------------------------------------------------------------------
+
+
+def _build_cloudwatch_metrics_request(arn, namespace_metrics, base_ns):
+    """Build an `ExportMetricsServiceRequest` shaped like a real CloudWatch Metric
+    Stream delivery: a resource carrying only `cloud.*`/`aws.exporter.arn` (no
+    `service.*`/`host.*`/`process.*` at all — the fully-degenerate identity fingerprint
+    `cloudwatch_metrics::is_cloudwatch_metric_stream_resource` detects), with one
+    `Summary` metric per `(namespace, metric_name)` pair in `namespace_metrics`, each
+    carrying a `Namespace` datapoint attribute (CloudWatch Metric Streams'
+    `opentelemetry1.0` output encodes every data point as a `Summary`)."""
+    resource = make_resource(
+        {
+            "cloud.account.id": "123456789012",
+            "cloud.provider": "aws",
+            "cloud.region": "us-east-1",
+            "aws.exporter.arn": arn,
+        }
+    )
+    metrics = []
+    for i, (namespace, metric_name) in enumerate(namespace_metrics):
+        metrics.append(
+            metrics_pb2.Metric(
+                name=f"amazonaws.com/{namespace}/{metric_name}",
+                unit="Percent",
+                summary=metrics_pb2.Summary(
+                    data_points=[
+                        metrics_pb2.SummaryDataPoint(
+                            attributes=[
+                                string_kv("Namespace", namespace),
+                                string_kv("MetricName", metric_name),
+                            ],
+                            time_unix_nano=base_ns + i,
+                            count=1,
+                            sum=42.0,
+                        )
+                    ]
+                ),
+            )
+        )
+    return metrics_service_pb2.ExportMetricsServiceRequest(
+        resource_metrics=[
+            metrics_pb2.ResourceMetrics(
+                resource=resource,
+                scope_metrics=[
+                    metrics_pb2.ScopeMetrics(
+                        scope=common_scope("e2e.cloudwatch.metrics", "1.0.0"),
+                        metrics=metrics,
+                    )
+                ],
+            )
+        ]
+    )
+
+
+def test_firehose_cloudwatch_metric_streams_namespace_partition_e2e():
+    """A CloudWatch Metric Stream delivery whose resource is fully degenerate (no
+    service.*/host.*/process.* — only cloud.*/aws.exporter.arn) must be partitioned
+    server-side into one process per CloudWatch namespace rather than collapsing every
+    namespace onto a single process_id (issue #1387). Tagged with a per-run-unique
+    aws.exporter.arn (rather than service.instance.id, which this route overwrites with
+    the ARN itself) so the run is isolated from other tests/runs without a DB wipe.
+
+    Looked up via `processes` filtered on the run's `aws.exporter.arn` rather than
+    `discover_process_id`, which resolves to a single first-match row and can't
+    disambiguate the N processes one ARN now maps to."""
+    arn = (
+        f"arn:aws:firehose:us-east-1:123456789012:deliverystream/cw-e2e-{uuid.uuid4()}"
+    )
+    namespaces = ["AWS/RDS", "AWS/ECS", "ECS/ContainerInsights"]
+    namespace_metrics = [(ns, "TestMetric") for ns in namespaces]
+    base_ns = _now_ns()
+    req = _build_cloudwatch_metrics_request(arn, namespace_metrics, base_ns)
+    request_id = f"firehose-cw-metrics-{uuid.uuid4()}"
+    body = _firehose_envelope(request_id, [_length_prefixed(req)])
+
+    resp = requests.post(
+        FIREHOSE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Amz-Firehose-Request-Id": request_id,
+        },
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["requestId"] == request_id
+
+    begin, end = _query_window()
+
+    def query_processes():
+        sql = (
+            "SELECT process_id, exe FROM processes "
+            "WHERE property_get(properties, 'otel.resource.aws.exporter.arn') = "
+            f"'{arn}'"
+        )
+        return client.query(sql, begin, end)
+
+    df = assert_eventually(
+        query_processes,
+        lambda r: len(r) >= len(namespaces),
+        timeout_s=POLL_TIMEOUT_S,
+        msg=f"waiting for {len(namespaces)} processes with aws.exporter.arn={arn}",
+    )
+    assert len(df) == len(namespaces), df
+
+    assert sorted(df["exe"].tolist()) == sorted(namespaces)
+    process_ids = df["process_id"].tolist()
+    assert len(set(process_ids)) == len(
+        namespaces
+    ), "distinct namespaces must resolve to distinct process_ids"
+
+    for pid in process_ids:
+
+        def query_measures_count(pid=pid):
+            sql = f"SELECT count(*) AS c FROM measures WHERE process_id = '{pid}'"
+            return client.query(sql, begin, end)
+
+        measures_df = assert_eventually(
+            query_measures_count,
+            lambda r: not r.empty and int(r.iloc[0]["c"]) >= 1,
+            timeout_s=POLL_TIMEOUT_S,
+            msg=f"waiting for measures with process_id={pid}",
+        )
+        assert int(measures_df.iloc[0]["c"]) >= 1

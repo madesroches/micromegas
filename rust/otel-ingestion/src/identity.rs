@@ -107,7 +107,11 @@ fn norm(s: &str) -> String {
 }
 
 /// Reads `attr` and returns the lower-cased + trimmed string value (or empty).
-fn attr_norm(attrs: &[KeyValue], key: &str) -> String {
+///
+/// Public so `cloudwatch_metrics::is_cloudwatch_metric_stream_resource` can share the exact
+/// same emptiness semantics `is_degenerate_resource` uses for its own fields, rather than
+/// reimplementing trim+lowercase locally and risking the two checks drifting apart.
+pub fn attr_norm(attrs: &[KeyValue], key: &str) -> String {
     attr(attrs, key)
         .map(|v| norm(&attr_to_string(v)))
         .unwrap_or_default()

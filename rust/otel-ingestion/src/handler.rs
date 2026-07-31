@@ -7,6 +7,7 @@
 use crate::block::{
     ProcessFromResource, split_logs, split_logs_with_extra_hash_input, split_metrics, split_traces,
 };
+use crate::cloudwatch_metrics::rewrite_cloudwatch_metric_streams;
 use crate::error::{OtelError, Signal};
 use crate::proto::{
     AnyValue, ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
@@ -356,12 +357,16 @@ pub fn decode_firehose_envelope(
 /// CloudWatch Metric Streams OpenTelemetry 1.0.0 output format, a record is **not** a
 /// single unframed protobuf message — it packs one-or-more length-delimited
 /// `[varint32 length][message bytes]` entries back to back. Each message is decoded via
-/// `decode_next_length_delimited` and immediately split + written via
-/// `ingest_parsed_metrics` before the next message's length prefix is even read, so a
-/// malformed message later in a record can't retroactively discard already-decoded,
-/// already-written messages that precede it in the same record. Identity,
-/// content-addressed `block_id`, and idempotent writes are inherited unchanged from the
-/// shared split/write path.
+/// `decode_next_length_delimited`, then passed through
+/// `cloudwatch_metrics::rewrite_cloudwatch_metric_streams` — which partitions a matching
+/// CloudWatch Metric Streams resource into one synthetic `ResourceMetrics` per namespace
+/// (folding the exporter ARN into `service.instance.id`), and passes any non-matching
+/// resource through unchanged — before being immediately split + written via
+/// `ingest_parsed_metrics`. Each message is written before the next message's length prefix
+/// is even read, so a malformed message later in a record can't retroactively discard
+/// already-decoded, already-written messages that precede it in the same record.
+/// Content-addressed `block_id` and idempotent writes are otherwise inherited unchanged from
+/// the shared split/write path.
 ///
 /// Decode/ingest errors are tagged with `firehose record[{i}] message[{j}]: ...` (`i` the
 /// record index, `j` the ordinal of the message within that record) so a failure can be
@@ -378,6 +383,7 @@ pub async fn ingest_firehose_metrics(
             decode_next_length_delimited::<ExportMetricsServiceRequest>(&mut buf, Signal::Metrics)
                 .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?
         {
+            let req = rewrite_cloudwatch_metric_streams(req);
             ingest_parsed_metrics(&service, req)
                 .await
                 .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?;
