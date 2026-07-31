@@ -31,7 +31,7 @@ def read_config():
             file=sys.stderr,
         )
         sys.exit(1)
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     for field in ("managed_by", "server"):
         if field not in data:
@@ -45,7 +45,7 @@ def read_config():
 
 def read_screen_file(path):
     """Read and validate a screen JSON file."""
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     for field in ("name", "screen_type", "config"):
         if field not in data:
@@ -59,8 +59,8 @@ def write_screen_file(path, screen_dict):
     for key in ("name", "screen_type", "config", "folder_path", "managed_by"):
         if key in screen_dict:
             ordered[key] = screen_dict[key]
-    with open(path, "w") as f:
-        json.dump(ordered, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ordered, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
 
@@ -179,8 +179,8 @@ def cmd_init(args):
         "server": args.server_url,
     }
 
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config_data, f, indent=2)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
     print(f"Created {CONFIG_FILE}:")
@@ -325,8 +325,12 @@ def compute_plan(config, client, names=None):
 
 def format_screen_diff(local_dict, server_dict, use_color):
     """Produce a unified diff between server and local screen JSON."""
-    server_json = json.dumps(server_dict, indent=2, sort_keys=True).splitlines()
-    local_json = json.dumps(local_dict, indent=2, sort_keys=True).splitlines()
+    server_json = json.dumps(
+        server_dict, indent=2, sort_keys=True, ensure_ascii=False
+    ).splitlines()
+    local_json = json.dumps(
+        local_dict, indent=2, sort_keys=True, ensure_ascii=False
+    ).splitlines()
     diff_lines = list(
         difflib.unified_diff(server_json, local_json, fromfile="server", tofile="local")
     )

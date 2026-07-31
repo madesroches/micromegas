@@ -40,6 +40,22 @@ def truncate_value(value, max_width):
     return s
 
 
+def read_sql_source(args):
+    """Resolve the SQL text to run from --file (path or '-' for stdin) or args.sql.
+
+    Lets OSError from a bad --file path propagate to the caller uncaught.
+    """
+    if args.file:
+        if args.file == "-":
+            sys.stdin.reconfigure(encoding="utf-8")
+            sql = sys.stdin.read().strip()
+        else:
+            sql = pathlib.Path(args.file).read_text(encoding="utf-8").strip()
+    else:
+        sql = args.sql
+    return sql
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="query",
@@ -84,16 +100,10 @@ def main():
         parser.error("cannot use both positional SQL and --file")
     if not args.file and not args.sql:
         parser.error("must provide SQL as a positional argument or via --file")
-    if args.file:
-        if args.file == "-":
-            sql = sys.stdin.read().strip()
-        else:
-            try:
-                sql = pathlib.Path(args.file).read_text().strip()
-            except OSError as e:
-                parser.error(f"cannot read file '{args.file}': {e}")
-    else:
-        sql = args.sql
+    try:
+        sql = read_sql_source(args)
+    except OSError as e:
+        parser.error(f"cannot read file '{args.file}': {e}")
 
     if not args.begin and not args.all:
         parser.error(

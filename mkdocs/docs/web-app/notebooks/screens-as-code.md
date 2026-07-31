@@ -92,6 +92,7 @@ Each screen is a single `.json` file:
 - Pretty-printed with 2-space indent
 - Server metadata (`created_by`, `updated_by`, timestamps) is excluded
 - `folder_path` is optional: key omitted means "no folder / don't move it"; `""` explicitly means root. To move a screen back to root, set `"folder_path": ""` rather than removing the key.
+- Files are read and written as UTF-8 (a leading BOM is tolerated on read). Non-ASCII content (e.g. em dashes, accents, CJK) is written as literal UTF-8 characters rather than `\uXXXX`-escaped.
 
 ## Commands
 

@@ -1,7 +1,11 @@
 """Unit tests for screen file I/O and plan logic."""
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 
 import pytest
 
@@ -424,3 +428,62 @@ class TestFormatScreenDiff:
         data = {"name": "a", "screen_type": "notebook", "config": {}}
         result = format_screen_diff(data, data, use_color=False)
         assert result == ""
+
+
+NON_ASCII_CONTENT = "em dash —, accented café, CJK 日本語"
+
+
+class TestNonAsciiEncodingRegression:
+    def test_round_trip_survives_non_utf8_locale(self, tmp_path):
+        """Regression test for issue #1399: write_screen_file/read_screen_file
+        must round-trip non-ASCII content unchanged even when the process's
+        locale-preferred encoding is not UTF-8 (e.g. LC_ALL=C on Linux, or the
+        default console codepage on Windows). Forcing LC_ALL=C alone is not
+        enough on Python 3.10+ (PEP 538/540 auto-coerce it back to a UTF-8
+        mode); PYTHONUTF8=0 must also be set to actually disable UTF-8 mode.
+        A real subprocess is required because CPython's TextIOWrapper resolves
+        its default encoding via OS locale APIs, not the Python-level
+        locale.getpreferredencoding() function, so in-process monkeypatching
+        has no effect on open()'s behavior.
+        """
+        screen_path = tmp_path / "non-ascii.json"
+        # Embed the content as an ASCII-only \\uXXXX-escaped literal (via
+        # ascii()) so no non-ASCII bytes travel through argv or os.environ,
+        # either of which would themselves be subject to the same
+        # locale-decoding problem this test is trying to isolate to
+        # write_screen_file/read_screen_file.
+        script = textwrap.dedent(
+            """
+            import os
+            import sys
+
+            assert sys.flags.utf8_mode == 0, "test setup failed: utf8_mode should be 0"
+
+            from micromegas.cli.screens import read_screen_file, write_screen_file
+
+            content = {content_literal}
+            screen_path = os.environ["TEST_SCREEN_PATH"]
+            screen_dict = {{
+                "name": "non-ascii-screen",
+                "screen_type": "notebook",
+                "config": {{"cells": [{{"type": "markdown", "content": content}}]}},
+            }}
+            write_screen_file(screen_path, screen_dict)
+            result = read_screen_file(screen_path)
+            loaded_content = result["config"]["cells"][0]["content"]
+            sys.stdout.buffer.write(loaded_content.encode("utf-8"))
+            """
+        ).format(content_literal=ascii(NON_ASCII_CONTENT))
+        env = dict(os.environ)
+        env["LC_ALL"] = "C"
+        env["PYTHONUTF8"] = "0"
+        env["TEST_SCREEN_PATH"] = str(screen_path)
+
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            capture_output=True,
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+        result = proc.stdout.decode("utf-8")
+        assert result == NON_ASCII_CONTENT
