@@ -59,17 +59,14 @@ creates the v1 schema via `sql_telemetry_db.rs::create_tables` when the version 
 belong **only** in a new step, never in `create_tables` (same shape as v4, which adds
 `streams.format` even though `create_tables` creates `streams`). **v5 is not exclusively claimed**:
 `tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` also reserves v5 for the
-blocks-partitioning work (plan committed 2026-07-15, not yet implemented) — but per that plan's own
-`derisk_deploy_ordering.md:15-27`, its Deploy 1 ships the `upgrade_data_lake_schema_v5` **function**
-(and an operator cutover may stamp real databases at `current_version = 5`) **without** bumping
-`LATEST_DATA_LAKE_SCHEMA_VERSION`, which stays 4 until a later, separate Deploy 2. So `LATEST` being
-still 4 in the tree does **not** mean v5 is free: the coordination below is keyed on whether
-`tasks/1245`'s `upgrade_data_lake_schema_v5` function exists in the tree (or any deployed database may
-already be stamped at that version), not on whether `LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped.
-Whichever of the two plans' migrations lands second must renumber to v6; see Implementation Steps
-Phase 1 step 1 for how this plan handles that coordination, including keeping the new step reachable
-from a database still at v4 — #1245's operator cutover to v5 is a separate, optional step, not
-guaranteed by this plan's own coordinated-upgrade deploy model (see [Migration](#migration) step 1).
+blocks-partitioning work (plan committed 2026-07-15, not yet implemented). **Sequencing prerequisite**:
+this plan claims v5 for its two new tables and must merge and deploy *before* `tasks/1245`'s work. If
+`tasks/1245` lands first instead, this plan must land only after that plan's Deploy 2 has completed —
+i.e. every database has been stamped `current_version = 5` via the operator cutover and
+`LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped to 5 in the tree — at which point this plan claims v6
+from a single `if 5 == current_version` arm, since no database can remain at v4. See Implementation
+Steps Phase 1 step 1 for the exact version this migration claims, and coordinate with `tasks/1245` (in
+particular `derisk_deploy_ordering.md`) before merging so only one plan claims a given version.
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -258,6 +255,14 @@ Design notes:
   per key per process* — a live key seen continuously by one process writes one `UPDATE` a minute at
   the default TTL, and the resulting column granularity (±TTL) is exactly what an
   approximately-last-used audit column wants.
+- **This stage assumes a live-key population well under `cache_size` (thousands, not tens of
+  thousands).** The "once per cache TTL per key per process" guarantee above holds only while the
+  working set of distinct live keys fits in the `valid` cache's `max_capacity` (default 10,000); past
+  that point the cache thrashes and the `last_used_at` `UPDATE` degrades toward one Postgres write per
+  authenticated request. #1374's plan to mint one ingestion key per user/machine — including game
+  clients — could push the live-key count well past this stage's assumption; revisiting the
+  `last_used_at` write strategy (e.g. sampling or throttling the `UPDATE`) and the cache-size/TTL
+  defaults is explicitly deferred to that follow-on stage, not solved here.
 - **Revocation takes effect within `cache_ttl_secs` (default 60s). This is a property, not an
   accident**: the `DELETE` route writes `revoked_at` and cannot invalidate remote caches. It is
   stated in the route's response body, in the admin docs, and asserted by a test. Raising the TTL
@@ -500,10 +505,13 @@ micromegas-import-api-keys --from-prefixed | psql "$MICROMEGAS_SQL_CONNECTION_ST
 
 # split deployment: only the unprefixed MICROMEGAS_API_KEYS is ever read here
 # (provider() == provider_with_prefix("") never sees the prefixed vars), so
-# an explicit destination per key is required, no default
+# an explicit destination per key is required, no default; --skip excludes
+# names that stay env-only (here, object-cache-srv client keys sharing this
+# same keyring, per docker/README.md and admin/object-cache.md)
 micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   --ingestion game-client,build-agent \
-  --analytics grafana,analyst-tools
+  --analytics grafana,analyst-tools \
+  --skip flight-sql,maintenance
 ```
 
 - `--from-prefixed` maps `MICROMEGAS_INGESTION_API_KEYS` → `ingestion_api_keys` and
@@ -518,9 +526,13 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   instead of emitting an empty `BEGIN; COMMIT;`, with a message pointing at the explicit form:
   `--keys-env MICROMEGAS_API_KEYS --ingestion ... --analytics ...`.
 - Otherwise **every key name in the source keyring must be listed in exactly one of `--ingestion` /
-  `--analytics`**; unassigned names are a non-zero exit listing them. A name in *both* is also an
-  error, with a message explaining that a dual-use key must be split into two distinct key strings —
-  see [Migration](#migration).
+  `--analytics` / `--skip`**; unassigned names are a non-zero exit listing them. A name in *both*
+  `--ingestion` and `--analytics` is also an error, with a message explaining that a dual-use key must
+  be split into two distinct key strings — see [Migration](#migration). `--skip name1,name2` is the
+  escape hatch for names that must stay env-only rather than land in either table — in particular the
+  `object-cache-srv` client keys (e.g. `flight-sql`, `maintenance`) that `docker/README.md:131` and
+  `mkdocs/docs/admin/object-cache.md:149` document as sharing the unprefixed `MICROMEGAS_API_KEYS`
+  keyring. Skipped names are not validated for length/entropy and are not emitted as SQL.
 - **Name validation and quoting.** Names come from operator-authored `MICROMEGAS_API_KEYS` JSON —
   `parse_key_ring` (`rust/auth/src/api_key.rs:58`) places no constraint on `name` — but they are
   interpolated into a SQL string literal that gets piped to `psql` running as the schema owner. Before
@@ -552,36 +564,16 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 ### Phase 1 — Schema
 
-1. `rust/ingestion/src/sql_migration.rs`: claim **the next free schema version**, keyed on whether
-   `tasks/1245_partition_blocks_by_insert_time`'s `upgrade_data_lake_schema_v5` function is already
-   present in the tree — **not** on whether `LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped to 5.
-   Per `tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:15-27`, that plan's
-   Deploy 1 ships `upgrade_data_lake_schema_v5` (reachable only via a standalone CLI subcommand, never
-   wired into `execute_migration`'s chain) while `LATEST` deliberately stays 4 — its own `LATEST` bump
-   to 5 is a separate, later Deploy 2 (`plan.md:550,577`). So if `tasks/1245`'s Deploy 1 has shipped
-   (the function exists in the tree, or any deployed database may already be stamped
-   `current_version = 5` via its operator cutover), this plan **must** claim v6 — **but a v4 database
-   remains reachable at deploy time**, since #1245's operator cutover is a separate, optional action
-   belonging to that plan, not something this plan's own coordinated-upgrade-of-all-services model
-   guarantees has run (see [Migration](#migration) step 1). `execute_migration` advances a database
-   through exactly one `if N == current_version` arm at a time, so a v6 claim that wires in only an
-   `if 5 == current_version` arm strands every v4 database — it can never reach `current_version = 5`
-   (that function exists but is not wired into the chain) and therefore never reaches 6, and the final
-   `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` panics at startup on every
-   ingestion/monolith instance run against it. Avoid this by making `upgrade_data_lake_schema_v6`
-   create both tables with `CREATE TABLE IF NOT EXISTS` (idempotent; the two new tables are independent
-   of #1245's DDL) and wiring it into `execute_migration` from **both** an `if 4 == current_version`
-   arm and an `if 5 == current_version` arm, each advancing `current_version` straight to 6 — this
-   defines no second `upgrade_data_lake_schema_v5` and does not collide with a database #1245's cutover
-   already stamped at 5; it simply gives a still-at-v4 database a direct path to 6 that never runs
-   #1245's v5 DDL, which is fine since this plan's tables do not depend on it. Only if `tasks/1245`'s
-   `upgrade_data_lake_schema_v5` is absent from the tree is v5 free to claim here, with the ordinary
-   single `if 4 == current_version` arm. Coordinate with that plan (in particular
-   `derisk_deploy_ordering.md`) before merging so only one PR claims a given version. In that v5-free
-   case, add `upgrade_data_lake_schema_v<N>` creating both tables and both unique indexes; bump
-   `LATEST_DATA_LAKE_SCHEMA_VERSION` to `N`; add the corresponding `if <N-1> == current_version` arm
-   to `execute_migration`. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh databases
-   reach the new version through the same upgrade path.
+1. `rust/ingestion/src/sql_migration.rs`: claim v5. Add `upgrade_data_lake_schema_v5` creating both
+   tables and both unique indexes; bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5; add the corresponding
+   `if 4 == current_version` arm to `execute_migration`. This requires this plan to merge and deploy
+   before `tasks/1245_partition_blocks_by_insert_time`'s work reaches its own Deploy 2 (see [Current
+   State](#current-state) → Schema and migrations). If that plan's Deploy 2 has already completed
+   fleet-wide — every database stamped `current_version = 5` and `LATEST_DATA_LAKE_SCHEMA_VERSION`
+   bumped to 5 in the tree — claim v6 instead: a single `if 5 == current_version` arm wiring
+   `upgrade_data_lake_schema_v6` suffices, since no database can remain at v4 once that cutover is
+   complete fleet-wide. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh databases reach
+   the new version through the same upgrade path.
 
 ### Phase 2 — Provider
 
@@ -710,7 +702,10 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   per user/machine on dev boxes and game clients. A shared table would make every one of those a read
   credential too. With "never both" as a rule, a `scopes` column is always a singleton. Cost: one
   behavior change at migration (below) and a duplicated `CREATE TABLE`; the *code* is shared, since
-  one provider parameterized by `ApiKeyTable` serves both.
+  one provider parameterized by `ApiKeyTable` serves both. **This is a schema-shape trade-off, not a
+  scale one**: #1374's per-user/per-machine keys are what push the live-key population past this
+  stage's cardinality assumption (§2's design notes), a separate concern from whether they land in one
+  table or two.
 - **Emitting SQL instead of connecting from python.** Costs the operator one extra pipe; avoids
   adding a Postgres driver to the published `micromegas` pip package for a deletable one-shot tool,
   and makes the insert reviewable before it runs. Alternative considered: add `psycopg[binary]` as a
@@ -793,14 +788,15 @@ Ordering, for both split and monolith deployments:
    (`rust/ingestion/src/sql_migration.rs:150-199`) is never exercised by a stale binary here — that
    failure mode is a property of an unsupported deployment model, not a live constraint under
    coordinated upgrades. flight-sql and the maintenance daemon do not run `execute_migration` and are
-   unaffected. **What does remain a real risk, and is not resolved by the coordinated-upgrade model, is
-   the *version-number* coordination with `tasks/1245_partition_blocks_by_insert_time`**: see
-   [Current State](#current-state) → Schema and migrations, and Implementation Steps Phase 1 step 1,
-   for which integer this migration claims and why it must not collide with
-   `upgrade_data_lake_schema_v5` if that function has landed in the tree or any database is already
-   stamped at that version.
-2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
-   *both* providers.
+   unaffected. **The version-number coordination with `tasks/1245_partition_blocks_by_insert_time`** is
+   a sequencing prerequisite, not a deploy-time risk: this plan must land (and claim v5) before that
+   plan's work, or, if that plan has already landed, only after every database has completed its
+   Deploy 2 cutover to `current_version = 5` — see [Current State](#current-state) → Schema and
+   migrations, and Implementation Steps Phase 1 step 1, for which integer this migration claims.
+2. Run `micromegas-import-api-keys` and apply its SQL, passing `--skip` for any key name that is an
+   `object-cache-srv` client key sharing the unprefixed `MICROMEGAS_API_KEYS` keyring (see §5) — those
+   names must stay env-only rather than be imported into either table. Existing key strings now
+   authenticate through *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
    redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
    configured" on its own, so both services keep serving without OIDC configured — including the
@@ -1028,7 +1024,11 @@ revoke it, and observe the rejection after the TTL.
 
 **Gates**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
 `python3 build/rust_ci.py`, and, from `python/micromegas/`, `poetry run black
-micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest`.
+micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest
+tests/cli/test_import_api_keys.py` — scoped to the new file, not a bare `poetry run pytest`: most
+other files under `tests/` are star-imported alongside `tests/test_utils.py`, which calls
+`micromegas.connect()` at module import time, so a bare invocation errors during collection without a
+live analytics service.
 
 ## Open Questions
 
