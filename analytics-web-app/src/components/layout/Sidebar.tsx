@@ -146,26 +146,27 @@ export function Sidebar() {
     })
   }, [])
 
-  const goToFolder = useCallback(
+  const buildFolderUrl = useCallback(
     (path: string) => {
       const next = new URLSearchParams(isScreensPage ? searchParams : undefined)
       next.set('folder', path)
       next.delete('q')
-      const url = `/screens?${next.toString()}`
+      return `/screens?${next.toString()}`
+    },
+    [isScreensPage, searchParams]
+  )
+
+  const goToFolder = useCallback(
+    (path: string) => {
+      const url = buildFolderUrl(path)
       if (isScreensPage) navigate(url, { replace: true })
       else navigate(url)
       setSearchQuery('')
     },
-    [isScreensPage, searchParams, navigate]
+    [isScreensPage, navigate, buildFolderUrl]
   )
 
-  const goToScreen = useCallback(
-    (name: string) => {
-      navigate(`/screen/${name}`)
-      setSearchQuery('')
-    },
-    [navigate]
-  )
+  const screenHref = (name: string) => `/screen/${name}`
 
   const updateSearch = useCallback(
     (value: string) => {
@@ -339,9 +340,12 @@ export function Sidebar() {
               folders={folders}
               screens={screens}
               selectedFolder={selectedFolder}
-              onSelectFolder={goToFolder}
+              onSelectFolder={() => setSearchQuery('')}
+              folderHref={buildFolderUrl}
+              folderNavReplace={isScreensPage}
               selectedScreen={activeScreenName}
-              onSelectScreen={goToScreen}
+              onSelectScreen={() => setSearchQuery('')}
+              screenHref={screenHref}
               expandedPaths={expandedPaths}
               onToggleExpand={toggleExpand}
               matchedFolders={matchedFolders}
