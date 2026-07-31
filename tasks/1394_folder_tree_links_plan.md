@@ -81,10 +81,23 @@ Ctrl/Cmd/middle-click it leaves the event alone and the browser opens a new tab 
 row is opened in a background tab — now a purely cosmetic, pre-existing tradeoff (no navigation is
 involved), see Trade-offs.
 
-Chevron toggle-expand, drag/drop, and both folder-menu buttons are unaffected: they already call
-`e.stopPropagation()` in their own `onClick`, which stops the click from reaching the `AppLink`'s
-listener at all (same mechanism that already stops it from reaching the old `div`'s listener), so no
-accidental navigation on those interactions.
+Drag/drop and both folder-menu buttons are unaffected: they already call `e.stopPropagation()` in
+their own `onClick`/handlers, which stops the click from reaching the `AppLink`'s listener at all
+(same mechanism that already stops it from reaching the old `div`'s listener), and none of them sit
+inside the `AppLink` (drag/drop handlers live on the outer row `<div>`; both buttons are kept as
+siblings after the `AppLink`, per point 3 above) — so there's no anchor native-navigation default
+action for their clicks to trigger in the first place.
+
+The chevron needs one more thing, because it *is* kept nested inside the `AppLink` (wrapping the
+chevron, folder icon, and match dot — see point 3 above): `stopPropagation()` alone is not enough to
+stop navigation here. `stopPropagation()` only stops the click event from bubbling up to reach
+react-router `Link`'s own click listener (which is where `preventDefault()` + client-side navigation
+would be triggered) — but a browser's native default action for an `<a href>` (following the link) is
+governed solely by whether `preventDefault()` was called on the event, completely independent of
+whether propagation was stopped. So the chevron's `onClick` must call **both**:
+`onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleExpand(node.path) }}`. This is the
+one case in this plan where a click target stays nested inside the `AppLink` rather than being kept
+as a sibling, which is why it alone needs the extra `preventDefault()`.
 
 `role="button"` / `tabIndex={0}` / `onKeyDown={(e) => e.key === 'Enter' && ...}` are removed from
 every converted row — real anchors are natively focusable, have an implicit `link` role, and already
@@ -118,11 +131,15 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
    - Extend `FolderTreeProps` with `folderHref: (path: string) => string`,
      `folderNavReplace: boolean`, `screenHref: (name: string) => string`; destructure them in
      `FolderTree(...)`.
+   - Add a doc comment above `onSelectFolder`/`onSelectScreen` in the `FolderTreeProps` interface
+     stating they are now wired to the `AppLink`'s `onClick` and must stay navigation-free — must never
+     call `navigate()` — so a future change doesn't silently reintroduce the double-navigation bug
+     described in Design. Keep the prop names as-is; this is a comment-only change to the interface.
    - `renderScreen` (line 241): no nested buttons exist here, so convert the whole row into
      `<AppLink href={screenHref(screen.name)} onClick={() => onSelectScreen(screen.name)} draggable onDragStart={...} style={...} className={...}>` in place of the `<div role="button" ...>` — same children, same classes, drop `role`/`tabIndex`/`onKeyDown`.
    - `renderNode` (line 269): keep the outer `<div>` (with `dropHandlers`, `style`, and the
      selected/drop-target classes — unchanged), but replace its `role="button"`/`tabIndex`/`onClick`/
-     `onKeyDown` with a child `<AppLink href={folderHref(node.path)} replace={folderNavReplace} onClick={() => onSelectFolder(node.path)} draggable={false} className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0">` wrapping only the chevron, folder icon, and match dot (lines 289-304, 310) — **not** the rename input. `flex-1 min-w-0` on the `AppLink` itself is required: in the outer row's flex layout, `AppLink` is now the direct flex item, so without it the link shrinks to its content width, bunching the "new subfolder"/folder-actions buttons up against the label instead of flush-right, and long names may not truncate correctly. `draggable={false}` is also required: an `<a href>` is natively draggable, and without this a folder/Home row drag would populate `dataTransfer`'s `text/plain` with the link's URL, which the row's own `dropHandlers`-driven `onDrop` would then pass to `onDropScreen` as if it were a screen name — a spurious drop. Inside the `AppLink`, render the name conditionally instead of today's renaming/non-renaming branch (lines 305-309):
+     `onKeyDown` with a child `<AppLink href={folderHref(node.path)} replace={folderNavReplace} onClick={() => onSelectFolder(node.path)} draggable={false} className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0">` wrapping only the chevron, folder icon, and match dot (lines 289-304, 310) — **not** the rename input. `flex-1 min-w-0` on the `AppLink` itself is required: in the outer row's flex layout, `AppLink` is now the direct flex item, so without it the link shrinks to its content width, bunching the "new subfolder"/folder-actions buttons up against the label instead of flush-right, and long names may not truncate correctly. `draggable={false}` is also required: an `<a href>` is natively draggable, and without this a folder/Home row drag would populate `dataTransfer`'s `text/plain` with the link's URL, which the row's own `dropHandlers`-driven `onDrop` would then pass to `onDropScreen` as if it were a screen name — a spurious drop. The chevron's existing `onClick={(e) => { e.stopPropagation(); onToggleExpand(node.path) }}` must be updated to also call `e.preventDefault()` — `onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleExpand(node.path) }}` — since it's now nested inside the `AppLink`: `stopPropagation()` alone stops the click from reaching the `AppLink`'s own listener but does not stop the anchor's native navigation default action, which depends solely on `preventDefault()` (see Design). Inside the `AppLink`, render the name conditionally instead of today's renaming/non-renaming branch (lines 305-309):
      `{renamingPath !== node.path && <span className="truncate">{node.name}</span>}`
      (the `flex-1 min-w-0` that mattered for layout now lives on the `AppLink` itself — see above; the
      span no longer needs to carry it). While renaming, the name `<span>` is simply omitted, not
