@@ -198,7 +198,10 @@ impl QueryMerger {
             anyhow::bail!(
                 "merge query {:?} (insert_range=[{}, {}]) produced a {partition_count}-partition \
                  physical plan; executing it would coalesce partitions and destroy the declared \
-                 ordering. This likely means repartition_file_scans did not take effect.",
+                 ordering. This likely means repartition_aggregations or \
+                 enable_round_robin_repartition did not take effect, or the merge query is \
+                 missing a collapsing operator (e.g. a SortPreservingMergeExec) to bring the \
+                 per-file partitions back to one.",
                 self.query,
                 insert_range.begin.to_rfc3339(),
                 insert_range.end.to_rfc3339()

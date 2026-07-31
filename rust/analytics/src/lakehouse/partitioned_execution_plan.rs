@@ -206,8 +206,7 @@ pub fn make_partitioned_execution_plan(
             projection,
             limit,
             non_empty_partitions,
-            &[],
-            OrderingBounds::InsertTime,
+            None,
         ),
         ScanOrdering::Concatenated { columns, bounds } => {
             let non_empty_partitions =
@@ -219,8 +218,7 @@ pub fn make_partitioned_execution_plan(
                 projection,
                 limit,
                 non_empty_partitions,
-                columns,
-                *bounds,
+                Some((columns.as_slice(), *bounds)),
             )
         }
         ScanOrdering::PerFile { columns } => build_per_file_plan(
@@ -235,9 +233,8 @@ pub fn make_partitioned_execution_plan(
     }
 }
 
-/// Builds the `Unordered` (`output_ordering` empty) and `Concatenated` (`output_ordering`
-/// non-empty) scan shapes: every non-empty partition in one sequential file group.
-#[expect(clippy::too_many_arguments)]
+/// Builds the `Unordered` (`ordering: None`) and `Concatenated` (`ordering: Some((columns,
+/// bounds))`) scan shapes: every non-empty partition in one sequential file group.
 fn build_unordered_or_concatenated_plan(
     schema: SchemaRef,
     reader_factory: Arc<ReaderFactory>,
@@ -245,8 +242,7 @@ fn build_unordered_or_concatenated_plan(
     projection: Option<&Vec<usize>>,
     limit: Option<usize>,
     non_empty_partitions: Vec<&Partition>,
-    output_ordering: &[ScanSortColumn],
-    ordering_bounds: OrderingBounds,
+    ordering: Option<(&[ScanSortColumn], OrderingBounds)>,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let mut file_group = vec![];
     for part in &non_empty_partitions {
@@ -257,7 +253,9 @@ fn build_unordered_or_concatenated_plan(
             ))
         })?;
         let mut pf = PartitionedFile::new(file_path, part.file_size as u64);
-        if let Some(leading_column) = output_ordering.first() {
+        if let Some((output_ordering, ordering_bounds)) = ordering
+            && let Some(leading_column) = output_ordering.first()
+        {
             pf = attach_ordering_statistics(pf, &schema, leading_column, part, ordering_bounds)?;
         }
         file_group.push(pf);
@@ -279,7 +277,9 @@ fn build_unordered_or_concatenated_plan(
         .with_projection_indices(projection.cloned())?
         .with_file_groups(vec![file_group.into()]);
 
-    if let Some(lex) = make_lex_ordering(&schema, output_ordering)? {
+    if let Some((output_ordering, _)) = ordering
+        && let Some(lex) = make_lex_ordering(&schema, output_ordering)?
+    {
         builder = builder.with_output_ordering(vec![lex]);
     }
     let file_scan_config = builder.build();
