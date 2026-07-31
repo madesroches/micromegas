@@ -68,9 +68,10 @@ Standalone `flight-sql-srv` does **not** go through this path: it builds its lak
 `connect_to_data_lake` + `migrate_lakehouse` only — never `execute_migration`. Its own doc comment on
 `from_connection` says the caller is responsible for running `migrate_db` (the ingestion schema) first.
 This is a real deployment ordering constraint in a split deployment: an ingestion binary or the
-monolith must reach migration v5 before flight-sql is deployed/rolled, or its first analytics-key
-lookup errors on a missing relation with no startup signal. Stated explicitly in
-[Migration](#migration) step 1.
+monolith must reach migration v5 before flight-sql is deployed/rolled, or flight-sql's own startup
+existence query (§3) fails at startup, naming the missing table — that failure *is* the startup
+signal Migration step 1 relies on, not a silent gap. Stated explicitly in [Migration](#migration)
+step 1.
 
 ### HTTP plumbing
 
@@ -154,14 +155,18 @@ pub struct DbApiKeyConfig {
     pub cache_size: u64,               // MICROMEGAS_API_KEY_CACHE_SIZE, default 10_000
     pub cache_ttl_secs: u64,           // MICROMEGAS_API_KEY_CACHE_TTL_SECONDS, default 60
     pub unknown_cache_ttl_secs: u64,   // MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS, default 10
+    pub unknown_cache_size: u64,       // MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE, default 10_000
 }
 
 pub struct DbApiKeyAuthProvider {
     pool: PgPool,
     table: ApiKeyTable,
-    /// hash -> (key_id, name) for keys known to be live
+    /// hash -> (key_id, name) for keys known to be live. max_capacity: cache_size.
     valid: Cache<[u8; 32], Arc<KeyRow>>,
-    /// hash -> () for tokens the DB answered "no such live key" for
+    /// hash -> () for tokens the DB answered "no such live key" for.
+    /// max_capacity: unknown_cache_size, so a flood of distinct bogus tokens
+    /// evicts (LRU) rather than growing without bound — moka's builder is
+    /// unbounded unless `max_capacity` is set (cf. `oidc.rs:375`).
     unknown: Cache<[u8; 32], ()>,
 }
 
@@ -249,13 +254,25 @@ pub async fn provider_with_prefix(prefix: &str) -> Result<Option<Arc<dyn AuthPro
 ```
 
 `build()` composes, in this order: env `ApiKeyAuthProvider` (in-memory, cheapest, preserves today's
-precedence) → `DbApiKeyAuthProvider` → `OidcAuthProvider`. Env and DB compose so nothing breaks
-mid-migration.
+precedence) → `OidcAuthProvider` → `DbApiKeyAuthProvider`. `MultiAuthProvider` tries providers in
+order (`rust/auth/src/multi.rs:84-93`), so this matters: `OidcAuthProvider::validate_jwt_token`
+starts with `decode_header(token)` (`oidc.rs:430`), which fails locally and instantly for a non-JWT
+API key, with no network or JWKS access — so putting it before the DB provider costs API-key
+requests nothing. Putting the DB provider last means only tokens that are neither an env key nor a
+valid JWT ever reach it, and it is the DB provider, not `OidcAuthProvider`'s 300s token cache
+(`oidc.rs:121`), that would otherwise be the binding cost on every OIDC request if it ran first.
+Env and DB compose so nothing breaks mid-migration.
 
 **A DB key store with at least one live key counts as "auth configured"; an empty one does not.**
 When a key store is attached, `build()` runs one cheap startup query —
 `SELECT EXISTS(SELECT 1 FROM <table> WHERE revoked_at IS NULL)` — and treats a non-empty result the
-same as env keys or OIDC being present. This is what makes Migration step 3 possible: once
+same as env keys or OIDC being present. **A failure of this query — e.g. a missing relation because
+the schema has not reached v5 yet — is propagated as an error from `build()`; it is never treated as
+"empty."** The error message names the table and states the migration-ordering requirement (the
+ingestion binary or monolith must reach v5 before flight-sql starts, per
+[Current State](#current-state)), so a pre-v5 rollout or DB-only deployment fails loudly and legibly
+at startup instead of surfacing later as a confusing auth error or silently starting with no
+providers configured. This is what makes Migration step 3 possible: once
 `micromegas-import-api-keys` has populated the table (step 2) and `MICROMEGAS_API_KEYS` is removed,
 the DB rows alone keep the service serving — no OIDC required. It also covers flight-sql specifically,
 which never mints and is documented (`mkdocs/docs/grafana/authentication.md`) to run key-only for
@@ -378,7 +395,14 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
 ```
 
 - `--from-prefixed` maps `MICROMEGAS_INGESTION_API_KEYS` → `ingestion_api_keys` and
-  `MICROMEGAS_ANALYTICS_API_KEYS` → `analytics_api_keys`.
+  `MICROMEGAS_ANALYTICS_API_KEYS` → `analytics_api_keys`. It reads only those two prefixed names —
+  unlike `default_provider::provider_with_prefix`, it does **not** fall back to the unprefixed
+  `MICROMEGAS_API_KEYS` (`rust/auth/src/default_provider.rs:53-59`), because a single unprefixed
+  keyring has no table to route to on its own. A monolith deployment that relies on that fallback
+  (e.g. `docker/docker-compose.monolith.yaml:52`, `docker/README.md:131`) would otherwise get a
+  silent no-op migration. So when neither prefixed variable is set, `--from-prefixed` exits non-zero
+  instead of emitting an empty `BEGIN; COMMIT;`, with a message pointing at the explicit form:
+  `--keys-env MICROMEGAS_API_KEYS --ingestion ... --analytics ...`.
 - Otherwise **every key name in the source keyring must be listed in exactly one of `--ingestion` /
   `--analytics`**; unassigned names are a non-zero exit listing them. A name in *both* is also an
   error, with a message explaining that a dual-use key must be split into two distinct key strings —
@@ -450,7 +474,8 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 ### Phase 6 — Tests and docs
 
-12. Tests per [Testing Strategy](#testing-strategy).
+12. Tests per [Testing Strategy](#testing-strategy), including the `rust/public/Cargo.toml`
+    `[[test]]` entry for `api_keys_tests` (see [Files to Modify](#files-to-modify)).
 13. Docs per [Documentation](#documentation).
 
 ## Files to Modify
@@ -471,6 +496,10 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - `rust/auth/Cargo.toml`, `rust/auth/src/lib.rs`, `rust/auth/src/default_provider.rs`
 - `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs`,
   `rust/public/src/servers/flight_sql_server.rs`
+- `rust/public/Cargo.toml` — add a `[[test]]` entry for `api_keys_tests` (`path =
+  "tests/api_keys_tests.rs"`, `required-features = ["server"]`), matching the seven existing blocks
+  at lines 97–130; without it the new file is auto-discovered unguarded and fails to compile under
+  `cargo test -p micromegas` (`default = []`)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
 - `python/micromegas/pyproject.toml`
 - `local_test_env/ai_scripts/start_services_with_oidc.py`
@@ -507,10 +536,12 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   `hash_key(token)`, it misses on every distinct token, so a flood of randomly generated bearer
   tokens — the actual shape of an unauthenticated attack on the ingestion endpoint — still costs one
   DB round trip per request, same as without the cache. Nothing else in this design (no rate limit, no
-  shared-failure breaker) bounds that; it is accepted as out of scope here, same as the unbounded
-  per-request `ct_eq` scan the env provider already runs today. Key creation can also be delayed by up
-  to `unknown_cache_ttl_secs` for a string that was probed just before it existed — hence 10s, not
-  60s.
+  shared-failure breaker) bounds *that*; it is accepted as out of scope here, same as the unbounded
+  per-request `ct_eq` scan the env provider already runs today. What *is* bounded is the cache's own
+  memory: `unknown` carries an explicit `max_capacity` (`unknown_cache_size`, default 10_000, one
+  32-byte-keyed entry per distinct token), so the same flood evicts old entries instead of growing the
+  process's memory without limit. Key creation can also be delayed by up to `unknown_cache_ttl_secs`
+  for a string that was probed just before it existed — hence 10s, not 60s.
 - **`GET` returns revoked rows by default.** Slightly noisier listing; an operator investigating an
   incident needs to see that a key *was* revoked and when. `include_revoked=false`, plus
   `limit`/`offset`, bound the response as the table grows (§4) rather than returning every row
@@ -561,7 +592,8 @@ Ordering, for both split and monolith deployments:
 1. Deploy the new binaries. Migration v5 creates the tables. **Nothing changes**: the env keyring
    still authenticates every existing key, and the DB tables are empty. In a split deployment, deploy
    or roll the ingestion service (or the monolith) first — it is what runs the migration — and only
-   then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)).
+   then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)); its
+   own startup existence query (§3) fails loudly, naming the table, if this ordering is violated.
 2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
    *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
@@ -648,7 +680,9 @@ rows with a unique name prefix and cleaning up:
   bound to `Analytics`, and vice versa.
 
 **`rust/public/tests/api_keys_tests.rs`** — `tower::ServiceExt::oneshot` against `api_keys_router`,
-with the `AuthContext` injected as an extension (no middleware needed):
+with the `AuthContext` injected as an extension (no middleware needed). Needs the matching
+`[[test]]` block in `rust/public/Cargo.toml` (`required-features = ["server"]`), like the other
+seven integration test files in this crate:
 
 - Every route returns 403 for `auth_type: ApiKey`, and 403 for a non-admin OIDC context. Both
   directions, since these are the whole gate.
@@ -664,6 +698,9 @@ with the `AuthContext` injected as an extension (no middleware needed):
 
 - The emitted hex digest equals `hashlib.sha256(key.encode()).hexdigest()` for a known key.
 - `--from-prefixed` routes each variable to the right table.
+- `--from-prefixed` with neither `MICROMEGAS_INGESTION_API_KEYS` nor `MICROMEGAS_ANALYTICS_API_KEYS`
+  set (including when only the unprefixed `MICROMEGAS_API_KEYS` is present) exits non-zero and
+  points at the explicit `--keys-env` form, and emits no SQL.
 - An unassigned key name exits non-zero and names the key.
 - A key name given to both `--ingestion` and `--analytics` exits non-zero with the split-it guidance.
 - The output contains `ON CONFLICT (key_hash) DO NOTHING` and is wrapped in `BEGIN`/`COMMIT`.
