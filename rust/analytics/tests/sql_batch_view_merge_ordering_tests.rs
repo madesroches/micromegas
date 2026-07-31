@@ -11,6 +11,7 @@
 //!   `target_partitions` byte-range groups once `target_partitions` is pinned above k
 
 use chrono::{TimeDelta, Utc};
+use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -29,6 +30,7 @@ use micromegas_analytics::lakehouse::sql_batch_view::SqlBatchView;
 use micromegas_analytics::lakehouse::view::{ScanSortColumn, View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
+use futures::TryStreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
@@ -51,15 +53,17 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
 
 /// A fabricated `SqlBatchView` whose extract query is entirely self-contained (no `FROM` table),
 /// so it needs neither a real database nor a registered view factory to resolve its schema.
-async fn make_test_view(lakehouse: &LakehouseContext) -> SqlBatchView {
+/// `merge_query` is the only thing that varies across this file's fixtures.
+async fn make_test_view_with_merge_query(
+    lakehouse: &LakehouseContext,
+    merge_query: &str,
+) -> SqlBatchView {
     let count_src_query = Arc::new(String::from("SELECT 0::BIGINT as count"));
     let extract_query = Arc::new(String::from(
         "SELECT 'n' AS name, TIMESTAMP '1970-01-01 00:00:00' AS time_bin, 1 AS measure \
          ORDER BY name, time_bin",
     ));
-    let merge_query = Arc::new(String::from(
-        "SELECT name, time_bin, sum(measure) AS measure FROM {source} GROUP BY name, time_bin",
-    ));
+    let merge_query = Arc::new(merge_query.to_owned());
     let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
         lakehouse.runtime().clone(),
@@ -84,6 +88,14 @@ async fn make_test_view(lakehouse: &LakehouseContext) -> SqlBatchView {
         Arc::new("time_bin".to_owned()),
     ])
     .expect("with_merge_sort_order")
+}
+
+async fn make_test_view(lakehouse: &LakehouseContext) -> SqlBatchView {
+    make_test_view_with_merge_query(
+        lakehouse,
+        "SELECT name, time_bin, sum(measure) AS measure FROM {source} GROUP BY name, time_bin",
+    )
+    .await
 }
 
 fn certifying_sort_order() -> Option<Vec<String>> {
@@ -353,5 +365,105 @@ async fn user_query_path_stays_streaming_with_target_partitions_pinned_above_k()
         "expected FileGroupPartitioner to split the {k} declared per-file groups into \
          target_partitions byte-range groups via an order-preserving hash repartition, \
          got:\n{plan_str}"
+    );
+}
+
+#[tokio::test]
+async fn build_side_enrichment_join_reports_ordering_not_honored_without_erroring() {
+    // Plan Testing Strategy item 3 / Design §5 correction 3: a realistic authoring mistake is an
+    // enrichment join phrased with the ordered aggregate on the *build* side of a `LEFT JOIN`
+    // (`CollectLeft` buffers its left input and inherits ordering from the right/probe side, so
+    // the naturally-phrased `(<ordered agg>) a LEFT JOIN dim d` reinstates a blocking SortExec --
+    // see `ordered_aggregation_spike_tests.rs`'s
+    // `enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort`). Even
+    // under the `PerFile` merge branch's mandatory trailing `DataFrame::sort` (merge.rs:183-188),
+    // the plan still carries a `SortExec` -- this must warn (check 3), not fail the merge.
+    let lakehouse = make_offline_lakehouse_context().await;
+    let view = make_test_view_with_merge_query(
+        &lakehouse,
+        "SELECT a.name, a.time_bin, a.measure, d.label FROM \
+         (SELECT name, time_bin, sum(measure) AS measure FROM {source} GROUP BY name, time_bin) a \
+         LEFT JOIN (VALUES ('n', 'lbl')) AS d(name, label) ON a.name = d.name",
+    )
+    .await;
+    let partitions = vec![
+        make_partition(Some("a.parquet"), certifying_sort_order(), 0),
+        make_partition(Some("b.parquet"), certifying_sort_order(), 1),
+    ];
+    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
+    let result = view
+        .merge_partitions(
+            lakehouse,
+            Arc::new(partitions),
+            Arc::new(PartitionCache::empty(insert_range)),
+            insert_range,
+        )
+        .await
+        .expect("a defeated elision must not fail the merge (fail-open)");
+    assert!(
+        !result.ordering_honored,
+        "expected the ordered aggregate sitting on the join's build side to reinstate a blocking \
+         SortExec, so ordering_honored should be false"
+    );
+    assert!(
+        result
+            .plan_display
+            .is_some_and(|plan_str| plan_str.contains("SortExec")),
+        "the PerFile merge path always reports plan_display, and it should show the surviving \
+         SortExec"
+    );
+}
+
+#[tokio::test]
+async fn declared_ascending_sort_order_overrides_a_contradictory_author_order_by_desc() {
+    // Testing Strategy item 3: the merge query's own (contradictory) `ORDER BY ... DESC` must not
+    // win -- `execute_per_file_merge`'s unconditional `DataFrame::sort` over the declared ascending
+    // columns (merge.rs:183-188) is applied on top of the author's query, so the declared order
+    // always wins. Two out-of-order rows ('b' before 'a', matching the author's DESC clause) make
+    // the override observable: an ascending result can only come from the declared sort order, not
+    // from the query's own `ORDER BY`.
+    let lakehouse = make_offline_lakehouse_context().await;
+    let view = make_test_view_with_merge_query(
+        &lakehouse,
+        "SELECT * FROM (VALUES \
+         ('b', TIMESTAMP '1970-01-01 00:00:01', 1), \
+         ('a', TIMESTAMP '1970-01-01 00:00:00', 2)) AS t(name, time_bin, measure) \
+         ORDER BY name DESC, time_bin DESC",
+    )
+    .await;
+    let partitions = vec![
+        make_partition(Some("a.parquet"), certifying_sort_order(), 0),
+        make_partition(Some("b.parquet"), certifying_sort_order(), 1),
+    ];
+    assert_eq!(
+        view.get_merged_partition_sort_order(&partitions),
+        certifying_sort_order(),
+        "the declared ascending sort order must still be recorded despite the author's DESC query"
+    );
+
+    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
+    let result = view
+        .merge_partitions(
+            lakehouse,
+            Arc::new(partitions),
+            Arc::new(PartitionCache::empty(insert_range)),
+            insert_range,
+        )
+        .await
+        .expect("merge_partitions should succeed");
+    let batches: Vec<_> = result
+        .stream
+        .try_collect()
+        .await
+        .expect("collecting the merge stream");
+    let rendered = pretty_format_batches(&batches)
+        .expect("pretty_format_batches")
+        .to_string();
+    let a_pos = rendered.find('a').expect("row 'a' should be present");
+    let b_pos = rendered.find('b').expect("row 'b' should be present");
+    assert!(
+        a_pos < b_pos,
+        "expected the declared ascending (name, time_bin) order to win over the author's \
+         `ORDER BY ... DESC`, got:\n{rendered}"
     );
 }
