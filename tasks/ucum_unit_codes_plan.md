@@ -145,16 +145,37 @@ Aliases mapping to `''`: `{Count}` (via the annotation rule below), `1`, `none`,
 `Count`, `counts`, `units`, `unit`, `iterations`. A dimensionless **rate** canonicalizes to `'/s'`
 (from `{Count}/s`, `1/s`, `count/s`).
 
-`format-value.ts` fallthrough changes from `rawUnit` to the normalized unit, and omits the separating
-space for a leading-slash unit so a dimensionless rate reads `1,234/s`:
+`format-value.ts` fallthrough changes from `rawUnit` to the normalized unit — but the normalized
+(spelled-out) name is not what should be *shown*: `centimeters` should still read `cm`, matching
+today's `42 cm` from the raw-unit fallthrough. So `units.ts` gets a small canonical→display-abbreviation
+map, and the fallthrough goes through it instead of printing the canonical name directly:
 
 ```ts
-if (!unit) return value.toLocaleString()
-if (unit.startsWith('/')) return `${value.toLocaleString()}${unit}`
-return `${value.toLocaleString()} ${unit}`
+// units.ts
+const CANONICAL_DISPLAY_ABBREV: Record<string, string> = {
+  '': '',
+  'percent': '%',
+  'degrees': '°',
+  'celsius': '°C',
+  'centimeters': 'cm',
+}
+
+/** The short form shown to users for a canonical unit; falls back to the canonical name itself. */
+export function unitDisplayAbbrev(canonicalUnit: string): string {
+  return CANONICAL_DISPLAY_ABBREV[canonicalUnit] ?? canonicalUnit
+}
 ```
 
-Unknown units still pass through verbatim (`normalizeUnit` returns its input), so
+```ts
+// format-value.ts fallthrough
+const displayUnit = unitDisplayAbbrev(unit)
+if (!displayUnit) return value.toLocaleString()
+if (displayUnit.startsWith('/')) return `${value.toLocaleString()}${displayUnit}`
+return `${value.toLocaleString()} ${displayUnit}`
+```
+
+Unknown units still pass through verbatim (`unitDisplayAbbrev` falls back to its input when there is
+no map entry, and `normalizeUnit` itself falls back to the raw string when there is no alias), so
 `formatValueWithUnit(42, 'widgets') === '42 widgets'` is preserved.
 
 **Not in scope:** compact SI notation for large dimensionless counters (`1.2G` rather than
@@ -196,16 +217,27 @@ the same canonical base. Encode that once and expand it, rather than writing 40 
 entries where a copy-paste slip is invisible:
 
 ```ts
-/** UCUM/OTLP codes for scalable units → canonical base name. Each also implies `<code>/s`. */
+/**
+ * UCUM/OTLP codes for scalable units → canonical base name. Each also implies `<code>/s`.
+ * Includes the byte/bit spellings already present as bare-form entries in the hand-written
+ * table above (`B`, `KB`, `kb`, `MB`, `GB`, `TB`, `bit`, `kbit`, `Mbit`, `Gbit`, `Tbit`, and the
+ * spelled-out canonical names) so their `/s` forms are generated here instead of hand-writing a
+ * matching rate entry for each one. Re-listing a bare form is harmless — both definitions map to
+ * the same canonical name.
+ */
 const UCUM_SCALED_CODES: Record<string, string> = {
   // Bytes — decimal and binary prefixes both map to the app's 1024-based canonical units.
-  'By': 'bytes',
-  'kBy': 'kilobytes', 'KiBy': 'kilobytes',
-  'MBy': 'megabytes', 'MiBy': 'megabytes',
-  'GBy': 'gigabytes', 'GiBy': 'gigabytes',
-  'TBy': 'terabytes', 'TiBy': 'terabytes',
-  // Bits — AWS spells megabits/gigabits `MBit`/`GBit` but terabits `Tbit`; accept both spellings.
-  'kBit': 'kilobits', 'MBit': 'megabits', 'GBit': 'gigabits', 'TBit': 'terabits',
+  'By': 'bytes', 'B': 'bytes', 'bytes': 'bytes',
+  'kBy': 'kilobytes', 'KiBy': 'kilobytes', 'KB': 'kilobytes', 'kb': 'kilobytes', 'kilobytes': 'kilobytes',
+  'MBy': 'megabytes', 'MiBy': 'megabytes', 'MB': 'megabytes', 'megabytes': 'megabytes',
+  'GBy': 'gigabytes', 'GiBy': 'gigabytes', 'GB': 'gigabytes', 'gigabytes': 'gigabytes',
+  'TBy': 'terabytes', 'TiBy': 'terabytes', 'TB': 'terabytes', 'terabytes': 'terabytes',
+  // Bits — AWS spells megabits/gigabits `MBit`/`GBit` but kilobits/terabits `kbit`/`Tbit`; accept both cases.
+  'bit': 'bits', 'bits': 'bits',
+  'kBit': 'kilobits', 'kbit': 'kilobits', 'kilobits': 'kilobits',
+  'MBit': 'megabits', 'Mbit': 'megabits', 'megabits': 'megabits',
+  'GBit': 'gigabits', 'Gbit': 'gigabits', 'gigabits': 'gigabits',
+  'TBit': 'terabits', 'Tbit': 'terabits', 'terabits': 'terabits',
 }
 
 function expandRates(codes: Record<string, string>): Record<string, string> {
@@ -220,12 +252,9 @@ function expandRates(codes: Record<string, string>): Record<string, string> {
 
 `UNIT_ALIASES` becomes a spread of the hand-written entries plus `expandRates(UCUM_SCALED_CODES)`,
 keeping its exported type `Record<string, string>` (the existing test at `units.test.ts:148-155`
-indexes it directly and keeps working).
-
-The already-present lowercase bit codes (`kbit`, `Mbit`, `Gbit`, `Tbit`, `bit`) need their `/s` forms
-too — run them through the same expansion by adding a second source map for codes whose bare form is
-already in the hand-written table, or simply include them in `UCUM_SCALED_CODES` (duplicate
-bare-form entries are harmless since they map to the same canonical name).
+indexes it directly and keeps working). This generates every required `/s` form in one place —
+`B/s`, `KB/s`, `MB/s`, `GB/s`, `TB/s`, `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `Tbit/s` — without a
+second source map or hand-written rate entries.
 
 Additional flat entries:
 
@@ -238,7 +267,8 @@ Additional flat entries:
 
 `celsius` gets a formatting branch in `format-value.ts` (`value.toFixed(1) + '°C'`), mirroring
 `degrees`. `centimeters` is a passthrough canonical name — no adaptive m/km ladder is added (see
-Trade-offs).
+Trade-offs). Axis and chart-title labels for both units go through `unitDisplayAbbrev` (§5), so they
+read `cm` / `°C` rather than the spelled-out canonical name.
 
 **Currency-collision check** (`units.ts:238-240` uppercases before matching ISO 4217): the new
 three-character keys are `kBy`, `MBy`, `GBy`, `TBy`, `Cel` → `KBY`, `MBY`, `GBY`, `TBY`, `CEL`; none
@@ -248,6 +278,10 @@ assert no key in `UNIT_ALIASES` normalizes to something `isCurrencyUnit` accepts
 
 `Hz`, `W`, `J` need **no** entries: they are already rendered correctly by passthrough
 (`1,234 Hz`), and adding identity aliases would be noise.
+
+`rate` also needs no entry: its only call site in the repo is a Rust test fixture
+(`rust/analytics/tests/metrics_test.rs:205`, `fmetric!("tagged_float", "rate", 2.5)`), not a
+production metric, so it is deliberately left unmapped (passthrough, renders `1,234 rate`).
 
 ### 5. Normalize the axis grouping key in `XYChart`
 
@@ -267,11 +301,13 @@ Changes in `XYChart.tsx`:
 - `:760` → `const scaleName = unitScaleKey(s.unit) || 'y'`
 - `:381-385` → `const scaleName = unitScaleKey(lineUnit) || 'y'` (the existing
   `scaleName in u.scales` guard stays)
-- `:735` axis label → `scaleInfo.unitName` is now canonical, so the `=== 'percent'` special case
-  still fires for `%`-sourced series (it previously did not).
-- `:910-911` single-series label → `normalizeUnit(primaryUnit)` before the `percent` check.
-- `:727` header `displayUnit` → fall back to `normalizeUnit(primaryUnit)` so a `none`/`count` series
-  shows no suffix.
+- `:735` axis label → `unitDisplayAbbrev(scaleInfo.unitName)` (`unitName` is already canonical),
+  replacing the ad-hoc `=== 'percent'` special case with the shared map so `centimeters`/`celsius`
+  render as `cm`/`°C` too.
+- `:910-911` single-series label → `unitDisplayAbbrev(normalizeUnit(primaryUnit))`, same replacement
+  for the ad-hoc `=== 'percent'` check.
+- `:292` header `displayUnit` → fall back to `unitDisplayAbbrev(normalizeUnit(primaryUnit))` so a
+  `none`/`count` series shows no suffix and `cm`/`celsius` series show their short form.
 
 `seriesInfoForTooltip` (`:827`) keeps the **raw** unit — `formatValueWithUnit` normalizes internally,
 and there is no cross-series key involved.
@@ -295,16 +331,17 @@ and append `suffix` in each branch.
    - Rewrite `normalizeUnit` with the annotation-stripping rule.
    - Add `splitRate`; generalize `isSizeUnit`, `getAdaptiveSizeUnit`, `isBitUnit`,
      `getAdaptiveBitUnit` to any `<canonical>/s`.
-   - Export `unitScaleKey`.
+   - Add `CANONICAL_DISPLAY_ABBREV` and export `unitScaleKey` and `unitDisplayAbbrev`.
 2. **`analytics-web-app/src/lib/format-value.ts`**
    - Add the `celsius` branch.
-   - Switch the fallthrough from `rawUnit` to the normalized unit; bare number when empty; no space
-     before a leading-slash unit.
+   - Switch the fallthrough from `rawUnit` to `unitDisplayAbbrev(normalized unit)`; bare number when
+     empty; no space before a leading-slash unit.
 3. **`analytics-web-app/src/components/xychart-axis.ts`**
    - Compute the unit suffix once in `formatYAxisTick`; handle empty and `/s`-leading units.
 4. **`analytics-web-app/src/components/XYChart.tsx`**
    - Route the three scale-key sites through `unitScaleKey`.
-   - Normalize the unit used for axis/header labels (`:727`, `:735`, `:910-911`).
+   - Route the axis/header labels (`:292`, `:735`, `:910-911`) through `unitDisplayAbbrev`,
+     replacing the ad-hoc `=== 'percent'` checks.
 5. **Tests** — extend `units.test.ts`, `format-value.test.ts`, and add coverage for
    `formatYAxisTick` and the axis grouping (see Testing Strategy). Update the two existing
    assertions that pin the old behavior: `units.test.ts:123-124`
@@ -319,6 +356,8 @@ and append `suffix` in each branch.
 - `analytics-web-app/src/lib/__tests__/units.test.ts`
 - `analytics-web-app/src/lib/__tests__/format-value.test.ts`
 - `analytics-web-app/src/components/__tests__/xychart-axis.test.ts` (extend, or create if absent)
+- `mkdocs/docs/web-app/notebooks/variables.md`
+- `mkdocs/docs/query-guide/schema-reference.md`
 
 ## Trade-offs
 
@@ -368,12 +407,16 @@ commit.
   issue's headline case `getAdaptiveSizeUnit(1_234_567_890, 'By/s')` → `GB/s`.
 - No alias normalizes to a value `isCurrencyUnit` accepts.
 - Update `units.test.ts:123-124` (`none`, `count` now normalize to `''`).
+- `unitDisplayAbbrev` maps `percent`→`%`, `degrees`→`°`, `celsius`→`°C`, `centimeters`→`cm`, `''`→`''`,
+  and passes through any other canonical name unchanged (e.g. `bytes`→`bytes`).
 
 **`format-value.test.ts`**
 - `formatValueWithUnit(1234567890, 'By/s')` → `'1.1 GB/s'` (the issue's reported symptom).
 - `formatValueWithUnit(5, 'none')` → `'5'`; `(1234567, 'count')` → grouped bare number;
   `(1234, '{Count}/s')` → `'1,234/s'`.
 - `formatValueWithUnit(21.5, 'Cel')` → `'21.5°C'`.
+- `formatValueWithUnit(42, 'cm')` → `'42 cm'` — regression guard that the new `centimeters` canonical
+  name still displays as `cm`, not the spelled-out name, via the fallthrough's `unitDisplayAbbrev`.
 - Unknown units still append verbatim (`'42 widgets'`) — regression guard on the `rawUnit` →
   normalized-unit switch.
 
@@ -383,12 +426,10 @@ commit.
 - Currency and existing numeric branches unchanged.
 
 **`XYChart` axis grouping**
-- Render a multi-series chart with units `bytes`, `B`, `By` and assert a single Y axis / single
-  scale key — the existing `XYChart` test setup (uPlot is mocked in the component tests) determines
-  whether this is asserted on the built `scales` object or via a `unitScaleKey` unit test. If wiring
-  a component-level assertion proves disproportionate, a direct test that
-  `unitScaleKey('bytes') === unitScaleKey('B') === unitScaleKey('By')` plus manual verification
-  covers the contract.
+- No `XYChart.tsx` component test exists today (`src/components/__tests__/` has no `uplot` mock), so
+  standing one up is out of scope here. A direct unit test in `units.test.ts` asserting
+  `unitScaleKey('bytes') === unitScaleKey('B') === unitScaleKey('By')` covers the grouping contract,
+  backed by the manual verification below for the end-to-end chart behavior.
 
 **Manual verification**
 Start the monolith (`python3 local_test_env/ai_scripts/start_services.py --monolith`), open a chart
@@ -397,17 +438,23 @@ confirm the axis, tooltip, and stat header read `GB/s` rather than raw `By/s` va
 
 ## Documentation
 
-No user-facing documentation covers the unit table (`doc/` has no units page), so no doc updates are
-required. The in-file doc comment at the top of `units.ts` should be extended to state the two
-invariants a future editor could easily break: the lookup is **case-sensitive** (UCUM `B` ≠ `By`),
-and canonical rate units are exactly `<canonical base>/s`.
+Two mkdocs pages enumerate the unit vocabulary and need updating (precedent:
+`tasks/completed/1326_money_currency_format_plan.md` touched both alongside the same four source
+files):
+
+- `mkdocs/docs/web-app/notebooks/variables.md:144` lists example units for `format_value` — add the
+  UCUM/OTLP codes (`By`, `MBy/s`, …) and the new dimensionless (`1`, `{Count}`, `none`) additions to
+  the enumerated vocabulary.
+- `mkdocs/docs/query-guide/schema-reference.md:280` documents the `measures.unit` column and
+  currently calls out only the currency case — add a note that CloudWatch/OTLP UCUM codes and
+  dimensionless units (`1`, `{Count}`) are also normalized and rendered adaptively.
+
+The in-file doc comment at the top of `units.ts` should also be extended to state the two invariants
+a future editor could easily break: the lookup is **case-sensitive** (UCUM `B` ≠ `By`), and canonical
+rate units are exactly `<canonical base>/s`.
 
 ## Open Questions
 
-- **`rate` → dimensionless?** The issue lists `rate` among the unmapped internal units and calls the
-  group dimensionless, but `rate` reads as a per-second quantity. This plan leaves `rate` unmapped
-  (passthrough, renders `1,234 rate`) rather than guessing; mapping it to `'/s'` is a one-line change
-  if that is the intent.
 - **Dropping the `count` suffix** is the visible behavior change for existing internal dashboards
   (51 `imetric!` call sites). The Trade-offs section argues for it; flagging it in case the loss of
   the axis label is unwanted.
