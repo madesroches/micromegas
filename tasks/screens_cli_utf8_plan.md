@@ -12,8 +12,10 @@ it's ever sent to the server, corrupting non-ASCII text (em dashes, accents,
 CJK) as mojibake. This plan pins every text-mode `open()` in the screens CLI
 to `encoding="utf-8"` (`utf-8-sig` on reads, to tolerate a stray BOM), switches
 `write_screen_file()` to `ensure_ascii=False` so pulled files are readable
-UTF-8 instead of escape sequences, and adds a regression test that forces a
-non-UTF-8 environment so the bug can be caught before it ships.
+UTF-8 instead of escape sequences, and adds regression tests — for
+`screens.py`, `query.py`, and `oidc.py` alike — that force a non-UTF-8
+environment so the bug can be caught before it ships in any of the three
+fixed modules.
 
 ## Current State
 
@@ -157,9 +159,33 @@ fix (see Open Questions).
    `locale.getpreferredencoding()` function, so monkeypatching that function
    in-process has no effect on `open()`'s actual behavior — only a real
    environment change on a subprocess forces it.
-5. From `python/micromegas/`, run `poetry run black
+5. `python/micromegas/tests/test_query.py` (new file — no test currently
+   exercises `cli/query.py`): add a regression test using the same
+   `sys.executable` + `LC_ALL=C`/`PYTHONUTF8=0` subprocess technique as step
+   4. The child script writes a temp SQL file containing non-ASCII content
+   (em dash, accented characters, CJK) as UTF-8 bytes, asserts
+   `sys.flags.utf8_mode == 0`, then runs the equivalent of query.py's
+   file-reading line — `pathlib.Path(path).read_text(encoding="utf-8").strip()`
+   — and writes the result back to the parent as UTF-8 bytes for comparison
+   against the original. `query.py`'s `main()` isn't invoked directly, since
+   it opens a live server connection immediately after parsing the SQL; this
+   test instead exercises the fixed `read_text(encoding="utf-8")` call from
+   step 2 in isolation.
+6. `python/micromegas/tests/auth/test_oidc_unit.py`: add
+   `test_oidc_token_save_and_load_non_ascii_locale()` alongside the existing
+   `test_oidc_token_save_and_load`, using the same subprocess/env-forcing
+   technique: a child script (with `LC_ALL=C`/`PYTHONUTF8=0` set, and the
+   existing test's `requests.get`/`OAuth2Session` mocks reproduced inline)
+   builds an `OidcAuthProvider` whose `client_id` contains non-ASCII content
+   (em dash/CJK — standing in for the "if that ever changes" case noted in
+   the Design section, since real JWTs are ASCII in practice), calls
+   `.save()`, then `OidcAuthProvider.from_file()` on the same path, and
+   writes the reloaded `client_id` back to the parent as UTF-8 bytes for
+   comparison against the original.
+7. From `python/micromegas/`, run `poetry run black
    micromegas/cli/screens.py micromegas/cli/query.py micromegas/auth/oidc.py
-   tests/test_screen_files.py` before committing (`poetry run` only finds
+   tests/test_screen_files.py tests/test_query.py
+   tests/auth/test_oidc_unit.py` before committing (`poetry run` only finds
    `pyproject.toml` by searching the cwd and its ancestors, and it lives at
    `python/micromegas/pyproject.toml`, not the repo root).
 
@@ -169,6 +195,8 @@ fix (see Open Questions).
 - `python/micromegas/micromegas/cli/query.py`
 - `python/micromegas/micromegas/auth/oidc.py`
 - `python/micromegas/tests/test_screen_files.py`
+- `python/micromegas/tests/test_query.py` (new file)
+- `python/micromegas/tests/auth/test_oidc_unit.py`
 
 ## Trade-offs
 
@@ -210,11 +238,28 @@ fix (see Open Questions).
   the locale via environment variables rather than an in-process patch.
 - Existing `test_screen_files.py` round-trip tests continue to pass
   unchanged (ASCII content is unaffected by the encoding pin).
-- Run `poetry run pytest tests/test_screen_files.py` from
-  `python/micromegas/` to verify locally. Note: no workflow under
-  `.github/workflows/` currently runs the Python test suite for
-  `python/micromegas`, so this test is a local regression test for now, not
-  a CI gate — adding that CI job is out of scope for this plan.
+- New `test_query.py` (step 5) covers the `query.py` fix with the same
+  forced-locale technique: a non-ASCII `--file` SQL file mis-decodes (or
+  raises) on the current code and round-trips intact once
+  `read_text(encoding="utf-8")` is in place. Without this test, the
+  `query.py` fix would ship with the exact same masking risk the Current
+  State section calls out for `screens.py` — ASCII-only fixtures wouldn't
+  have caught the original bug, and there was previously no test file for
+  `query.py` at all.
+- New `test_oidc_token_save_and_load_non_ascii_locale()` in
+  `test_oidc_unit.py` (step 6) covers the `oidc.py` fix the same way: a
+  non-ASCII `client_id` fails to survive a `save()`/`from_file()`
+  round-trip under the forced `LC_ALL=C`/`PYTHONUTF8=0` environment on the
+  current code, and survives once both `open()` calls in `oidc.py` are
+  pinned to `encoding="utf-8"`. The existing `test_oidc_token_save_and_load`
+  only round-trips a token under the default (already-UTF-8) test-runner
+  locale, so it would not have caught this.
+- Run `poetry run pytest tests/test_screen_files.py tests/test_query.py
+  tests/auth/test_oidc_unit.py` from `python/micromegas/` to verify locally.
+  Note: no workflow under `.github/workflows/` currently runs the Python
+  test suite for `python/micromegas`, so these tests are local regression
+  tests for now, not a CI gate — adding that CI job is out of scope for
+  this plan.
 
 ## Open Questions
 
