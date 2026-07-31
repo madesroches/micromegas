@@ -120,7 +120,7 @@ impl SqlPartitionSpec {
             );
         }
 
-        Ok(execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")?)
+        execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")
     }
 }
 

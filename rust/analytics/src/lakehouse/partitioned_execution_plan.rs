@@ -168,6 +168,7 @@ pub fn make_lex_ordering(
 ///   downstream `SortPreservingMergeExec`. If any non-empty partition fails to certify, this
 ///   degrades to the same plan shape as `Unordered`.
 #[span_fn]
+#[expect(clippy::too_many_arguments)]
 pub fn make_partitioned_execution_plan(
     schema: SchemaRef,
     reader_factory: Arc<ReaderFactory>,
@@ -264,7 +265,7 @@ fn build_unordered_or_concatenated_plan(
 
     // If all partitions are empty, return EmptyExec with projected schema
     if file_group.is_empty() {
-        return Ok(empty_exec(schema, projection)?);
+        return empty_exec(schema, projection);
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
@@ -310,7 +311,7 @@ fn build_per_file_plan(
     }
 
     if file_groups.is_empty() {
-        return Ok(empty_exec(schema, projection)?);
+        return empty_exec(schema, projection);
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
