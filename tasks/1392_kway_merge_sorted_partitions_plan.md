@@ -32,7 +32,8 @@ GROUP BY name, time_bin
 ORDER BY name, time_bin
 ```
 
-with `.with_merge_sort_order(vec![asc("name"), asc("time_bin")])`. Verified to plan as the fully
+with `.with_merge_sort_order(vec![Arc::new("name".to_string()), Arc::new("time_bin".to_string())])`
+(column names, ascending-only — see Design §3). Verified to plan as the fully
 streaming `ordering_mode=Sorted` shape of §5 — also with `first_value(unit ORDER BY time_bin)` and
 with a fuller measure set (`count`/`min`/`max`/`avg`/`sum`). Two notes on this choice:
 
@@ -246,16 +247,23 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
 - New builder method (avoids growing the already-`too_many_arguments` constructor):
 
   ```rust
-  /// Declares that this view's partitions are internally sorted by `columns` (ascending):
-  /// the extract query and the merge query must both end with a matching top-level
+  /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
+  /// order: the extract query and the merge query must both end with a matching top-level
   /// ORDER BY. A CTE-internal ORDER BY that is later joined does NOT count -- the join
   /// discards it.
-  pub fn with_merge_sort_order(mut self, columns: Vec<ScanSortColumn>) -> Self
+  pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Self
   ```
 
-  It stores `sort_order: Option<Vec<ScanSortColumn>>` and builds an
+  Column names only — there is no descending option. `ScanSortColumn` (`view.rs:42-45`) carries a
+  `descending` flag, but a descending column can never be certified (Design §1: recorded
+  `sort_order` is ascending-implied), so an API that accepted one would silently disable the whole
+  feature on a one-field typo. Taking plain column names makes that mistake unrepresentable instead
+  of relying on a runtime check.
+
+  It stores `sort_order: Option<Vec<Arc<String>>>` and builds an
   `ordered_merger: Option<Arc<dyn PartitionMerger>>` — a `QueryMerger` over the view's
-  `merge_partitions_query` with `ScanOrdering::PerFile { columns }`. The existing `merger` field
+  `merge_partitions_query` with `ScanOrdering::PerFile { columns }`, converting each name to
+  `ScanSortColumn { column, descending: false }`. The existing `merger` field
   (default `QueryMerger` or the `merger_maker` product, e.g. `BatchPartitionMerger`) is untouched
   and becomes the fallback. Keeping a custom `merger_maker` alongside `with_merge_sort_order` is
   deliberate and supported: during rollout, merges over not-yet-regenerated inputs still get the
@@ -275,18 +283,37 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   for arbitrary user queries because of the recorded-sort_order gate inside
   `make_partitioned_execution_plan` (Design §1); user sessions get no optimizer-config changes —
   the declaration is opportunistic information DataFusion may exploit (e.g. row-group pruning on
-  the leading column, order-aware aggregation), never a correctness risk.
+  the leading column, order-aware aggregation), never a correctness risk. It does have a resource
+  consequence, though: one file group per partition means `FileGroupPartitioner::
+  repartition_preserving_order` (vendored DataFusion 54.1) returns `None` — declining to
+  repartition — as soon as the file-group count reaches `target_partitions`, so `DataSourceExec`
+  cannot fold the groups back down the way it does today's single-file-group `Concatenated` scan.
+  Scan concurrency (open Parquet readers, plan partitions) becomes k = the number of partitions
+  overlapping the query's time range, uncapped by `target_partitions`. That k is bounded by query
+  range, not by rollup cadence (see Trade-offs), so it applies to user queries over a wide range on
+  a view that has not rolled up recently. Accepted here for the same no-hard-limits reason as the
+  merge path's k.
 
 - **Fresh-write recording**: `SqlPartitionSpec` gains a `sort_order: Option<Vec<String>>` field,
   threaded through `fetch_sql_partition_spec` (new parameter) into `write_partition_from_rows`
   (replacing the hardcoded `None` at `sql_partition_spec.rs:98`). `SqlBatchView` passes its
-  configured column names. To prevent a config typo from recording a false guarantee,
+  configured column names; `ExportLogView` (`export_log_view.rs:191`), the other caller of
+  `fetch_sql_partition_spec`, passes `None` — unchanged behavior. To prevent a config typo from
+  recording a false guarantee,
   `SqlPartitionSpec::write` — only when `sort_order` is declared — builds the extract plan once
   (`df.create_physical_plan()`), bails unless the plan is single-partition and its output ordering
   satisfies the declared columns (same checks as Design §2's merge branch; a global top-level
   `ORDER BY` guarantees both), then executes that exact plan via
   `datafusion::physical_plan::execute_stream`. The undeclared path keeps today's
   `df.execute_stream()` untouched.
+
+  This does not make the extract path stream, though: the required top-level `ORDER BY` sorts
+  `SqlBatchView`'s extract query the same way it always has — an in-process, blocking `SortExec`
+  (unlike `BlocksView`, whose fresh-write ordering is a Postgres `ORDER BY` streamed through
+  `MetadataPartitionSpec`). Its input is the *already-aggregated* extract output (post-`GROUP BY`),
+  not the raw source, but its memory cost still scales with the extract's insert-range bucket —
+  i.e. with whatever range a single fresh-write or `regenerate_partitions()` call covers, not with
+  k. Adopters must size that bucket accordingly; see Rollout step 2.
 
 ### 4. Memory expectation (stated precisely, per the issue comment)
 
@@ -394,7 +421,9 @@ list `with_merge_sort_order`'s rustdoc must carry:
 3. **Any enrichment join must put the dimension table on the left and the ordered stream on the
    right** (correction 3).
 4. **Both the extract and the merge query need the `ORDER BY`** — and it must be top-level: a
-   CTE-internal `ORDER BY` that is later joined does not count, because the join discards it.
+   CTE-internal `ORDER BY` that is later joined does not count, because the join discards it. Unlike
+   the merge query, the extract query's `ORDER BY` is a blocking sort (Design §3): size the
+   extract/regeneration bucket accordingly, it is not streamed the way the merge path is.
 
 ### 6. Row-group size (separable)
 
@@ -424,25 +453,31 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
    `with_ordering` → `with_scan_ordering`.
 5. `view.rs`: `get_scan_output_ordering() -> ScanOrdering` (default `Unordered`); update the
    trait doc to describe both non-trivial modes and their contracts.
-6. `thread_spans_view.rs`, `materialized_view.rs`: adapt call sites (no behavior change).
+6. `merge.rs`, `blocks_view.rs`, `thread_spans_view.rs`, `materialized_view.rs`: adapt call sites
+   (no behavior change) — `merge.rs`: `merge_scan_ordering` becomes `ScanOrdering`,
+   `with_merge_scan_ordering` takes `ScanOrdering` directly, and its `src_table` construction
+   switches to `with_scan_ordering`; `blocks_view.rs`: pass
+   `ScanOrdering::Concatenated { .., bounds: InsertTime }` at the `with_merge_scan_ordering` call
+   site. Both are mechanical, signature-only updates — the new `PerFile` merge branch itself is
+   added in Phase 2.
 7. Update direct-caller tests: `thread_spans_ordering_tests.rs`,
-   `blocks_view_merge_ordering_tests.rs`.
+   `blocks_view_merge_ordering_tests.rs` (signature updates only; these tests keep exercising
+   `Concatenated` behavior until Phase 2 adds `PerFile` coverage).
 
 ### Phase 2 — QueryMerger per-file branch
-8. `merge.rs`: `merge_scan_ordering: ScanOrdering`, `with_merge_scan_ordering(ScanOrdering)`,
-   per-file branch with the **five** config settings + three checks (Design §2).
-9. `blocks_view.rs`: pass `ScanOrdering::Concatenated { .., InsertTime }` (mechanical).
-10. Planning tests for the per-file branch (see Testing Strategy).
+8. `merge.rs`: add the `PerFile` branch — the **five** config settings + three checks (Design §2).
+9. Planning tests for the per-file branch (see Testing Strategy).
 
 ### Phase 3 — SqlBatchView declaration and recording
-11. `sql_partition_spec.rs`: `sort_order` field + `fetch_sql_partition_spec` parameter + declared
-    -path plan verification in `write` (Design §3).
-12. `sql_batch_view.rs`: `with_merge_sort_order`, dual-merger selection in `merge_partitions`,
+10. `sql_partition_spec.rs`: `sort_order` field + `fetch_sql_partition_spec` parameter + declared
+    -path plan verification in `write` (Design §3). `export_log_view.rs`: update its
+    `fetch_sql_partition_spec` call site to pass `None` (mechanical, no behavior change).
+11. `sql_batch_view.rs`: `with_merge_sort_order`, dual-merger selection in `merge_partitions`,
     `get_merged_partition_sort_order` and `get_scan_output_ordering` overrides.
-13. Unit + planning tests for the gates and overrides.
+12. Unit + planning tests for the gates and overrides.
 
 ### Phase 4 — Row-group size (separable, can land any time)
-14. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
+13. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
 
 ## Files to Modify
 
@@ -458,6 +493,7 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 | `rust/analytics/src/lakehouse/blocks_view.rs` | call-site update |
 | `rust/analytics/src/lakehouse/sql_batch_view.rs` | config, gating, overrides |
 | `rust/analytics/src/lakehouse/sql_partition_spec.rs` | `sort_order` recording + verification |
+| `rust/analytics/src/lakehouse/export_log_view.rs` | `fetch_sql_partition_spec` call site passes `None` |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 4) |
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/blocks_view_merge_ordering_tests.rs` | signature updates |
@@ -492,9 +528,12 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
   parallel (one per file partition, below the `SortPreservingMergeExec`). Disabling round-robin
   repartitioning (Design §2) caps that parallelism at k rather than `target_partitions`, which is
   the intended trade: bounded memory over extra CPU fan-out on an I/O-bound path.
-- **No ceiling on k**: consistent with the project's no-hard-limits stance; the rollup cadence
-  bounds k in practice, and a pathological k degrades gradually (more open readers), not with a
-  failure cliff.
+- **No ceiling on k**: consistent with the project's no-hard-limits stance. On the merge path the
+  rollup cadence bounds k in practice. On the user-query path (Design §3's `get_scan_output_ordering`
+  override) k is instead the number of partitions overlapping the requested range — not bounded by
+  rollup cadence, since a query can span partitions that have not yet rolled up. Either way a
+  pathological k degrades gradually (more open readers, more plan partitions), not with a failure
+  cliff, and ordering correctness is unaffected.
 
 ## Documentation
 
@@ -554,7 +593,11 @@ view adopting a sort order (in-repo or downstream):
    using the fallback merger (the gate sees uncertified old inputs) — keep any existing
    `BatchPartitionMerger` `merger_maker` in place as that fallback.
 2. Regenerate live partitions with the existing `regenerate_partitions()` UDF (range/delta
-   alignment rules per `functions-reference.md`).
+   alignment rules per `functions-reference.md`). Each regenerated partition re-runs the extract
+   query's blocking `ORDER BY` over that partition's regeneration bucket (Design §3) — size the
+   bucket passed to `regenerate_partitions()` for that cost; regenerating an already-merged,
+   day-sized partition sorts a full day's worth of the (already-aggregated) extract output in one
+   shot.
 3. Once every live partition certifies, ordered k-way merges engage automatically (per-merge input
    gate — no flag day). `sort_order` in `list_partitions()` makes progress auditable in SQL.
 4. Drop the custom `merger_maker` once the view's partitions are fully regenerated.
