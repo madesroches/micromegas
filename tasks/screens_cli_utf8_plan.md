@@ -108,13 +108,20 @@ fix (see Open Questions).
    - Add `encoding="utf-8"` to the token-file read (line 539) and the
      `os.fdopen(fd, "w")` write (line 505)
 4. `python/micromegas/tests/test_screen_files.py`: add a test that spawns a
-   `python` subprocess with both `LC_ALL=C` and `PYTHONUTF8=0` set in its
-   environment, running a small inline script that first asserts
-   `sys.flags.utf8_mode == 0` (confirming the locale-coercion bypass
-   actually took effect) and then round-trips non-ASCII content (em dash,
-   accented characters, CJK) through `write_screen_file` / `read_screen_file`
-   in a temp directory, asserting the content survives intact via the
-   subprocess's stdout. Both variables are required together: on Python
+   subprocess via `sys.executable` (not the literal string `"python"`, which
+   doesn't exist on bare Ubuntu/Debian CI runners — only `python3` does) with
+   both `LC_ALL=C` and `PYTHONUTF8=0` set in its environment, running a small
+   inline script that first asserts `sys.flags.utf8_mode == 0` (confirming
+   the locale-coercion bypass actually took effect) and then round-trips
+   non-ASCII content (em dash, accented characters, CJK) through
+   `write_screen_file` / `read_screen_file` in a temp directory. Since the
+   forced locale also makes the child's own `sys.stdout` ASCII-encoded (a
+   plain `print()` of the round-tripped content would itself raise
+   `UnicodeEncodeError` in the child, failing the test for the wrong reason),
+   the child script instead writes the round-tripped content directly as
+   UTF-8 bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`, and the
+   parent process reads and decodes those bytes to compare against the
+   original. Both variables are required together: on Python
    3.10+, `LC_ALL=C` alone is not sufficient to reproduce the bug — PEP 538
    (C-locale coercion) and PEP 540 (UTF-8 mode) make CPython auto-coerce to a
    UTF-8-based locale/mode in that case (verified empirically: under
@@ -158,14 +165,21 @@ fix (see Open Questions).
 
 ## Testing Strategy
 
-- New unit test(s) in `test_screen_files.py` that spawn a `python`
-  subprocess with both `LC_ALL=C` and `PYTHONUTF8=0` set in its environment
-  (on Python 3.10+, `LC_ALL=C` alone is coerced back to a UTF-8-based
-  locale/mode by PEP 538/540 and would not reproduce the bug — both
-  variables together are required), running a small script that first
-  asserts `sys.flags.utf8_mode == 0` to confirm the non-UTF-8 environment
-  actually took effect, then round-trips em dash / accented / CJK content
-  through `write_screen_file` → `read_screen_file`, asserting exact content
+- New unit test(s) in `test_screen_files.py` that spawn a subprocess via
+  `sys.executable` (not the literal string `"python"`, which is absent on
+  bare Ubuntu/Debian CI runners — only `python3` is guaranteed) with both
+  `LC_ALL=C` and `PYTHONUTF8=0` set in its environment (on Python 3.10+,
+  `LC_ALL=C` alone is coerced back to a UTF-8-based locale/mode by PEP
+  538/540 and would not reproduce the bug — both variables together are
+  required), running a small script that first asserts
+  `sys.flags.utf8_mode == 0` to confirm the non-UTF-8 environment actually
+  took effect, then round-trips em dash / accented / CJK content through
+  `write_screen_file` → `read_screen_file`. The forced locale makes the
+  child's own `sys.stdout` ASCII-encoded too, so a plain `print()` of that
+  content in the child would itself raise `UnicodeEncodeError`, masking the
+  actual bug under test; instead the child writes the round-tripped content
+  as raw UTF-8 bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`,
+  and the parent reads and decodes those bytes to assert exact content
   preservation. This fails on the current code (mis-decodes or raises) and
   passes once `encoding=` is pinned. A subprocess is required because
   CPython's `TextIOWrapper` resolves its default encoding via OS locale
