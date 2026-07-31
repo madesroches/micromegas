@@ -375,9 +375,11 @@ line 199.
 /// Router for the ingestion key-management routes. Hardcodes
 /// `ApiKeyTable::Ingestion`: there is no parameter an operator or a defaulting
 /// bug could point at `analytics_api_keys`. `config.cache_ttl_secs` is what the
-/// `DELETE` response's `effective_within_seconds` reports; the caller builds it
-/// the same way `ProviderBuilder::with_db_key_store` does
-/// (`DbApiKeyConfig::from_env()`), so the two cannot disagree.
+/// `DELETE` response's `effective_within_seconds` reports; `serve_ingestion`
+/// takes this same `DbApiKeyConfig` as a parameter and threads it in here, so
+/// every caller builds it with the identical prefix it gave
+/// `ProviderBuilder::with_db_key_store` (empty for `telemetry-ingestion-srv`,
+/// `MICROMEGAS_INGESTION` for the monolith) and the two cannot disagree.
 pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
 ```
 
@@ -404,8 +406,13 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   `MICROMEGAS_INGESTION_API_KEY` or the OIDC client-credentials trio) start getting 401'd, so the
   script must also provision an ingestion credential, not just drop the flag — see
   [Testing Strategy](#testing-strategy).
-- `serve_ingestion`'s **signature does not change**: the pool is already reachable as
-  `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`. The table is always
+- `serve_ingestion` **gains a new `api_key_config: DbApiKeyConfig` parameter**: the pool is already
+  reachable as `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`, but the
+  cache-TTL config is not otherwise derivable inside `serve_ingestion` — it has no way to learn which
+  prefix (if any) the caller used when building its provider. Each caller builds this config the same
+  way it built the provider's: `DbApiKeyConfig::from_env()` for `telemetry-ingestion-srv`,
+  `DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION")` for the monolith. This is what keeps
+  `effective_within_seconds` matching the TTL the running provider actually uses. The table is always
   `Ingestion` for this service. The monolith inherits the routes for free.
 - Gate, checked first in every handler (`fn require_key_admin(&AuthContext) -> Result<(), ApiKeyError>`):
   1. `auth_type != AuthType::Oidc` ⇒ **403** `ApiKeyError::NotOidc` ("caller is not an OIDC identity;
@@ -509,13 +516,22 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   `--analytics`**; unassigned names are a non-zero exit listing them. A name in *both* is also an
   error, with a message explaining that a dual-use key must be split into two distinct key strings —
   see [Migration](#migration).
+- **Name validation and quoting.** Names come from operator-authored `MICROMEGAS_API_KEYS` JSON —
+  `parse_key_ring` (`rust/auth/src/api_key.rs:58`) places no constraint on `name` — but they are
+  interpolated into a SQL string literal that gets piped to `psql` running as the schema owner. Before
+  emitting anything, every name is validated: non-empty, ≤255 bytes (the `VARCHAR(255)` column width,
+  so an oversized name fails here rather than at apply time), and containing no comma (so it
+  round-trips through the `--ingestion`/`--analytics` comma-separated lists). Any violation exits
+  non-zero naming the offending key, before any SQL is emitted. Every name is then emitted with
+  Postgres dollar-quoting (`$mmk$...$mmk$`) rather than a single-quoted literal, so an apostrophe (or
+  any other character) in a name can never break out of the literal or inject SQL.
 - Per key: `uuid.uuid4()` in python (no `gen_random_uuid()`, so no minimum PG version),
   `hashlib.sha256(key.encode()).hexdigest()`, `created_by = 'import'`:
 
 ```sql
 BEGIN;
 INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
-VALUES ('<uuid4>', decode('<hex>', 'hex'), 'game-client', now(), 'import')
+VALUES ('<uuid4>', decode('<hex>', 'hex'), $mmk$game-client$mmk$, now(), 'import')
 ON CONFLICT (key_hash) DO NOTHING;
 COMMIT;
 ```
@@ -580,17 +596,18 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    three handlers — `POST` validating `name` (non-empty, ≤255 bytes) and `GET` clamping/rejecting
    `limit` per the route table above — `api_keys_router(pool, config)`. Export from
    `rust/public/src/servers/mod.rs`.
-6. `rust/public/src/servers/ingestion.rs`: clone `lake.db_pool` before constructing
-   `WebIngestionService`; merge `api_keys_router(pool, DbApiKeyConfig::from_env())` into
-   `protected_app` inside the `if let Some(provider)` branch, before the middleware layer; `warn!`
-   when skipped.
+6. `rust/public/src/servers/ingestion.rs`: add an `api_key_config: DbApiKeyConfig` parameter to
+   `serve_ingestion`; clone `lake.db_pool` before constructing `WebIngestionService`; merge
+   `api_keys_router(pool, api_key_config)` into `protected_app` inside the `if let Some(provider)`
+   branch, before the middleware layer; `warn!` when skipped.
 7. Delete the dead duplicate `rust/public/src/servers/key_ring.rs` and its `mod.rs:57` export.
 
 ### Phase 4 — Call sites
 
 8. `rust/telemetry-ingestion-srv/src/main.rs`: switch to `ProviderBuilder` with
-   `(data_lake.db_pool.clone(), ApiKeyTable::Ingestion)`; update the module doc comment (lines 6–10)
-   and the startup error message.
+   `(data_lake.db_pool.clone(), ApiKeyTable::Ingestion)`; pass `DbApiKeyConfig::from_env()` — the same
+   unprefixed config the provider was built with — as the new `api_key_config` argument to its
+   `serve_ingestion` call; update the module doc comment (lines 6–10) and the startup error message.
 9. `rust/public/src/servers/flight_sql_server.rs`: clone the pool before `lakehouse` is moved; switch
    to `ProviderBuilder` with `ApiKeyTable::Analytics`. flight-sql runs no migration of its own (see
    [Current State](#current-state)); the deployment ordering constraint in Migration step 1 applies.
@@ -605,7 +622,10 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
     (analytics: "Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, or --disable-auth...")
     to mention the DB key store, since once §3 lands a non-empty key table also counts as "auth
     configured" and these messages would otherwise name env vars as the only remedies — misleading
-    exactly during Migration step 3, which removes those env vars.
+    exactly during Migration step 3, which removes those env vars. Pass
+    `DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION")` — the same prefix used to build the
+    ingestion provider — as the new `api_key_config` argument to the `serve_ingestion` call at
+    `rust/monolith/src/main.rs:246`.
 
 ### Phase 5 — Import tool
 
@@ -895,10 +915,12 @@ rows with a unique name prefix and cleaning up:
 using the extracted `key_store_has_live_rows` where full env isolation around `build()` would be
 awkward:
 
-- **Provider always registered**: `with_db_key_store` attached to an *empty* table still produces a
-  `MultiAuthProvider` containing the DB provider — asserted by authenticating a key minted (inserted)
-  into that table *after* `build()` returns, with no restart. This is the regression the design calls
-  out in §3: without it, a first-minted key would not authenticate until the process restarts.
+- **Provider always registered**: `with_db_key_store` attached to an *empty* table, alongside an env
+  keyring (or OIDC) so `build()` returns `Some` at all, still produces a `MultiAuthProvider` containing
+  the DB provider — asserted by inserting a row into that table *after* `build()` returns and
+  authenticating its key through the returned provider, with no restart. This is the regression the
+  design calls out in §3: without it, a first-minted key would not authenticate until the process
+  restarts.
 - **Non-empty table ⇒ `Some`**: a table with one live row and no env keys / OIDC configured still
   yields `Ok(Some(_))` from `build()`.
 - **Empty table + nothing else configured ⇒ `Ok(None)`**: an empty table with no env keys / OIDC
