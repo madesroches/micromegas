@@ -567,11 +567,12 @@ view adopting a sort order (in-repo or downstream):
    Design §2/§4/§5. Nothing blocks Phase 1.
 2. **`max_row_group_size` value** (Phase 4): 128 Ki rows proposed — acceptable, or prefer a
    different value / a per-view knob / deferral to a separate PR?
-3. **Where does the aggregate metrics view live?** The motivating adopter (Overview) is an aggregate
-   metrics view sorted by `(name, time_bin)`; there is no such view in-repo today — `metrics_view`
-   is the raw block-based `measures` view, and the only in-repo `SqlBatchView`s are `log_stats`,
-   `processes`, and `streams`. So: is the metrics rollup added in-repo as part of this work (giving
-   the feature a first-class in-repo user and an end-to-end test), or does it stay a downstream
-   deployment view with only the general mechanism landing here? Either way `log_stats` need not
-   adopt a sort order — adoption costs a deployment-side regeneration pass per view, which the
-   per-merge gate makes safe but not free.
+3. ~~**Where does the aggregate metrics view live?**~~ — **answered: outside this repo.** It's a
+   deployment-specific `SqlBatchView`, not an in-repo one — `metrics_view` stays the raw block-based
+   `measures` view, and the only in-repo `SqlBatchView`s remain `log_stats`, `processes`, and
+   `streams`, none of which need to adopt a sort order. This plan lands only the general mechanism
+   (`ScanOrdering::PerFile`, the `QueryMerger` branch, `SqlBatchView::with_merge_sort_order`); the
+   aggregate metrics rollup itself is configured downstream, in that deployment's view definitions.
+   Phases 0–3's tests validate the mechanism against the same `(name, time_bin)` shape without
+   requiring an in-repo end-to-end user; item 5 of the Testing Strategy's manual end-to-end pass uses
+   a throwaway test view for the same reason.
