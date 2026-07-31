@@ -355,12 +355,17 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   declared columns → `Some(column names)` (all-empty merges included — vacuously true of the
   empty output, matching the blocks precedent); otherwise `None`.
 
-- `get_scan_output_ordering` override: `ScanOrdering::PerFile { columns }` when configured. Safe
-  for arbitrary user queries because of the recorded-sort_order gate inside
-  `make_partitioned_execution_plan` (Design §1); user sessions get no optimizer-config changes —
-  the declaration is opportunistic information DataFusion may exploit (e.g. row-group pruning on
-  the leading column, order-aware aggregation), never a correctness risk. It does have a resource
-  consequence, though: `FileGroupPartitioner::repartition_preserving_order`
+- `get_scan_output_ordering` override: `ScanOrdering::PerFile { columns }` when configured. This is
+  a correctness contract, per `View::get_scan_output_ordering`'s own rustdoc — a false declaration
+  is not merely mis-ordered rows but, under `ordering_mode=Sorted` order-aware aggregation (§5),
+  wrong aggregate results (groups closed early, duplicate group keys). What makes declaring it safe
+  *here* is entirely the recorded-sort_order gate inside `make_partitioned_execution_plan` (Design
+  §1): every non-empty partition must certify the declared columns before the declaration reaches
+  DataFusion at all, for both consumers (user-query scans and merge scans) alike; the gate is not an
+  optional belt-and-braces check but the thing the correctness contract rests on, and it must not be
+  relaxed. User sessions get no optimizer-config changes beyond the declaration itself — DataFusion
+  is left to decide what to exploit (e.g. row-group pruning on the leading column, order-aware
+  aggregation). It does have a resource consequence, though: `FileGroupPartitioner::repartition_preserving_order`
   (`datafusion-datasource` 54.1.0, transitive via `datafusion = "54.1"`, `rust/Cargo.toml:50`) only
   declines to repartition (returns `None`)
   once the file-group count reaches `target_partitions`; below that threshold it splits each
@@ -414,9 +419,13 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   `MetadataPartitionSpec`). Its input is the *already-aggregated* extract output (post-`GROUP BY`),
   not the raw source, but its memory cost still scales with the extract's insert-range bucket —
   i.e. with whatever range a single fresh-write or `regenerate_partitions()` call covers, not with
-  k. For a fresh write the bucket is the `materialize_partitions()` delta, chosen freely; for
+  k. The fresh-write bucket is `min(view.get_max_partition_time_delta(CreateFromSource),
+  insert_range)` (`batch_update.rs:176-205`) — for a view with a small
+  `max_partition_delta_from_source` this is freely choosable, but it is capped at that view's
+  configured max, so a view whose max delta is coarse (a day, say) gets a day-sized bucket from the
+  daemon's own `every_day` task or from an operator's day-delta backfill, not a smaller one; for
   `regenerate_partitions()` the bucket is dictated by the existing partition's boundaries, not
-  freely choosable — see Rollout step 2.
+  freely choosable — see Rollout step 2 and, for `log_stats` specifically, §7.
 
 ### 4. Memory expectation (stated precisely, per the issue comment)
 
@@ -447,9 +456,13 @@ ever executed). All 9 pass under `cargo test`, `cargo fmt` and
 `cargo clippy --tests -- -D warnings` are clean, and the tests stay as the permanent regression
 guard. **Proceed to Phase 1**, with the three corrections recorded below folded in.
 
-Observed plan for the aggregate-metrics merge query of the Overview
-(`SELECT name, time_bin, first_value(unit) AS unit, sum(measure) AS total FROM source GROUP BY name,
-time_bin ORDER BY name, time_bin`) over 3 overlapping per-file partitions, with the five settings
+Observed plan for the Overview's aggregate-metrics merge query
+(`SELECT name, time_bin, first_value(unit) AS unit, sum(total) AS total FROM source GROUP BY name,
+time_bin`) plus the sort `QueryMerger` applies as a logical-plan node from the declared
+`(name, time_bin)` columns (Design §2) — the spike encodes that combination as a single SQL query
+with a trailing `ORDER BY name, time_bin` and `sum(measure) AS total`, since a `DataFusion`
+logical-plan `Sort` node lowers to the same plan shape as a SQL `ORDER BY` and the aggregate name
+is immaterial to the plan shape — over 3 overlapping per-file partitions, with the five settings
 of §2:
 
 ```
@@ -583,6 +596,19 @@ Its transform (extract) query needs a top-level `ORDER BY time_bin, process_id, 
 sort as a logical-plan node driven by the same four declared columns (Design §2). The transform
 query's `ORDER BY` is a blocking sort, but it sorts the *aggregate's output* — one row per group —
 not the `log_entries` scan, so it is far smaller than the raw input; §3's bucket sizing applies.
+`log_stats`' `max_partition_delta_from_source` is `TimeDelta::days(1)` (`log_stats_view.rs:70`),
+which is also its `CreateFromSource` bucket ceiling (`get_max_partition_time_delta`,
+`sql_batch_view.rs:275-284`): the daemon's `every_day` task materializes over the last two days at
+day granularity (`maintenance.rs:77-88`), and an operator's `materialize_partitions('log_stats', …,
+86400)` backfill hits the same ceiling, so a day's worth of sub-partitions being absent (daemon
+downtime, fresh deployment, retired sub-partitions) takes this `ORDER BY` over a full day's
+aggregate output, not a freely-small bucket. Accepted here rather than lowered: a day's worth of
+`log_stats` groups (`processes × levels × targets × 1440` minute-bins) is the aggregate's *output*
+row count, not `log_entries`' row count, and is the same working set the unordered merge path
+already holds today — this plan does not make that case worse, it only removes the larger,
+unbounded-by-day-count blowup from the merge side. A view that needs a smaller fresh-write bucket
+should lower its own `max_partition_delta_from_source` (Phase 4 step 16 is the place to do it for
+`log_stats`, if ever needed); this plan does not change `log_stats`' configured deltas.
 
 Two honest caveats:
 
@@ -891,7 +917,7 @@ polled), so they run in plain `cargo test`:
 
 ## Rollout
 
-Landing Phases 1–3 changes no existing view's behavior (every current view is `Unordered`); Phase 4
+Landing Phases 1–3 changes no existing view's behavior (no existing view declares `PerFile`); Phase 4
 then walks `log_stats` through the adoption sequence below, making it the first view to exercise it.
 For a view adopting a sort order (in-repo or downstream):
 
