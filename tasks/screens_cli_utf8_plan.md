@@ -107,19 +107,22 @@ fix (see Open Questions).
 3. `python/micromegas/micromegas/auth/oidc.py`:
    - Add `encoding="utf-8"` to the token-file read (line 539) and the
      `os.fdopen(fd, "w")` write (line 505)
-4. `python/micromegas/tests/test_screen_files.py`: add a test class that
-   forces a non-UTF-8 default encoding and round-trips non-ASCII content
-   (em dash, accented characters, CJK) through `write_screen_file` /
-   `read_screen_file`, asserting the content survives intact. Force the
-   non-default encoding by monkeypatching `locale.getpreferredencoding`
-   (which `io.open`/`TextIOWrapper` consult when `encoding=None`) to return
-   `"cp1252"` — this exercises exactly the code path that misbehaves without
-   an explicit `encoding=`, without depending on the CI runner's actual
-   locale.
-5. Run `poetry run black python/micromegas/micromegas/cli/screens.py
-   python/micromegas/micromegas/cli/query.py
-   python/micromegas/micromegas/auth/oidc.py
-   python/micromegas/tests/test_screen_files.py` before committing.
+4. `python/micromegas/tests/test_screen_files.py`: add a test that spawns a
+   `python` subprocess with `LC_ALL=C` (or `PYTHONUTF8=0` plus a non-UTF-8
+   locale) set in its environment, running a small inline script that
+   round-trips non-ASCII content (em dash, accented characters, CJK) through
+   `write_screen_file` / `read_screen_file` in a temp directory, asserting
+   the content survives intact via the subprocess's stdout. A subprocess is
+   required here: CPython's `TextIOWrapper` resolves its default encoding
+   via OS locale APIs (`_Py_GetLocaleEncoding`), not by calling the
+   Python-level `locale.getpreferredencoding()` function, so monkeypatching
+   that function in-process has no effect on `open()`'s actual behavior —
+   only a real environment/locale change on a subprocess forces it.
+5. From `python/micromegas/`, run `poetry run black
+   micromegas/cli/screens.py micromegas/cli/query.py micromegas/auth/oidc.py
+   tests/test_screen_files.py` before committing (`poetry run` only finds
+   `pyproject.toml` by searching the cwd and its ancestors, and it lives at
+   `python/micromegas/pyproject.toml`, not the repo root).
 
 ## Files to Modify
 
@@ -144,12 +147,18 @@ fix (see Open Questions).
 
 ## Testing Strategy
 
-- New unit test(s) in `test_screen_files.py` that monkeypatch
-  `locale.getpreferredencoding` to a non-UTF-8 encoding (e.g. `"cp1252"`)
-  and round-trip em dash / accented / CJK content through
-  `write_screen_file` → `read_screen_file`, asserting exact content
-  preservation. This fails on the current code (mis-decodes or raises) and
-  passes once `encoding=` is pinned.
+- New unit test(s) in `test_screen_files.py` that spawn a `python`
+  subprocess with `LC_ALL=C` (or `PYTHONUTF8=0` + a non-UTF-8 locale) set in
+  its environment, running a small script that round-trips em dash /
+  accented / CJK content through `write_screen_file` → `read_screen_file`,
+  asserting exact content preservation. This fails on the current code
+  (mis-decodes or raises) and passes once `encoding=` is pinned. A
+  subprocess is required because CPython's `TextIOWrapper` resolves its
+  default encoding via OS locale APIs, not the Python-level
+  `locale.getpreferredencoding()` function, so an in-process monkeypatch of
+  that function has no effect on `open()`'s actual behavior — this also
+  matches issue #1399 item 3, which specifies forcing the locale via
+  environment variables rather than an in-process patch.
 - Existing `test_screen_files.py` round-trip tests continue to pass
   unchanged (ASCII content is unaffected by the encoding pin).
 - Run `poetry run pytest tests/test_screen_files.py` from
