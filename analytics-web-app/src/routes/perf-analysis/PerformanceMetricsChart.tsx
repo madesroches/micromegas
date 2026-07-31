@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import { Clock } from 'lucide-react'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { executeStreamQuery } from '@/lib/arrow-stream'
+import { normalizeUnit, unitDisplayAbbrev } from '@/lib/units'
 import { timestampToMs } from '@/lib/arrow-utils'
 import {
   createPropertyTimelineGetter,
@@ -134,6 +135,10 @@ export function PerformanceMetricsChart({
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
+
+  // Short display form of the selected measure's unit, for the "no data in range"
+  // placeholder header. Empty for dimensionless units so the parenthetical drops entirely.
+  const noDataDisplayUnit = unitDisplayAbbrev(normalizeUnit(selectedMeasureInfo?.unit ?? ''))
 
   const chartTimeRange = useMemo(() => {
     if (chartData.length === 0) return null
@@ -286,9 +291,11 @@ export function PerformanceMetricsChart({
           <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
             <div className="text-base font-medium text-theme-text-primary">
               {selectedMeasure}{' '}
-              <span className="text-theme-text-muted font-normal">
-                ({selectedMeasureInfo?.unit || ''})
-              </span>
+              {noDataDisplayUnit && (
+                <span className="text-theme-text-muted font-normal">
+                  ({noDataDisplayUnit})
+                </span>
+              )}
             </div>
           </div>
           <div className="flex-1 flex items-center justify-center">

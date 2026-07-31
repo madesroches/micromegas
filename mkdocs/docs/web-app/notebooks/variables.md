@@ -141,7 +141,7 @@ Arguments may be:
 - **String literals** — `'bytes'` or `"bytes"` (either quote style; the *opposite* quote may appear inside without escaping).
 - **Numeric literals** — `3678630912`, `-1.5`, etc.
 
-The accepted unit vocabulary is the same set the chart understands — see `lib/units.ts` for canonical names and aliases (`bytes`, `KB`, `MB`, `seconds`, `ms`, `µs`, `bits/s`, `percent`, `degrees`, `boolean`, ISO 4217 currency codes like `USD`/`CAD`/`EUR`, …).
+The accepted unit vocabulary is the same set the chart understands — see `lib/units.ts` for canonical names and aliases (`bytes`, `KB`, `MB`, `seconds`, `ms`, `µs`, `bits/s`, `percent`, `degrees`, `boolean`, ISO 4217 currency codes like `USD`/`CAD`/`EUR`, …). This also includes the UCUM/OTLP unit codes emitted by CloudWatch Metric Streams and other OTLP producers (`By`, `KiBy`, `MBy/s`, `GBit/s`, …) and dimensionless forms (`1`, `{Count}`, `none`, `count`), which render as a bare number with no unit suffix.
 
 #### Error behavior
 

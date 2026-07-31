@@ -73,10 +73,15 @@ export function formatYAxisTick(
 ): string {
   const dv = rawValue * axisConversionFactor
   if (currencyCode) return formatCurrencyValue(dv, currencyCode)
-  if (dv === 0) return '0 ' + displayUnit
+  // Symbol-like display units (`/s`, `°`, `°C`, `%`) attach directly with no
+  // space; an empty display unit (dimensionless) contributes no suffix at all.
+  const suffix = displayUnit
+    ? /^[/°%]/.test(displayUnit) ? displayUnit : ' ' + displayUnit
+    : ''
+  if (dv === 0) return '0' + suffix
   const absV = Math.abs(dv)
-  if (absV >= 100) return Math.round(dv) + ' ' + displayUnit
-  if (absV >= 10) return dv.toFixed(1) + ' ' + displayUnit
-  if (absV >= 1) return dv.toFixed(2) + ' ' + displayUnit
-  return dv.toPrecision(2) + ' ' + displayUnit
+  if (absV >= 100) return Math.round(dv) + suffix
+  if (absV >= 10) return dv.toFixed(1) + suffix
+  if (absV >= 1) return dv.toFixed(2) + suffix
+  return dv.toPrecision(2) + suffix
 }

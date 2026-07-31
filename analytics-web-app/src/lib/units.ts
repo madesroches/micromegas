@@ -2,9 +2,15 @@
  * Unit normalization and formatting utilities
  *
  * Converts various unit aliases to canonical form for consistent handling.
+ *
+ * Two invariants a future editor could easily break:
+ * - The lookup is **case-sensitive**: UCUM `B` (the bel) and `By` (the byte) are
+ *   distinct keys that must not be collapsed by lowercasing.
+ * - Canonical rate units are always exactly `<canonical base>/s` (e.g. `kilobytes/s`),
+ *   never a bespoke spelling — `splitRate` below depends on that suffix convention.
  */
 
-export const UNIT_ALIASES: Record<string, string> = {
+const HAND_WRITTEN_ALIASES: Record<string, string> = {
   // Time (include canonical names for case-insensitive matching)
   'ns': 'nanoseconds',
   'nanoseconds': 'nanoseconds',
@@ -79,14 +85,97 @@ export const UNIT_ALIASES: Record<string, string> = {
   'deg': 'degrees',
   'degrees': 'degrees',
   'boolean': 'boolean',
+  // Temperature (OTel semconv)
+  'Cel': 'celsius',
+  'celsius': 'celsius',
+  // Length (Unreal)
+  'cm': 'centimeters',
+  'centimeters': 'centimeters',
+  // Dimensionless (UCUM unity, Unreal, Rust imetric!)
+  '1': '',
+  'none': '',
+  'None': '',
+  'count': '',
+  'Count': '',
+  'counts': '',
+  'units': '',
+  'unit': '',
+  'iterations': '',
+  '1/s': '/s',
+  'count/s': '/s',
 }
 
 /**
+ * UCUM/OTLP codes for scalable units → canonical base name. Each also implies `<code>/s`.
+ * Includes the byte/bit spellings already present as bare-form entries in `HAND_WRITTEN_ALIASES`
+ * above (`B`, `KB`, `kb`, `MB`, `GB`, `TB`, `bit`, `kbit`, `Mbit`, `Gbit`, `Tbit`, and the
+ * spelled-out canonical names) so their `/s` forms are generated here instead of hand-writing a
+ * matching rate entry for each one. Re-listing a bare form is harmless — both definitions map to
+ * the same canonical name.
+ */
+const UCUM_SCALED_CODES: Record<string, string> = {
+  // Bytes — decimal and binary prefixes both map to the app's 1024-based canonical units.
+  'By': 'bytes', 'B': 'bytes', 'bytes': 'bytes',
+  'kBy': 'kilobytes', 'KiBy': 'kilobytes', 'KB': 'kilobytes', 'kb': 'kilobytes', 'kilobytes': 'kilobytes',
+  'MBy': 'megabytes', 'MiBy': 'megabytes', 'MB': 'megabytes', 'megabytes': 'megabytes',
+  'GBy': 'gigabytes', 'GiBy': 'gigabytes', 'GB': 'gigabytes', 'gigabytes': 'gigabytes',
+  'TBy': 'terabytes', 'TiBy': 'terabytes', 'TB': 'terabytes', 'terabytes': 'terabytes',
+  // Bits — AWS spells megabits/gigabits `MBit`/`GBit` but kilobits/terabits `kbit`/`Tbit`; accept both cases.
+  'bit': 'bits', 'bits': 'bits',
+  'kBit': 'kilobits', 'kbit': 'kilobits', 'kilobits': 'kilobits',
+  'MBit': 'megabits', 'Mbit': 'megabits', 'megabits': 'megabits',
+  'GBit': 'gigabits', 'Gbit': 'gigabits', 'gigabits': 'gigabits',
+  'TBit': 'terabits', 'Tbit': 'terabits', 'terabits': 'terabits',
+}
+
+function expandRates(codes: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [code, canonical] of Object.entries(codes)) {
+    out[code] = canonical
+    out[`${code}/s`] = `${canonical}/s`
+  }
+  return out
+}
+
+export const UNIT_ALIASES: Record<string, string> = {
+  ...HAND_WRITTEN_ALIASES,
+  ...expandRates(UCUM_SCALED_CODES),
+}
+
+/** Matches UCUM annotations: free-text in curly braces, e.g. `{Count}`, `{request}`. */
+const ANNOTATION_RE = /\{[^}]*\}/g
+
+/**
  * Normalize a unit string to its canonical form.
+ *
+ * Table lookup runs first, so an explicit alias entry always wins. If the unit
+ * carries a UCUM `{...}` annotation and isn't itself a known alias, the
+ * annotation is stripped and the result is looked up again (so `{Count}` -> `''`
+ * and `By{net}` -> `bytes` without a table entry for every annotated spelling).
  * Returns the original unit if no alias is found.
  */
 export function normalizeUnit(unit: string): string {
-  return UNIT_ALIASES[unit] ?? unit
+  const direct = UNIT_ALIASES[unit]
+  if (direct !== undefined) return direct
+  if (!unit.includes('{')) return unit
+  const stripped = unit.replace(ANNOTATION_RE, '')
+  return UNIT_ALIASES[stripped] ?? stripped
+}
+
+/**
+ * Scale-grouping key for a series unit: canonical form, `''` when dimensionless/absent.
+ */
+export function unitScaleKey(unit: string | undefined | null): string {
+  return normalizeUnit(unit ?? '')
+}
+
+const RATE_SUFFIX = '/s'
+
+/** Split a canonical unit into its base unit and whether it is a per-second rate. */
+function splitRate(normalized: string): { base: string; isRate: boolean } {
+  return normalized.endsWith(RATE_SUFFIX)
+    ? { base: normalized.slice(0, -RATE_SUFFIX.length), isRate: true }
+    : { base: normalized, isRate: false }
 }
 
 /**
@@ -115,11 +204,12 @@ export const SIZE_UNIT_NAMES = new Set([
 
 /**
  * Check if a unit (or its alias) is a size-based unit.
- * Includes the `bytes/s` rate variant so adaptive scaling works on bandwidth axes.
+ * Includes any `<size>/s` rate variant (e.g. `kilobytes/s`) so adaptive scaling
+ * works on bandwidth axes.
  */
 export function isSizeUnit(unit: string): boolean {
-  const normalized = normalizeUnit(unit)
-  return SIZE_UNIT_NAMES.has(normalized) || normalized === 'bytes/s'
+  const { base } = splitRate(normalizeUnit(unit))
+  return SIZE_UNIT_NAMES.has(base)
 }
 
 /**
@@ -135,11 +225,12 @@ export const BIT_UNIT_NAMES = new Set([
 
 /**
  * Check if a unit (or its alias) is a bit-based unit.
- * Includes the `bits/s` rate variant so adaptive scaling works on bandwidth axes.
+ * Includes any `<bit>/s` rate variant (e.g. `kilobits/s`) so adaptive scaling
+ * works on bandwidth axes.
  */
 export function isBitUnit(unit: string): boolean {
-  const normalized = normalizeUnit(unit)
-  return BIT_UNIT_NAMES.has(normalized) || normalized === 'bits/s'
+  const { base } = splitRate(normalizeUnit(unit))
+  return BIT_UNIT_NAMES.has(base)
 }
 
 export type SizeUnit = 'bytes' | 'kilobytes' | 'megabytes' | 'gigabytes' | 'terabytes'
@@ -198,8 +289,8 @@ export function getAdaptiveSizeUnit(
   originalUnit: SizeUnit | string
 ): AdaptiveSizeUnit {
   const normalized = normalizeUnit(originalUnit)
-  const isRate = normalized === 'bytes/s'
-  const baseUnit = (isRate ? 'bytes' : normalized) as SizeUnit
+  const { base, isRate } = splitRate(normalized)
+  const baseUnit = base as SizeUnit
   const refBytes = toBytes(referenceValue, baseUnit)
 
   // Find the best unit where the value is >= 1 (prefer larger units)
@@ -295,8 +386,8 @@ export function getAdaptiveBitUnit(
   originalUnit: BitUnit | string
 ): AdaptiveBitUnit {
   const normalized = normalizeUnit(originalUnit)
-  const isRate = normalized === 'bits/s'
-  const baseUnit = (isRate ? 'bits' : normalized) as BitUnit
+  const { base, isRate } = splitRate(normalized)
+  const baseUnit = base as BitUnit
   const refBits = toBits(referenceValue, baseUnit)
 
   let bestUnit = BIT_UNITS[0]
@@ -317,4 +408,32 @@ export function getAdaptiveBitUnit(
     abbrev: isRate ? bestUnit.abbrev + '/s' : bestUnit.abbrev,
     conversionFactor,
   }
+}
+
+// Declared after SIZE_UNITS and BIT_UNITS since it derives from them.
+const CANONICAL_DISPLAY_ABBREV: Record<string, string> = {
+  '': '',
+  'percent': '%',
+  'degrees': '°',
+  'celsius': '°C',
+  'centimeters': 'cm',
+  // Time — hand-listed rather than imported from time-units.ts's TIME_UNITS, which would create an
+  // import cycle (time-units.ts already imports normalizeUnit from this module).
+  'nanoseconds': 'ns',
+  'microseconds': 'µs',
+  'milliseconds': 'ms',
+  'seconds': 's',
+  'minutes': 'min',
+  'hours': 'h',
+  'days': 'd',
+  // Size/bit — derived from SIZE_UNITS/BIT_UNITS so the abbreviation can never drift from the
+  // adaptive-scaling tables; each also gets its `/s` rate form, matching getAdaptiveSizeUnit's/
+  // getAdaptiveBitUnit's own `bestUnit.abbrev + '/s'` convention.
+  ...Object.fromEntries(SIZE_UNITS.flatMap((u) => [[u.unit, u.abbrev], [`${u.unit}/s`, `${u.abbrev}/s`]])),
+  ...Object.fromEntries(BIT_UNITS.flatMap((u) => [[u.unit, u.abbrev], [`${u.unit}/s`, `${u.abbrev}/s`]])),
+}
+
+/** The short form shown to users for a canonical unit; falls back to the canonical name itself. */
+export function unitDisplayAbbrev(canonicalUnit: string): string {
+  return CANONICAL_DISPLAY_ABBREV[canonicalUnit] ?? canonicalUnit
 }

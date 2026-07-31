@@ -97,6 +97,40 @@ describe('formatValueWithUnit', () => {
     })
   })
 
+  describe('celsius', () => {
+    it('formats with one decimal and °C suffix', () => {
+      expect(formatValueWithUnit(21.5, 'Cel')).toBe('21.5°C')
+    })
+
+    it('accepts the spelled-out celsius alias', () => {
+      expect(formatValueWithUnit(21.5, 'celsius')).toBe('21.5°C')
+    })
+  })
+
+  describe('dimensionless (UCUM unity, count, none)', () => {
+    it('formats none as a bare number', () => {
+      expect(formatValueWithUnit(5, 'none')).toBe('5')
+    })
+
+    it('formats count as a grouped bare number', () => {
+      expect(formatValueWithUnit(1234567, 'count')).toBe((1234567).toLocaleString())
+    })
+
+    it('formats a dimensionless rate with no space before the slash', () => {
+      expect(formatValueWithUnit(1234, '{Count}/s')).toBe('1,234/s')
+    })
+
+    it("formats the issue's headline rate symptom (By/s -> GB/s)", () => {
+      expect(formatValueWithUnit(1234567890, 'By/s')).toBe('1.1 GB/s')
+    })
+  })
+
+  describe('centimeters', () => {
+    it('displays the cm abbreviation rather than the spelled-out canonical name', () => {
+      expect(formatValueWithUnit(42, 'cm')).toBe('42 cm')
+    })
+  })
+
   describe('boolean', () => {
     it('formats nonzero as true', () => {
       expect(formatValueWithUnit(1, 'boolean')).toBe('true')

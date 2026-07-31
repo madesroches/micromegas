@@ -14,6 +14,7 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { normalizeUnit, unitDisplayAbbrev } from '@/lib/units'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { aggregateIntoSegments } from '@/lib/property-utils'
 import { useDataSourceState } from '@/hooks/useDataSourceState'
@@ -201,6 +202,10 @@ function ProcessMetricsContent() {
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
+
+  // Short display form of the selected measure's unit, for the "no data in range"
+  // placeholder header. Empty for dimensionless units so the parenthetical drops entirely.
+  const noDataDisplayUnit = unitDisplayAbbrev(normalizeUnit(selectedMeasureInfo?.unit ?? ''))
 
   // Extract measures from discovery query
   useEffect(() => {
@@ -561,9 +566,11 @@ function ProcessMetricsContent() {
               <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
                 <div className="text-base font-medium text-theme-text-primary">
                   {selectedMeasure}{' '}
-                  <span className="text-theme-text-muted font-normal">
-                    ({selectedMeasureInfo?.unit || ''})
-                  </span>
+                  {noDataDisplayUnit && (
+                    <span className="text-theme-text-muted font-normal">
+                      ({noDataDisplayUnit})
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex-1 flex items-center justify-center">

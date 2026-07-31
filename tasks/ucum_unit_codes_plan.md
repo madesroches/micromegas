@@ -434,7 +434,10 @@ raw string) they land on independent axes with independent ranges. A large count
 unitless ratio on the same chart would now share a scale, and one could visibly flatten. The
 alternative isn't the dichotomy it may first appear to be — canonicalizing `{Count}`/`Count`/`count`
 → a distinct `'count'` (rather than `''`) would keep those series on one shared axis *and* keep the
-label, independently of whatever `none`/`1` canonicalize to; see Open Questions.
+label, independently of whatever `none`/`1` canonicalize to.
+
+**Decision:** the `''` mapping is the accepted behavior — both the dropped label and the axis merge.
+The distinct-`'count'` alternative is explicitly not adopted.
 
 **No compact SI notation.** The issue notes that a large counter renders as `1,234,567,890`.
 `toLocaleString()` at least groups thousands; switching to `1.2G` would change every unitless value
@@ -519,12 +522,9 @@ The in-file doc comment at the top of `units.ts` should also be extended to stat
 a future editor could easily break: the lookup is **case-sensitive** (UCUM `B` ≠ `By`), and canonical
 rate units are exactly `<canonical base>/s`.
 
-## Open Questions
+## Resolved Questions
 
-- **Dropping the `count` suffix** is the visible behavior change for existing internal dashboards
-  (51 `imetric!` call sites). The Trade-offs section argues for it; flagging it in case the loss of
-  the axis label — and, per the Trade-offs update above, the axis *merge* with other unitless series
-  — is unwanted. An alternative that keeps the label and avoids the merge: canonicalize
-  `count`/`Count`/`{Count}`/`counts` to their own `'count'` canonical form (with a `CANONICAL_DISPLAY_ABBREV`
-  entry `'count': 'count'`) instead of folding them into `''`, reserving `''` for `none`/`1`/`unit(s)`/
-  `iterations`. Not adopted here pending a decision on which behavior is wanted.
+- **Dropping the `count` suffix.** Mapping `count`/`Count`/`{Count}`/`counts` → `''` is the visible
+  behavior change for existing internal dashboards (51 `imetric!` call sites): those series lose
+  their axis label and share one Y axis with other unitless series. Confirmed as the wanted
+  behavior; the distinct-`'count'` canonical alternative is not adopted. See Trade-offs.

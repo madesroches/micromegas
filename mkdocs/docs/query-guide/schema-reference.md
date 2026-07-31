@@ -277,7 +277,7 @@ Numerical measurements and counters.
 | `time` | `Timestamp(Nanosecond)` | Measurement timestamp |
 | `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `name` | `Dictionary(Int32, Utf8)` | Metric name |
-| `unit` | `Dictionary(Int32, Utf8)` | Measurement unit. May be an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`); the web app renders these as currency |
+| `unit` | `Dictionary(Int32, Utf8)` | Measurement unit. May be an ISO 4217 currency code (e.g. `USD`, `CAD`, `EUR`); the web app renders these as currency. CloudWatch/OTLP UCUM unit codes (e.g. `By`, `MBy/s`) and dimensionless units (e.g. `1`, `{Count}`) are also normalized and rendered adaptively |
 | `value` | `Float64` | Metric value |
 | `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |

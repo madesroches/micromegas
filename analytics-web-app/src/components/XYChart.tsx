@@ -6,7 +6,7 @@ import {
   getAdaptiveTimeUnit,
   formatTimeValue,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
@@ -234,7 +234,7 @@ export function XYChart({
   const unitScaleInfo = useMemo(() => {
     const unitMap = new Map<string, { seriesIndices: number[]; p99: number; max: number; hasVisible: boolean }>()
     for (let i = 0; i < normalizedSeries.length; i++) {
-      const u = normalizedSeries[i].unit || ''
+      const u = unitScaleKey(normalizedSeries[i].unit)
       if (!unitMap.has(u)) {
         unitMap.set(u, { seriesIndices: [], p99: 0, max: 0, hasVisible: false })
       }
@@ -261,7 +261,7 @@ export function XYChart({
     const entries = [...unitMap.entries()]
     return entries.map(([unitName, info], idx) => ({
       unitName,
-      scaleName: unitName || 'y',
+      scaleName: unitScaleKey(unitName) || 'y',
       side: idx === 0 ? 1 : idx === 1 ? 3 : idx % 2 === 0 ? 1 : 3, // 1=left, 3=right, alternate
       ...info,
     }))
@@ -288,8 +288,8 @@ export function XYChart({
     return getAdaptiveBitUnit(stats.p99, primaryUnit)
   }, [primaryUnit, stats.p99])
 
-  // Display unit for the header (adaptive abbreviation for time/size/bits, original for others).
-  const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? primaryUnit
+  // Display unit for the header (adaptive abbreviation for time/size/bits, short form for others).
+  const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)
@@ -379,7 +379,7 @@ export function XYChart({
             const lineColor = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : DEFAULT_REFERENCE_LINE_COLOR
             const lineStyle = line.style ?? 'dashed'
             const lineUnit = line.unit ?? pu
-            const scaleName = (lineUnit || 'y') as string
+            const scaleName = unitScaleKey(lineUnit) || 'y'
 
             // Check if scale exists; fall back to 'y'
             const effectiveScale = scaleName in u.scales ? scaleName : 'y'
@@ -732,7 +732,7 @@ export function XYChart({
         }
 
         const adaptiveInfo = unitAdaptiveMap.get(scaleInfo.unitName)
-        const yAxisUnit = adaptiveInfo?.abbrev ?? (scaleInfo.unitName === 'percent' ? '%' : scaleInfo.unitName)
+        const yAxisUnit = adaptiveInfo?.abbrev ?? unitDisplayAbbrev(scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
         const isCurrencyScale = isCurrencyUnit(normalizeUnit(scaleInfo.unitName))
         axes.push({
@@ -757,7 +757,7 @@ export function XYChart({
       for (let i = 0; i < normalizedSeries.length; i++) {
         const s = normalizedSeries[i]
         const color = s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]
-        const scaleName = s.unit || 'y'
+        const scaleName = unitScaleKey(s.unit) || 'y'
         const fillArr = seriesFillArrays[i]
         const strokeArr = seriesStrokeArrays[i]
         const gradStops = seriesGradientStops[i]
@@ -906,7 +906,7 @@ export function XYChart({
       const displayP99 = stats.p99 * conversionFactor
       const displayMax = stats.max * conversionFactor
 
-      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? (primaryUnit === 'percent' ? '%' : primaryUnit)
+      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
       const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))
 
       // Per-row color support for single-series
