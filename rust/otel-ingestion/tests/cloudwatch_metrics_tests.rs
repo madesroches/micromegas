@@ -19,7 +19,10 @@ use micromegas_otel_ingestion::proto::{
     any_value::Value as AnyVal, metric,
 };
 use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
-use opentelemetry_proto::tonic::metrics::v1::{Gauge, NumberDataPoint, Summary, SummaryDataPoint};
+use opentelemetry_proto::tonic::metrics::v1::{
+    ExponentialHistogram, ExponentialHistogramDataPoint, Gauge, Histogram, HistogramDataPoint,
+    NumberDataPoint, Sum, Summary, SummaryDataPoint,
+};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
@@ -128,6 +131,97 @@ fn cw_gauge_metric(namespace: &str, metric_name: &str, time: u64) -> Metric {
                     opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(1),
                 ),
             }],
+        })),
+    }
+}
+
+/// `Sum`-shaped metric carrying a `Namespace` datapoint attribute — covers
+/// `metric_namespace`'s `Sum` match arm.
+fn cw_sum_metric(namespace: &str, metric_name: &str, time: u64) -> Metric {
+    Metric {
+        name: format!("amazonaws.com/{namespace}/{metric_name}"),
+        description: String::new(),
+        unit: "Bytes".into(),
+        metadata: vec![],
+        data: Some(metric::Data::Sum(Sum {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![
+                    s_kv("Namespace", namespace),
+                    s_kv("MetricName", metric_name),
+                ],
+                start_time_unix_nano: 0,
+                time_unix_nano: time,
+                exemplars: vec![],
+                flags: 0,
+                value: Some(
+                    opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(1),
+                ),
+            }],
+            aggregation_temporality: 0,
+            is_monotonic: true,
+        })),
+    }
+}
+
+/// `Histogram`-shaped metric carrying a `Namespace` datapoint attribute — covers
+/// `metric_namespace`'s `Histogram` match arm.
+fn cw_histogram_metric(namespace: &str, metric_name: &str, time: u64) -> Metric {
+    Metric {
+        name: format!("amazonaws.com/{namespace}/{metric_name}"),
+        description: String::new(),
+        unit: "Milliseconds".into(),
+        metadata: vec![],
+        data: Some(metric::Data::Histogram(Histogram {
+            data_points: vec![HistogramDataPoint {
+                attributes: vec![
+                    s_kv("Namespace", namespace),
+                    s_kv("MetricName", metric_name),
+                ],
+                start_time_unix_nano: 0,
+                time_unix_nano: time,
+                count: 1,
+                sum: Some(1.0),
+                bucket_counts: vec![],
+                explicit_bounds: vec![],
+                exemplars: vec![],
+                flags: 0,
+                min: None,
+                max: None,
+            }],
+            aggregation_temporality: 0,
+        })),
+    }
+}
+
+/// `ExponentialHistogram`-shaped metric carrying a `Namespace` datapoint attribute — covers
+/// `metric_namespace`'s `ExponentialHistogram` match arm.
+fn cw_exponential_histogram_metric(namespace: &str, metric_name: &str, time: u64) -> Metric {
+    Metric {
+        name: format!("amazonaws.com/{namespace}/{metric_name}"),
+        description: String::new(),
+        unit: "Milliseconds".into(),
+        metadata: vec![],
+        data: Some(metric::Data::ExponentialHistogram(ExponentialHistogram {
+            data_points: vec![ExponentialHistogramDataPoint {
+                attributes: vec![
+                    s_kv("Namespace", namespace),
+                    s_kv("MetricName", metric_name),
+                ],
+                start_time_unix_nano: 0,
+                time_unix_nano: time,
+                count: 1,
+                sum: Some(1.0),
+                scale: 0,
+                zero_count: 0,
+                positive: None,
+                negative: None,
+                flags: 0,
+                exemplars: vec![],
+                min: None,
+                max: None,
+                zero_threshold: 0.0,
+            }],
+            aggregation_temporality: 0,
         })),
     }
 }
@@ -255,6 +349,24 @@ fn metric_namespace_extracts_from_summary_first_data_point() {
 fn metric_namespace_extracts_from_gauge() {
     let metric = cw_gauge_metric("AWS/ECS", "RunningTaskCount", 1_000);
     assert_eq!(metric_namespace(&metric).as_deref(), Some("AWS/ECS"));
+}
+
+#[test]
+fn metric_namespace_extracts_from_sum() {
+    let metric = cw_sum_metric("AWS/S3", "BucketSizeBytes", 1_000);
+    assert_eq!(metric_namespace(&metric).as_deref(), Some("AWS/S3"));
+}
+
+#[test]
+fn metric_namespace_extracts_from_histogram() {
+    let metric = cw_histogram_metric("AWS/Lambda", "Duration", 1_000);
+    assert_eq!(metric_namespace(&metric).as_deref(), Some("AWS/Lambda"));
+}
+
+#[test]
+fn metric_namespace_extracts_from_exponential_histogram() {
+    let metric = cw_exponential_histogram_metric("AWS/ApiGateway", "Latency", 1_000);
+    assert_eq!(metric_namespace(&metric).as_deref(), Some("AWS/ApiGateway"));
 }
 
 #[test]
