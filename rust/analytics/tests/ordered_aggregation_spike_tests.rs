@@ -224,7 +224,7 @@ async fn default_round_robin_repartition_fans_the_merge_out_to_target_partitions
     // instead of k, and there are that many partial-aggregate working sets. Peak memory would
     // scale with target_partitions rather than with k, which is why the merge branch must also set
     // `enable_round_robin_repartition = false`.
-    let mut config = SessionConfig::new();
+    let mut config = SessionConfig::new().with_target_partitions(8);
     {
         let options = config.options_mut();
         options.optimizer.repartition_file_scans = false;
