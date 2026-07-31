@@ -76,7 +76,12 @@ On each view failure, before continuing the loop:
 - `imetric!("materialize_view_failure", "count", tags, 1)` (pattern per `pg_stats.rs`'s use of
   `imetric!`/`fmetric!`) tagged with the view's `view_set_name` and `view_instance_id`, so a
   persistently failing view is visible as a non-zero counter over time via FlightSQL, rather than
-  only in logs.
+  only in logs. The tags are a `&'static PropertySet` built via
+  `PropertySet::find_or_create(vec![Property::new("view_set_name", intern_string(&view_set_name)),
+  Property::new("view_instance_id", intern_string(&view_instance_id))])` — the same
+  `find_or_create`/`intern_string` pattern `pg_stats.rs` uses for its own tag helpers
+  (`index_tags`/`table_tags`). Daemon-materialized views always have `view_instance_id == "global"`,
+  so the tag cardinality is small and fixed, and interning per-failure is safe.
 
 At the end of the pass, if any view failed, return a single aggregated `anyhow::Error` listing
 every failed view's identity and error — so `CronTask`/`log_task_result` still records the pass as
@@ -120,15 +125,11 @@ pub async fn materialize_all_views(
         .await
         {
             error!("materialize_all_views: {view_set_name} {view_instance_id} failed: {e:?}");
-            imetric!(
-                "materialize_view_failure",
-                "count",
-                [
-                    ("view_set_name", view_set_name.to_string()),
-                    ("view_instance_id", view_instance_id.to_string()),
-                ],
-                1
-            );
+            let tags = PropertySet::find_or_create(vec![
+                Property::new("view_set_name", intern_string(&view_set_name)),
+                Property::new("view_instance_id", intern_string(&view_instance_id)),
+            ]);
+            imetric!("materialize_view_failure", "count", tags, 1);
             failures.push(format!("{view_set_name} {view_instance_id}: {e:?}"));
         }
     }
@@ -148,9 +149,10 @@ keep their `?`: those are infrastructure/DB errors unrelated to any specific vie
 unreachable nothing in the pass can succeed anyway, so aborting immediately (as today) is still
 correct — only the per-view materialization step gets isolated.
 
-`imetric!`'s exact tag-list syntax should be checked against its current call sites
-(`pg_stats.rs:86-104` etc.) before landing; the sketch above shows intent, not necessarily the
-literal macro invocation shape.
+The tag-list syntax above (`PropertySet::find_or_create(vec![Property::new(...), ...])` passed as
+the `tags` argument to `imetric!`) matches the existing call shape in `pg_stats.rs:45-59, 86-104`
+and is what should land — the two-argument-plus-tags form of `imetric!` expects a `&'static
+PropertySet`, not an inline array literal.
 
 ## Implementation Steps
 
@@ -161,15 +163,30 @@ literal macro invocation shape.
    - Change `materialize_all_views` to the isolate-and-collect loop in Design §1/§3.
    - Add a doc comment above `materialize_all_views` (or immediately above the loop) recording the
      cross-group policy decision from Design §2, so it doesn't read as an oversight again.
-2. Add `micromegas_tracing::prelude::*`'s `imetric!` usage (already imported via the existing
-   `use micromegas_tracing::prelude::*;`) for the failure counter.
+2. Add the failure-counter `imetric!` call (§3). `imetric!` itself is already available via the
+   existing `use micromegas_tracing::prelude::*;`, but `PropertySet`, `Property`, and
+   `intern_string` are not re-exported by the prelude — add explicit imports, matching
+   `pg_stats.rs`: `use micromegas_tracing::intern_string::intern_string;` and
+   `use micromegas_tracing::property_set::{Property, PropertySet};`.
 3. Add a DB-backed regression test (see Testing Strategy) exercising same-group isolation and
    multi-failure aggregation.
+4. In `rust/public/Cargo.toml`, append a `[[test]]` block for the new test file, mirroring the
+   existing `pg_stats_test` entry:
+   ```toml
+   [[test]]
+   name = "materialize_fail_isolation_tests"
+   path = "tests/materialize_fail_isolation_tests.rs"
+   required-features = ["server"]
+   ```
+   This is required because `pub mod servers;` in `rust/public/src/lib.rs` is gated behind the
+   `server` feature (not a default feature); without this entry, a plain `cargo test` (no
+   `--features server`) fails to compile the new test.
 
 ## Files to Modify
 
 - `rust/public/src/servers/maintenance.rs` — `materialize_all_views`, update-group comment.
 - `rust/public/tests/materialize_fail_isolation_tests.rs` (new) — regression test.
+- `rust/public/Cargo.toml` — add the `[[test]]` entry for the new test file.
 
 ## Trade-offs
 
@@ -197,7 +214,13 @@ pattern in `rust/analytics/tests/sql_view_test.rs` / `thread_spans_ordering_db_t
 
 Build the test views with `SqlBatchView::new` in the *same* `update_group`:
 - A "failing" view whose `count_src_query` selects from a nonexistent table (or otherwise
-  guarantees a DB error), so `make_batch_partition_spec` always errors.
+  guarantees a DB error), so `make_batch_partition_spec` always errors. Its `extract_query` (and
+  `transform_query`, if distinct) must stay valid — e.g. a trivial select from `log_entries`, same
+  as the succeeding view below — because `SqlBatchView::new` unconditionally runs `extract_query` at
+  construction time to derive the schema (`sql_batch_view.rs:97-101`), independent of
+  `count_src_query`. If both queries target the same nonexistent table, `SqlBatchView::new()` itself
+  errors out during test setup, before `materialize_all_views` is ever reached, so only
+  `count_src_query` should be broken.
 - A "succeeding" view with a trivial, always-valid `count_src_query`/`transform_query` (e.g.
   counting/copying from `log_entries`, as `sql_view_test.rs` already does).
 
