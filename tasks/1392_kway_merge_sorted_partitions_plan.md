@@ -146,6 +146,8 @@ pub enum ScanOrdering {
     },
     /// Each file is internally sorted by `columns`; files may overlap arbitrarily. The scan
     /// yields one ordered plan partition per file, for a downstream SortPreservingMergeExec.
+    /// `columns` must be non-empty (enforced at construction by `with_merge_sort_order`, §3) --
+    /// an empty list would otherwise still plan and record a vacuous ordering.
     PerFile { columns: Vec<ScanSortColumn> },
 }
 ```
@@ -255,11 +257,22 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
 
   ```rust
   /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
-  /// order: the extract query and the merge query must both end with a matching top-level
-  /// ORDER BY. A CTE-internal ORDER BY that is later joined does NOT count -- the join
-  /// discards it.
-  pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Self
+  /// order. `columns` must be non-empty and every name must exist in this view's schema.
+  /// See the view-author contract (Documentation / Design §5) for the full four-item checklist
+  /// this encodes: (1) GROUP BY coverage, (2) an exact -- not superset -- top-level ORDER BY on
+  /// the merge query, (3) enrichment-join direction, and (4) a matching top-level ORDER BY on
+  /// both the extract and merge queries (a CTE-internal ORDER BY that is later joined does NOT
+  /// count -- the join discards it).
+  pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self>
   ```
+
+  Validates eagerly at construction rather than deferring to a runtime check: rejects an empty
+  `columns` (an empty list would otherwise stay representable and silently degenerate — no
+  `LexOrdering`, a vacuous certification gate, yet still recorded as `Some([])`), and resolves each
+  name against `self.schema` (the view's schema is already available on `self` at builder time) the
+  same way `make_lex_ordering` resolves it later via `Schema::index_of`. A typo or empty list
+  returns `Err` immediately instead of surfacing as a low-level `no field named …`
+  `DataFusionError` out of `SqlPartitionSpec::write` at first materialization.
 
   Column names only — there is no descending option. `ScanSortColumn` (`view.rs:42-45`) carries a
   `descending` flag, but a descending column can never be certified (Design §1: recorded
@@ -292,16 +305,19 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   the declaration is opportunistic information DataFusion may exploit (e.g. row-group pruning on
   the leading column, order-aware aggregation), never a correctness risk. It does have a resource
   consequence, though: `FileGroupPartitioner::repartition_preserving_order`
-  (`datafusion-datasource` 54.1, `rust/Cargo.toml:50`) only declines to repartition (returns `None`)
+  (`datafusion-datasource` 54.1.0, transitive via `datafusion = "54.1"`, `rust/Cargo.toml:50`) only
+  declines to repartition (returns `None`)
   once the file-group count reaches `target_partitions`; below that threshold it splits each
   single-file group into byte-range groups to fill out `target_partitions`. So on the user path
   scan concurrency (open Parquet readers, plan partitions) is `max(k, target_partitions)`, and the
   partial aggregate (`ordering_mode=Sorted`) runs with `target_partitions` working sets rather than
-  k — confirmed empirically with a throwaway planning test replicating
-  `SqlBatchView::register_table` in a default (user) session: 3 declared per-file groups became
-  `target_partitions` byte-range groups under a `RepartitionExec(Hash(…), preserve_order=true)`.
-  The declaration still improves user-path memory relative to today, though: each `Sorted` partial
-  holds one group's prefix instead of every group's, also confirmed by the probe. k itself is
+  k — confirmed empirically by a planning test replicating `SqlBatchView::register_table` in a
+  default (user) session: 3 declared per-file groups became `target_partitions` byte-range groups
+  under a `RepartitionExec(Hash(…), preserve_order=true)`. Because this is optimizer behavior, not a
+  documented contract, the probe is promoted into a permanent regression guard rather than left as
+  a one-off (Testing Strategy item 5, `sql_batch_view_merge_ordering_tests.rs`). The declaration
+  still improves user-path memory relative to today, though: each `Sorted` partial holds one
+  group's prefix instead of every group's, also confirmed by the probe. k itself is
   bounded by query range, not by rollup cadence (see Trade-offs), so a wide-range query against a
   view that has not rolled up recently is where k can exceed `target_partitions`. Accepted here for
   the same no-hard-limits reason as the merge path's k.
@@ -420,10 +436,12 @@ Three corrections to the design, all folded into §2 and §4 above:
 **View-author contract** — the requirements this encodes, all covered by spike tests. This is the
 list `with_merge_sort_order`'s rustdoc must carry:
 
-1. **The declared sort columns must be a prefix subset of the merge query's `GROUP BY` keys.**
-   Verified negative: declaring `(name, time_bin)` and grouping by `time_bin` alone loses
-   `GroupOrdering` entirely and reinstates a blocking `SortExec`. Key order within `GROUP BY` is
-   irrelevant; extra keys are tolerated (`PartiallySorted`).
+1. **Every declared sort column must appear among the merge query's `GROUP BY` keys** (order
+   within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`). Verified negative:
+   declaring `(name, time_bin)` and grouping by `time_bin` alone — which drops `name` — loses
+   `GroupOrdering` entirely and reinstates a blocking `SortExec`. This is the reverse of the
+   strict-prefix case above (`GROUP BY name` alone under the same declaration streams fine); the
+   requirement is that `GROUP BY` covers the declared columns, not that it equals them.
 2. **The merge query's top-level `ORDER BY` must be *exactly* the declared columns — not a
    superset.** This is the sharpest trap found, and it was understated as "must match" before the
    spike. `ORDER BY name, time_bin, unit` under a `(name, time_bin)` declaration asks for an
@@ -461,10 +479,11 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
    Design §5.
 
 ### Phase 1 — `ScanOrdering` refactor (behavior-preserving)
-2. `partitioned_execution_plan.rs`: add `ScanOrdering`, restructure
+2. `partition.rs`: add `Partition::certifies_sort_order`.
+3. `partitioned_execution_plan.rs`: add `ScanOrdering`, restructure
    `make_partitioned_execution_plan` around it, implement the `PerFile` file-group construction
-   and the recorded-sort_order degrade gate; make `make_lex_ordering` `pub`.
-3. `partition.rs`: add `Partition::certifies_sort_order`.
+   and the recorded-sort_order degrade gate (calls `Partition::certifies_sort_order` from step 2);
+   make `make_lex_ordering` `pub`.
 4. `partitioned_table_provider.rs`: replace the field pair with `ScanOrdering`;
    `with_ordering` → `with_scan_ordering`.
 5. `view.rs`: `get_scan_output_ordering() -> ScanOrdering` (default `Unordered`); update the
@@ -487,6 +506,10 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 
 ### Phase 2 — QueryMerger per-file branch
 9. `merge.rs`: add the `PerFile` branch — the **five** config settings + three checks (Design §2).
+   Update `MergeQueryResult::ordering_honored`'s rustdoc (`merge.rs:34-38`) for the per-file
+   semantics: it currently documents the flag as meaning no buffering `Sort`/`SortPreservingMerge`
+   node ran, which is wrong for `PerFile` mode, where a `SortPreservingMergeExec` is the *expected*
+   operator and only a surviving `SortExec` signals a regression.
 10. Planning tests for the per-file branch (see Testing Strategy).
 
 ### Phase 3 — SqlBatchView declaration and recording
@@ -496,9 +519,12 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 12. `sql_batch_view.rs`: `with_merge_sort_order`, dual-merger selection in `merge_partitions`,
     `get_merged_partition_sort_order` and `get_scan_output_ordering` overrides.
 13. Unit + planning tests for the gates and overrides.
+14. Docs: `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` —
+    extend the `regenerate_partitions()` notes to cover `SqlBatchView` partitions and the Rollout
+    step 2 bucket-size caveat (Documentation).
 
 ### Phase 4 — Row-group size (separable, can land any time)
-14. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
+15. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
 
 ## Files to Modify
 
@@ -516,6 +542,8 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 | `rust/analytics/src/lakehouse/sql_partition_spec.rs` | `sort_order` recording + verification |
 | `rust/analytics/src/lakehouse/export_log_view.rs` | `fetch_sql_partition_spec` call site passes `None` |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 4) |
+| `mkdocs/docs/admin/functions-reference.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
+| `mkdocs/docs/query-guide/python-api.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/blocks_view_merge_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/ordered_aggregation_spike_tests.rs` | new (Phase 0) — **done** |
@@ -564,15 +592,27 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 
 - Rustdoc on `ScanOrdering`, `with_merge_sort_order`, `certifies_sort_order`, and the updated
   `View::get_scan_output_ordering` contract carry the authoritative contracts. `with_merge_sort_order`
-  is the right home for the full view-author checklist, all three items now verified by the Phase 0
-  spike: (a) declared sort columns must be a prefix subset of the merge query's `GROUP BY` keys;
-  (b) both the extract and merge queries need a matching top-level `ORDER BY` — a CTE-internal
-  `ORDER BY` that is later joined does not count; (c) an enrichment join must put the dimension
-  table on the left and the ordered aggregate on the right, or `CollectLeft` buffers the whole
-  aggregate and re-sorts (Design §5 correction 3).
-- `mkdocs/docs/admin/functions-reference.md`: extend the `sort_order` column description and the
-  `regenerate_partitions()` note (line 119) to mention `SqlBatchView` partitions as a second
-  regeneration use case (currently blocks-specific).
+  is the right home for the full view-author checklist — all **four** items of Design §5's
+  "View-author contract", now verified by the Phase 0 spike: (1) every declared sort column must
+  appear among the merge query's `GROUP BY` keys (order irrelevant; extra keys degrade to
+  `PartiallySorted`); (2) the merge query's top-level `ORDER BY` must be *exactly* the declared
+  columns — not a superset — which is the sharpest trap found: a superset `ORDER BY` asks for an
+  ordering the scan cannot satisfy, so DataFusion silently buffers and sorts the whole aggregate,
+  and only the warn-only `ordering_honored` check (not the hard check 2) catches it; (3) any
+  enrichment join must put the dimension table on the left and the ordered stream on the right, or
+  `CollectLeft` buffers the whole aggregate and re-sorts; (4) both the extract and merge queries
+  need the `ORDER BY`, and it must be top-level — a CTE-internal `ORDER BY` that is later joined
+  does not count.
+- `mkdocs/docs/admin/functions-reference.md` (`regenerate_partitions()` note, line 119) and
+  `mkdocs/docs/query-guide/python-api.md` (same note, line 500) carry the same blocks-specific
+  sentence and must be updated together (the predecessor #1340 plan kept them in sync). Extend both
+  to mention `SqlBatchView` partitions as a second regeneration use case, and add the Rollout step 2
+  caveat to both: the regeneration bucket size is dictated by the existing partition's boundaries,
+  not freely choosable, so an already-large partition cannot avoid the extract's blocking `ORDER BY`
+  sort by picking a smaller `partition_delta_seconds` — retire it
+  (`retire_partition_by_metadata`) and re-materialize at a smaller delta instead. In
+  `python-api.md`, this caveat's natural home is next to the existing `regenerate_partitions()`
+  "**Warning:**" block (line 518).
 - No architecture page currently documents partition merging; not adding one in this plan.
 
 ## Testing Strategy
@@ -603,7 +643,18 @@ polled), so they run in plain `cargo test`:
 4. **SqlBatchView gates** (Phase 3): `get_merged_partition_sort_order` and merger selection across
    the input matrix (all certified / one uncertified / all empty / mixed); `SqlPartitionSpec`
    declared-path verification bails when the extract plan doesn't guarantee the order.
-5. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
+5. **User-query-path plan shape** (Phase 3, permanent regression guard, in
+   `sql_batch_view_merge_ordering_tests.rs`): promote the Design §3 planning probe from a throwaway
+   check into a permanent test — register a `SqlBatchView`-shaped table (via
+   `get_scan_output_ordering() -> PerFile`) in a **default (user) session**, not a merge-query
+   session with `QueryMerger`'s optimizer overrides, and plan a query against it. Assert the
+   user-path shape Design §3's memory reasoning and the "No ceiling on k" trade-off both depend on:
+   no `SortExec`, `ordering_mode=Sorted` on the aggregate, and the order-preserving repartition
+   (`RepartitionExec(Hash(...), preserve_order=true)`) splitting the k declared per-file groups into
+   `target_partitions` byte-range groups. This gives the user-path claim the same kind of permanent
+   guard §5 already keeps for the merge path, so a DataFusion upgrade that turned it into a blocking
+   `SortExec` would fail CI instead of landing silently.
+6. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
    a non-temporal key, ingest, let the daemon merge, and verify via
    `micromegas-query "SELECT ... FROM list_partitions()"` that merged partitions record the
    `sort_order`, and via the analytics log that `ordering_honored` held.
@@ -649,5 +700,5 @@ view adopting a sort order (in-repo or downstream):
    (`ScanOrdering::PerFile`, the `QueryMerger` branch, `SqlBatchView::with_merge_sort_order`); the
    aggregate metrics rollup itself is configured downstream, in that deployment's view definitions.
    Phases 0–3's tests validate the mechanism against the same `(name, time_bin)` shape without
-   requiring an in-repo end-to-end user; item 5 of the Testing Strategy's manual end-to-end pass uses
+   requiring an in-repo end-to-end user; item 6 of the Testing Strategy's manual end-to-end pass uses
    a throwaway test view for the same reason.
