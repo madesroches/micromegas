@@ -1002,10 +1002,17 @@ seven integration test files in this crate:
 
 - Every route returns 403 for `auth_type: ApiKey`, and 403 for a non-admin OIDC context. Both
   directions, since these are the whole gate.
+- **§4's `400` validation, no DB** (validated before any hashing or DB access, so these run against
+  the same `connect_lazy`/never-touched pool as the 403 bullets above): `POST` with an empty `name`
+  returns 400; `POST` with a `name` over 255 bytes returns 400; `GET` with `limit=0` (and a negative
+  `limit`) returns 400; `GET` with `limit=1000` does *not* return 400 — proving the clamp accepts and
+  rewrites the value rather than rejecting it — with the clamp's effect on the resulting row count
+  covered by the live-DB `GET` bullet below.
 - `#[ignore]`, live DB: `POST` returns the cleartext once and a `key_id`; the returned key
   authenticates through a `DbApiKeyAuthProvider`; `GET` lists the key **without** `key_hash` or the
-  key; `DELETE` returns 200 and is idempotent on a second call; `DELETE` of an unknown `key_id`
-  returns 404; the original `revoked_at` survives the second `DELETE`.
+  key; with 501 rows present, `GET ?limit=1000` returns exactly 500, confirming the clamp; `DELETE`
+  returns 200 and is idempotent on a second call; `DELETE` of an unknown `key_id` returns 404; the
+  original `revoked_at` survives the second `DELETE`.
 - **No route inserts into `analytics_api_keys`**: `api_keys_router` takes no table parameter, so this
   is true by construction; a unit test asserts the mint statement names `ingestion_api_keys` to keep
   it that way under refactoring.
@@ -1021,6 +1028,12 @@ seven integration test files in this crate:
 - A key name given to both `--ingestion` and `--analytics` exits non-zero with the split-it guidance.
 - The output contains `ON CONFLICT (key_hash) DO NOTHING` and is wrapped in `BEGIN`/`COMMIT`.
 - No cleartext key appears anywhere in the output.
+- **§5's name-validation guard**: a name that is empty, a name over 255 bytes, a name containing a
+  comma, and a name containing `$` each exit non-zero naming the offending key, with no SQL emitted
+  on stdout.
+- **Dollar-quoting round-trips arbitrary content**: a name containing a single quote and a name
+  containing a newline are each emitted inside `$mmk$...$mmk$` unmodified, rather than escaped or
+  truncated.
 
 **Round-trip (the zero-client-change claim), `#[ignore]`**: a Rust DB test that computes the same
 digest the python tool emits for a fixture key, inserts the row, and asserts the *original key
@@ -1048,9 +1061,8 @@ revoke it, and observe the rejection after the TTL.
 `python3 build/rust_ci.py`, and, from `python/micromegas/`, `poetry run black
 micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest
 tests/cli/test_import_api_keys.py` — scoped to the new file, not a bare `poetry run pytest`: most
-other files under `tests/` are star-imported alongside `tests/test_utils.py`, which calls
-`micromegas.connect()` at module import time, so a bare invocation errors during collection without a
-live analytics service.
+other files under `tests/` need a live analytics service (and the `test` dependency group) to *run*,
+so the gate is scoped to the new file, which needs neither.
 
 ## Open Questions
 
