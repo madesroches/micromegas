@@ -95,10 +95,18 @@ calls that touch user-controlled or server-controlled content:
   `resolve_connection`, imported directly by `tests/cli/test_config.py`),
   this plan extracts the `--file <path>`/stdin branch into a standalone
   `read_sql_source(args)` function in `query.py`, with `main()` calling it in
-  place of the inlined logic. This makes both encoding fixes above (the
-  `read_text(encoding="utf-8")` and the `sys.stdin.reconfigure` call) part of
-  a function the new `test_query.py` can import and call directly, rather
-  than a copy of the expression re-typed inside the test.
+  place of the inlined logic. Only the raw read calls move into
+  `read_sql_source(args)` — the `-` stdin branch's `sys.stdin.read().strip()`
+  and the file branch's `pathlib.Path(args.file).read_text(...).strip()` —
+  and `OSError` from the file branch propagates out of `read_sql_source()`
+  uncaught, since `read_sql_source()` takes only `args` and has no `parser`
+  to call `.error(...)` on. `main()` keeps its own `try/except OSError`
+  wrapped around the call to `read_sql_source(args)`, calling
+  `parser.error(...)` there exactly as it does today. This makes both
+  encoding fixes above (the `read_text(encoding="utf-8")` and the
+  `sys.stdin.reconfigure` call) part of a function the new `test_query.py`
+  can import and call directly, rather than a copy of the expression
+  re-typed inside the test.
 - `micromegas/auth/oidc.py:539` — `open(token_file)` reads a cached OIDC
   token JSON file. Content is a JWT/JSON blob that in practice is always
   ASCII, but pin `encoding="utf-8"` anyway for consistency and to close off
@@ -138,8 +146,12 @@ fix (see Open Questions).
    - Extract the SQL-source-resolution logic currently inlined in `main()`
      (lines 87-96: the `args.file` truthiness check, the `-` stdin branch,
      the file-read branch, and the `args.sql` fallback) into a new
-     `read_sql_source(args)` function; `main()` calls it and keeps its
-     existing `parser.error(...)` handling for the `OSError` case.
+     `read_sql_source(args)` function taking only `args` (no `parser`
+     parameter). The `try/except OSError` stays in `main()`, wrapped around
+     the call to `read_sql_source(args)`, with `main()` calling
+     `parser.error(...)` in the `except` clause exactly as today;
+     `read_sql_source()` itself contains only the raw read calls and lets
+     `OSError` propagate out uncaught.
    - Within `read_sql_source()`: `pathlib.Path(args.file).read_text(encoding="utf-8")`
      (was line 92)
    - Within `read_sql_source()`, stdin branch (was line 89):
@@ -214,16 +226,32 @@ fix (see Open Questions).
    JSON document containing a non-ASCII `client_id` (em dash/CJK — standing
    in for the "if that ever changes" case noted in the Design section, since
    real JWTs are ASCII in practice) as raw UTF-8 bytes (bypassing
-   `json.dump`'s ASCII-escaping and `save()` entirely), then calls
-   `OidcAuthProvider.from_file()` on that path and writes the loaded
-   `client_id` back to the parent as UTF-8 bytes for comparison against the
-   original.
+   `json.dump`'s ASCII-escaping and `save()` entirely). `OidcAuthProvider.__init__`
+   (and therefore `from_file()`, which calls it) unconditionally does a live
+   OIDC discovery request via `_fetch_oidc_metadata()`
+   (`requests.get(f"{issuer}/.well-known/openid-configuration", timeout=10)`),
+   so — mirroring `test_oidc_token_save_and_load` — the child script must
+   itself `patch("micromegas.auth.oidc.requests.get")` and
+   `patch("micromegas.auth.oidc.OAuth2Session")` (mocking a discovery
+   response and a session whose `.token` echoes the token file's contents)
+   before calling `from_file()`; these mocks do not carry over from the
+   parent process since they run in a separate subprocess. The child then
+   calls `OidcAuthProvider.from_file()` on the raw token file's path and
+   writes the loaded `client_id` back to the parent as UTF-8 bytes for
+   comparison against the original.
 7. From `python/micromegas/`, run `poetry run black
    micromegas/cli/screens.py micromegas/cli/query.py micromegas/auth/oidc.py
    tests/test_screen_files.py tests/test_query.py
    tests/auth/test_oidc_unit.py` before committing (`poetry run` only finds
    `pyproject.toml` by searching the cwd and its ancestors, and it lives at
    `python/micromegas/pyproject.toml`, not the repo root).
+8. `mkdocs/docs/web-app/notebooks/screens-as-code.md`, "File Format" section:
+   add a bullet noting that screen files are read and written as UTF-8
+   (`utf-8-sig` tolerated on read), and that non-ASCII content in a pulled
+   file now appears as literal UTF-8 characters (e.g. em dashes, accents,
+   CJK) rather than `\uXXXX`-escaped — a user-visible change to the
+   documented file format from this plan's `ensure_ascii=False` switch in
+   `write_screen_file()`.
 
 ## Files to Modify
 
@@ -233,6 +261,7 @@ fix (see Open Questions).
 - `python/micromegas/tests/test_screen_files.py`
 - `python/micromegas/tests/test_query.py` (new file)
 - `python/micromegas/tests/auth/test_oidc_unit.py`
+- `mkdocs/docs/web-app/notebooks/screens-as-code.md`
 
 ## Trade-offs
 
@@ -294,10 +323,14 @@ fix (see Open Questions).
   only ever see pure-ASCII escapes and pass regardless of the `open()`
   encoding pin, giving no real coverage. Instead the test writes a raw
   UTF-8-encoded token file directly (bypassing `json.dump`'s escaping) with
-  a non-ASCII `client_id`, then calls `from_file()` under the forced
-  `LC_ALL=C`/`PYTHONUTF8=0` environment: this mis-decodes on the current
-  code and reads back intact once `open(token_file)` is pinned to
-  `encoding="utf-8"`. The existing `test_oidc_token_save_and_load` only
+  a non-ASCII `client_id`, then (after re-establishing the
+  `requests.get`/`OAuth2Session` mocks inside the child subprocess, since
+  `from_file()` still triggers a live OIDC discovery call and the parent
+  process's mocks don't apply across the subprocess boundary) calls
+  `from_file()` under the forced `LC_ALL=C`/`PYTHONUTF8=0` environment: this
+  mis-decodes on the current code and reads back intact once
+  `open(token_file)` is pinned to `encoding="utf-8"`. The existing
+  `test_oidc_token_save_and_load` only
   round-trips a token under the default (already-UTF-8) test-runner locale,
   so it would not have caught this.
 - Run `poetry run pytest tests/test_screen_files.py tests/test_query.py
