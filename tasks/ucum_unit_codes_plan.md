@@ -325,11 +325,13 @@ Changes in `XYChart.tsx`:
 - `:760` → `const scaleName = unitScaleKey(s.unit) || 'y'`
 - `:381-385` → `const scaleName = unitScaleKey(lineUnit) || 'y'` (the existing
   `scaleName in u.scales` guard stays)
-- `:735` axis label → `unitDisplayAbbrev(scaleInfo.unitName)` (`unitName` is already canonical),
-  replacing the ad-hoc `=== 'percent'` special case with the shared map so `centimeters`/`celsius`
-  render as `cm`/`°C` too.
-- `:910-911` single-series label → `unitDisplayAbbrev(normalizeUnit(primaryUnit))`, same replacement
-  for the ad-hoc `=== 'percent'` check.
+- `:735` axis label → `adaptiveInfo?.abbrev ?? unitDisplayAbbrev(scaleInfo.unitName)` (`unitName` is
+  already canonical). Only the fallback changes — replacing the ad-hoc `=== 'percent'` special case
+  with the shared map so `centimeters`/`celsius` render as `cm`/`°C` too — while the `adaptiveInfo?.abbrev`
+  prefix that produces `GB/s`/`ms`/`Mbit` is unchanged.
+- `:909` single-series label → `adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ??
+  adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))`. Same fallback-only
+  replacement for the ad-hoc `=== 'percent'` check; the three adaptive-abbrev fallbacks stay in place.
 - `:292` header `displayUnit` → fall back to `unitDisplayAbbrev(normalizeUnit(primaryUnit))` so a
   `none`/`count` series shows no suffix and `cm`/`celsius` series show their short form.
 
@@ -364,8 +366,9 @@ and append `suffix` in each branch.
    - Compute the unit suffix once in `formatYAxisTick`; handle empty and `/s`-leading units.
 4. **`analytics-web-app/src/components/XYChart.tsx`**
    - Route the three scale-key sites through `unitScaleKey`.
-   - Route the axis/header labels (`:292`, `:735`, `:910-911`) through `unitDisplayAbbrev`,
-     replacing the ad-hoc `=== 'percent'` checks.
+   - Route the axis/header label **fallbacks** (`:292`, `:735`, `:909`) through `unitDisplayAbbrev`,
+     replacing the ad-hoc `=== 'percent'` checks, while keeping each site's `adaptiveInfo?.abbrev` /
+     `adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev` prefix intact.
 5. **`analytics-web-app/src/routes/ProcessMetricsPage.tsx`** and
    **`analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`**
    - Route the "no data in range" placeholder header's unit (`:565` / `:290`) through
