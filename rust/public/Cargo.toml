@@ -110,6 +110,11 @@ path = "tests/large_message_tests.rs"
 required-features = ["server"]
 
 [[test]]
+name = "materialize_fail_isolation_tests"
+path = "tests/materialize_fail_isolation_tests.rs"
+required-features = ["server"]
+
+[[test]]
 name = "pg_stats_test"
 path = "tests/pg_stats_test.rs"
 required-features = ["server"]

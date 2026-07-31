@@ -46,6 +46,15 @@ running, up to the grace period. See
 is safe to redo — a task that doesn't finish simply leaves its partition
 unwritten, and the next scheduled run redoes it.
 
+A view that fails to materialize (e.g. a bad `SqlBatchView` query) does not
+starve the views ordered after it: each view's materialization is attempted
+and its failure isolated independently, so every other view still gets
+materialized in the same pass. A failing view is logged and counted (see
+`materialize_view_failure` below); if any view failed, the pass as a whole is
+still reported as failed so the failure surfaces in the daemon's logs, but
+that failure is attributed per view rather than to whichever view happened to
+fail first.
+
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
 redundantly materialize the same partitions. Materialization is idempotent, so
@@ -109,6 +118,13 @@ ticks. Deltas and rates are a query-time concern.
 | `pg_activity_connections` | `{state}` | `pg_stat_activity`, grouped |
 | `pg_activity_oldest_xact_age_seconds` | — | `pg_stat_activity` |
 | `pg_pool_size`, `pg_pool_idle` | — | the daemon's own `sqlx::PgPool` (client-side, no query) |
+| `materialize_view_failure` | `{view_set_name, view_instance_id}` | the materialization tasks (every second/minute/hour/day), one increment per failed view per pass |
+
+`materialize_view_failure` is the one metric in this table that doesn't come
+from sampling `pg_stat_*`: it's incremented directly by the materialization
+tasks whenever a view's materialization fails (see [Running the
+daemon](#running-the-daemon) above), so a persistently failing view shows up
+as a non-zero, growing counter over time rather than only in the logs.
 
 Tags are read with the `property_get` SQL function, e.g.
 `property_get(properties, 'index')`.
