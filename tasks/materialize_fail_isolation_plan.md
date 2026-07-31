@@ -168,8 +168,7 @@ PropertySet`, not an inline array literal.
    `intern_string` are not re-exported by the prelude — add explicit imports, matching
    `pg_stats.rs`: `use micromegas_tracing::intern_string::intern_string;` and
    `use micromegas_tracing::property_set::{Property, PropertySet};`.
-3. Add a DB-backed regression test (see Testing Strategy) exercising same-group isolation and
-   multi-failure aggregation.
+3. Add a DB-backed regression test (see Testing Strategy) exercising same-group isolation.
 4. In `rust/public/Cargo.toml`, append a `[[test]]` block for the new test file, mirroring the
    existing `pg_stats_test` entry:
    ```toml
@@ -187,6 +186,8 @@ PropertySet`, not an inline array literal.
 - `rust/public/src/servers/maintenance.rs` — `materialize_all_views`, update-group comment.
 - `rust/public/tests/materialize_fail_isolation_tests.rs` (new) — regression test.
 - `rust/public/Cargo.toml` — add the `[[test]]` entry for the new test file.
+- `mkdocs/docs/admin/maintenance.md` — document `materialize_view_failure` and update the
+  failure/starvation behavior description.
 
 ## Trade-offs
 
@@ -204,6 +205,14 @@ PropertySet`, not an inline array literal.
   failed view per pass (rather than, say, a per-pass "any failures" gauge) gives per-view
   attribution for free from the tags, matching the issue's ask that starvation be individually
   visible per view.
+
+## Documentation
+
+Update `mkdocs/docs/admin/maintenance.md`: add `materialize_view_failure` (count, tags
+`{view_set_name, view_instance_id}`) to the metrics table alongside the existing
+self-observability metrics, and adjust the task-table/behavior description so it no longer implies
+a single failing view starves later ones — per-view failures are now isolated and individually
+observable.
 
 ## Testing Strategy
 
@@ -224,15 +233,14 @@ Build the test views with `SqlBatchView::new` in the *same* `update_group`:
 - A "succeeding" view with a trivial, always-valid `count_src_query`/`transform_query` (e.g.
   counting/copying from `log_entries`, as `sql_view_test.rs` already does).
 
-Assertions:
-1. **Same-group isolation**: call `materialize_all_views` with both views in one group; assert it
-   returns `Err`, the error text names the failing view, and the succeeding view actually produced
-   a partition (query it back, or assert no error was attributed to it).
-2. **Multiple failures reported**: add a second failing view (distinct `view_set_name`, same or
-   different group); assert the aggregated error mentions both failing views, not just the first
-   one encountered in iteration order.
-3. **Cross-group continuation**: put the failing view in an earlier group than the succeeding view;
-   assert the succeeding (later-group) view still materializes despite the earlier group's failure.
+Call `materialize_all_views` once with both views in the same update group and assert:
+1. it returns `Err`; and
+2. the succeeding view actually produced a partition (query it back), despite being ordered after
+   (or before) the failing one.
+
+The aggregated-error format (multiple failures listed) and cross-group continuation follow
+directly from the same uniform per-view isolate-and-collect loop as same-group isolation, so they
+don't need separate test scenarios.
 
 ## Open Questions
 
