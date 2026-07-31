@@ -225,6 +225,14 @@ pub fn hash_key(key: &str) -> [u8; 32];
 /// 256 bits of OS entropy, base64url-nopad, `mmk_` prefixed. `mmk_` is settled — confirmed by the
 /// user — not an open default; see [Open Questions](#open-questions).
 pub fn generate_key() -> String;
+
+/// Builds a small, dedicated connection pool for key-store lookups from an
+/// existing pool's connect options (`lake_pool.connect_options()` — sqlx's
+/// `Pool::connect_options`, so no new connection string needs to be threaded
+/// in), rather than sharing the caller's lake pool directly. `max_connections(4)`,
+/// `acquire_timeout(Duration::from_secs(2))`. See [Trade-offs](#trade-offs) →
+/// "A negative cache" for why the lake pool must not be shared here.
+pub fn dedicated_key_store_pool(lake_pool: &PgPool) -> PgPool;
 ```
 
 `validate_request`:
@@ -276,9 +284,19 @@ RETURNING key_id, name
    reachable must not be treated as a confirmed rejection. `auth_middleware` in turn downcasts the
    error it receives: `ProviderUnavailable` maps to a new `AuthError::Unavailable` →
    **503 Service Unavailable** (retryable per `http_event_sink.rs`'s `500..=599` classification);
-   every other error keeps mapping to `AuthError::InvalidToken` → 401. This is stated here and in
-   [Security](#security) as the chosen behavior: an outage in the key store is client-visible as a
-   retryable 503, never a permanent 401. **This `error!` is
+   every other error keeps mapping to `AuthError::InvalidToken` → 401. **The same downcast-and-remap is
+   applied at the two other surfaces a DB-backed provider reaches**, not only plain axum ingestion
+   routes: `rust/auth/src/tower.rs`'s gRPC `AuthService` — the path `flight_sql_server.rs` wraps around
+   the analytics provider, which §3 attaches `ApiKeyTable::Analytics` to — downcasts the same way and
+   maps `ProviderUnavailable` to `Status::unavailable` instead of its current single `Err(e)` arm
+   (`Status::unauthenticated("invalid token")`); and `rust/public/src/servers/firehose_common.rs`'s
+   `firehose_auth_middleware` maps it to **503** instead of its current unconditional
+   `StatusCode::UNAUTHORIZED`, since both Firehose routers validate through the same `MultiAuthProvider`
+   chain as every other ingestion route (see [Current State](#current-state)) and a DB-backed
+   `ingestion_api_keys` outage must not look like a rejected Firehose access key either. This is stated
+   here and in [Security](#security) as the chosen behavior: an outage in the key store is
+   client-visible as a retryable failure — 503, or `Status::unavailable` on the gRPC path — never a
+   permanent rejection, at every surface a DB-backed provider reaches. **This `error!` is
    rate-limited to at most one line per `cache_ttl_secs` window (per table), not one per rejected
    request**: §3 puts `DbApiKeyAuthProvider` last in the chain, so during an outage every
    non-env-key, non-JWT request reaches it, and once the positive cache's entries age out that
@@ -413,19 +431,22 @@ OIDC — that is unchanged and orthogonal to whether the *table* is empty — bu
 ever revokes, or mints via the import tool / direct SQL, no longer needs OIDC merely to pass this
 check.
 
-The four call sites (in three files), each supplying the pool it already has in scope:
+The four call sites (in three files) each pass a **dedicated** key-store pool, built by
+`db_api_key::dedicated_key_store_pool` from the lake pool's own connect options (§2) — not a clone of
+the lake pool itself. See [Trade-offs](#trade-offs) → "A negative cache" for why sharing it is a
+blast-radius problem this plan does not accept:
 
 | Site | Today | After |
 |---|---|---|
-| `telemetry-ingestion-srv/src/main.rs:51` | `provider()` | `ProviderBuilder::new("").with_db_key_store(data_lake.db_pool.clone(), ApiKeyTable::Ingestion).build()` |
-| `public/src/servers/flight_sql_server.rs:226` | `provider()` | `ProviderBuilder::new("").with_db_key_store(pool, ApiKeyTable::Analytics).build()` |
-| `monolith/src/main.rs:193` | `provider_with_prefix("MICROMEGAS_INGESTION")` | same + `.with_db_key_store(lake_pool, ApiKeyTable::Ingestion)` |
-| `monolith/src/main.rs:207` | `provider_with_prefix("MICROMEGAS_ANALYTICS")` | same + `.with_db_key_store(lake_pool, ApiKeyTable::Analytics)` |
+| `telemetry-ingestion-srv/src/main.rs:51` | `provider()` | `ProviderBuilder::new("").with_db_key_store(dedicated_key_store_pool(&data_lake.db_pool), ApiKeyTable::Ingestion).build()` |
+| `public/src/servers/flight_sql_server.rs:226` | `provider()` | `ProviderBuilder::new("").with_db_key_store(dedicated_key_store_pool(&pool), ApiKeyTable::Analytics).build()` |
+| `monolith/src/main.rs:193` | `provider_with_prefix("MICROMEGAS_INGESTION")` | same + `.with_db_key_store(dedicated_key_store_pool(&lake_pool), ApiKeyTable::Ingestion)` |
+| `monolith/src/main.rs:207` | `provider_with_prefix("MICROMEGAS_ANALYTICS")` | same + `.with_db_key_store(dedicated_key_store_pool(&lake_pool), ApiKeyTable::Analytics)` |
 
 The two unprefixed sites now name their table explicitly, since `""` carries no hint. In
-`flight_sql_server.rs` the pool must be cloned from `lakehouse.lake().db_pool` **before** line 213,
-where `lakehouse` is moved into `FlightSqlServiceImpl::new` — the same expression already appears at
-line 199.
+`flight_sql_server.rs` the pool must still be cloned from `lakehouse.lake().db_pool` **before** line
+213, where `lakehouse` is moved into `FlightSqlServiceImpl::new` — the same expression already appears
+at line 199 — so `dedicated_key_store_pool` has a pool to read connect options from.
 
 ### 4. Key-management API (`rust/public/src/servers/api_keys.rs`, new)
 
@@ -444,7 +465,7 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
 
 | Route | Body / result |
 |---|---|
-| `POST /auth/api_keys` | `{"name": "..."}` → **201** `{"key_id", "name", "created_at", "key"}` — the cleartext, returned exactly once. **400** if `name` is empty or exceeds 255 bytes (the `VARCHAR(255)` column width). |
+| `POST /auth/api_keys` | `{"name": "..."}` → **201** `{"key_id", "name", "created_at", "key"}` — the cleartext, returned exactly once. **400** if `name` is empty or exceeds 255 bytes (deliberately stricter than the `VARCHAR(255)` column, which bounds characters, not bytes). |
 | `GET /auth/api_keys?limit=&offset=&include_revoked=` | **200** `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]`, newest first. `limit` defaults to 100; values above 500 are silently clamped to 500 rather than rejected (a read endpoint, so capping is safer than erroring); `limit <= 0` is **400**. `offset` defaults to 0, `include_revoked` defaults to `true`. **Never `key_hash`, never the key.** |
 | `DELETE /auth/api_keys/{key_id}` | **200** `{"revoked_at", "effective_within_seconds"}`, or **404** for an unknown `key_id` |
 
@@ -492,7 +513,8 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
     var is unset. Without it, every `/auth/api_keys` call 403s at step 2 regardless of how correctly
     OIDC itself is configured — call this out in the admin docs (see
     [Documentation](#documentation)) rather than leaving it as a silent gap.
-- `POST` validates the body first — `name` non-empty and ≤255 bytes, matching the column — returning
+- `POST` validates the body first — `name` non-empty and ≤255 bytes, deliberately stricter than the
+  `VARCHAR(255)` column (which bounds characters, not bytes) — returning
   **400** `ApiKeyError::BadRequest` before any hashing or DB access; only a validated request generates
   `mmk_<43 base64url chars>` from 256 bits of `OsRng`, stores `hash_key(&key)`, and logs `key_id` /
   `name` / `created_by` at info — never the key. The `mmk_` prefix makes keys recognizable to secret
@@ -540,9 +562,11 @@ RETURNING revoked_at
 - **Rejected: admin-gated lakehouse UDFs** for key management, despite the precedent in #1382. Two
   reasons, both from the umbrella plan: `flight_sql_service_impl.rs:330` logs `sql={sql:?}` at info
   and micromegas ingests its own logs, so key material in a SQL literal would land in `log_entries` —
-  worse than the env var this replaces; and a write UDF would give the *read* service write access to
-  the key tables. Client-side hashing fixes the first but not the second, and the mint route is
-  needed for #1374 regardless.
+  worse than the env var this replaces; and a write UDF would give the *read* service INSERT/revoke
+  access to the key tables — a category of write beyond the column-scoped `UPDATE (last_used_at)` the
+  read service is already granted by design ([Security](#security)) to fold the audit timestamp into
+  the validation lookup (§2). Client-side hashing fixes the first but not the second, and the mint
+  route is needed for #1374 regardless.
 
 ### 5. Import tool (`python/micromegas/micromegas/cli/import_api_keys.py`, new)
 
@@ -606,8 +630,9 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
 - **Name validation and quoting.** Names come from operator-authored `MICROMEGAS_API_KEYS` JSON —
   `parse_key_ring` (`rust/auth/src/api_key.rs:58`) places no constraint on `name` — but they are
   interpolated into a SQL string literal that gets piped to `psql` running as the schema owner. Before
-  emitting anything, every name is validated: non-empty, ≤255 bytes (the `VARCHAR(255)` column width,
-  so an oversized name fails here rather than at apply time), containing no comma (so it
+  emitting anything, every name is validated: non-empty, ≤255 bytes (deliberately stricter than the
+  `VARCHAR(255)` column, which bounds characters, not bytes — this check can therefore only reject a
+  name early, never let one through that the column would then reject), containing no comma (so it
   round-trips through the `--ingestion`/`--analytics` comma-separated lists), and containing no `$`
   (Postgres dollar-quoting terminates at the first repeat of the tag, so a name containing the literal
   `$mmk$` tag used below would otherwise close the quoted literal early and let the remainder of the
@@ -654,15 +679,21 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 ### Phase 2 — Provider
 
-2. `rust/auth/Cargo.toml`: add `sqlx.workspace = true`, `uuid.workspace = true` (alphabetical order) to
-   `[dependencies]`; add `serial_test = "3.2"` to `[dev-dependencies]`, matching the version pinned in
-   `rust/ingestion/Cargo.toml` and the other crates that already use it — needed by the
-   `default_provider_tests.rs` bullets below that assert on `build()`, which reads process-wide env
-   vars.
+2. `rust/auth/Cargo.toml`: add `sqlx.workspace = true`, `thiserror.workspace = true`,
+   `uuid.workspace = true` (alphabetical order) to `[dependencies]` — `thiserror` backs the
+   `types::ProviderUnavailable` newtype (§2 step 5, Phase 2 step 3); add `serial_test = "3.2"` to
+   `[dev-dependencies]`, matching the version pinned in `rust/ingestion/Cargo.toml` and the other
+   crates that already use it — needed both by the `default_provider_tests.rs` bullets below that
+   assert on `build()`, which reads process-wide env vars, and by the `db_api_key_tests.rs` metric test
+   and its DB-error-triggering sibling tests (see [Testing Strategy](#testing-strategy)), which share
+   global tracing state and the `db_api_key_error_count` metric within one test binary and so must not
+   run concurrently.
 3. `rust/auth/src/db_api_key.rs` (new): `ApiKeyTable`, `DbApiKeyConfig` (+ `from_env` and
    `from_env_with_prefix`, the latter mirroring `provider_with_prefix`'s `{prefix}_*`-with-fallback
    convention so a monolith can set ingestion and analytics cache TTLs independently — see §2), `hash_key`,
-   `generate_key`, `DbApiKeyAuthProvider` with the two `moka` caches (the `valid` lookup going through
+   `generate_key`, `dedicated_key_store_pool` (builds the small dedicated pool used at all four §3
+   call sites, instead of sharing the lake pool — see [Trade-offs](#trade-offs) → "A negative cache"),
+   `DbApiKeyAuthProvider` with the two `moka` caches (the `valid` lookup going through
    `try_get_with`, not a plain `get`/`insert` pair — see §2 step 4) and the
    `UPDATE ... RETURNING` lookup, wrapping every DB error in `types::ProviderUnavailable` before
    returning it and emitting `imetric!("db_api_key_error_count", "count", table_tags(...), 1_u64)`
@@ -677,6 +708,9 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    - `rust/auth/src/axum.rs`: `auth_middleware` downcasts the error from `validate_request`; a
      `ProviderUnavailable` maps to a new `AuthError::Unavailable` → **503**, everything else keeps
      mapping to `AuthError::InvalidToken` → 401.
+   - `rust/auth/src/tower.rs`: the gRPC `AuthService`'s single `Err(e)` arm (currently
+     `Status::unauthenticated("invalid token")` unconditionally) downcasts the same way; a
+     `ProviderUnavailable` maps to `Status::unavailable`, everything else keeps the existing mapping.
 4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; `with_db_key_store` builds the attached
    provider's `DbApiKeyConfig` via `DbApiKeyConfig::from_env_with_prefix(&self.prefix)`, so the cache
    TTL a `DbApiKeyAuthProvider` actually runs with follows the same prefix its `ApiKeyAuthProvider` /
@@ -705,23 +739,29 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    the `CHANGELOG.md` bullet in [Documentation](#documentation)); clone `lake.db_pool` before
    constructing `WebIngestionService`; merge
    `api_keys_router(pool, api_key_config)` into `protected_app` inside the `if let Some(provider)`
-   branch, before the middleware layer; `warn!` when skipped.
+   branch, before the middleware layer; `warn!` when skipped. Also in this step:
+   `rust/public/src/servers/firehose_common.rs`: `firehose_auth_middleware`'s `Err(e)` arm downcasts
+   for `ProviderUnavailable` and returns 503 instead of its current unconditional
+   `StatusCode::UNAUTHORIZED` (§2 step 5).
 7. Delete the dead duplicate `rust/public/src/servers/key_ring.rs` and its `mod.rs:57` export.
 
 ### Phase 4 — Call sites
 
 8. `rust/telemetry-ingestion-srv/src/main.rs`: switch to `ProviderBuilder` with
-   `(data_lake.db_pool.clone(), ApiKeyTable::Ingestion)`; its `serve_ingestion` call is unchanged —
+   `(dedicated_key_store_pool(&data_lake.db_pool), ApiKeyTable::Ingestion)` (§2, [Trade-offs](#trade-offs)
+   → "A negative cache" — not a clone of `data_lake.db_pool` itself); its `serve_ingestion` call is unchanged —
    the wrapper's `DbApiKeyConfig::from_env()` default is already the same unprefixed config the
    provider was built with; update the module doc comment (lines 6–10) and the startup error message.
 9. `rust/public/src/servers/flight_sql_server.rs`: clone the pool before `lakehouse` is moved; switch
-   to `ProviderBuilder` with `ApiKeyTable::Analytics`. flight-sql runs no migration of its own (see
+   to `ProviderBuilder` with `(dedicated_key_store_pool(&pool), ApiKeyTable::Analytics)`. flight-sql
+   runs no migration of its own (see
    [Current State](#current-state)); the deployment ordering constraint in Migration step 1 applies.
    Update the startup error message at `flight_sql_server.rs:230` ("Authentication required but no
    auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG") to also mention the
    DB key store as a way to satisfy the check, matching step 8's treatment of telemetry-ingestion-srv.
-10. `rust/monolith/src/main.rs`: both providers get `.with_db_key_store(...)` from
-    `lakehouse.lake().db_pool`, with `Ingestion` / `Analytics` respectively. Note the pool must be
+10. `rust/monolith/src/main.rs`: both providers get `.with_db_key_store(dedicated_key_store_pool(&lake_pool), ...)`
+    built from `lakehouse.lake().db_pool`, with `Ingestion` / `Analytics` respectively (§2,
+    [Trade-offs](#trade-offs) → "A negative cache"). Note the pool must be
     taken while `lakehouse` is still borrowed, before the role `join_set` spawns. Update the two
     `bail!` messages at `rust/monolith/src/main.rs:196-199` (ingestion: "Set
     MICROMEGAS_INGESTION_API_KEYS, MICROMEGAS_API_KEYS, or --disable-auth") and `:210-214`
@@ -763,7 +803,9 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - `rust/auth/Cargo.toml`, `rust/auth/src/lib.rs`, `rust/auth/src/default_provider.rs`
 - `rust/auth/src/types.rs` (adding `ProviderUnavailable`), `rust/auth/src/multi.rs` (re-raising it when
   every provider fails and at least one saw it), `rust/auth/src/axum.rs` (mapping it to a new
-  `AuthError::Unavailable` → 503) — see §2 step 5 and [Security](#security)
+  `AuthError::Unavailable` → 503), `rust/auth/src/tower.rs` (mapping it to `Status::unavailable` in the
+  gRPC `AuthService`), `rust/public/src/servers/firehose_common.rs` (mapping it to 503 in
+  `firehose_auth_middleware`) — see §2 step 5 and [Security](#security)
 - `rust/auth/tests/multi_tests.rs`, `rust/auth/tests/axum_tests.rs` (existing files, new cases for the
   `ProviderUnavailable` → 503 path — see [Testing Strategy](#testing-strategy))
 - `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs` (adding
@@ -828,9 +870,26 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - **A negative cache.** It only makes *repeated* probes of the same token free: keyed by
   `hash_key(token)`, it misses on every distinct token, so a flood of randomly generated bearer
   tokens — the actual shape of an unauthenticated attack on the ingestion endpoint — still costs one
-  DB round trip per request, same as without the cache. Nothing else in this design (no rate limit, no
-  shared-failure breaker) bounds *that*; it is accepted as out of scope here, same as the unbounded
-  per-request `ct_eq` scan the env provider already runs today. What *is* bounded is the cache's own
+  DB round trip per request, same as without the cache. **This is not merely comparable to the
+  in-memory `ct_eq` scan the env provider runs today — sharing the lake pool would make it materially
+  worse**: all four call sites (§3) originally would have handed `DbApiKeyAuthProvider` a clone of the
+  same pool the write path uses (`data_lake.db_pool` / `lakehouse.lake().db_pool`), built by
+  `remote_data_lake.rs` with `PgPoolOptions::new().connect(db_uri)` and no overrides —
+  sqlx's defaults are `max_connections: 10`, `acquire_timeout: 30s`. On that pool, an unauthenticated
+  flood would contend for the same 10 connections `WebIngestionService`'s inserts need, degrading
+  ingestion writes, not just costing the flood itself a round trip; and during an outage, each lookup
+  could block up to 30s before returning its 503 — the same default the test setup already works around
+  with a 50ms `acquire_timeout` (see [Testing Strategy](#testing-strategy)) to keep test runs fast, but
+  which the production path would not otherwise override. **Resolution: `DbApiKeyAuthProvider` gets its
+  own small dedicated pool instead** — `db_api_key::dedicated_key_store_pool` (§2) builds it from the
+  lake pool's connect options with `max_connections(4)` and `acquire_timeout(2s)`, and all four call
+  sites in §3 use it. A credential flood or a DB outage on the key-lookup path therefore can never
+  starve the write path of connections, and a lookup fails fast (2s) into its 503 rather than blocking
+  up to 30s. What this does *not* bound is the flood itself: nothing here (no rate limit, no
+  shared-failure breaker) caps the rate of distinct bogus tokens hitting those 4 connections; that is
+  accepted as out of scope, same as the unbounded per-request `ct_eq` scan the env provider already
+  runs today — the difference this resolution buys is that the blast radius stops at those 4
+  connections instead of spilling onto ingestion writes. What *is* bounded elsewhere is the cache's own
   memory: `unknown` carries an explicit `max_capacity` (`unknown_cache_size`, default 10_000, one
   32-byte-keyed entry per distinct token), so the same flood evicts old entries instead of growing the
   process's memory without limit. Key creation can also be delayed by up to `unknown_cache_ttl_secs`
@@ -881,10 +940,16 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
   The env provider's `ct_eq` scan is untouched and still correct for its (small, static) keyring.
 - **Low-entropy legacy keys** are the one place SHA-256-without-KDF is thin. The import tool warns;
   the migration guide says rotate.
-- **A key-store outage is not client-visible as a rejected credential.** `DbApiKeyAuthProvider`
+- **A key-store outage is not client-visible as a rejected credential, at every surface a DB-backed
+  provider reaches.** `DbApiKeyAuthProvider`
   wraps every DB error in `ProviderUnavailable` (§2 step 5); `MultiAuthProvider` re-raises it when no
   provider in the chain succeeded, and `auth_middleware` (`rust/auth/src/axum.rs`) maps it to
-  **503**, not the blanket 401 every other provider error gets. This matters because
+  **503**, not the blanket 401 every other provider error gets. The same downcast-and-remap covers the
+  gRPC `AuthService` (`rust/auth/src/tower.rs`, mapping to `Status::unavailable` — the path
+  `flight_sql_server.rs` wraps around the `Analytics` provider) and the Firehose routers
+  (`rust/public/src/servers/firehose_common.rs`'s `firehose_auth_middleware`, mapping to 503), since
+  both validate through the same `MultiAuthProvider` chain as the plain axum ingestion routes. This
+  matters because
   `rust/telemetry-sink/src/http_event_sink.rs` treats `4xx` as permanent (drop, no retry) and `5xx` as
   transient (retry): without the distinction, a Postgres outage would look identical to an invalid
   key to every ingestion client, and telemetry would be silently and permanently dropped for the
@@ -983,7 +1048,7 @@ place the zero-client-change claim in the issue does not hold.
   this plan's own Migration step 3 — unsetting the env var before the table is populated would leave
   machine clients unauthenticated.
 - **`admin/ingestion.md`**: note the `/auth/api_keys` routes and that they require OIDC + admin; add
-  a `MICROMEGAS_ADMINS` row to the environment-variable table (mirroring `admin/flight-sql.md:48-58`,
+  a `MICROMEGAS_ADMINS` row to the environment-variable table (mirroring `admin/flight-sql.md:30`,
   which already documents it), and state plainly that minting/listing/revoking keys 403s until an
   OIDC identity is in that list — `MICROMEGAS_ADMINS` is otherwise unset for ingestion and every
   `/auth/api_keys` call fails with no other symptom; mark `MICROMEGAS_API_KEYS` as the legacy/bootstrap
@@ -1035,7 +1100,10 @@ place the zero-client-change claim in the issue does not hold.
   `api_key.rs`'s keyring half — see [Current State](#current-state)), the new (non-breaking)
   `serve_ingestion_with_api_key_config` entry point — `serve_ingestion` (published under the `server`
   feature, see [Files to Modify](#files-to-modify)) keeps its existing signature as a thin wrapper
-  around it — and the
+  around it — the new `micromegas_auth::axum::AuthError::Unavailable` variant and
+  `micromegas_auth::types::ProviderUnavailable` type (§2 step 5), flagged as a **minor breaking
+  change**: `AuthError` is published API with no `publish = false` on `rust/auth/Cargo.toml`, so any
+  downstream exhaustive `match` on it will need a new arm — and the
   one client-visible breaking change: a key valid on both ingestion and flight-sql today must
   become two distinct keys (see [Migration](#migration)).
 
@@ -1060,11 +1128,18 @@ the default would cost ~60s per run):
 - **A key-store outage is a `ProviderUnavailable`, not a generic rejection**: against this same
   unreachable pool, assert the error `validate_request` returns downcasts to
   `types::ProviderUnavailable`.
-- **`db_api_key_error_count` fires on a DB error**: using `micromegas_tracing::test_utils::init_in_memory_tracing`
-  and the `count_integer_metric` helper (`rust/object-cache/tests/telemetry_tests.rs:39-`), assert two
+- **`db_api_key_error_count` fires on a DB error**: **`#[serial]`**, using
+  `micromegas_tracing::test_utils::init_in_memory_tracing` and the `count_integer_metric` helper
+  (`rust/object-cache/tests/telemetry_tests.rs:39-`, guard constructed at line 84), following
+  `rust/tracing/src/test_utils.rs:42-45`'s requirement that any test using `init_in_memory_tracing` be
+  `#[serial]` since it shares global dispatch state via `init_event_dispatch`; assert two
   DB attempts against the unreachable pool each increment `db_api_key_error_count` by one, including
   when the rate-limited `error!` line itself is suppressed on the second attempt — the metric is
-  unconditional, the log line is not.
+  unconditional, the log line is not. **The two sibling bullets above in this same file — "A DB error
+  is not cached as `unknown`" and "A key-store outage is a `ProviderUnavailable`" — also trigger the
+  same unconditional `imetric!` and must likewise be `#[serial]`**, so none of the three can run
+  concurrently and land events in each other's shared `InMemorySink`, which would make the "two
+  attempts ⇒ two increments" assertion wrong rather than merely flaky.
 
 **`rust/auth/tests/db_api_key_tests.rs` — `#[ignore]`, live Postgres**, each test creating its own
 rows with a unique name prefix and cleaning up:
@@ -1204,8 +1279,11 @@ revoke it, and observe the rejection after the TTL.
 `python3 build/rust_ci.py`, and, from `python/micromegas/`, `poetry run black
 micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest
 tests/cli/test_import_api_keys.py` — scoped to the new file, not a bare `poetry run pytest`: most
-other files under `tests/` need a live analytics service (and the `test` dependency group) to *run*,
-so the gate is scoped to the new file, which needs neither.
+other files under `tests/` need a live analytics service to *run*, so the gate is scoped to the new
+file, which needs no live service. (`pytest` itself is declared in the `test` dependency group,
+`python/micromegas/pyproject.toml:27-30`, so that group must still be installed for `poetry run
+pytest` to work at all, scoped or not — scoping only avoids the live service and the
+`opentelemetry-proto` dependency the other files also need.)
 
 ## Open Questions
 
