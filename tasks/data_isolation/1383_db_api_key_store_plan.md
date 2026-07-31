@@ -28,7 +28,7 @@ grant recipe for operators who separate roles (see [Security](#security)).
 ### The env keyring
 
 - `rust/auth/src/api_key.rs` — `parse_key_ring(json) -> HashMap<Key, String>` (key → name) and
-  `ApiKeyAuthProvider`. `validate_request` (lines 100–129) compares the bearer token against
+  `ApiKeyAuthProvider`. `validate_request` (lines 106–130) compares the bearer token against
   **every** key with `subtle::ConstantTimeEq` and deliberately never early-exits. Correct for a
   handful of team keys; O(N) per request. Every context it produces is `is_admin: false` (line 124)
   and `allow_delegation: true` (line 126).
@@ -59,12 +59,13 @@ creates the v1 schema via `sql_telemetry_db.rs::create_tables` when the version 
 belong **only** in a new v5 step, never in `create_tables` (same shape as v4, which adds
 `streams.format` even though `create_tables` creates `streams`).
 
-`connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:34`) runs `execute_migration`
-under a DB lock, so both ingestion binaries and the monolith reach the tables before serving.
+`connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
+under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
+so both ingestion binaries and the monolith reach the tables before serving.
 `DataLakeConnection` (`rust/ingestion/src/data_lake_connection.rs`) exposes `pub db_pool: PgPool`.
 
 Standalone `flight-sql-srv` does **not** go through this path: it builds its lakehouse via
-`LakehouseContext::from_env()` (`rust/analytics/src/lakehouse/lakehouse_context.rs:48-56`), which calls
+`LakehouseContext::from_env()` (`rust/analytics/src/lakehouse/lakehouse_context.rs:48-58`), which calls
 `connect_to_data_lake` + `migrate_lakehouse` only — never `execute_migration`. Its own doc comment on
 `from_connection` says the caller is responsible for running `migrate_db` (the ingestion schema) first.
 This is a real deployment ordering constraint in a split deployment: an ingestion binary or the
@@ -97,8 +98,9 @@ step 1.
   rotation", "no user identity for audit logging".
 - `mkdocs/docs/admin/ingestion.md:25-58`, `admin/monolith.md`, `admin/flight-sql.md`,
   `admin/object-cache.md`, `otlp/index.md`, `docker/README.md` all document `MICROMEGAS_API_KEYS`.
-- `rust/public/src/servers/key_ring.rs` is a byte-for-byte duplicate of the `api_key.rs` keyring, is
-  exported from `servers/mod.rs:57`, and is otherwise unreferenced — dead code. Deleting it is a
+- `rust/public/src/servers/key_ring.rs` is an unreferenced subset duplicate of the `api_key.rs`
+  keyring half (types + `parse_key_ring`, no provider; it additionally logs key names at `info!`),
+  exported from `servers/mod.rs:57` and otherwise unreferenced — dead code. Deleting it is a
   one-line cleanup that belongs with this work (see [Files to Modify](#files-to-modify)).
 
 ## Design
@@ -315,7 +317,7 @@ OIDC — that is unchanged and orthogonal to whether the *table* is empty — bu
 ever revokes, or mints via the import tool / direct SQL, no longer needs OIDC merely to pass this
 check.
 
-The three call sites, each supplying the pool it already has in scope:
+The four call sites (in three files), each supplying the pool it already has in scope:
 
 | Site | Today | After |
 |---|---|---|
@@ -354,10 +356,10 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   `AuthContext` in extensions and the extractor would 500; skipping registration (with a `warn!`)
   removes the hazard entirely and is correct on the merits — there is nothing to authenticate in that
   mode. Consequence: local dev needs OIDC configured for the *ingestion* server specifically.
-  `local_test_env/ai_scripts/start_services_with_oidc.py` does not do this today — it starts
-  `telemetry-ingestion-srv` with `--disable-auth` and gives OIDC only to the analytics/flight-sql
-  server — so it must be extended (see [Testing Strategy](#testing-strategy)) before it can exercise
-  these routes at all.
+  `local_test_env/ai_scripts/start_services_with_oidc.py` does not do this today — it copies the same
+  OIDC-carrying environment to the ingestion process (line 129) but launches it with `--disable-auth`
+  (line 194), so the config is present but ignored — so it must be extended (see
+  [Testing Strategy](#testing-strategy)) before it can exercise these routes at all.
 - `serve_ingestion`'s **signature does not change**: the pool is already reachable as
   `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`. The table is always
   `Ingestion` for this service. The monolith inherits the routes for free.
@@ -499,9 +501,18 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 9. `rust/public/src/servers/flight_sql_server.rs`: clone the pool before `lakehouse` is moved; switch
    to `ProviderBuilder` with `ApiKeyTable::Analytics`. flight-sql runs no migration of its own (see
    [Current State](#current-state)); the deployment ordering constraint in Migration step 1 applies.
+   Update the startup error message at `flight_sql_server.rs:230` ("Authentication required but no
+   auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG") to also mention the
+   DB key store as a way to satisfy the check, matching step 8's treatment of telemetry-ingestion-srv.
 10. `rust/monolith/src/main.rs`: both providers get `.with_db_key_store(...)` from
     `lakehouse.lake().db_pool`, with `Ingestion` / `Analytics` respectively. Note the pool must be
-    taken while `lakehouse` is still borrowed, before the role `join_set` spawns.
+    taken while `lakehouse` is still borrowed, before the role `join_set` spawns. Update the two
+    `bail!` messages at `rust/monolith/src/main.rs:196-199` (ingestion: "Set
+    MICROMEGAS_INGESTION_API_KEYS, MICROMEGAS_API_KEYS, or --disable-auth") and `:210-214`
+    (analytics: "Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, or --disable-auth...")
+    to mention the DB key store, since once §3 lands a non-empty key table also counts as "auth
+    configured" and these messages would otherwise name env vars as the only remedies — misleading
+    exactly during Migration step 3, which removes those env vars.
 
 ### Phase 5 — Import tool
 
@@ -763,8 +774,10 @@ the claim end to end without needing a live `psql` in CI.
 
 **Full-stack smoke, manual**: `local_test_env/ai_scripts/start_services_with_oidc.py:182-199` currently
 launches `telemetry-ingestion-srv` with `--disable-auth`, so `/auth/api_keys` would not even be
-registered there. Extend the script to launch the ingestion server with the same OIDC config used for
-the analytics server, instead of `--disable-auth` (listed under
+registered there — even though the process already receives the OIDC config, since `env =
+os.environ.copy()` (line 129) is the same environment passed to ingestion, flight-sql, and the
+maintenance daemon alike. Extend the script by simply removing `--disable-auth` from the ingestion
+launch (line 194); no new config needs to be threaded through (listed under
 [Files to Modify](#files-to-modify)). Then: `python3
 local_test_env/ai_scripts/start_services_with_oidc.py`, mint a key over HTTP, use it to POST telemetry,
 revoke it, and observe the rejection after the TTL.
