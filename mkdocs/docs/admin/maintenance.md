@@ -121,10 +121,13 @@ ticks. Deltas and rates are a query-time concern.
 | `materialize_view_failure` | `{view_set_name, view_instance_id}` | the materialization tasks (every second/minute/hour/day), one increment per failed view per pass |
 
 `materialize_view_failure` is the one metric in this table that doesn't come
-from sampling `pg_stat_*`: it's incremented directly by the materialization
-tasks whenever a view's materialization fails (see [Running the
-daemon](#running-the-daemon) above), so a persistently failing view shows up
-as a non-zero, growing counter over time rather than only in the logs.
+from sampling `pg_stat_*`, and unlike the `pg_stat_*` metrics above it is
+**not** a cumulative counter: the materialization tasks emit one discrete
+event with `value = 1` per failed view per pass (see [Running the
+daemon](#running-the-daemon) above) — nothing accumulates between events. To
+count failures over a time window, use `count(*)` or `sum(value)`; a
+`max(value) - min(value)` delta (the right approach for the cumulative
+`pg_stat_*` counters) will always read `0` here.
 
 Tags are read with the `property_get` SQL function, e.g.
 `property_get(properties, 'index')`.
