@@ -145,10 +145,20 @@ absent. This matters because `compute_plan()` treats a server-tracked name
 candidate; without the `unreadable` set, a locally corrupt file would look
 identical to a genuinely deleted one and `apply` would delete the
 server-side screen purely because the local copy failed to parse.
-`compute_plan()` now excludes any name in `unreadable` from `deletes`, and
-`cmd_pull()` separately re-checks each target file itself before
-overwriting it, skipping (with a warning) rather than silently clobbering a
-file it cannot read.
+
+An initial version of this fix had `compute_plan()` exclude any name in
+`unreadable` from `deletes` by matching `unreadable` (file stems) directly
+against server screen *names* — but a file's stem is not guaranteed to match
+its internal `name` field, and for a file that fails to decode/parse, the
+real `name` is fundamentally unknowable (that's the whole reason it's
+unreadable), so there is no way to look up what name to exclude. A follow-up
+fix (from a later branch review) corrected this: `compute_plan()` now treats
+any non-empty `unreadable` set as a reason to skip delete computation
+entirely (leaving `deletes` empty) and prints a warning explaining that
+deletes were skipped because N local file(s) could not be read, rather than
+attempting name-based filtering. `cmd_pull()` separately re-checks each
+target file itself before overwriting it, skipping (with a warning) rather
+than silently clobbering a file it cannot read.
 
 ## Implementation Steps
 
@@ -184,16 +194,18 @@ file it cannot read.
    doesn't exist on bare Ubuntu/Debian CI runners — only `python3` does) with
    both `LC_ALL=C` and `PYTHONUTF8=0` set in its environment, running a small
    inline script that first asserts `sys.flags.utf8_mode == 0` (confirming
-   the locale-coercion bypass actually took effect) and then round-trips
+   the locale-coercion bypass actually took effect) and then reads back
    non-ASCII content (em dash, accented characters, CJK) through
-   `write_screen_file` / `read_screen_file` in a temp directory. Since the
-   forced locale also makes the child's own `sys.stdout` ASCII-encoded (a
-   plain `print()` of the round-tripped content would itself raise
-   `UnicodeEncodeError` in the child, failing the test for the wrong reason),
-   the child script instead writes the round-tripped content directly as
-   UTF-8 bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`, and the
-   parent process reads and decodes those bytes to compare against the
-   original. Both variables are required together: on Python
+   `read_screen_file` from a fixture file written directly as UTF-8 bytes
+   (bypassing `write_screen_file`, so this test isolates the read-side
+   `encoding="utf-8-sig"` pin — see step 4a below for the paired write-side
+   test). Since the forced locale also makes the child's own `sys.stdout`
+   ASCII-encoded (a plain `print()` of the round-tripped content would itself
+   raise `UnicodeEncodeError` in the child, failing the test for the wrong
+   reason), the child script instead writes the round-tripped content
+   directly as UTF-8 bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`,
+   and the parent process reads and decodes those bytes to compare against
+   the original. Both variables are required together: on Python
    3.10+, `LC_ALL=C` alone is not sufficient to reproduce the bug — PEP 538
    (C-locale coercion) and PEP 540 (UTF-8 mode) make CPython auto-coerce to a
    UTF-8-based locale/mode in that case (verified empirically: under
@@ -208,6 +220,20 @@ file it cannot read.
    `locale.getpreferredencoding()` function, so monkeypatching that function
    in-process has no effect on `open()`'s actual behavior — only a real
    environment change on a subprocess forces it.
+   - **4a. Write-side coverage (added after branch review):** the read-side
+     test above says nothing about `write_screen_file`'s own
+     `encoding="utf-8"` + `ensure_ascii=False` pin, since it deliberately
+     bypasses `write_screen_file` to isolate the read-side fix. A separate
+     `test_write_survives_non_utf8_locale` test uses the same forced-locale
+     subprocess technique, but calls `write_screen_file()` itself with
+     non-ASCII content (embedded in the child script as an `ascii()`-escaped
+     literal, so no non-ASCII bytes travel through argv or `os.environ`) and
+     asserts (a) no `UnicodeEncodeError` is raised and (b) the resulting
+     on-disk bytes are literal UTF-8 — the actual characters, not `\uXXXX`
+     escapes. A small in-process (no subprocess needed) test also extends
+     `TestFormatScreenDiff` with a non-ASCII case, since `format_screen_diff`
+     only does in-memory `json.dumps` and has no file I/O whose encoding
+     could depend on process locale.
 5. `python/micromegas/tests/test_query.py` (new file — no test currently
    exercises `cli/query.py`): add regression tests using the same
    `sys.executable` + `LC_ALL=C`/`PYTHONUTF8=0` subprocess technique as step
@@ -302,28 +328,49 @@ file it cannot read.
 
 ## Testing Strategy
 
-- New unit test(s) in `test_screen_files.py` that spawn a subprocess via
-  `sys.executable` (not the literal string `"python"`, which is absent on
-  bare Ubuntu/Debian CI runners — only `python3` is guaranteed) with both
-  `LC_ALL=C` and `PYTHONUTF8=0` set in its environment (on Python 3.10+,
-  `LC_ALL=C` alone is coerced back to a UTF-8-based locale/mode by PEP
+- `test_read_survives_non_utf8_locale` in `test_screen_files.py` spawns a
+  subprocess via `sys.executable` (not the literal string `"python"`, which
+  is absent on bare Ubuntu/Debian CI runners — only `python3` is guaranteed)
+  with both `LC_ALL=C` and `PYTHONUTF8=0` set in its environment (on Python
+  3.10+, `LC_ALL=C` alone is coerced back to a UTF-8-based locale/mode by PEP
   538/540 and would not reproduce the bug — both variables together are
   required), running a small script that first asserts
   `sys.flags.utf8_mode == 0` to confirm the non-UTF-8 environment actually
-  took effect, then round-trips em dash / accented / CJK content through
-  `write_screen_file` → `read_screen_file`. The forced locale makes the
-  child's own `sys.stdout` ASCII-encoded too, so a plain `print()` of that
-  content in the child would itself raise `UnicodeEncodeError`, masking the
-  actual bug under test; instead the child writes the round-tripped content
-  as raw UTF-8 bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`,
-  and the parent reads and decodes those bytes to assert exact content
-  preservation. This fails on the current code (mis-decodes or raises) and
-  passes once `encoding=` is pinned. A subprocess is required because
-  CPython's `TextIOWrapper` resolves its default encoding via OS locale
-  APIs, not the Python-level `locale.getpreferredencoding()` function, so an
-  in-process monkeypatch of that function has no effect on `open()`'s actual
-  behavior — this also matches issue #1399 item 3, which specifies forcing
-  the locale via environment variables rather than an in-process patch.
+  took effect, then reads em dash / accented / CJK content back through
+  `read_screen_file` from a fixture file that is written directly as raw
+  UTF-8 bytes (bypassing `write_screen_file`/`json.dump` entirely, per the
+  test's own docstring) so this test exercises only the read-side
+  `encoding="utf-8-sig"` pin. The forced locale makes the child's own
+  `sys.stdout` ASCII-encoded too, so a plain `print()` of that content in the
+  child would itself raise `UnicodeEncodeError`, masking the actual bug
+  under test; instead the child writes the read-back content as raw UTF-8
+  bytes via `sys.stdout.buffer.write(content.encode("utf-8"))`, and the
+  parent reads and decodes those bytes to assert exact content preservation.
+  This fails on the current code (mis-decodes or raises) and passes once
+  `encoding=` is pinned. A subprocess is required because CPython's
+  `TextIOWrapper` resolves its default encoding via OS locale APIs, not the
+  Python-level `locale.getpreferredencoding()` function, so an in-process
+  monkeypatch of that function has no effect on `open()`'s actual behavior —
+  this also matches issue #1399 item 3, which specifies forcing the locale
+  via environment variables rather than an in-process patch.
+- `test_write_survives_non_utf8_locale` in `test_screen_files.py` covers the
+  write side that the read-only test above doesn't touch: it uses the same
+  forced-locale subprocess technique, but calls `write_screen_file()` itself
+  with non-ASCII content (embedded in the child script as an
+  `ascii()`-escaped literal so no non-ASCII bytes need to travel through
+  argv or `os.environ`, the same technique `test_query.py`'s stdin case
+  uses) and asserts both that no `UnicodeEncodeError` is raised and that the
+  resulting on-disk bytes are literal UTF-8 (the actual characters, not
+  `\uXXXX` escapes). Verified empirically: under `LC_ALL=C PYTHONUTF8=0`,
+  the pre-fix `write_screen_file` (plain `open(path, "w")`, no `encoding=`)
+  raises `UnicodeEncodeError` on this content, since `ensure_ascii=False`
+  output containing e.g. an em dash cannot be encoded via the locale's ASCII
+  default — i.e. the write-side pin is load-bearing and this test is what
+  verifies it, which the read-only test does not. A small in-process
+  addition to `TestFormatScreenDiff` (no subprocess needed, since
+  `format_screen_diff` only does in-memory `json.dumps` with no file I/O
+  whose encoding could depend on process locale) separately asserts that
+  non-ASCII content renders literally rather than as `\uXXXX` escapes.
 - Existing `test_screen_files.py` round-trip tests continue to pass
   unchanged (ASCII content is unaffected by the encoding pin).
 - New `test_query.py` (step 5) covers the `query.py` fix with the same

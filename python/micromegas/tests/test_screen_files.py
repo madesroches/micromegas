@@ -468,6 +468,39 @@ class TestComputePlan:
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert deletes == []
 
+    def test_unreadable_file_with_mismatched_stem_still_skips_deletes(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression test: `unreadable` is keyed by file *stem*, but nothing
+        enforces that a file's stem matches its internal `name` field. A file
+        named dashboard.json whose real (unreadable) `name` is
+        "prod-dashboard" must not let "prod-dashboard" slip through as a
+        delete just because "prod-dashboard" != "dashboard" (the stem).
+        compute_plan must skip delete computation entirely whenever any local
+        file is unreadable, regardless of stem/name matching."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        # File stem is "dashboard", but its (unreadable) internal name field
+        # is "prod-dashboard" -- nothing enforces the two must match.
+        with open("dashboard.json", "wb") as f:
+            f.write(
+                '{"name": "prod-dashboard", "screen_type": "notebook", '
+                '"config": {"x": "caf\xe9"}}'.encode("latin-1")
+            )
+
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "prod-dashboard",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            }
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert deletes == []
+
 
 class TestCmdPull:
     def test_unreadable_local_file_not_overwritten(self, tmp_path, monkeypatch):
@@ -540,6 +573,23 @@ class TestFormatScreenDiff:
         result = format_screen_diff(data, data, use_color=False)
         assert result == ""
 
+    def test_non_ascii_content_rendered_literally(self):
+        """format_screen_diff must render non-ASCII content (em dash,
+        accented characters, CJK) literally, not as \\uXXXX escapes -- covers
+        the ensure_ascii=False fix for the diff's json.dumps calls. In-process
+        is sufficient here (unlike the locale-forcing tests below) since
+        format_screen_diff only does in-memory json.dumps, no file I/O whose
+        encoding could depend on the process locale."""
+        server = {"name": "a", "screen_type": "notebook", "config": {"x": "old"}}
+        local = {
+            "name": "a",
+            "screen_type": "notebook",
+            "config": {"x": NON_ASCII_CONTENT},
+        }
+        result = format_screen_diff(local, server, use_color=False)
+        assert NON_ASCII_CONTENT in result
+        assert "\\u" not in result
+
 
 NON_ASCII_CONTENT = "em dash —, accented café, CJK 日本語"
 
@@ -605,3 +655,65 @@ class TestNonAsciiEncodingRegression:
         assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
         result = proc.stdout.decode("utf-8")
         assert result == NON_ASCII_CONTENT
+
+    def test_write_survives_non_utf8_locale(self, tmp_path):
+        """Regression test for issue #1399: write_screen_file must be able to
+        write non-ASCII content without raising, and must write it as literal
+        UTF-8 bytes (not ensure_ascii-style \\uXXXX escapes), even when the
+        process's locale-preferred encoding is not UTF-8.
+
+        Complements test_read_survives_non_utf8_locale above, whose own
+        docstring explains it deliberately bypasses write_screen_file (writing
+        raw UTF-8 bytes directly) to isolate coverage to the read-side
+        encoding="utf-8-sig" pin. This test exercises the write side instead:
+        write_screen_file's encoding="utf-8" + ensure_ascii=False. Content is
+        embedded as an ascii()-escaped literal so no non-ASCII bytes need to
+        travel through argv or os.environ, matching the technique used for
+        the stdin case in test_query.py.
+
+        Verified empirically: under LC_ALL=C PYTHONUTF8=0, the pre-fix
+        write_screen_file (plain open(path, "w"), no encoding=) raises
+        UnicodeEncodeError on this content, since ensure_ascii=False content
+        containing e.g. an em dash cannot be encoded by the locale's ASCII
+        default.
+        """
+        screen_path = tmp_path / "non-ascii-write.json"
+        script = textwrap.dedent(
+            """
+            import os
+            import sys
+
+            assert sys.flags.utf8_mode == 0, "test setup failed: utf8_mode should be 0"
+
+            from micromegas.cli.screens import write_screen_file
+
+            screen_path = os.environ["TEST_SCREEN_PATH"]
+            content = {content_literal}
+            write_screen_file(
+                screen_path,
+                {{
+                    "name": "non-ascii-screen",
+                    "screen_type": "notebook",
+                    "config": {{"cells": [{{"type": "markdown", "content": content}}]}},
+                }},
+            )
+            """
+        ).format(content_literal=ascii(NON_ASCII_CONTENT))
+        env = dict(os.environ)
+        env["LC_ALL"] = "C"
+        env["PYTHONUTF8"] = "0"
+        env["TEST_SCREEN_PATH"] = str(screen_path)
+
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            capture_output=True,
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+
+        raw_bytes = screen_path.read_bytes()
+        # Content must be present as literal UTF-8 bytes, not \uXXXX escapes.
+        assert NON_ASCII_CONTENT.encode("utf-8") in raw_bytes
+        assert b"\\u" not in raw_bytes
+        decoded = json.loads(raw_bytes.decode("utf-8"))
+        assert decoded["config"]["cells"][0]["content"] == NON_ASCII_CONTENT

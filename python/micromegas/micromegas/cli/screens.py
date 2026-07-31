@@ -69,10 +69,13 @@ def list_local_screens():
 
     Returns (screens, unreadable): `screens` maps name -> data for files that
     parsed successfully; `unreadable` is the set of file stems that exist
-    locally but could not be decoded (e.g. non-UTF-8 encoding). Callers must
-    not treat names in `unreadable` as absent, since that could trigger a
-    server-side delete or a silent local overwrite of a file we couldn't
-    actually read.
+    locally but could not be decoded (e.g. non-UTF-8 encoding). A file's stem
+    is not guaranteed to match its screen's real `name` field, so `unreadable`
+    cannot be used to filter server-side names for delete protection - the
+    real name of an unreadable file is fundamentally unknowable. Callers must
+    instead treat any non-empty `unreadable` set as a reason to skip delete
+    computation entirely, since we can't rule out that an unreadable file
+    would otherwise account for a server-tracked screen.
     """
     screens = {}
     unreadable = set()
@@ -331,15 +334,21 @@ def compute_plan(config, client, names=None):
             else:
                 updates.append((name, normalized_local, normalized_server))
 
-    # Check for deletions: server screens tracked by this repo but missing locally
-    # (screens that failed to decode locally are not "missing" - skip them)
-    if not names:
+    # Check for deletions: server screens tracked by this repo but missing locally.
+    # A file that fails to decode/parse has an unknowable `name` field, so we
+    # cannot match it against server names to protect it from being treated as
+    # "missing". Rather than risk a silent delete, skip delete computation
+    # entirely whenever any local file is unreadable, and warn the user.
+    if unreadable:
+        print(
+            f"Warning: {len(unreadable)} local file(s) could not be read "
+            f"({', '.join(sorted(unreadable))}); skipping delete computation "
+            "since deletes cannot be safely determined.",
+            file=sys.stderr,
+        )
+    elif not names:
         for name, server in server_by_name.items():
-            if (
-                server.get("managed_by") == managed_by
-                and name not in local
-                and name not in unreadable
-            ):
+            if server.get("managed_by") == managed_by and name not in local:
                 deletes.append(name)
 
     # List untracked server screens
