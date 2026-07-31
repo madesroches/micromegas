@@ -25,8 +25,15 @@ The view groups **strictly by the two declared sort columns** and carries dimens
 as aggregates rather than as extra group keys — `first_value(unit)` rather than `GROUP BY ..., unit`:
 
 ```sql
--- merge query (the extract query has the same shape over `measures`, with the same ORDER BY)
-SELECT name, time_bin, first_value(unit) AS unit, sum(measure) AS total
+-- extract query, over `measures`
+SELECT name, date_bin('1 minute', time) AS time_bin, first_value(unit) AS unit, sum(value) AS total
+FROM measures
+WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+GROUP BY name, time_bin
+ORDER BY name, time_bin
+
+-- merge query, over the view's own partitions (same output columns, same GROUP BY/ORDER BY shape)
+SELECT name, time_bin, first_value(unit) AS unit, sum(total) AS total
 FROM {source}
 GROUP BY name, time_bin
 ORDER BY name, time_bin
@@ -318,7 +325,9 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   `MetadataPartitionSpec`). Its input is the *already-aggregated* extract output (post-`GROUP BY`),
   not the raw source, but its memory cost still scales with the extract's insert-range bucket —
   i.e. with whatever range a single fresh-write or `regenerate_partitions()` call covers, not with
-  k. Adopters must size that bucket accordingly; see Rollout step 2.
+  k. For a fresh write the bucket is the `materialize_partitions()` delta, chosen freely; for
+  `regenerate_partitions()` the bucket is dictated by the existing partition's boundaries, not
+  freely choosable — see Rollout step 2.
 
 ### 4. Memory expectation (stated precisely, per the issue comment)
 
@@ -427,8 +436,10 @@ list `with_merge_sort_order`'s rustdoc must carry:
    right** (correction 3).
 4. **Both the extract and the merge query need the `ORDER BY`** — and it must be top-level: a
    CTE-internal `ORDER BY` that is later joined does not count, because the join discards it. Unlike
-   the merge query, the extract query's `ORDER BY` is a blocking sort (Design §3): size the
-   extract/regeneration bucket accordingly, it is not streamed the way the merge path is.
+   the merge query, the extract query's `ORDER BY` is a blocking sort (Design §3), so it is not
+   streamed the way the merge path is: freely choosable for a fresh `materialize_partitions()`
+   bucket, but dictated by existing boundaries for a `regenerate_partitions()` bucket (Rollout
+   step 2).
 
 ### 6. Row-group size (separable)
 
@@ -467,22 +478,27 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
    added in Phase 2.
 7. Update direct-caller tests: `thread_spans_ordering_tests.rs`,
    `blocks_view_merge_ordering_tests.rs` (signature updates only; these tests keep exercising
-   `Concatenated` behavior until Phase 2 adds `PerFile` coverage).
+   `Concatenated` behavior).
+8. New test file `rust/analytics/tests/per_file_scan_ordering_tests.rs`: the `PerFile` scan/gate
+   tests (see Testing Strategy item 2) — overlapping partitions with certifying `sort_order` → k
+   plan partitions each declaring the ordering; one partition with `sort_order: NULL` → degraded,
+   unordered plan; descending declared column → degraded; declared columns a strict prefix of
+   recorded → certified.
 
 ### Phase 2 — QueryMerger per-file branch
-8. `merge.rs`: add the `PerFile` branch — the **five** config settings + three checks (Design §2).
-9. Planning tests for the per-file branch (see Testing Strategy).
+9. `merge.rs`: add the `PerFile` branch — the **five** config settings + three checks (Design §2).
+10. Planning tests for the per-file branch (see Testing Strategy).
 
 ### Phase 3 — SqlBatchView declaration and recording
-10. `sql_partition_spec.rs`: `sort_order` field + `fetch_sql_partition_spec` parameter + declared
+11. `sql_partition_spec.rs`: `sort_order` field + `fetch_sql_partition_spec` parameter + declared
     -path plan verification in `write` (Design §3). `export_log_view.rs`: update its
     `fetch_sql_partition_spec` call site to pass `None` (mechanical, no behavior change).
-11. `sql_batch_view.rs`: `with_merge_sort_order`, dual-merger selection in `merge_partitions`,
+12. `sql_batch_view.rs`: `with_merge_sort_order`, dual-merger selection in `merge_partitions`,
     `get_merged_partition_sort_order` and `get_scan_output_ordering` overrides.
-12. Unit + planning tests for the gates and overrides.
+13. Unit + planning tests for the gates and overrides.
 
 ### Phase 4 — Row-group size (separable, can land any time)
-13. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
+14. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
 
 ## Files to Modify
 
@@ -503,6 +519,7 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/blocks_view_merge_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/ordered_aggregation_spike_tests.rs` | new (Phase 0) — **done** |
+| `rust/analytics/tests/per_file_scan_ordering_tests.rs` | new (Phase 1) — `PerFile` scan/gate tests |
 | `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | new (Phases 2–3) |
 
 ## Trade-offs
@@ -600,12 +617,19 @@ view adopting a sort order (in-repo or downstream):
    `with_merge_sort_order`. New fresh partitions immediately record `sort_order`; merges keep
    using the fallback merger (the gate sees uncertified old inputs) — keep any existing
    `BatchPartitionMerger` `merger_maker` in place as that fallback.
-2. Regenerate live partitions with the existing `regenerate_partitions()` UDF (range/delta
-   alignment rules per `functions-reference.md`). Each regenerated partition re-runs the extract
-   query's blocking `ORDER BY` over that partition's regeneration bucket (Design §3) — size the
-   bucket passed to `regenerate_partitions()` for that cost; regenerating an already-merged,
-   day-sized partition sorts a full day's worth of the (already-aggregated) extract output in one
-   shot.
+2. Regenerate live partitions with the existing `regenerate_partitions()` UDF. Its bucket size is
+   not a free choice: `regenerate_partition_range` requires `delta` to exactly tile the requested
+   range, and each bucket must fully contain the existing partition(s) it replaces
+   (`verify_force_regeneration_alignment`, `batch_update.rs:111-138`) — so an already-merged,
+   day-sized partition can only be regenerated as one day-sized bucket, whose extract query's
+   blocking `ORDER BY` (Design §3) then sorts a full day's worth of the (already-aggregated)
+   extract output in one shot, the same `Resources exhausted` shape this plan exists to eliminate.
+   There is no bucket size that avoids this once a partition has already grown large. The bounded
+   path is to retire the oversized partition (`retire_partition_by_metadata`) and re-materialize it
+   at a smaller `CreateFromSource` delta via `materialize_partitions()`; ordered k-way merges then
+   roll the smaller partitions back up while streaming. Views should therefore adopt
+   `with_merge_sort_order` before their partitions grow large, or budget for a
+   retire-and-re-materialize pass if adopting late.
 3. Once every live partition certifies, ordered k-way merges engage automatically (per-merge input
    gate — no flag day). `sort_order` in `list_partitions()` makes progress auditable in SQL.
 4. Drop the custom `merger_maker` once the view's partitions are fully regenerated.
