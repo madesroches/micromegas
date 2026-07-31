@@ -115,17 +115,17 @@ const HAND_WRITTEN_ALIASES: Record<string, string> = {
  */
 const UCUM_SCALED_CODES: Record<string, string> = {
   // Bytes — decimal and binary prefixes both map to the app's 1024-based canonical units.
-  'By': 'bytes', 'B': 'bytes', 'bytes': 'bytes',
-  'kBy': 'kilobytes', 'KiBy': 'kilobytes', 'KB': 'kilobytes', 'kb': 'kilobytes', 'kilobytes': 'kilobytes',
-  'MBy': 'megabytes', 'MiBy': 'megabytes', 'MB': 'megabytes', 'megabytes': 'megabytes',
-  'GBy': 'gigabytes', 'GiBy': 'gigabytes', 'GB': 'gigabytes', 'gigabytes': 'gigabytes',
-  'TBy': 'terabytes', 'TiBy': 'terabytes', 'TB': 'terabytes', 'terabytes': 'terabytes',
+  'By': 'bytes', 'B': 'bytes', 'bytes': 'bytes', 'Bytes': 'bytes',
+  'kBy': 'kilobytes', 'KiBy': 'kilobytes', 'KB': 'kilobytes', 'kb': 'kilobytes', 'kilobytes': 'kilobytes', 'Kilobytes': 'kilobytes',
+  'MBy': 'megabytes', 'MiBy': 'megabytes', 'MB': 'megabytes', 'megabytes': 'megabytes', 'Megabytes': 'megabytes',
+  'GBy': 'gigabytes', 'GiBy': 'gigabytes', 'GB': 'gigabytes', 'gigabytes': 'gigabytes', 'Gigabytes': 'gigabytes',
+  'TBy': 'terabytes', 'TiBy': 'terabytes', 'TB': 'terabytes', 'terabytes': 'terabytes', 'Terabytes': 'terabytes',
   // Bits — AWS spells megabits/gigabits `MBit`/`GBit` but kilobits/terabits `kbit`/`Tbit`; accept both cases.
-  'bit': 'bits', 'bits': 'bits',
-  'kBit': 'kilobits', 'kbit': 'kilobits', 'kilobits': 'kilobits',
-  'MBit': 'megabits', 'Mbit': 'megabits', 'megabits': 'megabits',
-  'GBit': 'gigabits', 'Gbit': 'gigabits', 'gigabits': 'gigabits',
-  'TBit': 'terabits', 'Tbit': 'terabits', 'terabits': 'terabits',
+  'bit': 'bits', 'bits': 'bits', 'Bits': 'bits',
+  'kBit': 'kilobits', 'kbit': 'kilobits', 'kbits': 'kilobits', 'kilobits': 'kilobits', 'Kilobits': 'kilobits',
+  'MBit': 'megabits', 'Mbit': 'megabits', 'Mbits': 'megabits', 'megabits': 'megabits', 'Megabits': 'megabits',
+  'GBit': 'gigabits', 'Gbit': 'gigabits', 'Gbits': 'gigabits', 'gigabits': 'gigabits', 'Gigabits': 'gigabits',
+  'TBit': 'terabits', 'Tbit': 'terabits', 'Tbits': 'terabits', 'terabits': 'terabits', 'Terabits': 'terabits',
 }
 
 function expandRates(codes: Record<string, string>): Record<string, string> {
@@ -436,4 +436,18 @@ const CANONICAL_DISPLAY_ABBREV: Record<string, string> = {
 /** The short form shown to users for a canonical unit; falls back to the canonical name itself. */
 export function unitDisplayAbbrev(canonicalUnit: string): string {
   return CANONICAL_DISPLAY_ABBREV[canonicalUnit] ?? canonicalUnit
+}
+
+/**
+ * Symbol-like display units (`/s`, `°`, `°C`, `%`) attach directly to the
+ * value with no space; anything else gets a leading space. An empty display
+ * unit (dimensionless) contributes no suffix at all.
+ *
+ * Shared by axis tick formatting (`formatYAxisTick`) and tooltip/stat
+ * formatting (`formatNonTime`) so the two paths cannot drift apart on
+ * spacing for out-of-vocabulary, symbol-prefixed units (e.g. `°F`, `%CPU`).
+ */
+export function unitSuffix(displayUnit: string): string {
+  if (!displayUnit) return ''
+  return /^[/°%]/.test(displayUnit) ? displayUnit : ' ' + displayUnit
 }

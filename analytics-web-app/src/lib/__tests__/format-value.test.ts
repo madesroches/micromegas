@@ -79,6 +79,10 @@ describe('formatValueWithUnit', () => {
     it('formats bits per second adaptively', () => {
       expect(formatValueWithUnit(3_000_000_000, 'bits/s')).toBe('3.0 Gbit/s')
     })
+
+    it('scales the legacy plural rate spelling (Mbits/s) adaptively, not as a raw passthrough', () => {
+      expect(formatValueWithUnit(3000, 'Mbits/s')).toBe('3.0 Gbit/s')
+    })
   })
 
   describe('percent', () => {
@@ -164,6 +168,11 @@ describe('formatValueWithUnit', () => {
 
     it('appends an unknown unit verbatim', () => {
       expect(formatValueWithUnit(42, 'widgets')).toBe(`${(42).toLocaleString()} widgets`)
+    })
+
+    it('attaches an unmapped, symbol-prefixed unit with no space, matching formatYAxisTick', () => {
+      expect(formatValueWithUnit(72.5, '°F')).toBe(`${(72.5).toLocaleString()}°F`)
+      expect(formatValueWithUnit(50, '%CPU')).toBe(`${(50).toLocaleString()}%CPU`)
     })
   })
 })

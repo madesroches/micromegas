@@ -16,6 +16,7 @@ import {
   isCurrencyUnit,
   formatCurrencyValue,
   unitDisplayAbbrev,
+  unitSuffix,
 } from './units'
 
 function formatNonTime(value: number, rawUnit: string): string {
@@ -43,8 +44,7 @@ function formatNonTime(value: number, rawUnit: string): string {
 
   const displayUnit = unitDisplayAbbrev(unit)
   if (!displayUnit) return value.toLocaleString()
-  if (displayUnit.startsWith('/')) return `${value.toLocaleString()}${displayUnit}`
-  return `${value.toLocaleString()} ${displayUnit}`
+  return `${value.toLocaleString()}${unitSuffix(displayUnit)}`
 }
 
 /**

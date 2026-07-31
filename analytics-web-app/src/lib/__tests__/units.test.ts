@@ -12,6 +12,7 @@ import {
   formatCurrencyValue,
   unitScaleKey,
   unitDisplayAbbrev,
+  unitSuffix,
 } from '../units'
 
 describe('normalizeUnit', () => {
@@ -209,6 +210,13 @@ describe('normalizeUnit', () => {
       for (const [code, canonical] of [...sizeCases, ...bitCases]) {
         expect(normalizeUnit(`${code}/s`)).toBe(`${canonical}/s`)
       }
+    })
+
+    it('normalizes legacy plural/capitalized byte and bit rate aliases (not just their bare forms)', () => {
+      expect(normalizeUnit('Mbits/s')).toBe('megabits/s')
+      expect(normalizeUnit('Mbits')).toBe('megabits')
+      expect(normalizeUnit('Bytes/s')).toBe('bytes/s')
+      expect(normalizeUnit('Kilobits/s')).toBe('kilobits/s')
     })
 
     it('both bit-prefix spellings map to the same canonical unit', () => {
@@ -631,5 +639,28 @@ describe('unitDisplayAbbrev', () => {
       expect(unitDisplayAbbrev(name)).not.toBe(name)
       expect(unitDisplayAbbrev(`${name}/s`)).not.toBe(`${name}/s`)
     }
+  })
+})
+
+describe('unitSuffix', () => {
+  it('attaches symbol-prefixed display units with no space', () => {
+    expect(unitSuffix('/s')).toBe('/s')
+    expect(unitSuffix('°')).toBe('°')
+    expect(unitSuffix('°C')).toBe('°C')
+    expect(unitSuffix('%')).toBe('%')
+  })
+
+  it('attaches an out-of-vocabulary symbol-prefixed unit with no space', () => {
+    expect(unitSuffix('°F')).toBe('°F')
+    expect(unitSuffix('%CPU')).toBe('%CPU')
+  })
+
+  it('adds a leading space for other display units', () => {
+    expect(unitSuffix('ms')).toBe(' ms')
+    expect(unitSuffix('KB')).toBe(' KB')
+  })
+
+  it('returns an empty string for an empty (dimensionless) display unit', () => {
+    expect(unitSuffix('')).toBe('')
   })
 })
