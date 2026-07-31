@@ -67,7 +67,9 @@ still 4 in the tree does **not** mean v5 is free: the coordination below is keye
 `tasks/1245`'s `upgrade_data_lake_schema_v5` function exists in the tree (or any deployed database may
 already be stamped at that version), not on whether `LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped.
 Whichever of the two plans' migrations lands second must renumber to v6; see Implementation Steps
-Phase 1 step 1 for how this plan handles that coordination.
+Phase 1 step 1 for how this plan handles that coordination, including keeping the new step reachable
+from a database still at v4 — #1245's operator cutover to v5 is a separate, optional step, not
+guaranteed by this plan's own coordinated-upgrade deploy model (see [Migration](#migration) step 1).
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -413,7 +415,10 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   way it built the provider's: `DbApiKeyConfig::from_env()` for `telemetry-ingestion-srv`,
   `DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION")` for the monolith. This is what keeps
   `effective_within_seconds` matching the TTL the running provider actually uses. The table is always
-  `Ingestion` for this service. The monolith inherits the routes for free.
+  `Ingestion` for this service. The monolith inherits the routes for free. `serve_ingestion` is `pub`
+  on the published `micromegas` crate's `server` feature, so this new required parameter is a
+  **breaking public-API change** — recorded alongside the `key_ring` removal in the `CHANGELOG.md`
+  bullet (see [Documentation](#documentation)).
 - Gate, checked first in every handler (`fn require_key_admin(&AuthContext) -> Result<(), ApiKeyError>`):
   1. `auth_type != AuthType::Oidc` ⇒ **403** `ApiKeyError::NotOidc` ("caller is not an OIDC identity;
      API keys cannot manage keys"). Redundant with `is_admin: false` on key contexts, but it states
@@ -555,21 +560,36 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    wired into `execute_migration`'s chain) while `LATEST` deliberately stays 4 — its own `LATEST` bump
    to 5 is a separate, later Deploy 2 (`plan.md:550,577`). So if `tasks/1245`'s Deploy 1 has shipped
    (the function exists in the tree, or any deployed database may already be stamped
-   `current_version = 5` via its operator cutover), this plan **must** claim v6 and must **not** add an
-   `if 4 == current_version` arm — doing so would define a second `upgrade_data_lake_schema_v5` for
-   different DDL and collide with databases #1245's cutover already stamped 5, reintroducing the
-   hazard-1/hazard-3 failure modes `derisk_deploy_ordering.md` exists to prevent. Only if `tasks/1245`'s
-   `upgrade_data_lake_schema_v5` is absent from the tree is v5 free to claim here. Coordinate with that
-   plan (in particular `derisk_deploy_ordering.md`) before merging so only one PR claims a given
-   version. Add
-   `upgrade_data_lake_schema_v<N>` creating both tables and both unique indexes; bump
+   `current_version = 5` via its operator cutover), this plan **must** claim v6 — **but a v4 database
+   remains reachable at deploy time**, since #1245's operator cutover is a separate, optional action
+   belonging to that plan, not something this plan's own coordinated-upgrade-of-all-services model
+   guarantees has run (see [Migration](#migration) step 1). `execute_migration` advances a database
+   through exactly one `if N == current_version` arm at a time, so a v6 claim that wires in only an
+   `if 5 == current_version` arm strands every v4 database — it can never reach `current_version = 5`
+   (that function exists but is not wired into the chain) and therefore never reaches 6, and the final
+   `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` panics at startup on every
+   ingestion/monolith instance run against it. Avoid this by making `upgrade_data_lake_schema_v6`
+   create both tables with `CREATE TABLE IF NOT EXISTS` (idempotent; the two new tables are independent
+   of #1245's DDL) and wiring it into `execute_migration` from **both** an `if 4 == current_version`
+   arm and an `if 5 == current_version` arm, each advancing `current_version` straight to 6 — this
+   defines no second `upgrade_data_lake_schema_v5` and does not collide with a database #1245's cutover
+   already stamped at 5; it simply gives a still-at-v4 database a direct path to 6 that never runs
+   #1245's v5 DDL, which is fine since this plan's tables do not depend on it. Only if `tasks/1245`'s
+   `upgrade_data_lake_schema_v5` is absent from the tree is v5 free to claim here, with the ordinary
+   single `if 4 == current_version` arm. Coordinate with that plan (in particular
+   `derisk_deploy_ordering.md`) before merging so only one PR claims a given version. In that v5-free
+   case, add `upgrade_data_lake_schema_v<N>` creating both tables and both unique indexes; bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to `N`; add the corresponding `if <N-1> == current_version` arm
    to `execute_migration`. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh databases
    reach the new version through the same upgrade path.
 
 ### Phase 2 — Provider
 
-2. `rust/auth/Cargo.toml`: add `sqlx.workspace = true`, `uuid.workspace = true` (alphabetical order).
+2. `rust/auth/Cargo.toml`: add `sqlx.workspace = true`, `uuid.workspace = true` (alphabetical order) to
+   `[dependencies]`; add `serial_test = "3.2"` to `[dev-dependencies]`, matching the version pinned in
+   `rust/ingestion/Cargo.toml` and the other crates that already use it — needed by the
+   `default_provider_tests.rs` bullets below that assert on `build()`, which reads process-wide env
+   vars.
 3. `rust/auth/src/db_api_key.rs` (new): `ApiKeyTable`, `DbApiKeyConfig` (+ `from_env` and
    `from_env_with_prefix`, the latter mirroring `provider_with_prefix`'s `{prefix}_*`-with-fallback
    convention so a monolith can set ingestion and analytics cache TTLs independently — see §2), `hash_key`,
@@ -597,7 +617,9 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `limit` per the route table above — `api_keys_router(pool, config)`. Export from
    `rust/public/src/servers/mod.rs`.
 6. `rust/public/src/servers/ingestion.rs`: add an `api_key_config: DbApiKeyConfig` parameter to
-   `serve_ingestion`; clone `lake.db_pool` before constructing `WebIngestionService`; merge
+   `serve_ingestion` — a **breaking public-API change** on the published crate, per the `CHANGELOG.md`
+   bullet in [Documentation](#documentation); clone `lake.db_pool` before constructing
+   `WebIngestionService`; merge
    `api_keys_router(pool, api_key_config)` into `protected_app` inside the `if let Some(provider)`
    branch, before the middleware layer; `warn!` when skipped.
 7. Delete the dead duplicate `rust/public/src/servers/key_ring.rs` and its `mod.rs:57` export.
@@ -654,7 +676,10 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 - `rust/ingestion/src/sql_migration.rs`
 - `rust/auth/Cargo.toml`, `rust/auth/src/lib.rs`, `rust/auth/src/default_provider.rs`
-- `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs`,
+- `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs` (adding the new required
+  `api_key_config: DbApiKeyConfig` parameter to `serve_ingestion` is a **breaking public-API change**
+  on the published `server`-feature crate — same reasoning as the `key_ring` removal below — recorded
+  in the `CHANGELOG.md` bullet, see [Documentation](#documentation)),
   `rust/public/src/servers/flight_sql_server.rs`
 - `rust/public/Cargo.toml` — add a `[[test]]` entry for `api_keys_tests` (`path =
   "tests/api_keys_tests.rs"`, `required-features = ["server"]`), matching the seven existing blocks
@@ -870,7 +895,10 @@ place the zero-client-change claim in the issue does not hold.
   cache/audit env knobs (`MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`,
   `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), the
   **public-API removal** of `micromegas::servers::key_ring` (dead, unreferenced duplicate of
-  `api_key.rs`'s keyring half — see [Current State](#current-state)), and the
+  `api_key.rs`'s keyring half — see [Current State](#current-state)), a second **breaking public-API
+  change** — `serve_ingestion` (published under the `server` feature, see [Files to
+  Modify](#files-to-modify)) gains a new required `api_key_config: DbApiKeyConfig` parameter, breaking
+  every external caller's call site — and the
   one client-visible breaking change: a key valid on both ingestion and flight-sql today must
   become two distinct keys (see [Migration](#migration)).
 
@@ -913,7 +941,11 @@ rows with a unique name prefix and cleaning up:
 
 **`rust/auth/tests/default_provider_tests.rs`** — `ProviderBuilder` / §3's startup-existence rules,
 using the extracted `key_store_has_live_rows` where full env isolation around `build()` would be
-awkward:
+awkward. The three bullets below that assert on `build()`'s return value depend on
+`MICROMEGAS_API_KEYS` / `MICROMEGAS_OIDC_CONFIG` being present or absent, and every test in one
+`tests/*.rs` file shares a process and runs on parallel threads, so each is `#[serial]` (via the new
+`serial_test` dev-dependency, Phase 2 step 2) with an `EnvGuard` that sets/removes the relevant vars
+and restores them on drop — the same pattern as `rust/ingestion/tests/data_lake_config_tests.rs:1-45`:
 
 - **Provider always registered**: `with_db_key_store` attached to an *empty* table, alongside an env
   keyring (or OIDC) so `build()` returns `Some` at all, still produces a `MultiAuthProvider` containing
