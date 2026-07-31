@@ -104,6 +104,9 @@ def main():
         sql = read_sql_source(args)
     except OSError as e:
         parser.error(f"cannot read file '{args.file}': {e}")
+    except UnicodeError as e:
+        source = "stdin" if args.file == "-" else f"file '{args.file}'"
+        parser.error(f"cannot decode {source} as UTF-8: {e}")
 
     if not args.begin and not args.all:
         parser.error(
