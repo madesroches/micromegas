@@ -21,7 +21,7 @@ use futures::stream;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partitioned_execution_plan::{
-    OrderingBounds, make_partitioned_execution_plan,
+    OrderingBounds, ScanOrdering, make_partitioned_execution_plan,
 };
 use micromegas_analytics::lakehouse::perfetto_trace_execution_plan::write_thread_spans;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
@@ -85,8 +85,10 @@ async fn overlapping_partitions_are_rejected() {
         &[],
         None,
         Arc::new(vec![part_a, part_b]),
-        &begin_ascending(),
-        OrderingBounds::EventTime,
+        &ScanOrdering::Concatenated {
+            columns: begin_ascending(),
+            bounds: OrderingBounds::EventTime,
+        },
     );
     assert!(
         result.is_err(),
@@ -114,8 +116,10 @@ async fn non_overlapping_partitions_are_accepted() {
         &[],
         None,
         Arc::new(vec![part_a, part_b]),
-        &begin_ascending(),
-        OrderingBounds::EventTime,
+        &ScanOrdering::Concatenated {
+            columns: begin_ascending(),
+            bounds: OrderingBounds::EventTime,
+        },
     );
     assert!(
         result.is_ok(),
@@ -134,7 +138,7 @@ fn begin_sort_expr(schema: &Schema) -> LexOrdering {
     LexOrdering::new(vec![sort_expr]).expect("non-empty ordering")
 }
 
-async fn build_plan_wrapped_in_sort(output_ordering: &[ScanSortColumn]) -> Arc<dyn ExecutionPlan> {
+async fn build_plan_wrapped_in_sort(scan_ordering: &ScanOrdering) -> Arc<dyn ExecutionPlan> {
     let schema = Arc::new(get_spans_schema());
     let t0 = Utc::now();
     // Two non-overlapping partitions handed in reverse (non-min_event_time) order, to exercise
@@ -157,8 +161,7 @@ async fn build_plan_wrapped_in_sort(output_ordering: &[ScanSortColumn]) -> Arc<d
         &[],
         None,
         Arc::new(vec![part_later, part_earlier]),
-        output_ordering,
-        OrderingBounds::EventTime,
+        scan_ordering,
     )
     .expect("plan should build");
 
@@ -167,7 +170,11 @@ async fn build_plan_wrapped_in_sort(output_ordering: &[ScanSortColumn]) -> Arc<d
 
 #[tokio::test]
 async fn declared_ordering_elides_redundant_sort_for_multi_partition_group() {
-    let sorted_plan = build_plan_wrapped_in_sort(&begin_ascending()).await;
+    let sorted_plan = build_plan_wrapped_in_sort(&ScanOrdering::Concatenated {
+        columns: begin_ascending(),
+        bounds: OrderingBounds::EventTime,
+    })
+    .await;
     let optimized = EnforceSorting::new()
         .optimize(sorted_plan, &Default::default())
         .expect("EnforceSorting should not fail");
@@ -181,7 +188,7 @@ async fn declared_ordering_elides_redundant_sort_for_multi_partition_group() {
 
 #[tokio::test]
 async fn undeclared_ordering_keeps_sort_negative_control() {
-    let sorted_plan = build_plan_wrapped_in_sort(&[]).await;
+    let sorted_plan = build_plan_wrapped_in_sort(&ScanOrdering::Unordered).await;
     let optimized = EnforceSorting::new()
         .optimize(sorted_plan, &Default::default())
         .expect("EnforceSorting should not fail");

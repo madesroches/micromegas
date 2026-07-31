@@ -18,7 +18,7 @@ use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::partitioned_execution_plan::{
-    OrderingBounds, make_partitioned_execution_plan,
+    OrderingBounds, ScanOrdering, make_partitioned_execution_plan,
 };
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
@@ -107,8 +107,10 @@ async fn insert_time_overlapping_partitions_are_rejected() {
         &[],
         None,
         Arc::new(vec![part_a, part_b]),
-        &insert_time_ascending(),
-        OrderingBounds::InsertTime,
+        &ScanOrdering::Concatenated {
+            columns: insert_time_ascending(),
+            bounds: OrderingBounds::InsertTime,
+        },
     );
     assert!(
         result.is_err(),
@@ -131,8 +133,10 @@ async fn build_plan_wrapped_in_insert_time_sort(
         &[],
         None,
         Arc::new(partitions),
-        &insert_time_ascending(),
-        OrderingBounds::InsertTime,
+        &ScanOrdering::Concatenated {
+            columns: insert_time_ascending(),
+            bounds: OrderingBounds::InsertTime,
+        },
     )
     .expect("plan should build");
 
@@ -203,8 +207,7 @@ async fn undeclared_insert_time_ordering_keeps_sort_negative_control() {
         &[],
         None,
         Arc::new(vec![part_a, part_b]),
-        &[], // no declared ordering
-        OrderingBounds::InsertTime,
+        &ScanOrdering::Unordered, // no declared ordering
     )
     .expect("plan should build");
     let sort_expr = datafusion::physical_expr::PhysicalSortExpr::new(
@@ -257,7 +260,10 @@ fn make_ordered_merger(query: &str) -> QueryMerger {
         Arc::new(blocks_view_schema()),
         Arc::new(String::from(query)),
     )
-    .with_merge_scan_ordering(insert_time_ascending())
+    .with_merge_scan_ordering(ScanOrdering::Concatenated {
+        columns: insert_time_ascending(),
+        bounds: OrderingBounds::InsertTime,
+    })
 }
 
 #[tokio::test]

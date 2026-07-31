@@ -6,6 +6,7 @@ use super::{
     merge::{MergeQueryResult, PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::PartitionCache,
+    partitioned_execution_plan::ScanOrdering,
     session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
 };
@@ -149,21 +150,29 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// Declares an ordering the view's partition scan *already* emits, letting DataFusion
     /// elide redundant `Sort` nodes for queries that `ORDER BY` these columns.
     ///
-    /// Returning a non-empty ordering is a correctness contract the view must guarantee:
-    /// - rows within each partition file are already sorted by these columns, AND
-    /// - the leading column is the view's min-event-time column, and partition event-time
-    ///   ranges are non-overlapping (so files concatenate in globally-sorted order).
+    /// Returning a non-`Unordered` value is a correctness contract the view must guarantee, and
+    /// its shape depends on which variant is returned:
+    /// - `Concatenated { columns, .. }`: rows within each partition file are already sorted by
+    ///   `columns`, the leading column is the view's min-event-time column, and partition
+    ///   event-time ranges are non-overlapping (so files concatenate in globally-sorted order).
+    ///   For `ThreadSpansView`, the non-overlapping-ranges half of this rests on JIT partitions
+    ///   being sliced in event-time order, which in turn assumes a stream's blocks are registered
+    ///   in event-time order — an assumption documented but not enforced (see
+    ///   `thread_spans_view.rs`). If that assumption is ever violated, output would be silently
+    ///   mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering is
+    ///   declared.
+    /// - `PerFile { columns }`: rows within each partition file are already sorted, ascending, by
+    ///   `columns`, but partitions may overlap each other arbitrarily on those columns. A false
+    ///   declaration here is not merely mis-ordered rows but, under order-aware aggregation, wrong
+    ///   aggregate results (groups closed early, duplicate group keys) -- see
+    ///   `SqlBatchView::with_merge_sort_order`. What makes declaring this safe is the
+    ///   recorded-`sort_order` certification gate inside `make_partitioned_execution_plan`: every
+    ///   non-empty partition must certify `columns` before the declaration reaches DataFusion at
+    ///   all.
     ///
-    /// For `ThreadSpansView`, the non-overlapping-ranges half of this contract rests on JIT
-    /// partitions being sliced in event-time order, which in turn assumes a stream's blocks are
-    /// registered in event-time order — an assumption documented but not enforced (see
-    /// `thread_spans_view.rs`). If that assumption is ever violated, output would be silently
-    /// mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering is
-    /// declared.
-    ///
-    /// Default: empty (no declared ordering — DataFusion sorts as usual).
-    fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
-        vec![]
+    /// Default: `Unordered` (no declared ordering — DataFusion sorts as usual).
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        ScanOrdering::Unordered
     }
 }
 
