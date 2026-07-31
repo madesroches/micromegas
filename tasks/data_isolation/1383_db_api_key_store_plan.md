@@ -61,14 +61,20 @@ belong **only** in a new step, never in `create_tables` (same shape as v4, which
 `tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` also reserves v5 for the
 blocks-partitioning work (plan committed 2026-07-15, not yet implemented). **Hard prerequisite: this
 plan claims v5 and must merge and deploy before `tasks/1245`'s schema work lands.** Coordinate with
-that plan's owner if it is close to landing. This is not a symmetric race: `tasks/1245`'s plan
+that plan's owner if it is close to landing. **This coordination is two-sided, not just an ordering
+question, and merging first does not by itself protect this migration**: `tasks/1245`'s plan
 (`tasks/1245_partition_blocks_by_insert_time/plan.md:600-620`) changes `create_migration_table` to
-stamp a fresh install directly to `LATEST_DATA_LAKE_SCHEMA_VERSION` rather than 1, skipping every
-numbered `if N == current_version` arm on a fresh install; if `tasks/1245` lands first, a same-numbered
-v5 migration added afterward would never run on a new database, so this plan cannot simply claim the
-next free integer after the fact — it must be re-versioned as a deliberate follow-up edit against
-whatever version is then latest. See Implementation Steps Phase 1 step 1 for the version this
-migration claims.
+stamp a fresh install directly to `LATEST_DATA_LAKE_SCHEMA_VERSION` rather than 1, which skips *every*
+numbered `if N == current_version` arm on a fresh install — including this plan's v5 arm — once it
+lands, regardless of which plan merged first. So whichever plan lands second, `tasks/1245`'s
+fresh-install path (`create_tables` / `create_migration_table`) must also be updated to create
+`ingestion_api_keys` / `analytics_api_keys`, or the numbered-arm chain must be preserved for fresh
+installs — this is a coordination item to raise with #1245's owner, not a fact this plan can guarantee
+by merging first. Separately, if `tasks/1245` lands first, a same-numbered v5 migration added
+afterward would never run on a new database either way, so this plan must additionally be re-versioned
+as a deliberate follow-up edit against whatever version is then latest. See Implementation Steps
+Phase 1 step 1 for the version this migration claims, and for the caveat this implies for
+`create_tables`.
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -532,16 +538,27 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   escape hatch for names that must stay env-only rather than land in either table — in particular the
   `object-cache-srv` client keys (e.g. `flight-sql`, `maintenance`) that `docker/README.md:131` and
   `mkdocs/docs/admin/object-cache.md:149` document as sharing the unprefixed `MICROMEGAS_API_KEYS`
-  keyring. Skipped names are not validated for length/entropy and are not emitted as SQL.
+  keyring. **`--skip` is correct only for a name used *exclusively* as an object-cache client
+  credential.** A name like `flight-sql` or `maintenance` is commonly *also* that service's own
+  `MICROMEGAS_INGESTION_API_KEY` — the bearer token it presents to ingestion for its own self-telemetry
+  (`rust/telemetry-sink/src/api_key_decorator.rs:22`, via `with_auth_from_env`) — since both env vars
+  are commonly drawn from the same shared unprefixed keyring. A name that is also a service's ingestion
+  self-telemetry credential must instead be passed to `--ingestion`, so it survives in
+  `ingestion_api_keys`; it stays unchanged in `object-cache-srv`'s own env keyring regardless, since
+  that service is validated separately and keeps reading `MICROMEGAS_API_KEYS` permanently. Skipped
+  names are not validated for length/entropy and are not emitted as SQL.
 - **Name validation and quoting.** Names come from operator-authored `MICROMEGAS_API_KEYS` JSON —
   `parse_key_ring` (`rust/auth/src/api_key.rs:58`) places no constraint on `name` — but they are
   interpolated into a SQL string literal that gets piped to `psql` running as the schema owner. Before
   emitting anything, every name is validated: non-empty, ≤255 bytes (the `VARCHAR(255)` column width,
-  so an oversized name fails here rather than at apply time), and containing no comma (so it
-  round-trips through the `--ingestion`/`--analytics` comma-separated lists). Any violation exits
-  non-zero naming the offending key, before any SQL is emitted. Every name is then emitted with
-  Postgres dollar-quoting (`$mmk$...$mmk$`) rather than a single-quoted literal, so an apostrophe (or
-  any other character) in a name can never break out of the literal or inject SQL.
+  so an oversized name fails here rather than at apply time), containing no comma (so it
+  round-trips through the `--ingestion`/`--analytics` comma-separated lists), and containing no `$`
+  (Postgres dollar-quoting terminates at the first repeat of the tag, so a name containing the literal
+  `$mmk$` tag used below would otherwise close the quoted literal early and let the remainder of the
+  name be parsed as SQL). Any violation exits non-zero naming the offending key, before any SQL is
+  emitted. Every name is then emitted with Postgres dollar-quoting (`$mmk$...$mmk$`) rather than a
+  single-quoted literal, so no character other than the quoting tag itself — which validation rejects
+  — can ever break out of the literal or inject SQL.
 - Per key: `uuid.uuid4()` in python (no `gen_random_uuid()`, so no minimum PG version),
   `hashlib.sha256(key.encode()).hexdigest()`, `created_by = 'import'`:
 
@@ -565,13 +582,19 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 ### Phase 1 — Schema
 
 1. `rust/ingestion/src/sql_migration.rs`: claim v5. Add `upgrade_data_lake_schema_v5` creating both
-   tables and both unique indexes; bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5; add the corresponding
-   `if 4 == current_version` arm to `execute_migration`. This requires this plan to merge and deploy
-   before `tasks/1245_partition_blocks_by_insert_time`'s schema work lands (see [Current
-   State](#current-state) → Schema and migrations); if `tasks/1245` lands first instead, this plan must
-   be re-versioned as a deliberate follow-up edit rather than claiming v5. **Do not** touch
+   tables and both unique indexes, ending with `UPDATE migration SET version=5` (matching every other
+   `upgrade_data_lake_schema_vN`, e.g. `rust/ingestion/src/sql_migration.rs:93,131`, and required
+   because `execute_migration` re-reads the version in the same transaction and asserts
+   `current_version == LATEST_DATA_LAKE_SCHEMA_VERSION`); bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5;
+   add the corresponding `if 4 == current_version` arm to `execute_migration`. This requires this plan
+   to merge and deploy before `tasks/1245_partition_blocks_by_insert_time`'s schema work lands (see
+   [Current State](#current-state) → Schema and migrations); if `tasks/1245` lands first instead, this
+   plan must be re-versioned as a deliberate follow-up edit rather than claiming v5. **Do not** touch
    `sql_telemetry_db.rs::create_tables` — fresh databases reach the new version through the same
-   upgrade path.
+   upgrade path, **but this holds only as long as `create_migration_table` still stamps a fresh install
+   to `1`**; if `tasks/1245`'s fresh-install stamping change lands (see [Current State](#current-state)
+   → Schema and migrations), the fresh-install path must be revisited so new databases still get these
+   two tables.
 
 ### Phase 2 — Provider
 
@@ -790,10 +813,13 @@ Ordering, for both split and monolith deployments:
    a hard sequencing prerequisite, not a deploy-time risk: this plan must land and claim v5 before that
    plan's schema work lands — see [Current State](#current-state) → Schema and migrations for what
    happens if the ordering is violated.
-2. Run `micromegas-import-api-keys` and apply its SQL, passing `--skip` for any key name that is an
-   `object-cache-srv` client key sharing the unprefixed `MICROMEGAS_API_KEYS` keyring (see §5) — those
-   names must stay env-only rather than be imported into either table. Existing key strings now
-   authenticate through *both* providers.
+2. Run `micromegas-import-api-keys` and apply its SQL, passing `--skip` only for a key name that is an
+   `object-cache-srv` client key used *exclusively* as such (see §5) — those names stay env-only rather
+   than be imported into either table. A name that is also a service's own ingestion self-telemetry
+   credential (`MICROMEGAS_INGESTION_API_KEY`) must instead be passed to `--ingestion`, so it survives
+   in `ingestion_api_keys` once step 3 removes `MICROMEGAS_API_KEYS`; it is unaffected in
+   `object-cache-srv`'s own env keyring either way. Existing key strings now authenticate through
+   *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
    redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
    configured" on its own, so both services keep serving without OIDC configured — including the
