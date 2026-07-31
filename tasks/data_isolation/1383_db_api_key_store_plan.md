@@ -89,7 +89,12 @@ step 1.
 - `rust/public/src/servers/ingestion.rs::serve_ingestion` builds a `health_router` (unauthenticated),
   a `protected_app` (ingestion + OTLP + webhook routes) wrapped in
   `micromegas_auth::axum::auth_middleware` **only when `auth_provider.is_some()`**, and two Firehose
-  routers that carry their own auth.
+  routers. The Firehose routers do not carry a separate keyring: `firehose_auth_middleware`
+  (`rust/public/src/servers/firehose_common.rs:70-110`) synthesizes
+  `Authorization: Bearer <X-Amz-Firehose-Access-Key>` and validates it through the *same*
+  `Arc<dyn AuthProvider>` that `serve_ingestion` passes to the other two routers
+  (`ingestion.rs:131-132,154-156`) — i.e. the same `MultiAuthProvider` chain from §3. A DB-backed
+  `ingestion_api_keys` row therefore works as a Firehose access key exactly like an env key does today.
 - `auth_middleware` (`rust/auth/src/axum.rs:39`) validates, strips client-supplied `x-auth-*`
   headers, and inserts the `AuthContext` into request extensions. When auth is disabled, **no
   extension is inserted** — an `Extension<AuthContext>` extractor would 500.
@@ -110,8 +115,14 @@ step 1.
   `admin/object-cache.md`, `otlp/index.md`, `docker/README.md` all document `MICROMEGAS_API_KEYS`.
 - `rust/public/src/servers/key_ring.rs` is an unreferenced subset duplicate of the `api_key.rs`
   keyring half (types + `parse_key_ring`, no provider; it additionally logs key names at `info!`),
-  exported from `servers/mod.rs:57` and otherwise unreferenced — dead code. Deleting it is a
-  one-line cleanup that belongs with this work (see [Files to Modify](#files-to-modify)).
+  exported from `servers/mod.rs:57` and otherwise unreferenced — dead code internally. **It is,
+  however, published API**: `rust/public/src/lib.rs:171-172` declares `pub mod servers` behind the
+  `server` feature, `servers/mod.rs:57` declares `pub mod key_ring`, and `rust/public/Cargo.toml` has
+  no `publish = false` — so `micromegas::servers::key_ring::{Key, KeyRingEntry, parse_key_ring}` is
+  reachable by any external consumer of the published `micromegas` crate. Deleting it is still the
+  right call (it duplicates `api_key.rs` and has no caller), but it is a public-API removal, not an
+  internal cleanup, and is recorded as such in [Files to Modify](#files-to-modify) and the
+  `CHANGELOG.md` bullet (see [Documentation](#documentation)).
 
 ## Design
 
@@ -170,6 +181,17 @@ pub struct DbApiKeyConfig {
     pub unknown_cache_size: u64,       // MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE, default 10_000
 }
 
+impl DbApiKeyConfig {
+    /// `from_env()` is `from_env_with_prefix("")`. `from_env_with_prefix(prefix)` resolves each of
+    /// the four names above as `{prefix}_API_KEY_CACHE_*` first, falling back to the unprefixed
+    /// name — the same fallback `provider_with_prefix` already uses for `{prefix}_API_KEYS` /
+    /// `{prefix}_OIDC_CONFIG` / `{prefix}_ADMINS` (`default_provider.rs:53-80`). This is what lets a
+    /// monolith, which runs both providers in one process, give `MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS`
+    /// and `MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` independent values.
+    pub fn from_env() -> Self;
+    pub fn from_env_with_prefix(prefix: &str) -> Self;
+}
+
 pub struct DbApiKeyAuthProvider {
     pool: PgPool,
     table: ApiKeyTable,
@@ -186,7 +208,8 @@ pub struct DbApiKeyAuthProvider {
 /// tool and the mint route both go through the same digest definition.
 pub fn hash_key(key: &str) -> [u8; 32];
 
-/// 256 bits of OS entropy, base64url-nopad, `mmk_` prefixed.
+/// 256 bits of OS entropy, base64url-nopad, `mmk_` prefixed. `mmk_` is settled — confirmed by the
+/// user — not an open default; see [Open Questions](#open-questions).
 pub fn generate_key() -> String;
 ```
 
@@ -241,7 +264,12 @@ Design notes:
   `DEFAULT_TOKEN_CACHE_TTL_SECS = 300` for `OidcAuthProvider`, the same
   validated-credential-cached/revocation-delayed-by-TTL trade-off. 60s here is deliberately 5x tighter
   than that precedent, because bounded revocation latency is this stage's advertised deliverable; it
-  stays env-overridable per service (`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`).
+  stays env-overridable **per service**, via `DbApiKeyConfig::from_env_with_prefix(prefix)`
+  (mirroring `provider_with_prefix`'s `{prefix}_*`-with-unprefixed-fallback convention,
+  `default_provider.rs:53-80`) rather than a single unprefixed `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`
+  — the monolith runs both providers in one process from one environment, so an unprefixed-only name
+  would leave an operator unable to give ingestion keys a tighter revocation latency than analytics
+  keys, exactly the capability this bullet advertises.
 - A newly minted key is live immediately unless something already probed that exact string within
   `unknown_cache_ttl_secs` — hence a much shorter TTL on the negative cache than the positive one.
 - The `AuthContext` this provider produces is identical to the env provider's: `issuer: "api_key"`,
@@ -420,10 +448,16 @@ RETURNING revoked_at
   full lifecycle — list: `SELECT key_id, name, created_at, last_used_at, revoked_at FROM
   analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP `GET` for this table and the
   import tool's `uuid.uuid4()`-generated `key_id` is otherwise never surfaced to the operator; mint:
-  the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool emits (§5); revoke: the
+  generate the key and its digest with an explicit, trailing-newline-safe recipe —
+  `KEY="mmk_$(openssl rand -base64 32 | tr -d '=+/\n' | head -c 43)"; HASH=$(printf '%s' "$KEY" |
+  sha256sum | cut -d' ' -f1)` (`printf`, not `echo`, because `hash_key` covers the full key string and
+  `echo` would append a newline the validator never sees, silently minting a key that can never
+  authenticate) — then the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool
+  emits (§5), substituting `$HASH`; revoke: the
   same `UPDATE ... SET revoked_at = COALESCE(...)` statement `DELETE /auth/api_keys/{key_id}` runs
   above, keyed on the `key_id` the list step just produced (or a revoke-by-`name` variant for when the
-  operator only knows the name) — is written up as a runbook in `mkdocs/docs/admin/api-keys.md` rather
+  operator only knows the name) — is written up as a runbook in `mkdocs/docs/admin/api-keys.md`,
+  recipe and all, rather
   than left implicit. That runbook, not the import tool, is the durable answer to "how do I revoke an
   analytics key at 2am."
 - **Rejected: admin-gated lakehouse UDFs** for key management, despite the precedent in #1382. Two
@@ -520,10 +554,15 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 ### Phase 2 — Provider
 
 2. `rust/auth/Cargo.toml`: add `sqlx.workspace = true`, `uuid.workspace = true` (alphabetical order).
-3. `rust/auth/src/db_api_key.rs` (new): `ApiKeyTable`, `DbApiKeyConfig` (+ `from_env`), `hash_key`,
+3. `rust/auth/src/db_api_key.rs` (new): `ApiKeyTable`, `DbApiKeyConfig` (+ `from_env` and
+   `from_env_with_prefix`, the latter mirroring `provider_with_prefix`'s `{prefix}_*`-with-fallback
+   convention so a monolith can set ingestion and analytics cache TTLs independently — see §2), `hash_key`,
    `generate_key`, `DbApiKeyAuthProvider` with the two `moka` caches and the
    `UPDATE ... RETURNING` lookup. Register in `rust/auth/src/lib.rs`.
-4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; reimplement `provider()` /
+4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; `with_db_key_store` builds the attached
+   provider's `DbApiKeyConfig` via `DbApiKeyConfig::from_env_with_prefix(&self.prefix)`, so the cache
+   TTL a `DbApiKeyAuthProvider` actually runs with follows the same prefix its `ApiKeyAuthProvider` /
+   `OidcAuthProvider` siblings already do; reimplement `provider()` /
    `provider_with_prefix()` on top of it (env-only, unchanged behavior, so the `Ok(None)` rule on
    those thin wrappers is untouched). Keep both wrappers even though every internal caller moves off
    them in Phase 4 — they stay solely as the published crate's documented env-only entry point (see
@@ -614,7 +653,9 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 **Deleted**
 
-- `rust/public/src/servers/key_ring.rs` (dead duplicate)
+- `rust/public/src/servers/key_ring.rs` (dead duplicate internally, but a **public-API removal** on
+  the published `micromegas` crate — `micromegas::servers::key_ring::{Key, KeyRingEntry,
+  parse_key_ring}` — see [Current State](#current-state))
 
 ## Trade-offs
 
@@ -676,8 +717,12 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
   Recorded in `mkdocs/docs/admin/api-keys.md` and back-annotated onto the umbrella plan so the claim
   is not repeated as fact.
 - **No cleartext at rest, and one exposure in flight.** `POST /auth/api_keys` returns the key once,
-  over the ingestion service's TLS. It is never logged (the mint log line carries `key_id` only) and
-  never retrievable afterwards.
+  over whatever TLS the deployment terminates in front of the ingestion service — the service itself
+  is plain HTTP (`serve_ingestion` binds a bare `tokio::net::TcpListener`; there is no rustls/TLS
+  acceptor anywhere in `rust/public/src/servers/`). A TLS-terminating ingress in front of the ingestion
+  service is therefore an explicit prerequisite for running `POST /auth/api_keys`, called out in
+  `mkdocs/docs/admin/api-keys.md` (see [Documentation](#documentation)). It is never logged (the mint
+  log line carries `key_id` only) and never retrievable afterwards.
 - **Revocation latency is bounded by `cache_ttl_secs`**, not zero. Asserted by a test, reported in
   the `DELETE` response, documented in the admin guide.
 - **API keys cannot manage keys**, by two independent mechanisms: `is_admin` is hardcoded `false` on
@@ -692,36 +737,34 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
 Ordering, for both split and monolith deployments:
 
 1. Deploy the new binaries. The migration creates the tables. **Nothing changes**: the env keyring
-   still authenticates every existing key, and the DB tables are empty. In a split deployment, deploy
-   or roll the ingestion service (or the monolith) first — it is what runs the migration — and only
-   then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)); its
-   own startup existence query (§3) fails loudly, naming the table, if this ordering is violated.
-   **Not rollback-safe once applied, as `sql_migration.rs` stands today**: `execute_migration`
-   (`rust/ingestion/src/sql_migration.rs:150-199`) matches the DB's current version against a fixed
-   set of `if N == current_version` arms and panics via
-   `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` for any version it does not
-   recognize — including a DB already migrated past what an older binary knows. So after this migration
-   applies, any still-old `telemetry-ingestion-srv` or `micromegas-monolith` process (the only two
-   binaries that call `connect_to_remote_data_lake` / `migrate_db`, per
-   `rust/telemetry-ingestion-srv/src/main.rs:45` and `rust/monolith/src/main.rs:180`) panics at startup
-   against the new schema. **This is no longer unconditionally true once
-   `tasks/1245_partition_blocks_by_insert_time`'s Deploy 1 has landed**: that plan relaxes both
-   post-migration asserts from `==` to `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION`
-   (`derisk_deploy_ordering.md:15-27`), in which case an old binary finds the DB at a newer version and
-   logs a warning instead of panicking. Do not rely on that relaxation being present — check the state
-   of `sql_migration.rs` at implementation time — but if it is present, a rolling deploy that stalls
-   partway is degraded rather than crash-looping. Absent that relaxation, a rolling deploy of either
-   binary must run forward to completion — old replicas must not be left running or restarted, and the
-   binary must not be rolled back — once the migration has applied. flight-sql and the maintenance
-   daemon do not run `execute_migration` and are
-   unaffected.
+   still authenticates every existing key, and the DB tables are empty. **Deployment model: all
+   services are upgraded together, in one coordinated deploy — there is no supported mixed-version
+   window.** In a split deployment, that coordinated deploy still starts the ingestion service (or the
+   monolith) before flight-sql-srv, since ingestion is what runs the migration and flight-sql never
+   migrates on its own (see [Current State](#current-state)); its own startup existence query (§3)
+   fails loudly, naming the table, if this ordering is violated. Because no old binary is left running
+   or restarted against the new schema, `execute_migration`'s
+   `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` panic path
+   (`rust/ingestion/src/sql_migration.rs:150-199`) is never exercised by a stale binary here — that
+   failure mode is a property of an unsupported deployment model, not a live constraint under
+   coordinated upgrades. flight-sql and the maintenance daemon do not run `execute_migration` and are
+   unaffected. **What does remain a real risk, and is not resolved by the coordinated-upgrade model, is
+   the *version-number* coordination with `tasks/1245_partition_blocks_by_insert_time`**: see
+   [Current State](#current-state) → Schema and migrations, and Implementation Steps Phase 1 step 1,
+   for which integer this migration claims and why it must not collide with
+   `upgrade_data_lake_schema_v5` if that function has landed in the tree or any database is already
+   stamped at that version.
 2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
    *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
    redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
    configured" on its own, so both services keep serving without OIDC configured — including the
    key-only flight-sql deployment `mkdocs/docs/grafana/authentication.md` documents. Keys now live
-   only in the DB, and revoke/rotate no longer needs a redeploy.
+   only in the DB, and revoke/rotate no longer needs a redeploy. This also carries the two Firehose
+   routes safely: as noted in [Current State](#current-state), they validate through the same
+   `MultiAuthProvider` chain as every other ingestion route (`firehose_common.rs`), so a Firehose
+   access key minted into `ingestion_api_keys` keeps CloudWatch Metric Streams / CloudWatch Logs
+   ingestion working once `MICROMEGAS_API_KEYS` is gone.
    `object-cache-srv` keeps its `MICROMEGAS_API_KEYS` **permanently** — it has no DB access, and its
    keys are service-held, few, and never distributed to users or machines. Its keys remain
    non-revocable without a redeploy; accepted.
@@ -736,14 +779,20 @@ place the zero-client-change claim in the issue does not hold.
 
 ## Documentation
 
-- **New `mkdocs/docs/admin/api-keys.md`**, added to `mkdocs.yml` nav under Administration: the two
+- **New `mkdocs/docs/admin/api-keys.md`**, added to `mkdocs.yml` nav under Administration: a stated
+  prerequisite, ahead of the route documentation, that `POST /auth/api_keys` must sit behind a
+  TLS-terminating ingress — the ingestion service itself serves plain HTTP, so the one-time cleartext
+  key in the response is otherwise exposed in flight (see [Security](#security)); the two
   tables and why they are split; the three routes with request/response examples; the
   revocation-latency property and the cache env knobs; the grant recipe; the import procedure
   including the dual-use split; the `object-cache-srv` exception; a runbook for listing, minting, and
   revoking an `analytics_api_keys` row by hand (list: `SELECT key_id, name, created_at, last_used_at,
   revoked_at FROM analytics_api_keys ORDER BY created_at DESC` — the only way to discover a `key_id` to
-  revoke, since this table has no HTTP `GET`; mint: the import tool's `INSERT` shape; revoke: the same
-  `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs, by `key_id` from the list step or
+  revoke, since this table has no HTTP `GET`; mint: the full executable recipe from §4 — generate the
+  key and compute its digest with a trailing-newline-safe command (`printf '%s' "$KEY" | sha256sum`,
+  never `echo`, since `hash_key` covers the full key string and a stray newline would mint a key that
+  can never authenticate), then the import tool's `INSERT` shape with the computed hash; revoke: the
+  same `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs, by `key_id` from the list step or
   by `name`), since that table has no HTTP
   lifecycle of its own.
 - **`admin/authentication.md`**: of the "API Keys (Legacy)" section's Limitations list, "manual key
@@ -771,7 +820,17 @@ place the zero-client-change claim in the issue does not hold.
   `MICROMEGAS_API_KEYS` row in scope here; the FlightSQL Server table at `:195-199` documents no
   `MICROMEGAS_API_KEYS` at all): document `MICROMEGAS_API_KEYS` as the transitional (Migration
   steps 1–2) path rather than the steady state; update to point at `api-keys.md` and describe
-  DB-backed keys as the destination. **Leave `docker/README.md:131` and `:206` alone** — both are
+  DB-backed keys as the destination. This includes the two Firehose "Access key" bullets at
+  `otlp/index.md:426` and `:557`, which currently describe the value as "a micromegas API key — the
+  value from `MICROMEGAS_API_KEYS`" — reword both to say the access key is any live
+  `ingestion_api_keys` (or, transitionally, `MICROMEGAS_API_KEYS`) key, since the two Firehose routes
+  validate through the same provider chain as every other ingestion route (see
+  [Current State](#current-state)). Also update the four `mm_abc123def...` placeholder key examples at
+  `otlp/index.md:42,47,231,366` to the `mmk_` shape minted keys actually have (see §2's `generate_key`
+  and [Open Questions](#open-questions)), so the published examples match what the service mints.
+  **Leave the dated blog post (`mkdocs/docs/blog/posts/2026-05-04-*.md`) untouched** — historical posts
+  stay as published and are not in scope for this placeholder update. **Leave `docker/README.md:131`
+  and `:206` alone** — both are
   the object-cache keyring, which stays env-only permanently (see [Current State](#current-state));
   they must not be pointed at the import tool or `api-keys.md`.
 - **`docker/docker-compose.monolith.yaml:52`**: the comment naming
@@ -789,7 +848,9 @@ place the zero-client-change claim in the issue does not hold.
   `tasks/1245`'s `upgrade_data_lake_schema_v5` has already landed), the three new `/auth/api_keys`
   HTTP routes, the four new
   cache/audit env knobs (`MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`,
-  `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), and the
+  `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), the
+  **public-API removal** of `micromegas::servers::key_ring` (dead, unreferenced duplicate of
+  `api_key.rs`'s keyring half — see [Current State](#current-state)), and the
   one client-visible breaking change: a key valid on both ingestion and flight-sql today must
   become two distinct keys (see [Migration](#migration)).
 
@@ -846,10 +907,19 @@ awkward:
   already-migrated-to-v5 `MICROMEGAS_SQL_CONNECTION_STRING` pool, so a missing relation cannot be
   simulated by pointing at an unmigrated (v4) or `connect_lazy` pool — the former isn't available once
   this table exists, and the latter never reaches a server, so it produces a *connection* error, not
-  a missing-relation one. Instead, on that same live pool, run `key_store_has_live_rows` with
-  `SET search_path TO <a throwaway empty schema>` (created and dropped by the test) so the existence
-  query's unqualified table name genuinely resolves to nothing. Assert the resulting `Err` is a `sqlx`
-  undefined-table error (SQLSTATE `42P01`) — not merely that the message contains the table name, which
+  a missing-relation one. Instead, build a **separate, throwaway single-connection pool** whose
+  `search_path` is set in the connect options themselves — e.g.
+  `PgConnectOptions::from_str(&conn_str)?.options([("search_path", "<throwaway empty schema>")])`
+  fed to `PgPoolOptions::new().max_connections(1).connect_with(...)` — rather than issuing a bare
+  `SET search_path` against a connection borrowed from the shared pool. `SET` (not `SET LOCAL`) is
+  per-session state on whichever pooled connection happens to be checked out, and
+  `key_store_has_live_rows(&PgPool, ...)` acquires its own connection from the pool with no guarantee
+  it's the same one the test issued the `SET` on — and if it is, the mutated `search_path` leaks onto
+  that connection afterward, contaminating any other test that reuses the shared pool. Setting the
+  search path in the connect options instead means every connection this throwaway pool ever hands
+  out already resolves the unqualified table name to nothing, and the pool is dropped at the end of
+  the test with no shared state to clean up. Assert the resulting `Err` is a `sqlx` undefined-table
+  error (SQLSTATE `42P01`) — not merely that the message contains the table name, which
   would also pass for an unrelated error that happened to mention it — and that `build()` propagates it
   rather than treating it as `Ok(None)`.
 
@@ -908,9 +978,5 @@ micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry
 
 ## Open Questions
 
-None blocking. `cache_ttl_secs = 60` is settled by the `oidc.rs` precedent (see §2) rather than left
-open here. One default remains worth an explicit ack before implementation:
-
-1. **`mmk_` as the minted-key prefix.** Purely for recognizability/secret scanning; it has no effect
-   on validation and no bearing on imported legacy keys. Swap it for another string if there is a
-   naming preference.
+None. `cache_ttl_secs = 60` is settled by the `oidc.rs` precedent (see §2). The minted-key prefix is
+settled too: `mmk_`, confirmed by the user — see §2's `generate_key`.
