@@ -17,9 +17,13 @@ merges today need a full blocking `SortExec` over the whole range.
 exact shape, including `name` as `Dictionary(Int32, Utf8)` per `metrics_table_schema()`. **The
 mechanism itself is fully general**: nothing in `ScanOrdering::PerFile`, `QueryMerger`, or
 `SqlBatchView::with_merge_sort_order` knows about metrics, names, or time buckets. Any view whose
-partitions are internally sorted on any ascending column list can declare it; `log_stats` on
-`(process_id, level, target, time_bin)` would work the same way. The view-author contract
+partitions are internally sorted on any ascending column list can declare it. The view-author contract
 (Design §5) is the only thing a new adopter has to satisfy.
+
+The metrics view itself is configured downstream and is **not** in this repo (Open Question 3), so
+without an in-repo adopter the feature would ship exercised only by tests. **`log_stats` is therefore
+adopted as part of this plan** — see Design §7. It is a genuine beneficiary, not a token one, and it
+gives the mechanism a dogfooding target on the same rollout it introduces.
 
 The view groups **strictly by the two declared sort columns** and carries dimension columns through
 as aggregates rather than as extra group keys — `first_value(unit)` rather than `GROUP BY ..., unit`:
@@ -368,9 +372,9 @@ table on the left and the ordered aggregate on the right (§5). Views whose merg
 The one genuine unknown was whether DataFusion 54.1's `AggregateExec` keeps the plan streaming — no
 `SortExec` reinserted downstream of the `SortPreservingMergeExec` — when its input is ordered per
 file. **It does.** The spike lives in `rust/analytics/tests/ordered_aggregation_spike_tests.rs`
-(7 planning-only tests, no DB and no object store: a test-local `TableProvider` emits one
+(9 planning-only tests, no DB and no object store: a test-local `TableProvider` emits one
 single-file group per fabricated file, each declaring `LexOrdering (name, time_bin)`, and nothing is
-ever executed). All 7 pass under `cargo test`, `cargo fmt` and
+ever executed). All 9 pass under `cargo test`, `cargo fmt` and
 `cargo clippy --tests -- -D warnings` are clean, and the tests stay as the permanent regression
 guard. **Proceed to Phase 1**, with the three corrections recorded below folded in.
 
@@ -407,7 +411,16 @@ Single-partition output, streaming k-way merge, `ordering_mode=Sorted` on both a
   prefix of the declared columns (`GROUP BY name`) streams too.
 - **Order-sensitive aggregates are free**: `first_value(unit)` and `first_value(unit ORDER BY
   time_bin)` both keep `ordering_mode=Sorted`, as does a fuller measure set
-  (`count`/`min`/`max`/`avg`/`sum`).
+  (`count`/`min`/`max`/`avg`/`sum`). This is a finding about **plan shape only** — it says nothing
+  about whether a given aggregate is *semantically* valid in a merge query, which is a separate
+  constraint: the merge reads the view's own already-aggregated rows, so `count(*)` would count
+  partition rows rather than source events and a bare `avg` would average averages. See contract
+  item 5 below.
+
+The reversed-key-order case, `first_value(unit ORDER BY time_bin)`, and the fuller measure set were
+each run by hand during the spike and behaved as stated, but only appear in the landed file as prose
+(`ordered_aggregation_spike_tests.rs:145-149`) — no test asserts them. Add assertions for them when
+Phase 3 lands so the regression guard covers what §5 claims.
 - **An extra `GROUP BY` key outside the sort order degrades gracefully**, not catastrophically:
   `GROUP BY name, unit, time_bin` under a `(name, time_bin)` declaration gives
   `ordering_mode=PartiallySorted([0, 2])` — still streaming, still bounded to the current
@@ -433,8 +446,9 @@ Three corrections to the design, all folded into §2 and §4 above:
    | `dim d JOIN (<ordered agg>) a` | streams, no `SortExec` |
    | `dim d RIGHT JOIN (<ordered agg>) a` | streams, no `SortExec` |
 
-**View-author contract** — the requirements this encodes, all covered by spike tests. This is the
-list `with_merge_sort_order`'s rustdoc must carry:
+**View-author contract** — the requirements this encodes. Items 1–3 are each pinned by a spike test;
+item 4 was verified by hand during the spike but has no test, so add one when Phase 3 lands. This is
+the list `with_merge_sort_order`'s rustdoc must carry:
 
 1. **Every declared sort column must appear among the merge query's `GROUP BY` keys** (order
    within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`). Verified negative:
@@ -458,6 +472,11 @@ list `with_merge_sort_order`'s rustdoc must carry:
    streamed the way the merge path is: freely choosable for a fresh `materialize_partitions()`
    bucket, but dictated by existing boundaries for a `regenerate_partitions()` bucket (Rollout
    step 2).
+5. **The merge query's aggregates must be composable over already-aggregated rows.** Independent of
+   ordering, but easy to get wrong while writing the pair of queries: the merge reads the view's own
+   output, not the source, so use `sum(count)` rather than `count(*)`, and avoid a bare `avg` (carry
+   `sum` and `count` and divide at read time). `log_stats` is the in-repo model — it extracts
+   `count(*) AS count` and merges `sum(count) AS count` (`log_stats_view.rs:35, 50`).
 
 ### 6. Row-group size (separable)
 
@@ -471,11 +490,48 @@ Re-enabling `enable_page_index` is **not** in this plan: it is gated on legacy P
 (incomplete ColumnIndex metadata) aging out of every deployment, which is an operational condition
 this repo can't verify — file it as a follow-up issue referencing `query.rs:215-219`.
 
+### 7. In-repo adopter: `log_stats`
+
+The motivating metrics view lives outside this repo (Open Question 3), so the mechanism would
+otherwise land with no in-repo consumer. `log_stats` (`log_stats_view.rs`) is adopted to close that
+gap — it fits the contract with the least change of any existing view:
+
+- **Its merge aggregate is already composable.** It extracts `count(*) AS count` and merges
+  `sum(count) AS count` (`log_stats_view.rs:35, 50`), which is exactly contract item 5. Nothing to
+  restructure.
+- **No custom merger** (`None`, `log_stats_view.rs:72`), so it lands on the default `QueryMerger`
+  path this plan modifies rather than a bespoke one.
+- **It really does k-way merge.** Both deltas are `TimeDelta::days(1)`
+  (`log_stats_view.rs:70-71`), but those are *max* deltas — the daemon rolls partitions up
+  incrementally, so merges run with k > 1 and are not a k=1 no-op.
+- **Its group cardinality is the shape the feature exists for**: `processes × levels × targets ×
+  1440` minute-bins per day, all of which the current unordered merge must hold at once.
+
+**Declare the sort order as `(time_bin, process_id, level, target)` — time first.** The spike found
+`GROUP BY` key order irrelevant (§5), so any prefix of the group keys streams equally well; leading
+with `time_bin` is the better choice because it keeps each merged partition time-local, preserving
+row-group pruning on `time_bin` for user queries. Leading with `process_id` would scatter time values
+across row groups for no compensating gain.
+
+Both of its queries need a top-level `ORDER BY time_bin, process_id, level, target` added (contract
+item 4). The transform query's `ORDER BY` is a blocking sort, but it sorts the *aggregate's output* —
+one row per group — not the `log_entries` scan, so it is far smaller than the raw input; §3's bucket
+sizing applies.
+
+Two honest caveats:
+
+- Whether `log_stats` is *currently* under memory pressure in any given deployment is not something
+  this repo can determine. The adoption is justified by shape and by the value of an in-repo
+  consumer, not by a measured incident.
+- Existing `log_stats` partitions have `sort_order` NULL, so they will not certify and its merges
+  keep taking the unordered path until they are retired and re-materialized (Rollout step 2). The
+  degrade is silent and carries no correctness risk.
+
 ## Implementation Steps
 
 ### Phase 0 — Spike (go/no-go) — **DONE, outcome: GO**
 1. ~~New test file `rust/analytics/tests/ordered_aggregation_spike_tests.rs` (planning-only, Design
-   §5).~~ Landed with 7 passing tests; verdict and the three resulting design corrections are in
+   §5).~~ Landed with 9 passing tests; verdict and the three resulting design corrections are in
    Design §5.
 
 ### Phase 1 — `ScanOrdering` refactor (behavior-preserving)
@@ -523,8 +579,18 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
     extend the `regenerate_partitions()` notes to cover `SqlBatchView` partitions and the Rollout
     step 2 bucket-size caveat (Documentation).
 
-### Phase 4 — Row-group size (separable, can land any time)
-15. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
+### Phase 4 — Adopt `log_stats` (in-repo consumer, Design §7)
+15. `log_stats_view.rs`: add `ORDER BY time_bin, process_id, level, target` to both the transform and
+    the merge query, and chain `.with_merge_sort_order(...)` with the same four columns. The
+    `sum(count)` merge aggregate already satisfies contract item 5 — no query restructuring.
+16. New test file `rust/analytics/tests/log_stats_ordering_tests.rs`: planning test asserting
+    `log_stats`' merge query reaches the streaming shape
+    (`ordering_mode=Sorted`, no `SortExec`) — Testing Strategy item 6: the same assertions as
+    item 3, but against the real view definition rather than a fabricated one, so a future edit to
+    its queries that breaks the contract fails CI.
+
+### Phase 5 — Row-group size (separable, can land any time)
+17. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
 
 ## Files to Modify
 
@@ -541,7 +607,8 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 | `rust/analytics/src/lakehouse/sql_batch_view.rs` | config, gating, overrides |
 | `rust/analytics/src/lakehouse/sql_partition_spec.rs` | `sort_order` recording + verification |
 | `rust/analytics/src/lakehouse/export_log_view.rs` | `fetch_sql_partition_spec` call site passes `None` |
-| `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 4) |
+| `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 5) |
+| `rust/analytics/src/lakehouse/log_stats_view.rs` | `ORDER BY` on both queries + `with_merge_sort_order` (Phase 4) |
 | `mkdocs/docs/admin/functions-reference.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
 | `mkdocs/docs/query-guide/python-api.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
@@ -549,6 +616,7 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 | `rust/analytics/tests/ordered_aggregation_spike_tests.rs` | new (Phase 0) — **done** |
 | `rust/analytics/tests/per_file_scan_ordering_tests.rs` | new (Phase 1) — `PerFile` scan/gate tests |
 | `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | new (Phases 2–3) |
+| `rust/analytics/tests/log_stats_ordering_tests.rs` | new (Phase 4) — pins the shipped `log_stats` view's streaming shape |
 
 ## Trade-offs
 
@@ -592,8 +660,8 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
 
 - Rustdoc on `ScanOrdering`, `with_merge_sort_order`, `certifies_sort_order`, and the updated
   `View::get_scan_output_ordering` contract carry the authoritative contracts. `with_merge_sort_order`
-  is the right home for the full view-author checklist — all **four** items of Design §5's
-  "View-author contract", now verified by the Phase 0 spike: (1) every declared sort column must
+  is the right home for the full view-author checklist — all **five** items of Design §5's
+  "View-author contract" (items 1–3 pinned by Phase 0 spike tests, item 4 verified by hand): (1) every declared sort column must
   appear among the merge query's `GROUP BY` keys (order irrelevant; extra keys degrade to
   `PartiallySorted`); (2) the merge query's top-level `ORDER BY` must be *exactly* the declared
   columns — not a superset — which is the sharpest trap found: a superset `ORDER BY` asks for an
@@ -602,7 +670,8 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
   enrichment join must put the dimension table on the left and the ordered stream on the right, or
   `CollectLeft` buffers the whole aggregate and re-sorts; (4) both the extract and merge queries
   need the `ORDER BY`, and it must be top-level — a CTE-internal `ORDER BY` that is later joined
-  does not count.
+  does not count; and (5) the merge query's aggregates must be composable over already-aggregated
+  rows (`sum(count)`, not `count(*)`; no bare `avg`), with `log_stats` as the in-repo model.
 - `mkdocs/docs/admin/functions-reference.md` (`regenerate_partitions()` note, line 119) and
   `mkdocs/docs/query-guide/python-api.md` (same note, line 500) carry the same blocks-specific
   sentence and must be updated together (the predecessor #1340 plan kept them in sync). Extend both
@@ -654,15 +723,22 @@ polled), so they run in plain `cargo test`:
    `target_partitions` byte-range groups. This gives the user-path claim the same kind of permanent
    guard §5 already keeps for the merge path, so a DataFusion upgrade that turned it into a blocking
    `SortExec` would fail CI instead of landing silently.
-6. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
+6. **`log_stats` adoption** (Phase 4, Design §7): plan `log_stats`' real merge query — read from
+   `make_log_stats_view` itself, not a copy — and assert the streaming shape
+   (`ordering_mode=Sorted`, no `SortExec`) under its declared
+   `(time_bin, process_id, level, target)` sort order. Unlike items 2–5, which use fabricated views,
+   this pins the *shipped* view definition, so a later edit to its `ORDER BY` or `GROUP BY` that
+   silently breaks the contract fails CI rather than quietly degrading to the unordered merge.
+7. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
    a non-temporal key, ingest, let the daemon merge, and verify via
    `micromegas-query "SELECT ... FROM list_partitions()"` that merged partitions record the
    `sort_order`, and via the analytics log that `ordering_honored` held.
 
 ## Rollout
 
-Landing this plan changes no existing view's behavior (every current view is `Unordered`). For a
-view adopting a sort order (in-repo or downstream):
+Landing Phases 1–3 changes no existing view's behavior (every current view is `Unordered`); Phase 4
+then walks `log_stats` through the adoption sequence below, making it the first view to exercise it.
+For a view adopting a sort order (in-repo or downstream):
 
 1. Add the top-level `ORDER BY` to the extract and merge queries and call
    `with_merge_sort_order`. New fresh partitions immediately record `sort_order`; merges keep
@@ -685,20 +761,32 @@ view adopting a sort order (in-repo or downstream):
    gate — no flag day). `sort_order` in `list_partitions()` makes progress auditable in SQL.
 4. Drop the custom `merger_maker` once the view's partitions are fully regenerated.
 
+For `log_stats` specifically (Design §7), step 2 is the operative one: its live partitions predate the
+declaration and so will not certify, meaning its merges keep taking the unordered path — silently and
+with no correctness risk — until they are retired and re-materialized. Phase 4 can therefore land
+without any coordinated operational step; the benefit arrives whenever an operator chooses to do the
+retire-and-re-materialize pass.
+
 ## Open Questions
 
 1. ~~**Phase 0 spike outcome**~~ — **answered: GO.** DataFusion 54.1 plans the ordered per-file
    `GROUP BY` merge as a fully streaming pipeline. Three design corrections resulted (a fifth
    optimizer setting, the limits of check 2, and the enrichment-join direction); all are folded into
    Design §2/§4/§5. Nothing blocks Phase 1.
-2. **`max_row_group_size` value** (Phase 4): 128 Ki rows proposed — acceptable, or prefer a
+2. **`max_row_group_size` value** (Phase 5): 128 Ki rows proposed — acceptable, or prefer a
    different value / a per-view knob / deferral to a separate PR?
 3. ~~**Where does the aggregate metrics view live?**~~ — **answered: outside this repo.** It's a
    deployment-specific `SqlBatchView`, not an in-repo one — `metrics_view` stays the raw block-based
    `measures` view, and the only in-repo `SqlBatchView`s remain `log_stats`, `processes`, and
-   `streams`, none of which need to adopt a sort order. This plan lands only the general mechanism
-   (`ScanOrdering::PerFile`, the `QueryMerger` branch, `SqlBatchView::with_merge_sort_order`); the
-   aggregate metrics rollup itself is configured downstream, in that deployment's view definitions.
-   Phases 0–3's tests validate the mechanism against the same `(name, time_bin)` shape without
-   requiring an in-repo end-to-end user; item 6 of the Testing Strategy's manual end-to-end pass uses
-   a throwaway test view for the same reason.
+   `streams`. The aggregate metrics rollup itself is configured downstream, in that deployment's view
+   definitions, so Phases 1–3 land only the general mechanism (`ScanOrdering::PerFile`, the
+   `QueryMerger` branch, `SqlBatchView::with_merge_sort_order`) and validate it against the same
+   `(name, time_bin)` shape using fabricated views.
+   **Consequence, addressed by Phase 4:** that left the mechanism with no in-repo consumer. `log_stats`
+   is therefore adopted as one (Design §7) — it fits the contract with the least change of any existing
+   view and gives the feature a dogfooding target. `processes` and `streams` are *also* eligible —
+   each merges on a single high-cardinality non-temporal key (`GROUP BY process_id` /
+   `GROUP BY stream_id`, `processes_view.rs:66`, `streams_view.rs:52`) — but are left for a follow-up:
+   one adopter is enough to dogfood the mechanism, and `log_stats`' multi-column
+   `(time_bin, process_id, level, target)` order exercises more of the contract than a single-column
+   one would.
