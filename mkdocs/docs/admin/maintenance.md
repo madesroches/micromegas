@@ -46,6 +46,23 @@ running, up to the grace period. See
 is safe to redo — a task that doesn't finish simply leaves its partition
 unwritten, and the next scheduled run redoes it.
 
+A view that fails to materialize (e.g. a bad `SqlBatchView` query) does not
+starve the views ordered after it: each view's materialization is attempted
+and its failure isolated independently, so every other view still gets
+materialized in the same pass. A failing view is logged and counted (see
+[`materialize_view_failure`](#materialize_view_failure) below); if any view
+failed, the pass as a whole is still reported as failed so the failure
+surfaces in the daemon's logs, but that failure is attributed per view rather
+than to whichever view happened to fail first.
+
+### `materialize_view_failure`
+
+Each of the four materialization tasks (every second/minute/hour/day) emits
+`materialize_view_failure` (`count`, tags `{view_set_name,
+view_instance_id}`) as one event with `value = 1` per failed view per
+materialization pass. To count failures over a window, use `count(*)` or
+`sum(value)`.
+
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
 redundantly materialize the same partitions. Materialization is idempotent, so

@@ -11,7 +11,9 @@ use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
+use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::property_set::{Property, PropertySet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +28,18 @@ type Views = Arc<Vec<Arc<dyn View>>>;
 ///
 /// This function iterates through the provided views, materializing partitions
 /// for each view within the specified `insert_range` and `partition_time_delta`.
+///
+/// Per-view failures are isolated: a view whose `materialize_partition_range`
+/// call errors is logged, counted (`materialize_view_failure`), and skipped —
+/// every other view, in the same update group or a later one, still gets its
+/// own materialization attempt this pass. This is a deliberate cross-group
+/// policy ("continue anyway"): materialization is idempotent and re-attempted
+/// every tick, so letting later groups proceed even after an earlier-group
+/// failure can't corrupt anything, and it avoids reintroducing the
+/// group-granularity starvation this isolation is meant to fix. If any view
+/// failed, the pass still returns a single aggregated `Err` listing every
+/// failed view, so `CronTask`/`log_task_result` continues to record the pass
+/// as failed.
 #[span_fn]
 pub async fn materialize_all_views(
     lakehouse: Arc<LakehouseContext>,
@@ -39,9 +53,15 @@ pub async fn materialize_all_views(
             .await?,
     );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
+    let mut failures = Vec::new();
     for view in &*views {
         if view.get_update_group() != last_group {
-            // views in the same group should have no inter-dependencies
+            // Views in the same update group have no inter-dependencies: a
+            // SqlBatchView whose count_src_query/extract_query reads another
+            // registered view must put that view in an *earlier* group (see
+            // SqlBatchView::new's view_factory), so same-group views can
+            // always be materialized independently, in any order, with one's
+            // failure isolated from the other's.
             last_group = view.get_update_group();
             partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
@@ -52,7 +72,9 @@ pub async fn materialize_all_views(
                 .await?,
             );
         }
-        materialize_partition_range(
+        let view_set_name = view.get_view_set_name();
+        let view_instance_id = view.get_view_instance_id();
+        if let Err(e) = materialize_partition_range(
             partitions_all_views.clone(),
             lakehouse.clone(),
             view.clone(),
@@ -60,7 +82,23 @@ pub async fn materialize_all_views(
             partition_time_delta,
             null_response_writer.clone(),
         )
-        .await?;
+        .await
+        {
+            error!("materialize_all_views: {view_set_name} {view_instance_id} failed: {e:?}");
+            let tags = PropertySet::find_or_create(vec![
+                Property::new("view_set_name", intern_string(view_set_name.as_str())),
+                Property::new("view_instance_id", intern_string(view_instance_id.as_str())),
+            ]);
+            imetric!("materialize_view_failure", "count", tags, 1);
+            failures.push(format!("{view_set_name} {view_instance_id}"));
+        }
+    }
+    if !failures.is_empty() {
+        anyhow::bail!(
+            "materialize_all_views: {} view(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
     Ok(())
 }
