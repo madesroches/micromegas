@@ -12,8 +12,11 @@
 //! calls.
 //!
 //! Once a record's bytes are extracted from the envelope, `handler::ingest_firehose_metrics`
-//! decodes each length-delimited message in turn and reuses the existing split/write
-//! logic per message — no new identity, block, split, or write logic.
+//! decodes each length-delimited message in turn, runs it through
+//! `micromegas_otel_ingestion::cloudwatch_metrics::rewrite_cloudwatch_metric_streams` (a
+//! CloudWatch-specific resource rewrite that partitions a matching degenerate resource into
+//! one process per CloudWatch namespace — see that module's docs), and reuses the existing
+//! split/write logic per message.
 
 use super::firehose_common::{firehose_auth_middleware, firehose_response, request_id_from};
 use super::ingestion_limits::apply_ingestion_body_limits;

@@ -9,6 +9,7 @@
 
 pub mod block;
 pub mod cloudwatch_logs;
+pub mod cloudwatch_metrics;
 pub mod error;
 pub mod handler;
 pub mod identity;
