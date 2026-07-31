@@ -63,6 +63,15 @@ belong **only** in a new v5 step, never in `create_tables` (same shape as v4, wh
 under a DB lock, so both ingestion binaries and the monolith reach the tables before serving.
 `DataLakeConnection` (`rust/ingestion/src/data_lake_connection.rs`) exposes `pub db_pool: PgPool`.
 
+Standalone `flight-sql-srv` does **not** go through this path: it builds its lakehouse via
+`LakehouseContext::from_env()` (`rust/analytics/src/lakehouse/lakehouse_context.rs:48-56`), which calls
+`connect_to_data_lake` + `migrate_lakehouse` only — never `execute_migration`. Its own doc comment on
+`from_connection` says the caller is responsible for running `migrate_db` (the ingestion schema) first.
+This is a real deployment ordering constraint in a split deployment: an ingestion binary or the
+monolith must reach migration v5 before flight-sql is deployed/rolled, or its first analytics-key
+lookup errors on a missing relation with no startup signal. Stated explicitly in
+[Migration](#migration) step 1.
+
 ### HTTP plumbing
 
 - `rust/public/src/servers/ingestion.rs::serve_ingestion` builds a `health_router` (unauthenticated),
@@ -168,8 +177,9 @@ pub fn generate_key() -> String;
 
 1. `bearer_token()` or bail.
 2. `hash_key(token)`.
-3. `unknown` cache hit ⇒ bail without touching the DB (bogus tokens cannot be turned into a DB
-   round-trip per request).
+3. `unknown` cache hit ⇒ bail without touching the DB (a *repeated* probe of the same bogus token is
+   free after the first attempt — see [Trade-offs](#trade-offs) for what this does and does not
+   bound).
 4. `valid` cache hit ⇒ build the `AuthContext` and return.
 5. Otherwise one statement against the DB:
 
@@ -182,7 +192,11 @@ RETURNING key_id, name
    `Some(row)` ⇒ insert into `valid`, return the context. `None` ⇒ insert into `unknown`, bail
    "invalid API token".
 6. **A DB *error* is propagated and cached in neither map.** Caching an outage as `unknown` would
-   turn a transient failure into a TTL-long outage for every affected key.
+   turn a transient failure into a TTL-long outage for every affected key. The provider itself logs
+   the error at `error!` (with the table name) before returning it, because the composition layer does
+   not: `MultiAuthProvider` (`rust/auth/src/multi.rs:83-91`) catches every provider error and logs it
+   at `debug!`, so without this a Postgres outage would surface only as a flood of ordinary 401s at
+   `warn!` from `axum.rs`, with no signal at a level operators actually run at.
 
 Design notes:
 
@@ -194,7 +208,12 @@ Design notes:
 - **Revocation takes effect within `cache_ttl_secs` (default 60s). This is a property, not an
   accident**: the `DELETE` route writes `revoked_at` and cannot invalidate remote caches. It is
   stated in the route's response body, in the admin docs, and asserted by a test. Raising the TTL
-  trades revocation latency for DB load; 60s keeps the headline value of the stage intact.
+  trades revocation latency for DB load; 60s keeps the headline value of the stage intact. The
+  codebase already has this exact knob for the other auth cache — `rust/auth/src/oidc.rs:119-143`'s
+  `DEFAULT_TOKEN_CACHE_TTL_SECS = 300` for `OidcAuthProvider`, the same
+  validated-credential-cached/revocation-delayed-by-TTL trade-off. 60s here is deliberately 5x tighter
+  than that precedent, because bounded revocation latency is this stage's advertised deliverable; it
+  stays env-overridable per service (`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`).
 - A newly minted key is live immediately unless something already probed that exact string within
   `unknown_cache_ttl_secs` — hence a much shorter TTL on the negative cache than the positive one.
 - The `AuthContext` this provider produces is identical to the env provider's: `issuer: "api_key"`,
@@ -233,12 +252,21 @@ pub async fn provider_with_prefix(prefix: &str) -> Result<Option<Arc<dyn AuthPro
 precedence) → `DbApiKeyAuthProvider` → `OidcAuthProvider`. Env and DB compose so nothing breaks
 mid-migration.
 
-**The DB store alone does not count as "auth configured."** `build()` still returns `Ok(None)` when
-neither env keys nor OIDC are present, even with a key store attached. Otherwise the startup guard in
-`telemetry-ingestion-srv` ("Authentication required but no auth providers configured") would never
-fire, and an operator with an empty deployment would get a process that 401s every request with no
-way to mint a key (minting requires OIDC). Failing at startup with a message is better than failing
-closed silently.
+**A DB key store with at least one live key counts as "auth configured"; an empty one does not.**
+When a key store is attached, `build()` runs one cheap startup query —
+`SELECT EXISTS(SELECT 1 FROM <table> WHERE revoked_at IS NULL)` — and treats a non-empty result the
+same as env keys or OIDC being present. This is what makes Migration step 3 possible: once
+`micromegas-import-api-keys` has populated the table (step 2) and `MICROMEGAS_API_KEYS` is removed,
+the DB rows alone keep the service serving — no OIDC required. It also covers flight-sql specifically,
+which never mints and is documented (`mkdocs/docs/grafana/authentication.md`) to run key-only for
+Grafana; it must not be forced to stand up OIDC just to satisfy this check. An empty key store still
+does *not* count: `build()` returns `Ok(None)` when the table has no live rows and neither env keys nor
+OIDC are configured, so the startup guard in `telemetry-ingestion-srv` ("Authentication required but
+no auth providers configured") still fires for a genuinely empty deployment, and an operator gets a
+clear failure instead of a process that silently 401s every request. Minting itself still requires
+OIDC — that is unchanged and orthogonal to whether the *table* is empty — but a deployment that only
+ever revokes, or mints via the import tool / direct SQL, no longer needs OIDC merely to pass this
+check.
 
 The three call sites, each supplying the pool it already has in scope:
 
@@ -259,14 +287,17 @@ line 199.
 ```rust
 /// Router for the ingestion key-management routes. Hardcodes
 /// `ApiKeyTable::Ingestion`: there is no parameter an operator or a defaulting
-/// bug could point at `analytics_api_keys`.
-pub fn api_keys_router(pool: PgPool) -> Router;
+/// bug could point at `analytics_api_keys`. `config.cache_ttl_secs` is what the
+/// `DELETE` response's `effective_within_seconds` reports; the caller builds it
+/// the same way `ProviderBuilder::with_db_key_store` does
+/// (`DbApiKeyConfig::from_env()`), so the two cannot disagree.
+pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
 ```
 
 | Route | Body / result |
 |---|---|
 | `POST /auth/api_keys` | `{"name": "..."}` → **201** `{"key_id", "name", "created_at", "key"}` — the cleartext, returned exactly once |
-| `GET /auth/api_keys` | **200** `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]`, newest first, revoked rows included. **Never `key_hash`, never the key.** |
+| `GET /auth/api_keys?limit=&offset=&include_revoked=` | **200** `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]`, newest first. `limit` defaults to 100 (max 500), `offset` defaults to 0, `include_revoked` defaults to `true`. **Never `key_hash`, never the key.** |
 | `DELETE /auth/api_keys/{key_id}` | **200** `{"revoked_at", "effective_within_seconds"}`, or **404** for an unknown `key_id` |
 
 - Merged into `serve_ingestion`'s `protected_app` **before** the `auth_middleware` layer is applied,
@@ -275,8 +306,11 @@ pub fn api_keys_router(pool: PgPool) -> Router;
 - **Registered only when `auth_provider.is_some()`.** With `--disable-auth` there is no
   `AuthContext` in extensions and the extractor would 500; skipping registration (with a `warn!`)
   removes the hazard entirely and is correct on the merits — there is nothing to authenticate in that
-  mode. Consequence: local dev exercises these routes through
-  `local_test_env/ai_scripts/start_services_with_oidc.py`, not `start_services.py`.
+  mode. Consequence: local dev needs OIDC configured for the *ingestion* server specifically.
+  `local_test_env/ai_scripts/start_services_with_oidc.py` does not do this today — it starts
+  `telemetry-ingestion-srv` with `--disable-auth` and gives OIDC only to the analytics/flight-sql
+  server — so it must be extended (see [Testing Strategy](#testing-strategy)) before it can exercise
+  these routes at all.
 - `serve_ingestion`'s **signature does not change**: the pool is already reachable as
   `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`. The table is always
   `Ingestion` for this service. The monolith inherits the routes for free.
@@ -299,12 +333,19 @@ RETURNING revoked_at
 ```
 
   `Some` ⇒ 200, `None` ⇒ 404. `effective_within_seconds` in the response is *this process's*
-  configured `cache_ttl_secs`, so the revocation-latency property shows up where the operator is
+  configured `cache_ttl_secs` (the `config` parameter above, read via the same
+  `DbApiKeyConfig::from_env()` call the provider uses, so it cannot silently disagree with the
+  provider actually running), so the revocation-latency property shows up where the operator is
   looking; the docs note that a fleet with mixed configuration takes the longest configured TTL.
 - **Analytics keys are not mintable through this API.** They are few, manually issued (§5, or direct
   SQL by an operator with DB access), and stay out of every HTTP write path: issuing read credentials
   from the fleet-facing service is the wrong direction for the write/read asymmetry, and keeping them
-  out is what confines the ingestion service's DB writes to one table.
+  out is what confines the ingestion service's DB writes to one table. The operator procedure for both
+  halves of the lifecycle — mint: the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the
+  import tool emits (§5); revoke: the same `UPDATE ... SET revoked_at = COALESCE(...)` statement
+  `DELETE /auth/api_keys/{key_id}` runs above — is written up as a runbook in
+  `mkdocs/docs/admin/api-keys.md` rather than left implicit. That runbook, not the import tool, is the
+  durable answer to "how do I revoke an analytics key at 2am."
 - **Rejected: admin-gated lakehouse UDFs** for key management, despite the precedent in #1382. Two
   reasons, both from the umbrella plan: `flight_sql_service_impl.rs:330` logs `sql={sql:?}` at info
   and micromegas ingests its own logs, so key material in a SQL literal would land in `log_entries` —
@@ -315,7 +356,10 @@ RETURNING revoked_at
 ### 5. Import tool (`python/micromegas/micromegas/cli/import_api_keys.py`, new)
 
 A one-shot migration for *legacy key strings* — the one thing the mint route cannot do, since it
-generates fresh keys. Deletable once every deployment has run it.
+generates fresh keys. Deletable once every deployment has run it **for `ingestion_api_keys`** — but
+the by-hand `INSERT` shape it produces is exactly what the `admin/api-keys.md` runbook (§4) points
+operators at for `analytics_api_keys`, which has no HTTP mint/revoke path of its own, so that statement
+shape stays documented as a template even after this tool is deleted.
 
 **It emits SQL on stdout rather than connecting to Postgres.** The repo has no python DB driver in any
 `pyproject.toml`, and the established convention for python-touches-Postgres here is to shell out to
@@ -373,17 +417,19 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `generate_key`, `DbApiKeyAuthProvider` with the two `moka` caches and the
    `UPDATE ... RETURNING` lookup. Register in `rust/auth/src/lib.rs`.
 4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; reimplement `provider()` /
-   `provider_with_prefix()` on top of it (env-only, unchanged behavior); keep the `Ok(None)` rule
-   keyed on env-keys-or-OIDC only.
+   `provider_with_prefix()` on top of it (env-only, unchanged behavior, so the `Ok(None)` rule on
+   those thin wrappers is untouched); `ProviderBuilder::build()` additionally treats a non-empty
+   attached key store as "configured" via the startup existence query described in §3.
 
 ### Phase 3 — Management API
 
 5. `rust/public/src/servers/api_keys.rs` (new): `ApiKeyError` + `IntoResponse` (403 / 404 / 500,
-   modeled on `data_sources.rs`), `require_key_admin`, the three handlers, `api_keys_router(pool)`.
-   Export from `rust/public/src/servers/mod.rs`.
+   modeled on `data_sources.rs`), `require_key_admin`, the three handlers, `api_keys_router(pool,
+   config)`. Export from `rust/public/src/servers/mod.rs`.
 6. `rust/public/src/servers/ingestion.rs`: clone `lake.db_pool` before constructing
-   `WebIngestionService`; merge `api_keys_router(pool)` into `protected_app` inside the
-   `if let Some(provider)` branch, before the middleware layer; `warn!` when skipped.
+   `WebIngestionService`; merge `api_keys_router(pool, DbApiKeyConfig::from_env())` into
+   `protected_app` inside the `if let Some(provider)` branch, before the middleware layer; `warn!`
+   when skipped.
 7. Delete the dead duplicate `rust/public/src/servers/key_ring.rs` and its `mod.rs:57` export.
 
 ### Phase 4 — Call sites
@@ -392,7 +438,8 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `(data_lake.db_pool.clone(), ApiKeyTable::Ingestion)`; update the module doc comment (lines 6–10)
    and the startup error message.
 9. `rust/public/src/servers/flight_sql_server.rs`: clone the pool before `lakehouse` is moved; switch
-   to `ProviderBuilder` with `ApiKeyTable::Analytics`.
+   to `ProviderBuilder` with `ApiKeyTable::Analytics`. flight-sql runs no migration of its own (see
+   [Current State](#current-state)); the deployment ordering constraint in Migration step 1 applies.
 10. `rust/monolith/src/main.rs`: both providers get `.with_db_key_store(...)` from
     `lakehouse.lake().db_pool`, with `Ingestion` / `Analytics` respectively. Note the pool must be
     taken while `lakehouse` is still borrowed, before the role `join_set` spawns.
@@ -426,8 +473,11 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   `rust/public/src/servers/flight_sql_server.rs`
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
 - `python/micromegas/pyproject.toml`
+- `local_test_env/ai_scripts/start_services_with_oidc.py`
 - `mkdocs/mkdocs.yml`, `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
-  `mkdocs/docs/admin/monolith.md`, `mkdocs/docs/admin/flight-sql.md`
+  `mkdocs/docs/admin/monolith.md`, `mkdocs/docs/admin/flight-sql.md`,
+  `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/otlp/index.md`, `docker/README.md`,
+  `mkdocs/docs/grafana/authentication.md`
 - `tasks/data_isolation/audience_based_access_control_plan.md` (record the `key_id` column and the
   single-DB-role caveat)
 
@@ -453,11 +503,18 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   granularity (±cache TTL) and turns the miss-path `SELECT` into an `UPDATE ... RETURNING`; buys the
   removal of all per-entry timestamp state and any second round trip. For an
   approximately-last-used audit column this is the right resolution.
-- **A negative cache.** Without it, a flood of bogus tokens is a DB round trip per request. With it,
-  key creation can be delayed by up to `unknown_cache_ttl_secs` for a string that was probed just
-  before it existed — hence 10s, not 60s.
-- **`GET` returns revoked rows.** Slightly noisier listing; an operator investigating an incident
-  needs to see that a key *was* revoked and when.
+- **A negative cache.** It only makes *repeated* probes of the same token free: keyed by
+  `hash_key(token)`, it misses on every distinct token, so a flood of randomly generated bearer
+  tokens — the actual shape of an unauthenticated attack on the ingestion endpoint — still costs one
+  DB round trip per request, same as without the cache. Nothing else in this design (no rate limit, no
+  shared-failure breaker) bounds that; it is accepted as out of scope here, same as the unbounded
+  per-request `ct_eq` scan the env provider already runs today. Key creation can also be delayed by up
+  to `unknown_cache_ttl_secs` for a string that was probed just before it existed — hence 10s, not
+  60s.
+- **`GET` returns revoked rows by default.** Slightly noisier listing; an operator investigating an
+  incident needs to see that a key *was* revoked and when. `include_revoked=false`, plus
+  `limit`/`offset`, bound the response as the table grows (§4) rather than returning every row
+  unconditionally.
 - **Routes on the ingestion service.** It mildly expands the surface of the most exposed process.
   Accepted deliberately: that is where the DB write grant belongs, OIDC is required, and no API key
   can be admin, so no key can mint another.
@@ -502,11 +559,16 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
 Ordering, for both split and monolith deployments:
 
 1. Deploy the new binaries. Migration v5 creates the tables. **Nothing changes**: the env keyring
-   still authenticates every existing key, and the DB tables are empty.
+   still authenticates every existing key, and the DB tables are empty. In a split deployment, deploy
+   or roll the ingestion service (or the monolith) first — it is what runs the migration — and only
+   then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)).
 2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
    *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
-   redeploy. Keys now live only in the DB, and revoke/rotate no longer needs a redeploy.
+   redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
+   configured" on its own, so both services keep serving without OIDC configured — including the
+   key-only flight-sql deployment `mkdocs/docs/grafana/authentication.md` documents. Keys now live
+   only in the DB, and revoke/rotate no longer needs a redeploy.
    `object-cache-srv` keeps its `MICROMEGAS_API_KEYS` **permanently** — it has no DB access, and its
    keys are service-held, few, and never distributed to users or machines. Its keys remain
    non-revocable without a redeploy; accepted.
@@ -524,7 +586,10 @@ place the zero-client-change claim in the issue does not hold.
 - **New `mkdocs/docs/admin/api-keys.md`**, added to `mkdocs.yml` nav under Administration: the two
   tables and why they are split; the three routes with request/response examples; the
   revocation-latency property and the cache env knobs; the grant recipe; the import procedure
-  including the dual-use split; the `object-cache-srv` exception.
+  including the dual-use split; the `object-cache-srv` exception; a runbook for minting and revoking an
+  `analytics_api_keys` row by hand (mint: the import tool's `INSERT` shape; revoke: the same
+  `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs), since that table has no HTTP
+  lifecycle of its own.
 - **`admin/authentication.md`**: the "API Keys (Legacy)" section's Limitations list ("manual key
   distribution and rotation", "no automatic expiration", "no user identity for audit logging") is now
   wrong for DB-backed keys. Rewrite as two subsections — env keyring (static, still used by
@@ -535,6 +600,12 @@ place the zero-client-change claim in the issue does not hold.
   validates `analytics_api_keys` and mints nothing.
 - **`admin/object-cache.md`**: state explicitly that its `MICROMEGAS_API_KEYS` is permanent and its
   keys are not revocable without a redeploy — otherwise it reads as an oversight.
+- **`otlp/index.md`, `docker/README.md`**: both document `MICROMEGAS_API_KEYS` for ingestion/flight-sql,
+  which is now the transitional (Migration steps 1–2) path rather than the steady state; update to
+  point at `api-keys.md` and describe DB-backed keys as the destination.
+- **`grafana/authentication.md`**: the key-only flight-sql deployment it documents (line 30) is exactly
+  the case §3 and Migration rely on; confirm it still applies to DB-backed `analytics_api_keys` and
+  cross-link `api-keys.md`.
 - **`tasks/data_isolation/audience_based_access_control_plan.md`**: record the `key_id` column and
   replace the "Postgres grants enforce it" claim with the code-boundary-plus-documented-grants
   reality.
@@ -545,8 +616,11 @@ Rust unit tests live under each crate's `tests/` folder (per `rust/CLAUDE.md`); 
 `#[ignore]`d and read `MICROMEGAS_SQL_CONNECTION_STRING`, matching
 `analytics/tests/thread_spans_ordering_db_test.rs` and `public/tests/pg_stats_test.rs`.
 
-**`rust/auth/tests/db_api_key_tests.rs` — no DB** (lazy pool to `postgres://localhost/unused`, the
-`firehose_tests.rs` trick):
+**`rust/auth/tests/db_api_key_tests.rs` — no DB** (`PgPoolOptions::new()
+.acquire_timeout(Duration::from_millis(50)).connect_lazy("postgres://localhost/unused")` — the
+`firehose_tests.rs` trick, but with an explicit short `acquire_timeout`: sqlx's default is 30s
+(`sqlx-core-0.8.6/src/pool/options.rs:160`), and the last bullet below makes two DB attempts, which at
+the default would cost ~60s per run):
 
 - `hash_key` matches a known SHA-256 vector, and its output never contains the key bytes.
 - `generate_key` produces the `mmk_` prefix, 32 decoded bytes, and distinct values across calls.
@@ -600,19 +674,22 @@ digest the python tool emits for a fixture key, inserts the row, and asserts the
 string* authenticates through `DbApiKeyAuthProvider`. Paired with the python test above, this covers
 the claim end to end without needing a live `psql` in CI.
 
-**Full-stack smoke, manual**: `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
-mint a key over HTTP, use it to POST telemetry, revoke it, and observe the rejection after the TTL.
+**Full-stack smoke, manual**: `local_test_env/ai_scripts/start_services_with_oidc.py:182-199` currently
+launches `telemetry-ingestion-srv` with `--disable-auth`, so `/auth/api_keys` would not even be
+registered there. Extend the script to launch the ingestion server with the same OIDC config used for
+the analytics server, instead of `--disable-auth` (listed under
+[Files to Modify](#files-to-modify)). Then: `python3
+local_test_env/ai_scripts/start_services_with_oidc.py`, mint a key over HTTP, use it to POST telemetry,
+revoke it, and observe the rejection after the TTL.
 
 **Gates**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
 `python3 build/rust_ci.py`.
 
 ## Open Questions
 
-None blocking. Two defaults worth an explicit ack before implementation:
+None blocking. `cache_ttl_secs = 60` is settled by the `oidc.rs` precedent (see §2) rather than left
+open here. One default remains worth an explicit ack before implementation:
 
-1. **`cache_ttl_secs = 60`** sets the advertised revocation latency. Shorter means faster revoke and
-   more `UPDATE`s (one per key per process per TTL); longer means less DB load and a slower 2am
-   revoke. 60s is proposed as the default, env-overridable per service.
-2. **`mmk_` as the minted-key prefix.** Purely for recognizability/secret scanning; it has no effect
+1. **`mmk_` as the minted-key prefix.** Purely for recognizability/secret scanning; it has no effect
    on validation and no bearing on imported legacy keys. Swap it for another string if there is a
    naming preference.
