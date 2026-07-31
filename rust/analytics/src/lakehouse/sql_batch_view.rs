@@ -33,6 +33,17 @@ use std::{hash::DefaultHasher, sync::Arc};
 pub type MergerMaker =
     dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn PartitionMerger> + Send + Sync;
 
+/// Builds the ascending `ScanSortColumn` list corresponding to a declared sort order.
+fn sort_order_as_scan_columns(columns: &[Arc<String>]) -> Vec<ScanSortColumn> {
+    columns
+        .iter()
+        .map(|column| ScanSortColumn {
+            column: column.clone(),
+            descending: false,
+        })
+        .collect()
+}
+
 /// SQL-defined view updated in batch
 #[derive(Debug)]
 pub struct SqlBatchView {
@@ -171,13 +182,7 @@ impl SqlBatchView {
                 )
             })?;
         }
-        let scan_columns: Vec<ScanSortColumn> = columns
-            .iter()
-            .map(|column| ScanSortColumn {
-                column: column.clone(),
-                descending: false,
-            })
-            .collect();
+        let scan_columns = sort_order_as_scan_columns(&columns);
         let merge_query = Arc::new(self.merge_partitions_query.replace("{source}", "source"));
         let ordered_merger: Arc<dyn PartitionMerger> = Arc::new(
             QueryMerger::new(
@@ -201,13 +206,7 @@ impl SqlBatchView {
         let Some(sort_order) = &self.sort_order else {
             return false;
         };
-        let columns: Vec<ScanSortColumn> = sort_order
-            .iter()
-            .map(|column| ScanSortColumn {
-                column: column.clone(),
-                descending: false,
-            })
-            .collect();
+        let columns = sort_order_as_scan_columns(sort_order);
         partitions_to_merge
             .iter()
             .all(|p| p.certifies_sort_order(&columns))
@@ -382,13 +381,7 @@ impl View for SqlBatchView {
     fn get_scan_output_ordering(&self) -> ScanOrdering {
         match &self.sort_order {
             Some(columns) => ScanOrdering::PerFile {
-                columns: columns
-                    .iter()
-                    .map(|column| ScanSortColumn {
-                        column: column.clone(),
-                        descending: false,
-                    })
-                    .collect(),
+                columns: sort_order_as_scan_columns(columns),
             },
             None => ScanOrdering::Unordered,
         }
