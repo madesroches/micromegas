@@ -254,7 +254,7 @@ def cmd_init(args):
         f.write("\n")
 
     print(f"Created {CONFIG_FILE}:")
-    print(json.dumps(config_data, indent=2))
+    print(json.dumps(config_data, indent=2, ensure_ascii=False))
 
 
 def cmd_import(args):
@@ -337,14 +337,14 @@ def cmd_pull(args):
                 if server_screen_to_file(existing) == new_content:
                     unchanged += 1
                     continue
-            except UnicodeDecodeError as e:
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 print(
-                    f"Warning: skipping '{name}': {local_path} has an "
-                    f"encoding error ({e}); not overwriting.",
+                    f"Warning: skipping '{name}': {local_path} could not be "
+                    f"read ({e}); not overwriting.",
                     file=sys.stderr,
                 )
                 continue
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 pass
 
         write_screen_file(local_path, new_content)
@@ -620,7 +620,7 @@ def cmd_list(args):
 
     if args.format == "json":
         result = [{"name": name, "status": screen_status(name)} for name in all_names]
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     # Table format

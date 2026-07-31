@@ -675,6 +675,35 @@ class TestCmdPull:
 
         assert Path("bad.json").read_bytes() == original_bytes
 
+    def test_invalid_json_local_file_not_overwritten(self, tmp_path, monkeypatch):
+        """cmd_pull must not silently clobber a local file whose JSON fails to
+        parse, even when the server returns fresh content for that name --
+        it should skip/warn instead, same as the undecodable-bytes case."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        original_bytes = b"{ not json -- my precious local edits"
+        with open("broken.json", "wb") as f:
+            f.write(original_bytes)
+
+        class FakeClient:
+            def get_screen(self, name):
+                return {
+                    "name": name,
+                    "screen_type": "notebook",
+                    "config": {"cells": []},
+                    "managed_by": "test",
+                }
+
+        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+
+        class Args:
+            names = ["broken"]
+
+        cmd_pull(Args())
+
+        assert Path("broken.json").read_bytes() == original_bytes
+
 
 class TestCmdApply:
     def test_unreadable_warning_printed_once(self, tmp_path, monkeypatch, capsys):
