@@ -284,15 +284,20 @@ Mirror the `BlocksView` dual-merger pattern, configured per view:
   `make_partitioned_execution_plan` (Design §1); user sessions get no optimizer-config changes —
   the declaration is opportunistic information DataFusion may exploit (e.g. row-group pruning on
   the leading column, order-aware aggregation), never a correctness risk. It does have a resource
-  consequence, though: one file group per partition means `FileGroupPartitioner::
-  repartition_preserving_order` (vendored DataFusion 54.1) returns `None` — declining to
-  repartition — as soon as the file-group count reaches `target_partitions`, so `DataSourceExec`
-  cannot fold the groups back down the way it does today's single-file-group `Concatenated` scan.
-  Scan concurrency (open Parquet readers, plan partitions) becomes k = the number of partitions
-  overlapping the query's time range, uncapped by `target_partitions`. That k is bounded by query
-  range, not by rollup cadence (see Trade-offs), so it applies to user queries over a wide range on
-  a view that has not rolled up recently. Accepted here for the same no-hard-limits reason as the
-  merge path's k.
+  consequence, though: `FileGroupPartitioner::repartition_preserving_order`
+  (`datafusion-datasource` 54.1, `rust/Cargo.toml:50`) only declines to repartition (returns `None`)
+  once the file-group count reaches `target_partitions`; below that threshold it splits each
+  single-file group into byte-range groups to fill out `target_partitions`. So on the user path
+  scan concurrency (open Parquet readers, plan partitions) is `max(k, target_partitions)`, and the
+  partial aggregate (`ordering_mode=Sorted`) runs with `target_partitions` working sets rather than
+  k — confirmed empirically with a throwaway planning test replicating
+  `SqlBatchView::register_table` in a default (user) session: 3 declared per-file groups became
+  `target_partitions` byte-range groups under a `RepartitionExec(Hash(…), preserve_order=true)`.
+  The declaration still improves user-path memory relative to today, though: each `Sorted` partial
+  holds one group's prefix instead of every group's, also confirmed by the probe. k itself is
+  bounded by query range, not by rollup cadence (see Trade-offs), so a wide-range query against a
+  view that has not rolled up recently is where k can exceed `target_partitions`. Accepted here for
+  the same no-hard-limits reason as the merge path's k.
 
 - **Fresh-write recording**: `SqlPartitionSpec` gains a `sort_order: Option<Vec<String>>` field,
   threaded through `fetch_sql_partition_spec` (new parameter) into `write_partition_from_rows`
@@ -529,11 +534,14 @@ this repo can't verify — file it as a follow-up issue referencing `query.rs:21
   repartitioning (Design §2) caps that parallelism at k rather than `target_partitions`, which is
   the intended trade: bounded memory over extra CPU fan-out on an I/O-bound path.
 - **No ceiling on k**: consistent with the project's no-hard-limits stance. On the merge path the
-  rollup cadence bounds k in practice. On the user-query path (Design §3's `get_scan_output_ordering`
-  override) k is instead the number of partitions overlapping the requested range — not bounded by
-  rollup cadence, since a query can span partitions that have not yet rolled up. Either way a
-  pathological k degrades gradually (more open readers, more plan partitions), not with a failure
-  cliff, and ordering correctness is unaffected.
+  rollup cadence bounds k in practice, and Design §2's disabled round-robin repartitioning keeps
+  scan/partial-aggregate concurrency at k rather than `target_partitions`. On the user-query path
+  (Design §3's `get_scan_output_ordering` override) k is instead the number of partitions
+  overlapping the requested range — not bounded by rollup cadence, since a query can span
+  partitions that have not yet rolled up — but there concurrency is `max(k, target_partitions)`,
+  since DataFusion still repartitions per-file groups up to `target_partitions` on that path.
+  Either way a pathological k degrades gradually (more open readers, more plan partitions), not
+  with a failure cliff, and ordering correctness is unaffected.
 
 ## Documentation
 
