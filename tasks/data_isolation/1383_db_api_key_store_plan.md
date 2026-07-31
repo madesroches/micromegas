@@ -471,10 +471,11 @@ RETURNING revoked_at
 ```
 
   `Some` ⇒ 200, `None` ⇒ 404. `effective_within_seconds` in the response is *this process's*
-  configured `cache_ttl_secs` (the `config` parameter above, read via the same
-  `DbApiKeyConfig::from_env()` call the provider uses, so it cannot silently disagree with the
-  provider actually running), so the revocation-latency property shows up where the operator is
-  looking; the docs note that a fleet with mixed configuration takes the longest configured TTL.
+  configured `cache_ttl_secs` (the `config` parameter threaded in by
+  `serve_ingestion_with_api_key_config`, built with the same prefix the caller gave
+  `ProviderBuilder::with_db_key_store`, so it cannot silently disagree with the provider actually
+  running), so the revocation-latency property shows up where the operator is looking; the docs
+  note that a fleet with mixed configuration takes the longest configured TTL.
 - **Analytics keys are not mintable through this API.** They are few, manually issued (§5, or direct
   SQL by an operator with DB access), and stay out of every HTTP write path: issuing read credentials
   from the fleet-facing service is the wrong direction for the write/read asymmetry, and keeping them
@@ -482,12 +483,14 @@ RETURNING revoked_at
   full lifecycle — list: `SELECT key_id, name, created_at, last_used_at, revoked_at FROM
   analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP `GET` for this table and the
   import tool's `uuid.uuid4()`-generated `key_id` is otherwise never surfaced to the operator; mint:
-  generate the key and its digest with an explicit, trailing-newline-safe recipe —
+  generate the key, its digest, and a `key_id` with an explicit, trailing-newline-safe recipe —
   `KEY="mmk_$(openssl rand -base64 48 | tr -d '=+/\n' | head -c 43)"; HASH=$(printf '%s' "$KEY" |
-  sha256sum | cut -d' ' -f1)` (`printf`, not `echo`, because `hash_key` covers the full key string and
-  `echo` would append a newline the validator never sees, silently minting a key that can never
-  authenticate) — then the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool
-  emits (§5), substituting `$HASH`; revoke: the
+  sha256sum | cut -d' ' -f1); ID=$(uuidgen)` (`printf`, not `echo`, because `hash_key` covers the full
+  key string and `echo` would append a newline the validator never sees, silently minting a key that
+  can never authenticate; `uuidgen`, not `gen_random_uuid()`, to keep §5's no-minimum-PG-version
+  property — the table has no `DEFAULT` on `key_id`, so nothing else supplies one) — then the same
+  `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool emits (§5), substituting `$ID`
+  for `key_id` and `$HASH` for the hash; revoke: the
   same `UPDATE ... SET revoked_at = COALESCE(...)` statement `DELETE /auth/api_keys/{key_id}` runs
   above, keyed **only** on the `key_id` the list step just produced — never on `name`, since `name` has
   no uniqueness constraint (§1) and a rotation-under-a-stable-name workflow (§5, [Security](#security))
@@ -525,12 +528,14 @@ micromegas-import-api-keys --from-prefixed | psql "$MICROMEGAS_SQL_CONNECTION_ST
 # split deployment: only the unprefixed MICROMEGAS_API_KEYS is ever read here
 # (provider() == provider_with_prefix("") never sees the prefixed vars), so
 # an explicit destination per key is required, no default; --skip excludes
-# names that stay env-only (here, object-cache-srv client keys sharing this
-# same keyring, per docker/README.md and admin/object-cache.md)
+# names used *exclusively* as an object-cache-srv client credential, per
+# docker/README.md and admin/object-cache.md. A name that also doubles as a
+# service's own MICROMEGAS_INGESTION_API_KEY (e.g. flight-sql, maintenance)
+# must go to --ingestion instead, not --skip — see the guidance below.
 micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
-  --ingestion game-client,build-agent \
+  --ingestion game-client,build-agent,flight-sql,maintenance \
   --analytics grafana,analyst-tools \
-  --skip flight-sql,maintenance
+  --skip object-cache-client
 ```
 
 - `--from-prefixed` maps `MICROMEGAS_INGESTION_API_KEYS` → `ingestion_api_keys` and
@@ -835,8 +840,12 @@ Ordering, for both split and monolith deployments:
    than be imported into either table. A name that is also a service's own ingestion self-telemetry
    credential (`MICROMEGAS_INGESTION_API_KEY`) must instead be passed to `--ingestion`, so it survives
    in `ingestion_api_keys` once step 3 removes `MICROMEGAS_API_KEYS`; it is unaffected in
-   `object-cache-srv`'s own env keyring either way. Existing key strings now authenticate through
-   *both* providers.
+   `object-cache-srv`'s own env keyring either way. Because §3 places the env `ApiKeyAuthProvider`
+   first in the chain, the env provider keeps answering for every existing key for as long as
+   `MICROMEGAS_API_KEYS` is still set — i.e. through the rest of this step — so `DbApiKeyAuthProvider`
+   is never reached and the imported rows are proven only by their presence in the table, not by any
+   traffic; `last_used_at` stays NULL for every imported key until step 3 removes the env keyring and
+   lets the DB provider actually be exercised.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
    redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
    configured" on its own, so both services keep serving without OIDC configured — including the
@@ -870,9 +879,10 @@ place the zero-client-change claim in the issue does not hold.
   revoking an `analytics_api_keys` row by hand (list: `SELECT key_id, name, created_at, last_used_at,
   revoked_at FROM analytics_api_keys ORDER BY created_at DESC` — the only way to discover a `key_id` to
   revoke, since this table has no HTTP `GET`; mint: the full executable recipe from §4 — generate the
-  key and compute its digest with a trailing-newline-safe command (`printf '%s' "$KEY" | sha256sum`,
+  key, compute its digest with a trailing-newline-safe command (`printf '%s' "$KEY" | sha256sum`,
   never `echo`, since `hash_key` covers the full key string and a stray newline would mint a key that
-  can never authenticate), then the import tool's `INSERT` shape with the computed hash; revoke: the
+  can never authenticate), and generate the `key_id` with `uuidgen` (the table has no `DEFAULT`, so
+  nothing else supplies one), then the import tool's `INSERT` shape with the computed hash and id; revoke: the
   same `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs, keyed only on the `key_id`
   from the list step — never on `name`, called out explicitly as unsafe during rotation since `name`
   has no uniqueness constraint (§1)), since that table has no HTTP
