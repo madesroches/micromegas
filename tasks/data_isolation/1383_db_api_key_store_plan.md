@@ -345,8 +345,8 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
 
 | Route | Body / result |
 |---|---|
-| `POST /auth/api_keys` | `{"name": "..."}` → **201** `{"key_id", "name", "created_at", "key"}` — the cleartext, returned exactly once |
-| `GET /auth/api_keys?limit=&offset=&include_revoked=` | **200** `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]`, newest first. `limit` defaults to 100 (max 500), `offset` defaults to 0, `include_revoked` defaults to `true`. **Never `key_hash`, never the key.** |
+| `POST /auth/api_keys` | `{"name": "..."}` → **201** `{"key_id", "name", "created_at", "key"}` — the cleartext, returned exactly once. **400** if `name` is empty or exceeds 255 bytes (the `VARCHAR(255)` column width). |
+| `GET /auth/api_keys?limit=&offset=&include_revoked=` | **200** `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]`, newest first. `limit` defaults to 100; values above 500 are silently clamped to 500 rather than rejected (a read endpoint, so capping is safer than erroring); `limit <= 0` is **400**. `offset` defaults to 0, `include_revoked` defaults to `true`. **Never `key_hash`, never the key.** |
 | `DELETE /auth/api_keys/{key_id}` | **200** `{"revoked_at", "effective_within_seconds"}`, or **404** for an unknown `key_id` |
 
 - Merged into `serve_ingestion`'s `protected_app` **before** the `auth_middleware` layer is applied,
@@ -373,10 +373,12 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   1. `auth_type != AuthType::Oidc` ⇒ **403**. Redundant with `is_admin: false` on key contexts, but
      it states the rule directly: *no API key can manage keys.*
   2. `!is_admin` ⇒ **403**.
-- `POST` generates `mmk_<43 base64url chars>` from 256 bits of `OsRng`, stores `hash_key(&key)`, and
-  logs `key_id` / `name` / `created_by` at info — never the key. The `mmk_` prefix makes keys
-  recognizable to secret scanners; it is cosmetic to validation, since the hash covers the whole
-  string (which is what lets imported legacy keys of any shape keep working).
+- `POST` validates the body first — `name` non-empty and ≤255 bytes, matching the column — returning
+  **400** `ApiKeyError::BadRequest` before any hashing or DB access; only a validated request generates
+  `mmk_<43 base64url chars>` from 256 bits of `OsRng`, stores `hash_key(&key)`, and logs `key_id` /
+  `name` / `created_by` at info — never the key. The `mmk_` prefix makes keys recognizable to secret
+  scanners; it is cosmetic to validation, since the hash covers the whole string (which is what lets
+  imported legacy keys of any shape keep working).
 - `DELETE` is idempotent in one statement, preserving the original revocation time:
 
 ```sql
@@ -423,10 +425,13 @@ what will be inserted before applying it, and keeps cleartext keys inside the to
 only hashes appear in the output.
 
 ```bash
-# split deployment: destination is unambiguous from the variable name
+# monolith deployment: the prefixed keyrings (MICROMEGAS_INGESTION_API_KEYS /
+# MICROMEGAS_ANALYTICS_API_KEYS) route to their tables unambiguously
 micromegas-import-api-keys --from-prefixed | psql "$MICROMEGAS_SQL_CONNECTION_STRING"
 
-# unprefixed MICROMEGAS_API_KEYS: an explicit destination per key, no default
+# split deployment: only the unprefixed MICROMEGAS_API_KEYS is ever read here
+# (provider() == provider_with_prefix("") never sees the prefixed vars), so
+# an explicit destination per key is required, no default
 micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   --ingestion game-client,build-agent \
   --analytics grafana,analyst-tools
@@ -486,13 +491,18 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    them in Phase 4 — they stay solely as the published crate's documented env-only entry point (see
    §3's comment on the rationale), not because anything internal still calls them.
    `ProviderBuilder::build()` additionally treats a non-empty attached key store as "configured" via
-   the startup existence query described in §3.
+   the startup existence query described in §3. Extract that query into a separately callable
+   function (e.g. `key_store_has_live_rows(&PgPool, ApiKeyTable) -> Result<bool>`) so
+   `rust/auth/tests/default_provider_tests.rs` (see [Testing Strategy](#testing-strategy)) can exercise
+   the four §3 rules without needing full env-var isolation around `build()`.
 
 ### Phase 3 — Management API
 
-5. `rust/public/src/servers/api_keys.rs` (new): `ApiKeyError` + `IntoResponse` (403 / 404 / 500,
-   modeled on `data_sources.rs`), `require_key_admin`, the three handlers, `api_keys_router(pool,
-   config)`. Export from `rust/public/src/servers/mod.rs`.
+5. `rust/public/src/servers/api_keys.rs` (new): `ApiKeyError` + `IntoResponse` (400 / 403 / 404 / 500,
+   modeled on `data_sources.rs`'s `BadRequest`/`ValidationError` precedent), `require_key_admin`, the
+   three handlers — `POST` validating `name` (non-empty, ≤255 bytes) and `GET` clamping/rejecting
+   `limit` per the route table above — `api_keys_router(pool, config)`. Export from
+   `rust/public/src/servers/mod.rs`.
 6. `rust/public/src/servers/ingestion.rs`: clone `lake.db_pool` before constructing
    `WebIngestionService`; merge `api_keys_router(pool, DbApiKeyConfig::from_env())` into
    `protected_app` inside the `if let Some(provider)` branch, before the middleware layer; `warn!`
@@ -537,6 +547,7 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - `rust/auth/src/db_api_key.rs`
 - `rust/public/src/servers/api_keys.rs`
 - `rust/auth/tests/db_api_key_tests.rs`
+- `rust/auth/tests/default_provider_tests.rs`
 - `rust/public/tests/api_keys_tests.rs`
 - `python/micromegas/micromegas/cli/import_api_keys.py`
 - `python/micromegas/tests/cli/test_import_api_keys.py`
@@ -675,14 +686,21 @@ place the zero-client-change claim in the issue does not hold.
   `analytics_api_keys` row by hand (mint: the import tool's `INSERT` shape; revoke: the same
   `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs), since that table has no HTTP
   lifecycle of its own.
-- **`admin/authentication.md`**: the "API Keys (Legacy)" section's Limitations list ("manual key
-  distribution and rotation", "no automatic expiration", "no user identity for audit logging") is now
-  wrong for DB-backed keys. Rewrite as two subsections — env keyring (static, still used by
-  `object-cache-srv`) and DB-backed keys — and link to `api-keys.md`.
+- **`admin/authentication.md`**: of the "API Keys (Legacy)" section's Limitations list, "manual key
+  distribution and rotation" and "no user identity for audit logging" are now wrong for DB-backed keys
+  (mint/revoke via HTTP; `created_by`/`revoked_by` audit trail). "No automatic expiration" stays
+  **true** — this design adds revocation, not expiry, so keep it listed as a remaining limitation of
+  DB-backed keys. Rewrite as two subsections — env keyring (static, still used by `object-cache-srv`)
+  and DB-backed keys — and link to `api-keys.md`.
 - **`admin/ingestion.md`**: note the `/auth/api_keys` routes and that they require OIDC + admin;
-  mark `MICROMEGAS_API_KEYS` as the legacy/bootstrap path.
+  mark `MICROMEGAS_API_KEYS` as the legacy/bootstrap path; and correct the "refuses to start unless
+  `MICROMEGAS_API_KEYS` or `MICROMEGAS_OIDC_CONFIG` is set" sentence (lines 49–51) to list a non-empty
+  DB key store as a third way to satisfy the check, mirroring the startup-message fix in Implementation
+  step 8 — this stops being accurate the moment Migration step 3 removes the env vars.
 - **`admin/monolith.md`, `admin/flight-sql.md`**: point at `api-keys.md`; state that flight-sql
-  validates `analytics_api_keys` and mints nothing.
+  validates `analytics_api_keys` and mints nothing; and, in `flight-sql.md`, correct the same "refuses
+  to start unless ... is set" sentence (lines 49–50) to add the non-empty DB key store as a third way
+  to satisfy the check, mirroring Implementation step 9.
 - **`admin/object-cache.md`**: state explicitly that its `MICROMEGAS_API_KEYS` is permanent and its
   keys are not revocable without a redeploy — otherwise it reads as an oversight.
 - **`otlp/index.md`, `docker/README.md:192`** (the *Ingestion Server* env table — the only
@@ -745,6 +763,22 @@ rows with a unique name prefix and cleaning up:
   `DbApiKeyAuthProvider` authenticates a key from either.
 - **Surface separation, both directions**: a key row in `ingestion_api_keys` is rejected by a provider
   bound to `Analytics`, and vice versa.
+
+**`rust/auth/tests/default_provider_tests.rs`** — `ProviderBuilder` / §3's startup-existence rules,
+using the extracted `key_store_has_live_rows` where full env isolation around `build()` would be
+awkward:
+
+- **Provider always registered**: `with_db_key_store` attached to an *empty* table still produces a
+  `MultiAuthProvider` containing the DB provider — asserted by authenticating a key minted (inserted)
+  into that table *after* `build()` returns, with no restart. This is the regression the design calls
+  out in §3: without it, a first-minted key would not authenticate until the process restarts.
+- **Non-empty table ⇒ `Some`**: a table with one live row and no env keys / OIDC configured still
+  yields `Ok(Some(_))` from `build()`.
+- **Empty table + nothing else configured ⇒ `Ok(None)`**: an empty table with no env keys / OIDC
+  configured yields `Ok(None)`, preserving the "genuinely empty deployment" startup guard.
+- **Missing relation ⇒ `Err` naming the table**: pointing `with_db_key_store` at a pool with no
+  `ingestion_api_keys`/`analytics_api_keys` relation (e.g. a fresh `connect_lazy` pool against a schema
+  at v4) makes `build()` return an `Err` whose message names the table, not `Ok(None)`.
 
 **`rust/public/tests/api_keys_tests.rs`** — `tower::ServiceExt::oneshot` against `api_keys_router`,
 with the `AuthContext` injected as an extension (no middleware needed). Needs the matching
