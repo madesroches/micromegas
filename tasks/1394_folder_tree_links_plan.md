@@ -26,7 +26,7 @@ gestures work for free, while keeping today's click/keyboard/drag-and-drop behav
   - `AppLink` (`analytics-web-app/src/components/AppLink.tsx`) already wraps react-router's `Link` for internal navigation and is used elsewhere in `Sidebar.tsx` (lines 276, 294) for the icon nav rail.
 - `analytics-web-app/src/routes/ScreensPage.tsx` (lines ~185-230) has the precedent for this exact pattern: a draggable card `<div>` that is *not* itself the link, containing an `<AppLink href={...} className="block">` around the label/icon content, with an action `<button>` rendered as a separate sibling `<div className="absolute top-3 right-2">` outside the `AppLink` — avoiding nesting a real `<button>` inside an `<a>`.
 - `FolderBreadcrumb.tsx` has the same `div[role=button]` pattern for its path segments; it is a separate component from `FolderTree` and out of scope here — issue #1394's text explicitly scopes the fix to `FolderTree.tsx`'s `renderNode`/`renderScreen` and never mentions `FolderBreadcrumb.tsx`. Worth a follow-up issue if the same behavior is wanted there, but not a decision to make in this plan.
-- No `jsx-a11y` ESLint plugin is configured (`analytics-web-app/eslint.config.*`... — `package.json` lists only `@typescript-eslint`), so nested-interactive-content isn't lint-enforced either way, but the `ScreensPage` precedent is followed anyway for consistency.
+- No `jsx-a11y` ESLint plugin is configured (`analytics-web-app/.eslintrc.json`... — `package.json` lists only `@typescript-eslint`), so nested-interactive-content isn't lint-enforced either way, but the `ScreensPage` precedent is followed anyway for consistency.
 - `src/components/__tests__/FolderTree.test.tsx` only tests the pure tree-building helpers (`buildFolderTree`, `ancestorPaths`, etc.) — no render/interaction tests exist yet for the row markup.
 
 ## Design
@@ -81,12 +81,14 @@ Ctrl/Cmd/middle-click it leaves the event alone and the browser opens a new tab 
 row is opened in a background tab — now a purely cosmetic, pre-existing tradeoff (no navigation is
 involved), see Trade-offs.
 
-Drag/drop and both folder-menu buttons are unaffected: they already call `e.stopPropagation()` in
-their own `onClick`/handlers, which stops the click from reaching the `AppLink`'s listener at all
-(same mechanism that already stops it from reaching the old `div`'s listener), and none of them sit
-inside the `AppLink` (drag/drop handlers live on the outer row `<div>`; both buttons are kept as
-siblings after the `AppLink`, per point 3 above) — so there's no anchor native-navigation default
-action for their clicks to trigger in the first place.
+Drag/drop and both folder-menu buttons are unaffected: neither button sits inside the `AppLink` (both
+are kept as siblings after it, per point 3 above), so their clicks never bubble through the
+`AppLink`'s listener or trigger its anchor native-navigation default action in the first place — a
+sibling's click doesn't reach an ancestor `AppLink` at all, with or without `stopPropagation()`. The
+buttons' own `e.stopPropagation()` calls serve a different purpose: they stop the click from bubbling
+up to `FolderTree`'s top-level wrapper `onClick={() => setMenuFor(null)}` (the outer
+`<div className="flex flex-col gap-1 h-full" onClick={() => setMenuFor(null)}>` in `FolderTree.tsx`),
+which would otherwise immediately close the just-opened folder-actions menu.
 
 The chevron needs one more thing, because it *is* kept nested inside the `AppLink` (wrapping the
 chevron, folder icon, and match dot — see point 3 above): `stopPropagation()` alone is not enough to
@@ -136,7 +138,7 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
      call `navigate()` — so a future change doesn't silently reintroduce the double-navigation bug
      described in Design. Keep the prop names as-is; this is a comment-only change to the interface.
    - `renderScreen` (line 241): no nested buttons exist here, so convert the whole row into
-     `<AppLink href={screenHref(screen.name)} onClick={() => onSelectScreen(screen.name)} draggable onDragStart={...} style={...} className={...}>` in place of the `<div role="button" ...>` — same children, same classes, drop `role`/`tabIndex`/`onKeyDown`.
+     `<AppLink href={screenHref(screen.name)} replace={false} onClick={() => onSelectScreen(screen.name)} draggable onDragStart={...} style={...} className={...}>` in place of the `<div role="button" ...>` — same children, same classes, drop `role`/`tabIndex`/`onKeyDown`. `replace={false}` is explicit here (rather than left unset) for parity with `goToScreen`'s current always-push behavior: react-router's `Link` defaults an unset `replace` to `createPath(location) === createPath(path)`, which would replace instead of push when clicking the link for the screen already being viewed.
    - `renderNode` (line 269): keep the outer `<div>` (with `dropHandlers`, `style`, and the
      selected/drop-target classes — unchanged), but replace its `role="button"`/`tabIndex`/`onClick`/
      `onKeyDown` with a child `<AppLink href={folderHref(node.path)} replace={folderNavReplace} onClick={() => onSelectFolder(node.path)} draggable={false} className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0">` wrapping only the chevron, folder icon, and match dot (lines 289-304, 310) — **not** the rename input. `flex-1 min-w-0` on the `AppLink` itself is required: in the outer row's flex layout, `AppLink` is now the direct flex item, so without it the link shrinks to its content width, bunching the "new subfolder"/folder-actions buttons up against the label instead of flush-right, and long names may not truncate correctly. `draggable={false}` is also required: an `<a href>` is natively draggable, and without this a folder/Home row drag would populate `dataTransfer`'s `text/plain` with the link's URL, which the row's own `dropHandlers`-driven `onDrop` would then pass to `onDropScreen` as if it were a screen name — a spurious drop. The chevron's existing `onClick={(e) => { e.stopPropagation(); onToggleExpand(node.path) }}` must be updated to also call `e.preventDefault()` — `onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleExpand(node.path) }}` — since it's now nested inside the `AppLink`: `stopPropagation()` alone stops the click from reaching the `AppLink`'s own listener but does not stop the anchor's native navigation default action, which depends solely on `preventDefault()` (see Design). Inside the `AppLink`, render the name conditionally instead of today's renaming/non-renaming branch (lines 305-309):
@@ -174,10 +176,11 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
        throw for the test's synthetic hrefs.
      - the "new subfolder" and folder-actions buttons are *not* inside the folder's `<a>` (e.g.
        assert `link.contains(button)` is `false`), guarding the nested-interactive-content fix.
-     - once a folder is put into rename mode (`renamingPath` set to that folder's path — either by
-       driving the "Rename" menu action or by asserting on a component rendered directly with that
-       state), the rename `<input>` is *not* inside the folder's `<a>` either (same
-       `link.contains(input)` assertion), guarding the `<input>`-nested-in-`<a>` fix.
+     - once a folder is put into rename mode (`renamingPath` set to that folder's path by opening the
+       folder-actions menu and clicking "Rename" — `renamingPath` is internal `useState` with no prop
+       or ref to set it directly, so driving the menu is the only viable way to reach this state), the
+       rename `<input>` is *not* inside the folder's `<a>` either (same `link.contains(input)`
+       assertion), guarding the `<input>`-nested-in-`<a>` fix.
      - a Ctrl-click (and separately a Cmd/meta-click) on a folder's and a screen's `<a>` still calls
        `onSelectFolder`/`onSelectScreen` (the search-clearing side effect) but does **not** call
        `navigate()` or change the current tab's location — e.g. `fireEvent.click(link, { ctrlKey:
