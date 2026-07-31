@@ -58,11 +58,16 @@ creates the v1 schema via `sql_telemetry_db.rs::create_tables` when the version 
 `upgrade_data_lake_schema_v2/v3/v4` in sequence and asserts the final version. New tables therefore
 belong **only** in a new step, never in `create_tables` (same shape as v4, which adds
 `streams.format` even though `create_tables` creates `streams`). **v5 is not exclusively claimed**:
-`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` and
-`tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:22,27` also reserve the v5 bump,
-for the blocks-partitioning work (plan committed 2026-07-15, not yet implemented). Whichever of the
-two lands second must renumber to v6; see Implementation Steps Phase 1 step 1 for how this plan
-handles that coordination.
+`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` also reserves v5 for the
+blocks-partitioning work (plan committed 2026-07-15, not yet implemented) — but per that plan's own
+`derisk_deploy_ordering.md:15-27`, its Deploy 1 ships the `upgrade_data_lake_schema_v5` **function**
+(and an operator cutover may stamp real databases at `current_version = 5`) **without** bumping
+`LATEST_DATA_LAKE_SCHEMA_VERSION`, which stays 4 until a later, separate Deploy 2. So `LATEST` being
+still 4 in the tree does **not** mean v5 is free: the coordination below is keyed on whether
+`tasks/1245`'s `upgrade_data_lake_schema_v5` function exists in the tree (or any deployed database may
+already be stamped at that version), not on whether `LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped.
+Whichever of the two plans' migrations lands second must renumber to v6; see Implementation Steps
+Phase 1 step 1 for how this plan handles that coordination.
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -110,7 +115,7 @@ step 1.
 
 ## Design
 
-### 1. Schema (migration v5)
+### 1. Schema (migration v5, or v6 if `tasks/1245`'s `upgrade_data_lake_schema_v5` has already landed)
 
 ```sql
 CREATE TABLE ingestion_api_keys (
@@ -375,9 +380,18 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`. The table is always
   `Ingestion` for this service. The monolith inherits the routes for free.
 - Gate, checked first in every handler (`fn require_key_admin(&AuthContext) -> Result<(), ApiKeyError>`):
-  1. `auth_type != AuthType::Oidc` ⇒ **403**. Redundant with `is_admin: false` on key contexts, but
-     it states the rule directly: *no API key can manage keys.*
-  2. `!is_admin` ⇒ **403**.
+  1. `auth_type != AuthType::Oidc` ⇒ **403** `ApiKeyError::NotOidc` ("caller is not an OIDC identity;
+     API keys cannot manage keys"). Redundant with `is_admin: false` on key contexts, but it states
+     the rule directly: *no API key can manage keys.*
+  2. `!is_admin` ⇒ **403** `ApiKeyError::NotAdmin` ("OIDC identity is not in the admin list"). Distinct
+     variant/message from step 1 so an operator's 403 tells them which of the two conditions failed.
+  - **This gate needs `MICROMEGAS_ADMINS` (or `MICROMEGAS_INGESTION_ADMINS` on the monolith, which
+    falls back to `MICROMEGAS_ADMINS`, per `rust/auth/src/default_provider.rs:71-80`) populated on the
+    *ingestion* service, not just OIDC configured**: `is_admin` is set only by `OidcAuthProvider`, from
+    `load_admin_users(admin_var)` (`rust/auth/src/oidc.rs:264-269`), which returns `vec![]` when the
+    var is unset. Without it, every `/auth/api_keys` call 403s at step 2 regardless of how correctly
+    OIDC itself is configured — call this out in the admin docs (see
+    [Documentation](#documentation)) rather than leaving it as a silent gap.
 - `POST` validates the body first — `name` non-empty and ≤255 bytes, matching the column — returning
   **400** `ApiKeyError::BadRequest` before any hashing or DB access; only a validated request generates
   `mmk_<43 base64url chars>` from 256 bits of `OsRng`, stores `hash_key(&key)`, and logs `key_id` /
@@ -402,12 +416,16 @@ RETURNING revoked_at
 - **Analytics keys are not mintable through this API.** They are few, manually issued (§5, or direct
   SQL by an operator with DB access), and stay out of every HTTP write path: issuing read credentials
   from the fleet-facing service is the wrong direction for the write/read asymmetry, and keeping them
-  out is what confines the ingestion service's DB writes to one table. The operator procedure for both
-  halves of the lifecycle — mint: the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the
-  import tool emits (§5); revoke: the same `UPDATE ... SET revoked_at = COALESCE(...)` statement
-  `DELETE /auth/api_keys/{key_id}` runs above — is written up as a runbook in
-  `mkdocs/docs/admin/api-keys.md` rather than left implicit. That runbook, not the import tool, is the
-  durable answer to "how do I revoke an analytics key at 2am."
+  out is what confines the ingestion service's DB writes to one table. The operator procedure for the
+  full lifecycle — list: `SELECT key_id, name, created_at, last_used_at, revoked_at FROM
+  analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP `GET` for this table and the
+  import tool's `uuid.uuid4()`-generated `key_id` is otherwise never surfaced to the operator; mint:
+  the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool emits (§5); revoke: the
+  same `UPDATE ... SET revoked_at = COALESCE(...)` statement `DELETE /auth/api_keys/{key_id}` runs
+  above, keyed on the `key_id` the list step just produced (or a revoke-by-`name` variant for when the
+  operator only knows the name) — is written up as a runbook in `mkdocs/docs/admin/api-keys.md` rather
+  than left implicit. That runbook, not the import tool, is the durable answer to "how do I revoke an
+  analytics key at 2am."
 - **Rejected: admin-gated lakehouse UDFs** for key management, despite the precedent in #1382. Two
   reasons, both from the umbrella plan: `flight_sql_service_impl.rs:330` logs `sql={sql:?}` at info
   and micromegas ingests its own logs, so key material in a SQL literal would land in `log_entries` —
@@ -479,12 +497,21 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 ### Phase 1 — Schema
 
-1. `rust/ingestion/src/sql_migration.rs`: claim **the next free schema version** — v5 today, but v6 if
-   `tasks/1245_partition_blocks_by_insert_time`'s bump lands first. That plan also reserves a v5 step
-   for its blocks-partitioning work (`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577`,
-   `tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:22,27`); whichever of the two
-   lands second must renumber its migration. Coordinate with that plan (in particular
-   `derisk_deploy_ordering.md`) before merging so only one PR claims a given version. Add
+1. `rust/ingestion/src/sql_migration.rs`: claim **the next free schema version**, keyed on whether
+   `tasks/1245_partition_blocks_by_insert_time`'s `upgrade_data_lake_schema_v5` function is already
+   present in the tree — **not** on whether `LATEST_DATA_LAKE_SCHEMA_VERSION` has been bumped to 5.
+   Per `tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:15-27`, that plan's
+   Deploy 1 ships `upgrade_data_lake_schema_v5` (reachable only via a standalone CLI subcommand, never
+   wired into `execute_migration`'s chain) while `LATEST` deliberately stays 4 — its own `LATEST` bump
+   to 5 is a separate, later Deploy 2 (`plan.md:550,577`). So if `tasks/1245`'s Deploy 1 has shipped
+   (the function exists in the tree, or any deployed database may already be stamped
+   `current_version = 5` via its operator cutover), this plan **must** claim v6 and must **not** add an
+   `if 4 == current_version` arm — doing so would define a second `upgrade_data_lake_schema_v5` for
+   different DDL and collide with databases #1245's cutover already stamped 5, reintroducing the
+   hazard-1/hazard-3 failure modes `derisk_deploy_ordering.md` exists to prevent. Only if `tasks/1245`'s
+   `upgrade_data_lake_schema_v5` is absent from the tree is v5 free to claim here. Coordinate with that
+   plan (in particular `derisk_deploy_ordering.md`) before merging so only one PR claims a given
+   version. Add
    `upgrade_data_lake_schema_v<N>` creating both tables and both unique indexes; bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to `N`; add the corresponding `if <N-1> == current_version` arm
    to `execute_migration`. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh databases
@@ -669,16 +696,24 @@ Ordering, for both split and monolith deployments:
    or roll the ingestion service (or the monolith) first — it is what runs the migration — and only
    then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)); its
    own startup existence query (§3) fails loudly, naming the table, if this ordering is violated.
-   **Not rollback-safe once applied**: `execute_migration` (`rust/ingestion/src/sql_migration.rs:150-199`)
-   matches the DB's current version against a fixed set of `if N == current_version` arms and panics
-   via `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` for any version it does not
+   **Not rollback-safe once applied, as `sql_migration.rs` stands today**: `execute_migration`
+   (`rust/ingestion/src/sql_migration.rs:150-199`) matches the DB's current version against a fixed
+   set of `if N == current_version` arms and panics via
+   `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` for any version it does not
    recognize — including a DB already migrated past what an older binary knows. So after this migration
    applies, any still-old `telemetry-ingestion-srv` or `micromegas-monolith` process (the only two
    binaries that call `connect_to_remote_data_lake` / `migrate_db`, per
    `rust/telemetry-ingestion-srv/src/main.rs:45` and `rust/monolith/src/main.rs:180`) panics at startup
-   against the new schema. A rolling deploy of either binary must run forward to completion — old
-   replicas must not be left running or restarted, and the binary must not be rolled back — once the
-   migration has applied. flight-sql and the maintenance daemon do not run `execute_migration` and are
+   against the new schema. **This is no longer unconditionally true once
+   `tasks/1245_partition_blocks_by_insert_time`'s Deploy 1 has landed**: that plan relaxes both
+   post-migration asserts from `==` to `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION`
+   (`derisk_deploy_ordering.md:15-27`), in which case an old binary finds the DB at a newer version and
+   logs a warning instead of panicking. Do not rely on that relaxation being present — check the state
+   of `sql_migration.rs` at implementation time — but if it is present, a rolling deploy that stalls
+   partway is degraded rather than crash-looping. Absent that relaxation, a rolling deploy of either
+   binary must run forward to completion — old replicas must not be left running or restarted, and the
+   binary must not be rolled back — once the migration has applied. flight-sql and the maintenance
+   daemon do not run `execute_migration` and are
    unaffected.
 2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
    *both* providers.
@@ -704,9 +739,12 @@ place the zero-client-change claim in the issue does not hold.
 - **New `mkdocs/docs/admin/api-keys.md`**, added to `mkdocs.yml` nav under Administration: the two
   tables and why they are split; the three routes with request/response examples; the
   revocation-latency property and the cache env knobs; the grant recipe; the import procedure
-  including the dual-use split; the `object-cache-srv` exception; a runbook for minting and revoking an
-  `analytics_api_keys` row by hand (mint: the import tool's `INSERT` shape; revoke: the same
-  `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs), since that table has no HTTP
+  including the dual-use split; the `object-cache-srv` exception; a runbook for listing, minting, and
+  revoking an `analytics_api_keys` row by hand (list: `SELECT key_id, name, created_at, last_used_at,
+  revoked_at FROM analytics_api_keys ORDER BY created_at DESC` — the only way to discover a `key_id` to
+  revoke, since this table has no HTTP `GET`; mint: the import tool's `INSERT` shape; revoke: the same
+  `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs, by `key_id` from the list step or
+  by `name`), since that table has no HTTP
   lifecycle of its own.
 - **`admin/authentication.md`**: of the "API Keys (Legacy)" section's Limitations list, "manual key
   distribution and rotation" and "no user identity for audit logging" are now wrong for DB-backed keys
@@ -714,10 +752,14 @@ place the zero-client-change claim in the issue does not hold.
   **true** — this design adds revocation, not expiry, so keep it listed as a remaining limitation of
   DB-backed keys. Rewrite as two subsections — env keyring (static, still used by `object-cache-srv`)
   and DB-backed keys — and link to `api-keys.md`.
-- **`admin/ingestion.md`**: note the `/auth/api_keys` routes and that they require OIDC + admin;
-  mark `MICROMEGAS_API_KEYS` as the legacy/bootstrap path; and correct the "refuses to start unless
-  `MICROMEGAS_API_KEYS` or `MICROMEGAS_OIDC_CONFIG` is set" sentence (lines 49–51) to list a non-empty
-  DB key store as a third way to satisfy the check, mirroring the startup-message fix in Implementation
+- **`admin/ingestion.md`**: note the `/auth/api_keys` routes and that they require OIDC + admin; add
+  a `MICROMEGAS_ADMINS` row to the environment-variable table (mirroring `admin/flight-sql.md:48-58`,
+  which already documents it), and state plainly that minting/listing/revoking keys 403s until an
+  OIDC identity is in that list — `MICROMEGAS_ADMINS` is otherwise unset for ingestion and every
+  `/auth/api_keys` call fails with no other symptom; mark `MICROMEGAS_API_KEYS` as the legacy/bootstrap
+  path; and correct the "refuses to start unless `MICROMEGAS_API_KEYS` or `MICROMEGAS_OIDC_CONFIG` is
+  set" sentence (lines 49–51) to list a non-empty DB key store as a third way to satisfy the check,
+  mirroring the startup-message fix in Implementation
   step 8 — this stops being accurate the moment Migration step 3 removes the env vars.
 - **`admin/monolith.md`, `admin/flight-sql.md`**: point at `api-keys.md`; state that flight-sql
   validates `analytics_api_keys` and mints nothing; and, in `flight-sql.md`, correct the same "refuses
@@ -743,7 +785,9 @@ place the zero-client-change claim in the issue does not hold.
   replace the "Postgres grants enforce it" claim with the code-boundary-plus-documented-grants
   reality.
 - **`CHANGELOG.md`**: an `Unreleased` bullet covering the DB-backed key store (`ingestion_api_keys`
-  / `analytics_api_keys`, migration v5), the three new `/auth/api_keys` HTTP routes, the four new
+  / `analytics_api_keys`, migration v5 — or v6, per Implementation Steps Phase 1 step 1, if
+  `tasks/1245`'s `upgrade_data_lake_schema_v5` has already landed), the three new `/auth/api_keys`
+  HTTP routes, the four new
   cache/audit env knobs (`MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`,
   `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), and the
   one client-visible breaking change: a key valid on both ingestion and flight-sql today must
@@ -798,9 +842,16 @@ awkward:
   yields `Ok(Some(_))` from `build()`.
 - **Empty table + nothing else configured ⇒ `Ok(None)`**: an empty table with no env keys / OIDC
   configured yields `Ok(None)`, preserving the "genuinely empty deployment" startup guard.
-- **Missing relation ⇒ `Err` naming the table**: pointing `with_db_key_store` at a pool with no
-  `ingestion_api_keys`/`analytics_api_keys` relation (e.g. a fresh `connect_lazy` pool against a schema
-  at v4) makes `build()` return an `Err` whose message names the table, not `Ok(None)`.
+- **Missing relation ⇒ `Err` naming the table**: the other three bullets above run against the live,
+  already-migrated-to-v5 `MICROMEGAS_SQL_CONNECTION_STRING` pool, so a missing relation cannot be
+  simulated by pointing at an unmigrated (v4) or `connect_lazy` pool — the former isn't available once
+  this table exists, and the latter never reaches a server, so it produces a *connection* error, not
+  a missing-relation one. Instead, on that same live pool, run `key_store_has_live_rows` with
+  `SET search_path TO <a throwaway empty schema>` (created and dropped by the test) so the existence
+  query's unqualified table name genuinely resolves to nothing. Assert the resulting `Err` is a `sqlx`
+  undefined-table error (SQLSTATE `42P01`) — not merely that the message contains the table name, which
+  would also pass for an unrelated error that happened to mention it — and that `build()` propagates it
+  rather than treating it as `Ok(None)`.
 
 **`rust/public/tests/api_keys_tests.rs`** — `tower::ServiceExt::oneshot` against `api_keys_router`,
 with the `AuthContext` injected as an extension (no middleware needed). Needs the matching
