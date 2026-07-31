@@ -12,6 +12,7 @@ import pytest
 
 from micromegas.cli import screens as screens_module
 from micromegas.cli.screens import (
+    cmd_apply,
     cmd_pull,
     compute_plan,
     format_screen_diff,
@@ -180,9 +181,10 @@ class TestListLocalScreens:
                 "config": {},
             },
         )
-        screens, unreadable = list_local_screens()
+        screens, unreadable, invalid_names = list_local_screens()
         assert set(screens.keys()) == {"notebook-a", "notebook-b"}
         assert unreadable == set()
+        assert invalid_names == set()
 
     def test_unreadable_files_not_silently_dropped(self, tmp_path, monkeypatch):
         """Files that exist locally but fail to decode/parse must show up in
@@ -204,9 +206,31 @@ class TestListLocalScreens:
         with open("broken.json", "w") as f:
             f.write("{ not json")
 
-        screens, unreadable = list_local_screens()
+        screens, unreadable, invalid_names = list_local_screens()
         assert set(screens.keys()) == {"ok"}
         assert unreadable == {"bad", "broken"}
+        assert invalid_names == set()
+
+    def test_invalid_but_parsed_file_reports_known_name(self, tmp_path, monkeypatch):
+        """A file that parses as JSON but fails schema validation (missing a
+        required field) has a known identity -- its `name`, if present,
+        surfaces in `invalid_names`, distinct from `unreadable` (reserved for
+        files whose identity can't be determined at all). A file with no
+        `name` field contributes to neither -- its identity truly is
+        unknown, but that's a local-authoring mistake unrelated to any other
+        screen."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        with open("half-written.json", "w") as f:
+            json.dump({"name": "half-written", "screen_type": "notebook"}, f)
+        with open("schema.json", "w") as f:
+            json.dump({"$schema": "x"}, f)
+
+        screens, unreadable, invalid_names = list_local_screens()
+        assert screens == {}
+        assert unreadable == set()
+        assert invalid_names == {"half-written"}
 
 
 class TestComputePlan:
@@ -501,6 +525,87 @@ class TestComputePlan:
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert deletes == []
 
+    def test_unrelated_invalid_json_does_not_block_delete(self, tmp_path, monkeypatch):
+        """A stray local JSON file that isn't a screen at all -- it parses
+        fine but fails schema validation (no `name`/`screen_type`/`config`)
+        -- must not suppress deletion of an unrelated, cleanly-removed
+        screen. Only files whose identity is genuinely undeterminable (can't
+        even be parsed) warrant the conservative repo-wide skip."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        with open("schema.json", "w") as f:
+            json.dump({"$schema": "x"}, f)
+
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "removed-locally",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            }
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert deletes == ["removed-locally"]
+
+    def test_invalid_file_with_known_name_protects_only_itself(
+        self, tmp_path, monkeypatch
+    ):
+        """A local file that parses as JSON but fails schema validation
+        (e.g. missing `config`) still has a known `name` field -- that
+        specific name should be protected from deletion, without blocking
+        deletes for unrelated, cleanly-removed screens."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        with open("half-written.json", "w") as f:
+            json.dump({"name": "half-written", "screen_type": "notebook"}, f)
+
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "half-written",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+            {
+                "name": "removed-locally",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert deletes == ["removed-locally"]
+        assert "half-written" not in deletes
+
+    def test_named_subset_mode_no_skip_warning(self, tmp_path, monkeypatch, capsys):
+        """`--names` mode never computes deletes (see the `if not names`
+        guard), so the "skipping delete computation" warning must not fire
+        even when genuinely-unreadable files are present."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        write_screen_file(
+            "ok.json",
+            {
+                "name": "ok",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+        )
+        with open("broken.json", "w") as f:
+            f.write("{ not json")
+
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        client = self._make_client([])
+        compute_plan(config, client, names=["ok"])
+
+        captured = capsys.readouterr()
+        assert "skipping delete computation" not in captured.err
+
 
 class TestCmdPull:
     def test_unreadable_local_file_not_overwritten(self, tmp_path, monkeypatch):
@@ -534,6 +639,36 @@ class TestCmdPull:
         cmd_pull(Args())
 
         assert Path("bad.json").read_bytes() == original_bytes
+
+
+class TestCmdApply:
+    def test_unreadable_warning_printed_once(self, tmp_path, monkeypatch, capsys):
+        """cmd_apply must scan the directory once per invocation: compute_plan
+        used to re-scan (via list_local_screens) and cmd_apply scanned again
+        afterwards, so each unreadable-file warning printed twice in a single
+        `apply` run. It must now print exactly once."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": managed_by, "server": "http://localhost"}, f)
+        with open("broken.json", "w") as f:
+            f.write("{ not json")
+
+        class FakeClient:
+            def list_screens(self):
+                return []
+
+        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+
+        class Args:
+            names = []
+            auto_approve = True
+            color = False
+
+        cmd_apply(Args())
+
+        captured = capsys.readouterr()
+        assert captured.err.count("Warning: skipping broken.json") == 1
 
 
 class TestFormatScreenDiff:
