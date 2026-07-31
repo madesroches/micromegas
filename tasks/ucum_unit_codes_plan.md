@@ -151,13 +151,27 @@ today's `42 cm` from the raw-unit fallthrough. So `units.ts` gets a small canoni
 map, and the fallthrough goes through it instead of printing the canonical name directly:
 
 ```ts
-// units.ts
+// units.ts — declared after SIZE_UNITS and BIT_UNITS (§1) since it derives from them.
 const CANONICAL_DISPLAY_ABBREV: Record<string, string> = {
   '': '',
   'percent': '%',
   'degrees': '°',
   'celsius': '°C',
   'centimeters': 'cm',
+  // Time — hand-listed rather than imported from time-units.ts's TIME_UNITS, which would create an
+  // import cycle (time-units.ts already imports normalizeUnit from this module).
+  'nanoseconds': 'ns',
+  'microseconds': 'µs',
+  'milliseconds': 'ms',
+  'seconds': 's',
+  'minutes': 'min',
+  'hours': 'h',
+  'days': 'd',
+  // Size/bit — derived from SIZE_UNITS/BIT_UNITS (§1) so the abbreviation can never drift from the
+  // adaptive-scaling tables; each also gets its `/s` rate form, matching getAdaptiveSizeUnit's/
+  // getAdaptiveBitUnit's own `bestUnit.abbrev + '/s'` convention.
+  ...Object.fromEntries(SIZE_UNITS.flatMap((u) => [[u.unit, u.abbrev], [`${u.unit}/s`, `${u.abbrev}/s`]])),
+  ...Object.fromEntries(BIT_UNITS.flatMap((u) => [[u.unit, u.abbrev], [`${u.unit}/s`, `${u.abbrev}/s`]])),
 }
 
 /** The short form shown to users for a canonical unit; falls back to the canonical name itself. */
@@ -408,7 +422,12 @@ commit.
 - No alias normalizes to a value `isCurrencyUnit` accepts.
 - Update `units.test.ts:123-124` (`none`, `count` now normalize to `''`).
 - `unitDisplayAbbrev` maps `percent`→`%`, `degrees`→`°`, `celsius`→`°C`, `centimeters`→`cm`, `''`→`''`,
-  and passes through any other canonical name unchanged (e.g. `bytes`→`bytes`).
+  the time/size/bit canonical names to their short forms (`milliseconds`→`ms`, `kilobytes`→`KB`,
+  `megabits`→`Mbit`, …) and their `/s` forms (`bytes/s`→`B/s`, `kilobits/s`→`kbit/s`, …), and passes
+  through any other, genuinely unmapped canonical name unchanged (e.g. `widgets`→`widgets`).
+- Regression guard for the all-zero-series case: for every name in `TIME_UNIT_NAMES`,
+  `SIZE_UNIT_NAMES`, and `BIT_UNIT_NAMES` (bare and `/s` forms), `unitDisplayAbbrev(name) !== name` —
+  i.e. an adaptive family never falls through to its spelled-out canonical name.
 
 **`format-value.test.ts`**
 - `formatValueWithUnit(1234567890, 'By/s')` → `'1.1 GB/s'` (the issue's reported symptom).
