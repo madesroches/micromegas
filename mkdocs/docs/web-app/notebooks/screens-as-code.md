@@ -138,6 +138,8 @@ Apply local state to server. Runs `plan` first, then prompts for confirmation. U
 
 Screens tracked by this repo that no longer have a local file are deleted from the server.
 
+If a local `.json` file can't even be decoded/parsed, its identity is unknown, so deletes are skipped entirely for that run (a warning is printed, but the command still exits 0) -- worth knowing when running `apply --auto-approve` in CI. A file that parses as JSON but fails schema validation only protects its own `name` (if present) from deletion; it doesn't affect deletes for other screens.
+
 ### `list`
 
 ```bash

@@ -646,17 +646,31 @@ class TestCmdApply:
         """cmd_apply must scan the directory once per invocation: compute_plan
         used to re-scan (via list_local_screens) and cmd_apply scanned again
         afterwards, so each unreadable-file warning printed twice in a single
-        `apply` run. It must now print exactly once."""
+        `apply` run. It must now print exactly once.
+
+        A valid `ok.json` screen (absent from the server) is included so that
+        `creates` is non-empty and `cmd_apply` proceeds past its "No changes"
+        early return into the create/update/delete code path that previously
+        re-scanned the directory -- without it, the double-scan bug this test
+        guards against is never reached and the test would pass regardless of
+        whether the bug is present."""
         monkeypatch.chdir(tmp_path)
         managed_by = "https://github.com/org/repo/tree/main/screens"
         with open("micromegas-screens.json", "w") as f:
             json.dump({"managed_by": managed_by, "server": "http://localhost"}, f)
         with open("broken.json", "w") as f:
             f.write("{ not json")
+        with open("ok.json", "w") as f:
+            json.dump(
+                {"name": "ok", "screen_type": "notebook", "config": {"cells": []}}, f
+            )
 
         class FakeClient:
             def list_screens(self):
                 return []
+
+            def create_screen(self, name, screen_type, config, managed_by, folder_path):
+                pass
 
         monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
 
