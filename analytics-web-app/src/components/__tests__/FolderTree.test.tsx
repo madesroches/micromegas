@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { buildFolderTree, ancestorPaths, normalizeFolderSegment, parentOf, FolderTree } from '../FolderTree'
 import { FolderInfo } from '@/lib/folders-api'
 import { Screen } from '@/lib/screens-api'
@@ -120,6 +120,20 @@ function LocationDisplay() {
   return <div data-testid="location">{location.pathname}{location.search}</div>
 }
 
+// Exposes a button that steps one entry back in history. Used to distinguish
+// "navigated exactly once" from "navigated twice to the same URL": a single
+// duplicate push is invisible in the final pathname (it's the same URL) but
+// leaves an extra history entry, so going back one step lands back on the
+// *previous* pushed entry instead of the original starting location.
+function GoBackButton() {
+  const navigate = useNavigate()
+  return (
+    <button data-testid="go-back" onClick={() => navigate(-1)}>
+      back
+    </button>
+  )
+}
+
 function renderTree(overrides: {
   onSelectFolder?: (path: string) => void
   onSelectScreen?: (name: string) => void
@@ -148,6 +162,7 @@ function renderTree(overrides: {
         onDeleteFolder={vi.fn()}
       />
       <LocationDisplay />
+      <GoBackButton />
     </MemoryRouter>
   )
 
@@ -203,9 +218,25 @@ describe('FolderTree rendering', () => {
     expect(screen.getByTestId('location').textContent).toBe(before)
   })
 
-  it('navigates exactly once (no duplicate history entry) on a plain click', () => {
+  it('navigates exactly once (no duplicate history entry) on a plain click of a screen', () => {
     renderTree()
     fireEvent.click(screen.getByRole('link', { name: /dashboard/ }))
     expect(screen.getByTestId('location').textContent).toBe('/screen/dashboard')
+
+    // If onSelectScreen also called navigate() to the same URL, this would be
+    // invisible above (same pathname either way) but would leave an extra
+    // history entry. Going back one step should return to the original
+    // location; a duplicate push would leave us stuck on /screen/dashboard.
+    fireEvent.click(screen.getByTestId('go-back'))
+    expect(screen.getByTestId('location').textContent).toBe('/screens')
+  })
+
+  it('navigates exactly once (no duplicate history entry) on a plain click of a folder', () => {
+    renderTree()
+    fireEvent.click(screen.getByRole('link', { name: /team/ }))
+    expect(screen.getByTestId('location').textContent).toBe('/screens?folder=team')
+
+    fireEvent.click(screen.getByTestId('go-back'))
+    expect(screen.getByTestId('location').textContent).toBe('/screens')
   })
 })

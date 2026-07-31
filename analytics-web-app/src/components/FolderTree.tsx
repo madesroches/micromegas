@@ -308,7 +308,7 @@ export function FolderTree({
             replace={folderNavReplace}
             onClick={() => onSelectFolder(node.path)}
             draggable={false}
-            className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0"
+            className={`flex items-center gap-1.5 cursor-pointer min-w-0 ${renamingPath === node.path ? '' : 'flex-1'}`}
           >
             {hasChildren ? (
               <ChevronRight
