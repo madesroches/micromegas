@@ -57,9 +57,9 @@ export interface InitOutput {
     readonly rust_zstd_wasm_shim_memmove: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_memset: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_qsort: (a: number, b: number, c: number, d: number) => void;
-    readonly wasm_bindgen_531d9694881ee3b8___closure__destroy___dyn_core_7d5f0a2ba6a62c33___ops__function__FnMut__wasm_bindgen_531d9694881ee3b8___JsValue____Output___core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_531d9694881ee3b8___JsError___: (a: number, b: number) => void;
-    readonly wasm_bindgen_531d9694881ee3b8___convert__closures_____invoke___wasm_bindgen_531d9694881ee3b8___JsValue__core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_531d9694881ee3b8___JsError___true_: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_531d9694881ee3b8___convert__closures_____invoke___js_sys_f55d77ba675af7f1___Function_fn_wasm_bindgen_531d9694881ee3b8___JsValue_____wasm_bindgen_531d9694881ee3b8___sys__Undefined___js_sys_f55d77ba675af7f1___Function_fn_wasm_bindgen_531d9694881ee3b8___JsValue_____wasm_bindgen_531d9694881ee3b8___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_9464af5f1cc93373___closure__destroy___dyn_core_9b3796e30d99ddb7___ops__function__FnMut__wasm_bindgen_9464af5f1cc93373___JsValue____Output___core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_9464af5f1cc93373___JsError___: (a: number, b: number) => void;
+    readonly wasm_bindgen_9464af5f1cc93373___convert__closures_____invoke___wasm_bindgen_9464af5f1cc93373___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_9464af5f1cc93373___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_9464af5f1cc93373___convert__closures_____invoke___js_sys_338629792469778e___Function_fn_wasm_bindgen_9464af5f1cc93373___JsValue_____wasm_bindgen_9464af5f1cc93373___sys__Undefined___js_sys_338629792469778e___Function_fn_wasm_bindgen_9464af5f1cc93373___JsValue_____wasm_bindgen_9464af5f1cc93373___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
