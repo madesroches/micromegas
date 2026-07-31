@@ -3,6 +3,7 @@ import { ChevronRight, FileText, Folder, FolderOpen, Home, MoreVertical, Plus } 
 import { FolderInfo } from '@/lib/folders-api'
 import { Screen } from '@/lib/screens-api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { AppLink } from '@/components/AppLink'
 
 export interface FolderTreeNode {
   name: string
@@ -82,10 +83,33 @@ interface FolderTreeProps {
    * when no folder is active (e.g. the sidebar is shown on a non-Screens page).
    */
   selectedFolder: string | null
-  onSelectFolder: (path: string) => void
+  /**
+   * Fires as the `AppLink`'s `onClick` for a folder/Home row, with the click
+   * event as the second argument. Must stay navigation-free (never call
+   * `navigate()`): react-router's `Link` invokes this unconditionally on
+   * plain or Ctrl/Cmd/Shift/Alt clicks — so if this called `navigate()` too,
+   * a plain click would push a duplicate history entry and a Ctrl/Cmd-click
+   * would navigate the current tab away in addition to opening the new tab,
+   * defeating ctrl-click-to-open-in-new-tab. (Middle-click never reaches
+   * here at all: browsers dispatch `auxclick`, not `click`, for non-primary
+   * mouse buttons, so it's handled entirely as the browser's native
+   * new-tab action.)
+   */
+  onSelectFolder: (path: string, e: React.MouseEvent) => void
+  /** Builds the `href` for a folder row's `AppLink`, given its path ('' for Home). */
+  folderHref: (path: string) => string
+  /** Passed straight through to folder/Home `AppLink`s' `replace` prop. */
+  folderNavReplace: boolean
   /** Name of the screen currently open (e.g. on its screen page), or null/undefined if none. */
   selectedScreen?: string | null
-  onSelectScreen: (screenName: string) => void
+  /**
+   * Fires as the `AppLink`'s `onClick` for a screen row, with the click
+   * event as the second argument. Must stay navigation-free (never call
+   * `navigate()`) — see `onSelectFolder` above for why.
+   */
+  onSelectScreen: (screenName: string, e: React.MouseEvent) => void
+  /** Builds the `href` for a screen row's `AppLink`. */
+  screenHref: (name: string) => string
   expandedPaths: Set<string>
   onToggleExpand: (path: string) => void
   /** Folders (or their ancestors) that contain a search match; drives auto-expand + a dot marker. */
@@ -109,8 +133,11 @@ export function FolderTree({
   screens,
   selectedFolder,
   onSelectFolder,
+  folderHref,
+  folderNavReplace,
   selectedScreen,
   onSelectScreen,
+  screenHref,
   expandedPaths,
   onToggleExpand,
   matchedFolders,
@@ -239,17 +266,16 @@ export function FolderTree({
   })
 
   const renderScreen = (screen: Screen, depth: number) => (
-    <div
+    <AppLink
       key={`screen:${screen.name}`}
-      role="button"
-      tabIndex={0}
+      href={screenHref(screen.name)}
+      replace={false}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', screen.name)
         e.dataTransfer.effectAllowed = 'move'
       }}
-      onClick={() => onSelectScreen(screen.name)}
-      onKeyDown={(e) => e.key === 'Enter' && onSelectScreen(screen.name)}
+      onClick={(e) => onSelectScreen(screen.name, e)}
       style={{ paddingLeft: `${depth * 14 + 8}px` }}
       className={`group flex items-center gap-1.5 py-1.5 pr-2 rounded-md cursor-pointer text-sm transition-colors ${
         selectedScreen === screen.name
@@ -263,7 +289,7 @@ export function FolderTree({
       {isSearching && matchedScreens?.has(screen.name) && (
         <span className="w-1.5 h-1.5 rounded-full bg-accent-warning flex-none" />
       )}
-    </div>
+    </AppLink>
   )
 
   const renderNode = (node: FolderTreeNode, depth: number) => {
@@ -274,40 +300,42 @@ export function FolderTree({
     return (
       <div key={node.path}>
         <div
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelectFolder(node.path)}
-          onKeyDown={(e) => e.key === 'Enter' && onSelectFolder(node.path)}
           {...dropHandlers(node.path)}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          className={`group flex items-center gap-1.5 py-1.5 pr-2 rounded-md cursor-pointer text-sm transition-colors ${
+          className={`group flex items-center gap-1.5 pr-2 rounded-md text-sm transition-colors ${
             selectedFolder === node.path
               ? 'bg-accent-link/15 text-theme-text-primary'
               : 'text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'
           } ${dropTargetPath === node.path ? 'ring-1 ring-inset ring-accent-link bg-accent-link/20' : ''}`}
         >
-          {hasChildren ? (
-            <ChevronRight
-              className={`w-3.5 h-3.5 flex-none text-theme-text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleExpand(node.path)
-              }}
-            />
-          ) : (
-            <span className="w-3.5 h-3.5 flex-none" />
-          )}
-          {isOpen ? (
-            <FolderOpen className="w-4 h-4 flex-none text-accent-warning" />
-          ) : (
-            <Folder className="w-4 h-4 flex-none text-accent-warning" />
-          )}
-          {renamingPath === node.path ? (
-            renameInput(node)
-          ) : (
-            <span className="flex-1 truncate">{node.name}</span>
-          )}
-          {hasMatch && <span className="w-1.5 h-1.5 rounded-full bg-accent-warning flex-none" />}
+          <AppLink
+            href={folderHref(node.path)}
+            replace={folderNavReplace}
+            onClick={(e) => onSelectFolder(node.path, e)}
+            draggable={false}
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+            className={`flex items-center gap-1.5 py-1.5 cursor-pointer min-w-0 ${renamingPath === node.path ? '' : 'flex-1'}`}
+          >
+            {hasChildren ? (
+              <ChevronRight
+                className={`w-3.5 h-3.5 flex-none text-theme-text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onToggleExpand(node.path)
+                }}
+              />
+            ) : (
+              <span className="w-3.5 h-3.5 flex-none" />
+            )}
+            {isOpen ? (
+              <FolderOpen className="w-4 h-4 flex-none text-accent-warning" />
+            ) : (
+              <Folder className="w-4 h-4 flex-none text-accent-warning" />
+            )}
+            {renamingPath !== node.path && <span className="truncate">{node.name}</span>}
+            {hasMatch && <span className="w-1.5 h-1.5 rounded-full bg-accent-warning flex-none" />}
+          </AppLink>
+          {renamingPath === node.path && renameInput(node)}
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -368,11 +396,11 @@ export function FolderTree({
 
   return (
     <div className="flex flex-col gap-1 h-full" onClick={() => setMenuFor(null)}>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelectFolder('')}
-        onKeyDown={(e) => e.key === 'Enter' && onSelectFolder('')}
+      <AppLink
+        href={folderHref('')}
+        replace={folderNavReplace}
+        onClick={(e) => onSelectFolder('', e)}
+        draggable={false}
         {...dropHandlers('')}
         className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md cursor-pointer text-sm transition-colors ${
           selectedFolder === '' && !isSearching
@@ -382,7 +410,7 @@ export function FolderTree({
       >
         <Home className="w-4 h-4 flex-none text-theme-text-muted" />
         <span>Home</span>
-      </div>
+      </AppLink>
 
       <div className="h-px bg-theme-border my-1" />
 
