@@ -502,7 +502,7 @@ class OidcAuthProvider:
         if self.audience:
             data["audience"] = self.audience
 
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     @classmethod
@@ -536,7 +536,7 @@ class OidcAuthProvider:
         """
         token_file = str(Path(token_file).expanduser())
 
-        with open(token_file) as f:
+        with open(token_file, encoding="utf-8") as f:
             data = json.load(f)
 
         return cls(

@@ -1,7 +1,11 @@
 """Unit tests for OIDC authentication provider."""
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
@@ -78,6 +82,79 @@ def test_oidc_token_save_and_load():
             assert loaded_provider.issuer == "https://test.com"
             assert loaded_provider.client_id == "test-client"
             assert loaded_provider.client.token["id_token"] == "test-id"
+
+
+NON_ASCII_CLIENT_ID = "client-—-café-日本語"
+
+
+def test_oidc_token_load_non_ascii_locale(tmp_path):
+    """Regression test for issue #1399: OidcAuthProvider.from_file()'s
+    token-file read must be UTF-8, not locale-dependent.
+
+    save()'s json.dump keeps ensure_ascii=True, so a save()/from_file()
+    round trip would only ever see ASCII \\uXXXX escapes and would pass
+    regardless of the open() encoding pin. Instead this test writes a
+    token file directly as raw UTF-8 bytes (bypassing json.dump/save()
+    entirely) with a non-ASCII client_id, then loads it in a subprocess
+    forced to a non-UTF-8 locale (LC_ALL=C + PYTHONUTF8=0), matching the
+    technique used in test_screen_files.py.
+    """
+    token_file = tmp_path / "tokens.json"
+    data = {
+        "issuer": "https://test.com",
+        "client_id": NON_ASCII_CLIENT_ID,
+        "token": {
+            "access_token": "test-access",
+            "id_token": "test-id",
+            "refresh_token": "test-refresh",
+            "expires_at": time.time() + 3600,
+        },
+    }
+    token_file.write_bytes(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+    script = textwrap.dedent(
+        """
+        import os
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        assert sys.flags.utf8_mode == 0, "test setup failed: utf8_mode should be 0"
+
+        from micromegas.auth import OidcAuthProvider
+
+        token_file = os.environ["TEST_TOKEN_FILE"]
+
+        with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+            "micromegas.auth.oidc.OAuth2Session"
+        ) as MockSession:
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "authorization_endpoint": "https://test/auth",
+                "token_endpoint": "https://test/token",
+                "issuer": "https://test.com",
+            }
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
+            mock_client = MagicMock()
+            MockSession.return_value = mock_client
+
+            provider = OidcAuthProvider.from_file(token_file)
+            sys.stdout.buffer.write(provider.client_id.encode("utf-8"))
+        """
+    )
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["PYTHONUTF8"] = "0"
+    env["TEST_TOKEN_FILE"] = str(token_file)
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env=env,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    assert proc.stdout.decode("utf-8") == NON_ASCII_CLIENT_ID
 
 
 def test_oidc_get_token_valid():

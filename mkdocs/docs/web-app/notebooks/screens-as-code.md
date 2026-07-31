@@ -92,6 +92,7 @@ Each screen is a single `.json` file:
 - Pretty-printed with 2-space indent
 - Server metadata (`created_by`, `updated_by`, timestamps) is excluded
 - `folder_path` is optional: key omitted means "no folder / don't move it"; `""` explicitly means root. To move a screen back to root, set `"folder_path": ""` rather than removing the key.
+- Files are read and written as UTF-8 (a leading BOM is tolerated on read). Non-ASCII content (e.g. em dashes, accents, CJK) is written as literal UTF-8 characters rather than `\uXXXX`-escaped.
 
 ## Commands
 
@@ -136,6 +137,8 @@ micromegas-screens apply [NAME...] [--auto-approve]
 Apply local state to server. Runs `plan` first, then prompts for confirmation. Use `--auto-approve` for CI pipelines.
 
 Screens tracked by this repo that no longer have a local file are deleted from the server.
+
+If a local `.json` file can't even be decoded/parsed, its identity is unknown, so deletes are skipped entirely for that run (a warning is printed, but the command still exits 0) — worth knowing when running `apply --auto-approve` in CI. A file that parses as JSON but fails schema validation only protects its own `name` (if present) from deletion; it doesn't affect deletes for other screens.
 
 ### `list`
 

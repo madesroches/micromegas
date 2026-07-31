@@ -31,7 +31,7 @@ def read_config():
             file=sys.stderr,
         )
         sys.exit(1)
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     for field in ("managed_by", "server"):
         if field not in data:
@@ -43,13 +43,36 @@ def read_config():
     return data
 
 
-def read_screen_file(path):
-    """Read and validate a screen JSON file."""
-    with open(path, "r") as f:
-        data = json.load(f)
+def _load_screen_json(path):
+    """Parse a screen JSON file into a raw dict, without schema validation.
+
+    Raises UnicodeDecodeError or json.JSONDecodeError if the file can't even
+    be decoded/parsed -- in which case its contents (including any `name`
+    field) are fundamentally unknowable.
+    """
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def _validate_screen_dict(data, path):
+    """Raise ValueError if a parsed dict is missing a required screen field.
+
+    Unlike a decode/parse failure, `data` is a real dict here -- its `name`
+    field (if present) is known even though the screen itself is invalid.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: top-level JSON must be an object")
     for field in ("name", "screen_type", "config"):
         if field not in data:
             raise ValueError(f"{path}: missing required field '{field}'")
+    if not isinstance(data["name"], str):
+        raise ValueError(f"{path}: field 'name' must be a string")
+
+
+def read_screen_file(path):
+    """Read and validate a screen JSON file."""
+    data = _load_screen_json(path)
+    _validate_screen_dict(data, path)
     return data
 
 
@@ -59,23 +82,70 @@ def write_screen_file(path, screen_dict):
     for key in ("name", "screen_type", "config", "folder_path", "managed_by"):
         if key in screen_dict:
             ordered[key] = screen_dict[key]
-    with open(path, "w") as f:
-        json.dump(ordered, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ordered, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
 
 def list_local_screens():
-    """Scan current directory for screen JSON files (excluding config file)."""
+    """Scan current directory for screen JSON files (excluding config file).
+
+    Returns (screens, unreadable, invalid_names), distinguishing two tiers of
+    "can't use this file" for callers doing delete protection:
+
+    - `screens` maps name -> data for files that parsed and validated
+      successfully.
+    - `unreadable` is the set of file stems whose identity is genuinely
+      undeterminable: the file couldn't even be decoded/parsed as JSON
+      (UnicodeDecodeError, json.JSONDecodeError), so we don't have a dict to
+      look at, let alone a `name`. Callers should treat a non-empty
+      `unreadable` as a reason to fall back to a conservative, repo-wide
+      delete suppression, since we can't rule out that one of these files
+      would otherwise account for a server-tracked screen.
+    - `invalid_names` is the set of `name` values found in files that parsed
+      as JSON just fine but failed schema validation (missing `screen_type`/
+      `config`/etc -- a `ValueError` from `read_screen_file`). Unlike
+      `unreadable`, we *do* have the parsed dict here, so if it has a `name`
+      field, that specific name is known-but-locally-invalid: callers can
+      protect just that one name from being treated as deleted, without
+      suppressing deletes for unrelated, cleanly-removed screens. A
+      parsed-but-invalid file with no `name` field at all contributes
+      nothing here; its identity is unknown too, but since it's an
+      unrelated local-authoring mistake, it doesn't warrant blocking deletes
+      for the rest of the repo.
+    """
     screens = {}
+    unreadable = set()
+    invalid_names = set()
     for p in sorted(Path(".").glob("*.json")):
         if p.name == CONFIG_FILE:
             continue
         try:
-            data = read_screen_file(p)
-            screens[data["name"]] = data
-        except (json.JSONDecodeError, ValueError) as e:
+            data = _load_screen_json(p)
+        except UnicodeDecodeError as e:
+            print(
+                f"Warning: skipping {p}: encoding error ({e}); "
+                "not treating as absent",
+                file=sys.stderr,
+            )
+            unreadable.add(p.stem)
+            continue
+        except json.JSONDecodeError as e:
             print(f"Warning: skipping {p}: {e}", file=sys.stderr)
-    return screens
+            unreadable.add(p.stem)
+            continue
+
+        try:
+            _validate_screen_dict(data, p)
+        except ValueError as e:
+            print(f"Warning: skipping {p}: {e}", file=sys.stderr)
+            name = data.get("name") if isinstance(data, dict) else None
+            if isinstance(name, str) and name:
+                invalid_names.add(name)
+            continue
+
+        screens[data["name"]] = data
+    return screens, unreadable, invalid_names
 
 
 VOLATILE_KEYS = {"created_by", "updated_by", "created_at", "updated_at"}
@@ -179,12 +249,12 @@ def cmd_init(args):
         "server": args.server_url,
     }
 
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config_data, f, indent=2)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
     print(f"Created {CONFIG_FILE}:")
-    print(json.dumps(config_data, indent=2))
+    print(json.dumps(config_data, indent=2, ensure_ascii=False))
 
 
 def cmd_import(args):
@@ -242,7 +312,7 @@ def cmd_pull(args):
                 )
                 sys.exit(1)
     else:
-        local = list_local_screens()
+        local, _unreadable, _invalid_names = list_local_screens()
         names = list(local.keys())
 
     if not names:
@@ -267,7 +337,14 @@ def cmd_pull(args):
                 if server_screen_to_file(existing) == new_content:
                     unchanged += 1
                     continue
-            except (json.JSONDecodeError, ValueError):
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                print(
+                    f"Warning: skipping '{name}': {local_path} could not be "
+                    f"read ({e}); not overwriting.",
+                    file=sys.stderr,
+                )
+                continue
+            except ValueError:
                 pass
 
         write_screen_file(local_path, new_content)
@@ -276,10 +353,18 @@ def cmd_pull(args):
     print(f"Pull complete: {updated} updated, {unchanged} unchanged.")
 
 
-def compute_plan(config, client, names=None):
-    """Compute an execution plan. Returns (creates, updates, deletes, unchanged, untracked)."""
+def compute_plan(config, client, names=None, local_scan=None):
+    """Compute an execution plan. Returns (creates, updates, deletes, unchanged, untracked).
+
+    `local_scan`, if given, is a previously-computed `list_local_screens()`
+    result (screens, unreadable, invalid_names). Callers that already need
+    to scan the local directory themselves (e.g. `cmd_apply`, which also
+    reuses `local` after computing the plan) should pass their scan in here
+    instead of letting this function scan again, so unreadable-file warnings
+    aren't printed twice for a single command invocation.
+    """
     managed_by = config["managed_by"]
-    local = list_local_screens()
+    local, unreadable, invalid_names = local_scan or list_local_screens()
 
     if names:
         local = {k: v for k, v in local.items() if k in names}
@@ -307,11 +392,34 @@ def compute_plan(config, client, names=None):
             else:
                 updates.append((name, normalized_local, normalized_server))
 
-    # Check for deletions: server screens tracked by this repo but missing locally
+    # Check for deletions: server screens tracked by this repo but missing
+    # locally. Deletes are only ever considered in whole-repo mode (`not
+    # names`); in named-subset mode this loop never runs, so there's nothing
+    # to warn about and no reason to consult `unreadable`/`invalid_names`.
     if not names:
-        for name, server in server_by_name.items():
-            if server.get("managed_by") == managed_by and name not in local:
-                deletes.append(name)
+        if unreadable:
+            # These files couldn't even be decoded/parsed, so their `name`
+            # is fundamentally unknowable -- we can't rule out that one of
+            # them corresponds to a server-tracked screen being reported as
+            # "missing locally". Skip delete computation entirely rather
+            # than risk a silent delete.
+            print(
+                f"Warning: {len(unreadable)} local file(s) could not be read "
+                f"({', '.join(sorted(unreadable))}); skipping delete computation "
+                "since deletes cannot be safely determined.",
+                file=sys.stderr,
+            )
+        else:
+            # Files that parsed but failed schema validation have a known
+            # `name` (when present) -- protect exactly that name instead of
+            # suppressing deletes for the whole repo.
+            for name, server in server_by_name.items():
+                if (
+                    server.get("managed_by") == managed_by
+                    and name not in local
+                    and name not in invalid_names
+                ):
+                    deletes.append(name)
 
     # List untracked server screens
     for name, server in sorted(server_by_name.items()):
@@ -325,8 +433,12 @@ def compute_plan(config, client, names=None):
 
 def format_screen_diff(local_dict, server_dict, use_color):
     """Produce a unified diff between server and local screen JSON."""
-    server_json = json.dumps(server_dict, indent=2, sort_keys=True).splitlines()
-    local_json = json.dumps(local_dict, indent=2, sort_keys=True).splitlines()
+    server_json = json.dumps(
+        server_dict, indent=2, sort_keys=True, ensure_ascii=False
+    ).splitlines()
+    local_json = json.dumps(
+        local_dict, indent=2, sort_keys=True, ensure_ascii=False
+    ).splitlines()
     diff_lines = list(
         difflib.unified_diff(server_json, local_json, fromfile="server", tofile="local")
     )
@@ -396,8 +508,12 @@ def cmd_apply(args):
     managed_by = config["managed_by"]
     names = args.names if args.names else None
 
+    # Scan the directory once for this whole command invocation; compute_plan
+    # reuses this scan instead of scanning again, so unreadable-file warnings
+    # aren't printed twice.
+    local_scan = list_local_screens()
     creates, updates, deletes, unchanged, untracked = compute_plan(
-        config, client, names
+        config, client, names, local_scan=local_scan
     )
 
     if not creates and not updates and not deletes:
@@ -416,7 +532,7 @@ def cmd_apply(args):
 
     print("Applying...\n")
 
-    local = list_local_screens()
+    local, _unreadable, _invalid_names = local_scan
     created = 0
     updated_count = 0
     deleted = 0
@@ -480,7 +596,7 @@ def cmd_list(args):
     client = make_client(config)
     managed_by = config["managed_by"]
 
-    local = list_local_screens()
+    local, _unreadable, _invalid_names = list_local_screens()
     server_screens = client.list_screens()
     server_by_name = {s["name"]: s for s in server_screens}
 
@@ -504,7 +620,7 @@ def cmd_list(args):
 
     if args.format == "json":
         result = [{"name": name, "status": screen_status(name)} for name in all_names]
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     # Table format
@@ -526,6 +642,10 @@ def cmd_list(args):
 
 
 def main():
+    # Ensure stdout can always print the non-ASCII diff output produced by
+    # format_screen_diff(), regardless of the platform's default encoding.
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     parser = argparse.ArgumentParser(
         prog="micromegas-screens",
         description="Manage micromegas screens as code",
