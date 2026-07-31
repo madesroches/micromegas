@@ -293,7 +293,8 @@ Pure, unit-testable, no HTTP/framework dependency — same shape as `cloudwatch_
 
 1. **New module** — add `rust/otel-ingestion/src/cloudwatch_metrics.rs` with
    `UNKNOWN_NAMESPACE`, `is_cloudwatch_metric_stream_resource`, `metric_namespace`, the private
-   replace-if-present `set_attr`, and `rewrite_cloudwatch_metric_streams` per Design above. Add
+   replace-if-present `set_attr`, the private `clear_attr_if_present`, and
+   `rewrite_cloudwatch_metric_streams` per Design above. Add
    `pub mod cloudwatch_metrics;` to `rust/otel-ingestion/src/lib.rs`. Promote `attr_norm` in
    `rust/otel-ingestion/src/identity.rs:110-114` from private to `pub` so the fingerprint can
    reuse it.
