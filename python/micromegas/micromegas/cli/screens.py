@@ -91,6 +91,7 @@ def list_local_screens():
             unreadable.add(p.stem)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: skipping {p}: {e}", file=sys.stderr)
+            unreadable.add(p.stem)
     return screens, unreadable
 
 

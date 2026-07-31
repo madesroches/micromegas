@@ -6,10 +6,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from pathlib import Path
 
 import pytest
 
+from micromegas.cli import screens as screens_module
 from micromegas.cli.screens import (
+    cmd_pull,
     compute_plan,
     format_screen_diff,
     list_local_screens,
@@ -180,6 +183,30 @@ class TestListLocalScreens:
         screens, unreadable = list_local_screens()
         assert set(screens.keys()) == {"notebook-a", "notebook-b"}
         assert unreadable == set()
+
+    def test_unreadable_files_not_silently_dropped(self, tmp_path, monkeypatch):
+        """Files that exist locally but fail to decode/parse must show up in
+        `unreadable`, not just disappear as if the file were absent -- for
+        both a non-UTF-8-encoded file (UnicodeDecodeError) and a syntactically
+        invalid JSON file (JSONDecodeError)."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        write_screen_file(
+            "ok.json",
+            {"name": "ok", "screen_type": "notebook", "config": {}},
+        )
+        with open("bad.json", "wb") as f:
+            f.write(
+                '{"name": "bad", "screen_type": "notebook", '
+                '"config": {"x": "caf\xe9"}}'.encode("latin-1")
+            )
+        with open("broken.json", "w") as f:
+            f.write("{ not json")
+
+        screens, unreadable = list_local_screens()
+        assert set(screens.keys()) == {"ok"}
+        assert unreadable == {"bad", "broken"}
 
 
 class TestComputePlan:
@@ -391,6 +418,89 @@ class TestComputePlan:
         creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
         assert unchanged == ["root-screen"]
         assert updates == []
+
+    def test_unreadable_local_file_not_treated_as_delete(self, tmp_path, monkeypatch):
+        """A locally corrupt/unparseable file that is tracked (managed_by ==
+        this repo) on the server must never show up in `deletes` -- that
+        would make `apply` delete the server-side screen just because the
+        local file happens to be malformed."""
+        monkeypatch.chdir(tmp_path)
+        managed_by = "https://github.com/org/repo/tree/main/screens"
+        write_screen_file(
+            "ok.json",
+            {
+                "name": "ok",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+        )
+        with open("bad.json", "wb") as f:
+            f.write(
+                '{"name": "bad", "screen_type": "notebook", '
+                '"config": {"x": "caf\xe9"}}'.encode("latin-1")
+            )
+        with open("broken.json", "w") as f:
+            f.write("{ not json")
+
+        config = {"managed_by": managed_by, "server": "http://localhost"}
+        server_screens = [
+            {
+                "name": "ok",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+            {
+                "name": "bad",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+            {
+                "name": "broken",
+                "screen_type": "notebook",
+                "config": {},
+                "managed_by": managed_by,
+            },
+        ]
+        client = self._make_client(server_screens)
+        creates, updates, deletes, unchanged, untracked = compute_plan(config, client)
+        assert deletes == []
+
+
+class TestCmdPull:
+    def test_unreadable_local_file_not_overwritten(self, tmp_path, monkeypatch):
+        """cmd_pull must not silently clobber a local file it can't decode,
+        even when the server returns fresh content for that name -- it
+        should skip/warn instead."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        original_bytes = (
+            '{"name": "bad", "screen_type": "notebook", '
+            '"config": {"x": "caf\xe9"}}'.encode("latin-1")
+        )
+        with open("bad.json", "wb") as f:
+            f.write(original_bytes)
+
+        class FakeClient:
+            def get_screen(self, name):
+                return {
+                    "name": name,
+                    "screen_type": "notebook",
+                    "config": {"cells": []},
+                    "managed_by": "test",
+                }
+
+        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+
+        class Args:
+            names = ["bad"]
+
+        cmd_pull(Args())
+
+        assert Path("bad.json").read_bytes() == original_bytes
 
 
 class TestFormatScreenDiff:

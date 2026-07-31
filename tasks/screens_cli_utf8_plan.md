@@ -123,12 +123,32 @@ calls that touch user-controlled or server-controlled content:
 Stdout encoding for query results (issue item 4's second half — CLIs
 printing non-ASCII on a legacy Windows console codepage): `query.py` prints
 `tabulate`/CSV/JSON output straight to `sys.stdout` via `print()`, whose
-encoding is whatever the interpreter picked for the console stream. Actually
-reconfiguring `sys.stdout` (e.g. `sys.stdout.reconfigure(encoding="utf-8")`)
-is a bigger, separate change affecting all CLI output paths and isn't part
-of the screens JSON corruption this issue reports — noting it here per the
-issue's ask, but leaving it as a follow-up rather than folding it into this
-fix (see Open Questions).
+encoding is whatever the interpreter picked for the console stream.
+`screens.py`'s `main()` now unconditionally calls
+`sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")` before
+dispatching to any subcommand, since `format_screen_diff()`'s
+`ensure_ascii=False` output would otherwise raise `UnicodeEncodeError` on a
+non-UTF-8 stdout (e.g. a legacy Windows console codepage) instead of just
+mis-rendering; `errors="backslashreplace"` keeps `plan`/`apply` usable even
+on a console that truly cannot display the characters. `query.py`'s stdout
+is not reconfigured by this fix — that remains a follow-up (see Open
+Questions).
+
+### `unreadable` tracking in `list_local_screens()`/`compute_plan()`/`cmd_pull()`
+
+Branch review added a second return value to `list_local_screens()`: it now
+returns `(screens, unreadable)`, where `unreadable` is the set of file stems
+that exist locally but failed to decode or parse (non-UTF-8 bytes, invalid
+JSON, or a missing required field) — as opposed to files that are simply
+absent. This matters because `compute_plan()` treats a server-tracked name
+(`managed_by == managed_by`) with no matching local file as a deletion
+candidate; without the `unreadable` set, a locally corrupt file would look
+identical to a genuinely deleted one and `apply` would delete the
+server-side screen purely because the local copy failed to parse.
+`compute_plan()` now excludes any name in `unreadable` from `deletes`, and
+`cmd_pull()` separately re-checks each target file itself before
+overwriting it, skipping (with a warning) rather than silently clobbering a
+file it cannot read.
 
 ## Implementation Steps
 
@@ -273,9 +293,12 @@ fix (see Open Questions).
   fix, per the issue's explicit warning; doing one without the other would
   trade one corruption bug for another.
 - The `query.py` and `oidc.py` fixes are included since the issue explicitly
-  asks for a broader audit and they're the same one-line fix, but the
-  stdout-console-codepage concern is left as a follow-up (see Open
-  Questions) since it's a materially larger, separate change.
+  asks for a broader audit and they're the same one-line fix. The
+  stdout-console-codepage concern is resolved for `screens.py` (see
+  "Encoding fixes in `screens.py`" above) but left as a follow-up for
+  `query.py` (see Open Questions), since reconfiguring `query.py`'s stdout
+  touches all of its output paths (table/CSV/JSON) and is a materially
+  larger, separate change.
 
 ## Testing Strategy
 
@@ -342,8 +365,9 @@ fix (see Open Questions).
 
 ## Open Questions
 
-- Whether to also reconfigure CLI stdout encoding (`query.py`,
-  `screens.py`) for non-ASCII query results/diffs on legacy Windows console
-  codepages — the issue mentions it (item 4) but it's a broader change
-  than the file-corruption bug this issue is titled after. Left as a
-  follow-up unless the reviewer wants it folded in here.
+- Whether to also reconfigure `query.py`'s stdout encoding for non-ASCII
+  query results on legacy Windows console codepages — the issue mentions it
+  (item 4) and `screens.py`'s stdout is already reconfigured to UTF-8 (see
+  above), but doing the same for `query.py` is a broader change than the
+  file-corruption bug this issue is titled after. Left as a follow-up
+  unless the reviewer wants it folded in here.
