@@ -58,6 +58,14 @@ content, and never touches locale/encoding, so it wouldn't have caught this.
   escapes. This is safe only because the paired read side is now pinned to
   UTF-8 too (per the issue's own caveat) — doing this without the read-side
   fix would just move the corruption to the write path.
+- `format_screen_diff()` (lines 328-329): the two `json.dumps(server_dict, ...)`
+  / `json.dumps(local_dict, ...)` calls that build the `plan`/`apply` diff view
+  also default to `ensure_ascii=True`; add `ensure_ascii=False` to both for the
+  same human-readability reason as `write_screen_file()` — otherwise a screen
+  edit containing an em dash or CJK text still renders as `\uXXXX` escapes in
+  the diff a user reviews before approving a change, even after the write-side
+  fix above ships. No `open()` call is involved here (the dicts are already
+  in-memory), so this is a `json.dumps` argument change only.
 
 No other function in `screens.py` opens files in text mode.
 
@@ -110,6 +118,9 @@ fix (see Open Questions).
      `json.dump(ordered, f, indent=2, ensure_ascii=False)`
    - `cmd_init()`: `open(CONFIG_FILE, "w", encoding="utf-8")` and
      `json.dump(config_data, f, indent=2, ensure_ascii=False)`
+   - `format_screen_diff()`: both `json.dumps(server_dict, indent=2,
+     sort_keys=True)` and `json.dumps(local_dict, indent=2, sort_keys=True)`
+     (lines 328-329) gain `ensure_ascii=False`
 2. `python/micromegas/micromegas/cli/query.py`:
    - `pathlib.Path(args.file).read_text(encoding="utf-8")` (line 92)
    - stdin branch (line 89): `sys.stdin.reconfigure(encoding="utf-8")` before
