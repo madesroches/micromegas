@@ -6,10 +6,11 @@ use super::{
     merge::{MergeQueryResult, PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
+    partitioned_execution_plan::ScanOrdering,
     query::make_session_context,
     session_configurator::SessionConfigurator,
     sql_partition_spec::fetch_sql_partition_spec,
-    view::{PartitionSpec, View, ViewMetadata},
+    view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
 use crate::{
@@ -49,6 +50,13 @@ pub struct SqlBatchView {
     update_group: Option<i32>,
     max_partition_delta_from_source: TimeDelta,
     max_partition_delta_from_merge: TimeDelta,
+    /// The ascending sort order this view's partitions are declared to satisfy (see
+    /// `with_merge_sort_order`), if any.
+    sort_order: Option<Vec<Arc<String>>>,
+    /// A `QueryMerger` declaring `ScanOrdering::PerFile { columns: sort_order }`, used instead of
+    /// `merger` when every input to a merge certifies `sort_order` (Design §3 of
+    /// `tasks/1392_kway_merge_sorted_partitions_plan.md`).
+    ordered_merger: Option<Arc<dyn PartitionMerger>>,
 }
 
 impl SqlBatchView {
@@ -126,7 +134,83 @@ impl SqlBatchView {
             update_group,
             max_partition_delta_from_source,
             max_partition_delta_from_merge,
+            sort_order: None,
+            ordered_merger: None,
         })
+    }
+
+    /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
+    /// order. `columns` must be non-empty and every name must exist in this view's schema.
+    ///
+    /// This is a four-item view-author contract (see
+    /// `tasks/1392_kway_merge_sorted_partitions_plan.md` Design §5):
+    /// 1. Every declared sort column must appear among the merge query's `GROUP BY` keys (order
+    ///    within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`, not a blocking
+    ///    sort).
+    /// 2. Any enrichment join in the merge query must put the dimension table on the left and the
+    ///    ordered stream on the right -- `CollectLeft` buffers its left (build) input and inherits
+    ///    its output ordering from its right (probe) input, so the natural phrasing
+    ///    `(<ordered agg>) a LEFT JOIN dim d` reinstates a blocking sort.
+    /// 3. The extract query needs a top-level `ORDER BY` matching the declared columns -- and it
+    ///    must be top-level: a CTE-internal `ORDER BY` that is later joined does not count, since
+    ///    the join discards it. The merge query needs no author-written `ORDER BY` at all: this
+    ///    builder forwards `columns` to `with_merge_scan_ordering`, and `QueryMerger` applies the
+    ///    sort as a DataFusion logical-plan node -- no SQL text is derived or rewritten.
+    /// 4. The merge query's aggregates must be composable over already-aggregated rows (e.g.
+    ///    `sum(count)`, not `count(*)`; no bare `avg` -- carry `sum` and `count` and divide at
+    ///    read time). `log_stats` is the in-repo model.
+    pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self> {
+        if columns.is_empty() {
+            anyhow::bail!("with_merge_sort_order: columns must be non-empty");
+        }
+        for column in &columns {
+            self.schema.index_of(column.as_str()).with_context(|| {
+                format!(
+                    "with_merge_sort_order: column {column:?} not found in view {}'s schema",
+                    self.view_set_name
+                )
+            })?;
+        }
+        let scan_columns: Vec<ScanSortColumn> = columns
+            .iter()
+            .map(|column| ScanSortColumn {
+                column: column.clone(),
+                descending: false,
+            })
+            .collect();
+        let merge_query = Arc::new(self.merge_partitions_query.replace("{source}", "source"));
+        let ordered_merger: Arc<dyn PartitionMerger> = Arc::new(
+            QueryMerger::new(
+                self.view_factory.clone(),
+                self.session_configurator.clone(),
+                self.schema.clone(),
+                merge_query,
+            )
+            .with_merge_scan_ordering(ScanOrdering::PerFile {
+                columns: scan_columns,
+            }),
+        );
+        self.ordered_merger = Some(ordered_merger);
+        self.sort_order = Some(columns);
+        Ok(self)
+    }
+
+    /// True when a merge sort order is declared and every partition in `partitions_to_merge`
+    /// certifies it (empty partitions certify vacuously -- see `Partition::certifies_sort_order`).
+    fn all_inputs_certify(&self, partitions_to_merge: &[Partition]) -> bool {
+        let Some(sort_order) = &self.sort_order else {
+            return false;
+        };
+        let columns: Vec<ScanSortColumn> = sort_order
+            .iter()
+            .map(|column| ScanSortColumn {
+                column: column.clone(),
+                descending: false,
+            })
+            .collect();
+        partitions_to_merge
+            .iter()
+            .all(|p| p.certifies_sort_order(&columns))
     }
 }
 
@@ -183,6 +267,9 @@ impl View for SqlBatchView {
                 extract_sql,
                 view_meta,
                 insert_range,
+                self.sort_order
+                    .as_ref()
+                    .map(|columns| columns.iter().map(|c| c.to_string()).collect()),
             )
             .await
             .with_context(|| "fetch_sql_partition_spec")?,
@@ -253,8 +340,19 @@ impl View for SqlBatchView {
         partitions_all_views: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<MergeQueryResult> {
-        let res = self
-            .merger
+        // An all-empty source scans as an EmptyExec, whose SortExec is never elided -- taking the
+        // ordered path there would trip the plan-shape check's memory-regression warning on every
+        // quiet-day retry. So the ordered path additionally requires at least one non-empty input.
+        let any_non_empty = partitions_to_merge.iter().any(|p| !p.is_empty());
+        let merger = match &self.ordered_merger {
+            Some(ordered_merger)
+                if any_non_empty && self.all_inputs_certify(&partitions_to_merge) =>
+            {
+                ordered_merger
+            }
+            _ => &self.merger,
+        };
+        let res = merger
             .execute_merge_query(
                 lakehouse,
                 partitions_to_merge,
@@ -266,6 +364,34 @@ impl View for SqlBatchView {
             error!("{e:?}");
         }
         res
+    }
+
+    fn get_merged_partition_sort_order(
+        &self,
+        partitions_to_merge: &[Partition],
+    ) -> Option<Vec<String>> {
+        if self.ordered_merger.is_some() && self.all_inputs_certify(partitions_to_merge) {
+            self.sort_order
+                .as_ref()
+                .map(|columns| columns.iter().map(|c| c.to_string()).collect())
+        } else {
+            None
+        }
+    }
+
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        match &self.sort_order {
+            Some(columns) => ScanOrdering::PerFile {
+                columns: columns
+                    .iter()
+                    .map(|column| ScanSortColumn {
+                        column: column.clone(),
+                        descending: false,
+                    })
+                    .collect(),
+            },
+            None => ScanOrdering::Unordered,
+        }
     }
 
     fn get_update_group(&self) -> Option<i32> {

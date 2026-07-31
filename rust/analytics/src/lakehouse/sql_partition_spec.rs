@@ -1,19 +1,22 @@
 use super::{
     dataframe_time_bounds::DataFrameTimeBounds,
-    view::{PartitionSpec, ViewMetadata},
+    partitioned_execution_plan::make_lex_ordering,
+    view::{PartitionSpec, ScanSortColumn, ViewMetadata},
     write_partition::write_partition_from_rows,
 };
 use crate::{
     dfext::typed_column::typed_column_by_name, lakehouse::write_partition::PartitionRowSet,
     record_batch_transformer::RecordBatchTransformer, response_writer::Logger, time::TimeRange,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
         array::{Int64Array, RecordBatch},
         datatypes::Schema,
     },
+    execution::SendableRecordBatchStream,
+    physical_plan::execute_stream,
     prelude::*,
 };
 use futures::StreamExt;
@@ -31,6 +34,11 @@ pub struct SqlPartitionSpec {
     view_metadata: ViewMetadata,
     insert_range: TimeRange,
     record_count: i64,
+    /// The sort guarantee to record on the fresh partition this extract query writes, if any (see
+    /// `SqlBatchView::with_merge_sort_order`). When set, `write` verifies the extract query's
+    /// physical plan actually satisfies it (Design §3) before recording it -- a config typo must
+    /// never record a false guarantee.
+    sort_order: Option<Vec<String>>,
 }
 
 impl SqlPartitionSpec {
@@ -44,6 +52,7 @@ impl SqlPartitionSpec {
         view_metadata: ViewMetadata,
         insert_range: TimeRange,
         record_count: i64,
+        sort_order: Option<Vec<String>>,
     ) -> Self {
         Self {
             ctx,
@@ -54,7 +63,64 @@ impl SqlPartitionSpec {
             view_metadata,
             insert_range,
             record_count,
+            sort_order,
         }
+    }
+
+    /// Builds the extract query's physical plan once, verifies (only when `sort_order` is
+    /// declared) that it is single-partition and that its output ordering satisfies the declared
+    /// columns, and executes that exact plan -- the same discipline as
+    /// `QueryMerger::execute_merge_query`'s ordering-declared branches (Design §2/§3). The
+    /// undeclared path (`sort_order: None`) keeps today's plain `df.execute_stream()`.
+    async fn execute_extract_query(&self, df: DataFrame) -> Result<SendableRecordBatchStream> {
+        let Some(sort_order) = &self.sort_order else {
+            return df.execute_stream().await.map_err(Into::into);
+        };
+        let columns: Vec<ScanSortColumn> = sort_order
+            .iter()
+            .map(|c| ScanSortColumn {
+                column: Arc::new(c.clone()),
+                descending: false,
+            })
+            .collect();
+        let task_ctx = Arc::new(df.task_ctx());
+        let plan = df
+            .create_physical_plan()
+            .await
+            .with_context(|| "creating physical plan for extract query")?;
+
+        let partition_count = plan.properties().output_partitioning().partition_count();
+        if partition_count != 1 {
+            anyhow::bail!(
+                "extract query for {} (insert_range=[{}, {}]) produced a {partition_count}-partition \
+                 physical plan; a declared sort_order requires a single-partition, globally-ordered \
+                 output.",
+                self.view_metadata.view_set_name,
+                self.insert_range.begin.to_rfc3339(),
+                self.insert_range.end.to_rfc3339()
+            );
+        }
+
+        let lex = make_lex_ordering(&plan.schema(), &columns)
+            .with_context(|| "building the declared extract-query ordering")?
+            .with_context(|| "declared sort_order columns must be non-empty")?;
+        let ordering_satisfied = plan
+            .properties()
+            .equivalence_properties()
+            .ordering_satisfy(lex)
+            .with_context(|| "checking extract query plan output ordering")?;
+        if !ordering_satisfied {
+            anyhow::bail!(
+                "extract query for {} (insert_range=[{}, {}]) produced a physical plan whose output \
+                 ordering does not satisfy the declared sort_order {sort_order:?}; refusing to \
+                 record a false guarantee. Check for a missing or mismatched top-level ORDER BY.",
+                self.view_metadata.view_set_name,
+                self.insert_range.begin.to_rfc3339(),
+                self.insert_range.end.to_rfc3339()
+            );
+        }
+
+        Ok(execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")?)
     }
 }
 
@@ -86,7 +152,7 @@ impl PartitionSpec for SqlPartitionSpec {
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
         let df = self.ctx.sql(&self.extract_query).await?;
-        let mut stream = df.execute_stream().await?;
+        let mut stream = self.execute_extract_query(df).await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = spawn_with_context(write_partition_from_rows(
@@ -95,7 +161,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.schema.clone(),
             self.insert_range,
             self.get_source_data_hash(),
-            None,
+            self.sort_order.clone(),
             rx,
             logger.clone(),
         ));
@@ -115,7 +181,9 @@ impl PartitionSpec for SqlPartitionSpec {
     }
 }
 
-/// Fetches a `SqlPartitionSpec` by executing a count query and an extract query.
+/// Fetches a `SqlPartitionSpec` by executing a count query and an extract query. `sort_order`
+/// declares the ordering the resulting partition's rows are guaranteed to satisfy (see
+/// `SqlBatchView::with_merge_sort_order`); pass `None` for views that make no such guarantee.
 #[expect(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
@@ -126,6 +194,7 @@ pub async fn fetch_sql_partition_spec(
     extract_query: String,
     view_metadata: ViewMetadata,
     insert_range: TimeRange,
+    sort_order: Option<Vec<String>>,
 ) -> Result<SqlPartitionSpec> {
     let df = ctx.sql(&count_src_sql).await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
@@ -153,5 +222,6 @@ pub async fn fetch_sql_partition_spec(
         view_metadata,
         insert_range,
         count,
+        sort_order,
     ))
 }

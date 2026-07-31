@@ -317,15 +317,15 @@ async fn extra_group_by_key_outside_the_sort_order_still_streams() {
 }
 
 #[tokio::test]
-async fn order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort() {
-    // The easiest authoring mistake to make, and the reason the doc contract says the merge
-    // query's ORDER BY must be *exactly* the declared columns rather than merely start with them.
-    // Grouping by three keys and then writing `ORDER BY name, time_bin, unit` asks for an ordering
-    // the declared `(name, time_bin)` cannot satisfy, so the whole aggregate result is buffered and
-    // sorted -- the exact blowup this plan removes. Note the recorded `sort_order` would still be
-    // truthful (the output *is* sorted by `(name, time_bin)`), so Design §2 check 2 passes and only
-    // the warn-only `ordering_honored` check catches it. The fix is to either drop `unit` from the
-    // ORDER BY or declare `(name, time_bin, unit)` as the view's sort order.
+async fn order_by_extending_past_the_declared_scan_ordering_reinstates_a_blocking_sort() {
+    // A general DataFusion planning fact, independent of anything a SqlBatchView merge-query
+    // author writes (the revised §2/§3 design gives the merge query no author-written ORDER BY at
+    // all -- QueryMerger applies the sort programmatically from the declared columns). This test
+    // instead pins the underlying planning behavior an author-supplied query could still produce
+    // via an extra order-sensitive aggregate argument, e.g. `first_value(x ORDER BY y)` for a `y`
+    // outside the declared scan ordering: an ORDER BY requirement extending past what the scan
+    // declares (here, past `(name, time_bin)`) cannot be satisfied by the per-file ordering alone,
+    // so the whole result is buffered and sorted.
     let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
     let (_, plan_str) = plan_string(
         &ctx,
@@ -335,8 +335,132 @@ async fn order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort() 
     .await;
     assert!(
         plan_str.contains("SortExec"),
-        "an ORDER BY extending past the declared sort columns must be caught as a memory \
-         regression; if DataFusion learned to stream this, the contract can be relaxed:\n{plan_str}"
+        "an ORDER BY extending past the declared scan ordering must be caught as a memory \
+         regression; if DataFusion learned to stream this, the finding no longer holds:\n{plan_str}"
+    );
+}
+
+#[tokio::test]
+async fn reversed_group_by_key_order_still_streams() {
+    // Design §5: GROUP BY key order does not matter -- `GROUP BY time_bin, name` still streams,
+    // pinning the by-hand finding recorded in the design's prose.
+    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
+    let (plan, plan_str) = plan_string(
+        &ctx,
+        "SELECT name, time_bin, first_value(unit) AS unit, sum(measure) AS total FROM source \
+         GROUP BY time_bin, name ORDER BY name, time_bin",
+    )
+    .await;
+    assert_eq!(
+        plan.properties().output_partitioning().partition_count(),
+        1,
+        "must stay single-partition:\n{plan_str}"
+    );
+    assert!(
+        !plan_str.contains("SortExec") && plan_str.contains("ordering_mode=Sorted"),
+        "GROUP BY key order must not affect streaming, got:\n{plan_str}"
+    );
+}
+
+#[tokio::test]
+async fn first_value_with_explicit_inner_order_by_still_streams() {
+    // Design §5: `first_value(unit ORDER BY time_bin)` keeps ordering_mode=Sorted, just like the
+    // no-inner-ORDER-BY form MERGE_QUERY uses.
+    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
+    let (plan, plan_str) = plan_string(
+        &ctx,
+        "SELECT name, time_bin, first_value(unit ORDER BY time_bin) AS unit, sum(measure) AS total \
+         FROM source GROUP BY name, time_bin ORDER BY name, time_bin",
+    )
+    .await;
+    assert_eq!(
+        plan.properties().output_partitioning().partition_count(),
+        1,
+        "must stay single-partition:\n{plan_str}"
+    );
+    assert!(
+        !plan_str.contains("SortExec") && plan_str.contains("ordering_mode=Sorted"),
+        "an order-sensitive aggregate argument whose ORDER BY does not extend past the declared \
+         scan ordering must still stream, got:\n{plan_str}"
+    );
+}
+
+#[tokio::test]
+async fn fuller_measure_set_still_streams() {
+    // Design §5: a fuller measure set (count/min/max/avg/sum) plans identically to the single-sum
+    // MERGE_QUERY shape -- this is a finding about plan shape only (contract item 4 separately
+    // requires composable aggregates over already-aggregated rows, e.g. sum(count) not count(*),
+    // which is not what this planning-only test checks).
+    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
+    let (plan, plan_str) = plan_string(
+        &ctx,
+        "SELECT name, time_bin, count(measure) AS c, min(measure) AS mn, max(measure) AS mx, \
+         avg(measure) AS av, sum(measure) AS sm FROM source GROUP BY name, time_bin \
+         ORDER BY name, time_bin",
+    )
+    .await;
+    assert_eq!(
+        plan.properties().output_partitioning().partition_count(),
+        1,
+        "must stay single-partition:\n{plan_str}"
+    );
+    assert!(
+        !plan_str.contains("SortExec") && plan_str.contains("ordering_mode=Sorted"),
+        "a fuller measure set must plan identically to the single-sum shape, got:\n{plan_str}"
+    );
+}
+
+#[tokio::test]
+async fn cte_internal_order_by_is_discarded_by_a_later_join() {
+    // View-author contract item 3 (Design §5), extract-query half: the extract query's ORDER BY
+    // must be top-level. A CTE-internal ORDER BY that is later joined does not count -- relational
+    // joins carry no row-order guarantee over their inputs, so the join discards it. This is what
+    // SqlPartitionSpec::write's declared-path plan verification (Design §3) relies on: it checks
+    // ordering_satisfy against the *actual* physical plan, so a CTE-internal-only ORDER BY would
+    // correctly fail that check rather than falsely certify the fresh partition.
+    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
+    register_dim(&ctx).await;
+    let plan = plan_query(
+        &ctx,
+        "WITH sorted AS (SELECT name, time_bin, measure FROM source ORDER BY name, time_bin) \
+         SELECT s.name, s.time_bin, s.measure FROM sorted s JOIN dim d ON s.name = d.name",
+    )
+    .await;
+    let lex = lex_ordering_name_time_bin(&spike_schema());
+    let satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .expect("ordering_satisfy should not error");
+    assert!(
+        !satisfied,
+        "a CTE-internal ORDER BY must not survive a later join -- if it did, the extract-query \
+         contract's top-level requirement would be unnecessarily strict, got:\n{}",
+        displayable(plan.as_ref()).indent(true)
+    );
+}
+
+#[tokio::test]
+async fn top_level_order_by_satisfies_the_declared_columns() {
+    // Positive control for the same contract item: a genuinely top-level ORDER BY does satisfy the
+    // declared columns -- what SqlPartitionSpec::write's plan verification (Design §3) relies on to
+    // accept a fresh extract query.
+    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
+    let plan = plan_query(
+        &ctx,
+        "SELECT name, time_bin, measure FROM source ORDER BY name, time_bin",
+    )
+    .await;
+    let lex = lex_ordering_name_time_bin(&spike_schema());
+    let satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .expect("ordering_satisfy should not error");
+    assert!(
+        satisfied,
+        "a top-level ORDER BY matching the declared columns must satisfy them, got:\n{}",
+        displayable(plan.as_ref()).indent(true)
     );
 }
 

@@ -116,7 +116,7 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 !!! note "Requires admin"
     Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get "function not found".
 
-**Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)).
+**Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)), or a `SqlBatchView` (e.g. `log_stats`) whose live partitions predate it adopting a `with_merge_sort_order` declaration and so won't certify for ordered k-way merges until regenerated.
 
 **Parameters**:
 - `view_set_name` (String): Name of the view set to regenerate
@@ -133,6 +133,8 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 
 !!! warning "Alignment invariant"
     `(begin, end, partition_delta_seconds)` must exactly cover the boundaries of the partition(s) being regenerated: `(end - begin)` must be an exact, non-zero multiple of `partition_delta_seconds`, and the range must exactly match existing partition boundaries. A misaligned range/delta fails the query loudly (an error, not a log row) instead of silently leaving a duplicate, overlapping partition behind.
+
+    For a `SqlBatchView`, this means the regeneration bucket size is not a free choice: an already-merged, large partition can only be regenerated as one equally large bucket, whose extract query's `ORDER BY` (required by `with_merge_sort_order`) then sorts that whole bucket's aggregated output in one blocking pass -- there is no smaller `partition_delta_seconds` that avoids this once a partition has already grown large. The bounded alternative is to retire the oversized partition (`retire_partition_by_metadata`) and re-materialize it at a smaller delta via `materialize_partitions()` instead.
 
 !!! note "Online, no downtime"
     Regeneration retires the old partition and inserts the new one atomically, in the same transaction, and streams the source data in bounded chunks -- safe to run against a busy, in-production lakehouse. If another writer (e.g. the maintenance daemon merging partitions) commits a conflicting partition concurrently, the database's overlap exclusion constraint rejects the regeneration with an error instead of leaving duplicate rows -- retry after checking `list_partitions()`. It is an admin/rollout tool, not a steady-state path: run calls serially, never with overlapping ranges in flight concurrently.
