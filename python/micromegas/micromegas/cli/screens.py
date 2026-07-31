@@ -63,6 +63,8 @@ def _validate_screen_dict(data, path):
     for field in ("name", "screen_type", "config"):
         if field not in data:
             raise ValueError(f"{path}: missing required field '{field}'")
+    if not isinstance(data["name"], str):
+        raise ValueError(f"{path}: field 'name' must be a string")
 
 
 def read_screen_file(path):
@@ -136,7 +138,7 @@ def list_local_screens():
         except ValueError as e:
             print(f"Warning: skipping {p}: {e}", file=sys.stderr)
             name = data.get("name") if isinstance(data, dict) else None
-            if name:
+            if isinstance(name, str) and name:
                 invalid_names.add(name)
             continue
 

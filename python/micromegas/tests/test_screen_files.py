@@ -232,6 +232,23 @@ class TestListLocalScreens:
         assert unreadable == set()
         assert invalid_names == {"half-written"}
 
+    def test_non_string_name_does_not_crash(self, tmp_path, monkeypatch):
+        """A `name` field that parses as JSON but isn't a string (e.g. an
+        object) must not crash the scan with `TypeError: unhashable type`.
+        Such a file fails schema validation and, since its `name` isn't a
+        usable string, contributes to neither `invalid_names` nor
+        `screens`."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        with open("bad-name.json", "w") as f:
+            json.dump({"name": {"a": 1}, "screen_type": "notebook", "config": {}}, f)
+
+        screens, unreadable, invalid_names = list_local_screens()
+        assert screens == {}
+        assert unreadable == set()
+        assert invalid_names == set()
+
 
 class TestComputePlan:
     def _make_client(self, server_screens):
