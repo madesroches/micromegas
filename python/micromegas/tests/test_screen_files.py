@@ -249,6 +249,24 @@ class TestListLocalScreens:
         assert unreadable == set()
         assert invalid_names == set()
 
+    def test_scalar_top_level_json_does_not_crash(self, tmp_path, monkeypatch):
+        """A file whose top-level JSON value is a scalar (e.g. `null`) parses
+        fine as JSON but isn't a dict, so the required-field membership check
+        must not crash with `TypeError: argument of type 'NoneType' is not
+        iterable`. It fails schema validation like any other malformed file
+        and, having no `name` field to extract, contributes to neither
+        `invalid_names` nor `screens`."""
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+        with open("null.json", "w") as f:
+            f.write("null")
+
+        screens, unreadable, invalid_names = list_local_screens()
+        assert screens == {}
+        assert unreadable == set()
+        assert invalid_names == set()
+
 
 class TestComputePlan:
     def _make_client(self, server_screens):

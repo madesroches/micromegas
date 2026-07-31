@@ -60,6 +60,8 @@ def _validate_screen_dict(data, path):
     Unlike a decode/parse failure, `data` is a real dict here -- its `name`
     field (if present) is known even though the screen itself is invalid.
     """
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: top-level JSON must be an object")
     for field in ("name", "screen_type", "config"):
         if field not in data:
             raise ValueError(f"{path}: missing required field '{field}'")
