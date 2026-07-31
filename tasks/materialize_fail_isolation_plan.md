@@ -24,7 +24,7 @@ whether it's in the same update group or a later one — is skipped for that pas
 
 The comment immediately above the group-boundary refetch (`maintenance.rs:44`, "views in the same
 group should have no inter-dependencies") is about `SqlBatchView`'s `count_src_query` /
-`transform_query`, which can `SELECT` from other registered views (`SqlBatchView::new`,
+`extract_query`, which can `SELECT` from other registered views (`SqlBatchView::new`,
 `sql_batch_view.rs:65-83`, takes a `view_factory` for exactly this). `update_group` is what
 sequences that dependency: a SQL view that queries another view must be in a *later* group than
 the view it queries, so that the queried view's partitions for `insert_range` already exist by the
@@ -223,14 +223,14 @@ pattern in `rust/analytics/tests/sql_view_test.rs` / `thread_spans_ordering_db_t
 
 Build the test views with `SqlBatchView::new` in the *same* `update_group`:
 - A "failing" view whose `count_src_query` selects from a nonexistent table (or otherwise
-  guarantees a DB error), so `make_batch_partition_spec` always errors. Its `extract_query` (and
-  `transform_query`, if distinct) must stay valid — e.g. a trivial select from `log_entries`, same
+  guarantees a DB error), so `make_batch_partition_spec` always errors. Its `extract_query` must
+  stay valid — e.g. a trivial select from `log_entries`, same
   as the succeeding view below — because `SqlBatchView::new` unconditionally runs `extract_query` at
   construction time to derive the schema (`sql_batch_view.rs:97-101`), independent of
   `count_src_query`. If both queries target the same nonexistent table, `SqlBatchView::new()` itself
   errors out during test setup, before `materialize_all_views` is ever reached, so only
   `count_src_query` should be broken.
-- A "succeeding" view with a trivial, always-valid `count_src_query`/`transform_query` (e.g.
+- A "succeeding" view with a trivial, always-valid `count_src_query`/`extract_query` (e.g.
   counting/copying from `log_entries`, as `sql_view_test.rs` already does).
 
 Call `materialize_all_views` once with both views in the same update group and assert:
