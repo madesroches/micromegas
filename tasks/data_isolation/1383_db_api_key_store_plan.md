@@ -472,7 +472,7 @@ RETURNING revoked_at
   analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP `GET` for this table and the
   import tool's `uuid.uuid4()`-generated `key_id` is otherwise never surfaced to the operator; mint:
   generate the key and its digest with an explicit, trailing-newline-safe recipe —
-  `KEY="mmk_$(openssl rand -base64 32 | tr -d '=+/\n' | head -c 43)"; HASH=$(printf '%s' "$KEY" |
+  `KEY="mmk_$(openssl rand -base64 48 | tr -d '=+/\n' | head -c 43)"; HASH=$(printf '%s' "$KEY" |
   sha256sum | cut -d' ' -f1)` (`printf`, not `echo`, because `hash_key` covers the full key string and
   `echo` would append a newline the validator never sees, silently minting a key that can never
   authenticate) — then the same `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool
@@ -583,7 +583,7 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 1. `rust/ingestion/src/sql_migration.rs`: claim v5. Add `upgrade_data_lake_schema_v5` creating both
    tables and both unique indexes, ending with `UPDATE migration SET version=5` (matching every other
-   `upgrade_data_lake_schema_vN`, e.g. `rust/ingestion/src/sql_migration.rs:93,131`, and required
+   `upgrade_data_lake_schema_vN`, e.g. `rust/ingestion/src/sql_migration.rs:52,72,86`, and required
    because `execute_migration` re-reads the version in the same transaction and asserts
    `current_version == LATEST_DATA_LAKE_SCHEMA_VERSION`); bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5;
    add the corresponding `if 4 == current_version` arm to `execute_migration`. This requires this plan
