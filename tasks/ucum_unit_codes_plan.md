@@ -95,11 +95,21 @@ single-series axis label (`XYChart.tsx:910-911`).
 `xychart-axis.ts:68-81` (`formatYAxisTick`) unconditionally appends `' ' + displayUnit`, so an empty
 display unit yields a trailing space (`"100 "`).
 
-### Consumers not affected
+### Other consumers of `measures.unit`
 
-`ChartCell.tsx` only substitutes macros into unit strings and passes them through; there is no other
-unit-aware code. Tooltips (`XYChart.tsx:474-476`, `565-568`) and header stats
-(`XYChart.tsx:1169-1178`) all go through `formatValueWithUnit`, which normalizes internally.
+`analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` only substitutes macros into unit
+strings and passes them through; it needs no change. Tooltips (`XYChart.tsx:474-476`, `565-568`) and
+header stats (`XYChart.tsx:1169-1178`) all go through `formatValueWithUnit`, which normalizes
+internally.
+
+Four more sites render `measures.unit` directly, outside `formatValueWithUnit`:
+
+| Site | Code | Decision |
+|---|---|---|
+| `ProcessMetricsPage.tsx:483` | `{m.name} ({m.unit})` (measure dropdown option) | Leave raw — this is DB metadata in a discovery list, not a chart display. |
+| `MeasureDiscovery.tsx:124` | `{m.name} ({m.unit})` (measure dropdown option) | Leave raw, same reasoning. |
+| `ProcessMetricsPage.tsx:565` | `({selectedMeasureInfo?.unit || ''})` ("no data in range" placeholder header) | Route through `unitDisplayAbbrev(normalizeUnit(...))` so it matches the loaded-chart header (`XYChart.tsx:1151`'s `{displayTitle} ({displayUnit})`); otherwise the placeholder would read `(By/s)` while the loaded chart reads `(GB/s)`. |
+| `PerformanceMetricsChart.tsx:290` | `({selectedMeasureInfo?.unit || ''})` ("no data in range" placeholder header) | Same fix as above. |
 
 ## Design
 
@@ -356,7 +366,11 @@ and append `suffix` in each branch.
    - Route the three scale-key sites through `unitScaleKey`.
    - Route the axis/header labels (`:292`, `:735`, `:910-911`) through `unitDisplayAbbrev`,
      replacing the ad-hoc `=== 'percent'` checks.
-5. **Tests** — extend `units.test.ts`, `format-value.test.ts`, and add coverage for
+5. **`analytics-web-app/src/routes/ProcessMetricsPage.tsx`** and
+   **`analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`**
+   - Route the "no data in range" placeholder header's unit (`:565` / `:290`) through
+     `unitDisplayAbbrev(normalizeUnit(...))` to match `XYChart`'s loaded-chart header.
+6. **Tests** — extend `units.test.ts`, `format-value.test.ts`, and add coverage for
    `formatYAxisTick` and the axis grouping (see Testing Strategy). Update the two existing
    assertions that pin the old behavior: `units.test.ts:123-124`
    (`normalizeUnit('none') === 'none'`, `normalizeUnit('count') === 'count'`).
@@ -367,6 +381,8 @@ and append `suffix` in each branch.
 - `analytics-web-app/src/lib/format-value.ts`
 - `analytics-web-app/src/components/xychart-axis.ts`
 - `analytics-web-app/src/components/XYChart.tsx`
+- `analytics-web-app/src/routes/ProcessMetricsPage.tsx`
+- `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`
 - `analytics-web-app/src/lib/__tests__/units.test.ts`
 - `analytics-web-app/src/lib/__tests__/format-value.test.ts`
 - `analytics-web-app/src/components/__tests__/xychart-axis.test.ts` (extend, or create if absent)
@@ -425,9 +441,10 @@ commit.
   the time/size/bit canonical names to their short forms (`milliseconds`→`ms`, `kilobytes`→`KB`,
   `megabits`→`Mbit`, …) and their `/s` forms (`bytes/s`→`B/s`, `kilobits/s`→`kbit/s`, …), and passes
   through any other, genuinely unmapped canonical name unchanged (e.g. `widgets`→`widgets`).
-- Regression guard for the all-zero-series case: for every name in `TIME_UNIT_NAMES`,
-  `SIZE_UNIT_NAMES`, and `BIT_UNIT_NAMES` (bare and `/s` forms), `unitDisplayAbbrev(name) !== name` —
-  i.e. an adaptive family never falls through to its spelled-out canonical name.
+- Regression guard for the all-zero-series case: for every name in `TIME_UNIT_NAMES` (bare forms
+  only — there is no canonical time rate unit), and for every name in `SIZE_UNIT_NAMES` and
+  `BIT_UNIT_NAMES` (bare and `/s` forms), `unitDisplayAbbrev(name) !== name` — i.e. an adaptive
+  family never falls through to its spelled-out canonical name.
 
 **`format-value.test.ts`**
 - `formatValueWithUnit(1234567890, 'By/s')` → `'1.1 GB/s'` (the issue's reported symptom).
