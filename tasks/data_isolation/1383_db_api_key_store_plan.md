@@ -234,8 +234,12 @@ pub fn generate_key() -> String;
 3. `unknown` cache hit ⇒ bail without touching the DB (a *repeated* probe of the same bogus token is
    free after the first attempt — see [Trade-offs](#trade-offs) for what this does and does not
    bound).
-4. `valid` cache hit ⇒ build the `AuthContext` and return.
-5. Otherwise one statement against the DB:
+4. **`valid.try_get_with(hash, loader)`**, not a plain `get`/`insert` pair. moka 0.12.15's `Cache::get`
+   and `Cache::insert` do not coalesce: a plain `get` miss followed later by an `insert` lets every
+   in-flight request for a hash that just expired run its own loader concurrently. `try_get_with`
+   (`Cache<[u8; 32], Arc<KeyRow>>::try_get_with`) is moka's coalescing entry API — among concurrent
+   callers for the same key, exactly one runs `init` (the loader below); the rest await its result. A
+   cache hit returns the cached `Arc<KeyRow>` with no loader call at all. The loader:
 
 ```sql
 UPDATE <table> SET last_used_at = now()
@@ -243,31 +247,65 @@ WHERE key_hash = $1 AND revoked_at IS NULL
 RETURNING key_id, name
 ```
 
-   `Some(row)` ⇒ insert into `valid`, return the context. `None` ⇒ insert into `unknown`, bail
-   "invalid API token".
-6. **A DB *error* is propagated and cached in neither map.** Caching an outage as `unknown` would
+   returns `Result<Arc<KeyRow>, LookupError>` where `LookupError` is `NotFound` or `Db(anyhow::Error)`:
+   `Some(row)` ⇒ `Ok(Arc::new(row))`, which `try_get_with` inserts into `valid` and returns; `None` ⇒
+   `Err(LookupError::NotFound)`. On `Ok`, build the `AuthContext` and return. On
+   `Err(LookupError::NotFound)`, insert into `unknown` (outside the `try_get_with` call itself, since a
+   "no such live key" result is a legitimate outcome for the `unknown` cache, not a failure to retry)
+   and bail "invalid API token".
+5. **A DB *error* is propagated and cached in neither map.** `try_get_with` never inserts into `valid`
+   on an `Err` from the loader — so an `Err(LookupError::Db(e))` populates neither `valid` nor
+   `unknown`, exactly like the `NotFound` arm above populates only `unknown`, never `valid`. Caching an
+   outage as `unknown` would
    turn a transient failure into a TTL-long outage for every affected key. The provider itself logs
    the error at `error!` (with the table name) before returning it, because the composition layer does
    not: `MultiAuthProvider` (`rust/auth/src/multi.rs:83-91`) catches every provider error and logs it
-   at `debug!`, so without this a Postgres outage would surface only as a flood of ordinary 401s at
-   `warn!` from `axum.rs`, with no signal at a level operators actually run at. **This `error!` is
+   at `debug!`. **This DB error is also wrapped in a new `micromegas_auth::types::ProviderUnavailable`
+   (a `thiserror` newtype around the `anyhow::Error`, per `rust/CLAUDE.md`'s rule that a typed error is
+   warranted when a caller must branch on error kind) before being returned**, so that a store outage
+   is distinguishable from a rejected credential all the way out to the HTTP response. Without this,
+   `auth_middleware` (`rust/auth/src/axum.rs:39-58`) maps *any* provider error to `AuthError::InvalidToken`
+   → **401**, and `rust/telemetry-sink/src/http_event_sink.rs:525-534` classifies every `400..=499` as
+   `IngestionClientError::Permanent` (no retry) — so once the 60s positive-cache entries age out, a
+   Postgres outage would 401 every authenticated ingestion request and every client sink would drop its
+   batch permanently instead of retrying. `MultiAuthProvider::validate_request` is changed to track
+   whether any provider in the chain failed with `ProviderUnavailable` (checked via
+   `anyhow::Error::downcast_ref`); if the loop exhausts every provider with no success, it re-raises
+   `ProviderUnavailable` when at least one provider saw it, instead of the generic "authentication
+   failed with all providers" — a request that might have matched a live DB key had the store been
+   reachable must not be treated as a confirmed rejection. `auth_middleware` in turn downcasts the
+   error it receives: `ProviderUnavailable` maps to a new `AuthError::Unavailable` →
+   **503 Service Unavailable** (retryable per `http_event_sink.rs`'s `500..=599` classification);
+   every other error keeps mapping to `AuthError::InvalidToken` → 401. This is stated here and in
+   [Security](#security) as the chosen behavior: an outage in the key store is client-visible as a
+   retryable 503, never a permanent 401. **This `error!` is
    rate-limited to at most one line per `cache_ttl_secs` window (per table), not one per rejected
    request**: §3 puts `DbApiKeyAuthProvider` last in the chain, so during an outage every
    non-env-key, non-JWT request reaches it, and once the positive cache's entries age out that
    includes every legitimately-keyed request on the highest-volume service in the deployment —
    `error!` per request would flood `log_entries` with the outage's own noise, the same
    self-ingestion property the plan cites against the UDF approach in §4. Implementation: a small
-   `AtomicI64` "last logged at" timestamp on the provider, checked-and-set before emitting. Every DB
-   error still increments a `db_error_count` metric unconditionally, so the outage is fully visible in
-   metrics even on the requests whose `error!` line was suppressed.
+   `AtomicI64` "last logged at" timestamp on the provider, checked-and-set before emitting. **Every DB
+   error still emits `imetric!("db_api_key_error_count", "count", table_tags(self.table.table_name()),
+   1_u64)` unconditionally** — the `imetric!("<name>", "<unit>", ...)` convention already used by
+   `rust/public/src/servers/axum_utils.rs:30` and `rust/public/src/servers/pg_stats.rs:86-104`, with the
+   table name carried as a `{table}` tag via `PropertySet::find_or_create`, the same
+   `table_tags`/`index_tags` pattern `pg_stats.rs:38-42` already uses to keep one metric name shared
+   across the two tables rather than one static name per `ApiKeyTable` variant — so the outage is fully
+   visible in metrics, per table, even on the requests whose `error!` line was suppressed.
 
 Design notes:
 
 - **`last_used_at` is folded into the lookup**, so there is no second round trip, no throttling
-  machinery, and no per-entry timestamp state. It is naturally rate-limited to *once per cache TTL
-  per key per process* — a live key seen continuously by one process writes one `UPDATE` a minute at
-  the default TTL, and the resulting column granularity (±TTL) is exactly what an
-  approximately-last-used audit column wants.
+  machinery, and no per-entry timestamp state. It is rate-limited to *once per cache TTL per key per
+  process* **because the lookup goes through `valid.try_get_with`, moka's coalescing entry API, not a
+  plain `get`/`insert` pair** — a plain `get` miss followed by an `insert` does not coalesce concurrent
+  misses (moka 0.12.15 only coalesces through `get_with`/`try_get_with`/`optionally_get_with`), so every
+  in-flight request for a hash that just expired would otherwise run its own `UPDATE`, all against the
+  same row. With `try_get_with`, a burst of concurrent requests for the same live key collapses to
+  exactly one loader call — one `UPDATE` a minute at the default TTL for a key seen continuously by one
+  process, however many concurrent requests are in flight — and the resulting column granularity
+  (±TTL) is exactly what an approximately-last-used audit column wants.
 - **This stage assumes a live-key population well under `cache_size` (thousands, not tens of
   thousands).** The "once per cache TTL per key per process" guarantee above holds only while the
   working set of distinct live keys fits in the `valid` cache's `max_capacity` (default 10,000); past
@@ -624,8 +662,21 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 3. `rust/auth/src/db_api_key.rs` (new): `ApiKeyTable`, `DbApiKeyConfig` (+ `from_env` and
    `from_env_with_prefix`, the latter mirroring `provider_with_prefix`'s `{prefix}_*`-with-fallback
    convention so a monolith can set ingestion and analytics cache TTLs independently — see §2), `hash_key`,
-   `generate_key`, `DbApiKeyAuthProvider` with the two `moka` caches and the
-   `UPDATE ... RETURNING` lookup. Register in `rust/auth/src/lib.rs`.
+   `generate_key`, `DbApiKeyAuthProvider` with the two `moka` caches (the `valid` lookup going through
+   `try_get_with`, not a plain `get`/`insert` pair — see §2 step 4) and the
+   `UPDATE ... RETURNING` lookup, wrapping every DB error in `types::ProviderUnavailable` before
+   returning it and emitting `imetric!("db_api_key_error_count", "count", table_tags(...), 1_u64)`
+   unconditionally (§2 step 5). Register in `rust/auth/src/lib.rs`. Also, in the same step (§2 step 5's
+   store-unavailable-vs-rejected distinction):
+   - `rust/auth/src/types.rs`: add `ProviderUnavailable`, a `thiserror` newtype around `anyhow::Error`
+     — the one place in this crate a typed error is warranted, per `rust/CLAUDE.md`'s
+     anyhow-vs-thiserror rule, since two callers below must branch on this specific kind.
+   - `rust/auth/src/multi.rs`: `MultiAuthProvider::validate_request` downcasts each provider error for
+     `ProviderUnavailable` and, if every provider failed but at least one failed with it, re-raises
+     `ProviderUnavailable` instead of the generic "authentication failed with all providers".
+   - `rust/auth/src/axum.rs`: `auth_middleware` downcasts the error from `validate_request`; a
+     `ProviderUnavailable` maps to a new `AuthError::Unavailable` → **503**, everything else keeps
+     mapping to `AuthError::InvalidToken` → 401.
 4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; `with_db_key_store` builds the attached
    provider's `DbApiKeyConfig` via `DbApiKeyConfig::from_env_with_prefix(&self.prefix)`, so the cache
    TTL a `DbApiKeyAuthProvider` actually runs with follows the same prefix its `ApiKeyAuthProvider` /
@@ -710,6 +761,11 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 - `rust/ingestion/src/sql_migration.rs`
 - `rust/auth/Cargo.toml`, `rust/auth/src/lib.rs`, `rust/auth/src/default_provider.rs`
+- `rust/auth/src/types.rs` (adding `ProviderUnavailable`), `rust/auth/src/multi.rs` (re-raising it when
+  every provider fails and at least one saw it), `rust/auth/src/axum.rs` (mapping it to a new
+  `AuthError::Unavailable` → 503) — see §2 step 5 and [Security](#security)
+- `rust/auth/tests/multi_tests.rs`, `rust/auth/tests/axum_tests.rs` (existing files, new cases for the
+  `ProviderUnavailable` → 503 path — see [Testing Strategy](#testing-strategy))
 - `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs` (adding
   `serve_ingestion_with_api_key_config`, with `serve_ingestion` reimplemented as a thin
   `DbApiKeyConfig::from_env()` wrapper around it — mirroring §3's `ProviderBuilder`/`provider()` split,
@@ -754,10 +810,21 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   and makes the insert reviewable before it runs. Alternative considered: add `psycopg[binary]` as a
   dev-group dependency — rejected because the tool needs to run wherever the operator's DB
   credentials are, not only in a poetry dev env.
+- **Surfacing a key-store outage as 503, not 401.** Costs a new `ProviderUnavailable` typed error
+  threaded through `AuthProvider`'s otherwise-`anyhow` error path, plus the `downcast_ref` checks in
+  `MultiAuthProvider` and `auth_middleware` (§2 step 5). Buys correct retry behavior at the client: the
+  env keyring is in-memory and cannot fail, so today's env-only deployments never hit `axum.rs`'s
+  blanket "any provider error ⇒ 401" mapping on an outage — a DB-backed store can, and
+  `rust/telemetry-sink/src/http_event_sink.rs:525-534` treats every `4xx` as permanent and drops the
+  batch. Without this distinction, a Postgres outage would silently convert into data loss at every
+  ingestion client once the positive cache ages out, rather than a retried 503 during the outage
+  window.
 - **Folding `last_used_at` into the lookup statement** instead of a throttled background write. Costs
   granularity (±cache TTL) and turns the miss-path `SELECT` into an `UPDATE ... RETURNING`; buys the
-  removal of all per-entry timestamp state and any second round trip. For an
-  approximately-last-used audit column this is the right resolution.
+  removal of all per-entry timestamp state and any second round trip. This only rate-limits the write
+  to once per cache TTL per key because the lookup goes through `valid.try_get_with` (§2 step 4), not a
+  plain `get`/`insert` pair — the latter would let every concurrent miss for the same just-expired key
+  issue its own `UPDATE`. For an approximately-last-used audit column this is the right resolution.
 - **A negative cache.** It only makes *repeated* probes of the same token free: keyed by
   `hash_key(token)`, it misses on every distinct token, so a flood of randomly generated bearer
   tokens — the actual shape of an unauthenticated attack on the ingestion endpoint — still costs one
@@ -814,6 +881,14 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
   The env provider's `ct_eq` scan is untouched and still correct for its (small, static) keyring.
 - **Low-entropy legacy keys** are the one place SHA-256-without-KDF is thin. The import tool warns;
   the migration guide says rotate.
+- **A key-store outage is not client-visible as a rejected credential.** `DbApiKeyAuthProvider`
+  wraps every DB error in `ProviderUnavailable` (§2 step 5); `MultiAuthProvider` re-raises it when no
+  provider in the chain succeeded, and `auth_middleware` (`rust/auth/src/axum.rs`) maps it to
+  **503**, not the blanket 401 every other provider error gets. This matters because
+  `rust/telemetry-sink/src/http_event_sink.rs` treats `4xx` as permanent (drop, no retry) and `5xx` as
+  transient (retry): without the distinction, a Postgres outage would look identical to an invalid
+  key to every ingestion client, and telemetry would be silently and permanently dropped for the
+  duration of the outage instead of retried.
 
 ## Migration
 
@@ -874,7 +949,8 @@ place the zero-client-change claim in the issue does not hold.
   TLS-terminating ingress — the ingestion service itself serves plain HTTP, so the one-time cleartext
   key in the response is otherwise exposed in flight (see [Security](#security)); the two
   tables and why they are split; the three routes with request/response examples; the
-  revocation-latency property and the cache env knobs; the grant recipe; the import procedure
+  revocation-latency property and the cache env knobs; the `db_api_key_error_count` metric (§2 step 5)
+  as the signal to alert on for a key-store outage, alongside the four cache env knobs; the grant recipe; the import procedure
   including the dual-use split; the `object-cache-srv` exception; a runbook for listing, minting, and
   revoking an `analytics_api_keys` row by hand (list: `SELECT key_id, name, created_at, last_used_at,
   revoked_at FROM analytics_api_keys ORDER BY created_at DESC` — the only way to discover a `key_id` to
@@ -952,7 +1028,9 @@ place the zero-client-change claim in the issue does not hold.
   / `analytics_api_keys`, migration v5), the three new `/auth/api_keys`
   HTTP routes, the four new
   cache/audit env knobs (`MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`,
-  `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), the
+  `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), the new
+  `db_api_key_error_count` metric (§2 step 5) emitted on every key-store DB error regardless of log
+  suppression, the
   **public-API removal** of `micromegas::servers::key_ring` (dead, unreferenced duplicate of
   `api_key.rs`'s keyring half — see [Current State](#current-state)), the new (non-breaking)
   `serve_ingestion_with_api_key_config` entry point — `serve_ingestion` (published under the `server`
@@ -979,6 +1057,14 @@ the default would cost ~60s per run):
 - A missing bearer token fails before any DB access.
 - **A DB error is not cached as `unknown`**: two calls with the same token both attempt the DB
   (asserted via the error surfacing twice rather than the second call returning the cached rejection).
+- **A key-store outage is a `ProviderUnavailable`, not a generic rejection**: against this same
+  unreachable pool, assert the error `validate_request` returns downcasts to
+  `types::ProviderUnavailable`.
+- **`db_api_key_error_count` fires on a DB error**: using `micromegas_tracing::test_utils::init_in_memory_tracing`
+  and the `count_integer_metric` helper (`rust/object-cache/tests/telemetry_tests.rs:39-`), assert two
+  DB attempts against the unreachable pool each increment `db_api_key_error_count` by one, including
+  when the rate-limited `error!` line itself is suppressed on the second attempt — the metric is
+  unconditional, the log line is not.
 
 **`rust/auth/tests/db_api_key_tests.rs` — `#[ignore]`, live Postgres**, each test creating its own
 rows with a unique name prefix and cleaning up:
@@ -997,6 +1083,22 @@ rows with a unique name prefix and cleaning up:
   `DbApiKeyAuthProvider` authenticates a key from either.
 - **Surface separation, both directions**: a key row in `ingestion_api_keys` is rejected by a provider
   bound to `Analytics`, and vice versa.
+
+**`rust/auth/tests/multi_tests.rs`** (existing file, new cases) — a fake `AuthProvider` returning
+`Err(types::ProviderUnavailable(...).into())`:
+
+- One unavailable provider, no others configured ⇒ `MultiAuthProvider::validate_request`'s error
+  downcasts to `ProviderUnavailable`.
+- One unavailable provider plus one that plainly rejects (e.g. a wrong env key) ⇒ still
+  `ProviderUnavailable`, not the generic "authentication failed with all providers" — an outage must
+  not be masked by an ordinary rejection elsewhere in the chain.
+- All providers plainly reject, none unavailable ⇒ unchanged generic error (no regression on today's
+  behavior).
+
+**`rust/auth/tests/axum_tests.rs`** (existing file, new case), following the existing
+`test_invalid_api_key` shape: a fake provider that always returns `Err(ProviderUnavailable(...).into())`
+⇒ `auth_middleware` responds `StatusCode::SERVICE_UNAVAILABLE`, not `UNAUTHORIZED` — this is the
+assertion the issue requires: a key-store failure yields 503, not 401.
 
 **`rust/auth/tests/default_provider_tests.rs`** — `ProviderBuilder` / §3's startup-existence rules,
 using the extracted `key_store_has_live_rows` where full env isolation around `build()` would be
