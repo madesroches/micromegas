@@ -70,6 +70,14 @@ calls that touch user-controlled or server-controlled content:
   a `--file` SQL file with no `encoding=`. Same class of bug (a SQL file with
   a non-ASCII comment or string literal, edited on a non-UTF-8-locale
   machine, would mis-decode). Fix: `read_text(encoding="utf-8")`.
+- `micromegas/cli/query.py:89` — the `--file -` (stdin) branch does
+  `sys.stdin.read().strip()` with no encoding pin. Identical bug class:
+  under a non-UTF-8 locale (e.g. `LC_ALL=C PYTHONUTF8=0`, the same
+  environment this plan's own regression test forces), piping non-ASCII SQL
+  into stdin mis-decodes before it reaches the server. `sys.stdin` has no
+  `encoding=` kwarg to pass since it isn't an `open()` call; fix by
+  reconfiguring it explicitly: `sys.stdin.reconfigure(encoding="utf-8")`
+  immediately before the `.read()` call.
 - `micromegas/auth/oidc.py:539` — `open(token_file)` reads a cached OIDC
   token JSON file. Content is a JWT/JSON blob that in practice is always
   ASCII, but pin `encoding="utf-8"` anyway for consistency and to close off
@@ -104,6 +112,8 @@ fix (see Open Questions).
      `json.dump(config_data, f, indent=2, ensure_ascii=False)`
 2. `python/micromegas/micromegas/cli/query.py`:
    - `pathlib.Path(args.file).read_text(encoding="utf-8")` (line 92)
+   - stdin branch (line 89): `sys.stdin.reconfigure(encoding="utf-8")` before
+     `sys.stdin.read()`
 3. `python/micromegas/micromegas/auth/oidc.py`:
    - Add `encoding="utf-8"` to the token-file read (line 539) and the
      `os.fdopen(fd, "w")` write (line 505)
