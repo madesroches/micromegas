@@ -113,12 +113,29 @@ fn clear_attr_if_present(attrs: &mut [KeyValue], key: &str) {
     }
 }
 
+/// Case-insensitive bucketing key for a namespace as returned by `metric_namespace`. Namespaces
+/// are already trimmed by `metric_namespace`; this additionally lower-cases so that CloudWatch
+/// namespaces differing only in case (e.g. `MyApp/Prod` vs `myapp/prod`) land in the same
+/// bucket — matching `identity::attr_norm`'s trim+lowercase semantics, which is what
+/// `process_id_from_resource` folds `service.name` through downstream. Without this, two case
+/// variants would produce two buckets (two `ResourceMetrics`, two `exe` values) that still hash
+/// to the same `process_id`, and `register_otel_process`'s `ON CONFLICT DO NOTHING` would let
+/// whichever `exe` lands first silently win.
+fn namespace_bucket_key(namespace: &Option<String>) -> Option<String> {
+    namespace.as_ref().map(|s| s.to_ascii_lowercase())
+}
+
 /// Partitions one CloudWatch-shaped `ResourceMetrics` into one synthetic `ResourceMetrics` per
 /// namespace found across its metrics (`metric_namespace`'s `None` result buckets under
 /// `UNKNOWN_NAMESPACE`). A namespace appearing in more than one original `ScopeMetrics` still
 /// ends up as a single output resource's `scope_metrics` list — `BTreeMap` for deterministic
 /// iteration order, load-bearing for reproducible `block_id`s across repeated rewrites of the
 /// same input.
+///
+/// Bucketing is keyed on `namespace_bucket_key` (case-insensitive) so that case variants of the
+/// same namespace merge into one bucket; the first-seen raw (case-preserving) namespace string
+/// is retained alongside the bucket and used as `service.name`, so the output `exe` is stable
+/// regardless of which case variant happens to sort first.
 ///
 /// Every other field on the synthetic `ResourceMetrics`/`Resource` is carried over from the
 /// original unchanged — only `attributes` differs.
@@ -140,21 +157,35 @@ fn partition_resource_metrics(rm: ResourceMetrics) -> Vec<ResourceMetrics> {
         .unwrap_or_default();
     let schema_url = rm.schema_url.clone();
 
-    let mut buckets: BTreeMap<Option<String>, Vec<ScopeMetrics>> = BTreeMap::new();
+    // Each bucket carries the first-seen raw namespace string alongside its accumulated
+    // metrics/scope_metrics, so case variants collapse onto one bucket keyed by
+    // `namespace_bucket_key` while still emitting a single, stable `service.name`.
+    let mut buckets: BTreeMap<Option<String>, (Option<String>, Vec<ScopeMetrics>)> =
+        BTreeMap::new();
     for scope in rm.scope_metrics {
         let scope_scope = scope.scope.clone();
         let scope_schema_url = scope.schema_url.clone();
-        let mut per_namespace: BTreeMap<Option<String>, Vec<Metric>> = BTreeMap::new();
+        let mut per_namespace: BTreeMap<Option<String>, (Option<String>, Vec<Metric>)> =
+            BTreeMap::new();
         for metric in scope.metrics {
             let namespace = metric_namespace(&metric);
-            per_namespace.entry(namespace).or_default().push(metric);
+            let key = namespace_bucket_key(&namespace);
+            per_namespace
+                .entry(key)
+                .or_insert_with(|| (namespace.clone(), Vec::new()))
+                .1
+                .push(metric);
         }
-        for (namespace, metrics) in per_namespace {
-            buckets.entry(namespace).or_default().push(ScopeMetrics {
-                scope: scope_scope.clone(),
-                metrics,
-                schema_url: scope_schema_url.clone(),
-            });
+        for (key, (raw_namespace, metrics)) in per_namespace {
+            buckets
+                .entry(key)
+                .or_insert_with(|| (raw_namespace, Vec::new()))
+                .1
+                .push(ScopeMetrics {
+                    scope: scope_scope.clone(),
+                    metrics,
+                    schema_url: scope_schema_url.clone(),
+                });
         }
     }
 
@@ -164,7 +195,7 @@ fn partition_resource_metrics(rm: ResourceMetrics) -> Vec<ResourceMetrics> {
 
     buckets
         .into_iter()
-        .map(|(namespace, scope_metrics)| {
+        .map(|(_key, (namespace, scope_metrics))| {
             let mut resource_attrs = original_attrs.clone();
             // cloud.account.id, cloud.provider, cloud.region, aws.exporter.arn carried over
             // (via original_attrs.clone() above); only these three are added/changed:

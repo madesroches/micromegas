@@ -431,6 +431,57 @@ fn rewrite_merges_same_namespace_across_two_scope_metrics_into_one_resource_metr
 }
 
 #[test]
+fn rewrite_merges_case_variant_namespaces_into_one_resource_metrics_with_one_exe() {
+    // "MyApp/Prod" and "myapp/prod" must collapse onto the same bucket: process_id derivation
+    // (identity::attr_norm) lower-cases service.name, so two case-preserving buckets would
+    // otherwise produce two ResourceMetrics/exe values sharing one process_id.
+    let arn = "arn:aws:firehose:us-east-1:123456789012:deliverystream/cw-metrics";
+    let req = make_cw_request(
+        cw_resource_attrs(arn),
+        one_scope(vec![
+            cw_summary_metric("MyApp/Prod", "CPUUtilization", 1_000),
+            cw_summary_metric("myapp/prod", "MemoryUtilization", 2_000),
+        ]),
+    );
+
+    let rewritten = rewrite_cloudwatch_metric_streams(req);
+    assert_eq!(
+        rewritten.resource_metrics.len(),
+        1,
+        "case variants of the same namespace must merge into one ResourceMetrics"
+    );
+
+    let attrs = &rewritten.resource_metrics[0]
+        .resource
+        .as_ref()
+        .expect("resource")
+        .attributes;
+    // First-seen raw (case-preserving) namespace string wins as service.name/exe.
+    assert_eq!(find_attr(attrs, "service.name"), Some("MyApp/Prod"));
+
+    let all_metric_names: Vec<_> = rewritten.resource_metrics[0]
+        .scope_metrics
+        .iter()
+        .flat_map(|s| s.metrics.iter().map(|m| m.name.clone()))
+        .collect();
+    assert_eq!(
+        all_metric_names,
+        vec![
+            "amazonaws.com/MyApp/Prod/CPUUtilization".to_string(),
+            "amazonaws.com/myapp/prod/MemoryUtilization".to_string(),
+        ],
+        "both metrics land under the merged bucket"
+    );
+
+    let blocks = split_metrics(rewritten).expect("split_metrics");
+    assert_eq!(
+        blocks.len(),
+        1,
+        "one PreparedBlock (one process_id) for the merged case-variant namespace"
+    );
+}
+
+#[test]
 fn full_pipeline_yields_one_block_per_namespace_with_distinct_process_ids_and_expected_exe() {
     let arn = "arn:aws:firehose:us-east-1:123456789012:deliverystream/cw-metrics";
     let req = make_cw_request(
