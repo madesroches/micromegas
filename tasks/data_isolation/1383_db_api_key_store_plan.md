@@ -201,7 +201,18 @@ RETURNING key_id, name
    the error at `error!` (with the table name) before returning it, because the composition layer does
    not: `MultiAuthProvider` (`rust/auth/src/multi.rs:83-91`) catches every provider error and logs it
    at `debug!`, so without this a Postgres outage would surface only as a flood of ordinary 401s at
-   `warn!` from `axum.rs`, with no signal at a level operators actually run at.
+   `warn!` from `axum.rs`, with no signal at a level operators actually run at. **This `error!` is
+   rate-limited to at most one line per `cache_ttl_secs` window (per table), not one per rejected
+   request**: §3 puts `DbApiKeyAuthProvider` last in the chain, so during an outage every
+   non-env-key, non-JWT request reaches it, and once the positive cache's entries age out that
+   includes every legitimately-keyed request on the highest-volume service in the deployment —
+   `error!` per request would flood `log_entries` with the outage's own noise, the same
+   self-ingestion property the plan cites against the UDF approach in §4. Implementation: a small
+   `AtomicI64` "last logged at" timestamp on the provider, checked-and-set before emitting; a
+   `moka::sync::Cache<(), ()>` with `time_to_live(cache_ttl_secs)` and a `count()`-based first-insert
+   check works equally well. Either way, every DB error still increments a `db_error_count` metric
+   unconditionally, so the outage is fully visible in metrics even on the requests whose `error!`
+   line was suppressed.
 
 Design notes:
 
@@ -248,7 +259,15 @@ impl ProviderBuilder {
     pub async fn build(self) -> Result<Option<Arc<dyn AuthProvider>>>;
 }
 
-// Kept as thin env-only wrappers so existing callers and tests are untouched.
+// Kept, but not because any internal caller or test still needs them — Phase 4
+// migrates all four call sites (`telemetry-ingestion-srv`, `flight_sql_server.rs`,
+// `monolith/src/main.rs` x2) onto `ProviderBuilder`, and `rust/auth/tests/` has no
+// test referencing `default_provider` today. `provider()` / `provider_with_prefix()`
+// are `pub` on the published `micromegas-auth` crate, carry a rustdoc example
+// (`default_provider.rs:26-38`), and are the only documented env-only entry point for
+// an external caller that wants API-key + OIDC composition without a DB pool. Kept as
+// thin env-only wrappers to preserve that public API surface, not to avoid touching
+// internal callers.
 pub async fn provider() -> Result<Option<Arc<dyn AuthProvider>>>;
 pub async fn provider_with_prefix(prefix: &str) -> Result<Option<Arc<dyn AuthProvider>>>;
 ```
@@ -262,6 +281,17 @@ requests nothing. Putting the DB provider last means only tokens that are neithe
 valid JWT ever reach it, and it is the DB provider, not `OidcAuthProvider`'s 300s token cache
 (`oidc.rs:121`), that would otherwise be the binding cost on every OIDC request if it ran first.
 Env and DB compose so nothing breaks mid-migration.
+
+**`DbApiKeyAuthProvider` is always pushed onto the chain whenever a key store is attached** —
+registration never depends on the existence query below. That query feeds only the *"is anything
+configured at all"* decision (the `Ok(None)` early-out described next), never whether the DB
+provider itself is constructed. This matters because `MultiAuthProvider::is_empty()`
+(`rust/auth/src/multi.rs:74-76`) is `providers.is_empty()`: if the DB provider were conditionally
+pushed based on the existence check, a deployment that starts with an empty table (Migration step
+1, or a fresh install with OIDC only) would mint its first key through `POST /auth/api_keys` and
+that key would not authenticate until the process restarts — directly contradicting "grant/revoke
+without a redeploy." Always registering the provider means a newly minted key is live on the next
+request, cache-TTL aside, with no restart.
 
 **A DB key store with at least one live key counts as "auth configured"; an empty one does not.**
 When a key store is attached, `build()` runs one cheap startup query —
@@ -399,8 +429,10 @@ micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
   unlike `default_provider::provider_with_prefix`, it does **not** fall back to the unprefixed
   `MICROMEGAS_API_KEYS` (`rust/auth/src/default_provider.rs:53-59`), because a single unprefixed
   keyring has no table to route to on its own. A monolith deployment that relies on that fallback
-  (e.g. `docker/docker-compose.monolith.yaml:52`, `docker/README.md:131`) would otherwise get a
-  silent no-op migration. So when neither prefixed variable is set, `--from-prefixed` exits non-zero
+  (e.g. `docker/docker-compose.monolith.yaml:52`) would otherwise get a silent no-op migration —
+  note `docker/README.md:131` and `:206` are the unrelated **object-cache** keyring, permanently
+  out of scope, not a monolith fallback. So when neither prefixed variable is set,
+  `--from-prefixed` exits non-zero
   instead of emitting an empty `BEGIN; COMMIT;`, with a message pointing at the explicit form:
   `--keys-env MICROMEGAS_API_KEYS --ingestion ... --analytics ...`.
 - Otherwise **every key name in the source keyring must be listed in exactly one of `--ingestion` /
@@ -442,8 +474,11 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `UPDATE ... RETURNING` lookup. Register in `rust/auth/src/lib.rs`.
 4. `rust/auth/src/default_provider.rs`: add `ProviderBuilder`; reimplement `provider()` /
    `provider_with_prefix()` on top of it (env-only, unchanged behavior, so the `Ok(None)` rule on
-   those thin wrappers is untouched); `ProviderBuilder::build()` additionally treats a non-empty
-   attached key store as "configured" via the startup existence query described in §3.
+   those thin wrappers is untouched). Keep both wrappers even though every internal caller moves off
+   them in Phase 4 — they stay solely as the published crate's documented env-only entry point (see
+   §3's comment on the rationale), not because anything internal still calls them.
+   `ProviderBuilder::build()` additionally treats a non-empty attached key store as "configured" via
+   the startup existence query described in §3.
 
 ### Phase 3 — Management API
 
@@ -506,9 +541,10 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - `mkdocs/mkdocs.yml`, `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
   `mkdocs/docs/admin/monolith.md`, `mkdocs/docs/admin/flight-sql.md`,
   `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/otlp/index.md`, `docker/README.md`,
-  `mkdocs/docs/grafana/authentication.md`
+  `mkdocs/docs/grafana/authentication.md`, `docker/docker-compose.monolith.yaml`
 - `tasks/data_isolation/audience_based_access_control_plan.md` (record the `key_id` column and the
   single-DB-role caveat)
+- `CHANGELOG.md` (`Unreleased` bullet — see [Documentation](#documentation))
 
 **Deleted**
 
@@ -632,15 +668,29 @@ place the zero-client-change claim in the issue does not hold.
   validates `analytics_api_keys` and mints nothing.
 - **`admin/object-cache.md`**: state explicitly that its `MICROMEGAS_API_KEYS` is permanent and its
   keys are not revocable without a redeploy — otherwise it reads as an oversight.
-- **`otlp/index.md`, `docker/README.md`**: both document `MICROMEGAS_API_KEYS` for ingestion/flight-sql,
-  which is now the transitional (Migration steps 1–2) path rather than the steady state; update to
-  point at `api-keys.md` and describe DB-backed keys as the destination.
+- **`otlp/index.md`, `docker/README.md:192`** (the *Ingestion Server* env table — the only
+  `MICROMEGAS_API_KEYS` row in scope here; the FlightSQL Server table at `:195-199` documents no
+  `MICROMEGAS_API_KEYS` at all): document `MICROMEGAS_API_KEYS` as the transitional (Migration
+  steps 1–2) path rather than the steady state; update to point at `api-keys.md` and describe
+  DB-backed keys as the destination. **Leave `docker/README.md:131` and `:206` alone** — both are
+  the object-cache keyring, which stays env-only permanently (see [Current State](#current-state));
+  they must not be pointed at the import tool or `api-keys.md`.
+- **`docker/docker-compose.monolith.yaml:52`**: the comment naming
+  `MICROMEGAS_INGESTION_API_KEYS`/`MICROMEGAS_API_KEYS` as the ingestion/FlightSQL auth fallback is
+  the genuine monolith-fallback reference (see §5); update it to also mention the DB-backed path
+  once it exists.
 - **`grafana/authentication.md`**: the key-only flight-sql deployment it documents (line 30) is exactly
   the case §3 and Migration rely on; confirm it still applies to DB-backed `analytics_api_keys` and
   cross-link `api-keys.md`.
 - **`tasks/data_isolation/audience_based_access_control_plan.md`**: record the `key_id` column and
   replace the "Postgres grants enforce it" claim with the code-boundary-plus-documented-grants
   reality.
+- **`CHANGELOG.md`**: an `Unreleased` bullet covering the DB-backed key store (`ingestion_api_keys`
+  / `analytics_api_keys`, migration v5), the three new `/auth/api_keys` HTTP routes, the four new
+  cache/audit env knobs (`MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`,
+  `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`), and the
+  one client-visible breaking change: a key valid on both ingestion and flight-sql today must
+  become two distinct keys (see [Migration](#migration)).
 
 ## Testing Strategy
 
