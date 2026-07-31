@@ -25,7 +25,7 @@ gestures work for free, while keeping today's click/keyboard/drag-and-drop behav
   - `<FolderTree onSelectFolder={goToFolder} onSelectScreen={goToScreen} .../>` (lines 338-345) is the only place `FolderTree` is rendered.
   - `AppLink` (`analytics-web-app/src/components/AppLink.tsx`) already wraps react-router's `Link` for internal navigation and is used elsewhere in `Sidebar.tsx` (lines 276, 294) for the icon nav rail.
 - `analytics-web-app/src/routes/ScreensPage.tsx` (lines ~185-230) has the precedent for this exact pattern: a draggable card `<div>` that is *not* itself the link, containing an `<AppLink href={...} className="block">` around the label/icon content, with an action `<button>` rendered as a separate sibling `<div className="absolute top-3 right-2">` outside the `AppLink` — avoiding nesting a real `<button>` inside an `<a>`.
-- `FolderBreadcrumb.tsx` has the same `div[role=button]` pattern for its path segments; it is a separate component from `FolderTree` and out of scope here (see Open Questions).
+- `FolderBreadcrumb.tsx` has the same `div[role=button]` pattern for its path segments; it is a separate component from `FolderTree` and out of scope here — issue #1394's text explicitly scopes the fix to `FolderTree.tsx`'s `renderNode`/`renderScreen` and never mentions `FolderBreadcrumb.tsx`. Worth a follow-up issue if the same behavior is wanted there, but not a decision to make in this plan.
 - No `jsx-a11y` ESLint plugin is configured (`analytics-web-app/eslint.config.*`... — `package.json` lists only `@typescript-eslint`), so nested-interactive-content isn't lint-enforced either way, but the `ScreensPage` precedent is followed anyway for consistency.
 - `src/components/__tests__/FolderTree.test.tsx` only tests the pure tree-building helpers (`buildFolderTree`, `ancestorPaths`, etc.) — no render/interaction tests exist yet for the row markup.
 
@@ -122,10 +122,11 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
      `<AppLink href={screenHref(screen.name)} onClick={() => onSelectScreen(screen.name)} draggable onDragStart={...} style={...} className={...}>` in place of the `<div role="button" ...>` — same children, same classes, drop `role`/`tabIndex`/`onKeyDown`.
    - `renderNode` (line 269): keep the outer `<div>` (with `dropHandlers`, `style`, and the
      selected/drop-target classes — unchanged), but replace its `role="button"`/`tabIndex`/`onClick`/
-     `onKeyDown` with a child `<AppLink href={folderHref(node.path)} replace={folderNavReplace} onClick={() => onSelectFolder(node.path)} className="flex items-center gap-1.5 cursor-pointer">` wrapping only the chevron, folder icon, and match dot (lines 289-304, 310) — **not** the rename input. Inside the `AppLink`, render the name conditionally instead of today's renaming/non-renaming branch (lines 305-309):
-     `{renamingPath !== node.path && <span className="flex-1 min-w-0 truncate">{node.name}</span>}`
-     (note `flex-1 min-w-0` moves onto this `<span>`, since `AppLink` itself no longer carries it —
-     see next bullet). While renaming, the name `<span>` is simply omitted, not swapped for the input.
+     `onKeyDown` with a child `<AppLink href={folderHref(node.path)} replace={folderNavReplace} onClick={() => onSelectFolder(node.path)} draggable={false} className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0">` wrapping only the chevron, folder icon, and match dot (lines 289-304, 310) — **not** the rename input. `flex-1 min-w-0` on the `AppLink` itself is required: in the outer row's flex layout, `AppLink` is now the direct flex item, so without it the link shrinks to its content width, bunching the "new subfolder"/folder-actions buttons up against the label instead of flush-right, and long names may not truncate correctly. `draggable={false}` is also required: an `<a href>` is natively draggable, and without this a folder/Home row drag would populate `dataTransfer`'s `text/plain` with the link's URL, which the row's own `dropHandlers`-driven `onDrop` would then pass to `onDropScreen` as if it were a screen name — a spurious drop. Inside the `AppLink`, render the name conditionally instead of today's renaming/non-renaming branch (lines 305-309):
+     `{renamingPath !== node.path && <span className="truncate">{node.name}</span>}`
+     (the `flex-1 min-w-0` that mattered for layout now lives on the `AppLink` itself — see above; the
+     span no longer needs to carry it). While renaming, the name `<span>` is simply omitted, not
+     swapped for the input.
    - When `renamingPath === node.path`, render `renameInput(node)` as a **sibling immediately after
      the `AppLink`** (not inside it) — this is the fix for the `<input>`-nested-in-`<a>` violation,
      the same class of problem the plan already avoids for the "new subfolder"/"folder actions"
@@ -137,7 +138,7 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
      stay as siblings *after* the `AppLink` (and after the conditional `renameInput`), structurally
      outside it — same pattern `ScreensPage.tsx` already uses to keep real `<button>`s out of an `<a>`.
    - Root Home row (line 371): same treatment as `renderScreen` — no nested buttons, so replace the
-     `<div role="button" ...>` itself with `<AppLink href={folderHref('')} replace={folderNavReplace} onClick={() => onSelectFolder('')} {...dropHandlers('')} className={...}>` wrapping the `Home` icon and label.
+     `<div role="button" ...>` itself with `<AppLink href={folderHref('')} replace={folderNavReplace} onClick={() => onSelectFolder('')} draggable={false} {...dropHandlers('')} className={...}>` wrapping the `Home` icon and label. `draggable={false}` is needed for the same reason as the folder row: the Home row keeps `dropHandlers('')` as a drop target, and without it the native anchor drag would leak the Home URL into `dataTransfer`'s `text/plain`, tripping `onDropScreen`.
    - `renameInput`'s existing `onClick={(e) => e.stopPropagation()}` (line 187) is no longer
      load-bearing once the input is a sibling outside the `AppLink` — a click on the input can no
      longer reach the `AppLink`'s `onClick` regardless. Harmless to leave in place; don't rely on it
@@ -202,10 +203,3 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
    URL; confirm plain left-click still navigates in-place and clears the search box; confirm
    dragging a screen into a folder, expanding/collapsing a folder via the chevron, and the
    rename/delete/new-subfolder actions all still work exactly as before.
-
-## Open Questions
-
-- `FolderBreadcrumb.tsx` has the identical `div[role=button]` pattern for its path segments and
-  would benefit from the same fix, but the issue specifically calls out "the folders bar" (the
-  sidebar tree), so it's left out of scope here. Worth a follow-up issue if the same behavior is
-  wanted there.
