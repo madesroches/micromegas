@@ -359,7 +359,13 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   `local_test_env/ai_scripts/start_services_with_oidc.py` does not do this today — it copies the same
   OIDC-carrying environment to the ingestion process (line 129) but launches it with `--disable-auth`
   (line 194), so the config is present but ignored — so it must be extended (see
-  [Testing Strategy](#testing-strategy)) before it can exercise these routes at all.
+  [Testing Strategy](#testing-strategy)) before it can exercise these routes at all. Enabling auth on
+  port 9000 also means every `#[micromegas_main]` binary's own self-telemetry POSTs to it (ingestion,
+  flight-sql, and the maintenance daemon all share the OIDC-carrying `env`, but none of that config
+  feeds the *sink* — `with_auth_from_env` only attaches an `Authorization` header from
+  `MICROMEGAS_INGESTION_API_KEY` or the OIDC client-credentials trio) start getting 401'd, so the
+  script must also provision an ingestion credential, not just drop the flag — see
+  [Testing Strategy](#testing-strategy).
 - `serve_ingestion`'s **signature does not change**: the pool is already reachable as
   `lake.db_pool`, cloned before `lake` moves into `WebIngestionService::new`. The table is always
   `Ingestion` for this service. The monolith inherits the routes for free.
@@ -776,14 +782,22 @@ the claim end to end without needing a live `psql` in CI.
 launches `telemetry-ingestion-srv` with `--disable-auth`, so `/auth/api_keys` would not even be
 registered there — even though the process already receives the OIDC config, since `env =
 os.environ.copy()` (line 129) is the same environment passed to ingestion, flight-sql, and the
-maintenance daemon alike. Extend the script by simply removing `--disable-auth` from the ingestion
-launch (line 194); no new config needs to be threaded through (listed under
-[Files to Modify](#files-to-modify)). Then: `python3
+maintenance daemon alike. Removing `--disable-auth` from the ingestion launch (line 194) is not
+enough on its own: every `#[micromegas_main]` binary appends `.with_auth_from_env()` when no literal
+key is given, and that only attaches an `Authorization` header if `MICROMEGAS_INGESTION_API_KEY` (or
+the OIDC client-credentials trio) is set in the *sink's* environment — the server-side
+`MICROMEGAS_OIDC_CONFIG` the script already copies does not feed it. Without a credential, ingestion,
+flight-sql, and the maintenance daemon would all start 401ing their own self-telemetry POSTs to port
+9000, the only data this local env has to query. So the script must also: mint (or hardcode for local
+use) an ingestion key, set `MICROMEGAS_API_KEYS` on the ingestion process so it accepts that key, and
+set the matching `MICROMEGAS_INGESTION_API_KEY` in the shared `env` (line 129) before it is passed to
+all three service processes. Then: `python3
 local_test_env/ai_scripts/start_services_with_oidc.py`, mint a key over HTTP, use it to POST telemetry,
 revoke it, and observe the rejection after the TTL.
 
 **Gates**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
-`python3 build/rust_ci.py`.
+`python3 build/rust_ci.py`, and, from `python/micromegas/`, `poetry run black
+micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest`.
 
 ## Open Questions
 
