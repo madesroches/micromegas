@@ -243,8 +243,8 @@ entries where a copy-paste slip is invisible:
 ```ts
 /**
  * UCUM/OTLP codes for scalable units → canonical base name. Each also implies `<code>/s`.
- * Includes the byte/bit spellings already present as bare-form entries in the hand-written
- * table above (`B`, `KB`, `kb`, `MB`, `GB`, `TB`, `bit`, `kbit`, `Mbit`, `Gbit`, `Tbit`, and the
+ * Includes the byte/bit spellings already present as bare-form entries in `HAND_WRITTEN_ALIASES`
+ * above (`B`, `KB`, `kb`, `MB`, `GB`, `TB`, `bit`, `kbit`, `Mbit`, `Gbit`, `Tbit`, and the
  * spelled-out canonical names) so their `/s` forms are generated here instead of hand-writing a
  * matching rate entry for each one. Re-listing a bare form is harmless — both definitions map to
  * the same canonical name.
@@ -274,9 +274,14 @@ function expandRates(codes: Record<string, string>): Record<string, string> {
 }
 ```
 
-`UNIT_ALIASES` becomes a spread of the hand-written entries plus `expandRates(UCUM_SCALED_CODES)`,
-keeping its exported type `Record<string, string>` (the existing test at `units.test.ts:148-155`
-indexes it directly and keeps working). This generates every required `/s` form in one place —
+The existing hand-written object literal (today `units.ts:7-82`, exported as `UNIT_ALIASES`) is
+extracted into its own const, `HAND_WRITTEN_ALIASES`, declared **before** `UCUM_SCALED_CODES` in
+the file. `UNIT_ALIASES` itself becomes `{ ...HAND_WRITTEN_ALIASES, ...expandRates(UCUM_SCALED_CODES) }`,
+declared after both — this ordering matters because `const` bindings are in the temporal dead zone
+until their declaration runs, so `UNIT_ALIASES` referencing `UCUM_SCALED_CODES` (via `expandRates`)
+before `UCUM_SCALED_CODES` is declared would throw at module load. `UNIT_ALIASES` keeps its exported
+type `Record<string, string>` (the existing test at `units.test.ts:148-155` indexes it directly and
+keeps working). This generates every required `/s` form in one place —
 `B/s`, `KB/s`, `MB/s`, `GB/s`, `TB/s`, `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `Tbit/s` — without a
 second source map or hand-written rate entries.
 
@@ -341,10 +346,16 @@ and there is no cross-series key involved.
 ### 6. Empty display unit in tick labels
 
 `formatYAxisTick` (`xychart-axis.ts:68-81`) appends `' ' + displayUnit` on all five branches. With a
-dimensionless axis this leaves a trailing space. Build the suffix once:
+dimensionless axis this leaves a trailing space. A leading-slash unit (`/s`) also needs to attach
+without a space, and so do the symbol units surfaced by §5's `unitDisplayAbbrev` fallback (`°` for
+degrees, `°C` for celsius, `%` for percent) — otherwise a `degrees` axis regresses from today's
+`180 degrees` to `180 °`. Build the suffix once, attaching it directly whenever it starts with `/`
+or `°` or `%`:
 
 ```ts
-const suffix = displayUnit ? (displayUnit.startsWith('/') ? displayUnit : ' ' + displayUnit) : ''
+const suffix = displayUnit
+  ? /^[/°%]/.test(displayUnit) ? displayUnit : ' ' + displayUnit
+  : ''
 ```
 
 and append `suffix` in each branch.
@@ -352,6 +363,10 @@ and append `suffix` in each branch.
 ## Implementation Steps
 
 1. **`analytics-web-app/src/lib/units.ts`**
+   - Extract the existing hand-written alias literal into its own const, `HAND_WRITTEN_ALIASES`,
+     declared before `UCUM_SCALED_CODES` and `UNIT_ALIASES` (declaration order matters: `UNIT_ALIASES`
+     spreads `expandRates(UCUM_SCALED_CODES)`, so `UCUM_SCALED_CODES` must be declared first or the
+     module throws on the TDZ reference).
    - Add `UCUM_SCALED_CODES` + `expandRates`, spread into `UNIT_ALIASES`.
    - Add the flat dimensionless / `celsius` / `cm` entries.
    - Rewrite `normalizeUnit` with the annotation-stripping rule.
@@ -409,11 +424,17 @@ the app's `kilobytes` is 1024; `KiBy` is exactly 1024. Mapping both to `kilobyte
 1024 bytes. Splitting the ladder into decimal and binary families would double the canonical unit set
 and the axis-grouping cardinality for a difference nobody reads off a chart axis.
 
-**Dimensionless drops the label.** Mapping `count` → `''` means a counter series renders `1,234,567`
-rather than `1,234,567 count`, and its axis carries no unit label. The series *name* still carries the
-meaning, and this is what makes `5 none` render as `5`. The alternative — keeping the suffix for
-`count` while dropping it for `none` — would split the dimensionless family on cosmetics and leave
-`{Count}` and `count` on separate Y axes.
+**Dimensionless drops the label, and merges `count`-like series onto the shared unitless axis.**
+Mapping `count`/`{Count}`/`none` → `''` means a counter series renders `1,234,567` rather than
+`1,234,567 count`, and its axis carries no unit label. The series *name* still carries the meaning,
+and this is what makes `5 none` render as `5`. Because §5 keys `XYChart`'s per-unit scale map on the
+canonical unit, this canonicalization is not just a label loss: it also merges `count`/`{Count}`
+series onto the *same* Y axis as genuinely unitless series, where today (`unit || ''` keyed on the
+raw string) they land on independent axes with independent ranges. A large counter and a small
+unitless ratio on the same chart would now share a scale, and one could visibly flatten. The
+alternative isn't the dichotomy it may first appear to be — canonicalizing `{Count}`/`Count`/`count`
+→ a distinct `'count'` (rather than `''`) would keep those series on one shared axis *and* keep the
+label, independently of whatever `none`/`1` canonicalize to; see Open Questions.
 
 **No compact SI notation.** The issue notes that a large counter renders as `1,234,567,890`.
 `toLocaleString()` at least groups thousands; switching to `1.2G` would change every unitless value
@@ -464,6 +485,8 @@ commit.
 **`xychart-axis.test.ts`**
 - `formatYAxisTick` with an empty display unit produces no trailing space (`'100'`, `'0'`).
 - With a `/s` display unit produces `'100/s'`.
+- With a `°`, `°C`, or `%` display unit attaches without a space (`'180°'`, `'21°C'`, `'50%'`) —
+  regression guard for the degrees-axis fallback change in §5/§6.
 - Currency and existing numeric branches unchanged.
 
 **`XYChart` axis grouping**
@@ -500,4 +523,8 @@ rate units are exactly `<canonical base>/s`.
 
 - **Dropping the `count` suffix** is the visible behavior change for existing internal dashboards
   (51 `imetric!` call sites). The Trade-offs section argues for it; flagging it in case the loss of
-  the axis label is unwanted.
+  the axis label — and, per the Trade-offs update above, the axis *merge* with other unitless series
+  — is unwanted. An alternative that keeps the label and avoids the merge: canonicalize
+  `count`/`Count`/`{Count}`/`counts` to their own `'count'` canonical form (with a `CANONICAL_DISPLAY_ABBREV`
+  entry `'count': 'count'`) instead of folding them into `''`, reserving `''` for `none`/`1`/`unit(s)`/
+  `iterations`. Not adopted here pending a decision on which behavior is wanted.
