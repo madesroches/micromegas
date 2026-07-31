@@ -108,7 +108,7 @@ Four more sites render `measures.unit` directly, outside `formatValueWithUnit`:
 |---|---|---|
 | `ProcessMetricsPage.tsx:483` | `{m.name} ({m.unit})` (measure dropdown option) | Leave raw — this is DB metadata in a discovery list, not a chart display. |
 | `MeasureDiscovery.tsx:124` | `{m.name} ({m.unit})` (measure dropdown option) | Leave raw, same reasoning. |
-| `ProcessMetricsPage.tsx:565` | `({selectedMeasureInfo?.unit || ''})` ("no data in range" placeholder header) | Route through `unitDisplayAbbrev(normalizeUnit(...))` so it matches the loaded-chart header (`XYChart.tsx:1151`'s `{displayTitle} ({displayUnit})`); otherwise the placeholder would read `(By/s)` while the loaded chart reads `(GB/s)`. |
+| `ProcessMetricsPage.tsx:565` | `({selectedMeasureInfo?.unit || ''})` ("no data in range" placeholder header) | Route through `unitDisplayAbbrev(normalizeUnit(...))` **and** adopt `XYChart.tsx:1151`'s conditional rendering (`{displayUnit && <span> ({displayUnit})</span>}`) so the whole parenthetical drops for dimensionless units; otherwise a `none`/`count` measure would render a dangling `()` where today it shows `(count)`, and a `By/s` measure would still read `(By/s)` instead of `(GB/s)`. |
 | `PerformanceMetricsChart.tsx:290` | `({selectedMeasureInfo?.unit || ''})` ("no data in range" placeholder header) | Same fix as above. |
 
 ## Design
@@ -369,7 +369,9 @@ and append `suffix` in each branch.
 5. **`analytics-web-app/src/routes/ProcessMetricsPage.tsx`** and
    **`analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`**
    - Route the "no data in range" placeholder header's unit (`:565` / `:290`) through
-     `unitDisplayAbbrev(normalizeUnit(...))` to match `XYChart`'s loaded-chart header.
+     `unitDisplayAbbrev(normalizeUnit(...))`, and wrap the parenthetical in the same conditional
+     `displayUnit &&` guard as `XYChart.tsx:1151` so an empty abbreviation drops the whole
+     `(...)` instead of rendering `()`, matching `XYChart`'s loaded-chart header.
 6. **Tests** — extend `units.test.ts`, `format-value.test.ts`, and add coverage for
    `formatYAxisTick` and the axis grouping (see Testing Strategy). Update the two existing
    assertions that pin the old behavior: `units.test.ts:123-124`
@@ -470,7 +472,9 @@ commit.
 **Manual verification**
 Start the monolith (`python3 local_test_env/ai_scripts/start_services.py --monolith`), open a chart
 on a CloudWatch-sourced measure such as `amazonaws.com/AWS/RDS/NetworkThroughput_max` (`By/s`), and
-confirm the axis, tooltip, and stat header read `GB/s` rather than raw `By/s` values.
+confirm the axis, tooltip, and stat header read `GB/s` rather than raw `By/s` values. Also select a
+dimensionless (`none`/`count`) measure with no data in the current range on `ProcessMetricsPage` and
+`PerformanceMetricsChart` and confirm the placeholder header title has no trailing `()`.
 
 ## Documentation
 
