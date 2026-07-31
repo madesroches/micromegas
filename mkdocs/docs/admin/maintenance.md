@@ -50,10 +50,18 @@ A view that fails to materialize (e.g. a bad `SqlBatchView` query) does not
 starve the views ordered after it: each view's materialization is attempted
 and its failure isolated independently, so every other view still gets
 materialized in the same pass. A failing view is logged and counted (see
-`materialize_view_failure` below); if any view failed, the pass as a whole is
-still reported as failed so the failure surfaces in the daemon's logs, but
-that failure is attributed per view rather than to whichever view happened to
-fail first.
+[`materialize_view_failure`](#materialize_view_failure) below); if any view
+failed, the pass as a whole is still reported as failed so the failure
+surfaces in the daemon's logs, but that failure is attributed per view rather
+than to whichever view happened to fail first.
+
+### `materialize_view_failure`
+
+Each of the four materialization tasks (every second/minute/hour/day) emits
+`materialize_view_failure` (`count`, tags `{view_set_name,
+view_instance_id}`) as one event with `value = 1` per failed view per
+materialization pass. To count failures over a window, use `count(*)` or
+`sum(value)`.
 
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
@@ -118,16 +126,6 @@ ticks. Deltas and rates are a query-time concern.
 | `pg_activity_connections` | `{state}` | `pg_stat_activity`, grouped |
 | `pg_activity_oldest_xact_age_seconds` | — | `pg_stat_activity` |
 | `pg_pool_size`, `pg_pool_idle` | — | the daemon's own `sqlx::PgPool` (client-side, no query) |
-| `materialize_view_failure` | `{view_set_name, view_instance_id}` | the materialization tasks (every second/minute/hour/day), one increment per failed view per pass |
-
-`materialize_view_failure` is the one metric in this table that doesn't come
-from sampling `pg_stat_*`, and unlike the `pg_stat_*` metrics above it is
-**not** a cumulative counter: the materialization tasks emit one discrete
-event with `value = 1` per failed view per pass (see [Running the
-daemon](#running-the-daemon) above) — nothing accumulates between events. To
-count failures over a time window, use `count(*)` or `sum(value)`; a
-`max(value) - min(value)` delta (the right approach for the cumulative
-`pg_stat_*` counters) will always read `0` here.
 
 Tags are read with the `property_get` SQL function, e.g.
 `property_get(properties, 'index')`.

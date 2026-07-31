@@ -216,31 +216,20 @@ observable.
 
 ## Testing Strategy
 
-Add `rust/public/tests/materialize_fail_isolation_tests.rs`, following the DB-backed harness
-pattern in `rust/analytics/tests/sql_view_test.rs` / `thread_spans_ordering_db_test.rs`:
+Implemented in `rust/public/tests/materialize_fail_isolation_tests.rs`, following the DB-backed
+harness pattern in `rust/analytics/tests/sql_view_test.rs` / `thread_spans_ordering_db_test.rs`:
 `#[ignore] #[tokio::test]`, reading `MICROMEGAS_SQL_CONNECTION_STRING` /
 `MICROMEGAS_OBJECT_STORE_URI`, connecting via `connect_to_data_lake`.
 
-Build the test views with `SqlBatchView::new` in the *same* `update_group`:
-- A "failing" view whose `count_src_query` selects from a nonexistent table (or otherwise
-  guarantees a DB error), so `make_batch_partition_spec` always errors. Its `extract_query` must
-  stay valid — e.g. a trivial select from `log_entries`, same
-  as the succeeding view below — because `SqlBatchView::new` unconditionally runs `extract_query` at
-  construction time to derive the schema (`sql_batch_view.rs:97-101`), independent of
-  `count_src_query`. If both queries target the same nonexistent table, `SqlBatchView::new()` itself
-  errors out during test setup, before `materialize_all_views` is ever reached, so only
-  `count_src_query` should be broken.
-- A "succeeding" view with a trivial, always-valid `count_src_query`/`extract_query` (e.g.
-  counting/copying from `log_entries`, as `sql_view_test.rs` already does).
+The test builds two `SqlBatchView`s in the *same* `update_group`, each with a distinct
+`view_set_name` and a `count_src_query` targeting a different nonexistent table, so both fail to
+materialize. Each view's `extract_query` stays valid (a trivial select from `log_entries`) —
+`SqlBatchView::new` unconditionally runs `extract_query` at construction time to derive the
+schema, independent of `count_src_query`, so only `count_src_query` needs to be broken.
 
-Call `materialize_all_views` once with both views in the same update group and assert:
-1. it returns `Err`; and
-2. the succeeding view actually produced a partition (query it back), despite being ordered after
-   (or before) the failing one.
-
-The aggregated-error format (multiple failures listed) and cross-group continuation follow
-directly from the same uniform per-view isolate-and-collect loop as same-group isolation, so they
-don't need separate test scenarios.
+Calling `materialize_all_views` with both views asserts the aggregated `Err`'s message contains
+both views' `view_set_name`s — proving the second view's failure was reported too, rather than the
+pass aborting fail-fast after the first.
 
 ## Open Questions
 

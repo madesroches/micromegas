@@ -90,7 +90,7 @@ pub async fn materialize_all_views(
                 Property::new("view_instance_id", intern_string(view_instance_id.as_str())),
             ]);
             imetric!("materialize_view_failure", "count", tags, 1);
-            failures.push(format!("{view_set_name} {view_instance_id}: {e:?}"));
+            failures.push(format!("{view_set_name} {view_instance_id}"));
         }
     }
     if !failures.is_empty() {
