@@ -545,9 +545,9 @@ NON_ASCII_CONTENT = "em dash —, accented café, CJK 日本語"
 
 
 class TestNonAsciiEncodingRegression:
-    def test_round_trip_survives_non_utf8_locale(self, tmp_path):
-        """Regression test for issue #1399: write_screen_file/read_screen_file
-        must round-trip non-ASCII content unchanged even when the process's
+    def test_read_survives_non_utf8_locale(self, tmp_path):
+        """Regression test for issue #1399: read_screen_file must decode a
+        UTF-8-encoded screen file correctly even when the process's
         locale-preferred encoding is not UTF-8 (e.g. LC_ALL=C on Linux, or the
         default console codepage on Windows). Forcing LC_ALL=C alone is not
         enough on Python 3.10+ (PEP 538/540 auto-coerce it back to a UTF-8
@@ -556,13 +556,27 @@ class TestNonAsciiEncodingRegression:
         its default encoding via OS locale APIs, not the Python-level
         locale.getpreferredencoding() function, so in-process monkeypatching
         has no effect on open()'s behavior.
+
+        The fixture file is written as raw UTF-8 bytes directly (bypassing
+        write_screen_file/json.dump, whose ensure_ascii=True default would
+        escape non-ASCII content to plain-ASCII \\uXXXX sequences and mask
+        the read-side decoding bug this test targets). This isolates the
+        test to the encoding="utf-8-sig" pin in read_screen_file.
         """
         screen_path = tmp_path / "non-ascii.json"
-        # Embed the content as an ASCII-only \\uXXXX-escaped literal (via
-        # ascii()) so no non-ASCII bytes travel through argv or os.environ,
-        # either of which would themselves be subject to the same
-        # locale-decoding problem this test is trying to isolate to
-        # write_screen_file/read_screen_file.
+        screen_json = json.dumps(
+            {
+                "name": "non-ascii-screen",
+                "screen_type": "notebook",
+                "config": {
+                    "cells": [{"type": "markdown", "content": NON_ASCII_CONTENT}]
+                },
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        screen_path.write_bytes(screen_json.encode("utf-8"))
+
         script = textwrap.dedent(
             """
             import os
@@ -570,21 +584,14 @@ class TestNonAsciiEncodingRegression:
 
             assert sys.flags.utf8_mode == 0, "test setup failed: utf8_mode should be 0"
 
-            from micromegas.cli.screens import read_screen_file, write_screen_file
+            from micromegas.cli.screens import read_screen_file
 
-            content = {content_literal}
             screen_path = os.environ["TEST_SCREEN_PATH"]
-            screen_dict = {{
-                "name": "non-ascii-screen",
-                "screen_type": "notebook",
-                "config": {{"cells": [{{"type": "markdown", "content": content}}]}},
-            }}
-            write_screen_file(screen_path, screen_dict)
             result = read_screen_file(screen_path)
             loaded_content = result["config"]["cells"][0]["content"]
             sys.stdout.buffer.write(loaded_content.encode("utf-8"))
             """
-        ).format(content_literal=ascii(NON_ASCII_CONTENT))
+        )
         env = dict(os.environ)
         env["LC_ALL"] = "C"
         env["PYTHONUTF8"] = "0"
