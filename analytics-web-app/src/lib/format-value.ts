@@ -15,6 +15,8 @@ import {
   getAdaptiveBitUnit,
   isCurrencyUnit,
   formatCurrencyValue,
+  unitDisplayAbbrev,
+  unitSuffix,
 } from './units'
 
 function formatNonTime(value: number, rawUnit: string): string {
@@ -36,10 +38,13 @@ function formatNonTime(value: number, rawUnit: string): string {
 
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'degrees') return value.toFixed(1) + '°'
+  if (unit === 'celsius') return value.toFixed(1) + '°C'
   if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
   if (isCurrencyUnit(unit)) return formatCurrencyValue(value, unit)
 
-  return rawUnit ? `${value.toLocaleString()} ${rawUnit}` : value.toLocaleString()
+  const displayUnit = unitDisplayAbbrev(unit)
+  if (!displayUnit) return value.toLocaleString()
+  return `${value.toLocaleString()}${unitSuffix(displayUnit)}`
 }
 
 /**

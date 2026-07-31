@@ -79,6 +79,10 @@ describe('formatValueWithUnit', () => {
     it('formats bits per second adaptively', () => {
       expect(formatValueWithUnit(3_000_000_000, 'bits/s')).toBe('3.0 Gbit/s')
     })
+
+    it('scales the legacy plural rate spelling (Mbits/s) adaptively, not as a raw passthrough', () => {
+      expect(formatValueWithUnit(3000, 'Mbits/s')).toBe('3.0 Gbit/s')
+    })
   })
 
   describe('percent', () => {
@@ -94,6 +98,40 @@ describe('formatValueWithUnit', () => {
   describe('degrees', () => {
     it('formats with one decimal and degree sign', () => {
       expect(formatValueWithUnit(180.5, 'degrees')).toBe('180.5°')
+    })
+  })
+
+  describe('celsius', () => {
+    it('formats with one decimal and °C suffix', () => {
+      expect(formatValueWithUnit(21.5, 'Cel')).toBe('21.5°C')
+    })
+
+    it('accepts the spelled-out celsius alias', () => {
+      expect(formatValueWithUnit(21.5, 'celsius')).toBe('21.5°C')
+    })
+  })
+
+  describe('dimensionless (UCUM unity, count, none)', () => {
+    it('formats none as a bare number', () => {
+      expect(formatValueWithUnit(5, 'none')).toBe('5')
+    })
+
+    it('formats count as a grouped bare number', () => {
+      expect(formatValueWithUnit(1234567, 'count')).toBe((1234567).toLocaleString())
+    })
+
+    it('formats a dimensionless rate with no space before the slash', () => {
+      expect(formatValueWithUnit(1234, '{Count}/s')).toBe('1,234/s')
+    })
+
+    it("formats the issue's headline rate symptom (By/s -> GB/s)", () => {
+      expect(formatValueWithUnit(1234567890, 'By/s')).toBe('1.1 GB/s')
+    })
+  })
+
+  describe('centimeters', () => {
+    it('displays the cm abbreviation rather than the spelled-out canonical name', () => {
+      expect(formatValueWithUnit(42, 'cm')).toBe('42 cm')
     })
   })
 
@@ -130,6 +168,11 @@ describe('formatValueWithUnit', () => {
 
     it('appends an unknown unit verbatim', () => {
       expect(formatValueWithUnit(42, 'widgets')).toBe(`${(42).toLocaleString()} widgets`)
+    })
+
+    it('attaches an unmapped, symbol-prefixed unit with no space, matching formatYAxisTick', () => {
+      expect(formatValueWithUnit(72.5, '°F')).toBe(`${(72.5).toLocaleString()}°F`)
+      expect(formatValueWithUnit(50, '%CPU')).toBe(`${(50).toLocaleString()}%CPU`)
     })
   })
 })

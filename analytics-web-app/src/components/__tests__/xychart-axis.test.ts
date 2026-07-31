@@ -72,4 +72,19 @@ describe('formatYAxisTick', () => {
     const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CAD' }).format(50)
     expect(formatYAxisTick(50, 1, 'CAD', 'CAD')).toBe(expected)
   })
+
+  it('produces no trailing space with an empty (dimensionless) display unit', () => {
+    expect(formatYAxisTick(100, 1, '', null)).toBe('100')
+    expect(formatYAxisTick(0, 1, '', null)).toBe('0')
+  })
+
+  it('attaches a /s display unit without a leading space', () => {
+    expect(formatYAxisTick(100, 1, '/s', null)).toBe('100/s')
+  })
+
+  it('attaches °, °C, and % display units without a space', () => {
+    expect(formatYAxisTick(180, 1, '°', null)).toBe('180°')
+    expect(formatYAxisTick(210, 1, '°C', null)).toBe('210°C')
+    expect(formatYAxisTick(500, 1, '%', null)).toBe('500%')
+  })
 })

@@ -3,12 +3,16 @@ import {
   UNIT_ALIASES,
   TIME_UNIT_NAMES,
   SIZE_UNIT_NAMES,
+  BIT_UNIT_NAMES,
   isSizeUnit,
   getAdaptiveSizeUnit,
   isBitUnit,
   getAdaptiveBitUnit,
   isCurrencyUnit,
   formatCurrencyValue,
+  unitScaleKey,
+  unitDisplayAbbrev,
+  unitSuffix,
 } from '../units'
 
 describe('normalizeUnit', () => {
@@ -120,10 +124,135 @@ describe('normalizeUnit', () => {
       expect(normalizeUnit('custom_unit')).toBe('custom_unit')
       expect(normalizeUnit('meters')).toBe('meters')
       expect(normalizeUnit('rpm')).toBe('rpm')
-      expect(normalizeUnit('none')).toBe('none')
-      expect(normalizeUnit('count')).toBe('count')
       expect(normalizeUnit('requests')).toBe('requests')
       expect(normalizeUnit('')).toBe('')
+    })
+  })
+
+  describe('dimensionless units', () => {
+    it('normalizes none/count/unit spellings to the empty string', () => {
+      expect(normalizeUnit('none')).toBe('')
+      expect(normalizeUnit('None')).toBe('')
+      expect(normalizeUnit('count')).toBe('')
+      expect(normalizeUnit('Count')).toBe('')
+      expect(normalizeUnit('counts')).toBe('')
+      expect(normalizeUnit('1')).toBe('')
+      expect(normalizeUnit('units')).toBe('')
+      expect(normalizeUnit('unit')).toBe('')
+      expect(normalizeUnit('iterations')).toBe('')
+    })
+
+    it('normalizes dimensionless rates to /s', () => {
+      expect(normalizeUnit('1/s')).toBe('/s')
+      expect(normalizeUnit('count/s')).toBe('/s')
+    })
+  })
+
+  describe('temperature and length', () => {
+    it('normalizes Cel/celsius to celsius', () => {
+      expect(normalizeUnit('Cel')).toBe('celsius')
+      expect(normalizeUnit('celsius')).toBe('celsius')
+    })
+
+    it('normalizes cm/centimeters to centimeters', () => {
+      expect(normalizeUnit('cm')).toBe('centimeters')
+      expect(normalizeUnit('centimeters')).toBe('centimeters')
+    })
+  })
+
+  describe('UCUM annotations', () => {
+    it('strips annotations on otherwise dimensionless quantities', () => {
+      expect(normalizeUnit('{Count}')).toBe('')
+      expect(normalizeUnit('{request}')).toBe('')
+      expect(normalizeUnit('{connection}')).toBe('')
+      expect(normalizeUnit('1')).toBe('')
+    })
+
+    it('strips annotations on dimensionless rates', () => {
+      expect(normalizeUnit('{request}/s')).toBe('/s')
+    })
+
+    it('strips annotations on real units, then resolves the remainder', () => {
+      expect(normalizeUnit('By{net}')).toBe('bytes')
+    })
+
+    it('table lookup runs first: {Count} is resolved by the annotation rule, not a table entry', () => {
+      // There is no literal '{Count}' key in the table; normalizeUnit only
+      // reaches '' by stripping the annotation and re-looking-up 'Count'.
+      expect(UNIT_ALIASES['{Count}']).toBeUndefined()
+      expect(normalizeUnit('{Count}')).toBe('')
+    })
+  })
+
+  describe('CloudWatch/OTLP UCUM codes', () => {
+    const sizeCases: [string, string][] = [
+      ['By', 'bytes'], ['B', 'bytes'],
+      ['kBy', 'kilobytes'], ['KiBy', 'kilobytes'], ['KB', 'kilobytes'], ['kb', 'kilobytes'],
+      ['MBy', 'megabytes'], ['MiBy', 'megabytes'], ['MB', 'megabytes'],
+      ['GBy', 'gigabytes'], ['GiBy', 'gigabytes'], ['GB', 'gigabytes'],
+      ['TBy', 'terabytes'], ['TiBy', 'terabytes'], ['TB', 'terabytes'],
+    ]
+    const bitCases: [string, string][] = [
+      ['bit', 'bits'], ['bits', 'bits'],
+      ['kBit', 'kilobits'], ['kbit', 'kilobits'],
+      ['MBit', 'megabits'], ['Mbit', 'megabits'],
+      ['GBit', 'gigabits'], ['Gbit', 'gigabits'],
+      ['TBit', 'terabits'], ['Tbit', 'terabits'],
+    ]
+
+    it('normalizes every bare size/bit code to its canonical name', () => {
+      for (const [code, canonical] of [...sizeCases, ...bitCases]) {
+        expect(normalizeUnit(code)).toBe(canonical)
+      }
+    })
+
+    it('normalizes every size/bit code with a /s suffix to the canonical rate', () => {
+      for (const [code, canonical] of [...sizeCases, ...bitCases]) {
+        expect(normalizeUnit(`${code}/s`)).toBe(`${canonical}/s`)
+      }
+    })
+
+    it('normalizes legacy plural/capitalized byte and bit rate aliases (not just their bare forms)', () => {
+      expect(normalizeUnit('Mbits/s')).toBe('megabits/s')
+      expect(normalizeUnit('Mbits')).toBe('megabits')
+      expect(normalizeUnit('Bytes/s')).toBe('bytes/s')
+      expect(normalizeUnit('Kilobits/s')).toBe('kilobits/s')
+    })
+
+    it('both bit-prefix spellings map to the same canonical unit', () => {
+      expect(normalizeUnit('MBit')).toBe('megabits')
+      expect(normalizeUnit('Mbit')).toBe('megabits')
+      expect(normalizeUnit('GBit')).toBe('gigabits')
+      expect(normalizeUnit('Gbit')).toBe('gigabits')
+      expect(normalizeUnit('TBit')).toBe('terabits')
+      expect(normalizeUnit('Tbit')).toBe('terabits')
+      expect(normalizeUnit('kBit')).toBe('kilobits')
+      expect(normalizeUnit('kbit')).toBe('kilobits')
+    })
+  })
+
+  describe('case sensitivity', () => {
+    it('B (bel, legacy bytes alias) and By (UCUM byte) both resolve to bytes, as distinct keys', () => {
+      expect(normalizeUnit('B')).toBe('bytes')
+      expect(normalizeUnit('By')).toBe('bytes')
+    })
+
+    it('no lowercasing is introduced: B (bytes) and bit (bits) stay distinct', () => {
+      expect(normalizeUnit('B')).toBe('bytes')
+      expect(normalizeUnit('bit')).toBe('bits')
+      expect(normalizeUnit('B')).not.toBe(normalizeUnit('bit'))
+    })
+
+    it('does not fold case before lookup', () => {
+      expect(normalizeUnit('bY')).toBe('bY') // not a known alias, passthrough
+    })
+  })
+
+  describe('currency collision check', () => {
+    it('no alias normalizes to a value isCurrencyUnit accepts', () => {
+      for (const canonical of Object.values(UNIT_ALIASES)) {
+        expect(isCurrencyUnit(canonical)).toBe(false)
+      }
     })
   })
 })
@@ -191,6 +320,18 @@ describe('isSizeUnit', () => {
     expect(isSizeUnit('nanoseconds')).toBe(false)
     expect(isSizeUnit('percent')).toBe(false)
     expect(isSizeUnit('count')).toBe(false)
+  })
+
+  it('rejects dimensionless units', () => {
+    expect(isSizeUnit('')).toBe(false)
+    expect(isSizeUnit('none')).toBe(false)
+    expect(isSizeUnit('{Count}')).toBe(false)
+  })
+
+  it('accepts every prefixed size rate', () => {
+    for (const code of ['kBy/s', 'MBy/s', 'GBy/s', 'TBy/s', 'By/s']) {
+      expect(isSizeUnit(code)).toBe(true)
+    }
   })
 })
 
@@ -288,6 +429,20 @@ describe('getAdaptiveSizeUnit', () => {
       expect(result.conversionFactor).toBe(1)
     })
   })
+
+  describe('prefixed rate units (UCUM)', () => {
+    it('scales MBy/s with the 1024^2 factor', () => {
+      const result = getAdaptiveSizeUnit(1, 'MBy/s')
+      expect(result.abbrev).toBe('MB/s')
+      expect(result.conversionFactor).toBe(1)
+    })
+
+    it("the issue's headline case: a large By/s reference scales to GB/s", () => {
+      const result = getAdaptiveSizeUnit(1_234_567_890, 'By/s')
+      expect(result.unit).toBe('gigabytes')
+      expect(result.abbrev).toBe('GB/s')
+    })
+  })
 })
 
 describe('isBitUnit', () => {
@@ -308,6 +463,18 @@ describe('isBitUnit', () => {
   it('rejects non-bit units', () => {
     expect(isBitUnit('bytes')).toBe(false)
     expect(isBitUnit('seconds')).toBe(false)
+  })
+
+  it('rejects dimensionless units', () => {
+    expect(isBitUnit('')).toBe(false)
+    expect(isBitUnit('none')).toBe(false)
+    expect(isBitUnit('percent')).toBe(false)
+  })
+
+  it('accepts every prefixed bit rate', () => {
+    for (const code of ['kBit/s', 'kbit/s', 'MBit/s', 'Mbit/s', 'GBit/s', 'Gbit/s', 'TBit/s', 'Tbit/s']) {
+      expect(isBitUnit(code)).toBe(true)
+    }
   })
 })
 
@@ -358,6 +525,14 @@ describe('getAdaptiveBitUnit', () => {
       expect(result.conversionFactor).toBe(1 / KBIT)
     })
   })
+
+  describe('prefixed rate units (UCUM)', () => {
+    it('scales GBit/s with the decimal factor', () => {
+      const result = getAdaptiveBitUnit(1, 'GBit/s')
+      expect(result.abbrev).toBe('Gbit/s')
+      expect(result.conversionFactor).toBe(1)
+    })
+  })
 })
 
 describe('isCurrencyUnit', () => {
@@ -403,5 +578,89 @@ describe('formatCurrencyValue', () => {
   it('accepts lowercase currency codes', () => {
     const expected = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1234.5)
     expect(formatCurrencyValue(1234.5, 'usd')).toBe(expected)
+  })
+})
+
+describe('unitScaleKey', () => {
+  it('groups equivalent raw unit spellings onto the same scale key', () => {
+    expect(unitScaleKey('bytes')).toBe(unitScaleKey('B'))
+    expect(unitScaleKey('bytes')).toBe(unitScaleKey('By'))
+    expect(unitScaleKey('B')).toBe(unitScaleKey('By'))
+  })
+
+  it('returns the empty string for absent/dimensionless units', () => {
+    expect(unitScaleKey(undefined)).toBe('')
+    expect(unitScaleKey(null)).toBe('')
+    expect(unitScaleKey('')).toBe('')
+    expect(unitScaleKey('none')).toBe('')
+    expect(unitScaleKey('count')).toBe('')
+  })
+})
+
+describe('unitDisplayAbbrev', () => {
+  it('maps symbol-bearing canonical units to their short forms', () => {
+    expect(unitDisplayAbbrev('percent')).toBe('%')
+    expect(unitDisplayAbbrev('degrees')).toBe('°')
+    expect(unitDisplayAbbrev('celsius')).toBe('°C')
+    expect(unitDisplayAbbrev('centimeters')).toBe('cm')
+    expect(unitDisplayAbbrev('')).toBe('')
+  })
+
+  it('maps time canonical names to their short forms', () => {
+    expect(unitDisplayAbbrev('nanoseconds')).toBe('ns')
+    expect(unitDisplayAbbrev('microseconds')).toBe('µs')
+    expect(unitDisplayAbbrev('milliseconds')).toBe('ms')
+    expect(unitDisplayAbbrev('seconds')).toBe('s')
+    expect(unitDisplayAbbrev('minutes')).toBe('min')
+    expect(unitDisplayAbbrev('hours')).toBe('h')
+    expect(unitDisplayAbbrev('days')).toBe('d')
+  })
+
+  it('maps size/bit canonical names, and their /s rate forms, to their short forms', () => {
+    expect(unitDisplayAbbrev('kilobytes')).toBe('KB')
+    expect(unitDisplayAbbrev('megabits')).toBe('Mbit')
+    expect(unitDisplayAbbrev('bytes/s')).toBe('B/s')
+    expect(unitDisplayAbbrev('kilobits/s')).toBe('kbit/s')
+  })
+
+  it('passes through any other, genuinely unmapped canonical name unchanged', () => {
+    expect(unitDisplayAbbrev('widgets')).toBe('widgets')
+  })
+
+  it('never falls through to the spelled-out canonical name for an adaptive family', () => {
+    for (const name of TIME_UNIT_NAMES) {
+      expect(unitDisplayAbbrev(name)).not.toBe(name)
+    }
+    for (const name of SIZE_UNIT_NAMES) {
+      expect(unitDisplayAbbrev(name)).not.toBe(name)
+      expect(unitDisplayAbbrev(`${name}/s`)).not.toBe(`${name}/s`)
+    }
+    for (const name of BIT_UNIT_NAMES) {
+      expect(unitDisplayAbbrev(name)).not.toBe(name)
+      expect(unitDisplayAbbrev(`${name}/s`)).not.toBe(`${name}/s`)
+    }
+  })
+})
+
+describe('unitSuffix', () => {
+  it('attaches symbol-prefixed display units with no space', () => {
+    expect(unitSuffix('/s')).toBe('/s')
+    expect(unitSuffix('°')).toBe('°')
+    expect(unitSuffix('°C')).toBe('°C')
+    expect(unitSuffix('%')).toBe('%')
+  })
+
+  it('attaches an out-of-vocabulary symbol-prefixed unit with no space', () => {
+    expect(unitSuffix('°F')).toBe('°F')
+    expect(unitSuffix('%CPU')).toBe('%CPU')
+  })
+
+  it('adds a leading space for other display units', () => {
+    expect(unitSuffix('ms')).toBe(' ms')
+    expect(unitSuffix('KB')).toBe(' KB')
+  })
+
+  it('returns an empty string for an empty (dimensionless) display unit', () => {
+    expect(unitSuffix('')).toBe('')
   })
 })

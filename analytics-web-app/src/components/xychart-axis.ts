@@ -7,7 +7,7 @@
  */
 import type uPlot from 'uplot'
 import type { XAxisMode } from './XYChart'
-import { formatCurrencyValue } from '@/lib/units'
+import { formatCurrencyValue, unitSuffix } from '@/lib/units'
 
 export function buildXAxisConfig(xAxisMode: XAxisMode, xLabels?: string[]): uPlot.Axis {
   const xAxisConfig: uPlot.Axis = {
@@ -73,10 +73,11 @@ export function formatYAxisTick(
 ): string {
   const dv = rawValue * axisConversionFactor
   if (currencyCode) return formatCurrencyValue(dv, currencyCode)
-  if (dv === 0) return '0 ' + displayUnit
+  const suffix = unitSuffix(displayUnit)
+  if (dv === 0) return '0' + suffix
   const absV = Math.abs(dv)
-  if (absV >= 100) return Math.round(dv) + ' ' + displayUnit
-  if (absV >= 10) return dv.toFixed(1) + ' ' + displayUnit
-  if (absV >= 1) return dv.toFixed(2) + ' ' + displayUnit
-  return dv.toPrecision(2) + ' ' + displayUnit
+  if (absV >= 100) return Math.round(dv) + suffix
+  if (absV >= 10) return dv.toFixed(1) + suffix
+  if (absV >= 1) return dv.toFixed(2) + suffix
+  return dv.toPrecision(2) + suffix
 }
