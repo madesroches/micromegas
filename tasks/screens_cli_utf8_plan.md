@@ -88,6 +88,17 @@ calls that touch user-controlled or server-controlled content:
   `encoding=` kwarg to pass since it isn't an `open()` call; fix by
   reconfiguring it explicitly: `sys.stdin.reconfigure(encoding="utf-8")`
   immediately before the `.read()` call.
+- This file-reading logic (lines 87-96) currently lives inline in `main()`,
+  which makes it untestable without invoking `main()` itself (not viable — it
+  opens a live server connection right after). Following the same pattern
+  already used by `micromegas/cli/config.py` (`load_config`,
+  `resolve_connection`, imported directly by `tests/cli/test_config.py`),
+  this plan extracts the `--file <path>`/stdin branch into a standalone
+  `read_sql_source(args)` function in `query.py`, with `main()` calling it in
+  place of the inlined logic. This makes both encoding fixes above (the
+  `read_text(encoding="utf-8")` and the `sys.stdin.reconfigure` call) part of
+  a function the new `test_query.py` can import and call directly, rather
+  than a copy of the expression re-typed inside the test.
 - `micromegas/auth/oidc.py:539` — `open(token_file)` reads a cached OIDC
   token JSON file. Content is a JWT/JSON blob that in practice is always
   ASCII, but pin `encoding="utf-8"` anyway for consistency and to close off
@@ -124,9 +135,15 @@ fix (see Open Questions).
      sort_keys=True)` and `json.dumps(local_dict, indent=2, sort_keys=True)`
      (lines 328-329) gain `ensure_ascii=False`
 2. `python/micromegas/micromegas/cli/query.py`:
-   - `pathlib.Path(args.file).read_text(encoding="utf-8")` (line 92)
-   - stdin branch (line 89): `sys.stdin.reconfigure(encoding="utf-8")` before
-     `sys.stdin.read()`
+   - Extract the SQL-source-resolution logic currently inlined in `main()`
+     (lines 87-96: the `args.file` truthiness check, the `-` stdin branch,
+     the file-read branch, and the `args.sql` fallback) into a new
+     `read_sql_source(args)` function; `main()` calls it and keeps its
+     existing `parser.error(...)` handling for the `OSError` case.
+   - Within `read_sql_source()`: `pathlib.Path(args.file).read_text(encoding="utf-8")`
+     (was line 92)
+   - Within `read_sql_source()`, stdin branch (was line 89):
+     `sys.stdin.reconfigure(encoding="utf-8")` before `sys.stdin.read()`
 3. `python/micromegas/micromegas/auth/oidc.py`:
    - Add `encoding="utf-8"` to the token-file read (line 539) and the
      `os.fdopen(fd, "w")` write (line 505)
@@ -160,17 +177,31 @@ fix (see Open Questions).
    in-process has no effect on `open()`'s actual behavior — only a real
    environment change on a subprocess forces it.
 5. `python/micromegas/tests/test_query.py` (new file — no test currently
-   exercises `cli/query.py`): add a regression test using the same
+   exercises `cli/query.py`): add regression tests using the same
    `sys.executable` + `LC_ALL=C`/`PYTHONUTF8=0` subprocess technique as step
-   4. The child script writes a temp SQL file containing non-ASCII content
-   (em dash, accented characters, CJK) as UTF-8 bytes, asserts
-   `sys.flags.utf8_mode == 0`, then runs the equivalent of query.py's
-   file-reading line — `pathlib.Path(path).read_text(encoding="utf-8").strip()`
-   — and writes the result back to the parent as UTF-8 bytes for comparison
-   against the original. `query.py`'s `main()` isn't invoked directly, since
-   it opens a live server connection immediately after parsing the SQL; this
-   test instead exercises the fixed `read_text(encoding="utf-8")` call from
-   step 2 in isolation.
+   4, both importing and calling the real `read_sql_source()` from step 2
+   (not a reimplementation of its logic) — matching the pattern already used
+   by `tests/cli/test_config.py`, which imports and calls `load_config`/
+   `resolve_connection` from `micromegas/cli/config.py` rather than
+   reimplementing CLI parsing inline:
+   - **`--file <path>` case**: the child script writes a temp SQL file
+     containing non-ASCII content (em dash, accented characters, CJK) as
+     UTF-8 bytes, asserts `sys.flags.utf8_mode == 0`, builds an
+     `argparse.Namespace(file=<path>, sql=None)`, calls
+     `query.read_sql_source(args)`, and writes the result back to the parent
+     as UTF-8 bytes for comparison against the original.
+   - **`--file -` (stdin) case**: the child script writes the same
+     non-ASCII content to its own stdin pipe, asserts
+     `sys.flags.utf8_mode == 0`, builds an
+     `argparse.Namespace(file="-", sql=None)`, calls
+     `query.read_sql_source(args)` (exercising the
+     `sys.stdin.reconfigure(encoding="utf-8")` fix from step 2), and writes
+     the result back to the parent as UTF-8 bytes for comparison against the
+     original. Without this case, the stdin-reconfigure fix has no
+     regression coverage anywhere in this plan.
+   `query.py`'s `main()` isn't invoked directly in either case, since it
+   opens a live server connection immediately after parsing the SQL; both
+   tests instead exercise `read_sql_source()` in isolation.
 6. `python/micromegas/tests/auth/test_oidc_unit.py`: add
    `test_oidc_token_save_and_load_non_ascii_locale()` alongside the existing
    `test_oidc_token_save_and_load`, using the same subprocess/env-forcing
@@ -239,13 +270,19 @@ fix (see Open Questions).
 - Existing `test_screen_files.py` round-trip tests continue to pass
   unchanged (ASCII content is unaffected by the encoding pin).
 - New `test_query.py` (step 5) covers the `query.py` fix with the same
-  forced-locale technique: a non-ASCII `--file` SQL file mis-decodes (or
-  raises) on the current code and round-trips intact once
-  `read_text(encoding="utf-8")` is in place. Without this test, the
-  `query.py` fix would ship with the exact same masking risk the Current
-  State section calls out for `screens.py` — ASCII-only fixtures wouldn't
-  have caught the original bug, and there was previously no test file for
-  `query.py` at all.
+  forced-locale technique, importing and calling the real
+  `read_sql_source()` extracted in step 2 (rather than reimplementing its
+  logic in the test, matching the `test_config.py`/`config.py` pattern):
+  a non-ASCII `--file` SQL file mis-decodes (or raises) on the current code
+  and round-trips intact once `read_text(encoding="utf-8")` is in place;
+  separately, non-ASCII content piped via `--file -` (stdin) mis-decodes on
+  the current code and round-trips intact once
+  `sys.stdin.reconfigure(encoding="utf-8")` is in place. Without this
+  second case, the stdin fix would have no regression test anywhere in this
+  plan. Without either test, the `query.py` fix would ship with the exact
+  same masking risk the Current State section calls out for `screens.py` —
+  ASCII-only fixtures wouldn't have caught the original bug, and there was
+  previously no test file for `query.py` at all.
 - New `test_oidc_token_save_and_load_non_ascii_locale()` in
   `test_oidc_unit.py` (step 6) covers the `oidc.py` fix the same way: a
   non-ASCII `client_id` fails to survive a `save()`/`from_file()`
