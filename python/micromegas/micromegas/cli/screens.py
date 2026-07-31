@@ -65,17 +65,33 @@ def write_screen_file(path, screen_dict):
 
 
 def list_local_screens():
-    """Scan current directory for screen JSON files (excluding config file)."""
+    """Scan current directory for screen JSON files (excluding config file).
+
+    Returns (screens, unreadable): `screens` maps name -> data for files that
+    parsed successfully; `unreadable` is the set of file stems that exist
+    locally but could not be decoded (e.g. non-UTF-8 encoding). Callers must
+    not treat names in `unreadable` as absent, since that could trigger a
+    server-side delete or a silent local overwrite of a file we couldn't
+    actually read.
+    """
     screens = {}
+    unreadable = set()
     for p in sorted(Path(".").glob("*.json")):
         if p.name == CONFIG_FILE:
             continue
         try:
             data = read_screen_file(p)
             screens[data["name"]] = data
+        except UnicodeDecodeError as e:
+            print(
+                f"Warning: skipping {p}: encoding error ({e}); "
+                "not treating as absent",
+                file=sys.stderr,
+            )
+            unreadable.add(p.stem)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: skipping {p}: {e}", file=sys.stderr)
-    return screens
+    return screens, unreadable
 
 
 VOLATILE_KEYS = {"created_by", "updated_by", "created_at", "updated_at"}
@@ -242,7 +258,7 @@ def cmd_pull(args):
                 )
                 sys.exit(1)
     else:
-        local = list_local_screens()
+        local, _unreadable = list_local_screens()
         names = list(local.keys())
 
     if not names:
@@ -267,6 +283,13 @@ def cmd_pull(args):
                 if server_screen_to_file(existing) == new_content:
                     unchanged += 1
                     continue
+            except UnicodeDecodeError as e:
+                print(
+                    f"Warning: skipping '{name}': {local_path} has an "
+                    f"encoding error ({e}); not overwriting.",
+                    file=sys.stderr,
+                )
+                continue
             except (json.JSONDecodeError, ValueError):
                 pass
 
@@ -279,7 +302,7 @@ def cmd_pull(args):
 def compute_plan(config, client, names=None):
     """Compute an execution plan. Returns (creates, updates, deletes, unchanged, untracked)."""
     managed_by = config["managed_by"]
-    local = list_local_screens()
+    local, unreadable = list_local_screens()
 
     if names:
         local = {k: v for k, v in local.items() if k in names}
@@ -308,9 +331,14 @@ def compute_plan(config, client, names=None):
                 updates.append((name, normalized_local, normalized_server))
 
     # Check for deletions: server screens tracked by this repo but missing locally
+    # (screens that failed to decode locally are not "missing" - skip them)
     if not names:
         for name, server in server_by_name.items():
-            if server.get("managed_by") == managed_by and name not in local:
+            if (
+                server.get("managed_by") == managed_by
+                and name not in local
+                and name not in unreadable
+            ):
                 deletes.append(name)
 
     # List untracked server screens
@@ -420,7 +448,7 @@ def cmd_apply(args):
 
     print("Applying...\n")
 
-    local = list_local_screens()
+    local, _unreadable = list_local_screens()
     created = 0
     updated_count = 0
     deleted = 0
@@ -484,7 +512,7 @@ def cmd_list(args):
     client = make_client(config)
     managed_by = config["managed_by"]
 
-    local = list_local_screens()
+    local, _unreadable = list_local_screens()
     server_screens = client.list_screens()
     server_by_name = {s["name"]: s for s in server_screens}
 
@@ -530,6 +558,10 @@ def cmd_list(args):
 
 
 def main():
+    # Ensure stdout can always print the non-ASCII diff output produced by
+    # format_screen_diff(), regardless of the platform's default encoding.
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     parser = argparse.ArgumentParser(
         prog="micromegas-screens",
         description="Manage micromegas screens as code",

@@ -177,8 +177,9 @@ class TestListLocalScreens:
                 "config": {},
             },
         )
-        screens = list_local_screens()
+        screens, unreadable = list_local_screens()
         assert set(screens.keys()) == {"notebook-a", "notebook-b"}
+        assert unreadable == set()
 
 
 class TestComputePlan:
