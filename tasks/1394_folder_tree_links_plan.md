@@ -63,8 +63,8 @@ void` props keep their type signatures, but their *meaning* changes: they are no
 a required correctness change, not a cosmetic one — see below.
 
 **Why `goToFolder`/`goToScreen` cannot stay wired as the `AppLink`'s `onClick`:** react-router's
-`Link` invokes the caller-supplied `onClick` *unconditionally* on every click — plain, Ctrl/Cmd,
-middle, whatever. It only skips its *own* internal navigation for modified clicks; it never skips
+`Link` invokes the caller-supplied `onClick` *unconditionally* on plain or Ctrl/Cmd/Shift/Alt
+clicks. It only skips its *own* internal navigation for modified clicks; it never skips
 calling `onClick`. If `onClick` were still `goToFolder`/`goToScreen` (which call `navigate(...)`),
 then: (a) a plain left-click would call `navigate()` *and* let the anchor's own client-side
 navigation proceed, pushing a duplicate history entry; (b) a Ctrl/Cmd-click would correctly open the
@@ -197,14 +197,6 @@ handle Enter to activate, so this hand-rolled keyboard handling becomes redundan
 
 ## Trade-offs
 
-- **`onClick`'s search-clearing side effect still runs on a modified click (new tab).** With
-  `onSelectFolder`/`onSelectScreen` made navigation-free (see Design), opening a folder/screen in a
-  new tab via Ctrl/Cmd/middle-click still clears the search box in the *current* tab, since we never
-  call `preventDefault()` and the callback always runs. This is now a genuinely minor, purely
-  cosmetic side effect — no navigation happens in the current tab, only the search box empties.
-  Fixing even this remainder would require detecting modifier/button state in `onClick` and skipping
-  the side effect, which adds complexity disproportionate to a one-line UX nit. Left as-is; flagged
-  here rather than silently ignored.
 - **Buttons-outside-the-link structure (matching `ScreensPage.tsx`) vs. a "stretched link" overlay
   pattern** (absolutely-positioned `<a>` covering the whole row, real content layered on top via
   `pointer-events` tricks): the overlay pattern lets the *entire* row area (including the space

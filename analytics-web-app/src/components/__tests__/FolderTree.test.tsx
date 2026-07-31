@@ -135,13 +135,17 @@ function GoBackButton() {
 }
 
 function renderTree(overrides: {
-  onSelectFolder?: (path: string) => void
-  onSelectScreen?: (name: string) => void
+  onSelectFolder?: (path: string, e: React.MouseEvent) => void
+  onSelectScreen?: (name: string, e: React.MouseEvent) => void
+  folders?: FolderInfo[]
+  expandedPaths?: Set<string>
+  onToggleExpand?: (path: string) => void
 } = {}) {
-  const folders: FolderInfo[] = [{ path: 'team', screen_count: 0, subfolder_count: 0 }]
+  const folders: FolderInfo[] = overrides.folders ?? [{ path: 'team', screen_count: 0, subfolder_count: 0 }]
   const screens: Screen[] = [makeScreen('dashboard')]
   const onSelectFolder = overrides.onSelectFolder ?? vi.fn()
   const onSelectScreen = overrides.onSelectScreen ?? vi.fn()
+  const onToggleExpand = overrides.onToggleExpand ?? vi.fn()
 
   render(
     <MemoryRouter initialEntries={['/screens']}>
@@ -154,8 +158,8 @@ function renderTree(overrides: {
         folderNavReplace={false}
         onSelectScreen={onSelectScreen}
         screenHref={(n) => `/screen/${n}`}
-        expandedPaths={new Set(['team'])}
-        onToggleExpand={vi.fn()}
+        expandedPaths={overrides.expandedPaths ?? new Set(['team'])}
+        onToggleExpand={onToggleExpand}
         onDropScreen={vi.fn()}
         onCreateFolder={vi.fn()}
         onRenameFolder={vi.fn()}
@@ -166,7 +170,7 @@ function renderTree(overrides: {
     </MemoryRouter>
   )
 
-  return { onSelectFolder, onSelectScreen }
+  return { onSelectFolder, onSelectScreen, onToggleExpand }
 }
 
 describe('FolderTree rendering', () => {
@@ -179,9 +183,9 @@ describe('FolderTree rendering', () => {
   it('still calls onSelectFolder/onSelectScreen when a row is clicked', () => {
     const { onSelectFolder, onSelectScreen } = renderTree()
     fireEvent.click(screen.getByRole('link', { name: /team/ }))
-    expect(onSelectFolder).toHaveBeenCalledWith('team')
+    expect(onSelectFolder).toHaveBeenCalledWith('team', expect.anything())
     fireEvent.click(screen.getByRole('link', { name: /dashboard/ }))
-    expect(onSelectScreen).toHaveBeenCalledWith('dashboard')
+    expect(onSelectScreen).toHaveBeenCalledWith('dashboard', expect.anything())
   })
 
   it('keeps the new-subfolder and folder-actions buttons outside the folder link', () => {
@@ -202,19 +206,40 @@ describe('FolderTree rendering', () => {
     expect(folderLink?.contains(input)).toBe(false)
   })
 
+  // jsdom doesn't special-case modifier-key clicks the way real browsers do
+  // (open a new tab, leave the current tab alone): it still attempts the
+  // anchor's native navigation and logs "Not implemented: navigation" noise
+  // when it can't perform it, even though the assertions below already show
+  // the current tab's location never changes. Temporarily preventDefault()
+  // the click at the document level to suppress that native-navigation
+  // attempt without touching what the test actually verifies.
+  function withNativeNavSuppressed(fn: () => void) {
+    const suppress = (e: Event) => e.preventDefault()
+    document.addEventListener('click', suppress)
+    try {
+      fn()
+    } finally {
+      document.removeEventListener('click', suppress)
+    }
+  }
+
   it('does not navigate the current tab on a Ctrl-click, but still runs the side effect', () => {
     const { onSelectFolder } = renderTree()
     const before = screen.getByTestId('location').textContent
-    fireEvent.click(screen.getByRole('link', { name: /team/ }), { ctrlKey: true })
-    expect(onSelectFolder).toHaveBeenCalledWith('team')
+    withNativeNavSuppressed(() => {
+      fireEvent.click(screen.getByRole('link', { name: /team/ }), { ctrlKey: true })
+    })
+    expect(onSelectFolder).toHaveBeenCalledWith('team', expect.anything())
     expect(screen.getByTestId('location').textContent).toBe(before)
   })
 
   it('does not navigate the current tab on a meta (Cmd) click', () => {
     const { onSelectScreen } = renderTree()
     const before = screen.getByTestId('location').textContent
-    fireEvent.click(screen.getByRole('link', { name: /dashboard/ }), { metaKey: true })
-    expect(onSelectScreen).toHaveBeenCalledWith('dashboard')
+    withNativeNavSuppressed(() => {
+      fireEvent.click(screen.getByRole('link', { name: /dashboard/ }), { metaKey: true })
+    })
+    expect(onSelectScreen).toHaveBeenCalledWith('dashboard', expect.anything())
     expect(screen.getByTestId('location').textContent).toBe(before)
   })
 
@@ -238,5 +263,28 @@ describe('FolderTree rendering', () => {
 
     fireEvent.click(screen.getByTestId('go-back'))
     expect(screen.getByTestId('location').textContent).toBe('/screens')
+  })
+
+  it('toggles expand for the right folder on a chevron click without navigating (preventDefault guard)', () => {
+    const { onToggleExpand } = renderTree({
+      folders: [
+        { path: 'team', screen_count: 0, subfolder_count: 1 },
+        { path: 'team/sub', screen_count: 0, subfolder_count: 0 },
+      ],
+      expandedPaths: new Set(['team']),
+    })
+    const before = screen.getByTestId('location').textContent
+
+    // The chevron is aria-hidden (a decorative lucide icon), so it isn't
+    // reachable via getByRole; select it by its lucide-generated class name.
+    const chevron = document.querySelector('.lucide-chevron-right')
+    expect(chevron).not.toBeNull()
+    fireEvent.click(chevron!)
+
+    expect(onToggleExpand).toHaveBeenCalledWith('team')
+    // Guards against a regression that drops the chevron's preventDefault():
+    // without it, this click would fall through to the anchor's native
+    // navigation and change the current tab's location.
+    expect(screen.getByTestId('location').textContent).toBe(before)
   })
 })

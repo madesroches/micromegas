@@ -166,7 +166,7 @@ export function Sidebar() {
     [isScreensPage, navigate, buildFolderUrl]
   )
 
-  const screenHref = (name: string) => `/screen/${name}`
+  const screenHref = useCallback((name: string) => `/screen/${name}`, [])
 
   const updateSearch = useCallback(
     (value: string) => {
@@ -340,11 +340,17 @@ export function Sidebar() {
               folders={folders}
               screens={screens}
               selectedFolder={selectedFolder}
-              onSelectFolder={() => setSearchQuery('')}
+              onSelectFolder={(_, e) => {
+                if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+                setSearchQuery('')
+              }}
               folderHref={buildFolderUrl}
               folderNavReplace={isScreensPage}
               selectedScreen={activeScreenName}
-              onSelectScreen={() => setSearchQuery('')}
+              onSelectScreen={(_, e) => {
+                if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+                setSearchQuery('')
+              }}
               screenHref={screenHref}
               expandedPaths={expandedPaths}
               onToggleExpand={toggleExpand}

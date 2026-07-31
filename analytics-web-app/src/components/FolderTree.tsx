@@ -84,14 +84,18 @@ interface FolderTreeProps {
    */
   selectedFolder: string | null
   /**
-   * Fires as the `AppLink`'s `onClick` for a folder/Home row. Must stay
-   * navigation-free (never call `navigate()`): react-router's `Link` invokes
-   * this unconditionally on every click — plain, Ctrl/Cmd, middle, whatever —
-   * so if this called `navigate()` too, a plain click would push a duplicate
-   * history entry and a Ctrl/Cmd-click would navigate the current tab away in
-   * addition to opening the new tab, defeating ctrl-click-to-open-in-new-tab.
+   * Fires as the `AppLink`'s `onClick` for a folder/Home row, with the click
+   * event as the second argument. Must stay navigation-free (never call
+   * `navigate()`): react-router's `Link` invokes this unconditionally on
+   * plain or Ctrl/Cmd/Shift/Alt clicks — so if this called `navigate()` too,
+   * a plain click would push a duplicate history entry and a Ctrl/Cmd-click
+   * would navigate the current tab away in addition to opening the new tab,
+   * defeating ctrl-click-to-open-in-new-tab. (Middle-click never reaches
+   * here at all: browsers dispatch `auxclick`, not `click`, for non-primary
+   * mouse buttons, so it's handled entirely as the browser's native
+   * new-tab action.)
    */
-  onSelectFolder: (path: string) => void
+  onSelectFolder: (path: string, e: React.MouseEvent) => void
   /** Builds the `href` for a folder row's `AppLink`, given its path ('' for Home). */
   folderHref: (path: string) => string
   /** Passed straight through to folder/Home `AppLink`s' `replace` prop. */
@@ -99,10 +103,11 @@ interface FolderTreeProps {
   /** Name of the screen currently open (e.g. on its screen page), or null/undefined if none. */
   selectedScreen?: string | null
   /**
-   * Fires as the `AppLink`'s `onClick` for a screen row. Must stay
-   * navigation-free (never call `navigate()`) — see `onSelectFolder` above for why.
+   * Fires as the `AppLink`'s `onClick` for a screen row, with the click
+   * event as the second argument. Must stay navigation-free (never call
+   * `navigate()`) — see `onSelectFolder` above for why.
    */
-  onSelectScreen: (screenName: string) => void
+  onSelectScreen: (screenName: string, e: React.MouseEvent) => void
   /** Builds the `href` for a screen row's `AppLink`. */
   screenHref: (name: string) => string
   expandedPaths: Set<string>
@@ -270,7 +275,7 @@ export function FolderTree({
         e.dataTransfer.setData('text/plain', screen.name)
         e.dataTransfer.effectAllowed = 'move'
       }}
-      onClick={() => onSelectScreen(screen.name)}
+      onClick={(e) => onSelectScreen(screen.name, e)}
       style={{ paddingLeft: `${depth * 14 + 8}px` }}
       className={`group flex items-center gap-1.5 py-1.5 pr-2 rounded-md cursor-pointer text-sm transition-colors ${
         selectedScreen === screen.name
@@ -296,8 +301,7 @@ export function FolderTree({
       <div key={node.path}>
         <div
           {...dropHandlers(node.path)}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          className={`group flex items-center gap-1.5 py-1.5 pr-2 rounded-md cursor-pointer text-sm transition-colors ${
+          className={`group flex items-center gap-1.5 pr-2 rounded-md text-sm transition-colors ${
             selectedFolder === node.path
               ? 'bg-accent-link/15 text-theme-text-primary'
               : 'text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'
@@ -306,9 +310,10 @@ export function FolderTree({
           <AppLink
             href={folderHref(node.path)}
             replace={folderNavReplace}
-            onClick={() => onSelectFolder(node.path)}
+            onClick={(e) => onSelectFolder(node.path, e)}
             draggable={false}
-            className={`flex items-center gap-1.5 cursor-pointer min-w-0 ${renamingPath === node.path ? '' : 'flex-1'}`}
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+            className={`flex items-center gap-1.5 py-1.5 cursor-pointer min-w-0 ${renamingPath === node.path ? '' : 'flex-1'}`}
           >
             {hasChildren ? (
               <ChevronRight
@@ -394,7 +399,7 @@ export function FolderTree({
       <AppLink
         href={folderHref('')}
         replace={folderNavReplace}
-        onClick={() => onSelectFolder('')}
+        onClick={(e) => onSelectFolder('', e)}
         draggable={false}
         {...dropHandlers('')}
         className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md cursor-pointer text-sm transition-colors ${
