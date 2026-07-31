@@ -200,6 +200,11 @@ impl SqlBatchView {
         Ok(self)
     }
 
+    /// The merge query as given to `SqlBatchView::new`, `{source}` placeholder included.
+    pub fn get_merge_partitions_query(&self) -> Arc<String> {
+        self.merge_partitions_query.clone()
+    }
+
     /// True when a merge sort order is declared and every partition in `partitions_to_merge`
     /// certifies it (empty partitions certify vacuously -- see `Partition::certifies_sort_order`).
     fn all_inputs_certify(&self, partitions_to_merge: &[Partition]) -> bool {

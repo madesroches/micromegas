@@ -1,16 +1,24 @@
 //! Offline (no live DB) regression test for `log_stats`' adoption of order-preserving k-way
 //! merges (`tasks/1392_kway_merge_sorted_partitions_plan.md` Design §7, Testing Strategy item 6):
 //! unlike `per_file_scan_ordering_tests.rs` and `sql_batch_view_merge_ordering_tests.rs`, which use
-//! fabricated views, this pins the *shipped* `log_stats` view definition through the public
-//! `View::merge_partitions` surface, so a later edit to its `ORDER BY`/`GROUP BY` that silently
-//! breaks the streaming contract fails CI instead of quietly degrading to the unordered merge.
+//! fabricated views, this pins the *shipped* `log_stats` view definition, so a later edit to its
+//! `ORDER BY`/`GROUP BY` that silently breaks the streaming contract fails CI instead of quietly
+//! degrading to the unordered merge.
+//!
+//! It plans the shipped merge query itself over the view's own declared scan ordering rather than
+//! going through `View::merge_partitions`: the plan shape is what's under test, and executing the
+//! merge would only hide it behind a stream.
 
 use chrono::{TimeDelta, Utc};
+use datafusion::physical_plan::displayable;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::log_view::LogViewMaker;
+use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
-use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
+use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
+use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
@@ -20,9 +28,8 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
 
 /// Builds an offline `LakehouseContext` (in-memory object store, lazily-connected -- never
-/// actually queried -- Postgres pool) sufficient to run `View::merge_partitions`'s planning
-/// without touching a real database or reading real Parquet files (the returned stream is never
-/// polled in this test, so the fabricated, nonexistent `file_path`s are never opened).
+/// actually queried -- Postgres pool) sufficient to build the shipped `log_stats` view without
+/// touching a real database.
 async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     let db_pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
         .expect("connect_lazy should not touch the network");
@@ -62,7 +69,7 @@ fn make_certifying_partition(file_path: &str, index: i64) -> Partition {
 }
 
 #[tokio::test]
-async fn log_stats_merge_query_streams_end_to_end() {
+async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
     let lakehouse = make_offline_lakehouse_context().await;
 
     // log_stats' extract query reads FROM log_entries, so make_log_stats_view's own schema
@@ -75,44 +82,68 @@ async fn log_stats_merge_query_streams_end_to_end() {
     let mut view_factory = ViewFactory::new(vec![log_entries_view]);
     view_factory.add_view_set(String::from("log_entries"), Arc::new(LogViewMaker {}));
 
-    let view = Arc::new(
-        make_log_stats_view(
-            lakehouse.runtime().clone(),
-            lakehouse.lake().clone(),
-            Arc::new(view_factory),
-        )
-        .await
-        .expect("make_log_stats_view"),
-    );
+    let view = make_log_stats_view(
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        Arc::new(view_factory),
+    )
+    .await
+    .expect("make_log_stats_view");
 
-    let t0 = Utc::now();
-    let insert_range = TimeRange::new(t0, t0 + TimeDelta::days(3));
     let partitions = vec![
         make_certifying_partition("a.parquet", 0),
         make_certifying_partition("b.parquet", 1),
         make_certifying_partition("c.parquet", 2),
     ];
+    assert_eq!(
+        view.get_merged_partition_sort_order(&partitions),
+        Some(vec![
+            "time_bin".to_owned(),
+            "process_id".to_owned(),
+            "level".to_owned(),
+            "target".to_owned(),
+        ]),
+        "log_stats must record the sort_order its certifying inputs carry -- the guarantee the plan \
+         shape below has to back up"
+    );
 
-    let result = view
-        .merge_partitions(
-            lakehouse,
-            Arc::new(partitions),
-            Arc::new(PartitionCache::empty(insert_range)),
-            insert_range,
+    // The same source shape QueryMerger's PerFile branch registers: one file group per partition,
+    // all declaring the view's own scan ordering. target_partitions is pinned above the partition
+    // count so the assertions don't silently no-op on a low-core-count CI runner.
+    let reader_factory = Arc::new(ReaderFactory::new(
+        Arc::new(object_store::memory::InMemory::new()),
+        Arc::new(MetadataCache::new(1024 * 1024)),
+    ));
+    let source = PartitionedTableProvider::with_scan_ordering(
+        view.get_file_schema(),
+        reader_factory,
+        Arc::new(partitions),
+        view.get_scan_output_ordering(),
+    );
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    ctx.register_table("source", Arc::new(source))
+        .expect("register_table");
+    let plan = ctx
+        .sql(
+            &view
+                .get_merge_partitions_query()
+                .replace("{source}", "source"),
         )
         .await
-        .expect("merge_partitions should succeed");
+        .expect("planning log_stats' shipped merge query")
+        .create_physical_plan()
+        .await
+        .expect("create_physical_plan");
+    let plan_str = displayable(plan.as_ref()).indent(true).to_string();
 
     assert!(
-        result.ordering_honored,
-        "expected log_stats' shipped merge query to elide its declared per-file ordering"
-    );
-    let plan_display = result
-        .plan_display
-        .expect("a PerFile merge must report plan_display");
-    assert!(
-        plan_display.contains("ordering_mode=Sorted"),
+        plan_str.contains("ordering_mode=Sorted"),
         "expected order-aware aggregation over the declared (time_bin, process_id, level, target) \
-         ordering, got:\n{plan_display}"
+         ordering, got:\n{plan_str}"
+    );
+    assert!(
+        !plan_str.contains("SortExec"),
+        "log_stats' shipped merge query must stay a streaming k-way merge with no blocking sort, \
+         got:\n{plan_str}"
     );
 }

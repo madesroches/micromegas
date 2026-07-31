@@ -42,11 +42,6 @@ pub struct MergeQueryResult {
     /// operator, not a regression -- only a surviving `SortExec` means the streaming shape was
     /// lost. For `ScanOrdering::Concatenated`, either operator surviving is a regression.
     pub ordering_honored: bool,
-    /// The merge query's physical plan, rendered via `displayable(..).indent(true)`, for
-    /// `ScanOrdering::PerFile` merges only (`None` otherwise). This is the only way a test can
-    /// inspect a real view's merge-query plan shape through the public `View::merge_partitions`
-    /// surface.
-    pub plan_display: Option<String>,
 }
 
 /// A trait for merging partitions.
@@ -151,7 +146,6 @@ impl QueryMerger {
         Ok(MergeQueryResult {
             stream,
             ordering_honored,
-            plan_display: None,
         })
     }
 
@@ -253,7 +247,6 @@ impl QueryMerger {
         Ok(MergeQueryResult {
             stream,
             ordering_honored,
-            plan_display: Some(plan_str),
         })
     }
 }
@@ -301,7 +294,6 @@ impl PartitionMerger for QueryMerger {
                 Ok(MergeQueryResult {
                     stream,
                     ordering_honored: true,
-                    plan_display: None,
                 })
             }
             ScanOrdering::Concatenated { .. } => {

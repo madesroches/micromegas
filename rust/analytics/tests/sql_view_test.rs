@@ -182,7 +182,6 @@ impl PartitionMerger for LogSummaryMerger {
         Ok(MergeQueryResult {
             stream: builder.build(),
             ordering_honored: true,
-            plan_display: None,
         })
     }
 }

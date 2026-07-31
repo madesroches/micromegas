@@ -11,7 +11,7 @@
 //!   `target_partitions` byte-range groups once `target_partitions` is pinned above k
 
 use chrono::{TimeDelta, Utc};
-use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::TryStreamExt;
@@ -98,8 +98,66 @@ async fn make_test_view(lakehouse: &LakehouseContext) -> SqlBatchView {
     .await
 }
 
+/// A merge query whose rows come from a `VALUES` literal already in *descending* declared order:
+/// it needs no parquet file to run, and its output order alone reveals which merger ran, since only
+/// the ordered merger applies the declared ascending sort on top of the author's query.
+const DESCENDING_VALUES_MERGE_QUERY: &str = "SELECT * FROM (VALUES \
+     ('b', TIMESTAMP '1970-01-01 00:00:01', 1), \
+     ('a', TIMESTAMP '1970-01-01 00:00:00', 2)) AS t(name, time_bin, measure) \
+     ORDER BY name DESC, time_bin DESC";
+
 fn certifying_sort_order() -> Option<Vec<String>> {
     Some(vec!["name".to_owned(), "time_bin".to_owned()])
+}
+
+/// Merges `partitions` through `view` and returns the `name` column of the result, in output order.
+async fn merged_names(
+    lakehouse: Arc<LakehouseContext>,
+    view: &SqlBatchView,
+    partitions: Vec<Partition>,
+) -> Vec<String> {
+    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
+    let result = view
+        .merge_partitions(
+            lakehouse,
+            Arc::new(partitions),
+            Arc::new(PartitionCache::empty(insert_range)),
+            insert_range,
+        )
+        .await
+        .expect("merge_partitions should succeed");
+    let batches: Vec<RecordBatch> = result
+        .stream
+        .try_collect()
+        .await
+        .expect("collecting the merge stream");
+    batches
+        .iter()
+        .flat_map(|batch| {
+            let column = batch.column_by_name("name").expect("name column");
+            let names = column
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("name should be a StringArray");
+            (0..names.len())
+                .map(|i| names.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Whether `merge_partitions` ran the ordered merger for `partitions`, observed behaviorally on a
+/// probe view carrying the same sort-order declaration as this file's other fixtures: only the
+/// ordered merger sorts, so ascending output means it ran and descending output means it did not.
+/// This is the only externally visible difference between the two mergers.
+async fn ordered_merger_ran(lakehouse: Arc<LakehouseContext>, partitions: Vec<Partition>) -> bool {
+    let view = make_test_view_with_merge_query(&lakehouse, DESCENDING_VALUES_MERGE_QUERY).await;
+    let names = merged_names(lakehouse, &view, partitions).await;
+    match names.join(",").as_str() {
+        "a,b" => true,
+        "b,a" => false,
+        other => panic!("unexpected merge output rows [{other}]"),
+    }
 }
 
 fn make_partition(
@@ -143,6 +201,10 @@ async fn all_certified_inputs_use_the_ordered_merger_and_record_sort_order() {
         certifying_sort_order(),
         "all-certified inputs should record the declared sort_order"
     );
+    assert!(
+        ordered_merger_ran(lakehouse.clone(), partitions.clone()).await,
+        "all-certified inputs should take the ordered (PerFile) merger"
+    );
 
     let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
     let result = view
@@ -155,11 +217,6 @@ async fn all_certified_inputs_use_the_ordered_merger_and_record_sort_order() {
         .await
         .expect("merge_partitions should succeed");
     assert!(result.ordering_honored);
-    assert!(
-        result.plan_display.is_some(),
-        "all-certified inputs should take the ordered_merger (PerFile), which always reports \
-         plan_display"
-    );
 }
 
 #[tokio::test]
@@ -176,6 +233,10 @@ async fn one_uncertified_input_falls_back_to_the_plain_merger() {
         None,
         "a single uncertified input must not record a false sort_order guarantee"
     );
+    assert!(
+        !ordered_merger_ran(lakehouse.clone(), partitions.clone()).await,
+        "a single uncertified input must fall back to the plain merger"
+    );
 
     let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
     let result = view
@@ -191,10 +252,6 @@ async fn one_uncertified_input_falls_back_to_the_plain_merger() {
         result.ordering_honored,
         "the plain merger reports ordering_honored: true"
     );
-    assert!(
-        result.plan_display.is_none(),
-        "an uncertified input must fall back to the plain merger, which never reports plan_display"
-    );
 }
 
 #[tokio::test]
@@ -207,6 +264,11 @@ async fn all_empty_inputs_record_sort_order_vacuously_but_use_the_plain_merger()
         certifying_sort_order(),
         "an all-empty merge certifies vacuously, matching the blocks_view precedent"
     );
+    assert!(
+        !ordered_merger_ran(lakehouse.clone(), partitions.clone()).await,
+        "an all-empty merge must still use the plain merger -- an EmptyExec's SortExec is never \
+         elided, which would trip the memory-regression warning on every quiet-day retry"
+    );
 
     let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
     let result = view
@@ -218,11 +280,7 @@ async fn all_empty_inputs_record_sort_order_vacuously_but_use_the_plain_merger()
         )
         .await
         .expect("merge_partitions should succeed");
-    assert!(
-        result.plan_display.is_none(),
-        "an all-empty merge must still use the plain merger -- an EmptyExec's SortExec is never \
-         elided, which would trip the memory-regression warning on every quiet-day retry"
-    );
+    assert!(result.ordering_honored);
 }
 
 #[tokio::test]
@@ -237,6 +295,10 @@ async fn mixed_certified_and_empty_inputs_use_the_ordered_merger() {
         view.get_merged_partition_sort_order(&partitions),
         certifying_sort_order()
     );
+    assert!(
+        ordered_merger_ran(lakehouse.clone(), partitions.clone()).await,
+        "a certifying non-empty input alongside an empty one should still take the ordered path"
+    );
 
     let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
     let result = view
@@ -248,10 +310,7 @@ async fn mixed_certified_and_empty_inputs_use_the_ordered_merger() {
         )
         .await
         .expect("merge_partitions should succeed");
-    assert!(
-        result.plan_display.is_some(),
-        "a certifying non-empty input alongside an empty one should still take the ordered path"
-    );
+    assert!(result.ordering_honored);
 }
 
 #[tokio::test]
@@ -377,7 +436,8 @@ async fn build_side_enrichment_join_reports_ordering_not_honored_without_errorin
     // see `ordered_aggregation_spike_tests.rs`'s
     // `enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort`). Even
     // under the `PerFile` merge branch's mandatory trailing `DataFrame::sort` (merge.rs:183-188),
-    // the plan still carries a `SortExec` -- this must warn (check 3), not fail the merge.
+    // the plan still carries a `SortExec` -- this must warn (check 3), not fail the merge. A false
+    // `ordering_honored` is itself proof the ordered merger ran: the plain one always reports true.
     let lakehouse = make_offline_lakehouse_context().await;
     let view = make_test_view_with_merge_query(
         &lakehouse,
@@ -405,13 +465,6 @@ async fn build_side_enrichment_join_reports_ordering_not_honored_without_errorin
         "expected the ordered aggregate sitting on the join's build side to reinstate a blocking \
          SortExec, so ordering_honored should be false"
     );
-    assert!(
-        result
-            .plan_display
-            .is_some_and(|plan_str| plan_str.contains("SortExec")),
-        "the PerFile merge path always reports plan_display, and it should show the surviving \
-         SortExec"
-    );
 }
 
 #[tokio::test]
@@ -423,14 +476,7 @@ async fn declared_ascending_sort_order_overrides_a_contradictory_author_order_by
     // the override observable: an ascending result can only come from the declared sort order, not
     // from the query's own `ORDER BY`.
     let lakehouse = make_offline_lakehouse_context().await;
-    let view = make_test_view_with_merge_query(
-        &lakehouse,
-        "SELECT * FROM (VALUES \
-         ('b', TIMESTAMP '1970-01-01 00:00:01', 1), \
-         ('a', TIMESTAMP '1970-01-01 00:00:00', 2)) AS t(name, time_bin, measure) \
-         ORDER BY name DESC, time_bin DESC",
-    )
-    .await;
+    let view = make_test_view_with_merge_query(&lakehouse, DESCENDING_VALUES_MERGE_QUERY).await;
     let partitions = vec![
         make_partition(Some("a.parquet"), certifying_sort_order(), 0),
         make_partition(Some("b.parquet"), certifying_sort_order(), 1),
@@ -441,29 +487,11 @@ async fn declared_ascending_sort_order_overrides_a_contradictory_author_order_by
         "the declared ascending sort order must still be recorded despite the author's DESC query"
     );
 
-    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
-    let result = view
-        .merge_partitions(
-            lakehouse,
-            Arc::new(partitions),
-            Arc::new(PartitionCache::empty(insert_range)),
-            insert_range,
-        )
-        .await
-        .expect("merge_partitions should succeed");
-    let batches: Vec<_> = result
-        .stream
-        .try_collect()
-        .await
-        .expect("collecting the merge stream");
-    let rendered = pretty_format_batches(&batches)
-        .expect("pretty_format_batches")
-        .to_string();
-    let a_pos = rendered.find('a').expect("row 'a' should be present");
-    let b_pos = rendered.find('b').expect("row 'b' should be present");
-    assert!(
-        a_pos < b_pos,
+    let names = merged_names(lakehouse, &view, partitions).await;
+    assert_eq!(
+        names,
+        vec!["a".to_owned(), "b".to_owned()],
         "expected the declared ascending (name, time_bin) order to win over the author's \
-         `ORDER BY ... DESC`, got:\n{rendered}"
+         `ORDER BY ... DESC`"
     );
 }

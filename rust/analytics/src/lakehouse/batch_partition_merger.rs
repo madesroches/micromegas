@@ -120,7 +120,6 @@ impl PartitionMerger for BatchPartitionMerger {
             return Ok(MergeQueryResult {
                 stream: builder.build(),
                 ordering_honored: true,
-                plan_display: None,
             });
         }
 
@@ -189,7 +188,6 @@ impl PartitionMerger for BatchPartitionMerger {
         Ok(MergeQueryResult {
             stream: builder.build(),
             ordering_honored: true,
-            plan_display: None,
         })
     }
 }
