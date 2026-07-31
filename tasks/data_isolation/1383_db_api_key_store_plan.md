@@ -56,8 +56,13 @@ Consequence of the two unprefixed call sites: in a split deployment, *every key 
 `rust/ingestion/src/sql_migration.rs` — `LATEST_DATA_LAKE_SCHEMA_VERSION = 4`; `execute_migration`
 creates the v1 schema via `sql_telemetry_db.rs::create_tables` when the version reads 0, then applies
 `upgrade_data_lake_schema_v2/v3/v4` in sequence and asserts the final version. New tables therefore
-belong **only** in a new v5 step, never in `create_tables` (same shape as v4, which adds
-`streams.format` even though `create_tables` creates `streams`).
+belong **only** in a new step, never in `create_tables` (same shape as v4, which adds
+`streams.format` even though `create_tables` creates `streams`). **v5 is not exclusively claimed**:
+`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` and
+`tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:22,27` also reserve the v5 bump,
+for the blocks-partitioning work (plan committed 2026-07-15, not yet implemented). Whichever of the
+two lands second must renumber to v6; see Implementation Steps Phase 1 step 1 for how this plan
+handles that coordination.
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -474,10 +479,16 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 
 ### Phase 1 — Schema
 
-1. `rust/ingestion/src/sql_migration.rs`: add `upgrade_data_lake_schema_v5` creating both tables and
-   both unique indexes; bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5; add the `if 4 == current_version`
-   arm to `execute_migration`. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh
-   databases reach v5 through the same upgrade path.
+1. `rust/ingestion/src/sql_migration.rs`: claim **the next free schema version** — v5 today, but v6 if
+   `tasks/1245_partition_blocks_by_insert_time`'s bump lands first. That plan also reserves a v5 step
+   for its blocks-partitioning work (`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577`,
+   `tasks/1245_partition_blocks_by_insert_time/derisk_deploy_ordering.md:22,27`); whichever of the two
+   lands second must renumber its migration. Coordinate with that plan (in particular
+   `derisk_deploy_ordering.md`) before merging so only one PR claims a given version. Add
+   `upgrade_data_lake_schema_v<N>` creating both tables and both unique indexes; bump
+   `LATEST_DATA_LAKE_SCHEMA_VERSION` to `N`; add the corresponding `if <N-1> == current_version` arm
+   to `execute_migration`. **Do not** touch `sql_telemetry_db.rs::create_tables` — fresh databases
+   reach the new version through the same upgrade path.
 
 ### Phase 2 — Provider
 
@@ -653,11 +664,22 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
 
 Ordering, for both split and monolith deployments:
 
-1. Deploy the new binaries. Migration v5 creates the tables. **Nothing changes**: the env keyring
+1. Deploy the new binaries. The migration creates the tables. **Nothing changes**: the env keyring
    still authenticates every existing key, and the DB tables are empty. In a split deployment, deploy
    or roll the ingestion service (or the monolith) first — it is what runs the migration — and only
    then flight-sql-srv, which never migrates on its own (see [Current State](#current-state)); its
    own startup existence query (§3) fails loudly, naming the table, if this ordering is violated.
+   **Not rollback-safe once applied**: `execute_migration` (`rust/ingestion/src/sql_migration.rs:150-199`)
+   matches the DB's current version against a fixed set of `if N == current_version` arms and panics
+   via `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` for any version it does not
+   recognize — including a DB already migrated past what an older binary knows. So after this migration
+   applies, any still-old `telemetry-ingestion-srv` or `micromegas-monolith` process (the only two
+   binaries that call `connect_to_remote_data_lake` / `migrate_db`, per
+   `rust/telemetry-ingestion-srv/src/main.rs:45` and `rust/monolith/src/main.rs:180`) panics at startup
+   against the new schema. A rolling deploy of either binary must run forward to completion — old
+   replicas must not be left running or restarted, and the binary must not be rolled back — once the
+   migration has applied. flight-sql and the maintenance daemon do not run `execute_migration` and are
+   unaffected.
 2. Run `micromegas-import-api-keys` and apply its SQL. Existing key strings now authenticate through
    *both* providers.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
