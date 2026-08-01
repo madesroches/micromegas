@@ -217,6 +217,11 @@ impl SqlBatchView {
         Ok(self)
     }
 
+    /// The extract query as given to `SqlBatchView::new`, `{begin}`/`{end}` placeholders included.
+    pub fn get_extract_query(&self) -> Arc<String> {
+        self.extract_query.clone()
+    }
+
     /// The merge query as given to `SqlBatchView::new`, `{source}` placeholder included.
     pub fn get_merge_partitions_query(&self) -> Arc<String> {
         self.merge_partitions_query.clone()

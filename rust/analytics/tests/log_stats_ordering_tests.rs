@@ -7,7 +7,10 @@
 //!
 //! It plans the shipped merge query itself over the view's own declared scan ordering rather than
 //! going through `View::merge_partitions`: the plan shape is what's under test, and executing the
-//! merge would only hide it behind a stream.
+//! merge would only hide it behind a stream. It also plans the shipped *extract* query and checks
+//! its output ordering, pinning the other half of the streaming contract: the top-level `ORDER BY`
+//! that `SqlPartitionSpec::execute_extract_query` requires before it will record a fresh
+//! partition's `sort_order` guarantee.
 
 use chrono::{TimeDelta, Utc};
 use datafusion::physical_plan::displayable;
@@ -17,10 +20,14 @@ use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
+use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
+use micromegas_analytics::lakehouse::partitioned_execution_plan::make_lex_ordering;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
+use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
-use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
+use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas_analytics::lakehouse::view::{ScanSortColumn, View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -145,5 +152,86 @@ async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
         !plan_str.contains("SortExec"),
         "log_stats' shipped merge query must stay a streaming k-way merge with no blocking sort, \
          got:\n{plan_str}"
+    );
+}
+
+/// Pins the other half of the streaming contract: the *extract* query's declared top-level
+/// `ORDER BY` (Design §3 of `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`). This is
+/// what `SqlPartitionSpec::execute_extract_query` (`sql_partition_spec.rs`) checks before recording
+/// a fresh partition's `sort_order`: a single-partition physical plan whose output ordering
+/// satisfies the declared `(time_bin, process_id, level, target)` columns. If line 43 of
+/// `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`) were dropped or reordered,
+/// that check would `anyhow::bail!` and every fresh `log_stats` materialization would fail -- this
+/// test catches that offline, without needing a live database.
+#[tokio::test]
+async fn log_stats_extract_query_satisfies_its_declared_sort_order() {
+    let lakehouse = make_offline_lakehouse_context().await;
+
+    let log_view_maker = LogViewMaker {};
+    let log_entries_view = log_view_maker
+        .make_view("global")
+        .expect("log_entries global view");
+    let mut view_factory = ViewFactory::new(vec![log_entries_view]);
+    view_factory.add_view_set(String::from("log_entries"), Arc::new(LogViewMaker {}));
+    let view_factory = Arc::new(view_factory);
+
+    let view = make_log_stats_view(
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        view_factory.clone(),
+    )
+    .await
+    .expect("make_log_stats_view");
+
+    // Mirrors how `SqlBatchView::make_batch_partition_spec` plans the extract query: an ordinary
+    // session context with `log_entries` (empty, via `NullPartitionProvider`) registered as a
+    // table, no live database involved.
+    let ctx = make_session_context(
+        lakehouse.clone(),
+        Arc::new(NullPartitionProvider {}),
+        None,
+        view_factory,
+        Arc::new(NoOpSessionConfigurator),
+        true,
+    )
+    .await
+    .expect("make_session_context");
+
+    let now_str = Utc::now().to_rfc3339();
+    let sql = view
+        .get_extract_query()
+        .replace("{begin}", &now_str)
+        .replace("{end}", &now_str);
+    let plan = ctx
+        .sql(&sql)
+        .await
+        .expect("planning log_stats' shipped extract query")
+        .create_physical_plan()
+        .await
+        .expect("create_physical_plan");
+
+    let partition_count = plan.properties().output_partitioning().partition_count();
+    assert_eq!(
+        partition_count, 1,
+        "a declared sort_order requires the extract query's physical plan to be single-partition, \
+         got {partition_count}"
+    );
+
+    let declared_columns = ["time_bin", "process_id", "level", "target"].map(|c| ScanSortColumn {
+        column: Arc::new(c.to_owned()),
+        descending: false,
+    });
+    let lex = make_lex_ordering(&plan.schema(), &declared_columns)
+        .expect("building the declared extract-query ordering")
+        .expect("declared sort_order columns must be non-empty");
+    let ordering_satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .expect("checking extract query plan output ordering");
+    assert!(
+        ordering_satisfied,
+        "log_stats' shipped extract query must produce output already ordered by \
+         (time_bin, process_id, level, target); check for a missing or reordered top-level ORDER BY"
     );
 }
