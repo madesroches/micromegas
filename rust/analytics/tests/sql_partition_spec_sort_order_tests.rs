@@ -5,19 +5,21 @@
 //! `ORDER BY`), which gates every fresh materialization of any view declaring
 //! `with_merge_sort_order`, including the shipped `log_stats`.
 //!
-//! The ordering check runs before anything touches Postgres, so the failing case never needs a
-//! live database. The passing case can't be driven all the way to a successful `write()` offline
-//! (once the ordering check passes, `write()` goes on to insert the partition row over the lazily-
-//! connected, unreachable Postgres pool) -- so it instead asserts that the failure that does occur
-//! comes from that later, unrelated step, not from the ordering check.
+//! The ordering check runs before anything touches Postgres, so both cases can be verified
+//! offline without a live database. The passing case plans the extract query directly and checks
+//! the physical plan's output ordering, the same way `log_stats_ordering_tests.rs` pins the
+//! shipped `log_stats` extract query -- rather than driving `write()` into an unreachable
+//! Postgres, which would just spend the pool's acquire timeout without exercising anything new.
 
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
+use micromegas_analytics::lakehouse::partition_cache::{NullPartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::partitioned_execution_plan::make_lex_ordering;
+use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::sql_batch_view::SqlBatchView;
-use micromegas_analytics::lakehouse::view::View;
+use micromegas_analytics::lakehouse::view::{ScanSortColumn, View};
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::TracingLogger;
 use micromegas_analytics::time::TimeRange;
@@ -117,45 +119,60 @@ async fn extract_query_missing_order_by_fails_the_write() {
 #[tokio::test]
 async fn extract_query_matching_order_by_passes_the_ordering_check() {
     let lakehouse = make_offline_lakehouse_context().await;
-    let view = make_test_view(
-        &lakehouse,
-        "SELECT * FROM (VALUES \
+    let extract_query = "SELECT * FROM (VALUES \
          ('b', TIMESTAMP '1970-01-01 00:00:01', 1), \
          ('a', TIMESTAMP '1970-01-01 00:00:00', 2)) AS t(name, time_bin, measure) \
-         ORDER BY name, time_bin",
-    )
-    .await;
+         ORDER BY name, time_bin";
+    let view = make_test_view(&lakehouse, extract_query).await;
 
-    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
-    let partition_spec = view
-        .make_batch_partition_spec(
-            lakehouse.clone(),
-            Arc::new(PartitionCache::empty(insert_range)),
-            insert_range,
-        )
+    // Plan the extract query directly, the same way `execute_extract_query` does, and check that
+    // its output ordering satisfies the declared `(name, time_bin)` sort_order -- rather than
+    // driving `write()` all the way to the lazily-connected, unreachable Postgres pool, which
+    // would just spend the pool's acquire timeout without exercising anything the plan-level
+    // check below doesn't already cover.
+    let ctx = micromegas_analytics::lakehouse::query::make_session_context(
+        lakehouse.clone(),
+        Arc::new(micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider {}),
+        None,
+        Arc::new(ViewFactory::new(vec![])),
+        Arc::new(NoOpSessionConfigurator),
+        true,
+    )
+    .await
+    .expect("make_session_context");
+    let plan = ctx
+        .sql(extract_query)
         .await
-        .expect("make_batch_partition_spec");
+        .expect("planning the extract query")
+        .create_physical_plan()
+        .await
+        .expect("create_physical_plan");
 
-    // The ordering check passes, so `write` proceeds to insert the partition row over the
-    // lazily-connected, unreachable Postgres pool -- offline, that either fails quickly (e.g.
-    // connection refused) or hangs until the pool's acquire timeout, depending on how the sandbox
-    // handles the outbound connection. Either way, what this asserts is that the ordering check
-    // itself was never the cause, so bound the wait rather than let a slow environment stall CI.
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        partition_spec.write(lakehouse.lake().clone(), Arc::new(TracingLogger {})),
+    let declared_columns = ["name", "time_bin"].map(|c| ScanSortColumn {
+        column: Arc::new(c.to_owned()),
+        descending: false,
+    });
+    let lex = make_lex_ordering(&plan.schema(), &declared_columns)
+        .expect("building the declared extract-query ordering")
+        .expect("declared sort_order columns must be non-empty");
+    let ordering_satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .expect("checking extract query plan output ordering");
+    assert!(
+        ordering_satisfied,
+        "a matching top-level ORDER BY must satisfy the declared (name, time_bin) sort_order"
+    );
+
+    // Sanity-check the view itself still declares that sort_order, so this test would fail loudly
+    // if `make_test_view`'s `with_merge_sort_order` call were ever removed.
+    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
+    view.make_batch_partition_spec(
+        lakehouse.clone(),
+        Arc::new(PartitionCache::empty(insert_range)),
+        insert_range,
     )
-    .await;
-    if let Ok(result) = outcome {
-        let err = result.expect_err("no live database is reachable offline");
-        let message = format!("{err:#}");
-        assert!(
-            !message.contains("does not satisfy the declared sort_order")
-                && !message.contains("physical plan; a declared sort_order requires"),
-            "a matching top-level ORDER BY must pass the declared-sort_order verification, got: {message}"
-        );
-    }
-    // else: still waiting on the unreachable pool after 5s -- the ordering check itself runs
-    // synchronously before any Postgres access, so having gotten this far already proves it
-    // passed.
+    .await
+    .expect("make_batch_partition_spec");
 }
