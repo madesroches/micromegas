@@ -669,6 +669,9 @@ pub async fn write_partition_from_rows(
         // Explicitly enable page-level statistics for clarity (this is the default in Arrow 57.0+)
         // This generates ColumnIndex structures with proper null_pages field
         .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+        // 8x finer than the 1 Mi default, so a clustered sort key (tasks/completed/1392_kway_merge_sorted_partitions_plan.md
+        // Design §6) actually pays off in row-group pruning; only affects newly written partitions.
+        .set_max_row_group_row_count(Some(128 * 1024))
         .build();
     let mut arrow_writer =
         AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))

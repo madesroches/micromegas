@@ -3,7 +3,9 @@ use super::{
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
-    partitioned_execution_plan::OrderingBounds,
+    partitioned_execution_plan::{
+        ScanOrdering, assert_ordering_satisfied, assert_single_partition,
+    },
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
     session_configurator::SessionConfigurator,
@@ -32,10 +34,14 @@ pub struct MergeQueryResult {
     /// The merged rows.
     pub stream: SendableRecordBatchStream,
     /// Whether the merger's declared scan ordering (if any) was honored by the physical plan
-    /// without falling back to a buffering `Sort`/`SortPreservingMerge` node. Always `true` when
-    /// no ordering was declared to DataFusion in the first place -- it is only ever computed
-    /// dynamically by an ordering-declaring `QueryMerger`. This drives only a memory-regression
-    /// warning; it never gates the recorded `sort_order` (see `View::get_merged_partition_sort_order`).
+    /// without falling back to a buffering `Sort` node. Always `true` when no ordering was
+    /// declared to DataFusion in the first place -- it is only ever computed dynamically by an
+    /// ordering-declaring `QueryMerger`. This drives only a memory-regression warning; it never
+    /// gates the recorded `sort_order` (see `View::get_merged_partition_sort_order`).
+    ///
+    /// For `ScanOrdering::PerFile`, a surviving `SortPreservingMergeExec` is the *expected*
+    /// operator, not a regression -- only a surviving `SortExec` means the streaming shape was
+    /// lost. For `ScanOrdering::Concatenated`, either operator surviving is a regression.
     pub ordering_honored: bool,
 }
 
@@ -59,7 +65,7 @@ pub struct QueryMerger {
     session_configurator: Arc<dyn SessionConfigurator>,
     file_schema: Arc<Schema>,
     query: Arc<String>,
-    merge_scan_ordering: Vec<ScanSortColumn>,
+    merge_scan_ordering: ScanOrdering,
 }
 
 impl QueryMerger {
@@ -74,17 +80,164 @@ impl QueryMerger {
             session_configurator,
             file_schema,
             query,
-            merge_scan_ordering: vec![],
+            merge_scan_ordering: ScanOrdering::Unordered,
         }
     }
 
     /// Declares an ordering the merge's source scan already satisfies (see
-    /// `PartitionedTableProvider::with_ordering`), letting DataFusion elide the merge query's
-    /// `Sort` node instead of buffering. Default: empty (no declared ordering, matching today's
-    /// behavior for every existing caller).
-    pub fn with_merge_scan_ordering(mut self, ordering: Vec<ScanSortColumn>) -> Self {
+    /// `PartitionedTableProvider::with_scan_ordering`), letting DataFusion elide the merge query's
+    /// `Sort` node instead of buffering. Default: `Unordered` (matching today's behavior for every
+    /// existing caller).
+    pub fn with_merge_scan_ordering(mut self, ordering: ScanOrdering) -> Self {
         self.merge_scan_ordering = ordering;
         self
+    }
+
+    /// The `Concatenated` merge path (unchanged from before `ScanOrdering` existed): force the
+    /// source scan into a single sequential file group so the declared ordering can be elided
+    /// instead of re-sorted, then build the physical plan once, inspect it, and execute that exact
+    /// plan -- never planning or building twice.
+    async fn execute_concatenated_merge(
+        &self,
+        ctx: &SessionContext,
+        insert_range: TimeRange,
+    ) -> Result<MergeQueryResult> {
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .optimizer
+            .repartition_file_scans = false;
+
+        let df = ctx.sql(&self.query).await?;
+        let task_ctx = Arc::new(df.task_ctx());
+        let plan = df
+            .create_physical_plan()
+            .await
+            .with_context(|| "creating physical plan for merge query")?;
+
+        assert_single_partition(
+            &plan,
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            "executing it would coalesce partitions and destroy the declared ordering. This \
+             likely means repartition_file_scans did not take effect.",
+        )?;
+
+        let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+        let ordering_honored =
+            !plan_str.contains("SortExec") && !plan_str.contains("SortPreservingMergeExec");
+        if !ordering_honored {
+            warn!(
+                "merge query {:?} (insert_range=[{}, {}]) did not elide its declared ordering -- \
+                 the merge will still produce a correctly ordered result, but it will buffer in \
+                 memory instead of streaming. Plan:\n{plan_str}",
+                self.query,
+                insert_range.begin.to_rfc3339(),
+                insert_range.end.to_rfc3339()
+            );
+        }
+
+        let stream =
+            execute_stream(plan, task_ctx).with_context(|| "executing merge query plan")?;
+        Ok(MergeQueryResult {
+            stream,
+            ordering_honored,
+        })
+    }
+
+    /// The `PerFile` k-way merge path (Design §2 of
+    /// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): five optimizer settings keep the merge
+    /// a bounded-memory streaming k-way merge instead of fanning out to `target_partitions`, an
+    /// unconditional logical-plan `DataFrame::sort` makes the declared ordering a property of the
+    /// query plan rather than of an optimizer preference (so a wrong or missing merge-query sort
+    /// is not representable), and three checks -- two hard, one warn-only -- run against the
+    /// physical plan before it is executed.
+    async fn execute_per_file_merge(
+        &self,
+        ctx: &SessionContext,
+        columns: &[ScanSortColumn],
+        insert_range: TimeRange,
+    ) -> Result<MergeQueryResult> {
+        {
+            let state = ctx.state_ref();
+            let mut state = state.write();
+            let optimizer = &mut state.config_mut().options_mut().optimizer;
+            optimizer.repartition_file_scans = false;
+            optimizer.enable_round_robin_repartition = false;
+            optimizer.repartition_aggregations = false;
+            optimizer.prefer_existing_sort = true;
+            optimizer.repartition_joins = false;
+        }
+
+        let df = ctx.sql(&self.query).await?;
+        let df = df.sort(
+            columns
+                .iter()
+                .map(|c| {
+                    Expr::Column(datafusion::common::Column::new_unqualified(
+                        c.column.as_str(),
+                    ))
+                    .sort(!c.descending, c.descending)
+                })
+                .collect(),
+        )?;
+        let task_ctx = Arc::new(df.task_ctx());
+        let plan = df
+            .create_physical_plan()
+            .await
+            .with_context(|| "creating physical plan for per-file merge query")?;
+
+        // Check 1 (hard): execute_stream would otherwise coalesce partitions and destroy order.
+        assert_single_partition(
+            &plan,
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            "executing it would coalesce partitions and destroy the declared ordering. This \
+             likely means repartition_aggregations or enable_round_robin_repartition did not \
+             take effect, or the merge query is missing a collapsing operator (e.g. a \
+             SortPreservingMergeExec) to bring the per-file partitions back to one.",
+        )?;
+
+        // Check 2 (hard): the plan's output ordering must satisfy the declared columns -- a
+        // defensive assertion that the sort_order about to be recorded is truthful. This has no
+        // author-reachable failure path under this design (the sort above is applied
+        // unconditionally): it is a backstop against a future DataFusion regression, not against
+        // author error.
+        assert_ordering_satisfied(
+            &plan,
+            columns,
+            "per-file merge",
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            &format!(
+                "the declared per-file merge columns {columns:?}; refusing to record a false \
+                 sort_order guarantee."
+            ),
+        )?;
+
+        // Check 3 (warn-only): a SortPreservingMergeExec is the *expected* operator here -- only
+        // a surviving SortExec signals the streaming shape regressed (memory, not correctness --
+        // check 2 already proved the output order).
+        let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+        let ordering_honored = !plan_str.contains("SortExec");
+        if !ordering_honored {
+            warn!(
+                "merge query {:?} (insert_range=[{}, {}]) did not elide its declared per-file \
+                 ordering -- the merge will still produce a correctly ordered result, but it will \
+                 buffer in memory instead of streaming. Plan:\n{plan_str}",
+                self.query,
+                insert_range.begin.to_rfc3339(),
+                insert_range.end.to_rfc3339()
+            );
+        }
+
+        let stream = execute_stream(plan, task_ctx)
+            .with_context(|| "executing per-file merge query plan")?;
+        Ok(MergeQueryResult {
+            stream,
+            ordering_honored,
+        })
     }
 }
 
@@ -107,12 +260,11 @@ impl PartitionMerger for QueryMerger {
             true,
         )
         .await?;
-        let src_table = PartitionedTableProvider::with_ordering(
+        let src_table = PartitionedTableProvider::with_scan_ordering(
             self.file_schema.clone(),
             reader_factory,
             partitions_to_merge,
             self.merge_scan_ordering.clone(),
-            OrderingBounds::InsertTime,
         );
         ctx.register_table(
             TableReference::Bare {
@@ -121,69 +273,27 @@ impl PartitionMerger for QueryMerger {
             Arc::new(src_table),
         )?;
 
-        if self.merge_scan_ordering.is_empty() {
-            let stream = ctx
-                .sql(&self.query)
-                .await?
-                .execute_stream()
-                .await
-                .with_context(|| "merged_df.execute_stream")?;
-            return Ok(MergeQueryResult {
-                stream,
-                ordering_honored: true,
-            });
+        match &self.merge_scan_ordering {
+            ScanOrdering::Unordered => {
+                let stream = ctx
+                    .sql(&self.query)
+                    .await?
+                    .execute_stream()
+                    .await
+                    .with_context(|| "merged_df.execute_stream")?;
+                Ok(MergeQueryResult {
+                    stream,
+                    ordering_honored: true,
+                })
+            }
+            ScanOrdering::Concatenated { .. } => {
+                self.execute_concatenated_merge(&ctx, insert_range).await
+            }
+            ScanOrdering::PerFile { columns } => {
+                self.execute_per_file_merge(&ctx, columns, insert_range)
+                    .await
+            }
         }
-
-        // Ordering-declared merge: force the source scan into a single sequential file group
-        // (Design §1 point 3) so the declared ordering can be elided instead of re-sorted, then
-        // build the physical plan once, inspect it, and execute that exact plan -- never
-        // planning or building twice.
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .optimizer
-            .repartition_file_scans = false;
-
-        let df = ctx.sql(&self.query).await?;
-        let task_ctx = Arc::new(df.task_ctx());
-        let plan = df
-            .create_physical_plan()
-            .await
-            .with_context(|| "creating physical plan for merge query")?;
-
-        let partition_count = plan.properties().output_partitioning().partition_count();
-        if partition_count != 1 {
-            anyhow::bail!(
-                "merge query {:?} (insert_range=[{}, {}]) produced a {partition_count}-partition \
-                 physical plan; executing it would coalesce partitions and destroy the declared \
-                 ordering. This likely means repartition_file_scans did not take effect.",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
-
-        let plan_str = displayable(plan.as_ref()).indent(true).to_string();
-        let ordering_honored =
-            !plan_str.contains("SortExec") && !plan_str.contains("SortPreservingMergeExec");
-        if !ordering_honored {
-            warn!(
-                "merge query {:?} (insert_range=[{}, {}]) did not elide its declared ordering -- \
-                 the merge will still produce a correctly ordered result, but it will buffer in \
-                 memory instead of streaming. Plan:\n{plan_str}",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
-
-        let stream =
-            execute_stream(plan, task_ctx).with_context(|| "executing merge query plan")?;
-        Ok(MergeQueryResult {
-            stream,
-            ordering_honored,
-        })
     }
 }
 

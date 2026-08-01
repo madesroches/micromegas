@@ -1,4 +1,4 @@
-use super::view::ViewMetadata;
+use super::view::{ScanSortColumn, ViewMetadata};
 use crate::time::TimeRange;
 use chrono::{DateTime, Utc};
 
@@ -53,6 +53,32 @@ impl Partition {
     /// Returns the end of the insert time range.
     pub fn end_insert_time(&self) -> DateTime<Utc> {
         self.insert_time_range.end
+    }
+
+    /// True when this partition's recorded `sort_order` certifies `columns` as an ordering its
+    /// rows already satisfy: `columns` (ascending-only) must name a prefix of the recorded,
+    /// ascending-implied sort order. Empty partitions certify vacuously -- there are no rows to
+    /// violate the ordering. An empty (non-empty-partition) `columns` never certifies: it names no
+    /// ordering to satisfy, so declaring it certified would let a `ScanOrdering::PerFile { columns:
+    /// vec![] }` degrade to `Unordered` instead of silently planning and recording a vacuous
+    /// ordering (see `ScanOrdering::PerFile`).
+    pub fn certifies_sort_order(&self, columns: &[ScanSortColumn]) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        if columns.is_empty() {
+            return false;
+        }
+        let Some(recorded) = &self.sort_order else {
+            return false;
+        };
+        columns.len() <= recorded.len()
+            && columns
+                .iter()
+                .zip(recorded.iter())
+                .all(|(declared, recorded_col)| {
+                    !declared.descending && *declared.column == *recorded_col
+                })
     }
 
     /// Validates partition invariants. Returns error if partition is inconsistent.

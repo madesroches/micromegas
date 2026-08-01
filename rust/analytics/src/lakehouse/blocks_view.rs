@@ -6,6 +6,7 @@ use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition::Partition,
     partition_cache::PartitionCache,
+    partitioned_execution_plan::{OrderingBounds, ScanOrdering},
     session_configurator::NoOpSessionConfigurator,
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
@@ -77,10 +78,13 @@ impl BlocksView {
                 schema.clone(),
                 Arc::new(String::from("SELECT * FROM source ORDER BY insert_time;")),
             )
-            .with_merge_scan_ordering(vec![ScanSortColumn {
-                column: Arc::new(String::from("insert_time")),
-                descending: false,
-            }]),
+            .with_merge_scan_ordering(ScanOrdering::Concatenated {
+                columns: vec![ScanSortColumn {
+                    column: Arc::new(String::from("insert_time")),
+                    descending: false,
+                }],
+                bounds: OrderingBounds::InsertTime,
+            }),
         );
         let plain_merger: Arc<dyn PartitionMerger> = Arc::new(QueryMerger::new(
             empty_view_factory,

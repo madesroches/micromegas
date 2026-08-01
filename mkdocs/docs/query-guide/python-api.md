@@ -497,7 +497,7 @@ client.materialize_partitions(
 !!! note "Requires admin"
     Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
 
-Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced):
+Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced, or a `SqlBatchView` such as `log_stats` whose live partitions predate it declaring a merge sort order):
 
 ```python
 # Regenerate yesterday's daily blocks partition
@@ -516,6 +516,8 @@ client.regenerate_partitions(
 ```
 
 **Warning:** `(begin, end, partition_delta_seconds)` must exactly cover an existing partition's boundaries, or the call fails loudly instead of silently creating a duplicate partition. This is an admin/rollout tool -- run calls serially, never with overlapping ranges in flight concurrently.
+
+For a `SqlBatchView`, the bucket size is dictated by the existing partition's boundaries, not freely choosable: an already-large, merged partition can only be regenerated as one equally large bucket, and its extract query's required `ORDER BY` then sorts that whole bucket's aggregated output in a single blocking pass. There is no smaller `partition_delta_seconds` that avoids this once a partition has already grown large -- retire it (`retire_partitions`) and re-materialize at a smaller delta instead.
 
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
 

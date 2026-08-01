@@ -7,6 +7,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
+    partitioned_execution_plan::{OrderingBounds, ScanOrdering},
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::{ViewFactory, ViewMaker},
 };
@@ -355,10 +356,13 @@ impl View for ThreadSpansView {
         None
     }
 
-    fn get_scan_output_ordering(&self) -> Vec<ScanSortColumn> {
-        vec![ScanSortColumn {
-            column: MIN_TIME_COLUMN.clone(),
-            descending: false,
-        }]
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        ScanOrdering::Concatenated {
+            columns: vec![ScanSortColumn {
+                column: MIN_TIME_COLUMN.clone(),
+                descending: false,
+            }],
+            bounds: OrderingBounds::EventTime,
+        }
     }
 }

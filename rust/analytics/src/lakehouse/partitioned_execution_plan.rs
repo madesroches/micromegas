@@ -1,5 +1,9 @@
 use super::{partition::Partition, reader_factory::ReaderFactory, view::ScanSortColumn};
-use crate::{dfext::predicate::filters_to_predicate, time::datetime_to_scalar};
+use crate::{
+    dfext::predicate::filters_to_predicate,
+    time::{TimeRange, datetime_to_scalar},
+};
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{compute::SortOptions, datatypes::SchemaRef},
@@ -105,9 +109,31 @@ fn attach_ordering_statistics(
     Ok(file)
 }
 
+/// How a partition scan's declared output ordering is realized.
+#[derive(Clone, Debug)]
+pub enum ScanOrdering {
+    /// No declared ordering (today's default).
+    Unordered,
+    /// All files form one sequential file group that concatenates in globally-sorted order.
+    /// Requires non-overlapping leading-column bounds (checked against `bounds`).
+    Concatenated {
+        columns: Vec<ScanSortColumn>,
+        bounds: OrderingBounds,
+    },
+    /// Each file is internally sorted by `columns`; files may overlap arbitrarily. The scan
+    /// yields one ordered plan partition per file, for a downstream `SortPreservingMergeExec`.
+    /// `columns` should be non-empty -- `SqlBatchView::with_merge_sort_order` rejects an empty
+    /// list at construction, but this enum and `View::get_scan_output_ordering` are public, so
+    /// that is not the only construction path. An empty `columns` is still safe: it never
+    /// certifies (see `Partition::certifies_sort_order`), so `make_partitioned_execution_plan`
+    /// degrades it to `Unordered` for any non-empty partition rather than planning and recording a
+    /// vacuous ordering.
+    PerFile { columns: Vec<ScanSortColumn> },
+}
+
 /// Builds the `LexOrdering` declaring the already-satisfied output ordering of the scan, matching
 /// DataFusion's default `ORDER BY` semantics (ASC NULLS LAST unless `descending`).
-fn make_lex_ordering(
+pub fn make_lex_ordering(
     schema: &SchemaRef,
     output_ordering: &[ScanSortColumn],
 ) -> datafusion::error::Result<Option<LexOrdering>> {
@@ -132,15 +158,86 @@ fn make_lex_ordering(
     Ok(LexOrdering::new(sort_exprs))
 }
 
+/// Bails unless `plan` is a single-partition physical plan. `subject` names the query for the
+/// error message (e.g. `format!("merge query {:?}", query)` or `format!("extract query for
+/// {view}")`); `reason` supplies the full, call-site-specific trailing sentence(s) explaining what
+/// a non-single-partition plan means here -- executing such a plan would coalesce partitions and
+/// silently destroy a declared ordering before it is safe to record or execute. Shared by the
+/// three query-execution paths that must verify this before executing (Design §2/§3 of
+/// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): `QueryMerger::execute_concatenated_merge`,
+/// `QueryMerger::execute_per_file_merge`, and `SqlPartitionSpec::execute_extract_query`.
+pub fn assert_single_partition(
+    plan: &Arc<dyn ExecutionPlan>,
+    subject: &str,
+    insert_range: TimeRange,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let partition_count = plan.properties().output_partitioning().partition_count();
+    if partition_count != 1 {
+        anyhow::bail!(
+            "{subject} (insert_range=[{}, {}]) produced a {partition_count}-partition physical \
+             plan; {reason}",
+            insert_range.begin.to_rfc3339(),
+            insert_range.end.to_rfc3339()
+        );
+    }
+    Ok(())
+}
+
+/// Bails unless `plan`'s output ordering satisfies the declared `columns`, defensively
+/// re-verifying that a `sort_order` guarantee about to be recorded on a fresh partition is
+/// truthful. `label` is a short noun phrase used in the intermediate error-context messages (e.g.
+/// `"per-file merge"` or `"extract-query"`); `subject` names the query for the bail message;
+/// `reason` supplies the full, call-site-specific trailing text of the bail message (what was
+/// declared, and any guidance for diagnosing a mismatch). Shared by the two paths that record a
+/// `sort_order` guarantee (Design §2/§3): `QueryMerger::execute_per_file_merge` and
+/// `SqlPartitionSpec::execute_extract_query`. `QueryMerger::execute_concatenated_merge` does not
+/// call this -- its ordering is a structural property of the sorted, non-overlapping file group
+/// rather than a query-plan sort DataFusion could get wrong.
+pub fn assert_ordering_satisfied(
+    plan: &Arc<dyn ExecutionPlan>,
+    columns: &[ScanSortColumn],
+    label: &str,
+    subject: &str,
+    insert_range: TimeRange,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let lex = make_lex_ordering(&plan.schema(), columns)
+        .with_context(|| format!("building the declared {label} ordering"))?
+        .with_context(|| format!("declared {label} columns must be non-empty"))?;
+    let ordering_satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .with_context(|| format!("checking {label} plan output ordering"))?;
+    if !ordering_satisfied {
+        anyhow::bail!(
+            "{subject} (insert_range=[{}, {}]) produced a physical plan whose output ordering \
+             does not satisfy {reason}",
+            insert_range.begin.to_rfc3339(),
+            insert_range.end.to_rfc3339()
+        );
+    }
+    Ok(())
+}
+
 /// Creates a partitioned execution plan for scanning Parquet files.
 ///
-/// `output_ordering` declares an ordering the scan's rows already satisfy (see
-/// `View::get_scan_output_ordering`). When non-empty, the file group is sorted by the leading
-/// column's bound (read per `ordering_bounds`) and checked for non-overlap (erroring if
-/// violated), per-file min/max statistics are attached so DataFusion accepts the declared
-/// ordering, and the ordering is attached to the resulting `FileScanConfig` so `EnforceSorting`
-/// can elide a redundant `Sort` node. When empty, behavior is unchanged from before this
-/// parameter existed, and `ordering_bounds` is unused.
+/// `scan_ordering` declares how the scan's already-satisfied ordering (see
+/// `View::get_scan_output_ordering`), if any, is realized:
+/// - `Unordered`: behavior is unchanged from before this parameter existed.
+/// - `Concatenated { columns, bounds }`: the file group is sorted by the leading column's bound
+///   (read per `bounds`) and checked for non-overlap (erroring if violated), per-file min/max
+///   statistics are attached so DataFusion accepts the declared ordering, and the ordering is
+///   attached to the resulting `FileScanConfig` so `EnforceSorting` can elide a redundant `Sort`
+///   node.
+/// - `PerFile { columns }`: gated by `Partition::certifies_sort_order` -- if every non-empty
+///   partition's recorded `sort_order` certifies `columns`, each non-empty partition becomes its
+///   own single-file group (no overlap check, no per-file statistics -- DataFusion's multi-file-group
+///   ordering validation only needs those to prove cross-file order *within* a group, and
+///   single-file groups pass trivially), all declaring the same `columns` ordering for a
+///   downstream `SortPreservingMergeExec`. If any non-empty partition fails to certify, this
+///   degrades to the same plan shape as `Unordered`.
 #[span_fn]
 #[expect(clippy::too_many_arguments)]
 pub fn make_partitioned_execution_plan(
@@ -151,19 +248,73 @@ pub fn make_partitioned_execution_plan(
     filters: &[Expr],
     limit: Option<usize>,
     partitions: Arc<Vec<Partition>>,
-    output_ordering: &[ScanSortColumn],
-    ordering_bounds: OrderingBounds,
+    scan_ordering: &ScanOrdering,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let predicate = filters_to_predicate(schema.clone(), state, filters)?;
 
     let non_empty_partitions: Vec<&Partition> =
         partitions.iter().filter(|p| !p.is_empty()).collect();
-    let non_empty_partitions = if output_ordering.is_empty() {
-        non_empty_partitions
-    } else {
-        sort_and_check_non_overlapping(non_empty_partitions, ordering_bounds)?
+
+    // A PerFile declaration that any non-empty partition does not certify degrades to Unordered:
+    // both consumers (user-query scans and merge scans) fall back to sorting rather than trust a
+    // stale or uncertified guarantee.
+    let scan_ordering = match scan_ordering {
+        ScanOrdering::PerFile { columns }
+            if !non_empty_partitions
+                .iter()
+                .all(|p| p.certifies_sort_order(columns)) =>
+        {
+            &ScanOrdering::Unordered
+        }
+        other => other,
     };
 
+    match scan_ordering {
+        ScanOrdering::Unordered => build_unordered_or_concatenated_plan(
+            schema,
+            reader_factory,
+            predicate,
+            projection,
+            limit,
+            non_empty_partitions,
+            None,
+        ),
+        ScanOrdering::Concatenated { columns, bounds } => {
+            let non_empty_partitions =
+                sort_and_check_non_overlapping(non_empty_partitions, *bounds)?;
+            build_unordered_or_concatenated_plan(
+                schema,
+                reader_factory,
+                predicate,
+                projection,
+                limit,
+                non_empty_partitions,
+                Some((columns.as_slice(), *bounds)),
+            )
+        }
+        ScanOrdering::PerFile { columns } => build_per_file_plan(
+            schema,
+            reader_factory,
+            predicate,
+            projection,
+            limit,
+            non_empty_partitions,
+            columns,
+        ),
+    }
+}
+
+/// Builds the `Unordered` (`ordering: None`) and `Concatenated` (`ordering: Some((columns,
+/// bounds))`) scan shapes: every non-empty partition in one sequential file group.
+fn build_unordered_or_concatenated_plan(
+    schema: SchemaRef,
+    reader_factory: Arc<ReaderFactory>,
+    predicate: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+    projection: Option<&Vec<usize>>,
+    limit: Option<usize>,
+    non_empty_partitions: Vec<&Partition>,
+    ordering: Option<(&[ScanSortColumn], OrderingBounds)>,
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let mut file_group = vec![];
     for part in &non_empty_partitions {
         let file_path = part.file_path.as_ref().ok_or_else(|| {
@@ -173,7 +324,9 @@ pub fn make_partitioned_execution_plan(
             ))
         })?;
         let mut pf = PartitionedFile::new(file_path, part.file_size as u64);
-        if let Some(leading_column) = output_ordering.first() {
+        if let Some((output_ordering, ordering_bounds)) = ordering
+            && let Some(leading_column) = output_ordering.first()
+        {
             pf = attach_ordering_statistics(pf, &schema, leading_column, part, ordering_bounds)?;
         }
         file_group.push(pf);
@@ -181,13 +334,7 @@ pub fn make_partitioned_execution_plan(
 
     // If all partitions are empty, return EmptyExec with projected schema
     if file_group.is_empty() {
-        use datafusion::physical_plan::empty::EmptyExec;
-        let projected_schema = if let Some(projection) = projection {
-            Arc::new(schema.project(projection)?)
-        } else {
-            schema
-        };
-        return Ok(Arc::new(EmptyExec::new(projected_schema)));
+        return empty_exec(schema, projection);
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
@@ -201,9 +348,70 @@ pub fn make_partitioned_execution_plan(
         .with_projection_indices(projection.cloned())?
         .with_file_groups(vec![file_group.into()]);
 
-    if let Some(lex) = make_lex_ordering(&schema, output_ordering)? {
+    if let Some((output_ordering, _)) = ordering
+        && let Some(lex) = make_lex_ordering(&schema, output_ordering)?
+    {
         builder = builder.with_output_ordering(vec![lex]);
     }
     let file_scan_config = builder.build();
     Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
+}
+
+/// Builds the `PerFile` scan shape: one single-file file group per non-empty partition, all
+/// declaring the same `columns` ordering. No overlap check and no per-file statistics -- see the
+/// module-level rustdoc on `ScanOrdering::PerFile`.
+fn build_per_file_plan(
+    schema: SchemaRef,
+    reader_factory: Arc<ReaderFactory>,
+    predicate: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+    projection: Option<&Vec<usize>>,
+    limit: Option<usize>,
+    non_empty_partitions: Vec<&Partition>,
+    columns: &[ScanSortColumn],
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    let mut file_groups = vec![];
+    for part in &non_empty_partitions {
+        let file_path = part.file_path.as_ref().ok_or_else(|| {
+            datafusion::error::DataFusionError::Internal(format!(
+                "non-empty partition has no file_path: num_rows={}",
+                part.num_rows
+            ))
+        })?;
+        let pf = PartitionedFile::new(file_path, part.file_size as u64);
+        file_groups.push(vec![pf].into());
+    }
+
+    if file_groups.is_empty() {
+        return empty_exec(schema, projection);
+    }
+
+    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
+    let source = Arc::new(
+        ParquetSource::new(schema.clone())
+            .with_predicate(predicate)
+            .with_parquet_file_reader_factory(reader_factory),
+    );
+    let mut builder = FileScanConfigBuilder::new(object_store_url, source)
+        .with_limit(limit)
+        .with_projection_indices(projection.cloned())?
+        .with_file_groups(file_groups);
+
+    if let Some(lex) = make_lex_ordering(&schema, columns)? {
+        builder = builder.with_output_ordering(vec![lex]);
+    }
+    let file_scan_config = builder.build();
+    Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
+}
+
+fn empty_exec(
+    schema: SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_plan::empty::EmptyExec;
+    let projected_schema = if let Some(projection) = projection {
+        Arc::new(schema.project(projection)?)
+    } else {
+        schema
+    };
+    Ok(Arc::new(EmptyExec::new(projected_schema)))
 }

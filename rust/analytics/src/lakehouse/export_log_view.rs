@@ -197,6 +197,7 @@ impl View for ExportLogView {
                 extract_sql,
                 view_meta,
                 insert_range,
+                None,
             )
             .await
             .with_context(|| "fetch_sql_partition_spec")?,

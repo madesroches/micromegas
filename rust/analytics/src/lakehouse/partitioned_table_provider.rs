@@ -1,8 +1,7 @@
 use super::{
     partition::Partition,
-    partitioned_execution_plan::{OrderingBounds, make_partitioned_execution_plan},
+    partitioned_execution_plan::{ScanOrdering, make_partitioned_execution_plan},
     reader_factory::ReaderFactory,
-    view::ScanSortColumn,
 };
 use async_trait::async_trait;
 use datafusion::{
@@ -20,8 +19,7 @@ pub struct PartitionedTableProvider {
     schema: SchemaRef,
     reader_factory: Arc<ReaderFactory>,
     partitions: Arc<Vec<Partition>>,
-    output_ordering: Vec<ScanSortColumn>,
-    ordering_bounds: OrderingBounds,
+    scan_ordering: ScanOrdering,
 }
 
 impl std::fmt::Debug for PartitionedTableProvider {
@@ -43,27 +41,23 @@ impl PartitionedTableProvider {
             schema,
             reader_factory,
             partitions,
-            output_ordering: vec![],
-            ordering_bounds: OrderingBounds::EventTime,
+            scan_ordering: ScanOrdering::Unordered,
         }
     }
 
-    /// Builds a `PartitionedTableProvider` that declares `output_ordering` as an ordering the
-    /// scan's rows already satisfy, checked against `ordering_bounds` (see
-    /// `make_partitioned_execution_plan`).
-    pub fn with_ordering(
+    /// Builds a `PartitionedTableProvider` that declares `scan_ordering` as an ordering the
+    /// scan's rows already satisfy (see `make_partitioned_execution_plan`).
+    pub fn with_scan_ordering(
         schema: SchemaRef,
         reader_factory: Arc<ReaderFactory>,
         partitions: Arc<Vec<Partition>>,
-        output_ordering: Vec<ScanSortColumn>,
-        ordering_bounds: OrderingBounds,
+        scan_ordering: ScanOrdering,
     ) -> Self {
         Self {
             schema,
             reader_factory,
             partitions,
-            output_ordering,
-            ordering_bounds,
+            scan_ordering,
         }
     }
 }
@@ -93,8 +87,7 @@ impl TableProvider for PartitionedTableProvider {
             filters,
             limit,
             self.partitions.clone(),
-            &self.output_ordering,
-            self.ordering_bounds,
+            &self.scan_ordering,
         )
     }
 

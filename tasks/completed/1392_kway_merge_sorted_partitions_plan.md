@@ -1,0 +1,995 @@
+# Order-Preserving K-Way Merge for Non-Temporal Sort Keys Plan
+
+[#1392](https://github.com/madesroches/micromegas/issues/1392) — follow-up to #1340/#1336.
+
+## Overview
+
+### Motivating use case
+
+The concrete driver is an **aggregate metrics view**: a `SqlBatchView` rolling `measures` up into
+per-metric, per-time-bucket aggregates, whose useful output sort key is
+**`(name, time_bin)`** — metric name first, time second. `name` is the high-cardinality,
+non-temporal clustering key: every partition spans the full set of metric names, so partitions
+overlap totally on the leading sort column and the #1340 concatenation machinery cannot apply. Its
+merges today need a full blocking `SortExec` over the whole range.
+
+`(metric name, time_bin)` is what the design is validated against — the Phase 0 spike uses that
+exact shape, including `name` as `Dictionary(Int32, Utf8)` per `metrics_table_schema()`. **The
+mechanism itself is fully general**: nothing in `ScanOrdering::PerFile`, `QueryMerger`, or
+`SqlBatchView::with_merge_sort_order` knows about metrics, names, or time buckets. Any view whose
+partitions are internally sorted on any ascending column list can declare it. The view-author contract
+(Design §5) is the only thing a new adopter has to satisfy.
+
+The metrics view itself is configured downstream and is **not** in this repo (Open Question 3), so
+without an in-repo adopter the feature would ship exercised only by tests. **`log_stats` is therefore
+adopted as part of this plan** — see Design §7. It is a genuine beneficiary, not a token one, and it
+gives the mechanism a dogfooding target on the same rollout it introduces.
+
+The view groups **strictly by the two declared sort columns** and carries dimension columns through
+as aggregates rather than as extra group keys — `first_value(unit)` rather than `GROUP BY ..., unit`:
+
+```sql
+-- extract query, over `measures`
+SELECT name, date_bin('1 minute', time) AS time_bin, first_value(unit) AS unit, sum(value) AS total
+FROM measures
+WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+GROUP BY name, time_bin
+ORDER BY name, time_bin
+
+-- merge query, over the view's own partitions (same output columns, same GROUP BY shape --
+-- with_merge_sort_order's declared columns drive a sort QueryMerger applies as a DataFusion
+-- logical-plan node, not as SQL text, so no ORDER BY is written here)
+SELECT name, time_bin, first_value(unit) AS unit, sum(total) AS total
+FROM {source}
+GROUP BY name, time_bin
+```
+
+with `.with_merge_sort_order(vec![Arc::new("name".to_string()), Arc::new("time_bin".to_string())])`
+(column names, ascending-only — see Design §3). Verified to plan as the fully
+streaming `ordering_mode=Sorted` shape of §5 — also with `first_value(unit ORDER BY time_bin)` and
+with a fuller measure set (`count`/`min`/`max`/`avg`/`sum`). Two notes on this choice:
+
+- Grouping by an extra key outside the sort order (`GROUP BY name, unit, time_bin`) is *also*
+  supported — it degrades to `ordering_mode=PartiallySorted`, which still streams and still bounds
+  the working set to the current `(name, time_bin)` prefix. Grouping strictly by the sort columns
+  just gets the tighter `Sorted` mode. Either is fine; the spike covers both.
+- `first_value` with no explicit inner `ORDER BY` is semantically unpinned (it takes whatever row
+  the merge yields first). That is harmless for `unit`, which is functionally dependent on `name`,
+  but a column that genuinely varies within a group should use an explicit
+  `first_value(x ORDER BY …)` — which the spike confirms costs nothing in plan shape.
+
+### Mechanism
+
+A `SqlBatchView` whose desired output sort key does not lead with the event/insert-time column
+cannot use the ordering machinery from #1340: that machinery models the merge source as a single
+concatenated sorted stream, which requires partitions to be non-overlapping on the leading sort
+column — impossible for a non-temporal, high-value clustering key (e.g. a metric name) that every
+partition spans. Merging such views today requires a full blocking `SortExec`, which fails with
+`Resources exhausted` on busy days, and `BatchPartitionMerger` only scales the problem (it batches
+along the event-time axis while the sort runs along an orthogonal one).
+
+This plan adds a second scan mode — a **per-file declared ordering** — where each already-sorted
+partition file becomes its own DataFusion plan partition, all declaring the same `LexOrdering`.
+DataFusion then coalesces them with a streaming `SortPreservingMergeExec` (a k-way merge over k
+buffered batches) instead of a `SortExec`, and with ordered aggregation and the repartitioning
+settings of Design §2 the whole merge query streams end to end. Peak memory scales with k (number of
+partitions merged), not data volume. **The Phase 0 spike has been run and the answer is GO** — see
+Design §5 for the verified plan shape and the three corrections it produced.
+
+The issue's "Alternative considered" (key-range batching in `BatchPartitionMerger`) was designed
+in full and rejected — see the issue comment: it shares most of this plan's prerequisites, adds a
+larger delta of new machinery, and still sorts.
+
+## Current State
+
+### The #1340 concatenation mode
+
+- `make_partitioned_execution_plan` (`rust/analytics/src/lakehouse/partitioned_execution_plan.rs:146`)
+  puts every non-empty partition file into **one** file group
+  (`with_file_groups(vec![file_group.into()])`, line 202). A declared `output_ordering` is only
+  valid if the files concatenate in sorted order, so `sort_and_check_non_overlapping` (line 55)
+  requires the leading column's per-partition bounds (`OrderingBounds::EventTime` or
+  `InsertTime`) to be non-overlapping, and `attach_ordering_statistics` (line 90) attaches those
+  bounds as file statistics so DataFusion accepts the multi-file-group ordering.
+- `PartitionedTableProvider` (`partitioned_table_provider.rs`) carries
+  `output_ordering: Vec<ScanSortColumn>` + `ordering_bounds: OrderingBounds` and threads them into
+  the scan. Constructors: `new()` (unordered) and `with_ordering()`.
+- `QueryMerger::execute_merge_query` (`merge.rs:93`) has an ordering-declared branch (non-empty
+  `merge_scan_ordering`): sets `repartition_file_scans = false`, builds the physical plan once,
+  bails if the plan is not single-partition, computes
+  `ordering_honored = !plan.contains("SortExec") && !plan.contains("SortPreservingMergeExec")`
+  (warn-only, fail-open on memory), and executes that exact plan.
+- `View::get_scan_output_ordering()` (`view.rs:165`, returns `Vec<ScanSortColumn>`) declares a
+  trusted scan ordering for consumer queries via `MaterializedView::scan`
+  (`materialized_view.rs:96`). Only `ThreadSpansView` overrides it.
+- `View::get_merged_partition_sort_order()` (`view.rs:134`) computes the recorded
+  `lakehouse_partitions.sort_order` for a merge's output, from the inputs alone.
+- `BlocksView` (`blocks_view.rs:40-45, 194-229`) is the gating precedent: it holds an
+  `ordered_merger` and a `plain_merger`, picks the ordered one only when at least one input is
+  non-empty **and** every input is empty or carries the exact recorded
+  `sort_order == ["insert_time"]`, and records the guarantee under the same gate.
+
+### SqlBatchView records and declares nothing
+
+- `SqlBatchView` (`sql_batch_view.rs`) overrides neither `get_merged_partition_sort_order` nor
+  `get_scan_output_ordering`. Its merger is built at construction (`sql_batch_view.rs:104-112`) —
+  the default `QueryMerger` with no declared ordering, or a custom one via `merger_maker`
+  (how downstream deployments plug in `BatchPartitionMerger`).
+- `SqlPartitionSpec::write` (`sql_partition_spec.rs:98`) hardcodes `sort_order: None` on the
+  fresh-partition write path, so even a view whose extract query has a top-level `ORDER BY`
+  records `NULL`.
+- `Partition::sort_order`, the `regenerate_partitions()` admin UDF, and the v7 schema column all
+  already exist from #1340 — this plan reuses them unchanged.
+
+### Adjacent pruning limitations (issue "Related")
+
+- `WriterProperties` in `write_partition.rs:666-672` never sets `max_row_group_size`, so it
+  defaults to 1,048,576 rows — a partition is a handful of row groups, making clustering-based
+  row-group pruning very coarse.
+- `datafusion.execution.parquet.enable_page_index` is `false` in `make_session_context`
+  (`query.rs:219`) for legacy-file compatibility, while the writer emits
+  `EnabledStatistics::Page` — page statistics are written and never read.
+
+## Design
+
+### 1. `ScanOrdering` enum — a per-file mode alongside concatenation
+
+Replace the `(output_ordering: &[ScanSortColumn], ordering_bounds: OrderingBounds)` parameter pair
+with one enum in `partitioned_execution_plan.rs`:
+
+```rust
+/// How a partition scan's declared output ordering is realized.
+#[derive(Clone, Debug)]
+pub enum ScanOrdering {
+    /// No declared ordering (today's default).
+    Unordered,
+    /// All files form one sequential file group that concatenates in globally-sorted order.
+    /// Requires non-overlapping leading-column bounds (checked against `bounds`).
+    Concatenated {
+        columns: Vec<ScanSortColumn>,
+        bounds: OrderingBounds,
+    },
+    /// Each file is internally sorted by `columns`; files may overlap arbitrarily. The scan
+    /// yields one ordered plan partition per file, for a downstream SortPreservingMergeExec.
+    /// `columns` must be non-empty (enforced at construction by `with_merge_sort_order`, §3) --
+    /// an empty list would otherwise still plan and record a vacuous ordering.
+    PerFile { columns: Vec<ScanSortColumn> },
+}
+```
+
+`make_partitioned_execution_plan(schema, reader_factory, state, projection, filters, limit,
+partitions, scan_ordering: &ScanOrdering)`:
+
+- `Unordered` / `Concatenated`: byte-for-byte today's behavior (`Concatenated` runs
+  `sort_and_check_non_overlapping` + `attach_ordering_statistics` exactly as now).
+- `PerFile`: one file group **per** non-empty file (`with_file_groups(file_groups)`), the same
+  `LexOrdering` from `make_lex_ordering` declared via `with_output_ordering`. No overlap check, no
+  ordering statistics — DataFusion's multi-file-group ordering validation only needs min/max stats
+  to prove cross-file order *within* a group; single-file groups pass trivially (confirmed by the
+  Phase 0 spike).
+- **Recorded-sort_order gate, in `PerFile` mode only**: before declaring anything, check that
+  every non-empty partition's recorded `Partition::sort_order` *certifies* the declared columns —
+  the declared column names are a prefix of the recorded list and all declared columns are
+  ascending (recorded `sort_order` is ascending-implied, so a descending `ScanSortColumn` can
+  never be certified). If any non-empty partition fails, degrade to an unordered scan (same plan
+  shape as `Unordered`). Centralizing the gate here makes **both** consumers safe during rollout:
+  user-query scans via `MaterializedView` and merge scans see pre-rollout unsorted partitions and
+  silently fall back to sorting, with no per-caller logic. Add the certification helper as a
+  method on `Partition` (`partition.rs`), e.g.
+  `pub fn certifies_sort_order(&self, columns: &[ScanSortColumn]) -> bool`
+  (empty partitions certify vacuously).
+
+`PartitionedTableProvider` holds a single `scan_ordering: ScanOrdering` field; `new()` keeps
+`Unordered`, and `with_ordering(...)` becomes
+`with_scan_ordering(schema, reader_factory, partitions, ScanOrdering)`.
+
+`View::get_scan_output_ordering()` changes to return `ScanOrdering` (default `Unordered`).
+`ThreadSpansView` returns `Concatenated { columns, bounds: OrderingBounds::EventTime }`;
+`MaterializedView::scan` passes the value through unchanged. This is a breaking trait change with
+exactly one in-repo overrider — see Trade-offs.
+
+### 2. QueryMerger: per-file merge branch
+
+`QueryMerger::merge_scan_ordering` becomes a `ScanOrdering` (default `Unordered`);
+`with_merge_scan_ordering` takes `ScanOrdering` directly. `BlocksView` and its tests update to
+pass `Concatenated { .., bounds: InsertTime }` — no behavior change.
+
+`execute_merge_query` gains a third branch for `PerFile` (the `Unordered` and `Concatenated`
+branches keep today's exact behavior):
+
+- Session config, set the same way the existing branch sets `repartition_file_scans`
+  (`ctx.state_ref().write().config_mut().options_mut()`). All five settings were exercised as a
+  matrix in the Phase 0 spike (§5); the notes below record which are load-bearing and why:
+  - `optimizer.repartition_file_scans = false` — keep one plan partition per file group. Verified
+    load-bearing: left at its default, DataFusion byte-range-splits the k files into
+    `target_partitions` groups (`part_0.parquet:0..146`, …), multiplying open readers and
+    partial-aggregate working sets for no benefit on an I/O-bound serial merge.
+  - `optimizer.enable_round_robin_repartition = false` — **added after the Phase 0 spike.** The
+    other four settings do not prevent `EnforceDistribution` from inserting an order-preserving
+    `RepartitionExec: partitioning=RoundRobinBatch(target_partitions), preserve_order=true`
+    between the scan and the partial aggregate. The plan still streams and is still correct, but
+    the `SortPreservingMergeExec` above it then merges `target_partitions` streams instead of k,
+    with that many partial-aggregate working sets — peak memory would scale with
+    `target_partitions` rather than with k, defeating §4. With this setting, the observed plan is
+    exactly the intended shape (see §5).
+  - `optimizer.repartition_aggregations = false` — feeds a single-partition `AggregateExec`
+    directly from the `SortPreservingMergeExec`. Verified load-bearing for the *shape*, not for
+    correctness: left at its default the plan becomes
+    `SPM → AggregateExec(FinalPartitioned) → RepartitionExec(Hash([keys], target_partitions),
+    preserve_order=true) → AggregateExec(Partial)`, which still streams with
+    `ordering_mode=Sorted` but fans the aggregate out again and moves the SPM above the aggregate.
+    Keeping it `false` gives the simpler, predictable shape §4 reasons about.
+  - `optimizer.prefer_existing_sort = true` — belt and braces. Verified **not** required for the
+    streaming shape when the plan carries a matching top-level sort node (that sort node alone
+    forces DataFusion to pick order-preserving variants over re-sorting). It is what keeps the plan
+    ordered when no such sort node is present — which is why check 2 below cannot be relied on to
+    detect an omitted sort node.
+  - `optimizer.repartition_joins = false` — keeps any enrichment join in `CollectLeft` mode rather
+    than hash-partitioning it. **This is necessary but not sufficient**: `CollectLeft` buffers its
+    *left* (build) input and takes its output ordering from the *right* (probe) input, so the
+    ordered stream must be the right-hand side. See the authoring constraint in §5.
+- Build the `DataFrame` (`let df = ctx.sql(&self.query).await?;`, `merge.rs:148` today) and, before
+  creating the physical plan, apply the declared columns as an explicit DataFusion logical-plan sort
+  node — **not** as SQL text:
+  ```rust
+  let df = ctx.sql(&self.query).await?;
+  let df = match &self.merge_scan_ordering {
+      ScanOrdering::PerFile { columns } => df.sort(
+          columns
+              .iter()
+              .map(|c| col(c.column.as_str()).sort(!c.descending, c.descending))
+              .collect(),
+      )?,
+      _ => df,
+  };
+  ```
+  The `(asc, nulls_first)` pair mirrors the convention `make_lex_ordering` already uses (ASC NULLS
+  LAST / DESC NULLS FIRST, i.e. `nulls_first: c.descending` — `partitioned_execution_plan.rs:121-127`)
+  so the declared per-file scan ordering satisfies this sort exactly and the optimizer elides it as a
+  no-op instead of inserting a `SortExec`; a mismatched null convention would silently keep a
+  redundant `Sort`. No SQL text is inspected, wrapped, trimmed, or substituted for ordering purposes
+  — so a trailing `;`, an already-substituted `{source}` placeholder, lowercase `order by`, `first_value(x ORDER BY …)`
+  in the `SELECT` list, and nested/CTE sorts in `self.query` are all non-issues. `self.query` itself
+  (and the fallback `merger`'s copy of it) is never modified.
+- Build the physical plan once, then three checks before executing that exact plan (mirroring the
+  existing branch's build-once-execute-same-plan discipline):
+  1. **Hard**: `partition_count == 1`, same bail as today — `execute_stream` would otherwise
+     coalesce and destroy the order.
+  2. **Hard**: the plan's output ordering must satisfy the declared columns
+     (`plan.properties().equivalence_properties().ordering_satisfy(...)` against the
+     `make_lex_ordering` result — make that helper `pub`). Failure would mean the `sort_order` that
+     `get_merged_partition_sort_order` is about to record would be a lie: fail loudly before writing
+     anything, as a defensive assertion. (`BlocksView` never needed this — its merge query is a
+     fixed internal string.)
+
+     The Phase 0 spike sharpened what this check does and does not prove, and — combined with the
+     unconditional `DataFrame::sort` above — leaves it with **no author-reachable failure path**.
+     It validates the *actual plan's* output ordering, which is exactly what makes the recorded
+     `sort_order` truthful — so it is sound. But because the sort is applied unconditionally from
+     the declared columns regardless of what `self.query` itself orders by, even an author-written
+     `ORDER BY ... DESC` that contradicts the declared ascending columns is silently overridden
+     rather than surfaced as a check-2 failure (Testing Strategy item 3) — `SqlBatchView` merge
+     queries are author-supplied, but nothing an author writes in `self.query` can make check 2 fail.
+     Nor is it a detector for an omitted sort: with `prefer_existing_sort = true`, the already-ordered
+     per-file scan still plans to the same fully ordered streaming shape even without the explicit
+     `df.sort(...)` call above, so check 2 would still pass if that call were ever dropped. The sort
+     stays load-bearing regardless (it is what makes the ordering a property of the query plan rather
+     than of an optimizer preference) — which is why it is applied unconditionally inside
+     `execute_merge_query` itself rather than left to the view author; check 2 is a runtime backstop
+     that fails closed only if a future DataFusion version stops volunteering the ordering, not a
+     guard against author error.
+  3. **Warn-only**: `ordering_honored = !plan_str.contains("SortExec")`. A surviving `SortExec`
+     means the streaming shape regressed (memory, not correctness — check 2 already proved the
+     output order). Unlike the `Concatenated` branch, a `SortPreservingMergeExec` is the
+     *expected* operator here, never a failure — note `"SortPreservingMergeExec"` does not contain
+     the substring `"SortExec"`, so the check reads naturally. A single-non-empty-file merge may
+     legitimately contain neither operator.
+
+  `MergeQueryResult` itself stays two fields (`stream`, `ordering_honored`). An earlier revision
+  added a test-only `plan_display: Option<String>` field so tests could inspect the merge plan
+  through `View::merge_partitions`; it was dropped in favor of observing behavior directly:
+  `SqlBatchView` exposes `get_merge_partitions_query()` / `get_extract_query()` getters so a test
+  can plan the shipped queries over the view's own `get_scan_output_ordering()` and assert the
+  plan shape (`ordering_mode=Sorted`, no `SortExec`), and merger *selection* is observed through
+  output order (a probe view whose merge query emits rows in descending declared order — ascending
+  output proves the ordered merger's sort ran). See Testing Strategy item 6.
+
+### 3. SqlBatchView: declare, gate, and record
+
+Mirror the `BlocksView` dual-merger pattern, configured per view:
+
+- New builder method (avoids growing the already-`too_many_arguments` constructor):
+
+  ```rust
+  /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
+  /// order. `columns` must be non-empty and every name must exist in this view's schema.
+  /// See the view-author contract (Documentation / Design §5) for the full four-item checklist
+  /// this encodes: (1) GROUP BY coverage, (2) enrichment-join direction, (3) a top-level ORDER BY
+  /// on the extract query (a CTE-internal ORDER BY that is later joined does NOT count -- the join
+  /// discards it), and (4) composable merge-query aggregates. The merge query's own top-level
+  /// ORDER BY is not author-written at all: this builder forwards `columns` to
+  /// `with_merge_scan_ordering`, and `QueryMerger` applies the sort as a DataFusion logical-plan
+  /// node (see below and Design §2) — no SQL text is derived or rewritten.
+  pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self>
+  ```
+
+  Validates eagerly at construction rather than deferring to a runtime check: rejects an empty
+  `columns` (an empty list would otherwise stay representable and silently degenerate — no
+  `LexOrdering`, a vacuous certification gate, yet still recorded as `Some([])`), and resolves each
+  name against `self.schema` (the view's schema is already available on `self` at builder time) the
+  same way `make_lex_ordering` resolves it later via `Schema::index_of`. A typo or empty list
+  returns `Err` immediately instead of surfacing as a low-level `no field named …`
+  `DataFusionError` out of `SqlPartitionSpec::write` at first materialization.
+
+  Column names only — there is no descending option. `ScanSortColumn` (`view.rs:42-45`) carries a
+  `descending` flag, but a descending column can never be certified (Design §1: recorded
+  `sort_order` is ascending-implied), so an API that accepted one would silently disable the whole
+  feature on a one-field typo. Taking plain column names makes that mistake unrepresentable instead
+  of relying on a runtime check.
+
+  It stores `sort_order: Option<Vec<Arc<String>>>` and builds an
+  `ordered_merger: Option<Arc<dyn PartitionMerger>>` — a fresh `QueryMerger` built the same way the
+  default merger is (`sql_batch_view.rs:105`): over `merge_partitions_query.replace("{source}",
+  "source")`, so it resolves against the `source` table `QueryMerger::execute_merge_query` registers
+  (`merge.rs:117-122`) — with `ScanOrdering::PerFile { columns }`, converting each name to
+  `ScanSortColumn { column, descending: false }`. "Unmodified" here means no ordering-related
+  rewriting — no `ORDER BY` is added, wrapped, or otherwise altered — not that the `{source}`
+  placeholder is left unsubstituted; that substitution is the same mechanical step the default
+  merger already performs. `with_merge_sort_order` simply forwards `columns` to
+  `with_merge_scan_ordering`; there is no wrapped copy of the query text anywhere beyond that shared
+  substitution — the
+  top-level sort is applied as a logical-plan node inside `QueryMerger::execute_merge_query`'s
+  ordering-declared branch (Design §2), driven by the same `ScanSortColumn` list, so a wrong or
+  missing merge-query sort is not representable and `register_table` (below) never sees one. The
+  existing `merger` field
+  (default `QueryMerger` or the `merger_maker` product, e.g. `BatchPartitionMerger`) is untouched
+  and becomes the fallback. Keeping a custom `merger_maker` alongside `with_merge_sort_order` is
+  deliberate and supported: during rollout, merges over not-yet-regenerated inputs still get the
+  bounded batching merger instead of an unbounded blocking sort (see Rollout).
+
+- `merge_partitions` override changes: pick `ordered_merger` only when it is configured **and** at
+  least one input is non-empty **and** every input certifies the declared columns
+  (`Partition::certifies_sort_order`); otherwise use `self.merger`. The any-non-empty condition
+  matches `blocks_view.rs:201-204`: an all-empty source scans as `EmptyExec`, whose `SortExec` is
+  never elided, and would trip the memory-regression warning on every quiet-day retry.
+
+- `get_merged_partition_sort_order` override: when configured and every input certifies the
+  declared columns → `Some(column names)` (all-empty merges included — vacuously true of the
+  empty output, matching the blocks precedent); otherwise `None`.
+
+- `get_scan_output_ordering` override: `ScanOrdering::PerFile { columns }` when configured. This is
+  a correctness contract, per `View::get_scan_output_ordering`'s own rustdoc — a false declaration
+  is not merely mis-ordered rows but, under `ordering_mode=Sorted` order-aware aggregation (§5),
+  wrong aggregate results (groups closed early, duplicate group keys). What makes declaring it safe
+  *here* is entirely the recorded-sort_order gate inside `make_partitioned_execution_plan` (Design
+  §1): every non-empty partition must certify the declared columns before the declaration reaches
+  DataFusion at all, for both consumers (user-query scans and merge scans) alike; the gate is not an
+  optional belt-and-braces check but the thing the correctness contract rests on, and it must not be
+  relaxed. User sessions get no optimizer-config changes beyond the declaration itself — DataFusion
+  is left to decide what to exploit (e.g. row-group pruning on the leading column, order-aware
+  aggregation). It does have a resource consequence, though: `FileGroupPartitioner::repartition_preserving_order`
+  (`datafusion-datasource` 54.1.0, transitive via `datafusion = "54.1"`, `rust/Cargo.toml:50`) only
+  declines to repartition (returns `None`)
+  once the file-group count reaches `target_partitions`; below that threshold it splits each
+  single-file group into byte-range groups to fill out `target_partitions`. So on the user path
+  scan concurrency (open Parquet readers, plan partitions) is `max(k, target_partitions)`, and the
+  partial aggregate (`ordering_mode=Sorted`) runs with `target_partitions` working sets rather than
+  k — confirmed empirically by a planning test replicating `SqlBatchView::register_table` in a
+  default (user) session with `target_partitions` pinned above k (the split only fires once
+  `target_partitions` exceeds the file-group count, so an unpinned session would silently skip it on
+  a low-core-count machine — see Testing Strategy item 5): 3 declared per-file groups became
+  `target_partitions` byte-range groups under a `RepartitionExec(Hash(…), preserve_order=true)`.
+  Because this is optimizer behavior, not a documented contract, the probe is promoted into a
+  permanent regression guard rather than left as a one-off (Testing Strategy item 5,
+  `sql_batch_view_merge_ordering_tests.rs`). The declaration
+  still improves user-path memory relative to today, though: each `Sorted` partial holds one
+  group's prefix instead of every group's, also confirmed by the probe. k itself is
+  bounded by query range, not by rollup cadence (see Trade-offs), so a wide-range query against a
+  view that has not rolled up recently is where k can exceed `target_partitions`. Accepted here for
+  the same no-hard-limits reason as the merge path's k.
+
+- **The mandatory merge-query sort never reaches user queries — because it is a plan node applied
+  only in the ordered merge path, not because anything is split, stripped, or rewritten.**
+  `SqlBatchView::register_table` (`sql_batch_view.rs:224-247`) registers
+  `merge_partitions_query.replace("{source}", …)` verbatim as the user-visible table via
+  `df.into_view()`. `with_merge_sort_order` (above) never modifies `merge_partitions_query` itself,
+  and there is no wrapped copy of it anywhere — `ordered_merger` and the fallback `merger` both build
+  their `QueryMerger` over the exact same, unmodified query string. The sort is applied by
+  `QueryMerger::execute_merge_query` (Design §2) as a `DataFrame::sort` call on the parsed plan,
+  strictly inside the ordering-declared merge execution path; `register_table` never goes through
+  `QueryMerger`, so it can't pick it up. This costs nothing on the user path: ordered aggregation
+  there already comes from the declared per-file scan ordering plus `GROUP BY` (§5 —
+  `ordering_mode=Sorted` is independent of any `ORDER BY` or `.sort()` node), not from a requested
+  output order the view never needs to promise its callers.
+
+- **Fresh-write recording**: `SqlPartitionSpec` gains a `sort_order: Option<Vec<String>>` field,
+  threaded through `fetch_sql_partition_spec` (new parameter) into `write_partition_from_rows`
+  (replacing the hardcoded `None` at `sql_partition_spec.rs:98`). `SqlBatchView` passes its
+  configured column names; `ExportLogView` (`export_log_view.rs:191`), the other caller of
+  `fetch_sql_partition_spec`, passes `None` — unchanged behavior. To prevent a config typo from
+  recording a false guarantee,
+  `SqlPartitionSpec::write` — only when `sort_order` is declared — builds the extract plan once
+  (`df.create_physical_plan()`), bails unless the plan is single-partition and its output ordering
+  satisfies the declared columns (same checks as Design §2's merge branch; a global top-level
+  `ORDER BY` guarantees both), then executes that exact plan via
+  `datafusion::physical_plan::execute_stream`. The undeclared path keeps today's
+  `df.execute_stream()` untouched.
+
+  This does not make the extract path stream, though: the required top-level `ORDER BY` sorts
+  `SqlBatchView`'s extract query the same way it always has — an in-process, blocking `SortExec`
+  (unlike `BlocksView`, whose fresh-write ordering is a Postgres `ORDER BY` streamed through
+  `MetadataPartitionSpec`). Its input is the *already-aggregated* extract output (post-`GROUP BY`),
+  not the raw source, but its memory cost still scales with the extract's insert-range bucket —
+  i.e. with whatever range a single fresh-write or `regenerate_partitions()` call covers, not with
+  k. The fresh-write bucket is `min(view.get_max_partition_time_delta(CreateFromSource),
+  insert_range)` (`batch_update.rs:176-205`) — for a view with a small
+  `max_partition_delta_from_source` this is freely choosable, but it is capped at that view's
+  configured max, so a view whose max delta is coarse (a day, say) gets a day-sized bucket from the
+  daemon's own `every_day` task or from an operator's day-delta backfill, not a smaller one; for
+  `regenerate_partitions()` the bucket is dictated by the existing partition's boundaries, not
+  freely choosable — see Rollout step 2 and, for `log_stats` specifically, §7.
+
+### 4. Memory expectation (stated precisely, per the issue comment)
+
+With the scan sorted on `(key, time)` and both among the `GROUP BY` keys, the aggregate holds open
+only the group combinations for the current `(key, time)` prefix value. In the verified plan shape
+(§5) the partial aggregate runs in the k scan partitions and the final aggregate is
+single-partition, so peak = k partial working sets + one final working set + k buffered batches in
+the `SortPreservingMergeExec` + k open Parquet readers. It scales with k, not data volume; the
+daemon's incremental rollup (seconds → minutes → hours → day) keeps k modest per merge. No cap on k
+is introduced — the design needs no ceiling.
+
+**Correction from the Phase 0 spike**: the parenthetical that enrichment joins are free because
+they "sit downstream of the aggregate in `CollectLeft` mode" was wrong. `CollectLeft` buffers the
+*left* input, so a merge query phrased the natural way — `(<ordered aggregate>) a LEFT JOIN dim d`
+— collects the **entire aggregate result** into memory and re-sorts above the join, reintroducing
+the exact blowup this plan exists to remove. A merge query that enriches must put the dimension
+table on the left and the ordered aggregate on the right (§5). Views whose merge query has no join
+(e.g. `log_stats`) are unaffected.
+
+### 5. Go/no-go spike (Phase 0) — **DONE: GO**
+
+The one genuine unknown was whether DataFusion 54.1's `AggregateExec` keeps the plan streaming — no
+`SortExec` reinserted downstream of the `SortPreservingMergeExec` — when its input is ordered per
+file. **It does.** The spike lives in `rust/analytics/tests/ordered_aggregation_spike_tests.rs`
+(9 planning-only tests, no DB and no object store: a test-local `TableProvider` emits one
+single-file group per fabricated file, each declaring `LexOrdering (name, time_bin)`, and nothing is
+ever executed). All 9 pass under `cargo test`, `cargo fmt` and
+`cargo clippy --tests -- -D warnings` are clean, and the tests stay as the permanent regression
+guard. **Proceed to Phase 1**, with the three corrections recorded below folded in.
+
+Observed plan for the Overview's aggregate-metrics merge query
+(`SELECT name, time_bin, first_value(unit) AS unit, sum(total) AS total FROM source GROUP BY name,
+time_bin`) plus the sort `QueryMerger` applies as a logical-plan node from the declared
+`(name, time_bin)` columns (Design §2) — the spike encodes that combination as a single SQL query
+with a trailing `ORDER BY name, time_bin` and `sum(measure) AS total`, since a `DataFusion`
+logical-plan `Sort` node lowers to the same plan shape as a SQL `ORDER BY` and the aggregate name
+is immaterial to the plan shape — over 3 overlapping per-file partitions, with the five settings
+of §2:
+
+```
+ProjectionExec: expr=[name, time_bin, first_value(source.unit) as unit, sum(source.measure) as total]
+  AggregateExec: mode=Final, gby=[name, time_bin],
+                 aggr=[first_value(unit), sum(measure)], ordering_mode=Sorted
+    SortPreservingMergeExec: [name ASC NULLS LAST, time_bin ASC NULLS LAST]
+      AggregateExec: mode=Partial, gby=[name, time_bin],
+                     aggr=[first_value(unit), sum(measure)], ordering_mode=Sorted
+        DataSourceExec: file_groups={3 groups: [[part_0.parquet], [part_1.parquet], [part_2.parquet]]},
+                        output_ordering=[name ASC NULLS LAST, time_bin ASC NULLS LAST]
+```
+
+Single-partition output, streaming k-way merge, `ordering_mode=Sorted` on both aggregate phases, no
+`SortExec`, no `RepartitionExec`. Confirmed along the way:
+
+- **Single-file groups need no statistics.** The declared ordering is accepted with no per-file
+  min/max stats attached at all, as Design §1 assumed — `attach_ordering_statistics` is only
+  needed by `Concatenated` mode.
+- **A `Dictionary(Int32, Utf8)` leading sort column plans identically** to a plain `Utf8` one, so the
+  real `measures.name` type is not a special case. The spike schema uses the dictionary type.
+- **`"SortPreservingMergeExec"` does not contain the substring `"SortExec"`**, so §2's check 3 reads
+  naturally (the spike asserts `spm == true` and `contains("SortExec") == false` simultaneously).
+- **`ordering_mode=Sorted` is driven purely by the declared scan ordering plus the `GROUP BY` keys**,
+  not by any of the five settings — it appeared in every config combination tested. The settings
+  control how much the merge fans out, not whether ordered aggregation happens.
+- **`GROUP BY` key order does not matter** (`GROUP BY time_bin, name` still streams), and a strict
+  prefix of the declared columns (`GROUP BY name`) streams too.
+- **Order-sensitive aggregates are free**: `first_value(unit)` and `first_value(unit ORDER BY
+  time_bin)` both keep `ordering_mode=Sorted`, as does a fuller measure set
+  (`count`/`min`/`max`/`avg`/`sum`). This is a finding about **plan shape only** — it says nothing
+  about whether a given aggregate is *semantically* valid in a merge query, which is a separate
+  constraint: the merge reads the view's own already-aggregated rows, so `count(*)` would count
+  partition rows rather than source events and a bare `avg` would average averages. See contract
+  item 4 below.
+
+The reversed-key-order case, `first_value(unit ORDER BY time_bin)`, and the fuller measure set were
+each run by hand during the spike; Phase 3 step 14 later added assertions for them
+(`reversed_group_by_key_order_still_streams`, `first_value_with_explicit_inner_order_by_still_streams`,
+`fuller_measure_set_still_streams` — Testing Strategy item 1), so the regression guard now covers
+what §5 claims.
+- **An extra `GROUP BY` key outside the sort order degrades gracefully**, not catastrophically:
+  `GROUP BY name, unit, time_bin` under a `(name, time_bin)` declaration gives
+  `ordering_mode=PartiallySorted([0, 2])` — still streaming, still bounded to the current
+  `(name, time_bin)` prefix, no `SortExec`.
+
+Three corrections to the design, all folded into §2 and §4 above:
+
+1. **A fifth setting is required**: `optimizer.enable_round_robin_repartition = false`. Without it
+   an order-preserving `RoundRobinBatch(target_partitions)` repartition lands between the scan and
+   the partial aggregate, making peak memory scale with `target_partitions` instead of k (§2).
+2. **Check 2 does not detect an omitted sort** — with `prefer_existing_sort = true` the
+   already-ordered per-file scan plans to the same ordered streaming shape even without the explicit
+   `DataFrame::sort` call, so the check would still pass if that call were ever dropped. It is still
+   sound as a guard on the recorded `sort_order` (§2, check 2). This is why the sort is applied
+   unconditionally inside `QueryMerger::execute_merge_query` itself (§2) rather than relying on
+   documentation and review to get it right (§3) — check 2 alone cannot catch a missing one. The
+   Testing Strategy item that expected a hard error here has been corrected.
+3. **Enrichment joins must put the ordered stream on the probe side** (§4). `CollectLeft` buffers
+   its left input and inherits its output ordering from its right input, so:
+
+   | Merge query phrasing | Result |
+   |---|---|
+   | `(<ordered agg>) a LEFT JOIN dim d` | `CollectLeft` buffers the whole aggregate, blocking `SortExec` above the join |
+   | `(<ordered agg>) a JOIN dim d` | same |
+   | `dim d JOIN (<ordered agg>) a` | streams, no `SortExec` |
+   | `dim d RIGHT JOIN (<ordered agg>) a` | streams, no `SortExec` |
+
+**View-author contract** — the requirements this encodes. Items 1–2 are each pinned by a spike test;
+item 3 was verified by hand during the spike but has no test — Phase 3 step 14 adds one. This is
+the list `with_merge_sort_order`'s rustdoc must carry:
+
+1. **Every declared sort column must appear among the merge query's `GROUP BY` keys** (order
+   within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`). Verified negative:
+   declaring `(name, time_bin)` and grouping by `time_bin` alone — which drops `name` — loses
+   `GroupOrdering` entirely and reinstates a blocking `SortExec`. This is the reverse of the
+   strict-prefix case above (`GROUP BY name` alone under the same declaration streams fine); the
+   requirement is that `GROUP BY` covers the declared columns, not that it equals them.
+2. **Any enrichment join must put the dimension table on the left and the ordered stream on the
+   right** (correction 3).
+3. **The extract query needs a top-level `ORDER BY` matching the declared columns** — and it must
+   be top-level: a CTE-internal `ORDER BY` that is later joined does not count, because the join
+   discards it. This `ORDER BY` is a blocking sort (Design §3), so it is not streamed the way the
+   merge path is: freely choosable for a fresh `materialize_partitions()` bucket, but dictated by
+   existing boundaries for a `regenerate_partitions()` bucket (Rollout step 2). The merge query needs
+   no author-written `ORDER BY` at all — `QueryMerger::execute_merge_query` applies the sort as a
+   DataFusion logical-plan node driven by the same declared columns (Design §2), which makes a wrong
+   or missing merge-query sort unrepresentable rather than a documented trap to avoid.
+4. **The merge query's aggregates must be composable over already-aggregated rows.** Independent of
+   ordering, but easy to get wrong while writing the pair of queries: the merge reads the view's own
+   output, not the source, so use `sum(count)` rather than `count(*)`, and avoid a bare `avg` (carry
+   `sum` and `count` and divide at read time). `log_stats` is the in-repo model — it extracts
+   `count(*) AS count` and merges `sum(count) AS count` (`log_stats_view.rs:35, 50`).
+
+### 6. Row-group size (separable)
+
+Set `max_row_group_size` in `write_partition.rs`'s `WriterProperties` so a clustered sort key
+actually pays off in row-group pruning. Proposed: 128 Ki rows (8× finer pruning than the 1 Mi
+default; row-group metadata overhead stays negligible at partition scale). This is a one-line
+change with fleet-wide effect on newly written partitions (old partitions are unaffected until
+merged/regenerated); it is independent of everything above and can ship as its own commit or PR.
+
+Re-enabling `enable_page_index` is **not** in this plan: it is gated on legacy Parquet files
+(incomplete ColumnIndex metadata) aging out of every deployment, which is an operational condition
+this repo can't verify — file it as a follow-up issue referencing `query.rs:215-219`.
+
+### 7. In-repo adopter: `log_stats`
+
+The motivating metrics view lives outside this repo (Open Question 3), so the mechanism would
+otherwise land with no in-repo consumer. `log_stats` (`log_stats_view.rs`) is adopted to close that
+gap — it fits the contract with the least change of any existing view:
+
+- **Its merge aggregate is already composable.** It extracts `count(*) AS count` and merges
+  `sum(count) AS count` (`log_stats_view.rs:35, 50`), which is exactly contract item 4. Nothing to
+  restructure.
+- **No custom merger** (`None`, `log_stats_view.rs:72`), so it lands on the default `QueryMerger`
+  path this plan modifies rather than a bespoke one.
+- **It really does k-way merge.** Both deltas are `TimeDelta::days(1)`
+  (`log_stats_view.rs:70-71`), but those are *max* deltas — the daemon rolls partitions up
+  incrementally, so merges run with k > 1 and are not a k=1 no-op.
+- **Its group cardinality is the shape the feature exists for**: `processes × levels × targets ×
+  1440` minute-bins per day, all of which the current unordered merge must hold at once.
+
+**Declare the sort order as `(time_bin, process_id, level, target)` — time first.** The spike found
+`GROUP BY` key order irrelevant (§5), so any prefix of the group keys streams equally well; leading
+with `time_bin` is the better choice because it keeps each merged partition time-local, preserving
+row-group pruning on `time_bin` for user queries. Leading with `process_id` would scatter time values
+across row groups for no compensating gain.
+
+Its transform (extract) query needs a top-level `ORDER BY time_bin, process_id, level, target` added
+(contract item 3); the merge query needs no `ORDER BY` written by hand — `QueryMerger` applies the
+sort as a logical-plan node driven by the same four declared columns (Design §2). The transform
+query's `ORDER BY` is a blocking sort, but it sorts the *aggregate's output* — one row per group —
+not the `log_entries` scan, so it is far smaller than the raw input; §3's bucket sizing applies.
+`log_stats`' `max_partition_delta_from_source` is `TimeDelta::days(1)` (`log_stats_view.rs:70`),
+which is also its `CreateFromSource` bucket ceiling (`get_max_partition_time_delta`,
+`sql_batch_view.rs:275-284`): the daemon's `every_day` task materializes over the last two days at
+day granularity (`maintenance.rs:77-88`), and an operator's `materialize_partitions('log_stats', …,
+86400)` backfill hits the same ceiling, so a day's worth of sub-partitions being absent (daemon
+downtime, fresh deployment, retired sub-partitions) takes this `ORDER BY` over a full day's
+aggregate output, not a freely-small bucket. Accepted here rather than lowered: a day's worth of
+`log_stats` groups (`processes × levels × targets × 1440` minute-bins) is the aggregate's *output*
+row count, not `log_entries`' row count, and is the same working set the unordered merge path
+already holds today — this plan does not make that case worse, it only removes the larger,
+unbounded-by-day-count blowup from the merge side. A view that needs a smaller fresh-write bucket
+should lower its own `max_partition_delta_from_source` (Phase 4 step 16 is the place to do it for
+`log_stats`, if ever needed); this plan does not change `log_stats`' configured deltas.
+
+Two honest caveats:
+
+- Whether `log_stats` is *currently* under memory pressure in any given deployment is not something
+  this repo can determine. The adoption is justified by shape and by the value of an in-repo
+  consumer, not by a measured incident.
+- Existing `log_stats` partitions have `sort_order` NULL, so they will not certify and its merges
+  keep taking the unordered path until they are retired and re-materialized (Rollout step 2). The
+  degrade is silent and carries no correctness risk.
+
+## Implementation Steps
+
+### Phase 0 — Spike (go/no-go) — **DONE, outcome: GO**
+1. ~~New test file `rust/analytics/tests/ordered_aggregation_spike_tests.rs` (planning-only, Design
+   §5).~~ Landed with 9 passing tests; verdict and the three resulting design corrections are in
+   Design §5.
+
+### Phase 0.5 — CI fix-up (standalone, folded into the same PR ahead of Phase 1)
+Fix the spike test `default_round_robin_repartition_fans_the_merge_out_to_target_partitions`
+(committed on this branch, not on `main`), which builds its session with a bare `SessionConfig::new()`
+and so fails on a 2-core CI runner (with k = 3 files, the asserted `RoundRobinBatch` never appears
+when `target_partitions <= 3`, and `.github/workflows/check-runner.yml` defaults to the 2-core
+`ubuntu-latest` runner): pin `target_partitions` explicitly above k (e.g. `.with_target_partitions(8)`).
+This pin lands in the same PR as the rest of this plan, before any of it merges to `main` — it is not
+a hotfix against `main` and there is no window where `main`'s CI is red because of it.
+
+### Phase 1 — `ScanOrdering` refactor (behavior-preserving)
+2. `partition.rs`: add `Partition::certifies_sort_order`.
+3. `partitioned_execution_plan.rs`: add `ScanOrdering`, restructure
+   `make_partitioned_execution_plan` around it, implement the `PerFile` file-group construction
+   and the recorded-sort_order degrade gate (calls `Partition::certifies_sort_order` from step 2);
+   make `make_lex_ordering` `pub`.
+4. `partitioned_table_provider.rs`: replace the field pair with `ScanOrdering`;
+   `with_ordering` → `with_scan_ordering`.
+5. `view.rs`: `get_scan_output_ordering() -> ScanOrdering` (default `Unordered`); update the
+   trait doc to describe both non-trivial modes and their contracts.
+6. `merge.rs`, `blocks_view.rs`, `thread_spans_view.rs`, `materialized_view.rs`: adapt call sites
+   (no behavior change) — `merge.rs`: `merge_scan_ordering` becomes `ScanOrdering`,
+   `with_merge_scan_ordering` takes `ScanOrdering` directly, and its `src_table` construction
+   switches to `with_scan_ordering`; `blocks_view.rs`: pass
+   `ScanOrdering::Concatenated { .., bounds: InsertTime }` at the `with_merge_scan_ordering` call
+   site. Both are mechanical, signature-only updates — the new `PerFile` merge branch itself is
+   added in Phase 2.
+7. Update direct-caller tests: `thread_spans_ordering_tests.rs`,
+   `blocks_view_merge_ordering_tests.rs` (signature updates only; these tests keep exercising
+   `Concatenated` behavior).
+8. New test file `rust/analytics/tests/per_file_scan_ordering_tests.rs`: the `PerFile` scan/gate
+   tests (see Testing Strategy item 2) — overlapping partitions with certifying `sort_order` → k
+   plan partitions each declaring the ordering; one partition with `sort_order: NULL` → degraded,
+   unordered plan; descending declared column → degraded; declared columns a strict prefix of
+   recorded → certified.
+
+### Phase 2 — QueryMerger per-file branch
+9. `merge.rs`: add the `PerFile` branch — the **five** config settings + three checks (Design §2).
+   Update `MergeQueryResult::ordering_honored`'s rustdoc (`merge.rs:34-38`) for the per-file
+   semantics: it currently documents the flag as meaning no buffering `Sort`/`SortPreservingMerge`
+   node ran, which is wrong for `PerFile` mode, where a `SortPreservingMergeExec` is the *expected*
+   operator and only a surviving `SortExec` signals a regression. (An earlier revision also added
+   a test-only `plan_display` field to `MergeQueryResult` here; it was later dropped — see Design
+   §2 — in favor of tests planning the shipped queries directly via `SqlBatchView`'s query
+   getters, so `MergeQueryResult` and its other constructors are unchanged.)
+10. Planning tests for the per-file branch (see Testing Strategy).
+
+### Phase 3 — SqlBatchView declaration and recording
+11. `sql_partition_spec.rs`: `sort_order` field + `fetch_sql_partition_spec` parameter + declared
+    -path plan verification in `write` (Design §3). `export_log_view.rs`: update its
+    `fetch_sql_partition_spec` call site to pass `None` (mechanical, no behavior change).
+12. `sql_batch_view.rs`: `with_merge_sort_order` (forwarding the declared columns to
+    `with_merge_scan_ordering` so the `ordered_merger`'s `QueryMerger` applies the sort as a
+    logical-plan node, Design §2/§3), dual-merger selection in `merge_partitions`,
+    `get_merged_partition_sort_order` and `get_scan_output_ordering` overrides (Design §3).
+    `register_table` is untouched by this step — it keeps registering `merge_partitions_query`
+    verbatim and unmodified, since the sort is a plan node applied only inside
+    `QueryMerger::execute_merge_query`'s ordered merge path.
+13. Unit + planning tests for the gates and overrides.
+14. `ordered_aggregation_spike_tests.rs`: add the four assertions Design §5 records as verified by
+    hand only — reversed `GROUP BY` key order (`GROUP BY time_bin, name`), `first_value(x ORDER BY
+    …)`, the fuller measure set (`count`/`min`/`max`/`avg`/`sum`), and contract item 3 (the extract
+    query's required top-level `ORDER BY`, plus a negative control for a CTE-internal `ORDER BY`
+    that a later join discards) — so the regression guard covers what §5 and the view-author
+    contract claim. (The 2-core-CI repair for
+    `default_round_robin_repartition_fans_the_merge_out_to_target_partitions` moved to Phase 0.5.)
+    Also retire and rewrite `order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort`:
+    its comment claims the guard exists because "the doc contract says the merge query's ORDER BY
+    must be *exactly* the declared columns rather than merely start with them" — a contract the
+    revised §2/§3 design deleted (the merge query has no author-written `ORDER BY` at all; the sort
+    is applied programmatically from the declared columns). Rewrite the comment to describe what the
+    test actually pins — a general DataFusion planning fact, independent of anything an author writes
+    in a `SqlBatchView` merge query — and either drop the test or retarget it at a shape a merge-query
+    author can still produce (e.g. an extra order-sensitive aggregate argument), so it no longer reads
+    as guarding a live authoring hazard. **Done** — landed as
+    `order_by_extending_past_the_declared_scan_ordering_reinstates_a_blocking_sort`, alongside
+    `reversed_group_by_key_order_still_streams`, `first_value_with_explicit_inner_order_by_still_streams`,
+    `fuller_measure_set_still_streams`, `cte_internal_order_by_is_discarded_by_a_later_join`, and
+    `top_level_order_by_satisfies_the_declared_columns`.
+15. Docs: `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` —
+    extend the `regenerate_partitions()` notes to cover `SqlBatchView` partitions and the Rollout
+    step 2 bucket-size caveat (Documentation).
+
+### Phase 4 — Adopt `log_stats` (in-repo consumer, Design §7)
+16. `log_stats_view.rs`: add `ORDER BY time_bin, process_id, level, target` to the transform query,
+    and chain `.with_merge_sort_order(...)` with the same four columns — the merge query itself
+    needs no `ORDER BY` added, since `QueryMerger::execute_merge_query` applies the sort as a
+    logical-plan node from those same declared columns (Design §2). The `sum(count)` merge aggregate
+    already satisfies contract item 4 — no query restructuring. The sort node only applies inside
+    the `ordered_merger`'s execution path, never reaching `log_stats`' user-facing view, since
+    `register_table` registers the merge query verbatim (Design §3).
+17. New test file `rust/analytics/tests/log_stats_ordering_tests.rs`, pinning the *shipped*
+    `make_log_stats_view()` definition (Testing Strategy item 6) with two tests:
+    `log_stats_merge_query_stays_a_streaming_kway_merge` plans the real merge query (via
+    `get_merge_partitions_query()`) over a source registered with the view's own
+    `get_scan_output_ordering()` and asserts the streaming shape (`ordering_mode=Sorted`, no
+    `SortExec`), plus `get_merged_partition_sort_order` recording the four declared columns;
+    `log_stats_extract_query_satisfies_its_declared_sort_order` plans the real extract query (via
+    `get_extract_query()`) and asserts its output ordering satisfies the declared
+    `(time_bin, process_id, level, target)` columns — so a future edit to either query that breaks
+    the contract fails CI.
+
+### Phase 5 — Row-group size (separable, can land any time)
+18. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
+
+## Files to Modify
+
+| File | Change |
+|---|---|
+| `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | `ScanOrdering` enum, per-file mode, degrade gate, `pub make_lex_ordering` |
+| `rust/analytics/src/lakehouse/partition.rs` | `certifies_sort_order` |
+| `rust/analytics/src/lakehouse/partitioned_table_provider.rs` | `ScanOrdering` field/constructor |
+| `rust/analytics/src/lakehouse/view.rs` | `get_scan_output_ordering` returns `ScanOrdering` |
+| `rust/analytics/src/lakehouse/materialized_view.rs` | pass-through |
+| `rust/analytics/src/lakehouse/thread_spans_view.rs` | return `Concatenated` |
+| `rust/analytics/src/lakehouse/merge.rs` | per-file branch in `QueryMerger`, including the `DataFrame::sort` logical-plan node applied before physical planning |
+| `rust/analytics/src/lakehouse/blocks_view.rs` | call-site update |
+| `rust/analytics/src/lakehouse/sql_batch_view.rs` | config, gating, overrides; forwards declared columns to `with_merge_scan_ordering` for the ordered merger; `get_extract_query`/`get_merge_partitions_query` getters for tests |
+| `rust/analytics/src/lakehouse/sql_partition_spec.rs` | `sort_order` recording + verification |
+| `rust/analytics/src/lakehouse/export_log_view.rs` | `fetch_sql_partition_spec` call site passes `None` |
+| `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 5) |
+| `rust/analytics/src/lakehouse/log_stats_view.rs` | `ORDER BY` on the transform query + `with_merge_sort_order` (Phase 4) |
+| `mkdocs/docs/admin/functions-reference.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
+| `mkdocs/docs/query-guide/python-api.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
+| `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
+| `rust/analytics/tests/blocks_view_merge_ordering_tests.rs` | signature updates |
+| `rust/analytics/tests/ordered_aggregation_spike_tests.rs` | new (Phase 0) — **done**; 2-core-CI `target_partitions` pin for the repartition-fanout test lands in Phase 0.5; extended in Phase 3 (step 14) with the four by-hand assertions |
+| `rust/analytics/tests/per_file_scan_ordering_tests.rs` | new (Phase 1) — `PerFile` scan/gate tests |
+| `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | new (Phases 2–3) |
+| `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs` | new (Phase 3) — fresh-write declared-`sort_order` verification, offline |
+| `rust/analytics/tests/log_stats_ordering_tests.rs` | new (Phase 4) — pins the shipped `log_stats` view's streaming shape |
+
+## Trade-offs
+
+- **Per-file k-way merge vs key-range batching**: evaluated in full and rejected in the issue
+  comment. Both need sorted sources, recorded `sort_order` on both write paths, per-view sort-key
+  decisions, and a regenerate-before-trusting rollout; key-range batching's remaining delta
+  (distribution pre-query, greedy packing, oversized-key sub-slicing, five silent per-view
+  contract hazards) is larger than this plan's, and it still sorts.
+- **One `ScanOrdering` enum vs adding more parameters**: the `(columns, bounds)` pair already only
+  makes sense together, and per-file mode has no `bounds` at all — an enum makes invalid
+  combinations unrepresentable. It breaks `View::get_scan_output_ordering` for out-of-repo
+  implementors, but the migration is mechanical (`vec![] → Unordered`, wrap existing vectors in
+  `Concatenated`), and the alternative (a parallel `get_scan_ordering_mode()` getter that must be
+  kept consistent with the first) is a standing correctness trap.
+- **Certification gate inside `make_partitioned_execution_plan` vs per-caller**: the scan builder
+  is the one place that sees both the declaration and the `Partition` records, and it serves both
+  the merge path and user queries. `BlocksView`'s merge-path gate stays where it is (it must pick
+  a merger *and* a recorded value before planning); its exact-equality check is a special case of
+  the new prefix-based helper but is deliberately left untouched.
+- **Hard-fail on unsatisfied output ordering vs warn**: mirrors #1340's split — memory regressions
+  fail open (warn + execute), correctness hazards fail closed. A merge query without the matching
+  `ORDER BY` would record a false `sort_order` that every *future* ordered merge and user-query
+  scan would then trust; that must never write a partition.
+- **Serial single-partition aggregation**: accepted — the merge is I/O bound and the alternative
+  is spilling or failing (issue Proposal §2). The Phase 0 spike showed this is milder than feared:
+  only the *final* aggregate is single-partition, while the partial aggregate still runs k-way in
+  parallel (one per file partition, below the `SortPreservingMergeExec`). Disabling round-robin
+  repartitioning (Design §2) caps that parallelism at k rather than `target_partitions`, which is
+  the intended trade: bounded memory over extra CPU fan-out on an I/O-bound path.
+- **No ceiling on k**: consistent with the project's no-hard-limits stance. On the merge path the
+  rollup cadence bounds k in practice, and Design §2's disabled round-robin repartitioning keeps
+  scan/partial-aggregate concurrency at k rather than `target_partitions`. On the user-query path
+  (Design §3's `get_scan_output_ordering` override) k is instead the number of partitions
+  overlapping the requested range — not bounded by rollup cadence, since a query can span
+  partitions that have not yet rolled up — but there concurrency is `max(k, target_partitions)`,
+  since DataFusion still repartitions per-file groups up to `target_partitions` on that path.
+  Either way a pathological k degrades gradually (more open readers, more plan partitions), not
+  with a failure cliff, and ordering correctness is unaffected.
+
+## Documentation
+
+- Rustdoc on `ScanOrdering`, `with_merge_sort_order`, `certifies_sort_order`, and the updated
+  `View::get_scan_output_ordering` contract carry the authoritative contracts. `with_merge_sort_order`
+  is the right home for the full view-author checklist — all **four** items of Design §5's
+  "View-author contract" (items 1–2 pinned by Phase 0 spike tests, item 3 verified by hand): (1) every
+  declared sort column must appear among the merge query's `GROUP BY` keys (order irrelevant; extra
+  keys degrade to `PartiallySorted`); (2) any enrichment join must put the dimension table on the
+  left and the ordered stream on the right, or `CollectLeft` buffers the whole aggregate and
+  re-sorts; (3) the extract query needs a top-level `ORDER BY` matching the declared columns — a
+  CTE-internal `ORDER BY` that is later joined does not count. The merge query needs no
+  author-written `ORDER BY` at all: `QueryMerger::execute_merge_query` applies the sort as a
+  DataFusion logical-plan node driven by the same declared columns (Design §2), so a wrong or
+  missing merge-query sort is unrepresentable rather than a documented trap; and (4) the merge query's aggregates
+  must be composable over already-aggregated rows (`sum(count)`, not `count(*)`; no bare `avg`), with
+  `log_stats` as the in-repo model.
+- `mkdocs/docs/admin/functions-reference.md` (`regenerate_partitions()` note, line 119) and
+  `mkdocs/docs/query-guide/python-api.md` (same note, line 500) carry the same blocks-specific
+  sentence and must be updated together (the predecessor #1340 plan kept them in sync). Extend both
+  to mention `SqlBatchView` partitions as a second regeneration use case, and add the Rollout step 2
+  caveat to both: the regeneration bucket size is dictated by the existing partition's boundaries,
+  not freely choosable, so an already-large partition cannot avoid the extract's blocking `ORDER BY`
+  sort by picking a smaller `partition_delta_seconds` — retire it
+  (`retire_partition_by_metadata`) and re-materialize at a smaller delta instead. In
+  `python-api.md`, this caveat's natural home is next to the existing `regenerate_partitions()`
+  "**Warning:**" block (line 518).
+- No architecture page currently documents partition merging; not adding one in this plan.
+
+## Testing Strategy
+
+All new tests are planning-only against the offline harness
+(`blocks_view_merge_ordering_tests.rs:239` — in-memory object store, lazy PG pool, streams never
+polled), so they run in plain `cargo test`:
+
+1. **Spike/regression** (Phase 0) — **done**, `ordered_aggregation_spike_tests.rs`, 9 landed tests:
+   `ordered_group_by_over_per_file_scan_streams_end_to_end` (ordered `GROUP BY` merge plan over
+   per-file source → single-partition, `SortPreservingMergeExec` present, `ordering_mode=Sorted`, no
+   `SortExec`, no `RepartitionExec`) plus eight negative/generality controls:
+   `undeclared_per_file_scan_keeps_blocking_sort_negative_control` (undeclared scan still sorts);
+   `default_round_robin_repartition_fans_the_merge_out_to_target_partitions` (default
+   `enable_round_robin_repartition` fans out); `single_file_per_file_scan_needs_no_merge_operator`
+   (k == 1 needs neither operator); `group_by_keys_the_sort_columns_do_not_prefix_fall_back_to_blocking_sort`
+   (non-prefix `GROUP BY` loses `GroupOrdering`, and a strict prefix streams);
+   `extra_group_by_key_outside_the_sort_order_still_streams` (an extra `GROUP BY` key degrades to
+   `PartiallySorted`, not a blocking sort);
+   `order_by_extending_past_the_declared_scan_ordering_reinstates_a_blocking_sort` (an `ORDER BY`
+   extending past the declared columns reinstates a blocking sort — Phase 3 step 14 retargeted and
+   renamed this test, formerly `order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort`,
+   whose comment guarded a contract the revised §2/§3 design deleted); and both enrichment-join
+   directions
+   (`enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort`,
+   `enrichment_join_with_the_ordered_side_on_the_probe_side_keeps_streaming`).
+   **Phase 0.5** pins `target_partitions` explicitly (above k) in the
+   `default_round_robin_repartition_fans_the_merge_out_to_target_partitions` session (committed on
+   this branch, not on `main`), which today inherits the host's CPU count via a bare
+   `SessionConfig::new()` and fails on the project's own 2-core CI runners
+   (`.github/workflows/check-runner.yml` defaults to `ubuntu-latest`), since with `target_partitions
+   == 2` and 3 scan partitions the round-robin repartition it asserts never fires — pulled ahead of
+   Phase 1 within the same PR so the fix lands before this branch's tests ever run against `main`'s
+   CI. **Phase 3 extension** (step 14): assertions for the four by-hand-only cases noted in Design
+   §5 — reversed `GROUP BY` key order, `first_value(x ORDER BY …)`, the fuller measure set, and
+   contract item 3 (the extract query's required top-level `ORDER BY`, with a
+   CTE-internal-`ORDER BY`-discarded-by-join negative control) — closing the gap between what §5
+   claims and what the file asserts.
+2. **Per-file scan** (Phase 1): overlapping partitions with certifying `sort_order` → k plan
+   partitions each declaring the ordering; one partition with `sort_order: NULL` → degraded,
+   unordered plan (gate); descending declared column → degraded (ascending-only certification);
+   declared columns a strict prefix of recorded → certified.
+3. **QueryMerger per-file branch** (Phase 2): `ordering_honored: true` for overlapping sorted
+   inputs; merge query with an author-written `ORDER BY ... DESC` that contradicts the declared
+   ascending columns → the mandatory `DataFrame::sort` (§2) silently overrides it, so the merge
+   still succeeds with `ordering_honored: true` and the recorded ordering matches the declared
+   (ascending) columns, not the author's `DESC` — check 2 has no author-reachable failure path
+   under this design (it is a defensive assertion against a future DataFusion regression, not a
+   backstop against author error); single-non-empty-file merge → `ordering_honored: true` with
+   neither operator; `SELECT` shape that
+   defeats streaming → merge succeeds with `ordering_honored: false` (fail-open, mirroring
+   `defeated_elision_reports_ordering_not_honored_without_erroring`) — use the build-side
+   enrichment join from Design §5 correction 3 as that shape, since it is a realistic authoring
+   mistake. Do **not** assert that a merge query *missing* the `ORDER BY` hard-errors: the Phase 0
+   spike showed DataFusion still plans it ordered, so check 2 passes. A test asserting a
+   no-`ORDER BY` query is accepted (and correctly reports `ordering_honored: true`) is the accurate
+   version, and pins the behavior for future DataFusion upgrades.
+4. **SqlBatchView gates** (Phase 3): `get_merged_partition_sort_order` and merger selection across
+   the input matrix (all certified / one uncertified / all empty / mixed), including with a custom
+   `merger_maker` present (`custom_merger_maker_coexists_with_a_declared_merge_sort_order` pins the
+   Rollout coexistence: the custom merger stays the fallback for uncertified inputs while certified
+   inputs take the ordered merger); `SqlPartitionSpec`
+   declared-path verification bails when the extract plan doesn't guarantee the order. Also, in
+   `sql_batch_view_merge_ordering_tests.rs`: register a real `SqlBatchView` configured with
+   `with_merge_sort_order` via `register_table` and assert its user-facing view's **logical** plan
+   carries no `Sort` node above the merge query (a physical-plan `SortExec` absence check is not
+   discriminating here — when the underlying provider already declares the matching `PerFile`
+   ordering, DataFusion elides a leaked sort node the same way check 2 in §2 relies on, so the
+   physical plan is byte-identical whether or not the sort node is present; only the logical plan
+   still shows the difference) — confirming `register_table`'s verbatim, unmodified
+   `merge_partitions_query` never picks up the sort node, since that node is only ever applied inside
+   `QueryMerger::execute_merge_query` — while the same view's `merge_partitions` through its
+   `ordered_merger` still reports `ordering_honored: true` and a plan whose output ordering satisfies
+   the declared columns, confirming the `QueryMerger`-applied sort (Design §2/§3) does its job on the
+   merge side.
+5. **User-query-path plan shape** (Phase 3, permanent regression guard, in
+   `sql_batch_view_merge_ordering_tests.rs`): promote the Design §3 planning probe from a throwaway
+   check into a permanent test — register a `SqlBatchView`-shaped table (via
+   `get_scan_output_ordering() -> PerFile`) in a **default (user) session** with `target_partitions`
+   pinned explicitly above k (e.g. `SessionConfig::new().with_target_partitions(8)` for k = 3), not
+   left to inherit the host's CPU count — `FileGroupPartitioner::repartition_preserving_order`
+   returns `None` (no repartition) once the file-group count reaches `target_partitions`, so on a
+   low-core-count machine (the project's own CI runners include 2-core hosts,
+   `.github/workflows/rust.yml:33-35`) an unpinned session would silently fail to reproduce the shape
+   this test exists to guard. Plan a query against it, not a merge-query session with `QueryMerger`'s
+   optimizer overrides. Assert the user-path shape Design §3's memory reasoning and the "No ceiling on
+   k" trade-off both depend on: no `SortExec`, `ordering_mode=Sorted` on the aggregate, and the
+   order-preserving repartition (`RepartitionExec(Hash(...), preserve_order=true)`) splitting the k
+   declared per-file groups into `target_partitions` byte-range groups. This gives the user-path claim
+   the same kind of permanent guard §5 already keeps for the merge path, so a DataFusion upgrade that
+   turned it into a blocking `SortExec` would fail CI instead of landing silently.
+6. **`log_stats` adoption** (Phase 4, Design §7): plan `make_log_stats_view()`'s real queries
+   offline — the shipped merge query (via `get_merge_partitions_query()`) over a source declaring
+   the view's own `get_scan_output_ordering()`, asserting `ordering_mode=Sorted` and no `SortExec`
+   in the physical plan, and the shipped extract query (via `get_extract_query()`), asserting its
+   output ordering satisfies the declared columns. Unlike items 2–5, which use fabricated views,
+   this pins the *shipped* view definition, so a later edit to its `ORDER BY` or `GROUP BY` that
+   silently breaks the contract fails CI rather than quietly degrading to the unordered merge.
+   (An earlier revision asserted this through a test-only `plan_display` field on
+   `MergeQueryResult`; that field was dropped — Design §2 — in favor of planning the shipped
+   queries directly.)
+7. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
+   a non-temporal key, ingest, let the daemon merge, and verify via
+   `micromegas-query "SELECT ... FROM list_partitions()"` that merged partitions record the
+   `sort_order`, and via the analytics log that `ordering_honored` held.
+
+## Rollout
+
+Landing Phases 1–3 changes no existing view's behavior (no existing view declares `PerFile`); Phase 4
+then walks `log_stats` through the adoption sequence below, making it the first view to exercise it.
+For a view adopting a sort order (in-repo or downstream):
+
+1. Add the top-level `ORDER BY` to the extract query (the merge query needs none —
+   `QueryMerger::execute_merge_query` applies the sort itself as a logical-plan node from the
+   declared columns, Design §2) and call `with_merge_sort_order`. New fresh partitions immediately
+   record `sort_order`;
+   merges keep using the fallback merger (the gate sees uncertified old inputs) — keep any existing
+   `BatchPartitionMerger` `merger_maker` in place as that fallback.
+2. Regenerate live partitions with the existing `regenerate_partitions()` UDF. Its bucket size is
+   not a free choice: `regenerate_partition_range` requires `delta` to exactly tile the requested
+   range, and each bucket must fully contain the existing partition(s) it replaces
+   (`verify_force_regeneration_alignment`, `batch_update.rs:111-138`) — so an already-merged,
+   day-sized partition can only be regenerated as one day-sized bucket, whose extract query's
+   blocking `ORDER BY` (Design §3) then sorts a full day's worth of the (already-aggregated)
+   extract output in one shot, the same `Resources exhausted` shape this plan exists to eliminate.
+   There is no bucket size that avoids this once a partition has already grown large. The bounded
+   path is to retire the oversized partition (`retire_partition_by_metadata`) and re-materialize it
+   at a smaller `CreateFromSource` delta via `materialize_partitions()`; ordered k-way merges then
+   roll the smaller partitions back up while streaming. Views should therefore adopt
+   `with_merge_sort_order` before their partitions grow large, or budget for a
+   retire-and-re-materialize pass if adopting late.
+3. Once every live partition certifies, ordered k-way merges engage automatically (per-merge input
+   gate — no flag day). `sort_order` in `list_partitions()` makes progress auditable in SQL.
+4. Drop the custom `merger_maker` once the view's partitions are fully regenerated.
+
+For `log_stats` specifically (Design §7), step 2 is the operative one: its live partitions predate the
+declaration and so will not certify, meaning its merges keep taking the unordered path — silently and
+with no correctness risk — until they are retired and re-materialized. Phase 4 can therefore land
+without any coordinated operational step; the benefit arrives whenever an operator chooses to do the
+retire-and-re-materialize pass. This applies only to the merge path's memory cost, though: the merge
+query's sort (applied automatically by `QueryMerger::execute_merge_query` as a logical-plan node,
+Design §2) never reaches user queries in the first place, because `register_table` keeps registering
+`merge_partitions_query` verbatim and unmodified; user-query cost is therefore unaffected by
+certification state and needs no separate operational step either.
+
+## Open Questions
+
+1. ~~**Phase 0 spike outcome**~~ — **answered: GO.** DataFusion 54.1 plans the ordered per-file
+   `GROUP BY` merge as a fully streaming pipeline. Three design corrections resulted (a fifth
+   optimizer setting, the limits of check 2, and the enrichment-join direction); all are folded into
+   Design §2/§4/§5. Nothing blocks Phase 1.
+2. ~~**`max_row_group_size` value** (Phase 5)~~ — **answered: shipped at 128 Ki rows** on this
+   branch (`.set_max_row_group_row_count(Some(128 * 1024))`, `write_partition.rs`), no per-view
+   knob; only newly written partitions are affected.
+3. ~~**Where does the aggregate metrics view live?**~~ — **answered: outside this repo.** It's a
+   deployment-specific `SqlBatchView`, not an in-repo one — `metrics_view` stays the raw block-based
+   `measures` view, and the only in-repo `SqlBatchView`s remain `log_stats`, `processes`, and
+   `streams`. The aggregate metrics rollup itself is configured downstream, in that deployment's view
+   definitions, so Phases 1–3 land only the general mechanism (`ScanOrdering::PerFile`, the
+   `QueryMerger` branch, `SqlBatchView::with_merge_sort_order`) and validate it against the same
+   `(name, time_bin)` shape using fabricated views.
+   **Consequence, addressed by Phase 4:** that left the mechanism with no in-repo consumer. `log_stats`
+   is therefore adopted as one (Design §7) — it fits the contract with the least change of any existing
+   view and gives the feature a dogfooding target. `processes` and `streams` are *also* eligible —
+   each merges on a single high-cardinality non-temporal key (`GROUP BY process_id` /
+   `GROUP BY stream_id`, `processes_view.rs:66`, `streams_view.rs:52`) — but are left for a follow-up:
+   one adopter is enough to dogfood the mechanism, and `log_stats`' multi-column
+   `(time_bin, process_id, level, target)` order exercises more of the contract than a single-column
+   one would.
