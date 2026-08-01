@@ -1,6 +1,6 @@
 use super::{
     dataframe_time_bounds::DataFrameTimeBounds,
-    partitioned_execution_plan::make_lex_ordering,
+    partitioned_execution_plan::{assert_ordering_satisfied, assert_single_partition},
     view::{PartitionSpec, ScanSortColumn, ViewMetadata},
     write_partition::write_partition_from_rows,
 };
@@ -89,36 +89,25 @@ impl SqlPartitionSpec {
             .await
             .with_context(|| "creating physical plan for extract query")?;
 
-        let partition_count = plan.properties().output_partitioning().partition_count();
-        if partition_count != 1 {
-            anyhow::bail!(
-                "extract query for {} (insert_range=[{}, {}]) produced a {partition_count}-partition \
-                 physical plan; a declared sort_order requires a single-partition, globally-ordered \
-                 output.",
-                self.view_metadata.view_set_name,
-                self.insert_range.begin.to_rfc3339(),
-                self.insert_range.end.to_rfc3339()
-            );
-        }
+        let subject = format!("extract query for {}", self.view_metadata.view_set_name);
+        assert_single_partition(
+            &plan,
+            &subject,
+            self.insert_range,
+            "a declared sort_order requires a single-partition, globally-ordered output.",
+        )?;
 
-        let lex = make_lex_ordering(&plan.schema(), &columns)
-            .with_context(|| "building the declared extract-query ordering")?
-            .with_context(|| "declared sort_order columns must be non-empty")?;
-        let ordering_satisfied = plan
-            .properties()
-            .equivalence_properties()
-            .ordering_satisfy(lex)
-            .with_context(|| "checking extract query plan output ordering")?;
-        if !ordering_satisfied {
-            anyhow::bail!(
-                "extract query for {} (insert_range=[{}, {}]) produced a physical plan whose output \
-                 ordering does not satisfy the declared sort_order {sort_order:?}; refusing to \
-                 record a false guarantee. Check for a missing or mismatched top-level ORDER BY.",
-                self.view_metadata.view_set_name,
-                self.insert_range.begin.to_rfc3339(),
-                self.insert_range.end.to_rfc3339()
-            );
-        }
+        assert_ordering_satisfied(
+            &plan,
+            &columns,
+            "extract-query",
+            &subject,
+            self.insert_range,
+            &format!(
+                "the declared sort_order {sort_order:?}; refusing to record a false guarantee. \
+                 Check for a missing or mismatched top-level ORDER BY."
+            ),
+        )?;
 
         execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")
     }

@@ -1,5 +1,9 @@
 use super::{partition::Partition, reader_factory::ReaderFactory, view::ScanSortColumn};
-use crate::{dfext::predicate::filters_to_predicate, time::datetime_to_scalar};
+use crate::{
+    dfext::predicate::filters_to_predicate,
+    time::{TimeRange, datetime_to_scalar},
+};
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{compute::SortOptions, datatypes::SchemaRef},
@@ -118,8 +122,12 @@ pub enum ScanOrdering {
     },
     /// Each file is internally sorted by `columns`; files may overlap arbitrarily. The scan
     /// yields one ordered plan partition per file, for a downstream `SortPreservingMergeExec`.
-    /// `columns` must be non-empty (enforced at construction by `SqlBatchView::with_merge_sort_order`) --
-    /// an empty list would otherwise still plan and record a vacuous ordering.
+    /// `columns` should be non-empty -- `SqlBatchView::with_merge_sort_order` rejects an empty
+    /// list at construction, but this enum and `View::get_scan_output_ordering` are public, so
+    /// that is not the only construction path. An empty `columns` is still safe: it never
+    /// certifies (see `Partition::certifies_sort_order`), so `make_partitioned_execution_plan`
+    /// degrades it to `Unordered` for any non-empty partition rather than planning and recording a
+    /// vacuous ordering.
     PerFile { columns: Vec<ScanSortColumn> },
 }
 
@@ -148,6 +156,69 @@ pub fn make_lex_ordering(
         })
         .collect::<datafusion::error::Result<Vec<_>>>()?;
     Ok(LexOrdering::new(sort_exprs))
+}
+
+/// Bails unless `plan` is a single-partition physical plan. `subject` names the query for the
+/// error message (e.g. `format!("merge query {:?}", query)` or `format!("extract query for
+/// {view}")`); `reason` supplies the full, call-site-specific trailing sentence(s) explaining what
+/// a non-single-partition plan means here -- executing such a plan would coalesce partitions and
+/// silently destroy a declared ordering before it is safe to record or execute. Shared by the
+/// three query-execution paths that must verify this before executing (Design §2/§3 of
+/// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): `QueryMerger::execute_concatenated_merge`,
+/// `QueryMerger::execute_per_file_merge`, and `SqlPartitionSpec::execute_extract_query`.
+pub fn assert_single_partition(
+    plan: &Arc<dyn ExecutionPlan>,
+    subject: &str,
+    insert_range: TimeRange,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let partition_count = plan.properties().output_partitioning().partition_count();
+    if partition_count != 1 {
+        anyhow::bail!(
+            "{subject} (insert_range=[{}, {}]) produced a {partition_count}-partition physical \
+             plan; {reason}",
+            insert_range.begin.to_rfc3339(),
+            insert_range.end.to_rfc3339()
+        );
+    }
+    Ok(())
+}
+
+/// Bails unless `plan`'s output ordering satisfies the declared `columns`, defensively
+/// re-verifying that a `sort_order` guarantee about to be recorded on a fresh partition is
+/// truthful. `label` is a short noun phrase used in the intermediate error-context messages (e.g.
+/// `"per-file merge"` or `"extract-query"`); `subject` names the query for the bail message;
+/// `reason` supplies the full, call-site-specific trailing text of the bail message (what was
+/// declared, and any guidance for diagnosing a mismatch). Shared by the two paths that record a
+/// `sort_order` guarantee (Design §2/§3): `QueryMerger::execute_per_file_merge` and
+/// `SqlPartitionSpec::execute_extract_query`. `QueryMerger::execute_concatenated_merge` does not
+/// call this -- its ordering is a structural property of the sorted, non-overlapping file group
+/// rather than a query-plan sort DataFusion could get wrong.
+pub fn assert_ordering_satisfied(
+    plan: &Arc<dyn ExecutionPlan>,
+    columns: &[ScanSortColumn],
+    label: &str,
+    subject: &str,
+    insert_range: TimeRange,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let lex = make_lex_ordering(&plan.schema(), columns)
+        .with_context(|| format!("building the declared {label} ordering"))?
+        .with_context(|| format!("declared {label} columns must be non-empty"))?;
+    let ordering_satisfied = plan
+        .properties()
+        .equivalence_properties()
+        .ordering_satisfy(lex)
+        .with_context(|| format!("checking {label} plan output ordering"))?;
+    if !ordering_satisfied {
+        anyhow::bail!(
+            "{subject} (insert_range=[{}, {}]) produced a physical plan whose output ordering \
+             does not satisfy {reason}",
+            insert_range.begin.to_rfc3339(),
+            insert_range.end.to_rfc3339()
+        );
+    }
+    Ok(())
 }
 
 /// Creates a partitioned execution plan for scanning Parquet files.

@@ -3,7 +3,9 @@ use super::{
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
-    partitioned_execution_plan::{ScanOrdering, make_lex_ordering},
+    partitioned_execution_plan::{
+        ScanOrdering, assert_ordering_satisfied, assert_single_partition,
+    },
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
     session_configurator::SessionConfigurator,
@@ -114,17 +116,13 @@ impl QueryMerger {
             .await
             .with_context(|| "creating physical plan for merge query")?;
 
-        let partition_count = plan.properties().output_partitioning().partition_count();
-        if partition_count != 1 {
-            anyhow::bail!(
-                "merge query {:?} (insert_range=[{}, {}]) produced a {partition_count}-partition \
-                 physical plan; executing it would coalesce partitions and destroy the declared \
-                 ordering. This likely means repartition_file_scans did not take effect.",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
+        assert_single_partition(
+            &plan,
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            "executing it would coalesce partitions and destroy the declared ordering. This \
+             likely means repartition_file_scans did not take effect.",
+        )?;
 
         let plan_str = displayable(plan.as_ref()).indent(true).to_string();
         let ordering_honored =
@@ -191,44 +189,32 @@ impl QueryMerger {
             .with_context(|| "creating physical plan for per-file merge query")?;
 
         // Check 1 (hard): execute_stream would otherwise coalesce partitions and destroy order.
-        let partition_count = plan.properties().output_partitioning().partition_count();
-        if partition_count != 1 {
-            anyhow::bail!(
-                "merge query {:?} (insert_range=[{}, {}]) produced a {partition_count}-partition \
-                 physical plan; executing it would coalesce partitions and destroy the declared \
-                 ordering. This likely means repartition_aggregations or \
-                 enable_round_robin_repartition did not take effect, or the merge query is \
-                 missing a collapsing operator (e.g. a SortPreservingMergeExec) to bring the \
-                 per-file partitions back to one.",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
+        assert_single_partition(
+            &plan,
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            "executing it would coalesce partitions and destroy the declared ordering. This \
+             likely means repartition_aggregations or enable_round_robin_repartition did not \
+             take effect, or the merge query is missing a collapsing operator (e.g. a \
+             SortPreservingMergeExec) to bring the per-file partitions back to one.",
+        )?;
 
         // Check 2 (hard): the plan's output ordering must satisfy the declared columns -- a
         // defensive assertion that the sort_order about to be recorded is truthful. This has no
         // author-reachable failure path under this design (the sort above is applied
         // unconditionally): it is a backstop against a future DataFusion regression, not against
         // author error.
-        let lex = make_lex_ordering(&plan.schema(), columns)
-            .with_context(|| "building the declared per-file merge ordering")?
-            .with_context(|| "declared per-file merge columns must be non-empty")?;
-        let ordering_satisfied = plan
-            .properties()
-            .equivalence_properties()
-            .ordering_satisfy(lex)
-            .with_context(|| "checking merge query plan output ordering")?;
-        if !ordering_satisfied {
-            anyhow::bail!(
-                "merge query {:?} (insert_range=[{}, {}]) produced a physical plan whose output \
-                 ordering does not satisfy the declared per-file merge columns {columns:?}; \
-                 refusing to record a false sort_order guarantee.",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
+        assert_ordering_satisfied(
+            &plan,
+            columns,
+            "per-file merge",
+            &format!("merge query {:?}", self.query),
+            insert_range,
+            &format!(
+                "the declared per-file merge columns {columns:?}; refusing to record a false \
+                 sort_order guarantee."
+            ),
+        )?;
 
         // Check 3 (warn-only): a SortPreservingMergeExec is the *expected* operator here -- only
         // a surviving SortExec signals the streaming shape regressed (memory, not correctness --
