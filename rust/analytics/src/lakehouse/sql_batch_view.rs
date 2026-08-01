@@ -56,9 +56,6 @@ pub struct SqlBatchView {
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
     merger: Arc<dyn PartitionMerger>,
-    /// True when `new` was given a custom `merger_maker`, in which case `with_merge_sort_order`
-    /// must refuse to install its own `QueryMerger` in place of it.
-    has_custom_merger: bool,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
     update_group: Option<i32>,
@@ -123,7 +120,6 @@ impl SqlBatchView {
         let extracted_df = ctx.sql(&sql).await?;
         let schema = extracted_df.schema().inner().clone();
         let session_configurator_for_merger = session_configurator.clone();
-        let has_custom_merger = merger_maker.is_some();
         let merger = merger_maker.unwrap_or(&|_runtime, schema| {
             let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
             Arc::new(QueryMerger::new(
@@ -144,7 +140,6 @@ impl SqlBatchView {
             merge_partitions_query,
             schema,
             merger,
-            has_custom_merger,
             view_factory,
             session_configurator,
             update_group,
@@ -176,18 +171,13 @@ impl SqlBatchView {
     ///    `sum(count)`, not `count(*)`; no bare `avg` -- carry `sum` and `count` and divide at
     ///    read time). `log_stats` is the in-repo model.
     ///
-    /// Mutually exclusive with passing a custom `merger_maker` to `new`: this builder installs its
-    /// own `QueryMerger` over `merge_partitions_query` for the certified-sort path, which would
-    /// otherwise silently override a bespoke merger (e.g. `BatchPartitionMerger`) on every merge
-    /// where inputs certify. Call this only when `new` was given `None`.
+    /// A custom `merger_maker` passed to `new` remains fully supported alongside this
+    /// declaration: it stays the fallback merger, used whenever any input to a merge does not
+    /// certify the declared sort order, while merges whose inputs all certify take the ordered
+    /// `QueryMerger` this builder installs. This is the intended rollout path (plan Rollout steps
+    /// 1 and 4): keep e.g. a `BatchPartitionMerger` as the bounded fallback until every live
+    /// partition certifies, then drop it.
     pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self> {
-        if self.has_custom_merger {
-            anyhow::bail!(
-                "with_merge_sort_order: view {} was constructed with a custom merger_maker; \
-                 declaring a sort order would silently replace it with a QueryMerger",
-                self.view_set_name
-            );
-        }
         if columns.is_empty() {
             anyhow::bail!("with_merge_sort_order: columns must be non-empty");
         }

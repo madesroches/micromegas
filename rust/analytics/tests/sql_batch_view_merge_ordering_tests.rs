@@ -12,11 +12,14 @@
 
 use chrono::{TimeDelta, Utc};
 use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+use datafusion::arrow::datatypes::Schema;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::TryStreamExt;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::materialized_view::MaterializedView;
+use micromegas_analytics::lakehouse::merge::{PartitionMerger, QueryMerger};
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{
@@ -27,7 +30,7 @@ use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTabl
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
-use micromegas_analytics::lakehouse::sql_batch_view::SqlBatchView;
+use micromegas_analytics::lakehouse::sql_batch_view::{MergerMaker, SqlBatchView};
 use micromegas_analytics::lakehouse::view::{ScanSortColumn, View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
@@ -58,6 +61,17 @@ async fn make_test_view_with_merge_query(
     lakehouse: &LakehouseContext,
     merge_query: &str,
 ) -> SqlBatchView {
+    make_test_view_with_merge_query_and_merger(lakehouse, merge_query, None).await
+}
+
+/// Same as `make_test_view_with_merge_query`, but additionally accepts a `merger_maker` -- lets a
+/// test build the supported-but-previously-rejected combination of a custom `merger_maker` passed
+/// to `new` alongside a chained `.with_merge_sort_order` (plan Rollout steps 1 and 4).
+async fn make_test_view_with_merge_query_and_merger(
+    lakehouse: &LakehouseContext,
+    merge_query: &str,
+    merger_maker: Option<&MergerMaker>,
+) -> SqlBatchView {
     let count_src_query = Arc::new(String::from("SELECT 0::BIGINT as count"));
     let extract_query = Arc::new(String::from(
         "SELECT 'n' AS name, TIMESTAMP '1970-01-01 00:00:00' AS time_bin, 1 AS measure \
@@ -79,7 +93,7 @@ async fn make_test_view_with_merge_query(
         None,
         TimeDelta::days(1),
         TimeDelta::days(1),
-        None,
+        merger_maker,
     )
     .await
     .expect("SqlBatchView::new")
@@ -251,6 +265,65 @@ async fn one_uncertified_input_falls_back_to_the_plain_merger() {
     assert!(
         result.ordering_honored,
         "the plain merger reports ordering_honored: true"
+    );
+}
+
+#[tokio::test]
+async fn custom_merger_maker_coexists_with_a_declared_merge_sort_order() {
+    // Plan Design §3 and Rollout steps 1 & 4: a custom merger_maker (e.g. BatchPartitionMerger)
+    // must remain usable as the fallback merger for not-yet-certified inputs even after
+    // with_merge_sort_order is chained on top -- it must not be rejected, and certified inputs
+    // must still take the declared-order QueryMerger over it.
+    let lakehouse = make_offline_lakehouse_context().await;
+    let view_factory = Arc::new(ViewFactory::new(vec![]));
+    let custom_merger_maker: &MergerMaker = &{
+        let view_factory = view_factory.clone();
+        move |_runtime: Arc<RuntimeEnv>, schema: Arc<Schema>| {
+            Arc::new(QueryMerger::new(
+                view_factory.clone(),
+                Arc::new(NoOpSessionConfigurator),
+                schema,
+                Arc::new(DESCENDING_VALUES_MERGE_QUERY.replace("{source}", "source")),
+            )) as Arc<dyn PartitionMerger>
+        }
+    };
+    let view = make_test_view_with_merge_query_and_merger(
+        &lakehouse,
+        DESCENDING_VALUES_MERGE_QUERY,
+        Some(custom_merger_maker),
+    )
+    .await;
+
+    let certified = vec![
+        make_partition(Some("a.parquet"), certifying_sort_order(), 0),
+        make_partition(Some("b.parquet"), certifying_sort_order(), 1),
+    ];
+    assert_eq!(
+        view.get_merged_partition_sort_order(&certified),
+        certifying_sort_order(),
+        "certified inputs should still take the declared-order QueryMerger despite a custom merger_maker"
+    );
+    let names = merged_names(lakehouse.clone(), &view, certified).await;
+    assert_eq!(
+        names,
+        vec!["a".to_owned(), "b".to_owned()],
+        "the ordered merger should sort ascending regardless of the custom merger_maker"
+    );
+
+    let uncertified = vec![
+        make_partition(Some("a.parquet"), certifying_sort_order(), 0),
+        make_partition(Some("b.parquet"), None, 1),
+    ];
+    assert_eq!(
+        view.get_merged_partition_sort_order(&uncertified),
+        None,
+        "an uncertified input must not record a false sort_order guarantee"
+    );
+    let names = merged_names(lakehouse, &view, uncertified).await;
+    assert_eq!(
+        names,
+        vec!["b".to_owned(), "a".to_owned()],
+        "an uncertified input should fall back to the custom merger_maker, whose own query runs unsorted"
     );
 }
 
