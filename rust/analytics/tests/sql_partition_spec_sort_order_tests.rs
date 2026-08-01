@@ -130,9 +130,9 @@ async fn extract_query_matching_order_by_passes_the_ordering_check() {
     // driving `write()` all the way to the lazily-connected, unreachable Postgres pool, which
     // would just spend the pool's acquire timeout without exercising anything the plan-level
     // check below doesn't already cover.
-    let ctx = micromegas_analytics::lakehouse::query::make_session_context(
+    let ctx = make_session_context(
         lakehouse.clone(),
-        Arc::new(micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider {}),
+        Arc::new(NullPartitionProvider {}),
         None,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
