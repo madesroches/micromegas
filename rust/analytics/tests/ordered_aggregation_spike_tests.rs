@@ -1,4 +1,4 @@
-//! Phase 0 go/no-go spike for `tasks/1392_kway_merge_sorted_partitions_plan.md` (Design §5), kept
+//! Phase 0 go/no-go spike for `tasks/completed/1392_kway_merge_sorted_partitions_plan.md` (Design §5), kept
 //! as the permanent regression guard for the assumptions the whole plan rests on.
 //!
 //! Given a scan that exposes one ordered plan partition per already-sorted file (files overlapping

@@ -1,5 +1,5 @@
 //! Offline (no live DB) regression tests for the fresh-write (extract) path's declared-`sort_order`
-//! verification (`tasks/1392_kway_merge_sorted_partitions_plan.md` Testing Strategy):
+//! verification (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Testing Strategy):
 //! `SqlPartitionSpec::execute_extract_query` refuses to record a false sort_order guarantee when
 //! the extract query's physical plan doesn't actually satisfy it (e.g. a missing top-level
 //! `ORDER BY`), which gates every fresh materialization of any view declaring

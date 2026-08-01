@@ -1,5 +1,5 @@
 //! Offline (no live DB) regression tests for `SqlBatchView::with_merge_sort_order`
-//! (`tasks/1392_kway_merge_sorted_partitions_plan.md` Design §3, Testing Strategy items 4-5):
+//! (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Design §3, Testing Strategy items 4-5):
 //! - the dual-merger selection and `get_merged_partition_sort_order` gate across the input matrix
 //!   (all certified / one uncertified / all empty / mixed)
 //! - `register_table` keeps registering `merge_partitions_query` verbatim: the user-facing view's

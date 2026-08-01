@@ -1,5 +1,5 @@
 //! Offline (no live DB) regression test for `log_stats`' adoption of order-preserving k-way
-//! merges (`tasks/1392_kway_merge_sorted_partitions_plan.md` Design §7, Testing Strategy item 6):
+//! merges (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Design §7, Testing Strategy item 6):
 //! unlike `per_file_scan_ordering_tests.rs` and `sql_batch_view_merge_ordering_tests.rs`, which use
 //! fabricated views, this pins the *shipped* `log_stats` view definition, so a later edit to its
 //! `ORDER BY`/`GROUP BY` that silently breaks the streaming contract fails CI instead of quietly

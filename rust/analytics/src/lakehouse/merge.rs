@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::Schema,
     execution::SendableRecordBatchStream,
-    logical_expr::col,
     physical_plan::{displayable, execute_stream},
     prelude::*,
     sql::TableReference,
@@ -150,7 +149,7 @@ impl QueryMerger {
     }
 
     /// The `PerFile` k-way merge path (Design §2 of
-    /// `tasks/1392_kway_merge_sorted_partitions_plan.md`): five optimizer settings keep the merge
+    /// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): five optimizer settings keep the merge
     /// a bounded-memory streaming k-way merge instead of fanning out to `target_partitions`, an
     /// unconditional logical-plan `DataFrame::sort` makes the declared ordering a property of the
     /// query plan rather than of an optimizer preference (so a wrong or missing merge-query sort
@@ -177,7 +176,12 @@ impl QueryMerger {
         let df = df.sort(
             columns
                 .iter()
-                .map(|c| col(c.column.as_str()).sort(!c.descending, c.descending))
+                .map(|c| {
+                    Expr::Column(datafusion::common::Column::new_unqualified(
+                        c.column.as_str(),
+                    ))
+                    .sort(!c.descending, c.descending)
+                })
                 .collect(),
         )?;
         let task_ctx = Arc::new(df.task_ctx());
@@ -300,8 +304,7 @@ impl PartitionMerger for QueryMerger {
                 self.execute_concatenated_merge(&ctx, insert_range).await
             }
             ScanOrdering::PerFile { columns } => {
-                let columns = columns.clone();
-                self.execute_per_file_merge(&ctx, &columns, insert_range)
+                self.execute_per_file_merge(&ctx, columns, insert_range)
                     .await
             }
         }

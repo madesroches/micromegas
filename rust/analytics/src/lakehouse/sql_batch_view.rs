@@ -69,7 +69,7 @@ pub struct SqlBatchView {
     sort_order: Option<Vec<Arc<String>>>,
     /// A `QueryMerger` declaring `ScanOrdering::PerFile { columns: sort_order }`, used instead of
     /// `merger` when every input to a merge certifies `sort_order` (Design §3 of
-    /// `tasks/1392_kway_merge_sorted_partitions_plan.md`).
+    /// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`).
     ordered_merger: Option<Arc<dyn PartitionMerger>>,
 }
 
@@ -159,7 +159,7 @@ impl SqlBatchView {
     /// order. `columns` must be non-empty and every name must exist in this view's schema.
     ///
     /// This is a four-item view-author contract (see
-    /// `tasks/1392_kway_merge_sorted_partitions_plan.md` Design §5):
+    /// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Design §5):
     /// 1. Every declared sort column must appear among the merge query's `GROUP BY` keys (order
     ///    within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`, not a blocking
     ///    sort).

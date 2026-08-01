@@ -1,5 +1,5 @@
 //! Offline (no live DB) regression tests for `ScanOrdering::PerFile`
-//! (`tasks/1392_kway_merge_sorted_partitions_plan.md`, Design §1):
+//! (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md`, Design §1):
 //! - certifying partitions each become their own single-file file group, all declaring the same
 //!   `LexOrdering`, for a downstream `SortPreservingMergeExec`
 //! - the recorded-`sort_order` certification gate: any non-empty partition that fails to certify

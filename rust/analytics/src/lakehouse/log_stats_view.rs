@@ -26,7 +26,7 @@ pub async fn make_log_stats_view(
     ));
 
     // Transform query to aggregate logs by time bin, process, level, and target. The top-level
-    // ORDER BY is the view-author contract's item 3 (tasks/1392_kway_merge_sorted_partitions_plan.md
+    // ORDER BY is the view-author contract's item 3 (tasks/completed/1392_kway_merge_sorted_partitions_plan.md
     // Design §5/§7): it lets the fresh-write path record the (time_bin, process_id, level, target)
     // sort_order guarantee with_merge_sort_order below declares.
     let transform_query = Arc::new(String::from(
