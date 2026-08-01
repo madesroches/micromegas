@@ -285,12 +285,14 @@ branches keep today's exact behavior):
      the substring `"SortExec"`, so the check reads naturally. A single-non-empty-file merge may
      legitimately contain neither operator.
 
-  `MergeQueryResult` also gains a `plan_display: Option<String>` field: `Some(plan_str)` in this
-  `PerFile` branch (the same string check 3 already computes), `None` from the `Unordered`/
-  `Concatenated` branches. `SqlBatchView`'s fields and `QueryMerger`'s query string are otherwise
-  private, so this is the only way a test can inspect a real view's merge-query plan shape
-  (`ordering_mode=Sorted`, absence of `SortExec`) through the public `View::merge_partitions` surface
-  — needed by Testing Strategy item 6.
+  `MergeQueryResult` itself stays two fields (`stream`, `ordering_honored`). An earlier revision
+  added a test-only `plan_display: Option<String>` field so tests could inspect the merge plan
+  through `View::merge_partitions`; it was dropped in favor of observing behavior directly:
+  `SqlBatchView` exposes `get_merge_partitions_query()` / `get_extract_query()` getters so a test
+  can plan the shipped queries over the view's own `get_scan_output_ordering()` and assert the
+  plan shape (`ordering_mode=Sorted`, no `SortExec`), and merger *selection* is observed through
+  output order (a probe view whose merge query emits rows in descending declared order — ascending
+  output proves the ordered merger's sort ran). See Testing Strategy item 6.
 
 ### 3. SqlBatchView: declare, gate, and record
 
@@ -500,9 +502,10 @@ Single-partition output, streaming k-way merge, `ordering_mode=Sorted` on both a
   item 4 below.
 
 The reversed-key-order case, `first_value(unit ORDER BY time_bin)`, and the fuller measure set were
-each run by hand during the spike and behaved as stated, but only appear in the landed file as prose
-(`ordered_aggregation_spike_tests.rs:145-149`) — no test asserts them. Phase 3 step 14 adds assertions
-for them (Testing Strategy item 1) so the regression guard covers what §5 claims.
+each run by hand during the spike; Phase 3 step 14 later added assertions for them
+(`reversed_group_by_key_order_still_streams`, `first_value_with_explicit_inner_order_by_still_streams`,
+`fuller_measure_set_still_streams` — Testing Strategy item 1), so the regression guard now covers
+what §5 claims.
 - **An extra `GROUP BY` key outside the sort order degrades gracefully**, not catastrophically:
   `GROUP BY name, unit, time_bin` under a `(name, time_bin)` declaration gives
   `ordering_mode=PartiallySorted([0, 2])` — still streaming, still bounded to the current
@@ -666,12 +669,10 @@ a hotfix against `main` and there is no window where `main`'s CI is red because 
    Update `MergeQueryResult::ordering_honored`'s rustdoc (`merge.rs:34-38`) for the per-file
    semantics: it currently documents the flag as meaning no buffering `Sort`/`SortPreservingMerge`
    node ran, which is wrong for `PerFile` mode, where a `SortPreservingMergeExec` is the *expected*
-   operator and only a surviving `SortExec` signals a regression. Add the `plan_display:
-   Option<String>` field alongside (Design §2) so a test can inspect the real merge query's plan
-   shape via the public `View::merge_partitions` surface (Testing Strategy item 6). Adding the field
-   breaks three existing `MergeQueryResult` struct-literal constructors that don't use this plan's
-   new builder path: `batch_partition_merger.rs:120` and `:188`, and `tests/sql_view_test.rs:182`
-   (`LogSummaryMerger`) — update all three to set `plan_display: None`.
+   operator and only a surviving `SortExec` signals a regression. (An earlier revision also added
+   a test-only `plan_display` field to `MergeQueryResult` here; it was later dropped — see Design
+   §2 — in favor of tests planning the shipped queries directly via `SqlBatchView`'s query
+   getters, so `MergeQueryResult` and its other constructors are unchanged.)
 10. Planning tests for the per-file branch (see Testing Strategy).
 
 ### Phase 3 — SqlBatchView declaration and recording
@@ -701,7 +702,11 @@ a hotfix against `main` and there is no window where `main`'s CI is red because 
     test actually pins — a general DataFusion planning fact, independent of anything an author writes
     in a `SqlBatchView` merge query — and either drop the test or retarget it at a shape a merge-query
     author can still produce (e.g. an extra order-sensitive aggregate argument), so it no longer reads
-    as guarding a live authoring hazard.
+    as guarding a live authoring hazard. **Done** — landed as
+    `order_by_extending_past_the_declared_scan_ordering_reinstates_a_blocking_sort`, alongside
+    `reversed_group_by_key_order_still_streams`, `first_value_with_explicit_inner_order_by_still_streams`,
+    `fuller_measure_set_still_streams`, `cte_internal_order_by_is_discarded_by_a_later_join`, and
+    `top_level_order_by_satisfies_the_declared_columns`.
 15. Docs: `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` —
     extend the `regenerate_partitions()` notes to cover `SqlBatchView` partitions and the Rollout
     step 2 bucket-size caveat (Documentation).
@@ -714,12 +719,16 @@ a hotfix against `main` and there is no window where `main`'s CI is red because 
     already satisfies contract item 4 — no query restructuring. The sort node only applies inside
     the `ordered_merger`'s execution path, never reaching `log_stats`' user-facing view, since
     `register_table` registers the merge query verbatim (Design §3).
-17. New test file `rust/analytics/tests/log_stats_ordering_tests.rs`: call `make_log_stats_view()`'s
-    real instance through `View::merge_partitions` and assert on the returned `MergeQueryResult`
-    (`ordering_honored == true`; `plan_display` containing `ordering_mode=Sorted`) — Testing Strategy
-    item 6: the same shape as item 3's assertions, but read from the real view definition rather than
-    a fabricated one, through the `plan_display` accessor Phase 2 step 9 adds, so a future edit to its
-    queries that breaks the contract fails CI.
+17. New test file `rust/analytics/tests/log_stats_ordering_tests.rs`, pinning the *shipped*
+    `make_log_stats_view()` definition (Testing Strategy item 6) with two tests:
+    `log_stats_merge_query_stays_a_streaming_kway_merge` plans the real merge query (via
+    `get_merge_partitions_query()`) over a source registered with the view's own
+    `get_scan_output_ordering()` and asserts the streaming shape (`ordering_mode=Sorted`, no
+    `SortExec`), plus `get_merged_partition_sort_order` recording the four declared columns;
+    `log_stats_extract_query_satisfies_its_declared_sort_order` plans the real extract query (via
+    `get_extract_query()`) and asserts its output ordering satisfies the declared
+    `(time_bin, process_id, level, target)` columns — so a future edit to either query that breaks
+    the contract fails CI.
 
 ### Phase 5 — Row-group size (separable, can land any time)
 18. `write_partition.rs`: `.set_max_row_group_size(...)` (Design §6, pending Open Question 2).
@@ -736,8 +745,7 @@ a hotfix against `main` and there is no window where `main`'s CI is red because 
 | `rust/analytics/src/lakehouse/thread_spans_view.rs` | return `Concatenated` |
 | `rust/analytics/src/lakehouse/merge.rs` | per-file branch in `QueryMerger`, including the `DataFrame::sort` logical-plan node applied before physical planning |
 | `rust/analytics/src/lakehouse/blocks_view.rs` | call-site update |
-| `rust/analytics/src/lakehouse/batch_partition_merger.rs` | `MergeQueryResult` struct literals (`:120`, `:188`) set `plan_display: None` |
-| `rust/analytics/src/lakehouse/sql_batch_view.rs` | config, gating, overrides; forwards declared columns to `with_merge_scan_ordering` for the ordered merger |
+| `rust/analytics/src/lakehouse/sql_batch_view.rs` | config, gating, overrides; forwards declared columns to `with_merge_scan_ordering` for the ordered merger; `get_extract_query`/`get_merge_partitions_query` getters for tests |
 | `rust/analytics/src/lakehouse/sql_partition_spec.rs` | `sort_order` recording + verification |
 | `rust/analytics/src/lakehouse/export_log_view.rs` | `fetch_sql_partition_spec` call site passes `None` |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `max_row_group_size` (Phase 5) |
@@ -746,10 +754,10 @@ a hotfix against `main` and there is no window where `main`'s CI is red because 
 | `mkdocs/docs/query-guide/python-api.md` | `regenerate_partitions()` note: `SqlBatchView` use case + bucket-size caveat |
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | signature updates |
 | `rust/analytics/tests/blocks_view_merge_ordering_tests.rs` | signature updates |
-| `rust/analytics/tests/sql_view_test.rs` | `MergeQueryResult` struct literal (`:182`, `LogSummaryMerger`) sets `plan_display: None` |
 | `rust/analytics/tests/ordered_aggregation_spike_tests.rs` | new (Phase 0) — **done**; 2-core-CI `target_partitions` pin for the repartition-fanout test lands in Phase 0.5; extended in Phase 3 (step 14) with the four by-hand assertions |
 | `rust/analytics/tests/per_file_scan_ordering_tests.rs` | new (Phase 1) — `PerFile` scan/gate tests |
 | `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | new (Phases 2–3) |
+| `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs` | new (Phase 3) — fresh-write declared-`sort_order` verification, offline |
 | `rust/analytics/tests/log_stats_ordering_tests.rs` | new (Phase 4) — pins the shipped `log_stats` view's streaming shape |
 
 ## Trade-offs
@@ -835,10 +843,11 @@ polled), so they run in plain `cargo test`:
    (non-prefix `GROUP BY` loses `GroupOrdering`, and a strict prefix streams);
    `extra_group_by_key_outside_the_sort_order_still_streams` (an extra `GROUP BY` key degrades to
    `PartiallySorted`, not a blocking sort);
-   `order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort` (an `ORDER BY` extending
-   past the declared columns reinstates a blocking sort — Phase 3 step 14 retires/rewrites this
-   test's now-stale comment against the revised §2/§3 contract, under which the merge query has no
-   author-written `ORDER BY` to get wrong in this way); and both enrichment-join directions
+   `order_by_extending_past_the_declared_scan_ordering_reinstates_a_blocking_sort` (an `ORDER BY`
+   extending past the declared columns reinstates a blocking sort — Phase 3 step 14 retargeted and
+   renamed this test, formerly `order_by_beyond_the_declared_sort_columns_reinstates_a_blocking_sort`,
+   whose comment guarded a contract the revised §2/§3 design deleted); and both enrichment-join
+   directions
    (`enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort`,
    `enrichment_join_with_the_ordered_side_on_the_probe_side_keeps_streaming`).
    **Phase 0.5** pins `target_partitions` explicitly (above k) in the
@@ -873,7 +882,10 @@ polled), so they run in plain `cargo test`:
    no-`ORDER BY` query is accepted (and correctly reports `ordering_honored: true`) is the accurate
    version, and pins the behavior for future DataFusion upgrades.
 4. **SqlBatchView gates** (Phase 3): `get_merged_partition_sort_order` and merger selection across
-   the input matrix (all certified / one uncertified / all empty / mixed); `SqlPartitionSpec`
+   the input matrix (all certified / one uncertified / all empty / mixed), including with a custom
+   `merger_maker` present (`custom_merger_maker_coexists_with_a_declared_merge_sort_order` pins the
+   Rollout coexistence: the custom merger stays the fallback for uncertified inputs while certified
+   inputs take the ordered merger); `SqlPartitionSpec`
    declared-path verification bails when the extract plan doesn't guarantee the order. Also, in
    `sql_batch_view_merge_ordering_tests.rs`: register a real `SqlBatchView` configured with
    `with_merge_sort_order` via `register_table` and assert its user-facing view's **logical** plan
@@ -903,13 +915,16 @@ polled), so they run in plain `cargo test`:
    declared per-file groups into `target_partitions` byte-range groups. This gives the user-path claim
    the same kind of permanent guard §5 already keeps for the merge path, so a DataFusion upgrade that
    turned it into a blocking `SortExec` would fail CI instead of landing silently.
-6. **`log_stats` adoption** (Phase 4, Design §7): call `make_log_stats_view()`'s real instance's
-   `View::merge_partitions` (offline harness — stream never polled) and inspect the returned
-   `MergeQueryResult`: assert `ordering_honored == true` (no surviving `SortExec`) and, via the
-   `plan_display` field the `PerFile` branch adds (Design §2, step 9), that the plan text contains
-   `ordering_mode=Sorted`. Unlike items 2–5, which use fabricated views, this pins the *shipped* view
-   definition, so a later edit to its `ORDER BY` or `GROUP BY` that silently breaks the contract
-   fails CI rather than quietly degrading to the unordered merge.
+6. **`log_stats` adoption** (Phase 4, Design §7): plan `make_log_stats_view()`'s real queries
+   offline — the shipped merge query (via `get_merge_partitions_query()`) over a source declaring
+   the view's own `get_scan_output_ordering()`, asserting `ordering_mode=Sorted` and no `SortExec`
+   in the physical plan, and the shipped extract query (via `get_extract_query()`), asserting its
+   output ordering satisfies the declared columns. Unlike items 2–5, which use fabricated views,
+   this pins the *shipped* view definition, so a later edit to its `ORDER BY` or `GROUP BY` that
+   silently breaks the contract fails CI rather than quietly degrading to the unordered merge.
+   (An earlier revision asserted this through a test-only `plan_display` field on
+   `MergeQueryResult`; that field was dropped — Design §2 — in favor of planning the shipped
+   queries directly.)
 7. **End-to-end (manual, local test env)**: start services, define a test `SqlBatchView` sorted on
    a non-temporal key, ingest, let the daemon merge, and verify via
    `micromegas-query "SELECT ... FROM list_partitions()"` that merged partitions record the
@@ -960,8 +975,9 @@ certification state and needs no separate operational step either.
    `GROUP BY` merge as a fully streaming pipeline. Three design corrections resulted (a fifth
    optimizer setting, the limits of check 2, and the enrichment-join direction); all are folded into
    Design §2/§4/§5. Nothing blocks Phase 1.
-2. **`max_row_group_size` value** (Phase 5): 128 Ki rows proposed — acceptable, or prefer a
-   different value / a per-view knob / deferral to a separate PR?
+2. ~~**`max_row_group_size` value** (Phase 5)~~ — **answered: shipped at 128 Ki rows** on this
+   branch (`.set_max_row_group_row_count(Some(128 * 1024))`, `write_partition.rs`), no per-view
+   knob; only newly written partitions are affected.
 3. ~~**Where does the aggregate metrics view live?**~~ — **answered: outside this repo.** It's a
    deployment-specific `SqlBatchView`, not an in-repo one — `metrics_view` stays the raw block-based
    `measures` view, and the only in-repo `SqlBatchView`s remain `log_stats`, `processes`, and
