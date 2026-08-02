@@ -74,7 +74,10 @@ vaguer than what is accepted and silent on which offset spellings work.
 
 `python/micromegas/tests/test_time.py` has one test covering a `+00:00` string
 and a naive string; no `Z` coverage. `tests/cli/` contains only
-`test_config.py`; `parse_timestamp` is untested.
+`test_config.py`; `parse_timestamp` is untested. `tests/test_query.py` already
+exists as the hermetic test module for `micromegas/cli/query.py` (added for
+#1399, covering `read_sql_source`), so it is the established home for
+`parse_timestamp` coverage rather than a new file under `tests/cli/`.
 
 There is **no Python CI workflow at all** — `.github/workflows/` contains
 `rust.yml`, `analytics-web-app.yml`, `grafana-plugin.yml`, `blender-extension.yml`,
@@ -82,8 +85,10 @@ There is **no Python CI workflow at all** — `.github/workflows/` contains
 `pytest`. So nothing would have caught this even with a test, and nothing
 exercises Python 3.10 specifically. Most tests under `python/micromegas/tests/`
 are integration tests requiring a live service (`tests/test_utils.py:5` calls
-`micromegas.connect()` at import time), so a CI job must run an explicit
-hermetic subset rather than the whole directory.
+`micromegas.connect()`, but only at *run* time — `FlightSQLClient.__init__`
+builds a lazy `pyarrow.flight` channel with no I/O, so collection succeeds and
+these tests only fail when actually executed, with a connection error), so a
+CI job must run an explicit hermetic subset rather than the whole directory.
 
 ## Design
 
@@ -188,18 +193,27 @@ already uses.
 ### 4. Hermetic Python unit-test CI
 
 Add `.github/workflows/python.yml`, triggered on pushes/PRs touching
-`python/**` (plus the workflow file itself), running a matrix of Python **3.10**
-and **3.12**:
+`python/**` and `build/python_ci.py` (plus the workflow file itself), running
+a matrix of Python **3.10** and **3.12**. Following the pattern every other
+workflow uses — `rust.yml` → `build/rust_ci.py`, `analytics-web-app.yml` →
+`build/analytics_web_ci.py`, `grafana-plugin.yml` → `build/grafana_ci.py`,
+`blender-extension.yml` → `build/build_blender_plugin.py` — the workflow
+delegates to a new `build/python_ci.py` rather than inlining shell in the
+YAML:
 
-- Install Poetry, `poetry install` in `python/micromegas`.
-- `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/cli tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
+- Workflow step: `poetry install` in `python/micromegas`, then
+  `python build/python_ci.py`.
+- `build/python_ci.py` runs
+  `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
+  from `python/micromegas` and returns its exit code.
 
 The explicit file list is deliberate: `pytest` over the whole `tests/` directory
-would collect the integration suite, and `tests/test_utils.py:5` calls
-`micromegas.connect()` at *import* time, so collection itself fails without a
-running service. `--doctest-modules` is scoped to `micromegas/time.py` alone —
-`flightsql/client.py` contains many illustrative `>>>` blocks that are not
-executable doctests and would fail if collected.
+would collect and run the integration suite, and `tests/test_utils.py:5` calls
+`micromegas.connect()` — a `FlightSQLClient` construction with no I/O of its
+own — which fails only when a test actually runs a query against it (a
+connection error), not at collection time. `--doctest-modules` is scoped to
+`micromegas/time.py` alone — `flightsql/client.py` contains many illustrative
+`>>>` blocks that are not executable doctests and would fail if collected.
 
 The 3.10 leg is the part that actually earns its keep here: on 3.11+ the `Z`
 regression tests pass whether or not the shim exists, because `fromisoformat`
@@ -222,14 +236,20 @@ broken one.
    (lines 74, 78); wrap the `parse_timestamp` calls in `main()` (lines 120-121)
    with per-flag `ValueError` → `parser.error()` handling.
 5. **`python/micromegas/tests/test_time.py`** — extend with the cases below.
-6. **`python/micromegas/tests/cli/test_query_timestamps.py`** (new) — cover
-   `parse_timestamp`.
-7. **`.github/workflows/python.yml`** (new) — the 3.10/3.12 hermetic unit-test
-   job described above.
+6. **`python/micromegas/tests/test_query.py`** — extend with cases covering
+   `parse_timestamp`, alongside the existing `read_sql_source` regression
+   tests.
+7. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
+   above, following the existing `build/*_ci.py` scripts.
+   **`.github/workflows/python.yml`** (new) — the 3.10/3.12 matrix job that
+   installs Poetry and calls `build/python_ci.py`, with `build/python_ci.py`
+   included in the workflow's path filter.
 8. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
    option descriptions (lines 605-606) to say RFC 3339 and show the `Z` form,
-   and update the "specific timestamps" CLI example (lines 619-621) to use
-   `Z`-suffixed values so the docs demonstrate the canonical spelling.
+   update the "specific timestamps" CLI example (lines 619-621) to use
+   `Z`-suffixed values so the docs demonstrate the canonical spelling, and add
+   `parse_datetime` to the "Time Utilities" section (lines 693-716) alongside
+   `format_datetime`/`parse_time_delta`.
 9. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing style,
    noting the `Z` acceptance fix, the `flightsql/time.py` removal, the CLI error
    handling, and the new Python CI job, with `(#1405)`.
@@ -243,7 +263,8 @@ broken one.
 - `python/micromegas/micromegas/flightsql/time.py` *(delete)*
 - `python/micromegas/micromegas/cli/query.py`
 - `python/micromegas/tests/test_time.py`
-- `python/micromegas/tests/cli/test_query_timestamps.py` *(new)*
+- `python/micromegas/tests/test_query.py`
+- `build/python_ci.py` *(new)*
 - `.github/workflows/python.yml` *(new)*
 - `mkdocs/docs/query-guide/python-api.md`
 - `CHANGELOG.md`
@@ -276,12 +297,10 @@ note covers the theoretical caller.
 
 **Explicit test-file list in CI vs. pytest markers.** Marking hermetic tests
 (`@pytest.mark.unit`) and running `-m unit` would be more elegant and would
-auto-include future unit tests. It was rejected for this change because it means
-touching every existing test file to classify it, which is a much larger diff
-than the fix warrants, and because `tests/test_utils.py` fails at *collection*
-time without a server — so marker selection alone would not save the run without
-also restructuring that module. The explicit list is honest about what is
-covered; broadening it is a natural follow-up.
+auto-include future unit tests. It was rejected for this change because it
+means touching every existing test file to classify it, which is a much larger
+diff than this fix warrants. The explicit list is honest about what is
+covered; broadening it (or migrating to markers) is a natural follow-up.
 
 **`parser.error()` in `main()` vs. inside `parse_timestamp`.** Passing the
 `parser` into `parse_timestamp` would centralize the message, but it would weld
@@ -296,7 +315,11 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   descriptions (lines 605-606) and the specific-timestamps CLI example
   (lines 619-621). The Python API sections (lines 57-58, 88-95, 108-109)
   already document the `Z` form correctly and need no change — they become
-  accurate rather than aspirational.
+  accurate rather than aspirational. The "Time Utilities" section
+  (lines 693-716), currently headed
+  ``### `format_datetime(value)` and `parse_time_delta(user_string)` ``, gains
+  `parse_datetime` in its heading, import example, and prose, since it is now
+  a public function in the same module.
 - `python/micromegas/micromegas/cli/query.py` — `parse_timestamp` docstring and
   argparse help strings (the CLI's in-tool documentation).
 - `python/micromegas/micromegas/time.py` — `parse_datetime` docstring; the
@@ -322,10 +345,10 @@ and `parse_datetime`:
 - `"not-a-timestamp"` → `ValueError` from `parse_datetime`.
 - Fractional seconds with `Z`: `"2024-08-26T17:32:00.123456Z"`.
 
-### `tests/cli/test_query_timestamps.py` — new
+### `tests/test_query.py` — extend
 
-Direct unit tests of `micromegas.cli.query.parse_timestamp`, matching the
-existing hermetic style of `tests/cli/test_config.py`:
+Direct unit tests of `micromegas.cli.query.parse_timestamp`, added alongside
+the existing `read_sql_source` regression tests in this module:
 
 - `None` → `None`.
 - `"1h"` / `"30m"` / `"7d"` → a tz-aware datetime roughly that far in the past
