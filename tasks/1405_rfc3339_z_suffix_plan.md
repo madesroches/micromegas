@@ -9,15 +9,18 @@ bare `datetime.datetime.fromisoformat()`, which does not accept an RFC 3339 `Z`
 (Zulu/UTC) suffix before Python 3.11 — a version `pyproject.toml` still supports
 (`python = "^3.10"`). Meanwhile the project's docstrings, the public API
 reference, and the mkdocs query guide all advertise the `Z` form as the
-canonical spelling. This plan closes that gap: a single shared
-`parse_datetime()` helper in `micromegas/time.py` normalizes a trailing `Z`/`z`
-to `+00:00` before parsing, the duplicate `format_datetime` in
-`micromegas/flightsql/time.py` (which is the copy the actual query path uses) is
-deleted in favor of the shared one, the CLI turns parse failures into a readable
-`argparse` error instead of an uncaught traceback and names RFC 3339 in its help
-text, and a hermetic Python unit-test CI job — with a 3.10 leg and the
-`time.py` doctest enabled — makes this class of version-specific regression
-visible before it ships.
+canonical spelling. This plan closes that gap by raising the client's minimum
+supported Python version to 3.11 — where `fromisoformat` accepts `Z` natively —
+and normalizing the one thing 3.11+ still rejects, a lowercase `z` (RFC 3339
+permits it; the stdlib doesn't, on any version). A single shared
+`parse_datetime()` helper in `micromegas/time.py` does that normalization before
+parsing, the duplicate `format_datetime` in `micromegas/flightsql/time.py`
+(which is the copy the actual query path uses) is deleted in favor of the
+shared one, the CLI turns parse failures into a readable `argparse` error
+instead of an uncaught traceback and names RFC 3339 in its help text, and a
+hermetic Python unit-test CI job — with a 3.11/3.14 matrix and the `time.py`
+doctest enabled — confirms the package installs and passes on both the new
+floor and the newest supported interpreter.
 
 ## Current State
 
@@ -42,7 +45,12 @@ calling `micromegas.time.format_datetime` directly. Nothing else imports
 
 Consequence: fixing only `micromegas/time.py`, as the issue's suggested patch
 implies, would leave `client.query(sql, "2024-01-01T00:00:00Z", ...)` — the exact
-call the docs advertise — still broken on Python 3.10.
+call the docs advertise — still broken on Python 3.10, which is what
+`pyproject.toml` (`python = "^3.10"`) declares as supported today. The fix
+adopted here is to raise the floor to 3.11, where `fromisoformat` accepts `Z`
+natively, and to normalize the one spelling that remains unsupported on every
+version — lowercase `z` — in the shared helper (see Design §1–§2 and
+Trade-offs).
 
 ### The CLI parse site
 
@@ -61,7 +69,8 @@ vaguer than what is accepted and silent on which offset spellings work.
 ### Documented contract
 
 - `time.py:49-50` docstring shows `format_datetime('2024-01-01T12:00:00Z')` →
-  `'2024-01-01T12:00:00+00:00'` as a working example. On 3.10 it raises.
+  `'2024-01-01T12:00:00+00:00'` as a working example. On 3.10 it raises; on
+  3.11+ it already works natively.
 - `time.py:54`: "The server requires RFC3339 format for all time-based queries."
 - `flightsql/client.py:323` and `:380`: begin/end "Can be a timezone-aware
   datetime or RFC3339 string (e.g., `"2024-01-01T00:00:00Z"`)".
@@ -83,7 +92,7 @@ There is **no Python CI workflow at all** — `.github/workflows/` contains
 `rust.yml`, `analytics-web-app.yml`, `grafana-plugin.yml`, `blender-extension.yml`,
 `capi-release.yml`, `publish-docs.yml`, and friends, none of which run
 `pytest`. So nothing would have caught this even with a test, and nothing
-exercises Python 3.10 specifically. Most tests under `python/micromegas/tests/`
+exercises any specific Python version. Most tests under `python/micromegas/tests/`
 are integration tests requiring a live service (`tests/test_utils.py:5` calls
 `micromegas.connect()`, but only at *run* time — `FlightSQLClient.__init__`
 builds a lazy `pyarrow.flight` channel with no I/O, so collection succeeds and
@@ -92,63 +101,76 @@ CI job must run an explicit hermetic subset rather than the whole directory.
 
 ## Design
 
-### 1. Shared `parse_datetime()` in `micromegas/time.py`
+### 1. Bump the Python floor to 3.11
 
-Add one public helper next to `format_datetime`, and route every string-parsing
+`python/micromegas/pyproject.toml` declares `python = "^3.10"`. Change it to
+`python = "^3.11"`. This is the decision that makes the rest of the plan
+simple: 3.11 is exactly where `datetime.fromisoformat()` learned to accept a
+`Z` suffix, so the client no longer needs to shim anything for `Z` itself —
+only for lowercase `z`, which the stdlib rejects on every version including
+3.14 (see §2 and Trade-offs for why that one case still needs normalizing).
+
+Python 3.10 reaches end of life in October 2026 — about two months from now —
+so dropping it is not a preemptive break; it is dropping a version that is
+about to stop receiving security fixes upstream. `pyarrow` (23.0.1, locked),
+`grpcio`, `pandas`, and `numpy` all already publish cp311 through cp314
+wheels, so there is no dependency-availability reason to stay on 3.10.
+
+After changing the constraint, `poetry.lock` must be regenerated (`poetry
+lock` from `python/micromegas`) so the lock file's resolution and hashes match
+the new `python` bound; the regenerated lock file is committed alongside the
+`pyproject.toml` change.
+
+### 2. Shared `parse_datetime()` in `micromegas/time.py`
+
+Now that the floor is 3.11, `fromisoformat` already handles the `Z` suffix and
+any number of fractional-second digits natively — there is nothing left to
+normalize for either of those. The one gap that remains on every supported
+version, including 3.14, is a lowercase `z`: RFC 3339 section 5.6 defines the
+offset via ABNF `"Z"`, and ABNF string literals are case-insensitive, so `z` is
+conformant, but the stdlib parser rejects it regardless of version. Add one
+small public helper next to `format_datetime`, and route every string-parsing
 site through it:
 
 ```python
-_FRACTION_RE = re.compile(r"\.(\d+)")
-
-
 def parse_datetime(value):
     """Parse an RFC 3339 timestamp string into a datetime.
 
-    Accepts the full RFC 3339 grammar on every supported interpreter: the
-    'Z' (Zulu/UTC) suffix, numeric offsets, and any number of
-    fractional-second digits (RFC 3339's `time-secfrac = "." 1*DIGIT`).
-    Python's datetime.fromisoformat() only learned to accept 'Z' in 3.11,
-    and on 3.10 it only accepts a fractional-seconds part that is exactly
-    3 or 6 digits long (what isoformat() emits), not an arbitrary count —
-    so both the 'Z' suffix and the fractional-seconds field are normalized
-    before parsing, keeping the accepted grammar identical on 3.10 and
-    3.11+. This project supports 3.10.
+    datetime.fromisoformat() accepts an uppercase 'Z' offset but not a
+    lowercase 'z', which RFC 3339 section 5.6 permits (its ABNF string
+    literals are case-insensitive), so normalize that one case first.
     """
-    if value.endswith(("Z", "z")):
-        value = value[:-1] + "+00:00"
-    match = _FRACTION_RE.search(value)
-    if match:
-        digits = match.group(1)[:6].ljust(6, "0")
-        value = value[: match.start()] + "." + digits + value[match.end() :]
+    if value.endswith("z"):
+        value = value[:-1] + "Z"
     return datetime.datetime.fromisoformat(value)
 ```
 
 Public (not `_`-prefixed) so both the CLI and the flightsql client can import it
 without reaching into a private name, consistent with the project's preference
-for `pub` over `pub(crate)`-style narrowing.
+for `pub` over `pub(crate)`-style narrowing. It stays the single shared parse
+site — `format_datetime`, `parse_timestamp` (CLI), and the flightsql client all
+go through it — which is the DRY point of this plan, even though the helper
+itself is now only a few lines: a version-specific shim would have been easy
+to leave scattered across call sites and hard to remove later, whereas a
+one-line normalization is just as easy to keep centralized.
 
 `format_datetime`'s string branch (`time.py:65`) becomes
 `return format_datetime(parse_datetime(value))`.
 
 Notes on the normalization:
 
-- Only a *trailing* `Z`/`z` is rewritten to `+00:00`; other offsets (`+00:00`,
-  `-05:00`) and naive values are otherwise untouched.
-- A fractional-seconds group, if present, is padded with trailing zeros or
-  truncated to exactly six digits (microseconds) before parsing. RFC 3339
-  allows any digit count there, but `fromisoformat` is inconsistent about it
-  across supported interpreters: 3.10 accepts only 3 or 6 digits, while 3.11+
-  accepts any count but silently truncates beyond six itself. Truncating
-  beyond microsecond precision is lossy, but it matches `datetime`'s own
-  resolution and reproduces exactly what 3.11+ already does — so 3.10 now
-  matches it instead of raising.
-- Lowercase `z` is accepted: RFC 3339 section 5.6 defines the offset via ABNF
-  `"Z"`, and ABNF string literals are case-insensitive, so `z` is conformant.
-  Accepting it also costs nothing.
+- Only a *trailing* lowercase `z` is rewritten to `Z`; an uppercase `Z`,
+  numeric offsets (`+00:00`, `-05:00`), and naive values are already handled
+  natively by `fromisoformat` on 3.11+ and are passed through untouched.
 - A `ValueError` from a genuinely malformed value still propagates, unchanged —
   callers decide how to present it.
+- The fractional-seconds padding/truncation logic and its `_FRACTION_RE` regex
+  that a 3.10-supporting version of this helper would need are gone entirely:
+  3.11+ accepts any digit count in `time-secfrac` natively (truncating beyond
+  microsecond precision itself, which is `datetime`'s own resolution limit,
+  not something this helper needs to reproduce).
 
-### 2. Collapse the duplicate `flightsql/time.py`
+### 3. Collapse the duplicate `flightsql/time.py`
 
 Delete `python/micromegas/micromegas/flightsql/time.py` and point the client at
 the canonical implementation. In `flightsql/client.py`, replace
@@ -189,7 +211,7 @@ asserts `make_call_headers` directly, so the fix is verified on the path the
 issue's repro actually exercises, not just on `micromegas.time` and
 `cli.query`.
 
-### 3. CLI: friendly error and accurate help
+### 4. CLI: friendly error and accurate help
 
 In `cli/query.py`:
 
@@ -219,11 +241,15 @@ In `cli/query.py`:
 contract for bad arguments, and the same treatment the surrounding validation
 already uses.
 
-### 4. Hermetic Python unit-test CI
+### 5. Hermetic Python unit-test CI
 
 Add `.github/workflows/python.yml`, triggered on pushes/PRs touching
 `python/**` and `build/python_ci.py` (plus the workflow file itself), running
-a matrix of Python **3.10** and **3.12** on `runs-on: ubuntu-latest`. This
+a matrix of Python **3.11** and **3.14** — the new floor and the newest
+generally-available interpreter — on `runs-on: ubuntu-latest`. The matrix
+values must be written as quoted YAML strings
+(`python-version: ["3.11", "3.14"]`); bare `3.10`-style scalars parse as YAML
+floats (`3.1`), which is a known footgun with `actions/setup-python`. This
 workflow deliberately pins that fixed runner rather than routing through
 `check-runner.yml`: the version matrix is the thing under test, so it must
 stay deterministic regardless of self-hosted-runner availability. Following
@@ -247,8 +273,9 @@ the pattern every other workflow uses — `rust.yml` → `build/rust_ci.py`,
   checking its own `sys.version_info`: `python_ci.py` itself is invoked by the
   interpreter `setup-python` put on `PATH`, so its own `sys.version_info` is
   the matrix version by construction and could never catch a mis-pinned venv
-  (e.g. Poetry silently resolving to the runner's default 3.12 instead of the
-  matrix's 3.10 for the `poetry run pytest` subprocess below). It then runs
+  (e.g. Poetry silently resolving to the runner's default interpreter instead
+  of the matrix's 3.11 for the `poetry run pytest` subprocess below). It then
+  runs
   `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
   from `python/micromegas` and returns its exit code.
 
@@ -260,12 +287,18 @@ connection error), not at collection time. `--doctest-modules` is scoped to
 `micromegas/time.py` alone — `flightsql/client.py` contains many illustrative
 `>>>` blocks that are not executable doctests and would fail if collected.
 
-The 3.10 leg is the part that actually earns its keep here: on 3.11+ the `Z`
-regression tests pass whether or not the shim exists, because `fromisoformat`
-handles `Z` natively. Only the 3.10 leg distinguishes a fixed build from a
-broken one — which is exactly why the interpreter-pinning and
-version-assertion steps above matter: without them, the 3.10 leg could
-silently run on 3.12 and report a false green.
+It is no longer true that only one leg of this matrix "proves" the fix — the
+`Z` acceptance is now native on every supported interpreter (3.11 through
+3.14), so both legs exercise the same code path for it. What the two-version
+matrix buys instead is (a) confirming the package actually installs and its
+test suite passes on both the floor (3.11) and the newest usable interpreter
+(3.14), catching e.g. a dependency that lacks a wheel for one of them, and (b)
+catching a lowercase-`z` regression on both, since that normalization is this
+plan's one piece of interpreter-independent behavior and is worth checking on
+more than a single version. The interpreter-pinning and version-assertion
+steps above still matter for the same reason as always: without them, a
+matrix leg could silently run on the runner's default interpreter instead of
+the one it claims to be testing, and report a false green.
 
 The new `unit-tests` checks start out **advisory**: they are not added to the
 repo's branch-protection required-status-checks list, so no companion skip
@@ -274,47 +307,52 @@ workflow is needed for this change. Skip workflows like `build-skip.yml`/
 hanging on PRs whose paths don't touch the relevant code
 (`tasks/completed/container_based_dev_worker_plan.md:95`); since nothing here
 depends on an out-of-repo branch-protection change, that machinery does not
-apply yet. Follow-up: if `unit-tests (3.10)` / `unit-tests (3.12)` are later
+apply yet. Follow-up: if `unit-tests (3.11)` / `unit-tests (3.14)` are later
 made required in branch protection, a companion
 `.github/workflows/python-build-skip.yml` mirroring those matrix leg names
 must be added at that time, following the `build-skip.yml` pattern.
 
 ## Implementation Steps
 
-1. **`python/micromegas/micromegas/time.py`** — add `parse_datetime()` with the
-   `Z`/`z` normalization and docstring; change `format_datetime`'s string branch
-   (line 65) to use it. Leave the existing docstring example at line 49 as-is —
-   it becomes true rather than aspirational.
-2. **`python/micromegas/micromegas/flightsql/client.py`** — replace
+1. **`python/micromegas/pyproject.toml`** — change `python = "^3.10"` to
+   `python = "^3.11"`.
+   **`python/micromegas/poetry.lock`** — regenerate with `poetry lock` (from
+   `python/micromegas`) so the lock file matches the new constraint.
+2. **`python/micromegas/micromegas/time.py`** — add `parse_datetime()` with the
+   lowercase-`z` normalization and docstring; change `format_datetime`'s
+   string branch (line 65) to use it. Leave the existing docstring example at
+   line 49 as-is — it becomes true rather than aspirational.
+3. **`python/micromegas/micromegas/flightsql/client.py`** — replace
    `from . import time` (line 2) with `from ..time import format_datetime`;
    update the two call sites at lines 72 and 79.
-3. **Delete `python/micromegas/micromegas/flightsql/time.py`.**
-4. **`python/micromegas/micromegas/cli/query.py`** — use
+4. **Delete `python/micromegas/micromegas/flightsql/time.py`.**
+5. **`python/micromegas/micromegas/cli/query.py`** — use
    `micromegas.time.parse_datetime` in `parse_timestamp` (line 27); update its
    docstring and the inline comment at line 26; update `--begin`/`--end` help
    (lines 74, 78); wrap the `parse_timestamp` calls in `main()` (lines 120-121)
    with per-flag `ValueError` → `parser.error()` handling.
-5. **`python/micromegas/tests/test_time.py`** — extend with the cases below.
-6. **`python/micromegas/tests/test_query.py`** — extend with cases covering
+6. **`python/micromegas/tests/test_time.py`** — extend with the cases below.
+7. **`python/micromegas/tests/test_query.py`** — extend with cases covering
    `parse_timestamp`, alongside the existing `read_sql_source` regression
    tests.
    **`python/micromegas/tests/test_flightsql_headers.py`** (new) — a hermetic
    unit test for `flightsql.client.make_call_headers`, the function on the
    live query path, asserting a `Z`-suffixed `begin` produces a
    `query_range_begin` header of `2024-01-01T00:00:00+00:00`.
-7. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
+8. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
    above (including the new `tests/test_flightsql_headers.py`) plus the
    venv-interpreter version assertion (`poetry run python -c "..."` compared
    against the expected version), following the existing `build/*_ci.py`
    scripts.
-   **`.github/workflows/python.yml`** (new) — the 3.10/3.12 matrix job on
-   `runs-on: ubuntu-latest`, with `actions/setup-python` pinned to
-   `${{ matrix.python-version }}` and `poetry env use python` before
-   `poetry install`, calling `build/python_ci.py` with the matrix version;
-   `build/python_ci.py` included in the workflow's path filter. The
-   `unit-tests` checks start out advisory (not added to branch protection),
-   so no companion skip workflow is added in this step.
-8. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
+   **`.github/workflows/python.yml`** (new) — the 3.11/3.14 matrix job (as
+   quoted YAML strings) on `runs-on: ubuntu-latest`, with
+   `actions/setup-python` pinned to `${{ matrix.python-version }}` and
+   `poetry env use python` before `poetry install`, calling
+   `build/python_ci.py` with the matrix version; `build/python_ci.py`
+   included in the workflow's path filter. The `unit-tests` checks start out
+   advisory (not added to branch protection), so no companion skip workflow
+   is added in this step.
+9. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
    option descriptions (lines 605-606) to say RFC 3339 and show the `Z` form,
    update the "specific timestamps" CLI example (lines 619-621) to use
    `Z`-suffixed values so the docs demonstrate the canonical spelling, and add
@@ -323,14 +361,19 @@ must be added at that time, following the `build-skip.yml` pattern.
    **`CLAUDE.md`** (repo root) — update line 60's `--begin`/`--end`
    description from "ISO format" to RFC 3339 wording with a `Z` example,
    matching the mkdocs and argparse-help wording above.
-9. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing style,
-   noting the `Z` acceptance fix, the `flightsql/time.py` removal, the CLI error
-   handling, and the new Python CI job, with `(#1405)`.
-10. **Format** — `poetry run black` on every touched Python file (required by
+10. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing
+    style, noting: the minimum supported Python version rising from 3.10 to
+    3.11 (called out explicitly as a breaking change for anyone still on
+    3.10, since it means `pip install micromegas` no longer works there), the
+    `Z`/`z` acceptance fix, the `flightsql/time.py` removal, the CLI error
+    handling, and the new Python CI job, with `(#1405)`.
+11. **Format** — `poetry run black` on every touched Python file (required by
     `python/CLAUDE.md`).
 
 ## Files to Modify
 
+- `python/micromegas/pyproject.toml`
+- `python/micromegas/poetry.lock`
 - `python/micromegas/micromegas/time.py`
 - `python/micromegas/micromegas/flightsql/client.py`
 - `python/micromegas/micromegas/flightsql/time.py` *(delete)*
@@ -346,23 +389,28 @@ must be added at that time, following the `build-skip.yml` pattern.
 
 ## Trade-offs
 
-**Normalize `Z` vs. drop Python 3.10.** The issue notes that 3.11 handles `Z`
-natively, making the shim unnecessary. Dropping 3.10 is a far larger, breaking
-decision for downstream users than a three-line helper, and it would not by
-itself fix the CLI's traceback-on-bad-input or the duplicated module. The shim
-is cheap and removable later; when 3.10 support is eventually dropped,
-`parse_datetime` can become a thin alias for `fromisoformat` (or be deleted)
-without touching any call site — which is precisely the point of routing every
-site through one helper.
+**Raise the floor to 3.11 vs. keep 3.10 and shim `Z`.** This decision is made,
+not open: the plan raises the minimum supported Python version to 3.11 rather
+than keeping 3.10 support and normalizing the `Z` suffix (and the
+fractional-seconds digit-count differences that would go with it) in Python.
+3.11 is exactly the version where `fromisoformat` learned native `Z` support,
+so it is the natural floor for a project whose contract is "accept RFC 3339
+timestamps" — anchoring on it means the stdlib does that work instead of a
+hand-rolled shim having to reproduce it and stay in sync with it. The other
+side of the decision: Python 3.10 reaches end of life in October 2026, about
+two months from now, so dropping it now is dropping a version whose upstream
+security support is about to end anyway, not preempting meaningful runway.
+`pyarrow`, `grpcio`, `pandas`, and `numpy` already publish cp311+ wheels, so
+there's no dependency blocker either way.
 
-**Normalize `Z` and fractional seconds vs. adopt a parsing dependency.**
-`dateutil` or `ciso8601` would handle the whole of RFC 3339 (and more), but
-`dateutil` is not currently a declared dependency of the client, and both
-accept far *more* than RFC 3339, which would loosen rather than sharpen the
-contract. A small amount of normalization in front of the stdlib parser —
-rewriting the `Z` suffix and padding/truncating the fractional-seconds field to
-microseconds — keeps the accepted grammar exactly "what `fromisoformat` takes
-on 3.11+", rather than a narrower, interpreter-dependent subset of it.
+**Normalize lowercase `z` vs. reject it.** With the floor at 3.11, the only
+remaining gap between what `fromisoformat` accepts and what RFC 3339 permits
+is a lowercase `z` offset — RFC 3339 section 5.6's ABNF string literals are
+case-insensitive, so `z` is conformant, but the stdlib rejects it on every
+version through 3.14. The plan normalizes it (rewriting a trailing `z` to
+`Z` before parsing) rather than leaving it to raise, since the project's own
+docs and issue history already treat `Z`/`z` as interchangeable and the fix is
+a single-line, version-independent rewrite with no dependency or grammar cost.
 
 **Delete `flightsql/time.py` vs. re-export from it.** A shim module
 (`from ..time import format_datetime`) would preserve
@@ -430,12 +478,13 @@ and `parse_datetime`:
 - `"not-a-timestamp"` → `ValueError` from `parse_datetime`.
 - Fractional seconds with `Z`: `"2024-08-26T17:32:00.123456Z"`.
 - `"2024-08-26T17:32:00.5Z"` → `"2024-08-26T17:32:00.500000+00:00"` (a
-  single-digit `time-secfrac`, padded to microseconds — this is the case that
-  fails on 3.10 without the fractional-seconds normalization, even after the
-  `Z` rewrite).
+  single-digit `time-secfrac`; asserts that `parse_datetime` behaves exactly
+  as the stdlib does on 3.11+ — there is no normalization logic of this
+  helper's own left to exercise here, since `fromisoformat` already pads any
+  digit count to microseconds natively).
 - `"2024-08-26T17:32:00.1234567Z"` → `"2024-08-26T17:32:00.123456+00:00"`
-  (more than six fractional digits, truncated — lossy, but matches what
-  `fromisoformat` itself does on 3.11+ and what `datetime` can represent).
+  (more than six fractional digits; likewise just confirms `parse_datetime`
+  passes through `fromisoformat`'s own truncation behavior unchanged).
 
 ### `tests/test_query.py` — extend
 
@@ -491,8 +540,10 @@ The first two should run; the third should print a usage message and exit 2.
 
 ### Python-version note
 
-On the developer's local interpreter (3.12) every `Z` assertion passes with or
-without the fix, since `fromisoformat` handles `Z` natively there. The fix is
-only *proved* by the 3.10 CI leg. Anyone verifying locally on 3.11+ should treat
-a green run as necessary but not sufficient, and rely on CI's 3.10 job for the
-real signal.
+Unlike the pre-3.11-floor version of this plan, there is no version-specific
+gap left to worry about here: the lowercase-`z` normalization this plan adds
+is plain Python with no interpreter-dependent behavior, so it behaves
+identically on 3.11 through 3.14. A local run on whatever interpreter the
+developer has installed (3.11+) proves the fix; the CI matrix (§5) exists to
+confirm installability and test-suite health on the floor and newest
+interpreter, not to reveal behavior a local run couldn't.
