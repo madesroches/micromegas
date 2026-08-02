@@ -98,15 +98,28 @@ Add one public helper next to `format_datetime`, and route every string-parsing
 site through it:
 
 ```python
+_FRACTION_RE = re.compile(r"\.(\d+)")
+
+
 def parse_datetime(value):
     """Parse an RFC 3339 timestamp string into a datetime.
 
-    Accepts both the 'Z' (Zulu/UTC) suffix and numeric offsets. Python's
-    datetime.fromisoformat() only learned to accept 'Z' in 3.11, so the
-    suffix is normalized to '+00:00' first — this project supports 3.10.
+    Accepts the full RFC 3339 grammar on every supported interpreter: the
+    'Z' (Zulu/UTC) suffix, numeric offsets, and any number of
+    fractional-second digits (RFC 3339's `time-secfrac = "." 1*DIGIT`).
+    Python's datetime.fromisoformat() only learned to accept 'Z' in 3.11,
+    and on 3.10 it only accepts a fractional-seconds part that is exactly
+    3 or 6 digits long (what isoformat() emits), not an arbitrary count —
+    so both the 'Z' suffix and the fractional-seconds field are normalized
+    before parsing, keeping the accepted grammar identical on 3.10 and
+    3.11+. This project supports 3.10.
     """
     if value.endswith(("Z", "z")):
         value = value[:-1] + "+00:00"
+    match = _FRACTION_RE.search(value)
+    if match:
+        digits = match.group(1)[:6].ljust(6, "0")
+        value = value[: match.start()] + "." + digits + value[match.end() :]
     return datetime.datetime.fromisoformat(value)
 ```
 
@@ -119,8 +132,16 @@ for `pub` over `pub(crate)`-style narrowing.
 
 Notes on the normalization:
 
-- Only a *trailing* `Z`/`z` is rewritten, so `+00:00`, `-05:00`, naive values,
-  and fractional seconds are all untouched and keep today's behavior.
+- Only a *trailing* `Z`/`z` is rewritten to `+00:00`; other offsets (`+00:00`,
+  `-05:00`) and naive values are otherwise untouched.
+- A fractional-seconds group, if present, is padded with trailing zeros or
+  truncated to exactly six digits (microseconds) before parsing. RFC 3339
+  allows any digit count there, but `fromisoformat` is inconsistent about it
+  across supported interpreters: 3.10 accepts only 3 or 6 digits, while 3.11+
+  accepts any count but silently truncates beyond six itself. Truncating
+  beyond microsecond precision is lossy, but it matches `datetime`'s own
+  resolution and reproduces exactly what 3.11+ already does — so 3.10 now
+  matches it instead of raising.
 - Lowercase `z` is accepted: RFC 3339 section 5.6 defines the offset via ABNF
   `"Z"`, and ABNF string literals are case-insensitive, so `z` is conformant.
   Accepting it also costs nothing.
@@ -159,6 +180,14 @@ importers outside `client.py`, so deleting it is not an observable API break for
 documented usage. Should any out-of-tree caller import
 `micromegas.flightsql.time` directly, the canonical `micromegas.time` is a
 drop-in replacement — worth a changelog line.
+
+`make_call_headers` (`client.py:63-84`, the function that actually calls
+`format_datetime` on the live query path) has no hermetic test today — the
+only tests that touch the flightsql client are integration tests excluded from
+CI (see Testing Strategy). A new `tests/test_flightsql_headers.py` unit test
+asserts `make_call_headers` directly, so the fix is verified on the path the
+issue's repro actually exercises, not just on `micromegas.time` and
+`cli.query`.
 
 ### 3. CLI: friendly error and accurate help
 
@@ -204,7 +233,7 @@ YAML:
 - Workflow step: `poetry install` in `python/micromegas`, then
   `python build/python_ci.py`.
 - `build/python_ci.py` runs
-  `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
+  `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
   from `python/micromegas` and returns its exit code.
 
 The explicit file list is deliberate: `pytest` over the whole `tests/` directory
@@ -239,8 +268,13 @@ broken one.
 6. **`python/micromegas/tests/test_query.py`** — extend with cases covering
    `parse_timestamp`, alongside the existing `read_sql_source` regression
    tests.
+   **`python/micromegas/tests/test_flightsql_headers.py`** (new) — a hermetic
+   unit test for `flightsql.client.make_call_headers`, the function on the
+   live query path, asserting a `Z`-suffixed `begin` produces a
+   `query_range_begin` header of `2024-01-01T00:00:00+00:00`.
 7. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
-   above, following the existing `build/*_ci.py` scripts.
+   above (including the new `tests/test_flightsql_headers.py`), following the
+   existing `build/*_ci.py` scripts.
    **`.github/workflows/python.yml`** (new) — the 3.10/3.12 matrix job that
    installs Poetry and calls `build/python_ci.py`, with `build/python_ci.py`
    included in the workflow's path filter.
@@ -264,6 +298,7 @@ broken one.
 - `python/micromegas/micromegas/cli/query.py`
 - `python/micromegas/tests/test_time.py`
 - `python/micromegas/tests/test_query.py`
+- `python/micromegas/tests/test_flightsql_headers.py` *(new)*
 - `build/python_ci.py` *(new)*
 - `.github/workflows/python.yml` *(new)*
 - `mkdocs/docs/query-guide/python-api.md`
@@ -280,12 +315,14 @@ is cheap and removable later; when 3.10 support is eventually dropped,
 without touching any call site — which is precisely the point of routing every
 site through one helper.
 
-**Normalize `Z` vs. adopt a parsing dependency.** `dateutil` or `ciso8601` would
-handle the whole of RFC 3339 (and more), but `dateutil` is not currently a
-declared dependency of the client, and both accept far *more* than RFC 3339,
-which would loosen rather than sharpen the contract. Two lines of normalization
-in front of the stdlib parser keeps the accepted grammar exactly "what
-`fromisoformat` takes, plus `Z`".
+**Normalize `Z` and fractional seconds vs. adopt a parsing dependency.**
+`dateutil` or `ciso8601` would handle the whole of RFC 3339 (and more), but
+`dateutil` is not currently a declared dependency of the client, and both
+accept far *more* than RFC 3339, which would loosen rather than sharpen the
+contract. A small amount of normalization in front of the stdlib parser —
+rewriting the `Z` suffix and padding/truncating the fractional-seconds field to
+microseconds — keeps the accepted grammar exactly "what `fromisoformat` takes
+on 3.11+", rather than a narrower, interpreter-dependent subset of it.
 
 **Delete `flightsql/time.py` vs. re-export from it.** A shim module
 (`from ..time import format_datetime`) would preserve
@@ -344,6 +381,13 @@ and `parse_datetime`:
   `format_datetime` (existing behavior, already covered; keep it).
 - `"not-a-timestamp"` → `ValueError` from `parse_datetime`.
 - Fractional seconds with `Z`: `"2024-08-26T17:32:00.123456Z"`.
+- `"2024-08-26T17:32:00.5Z"` → `"2024-08-26T17:32:00.500000+00:00"` (a
+  single-digit `time-secfrac`, padded to microseconds — this is the case that
+  fails on 3.10 without the fractional-seconds normalization, even after the
+  `Z` rewrite).
+- `"2024-08-26T17:32:00.1234567Z"` → `"2024-08-26T17:32:00.123456+00:00"`
+  (more than six fractional digits, truncated — lossy, but matches what
+  `fromisoformat` itself does on 3.11+ and what `datetime` can represent).
 
 ### `tests/test_query.py` — extend
 
@@ -364,6 +408,20 @@ the existing `read_sql_source` regression tests in this module:
 
 Assert on return values directly; no service, no subprocess, no mocking of
 argparse internals.
+
+### `tests/test_flightsql_headers.py` — new
+
+A direct, hermetic unit test of `flightsql.client.make_call_headers` — the
+function Current State identifies as the one actually on the live query path
+(`client.py:72,79`), which neither `test_time.py` nor `test_query.py` reaches:
+
+- `make_call_headers("2024-01-01T00:00:00Z", None)` includes a
+  `query_range_begin` header of `(b"query_range_begin",
+  b"2024-01-01T00:00:00+00:00")` — headers are `(bytes, bytes)` tuples, not
+  strings.
+
+`make_call_headers` is a module-level pure function with no I/O, so this
+needs no service, mocking, or subprocess.
 
 ### Doctest
 
