@@ -45,13 +45,18 @@ This call is total — it never fails just because nothing is configured yet, si
 config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
 by itself (see the Interactive SSO note below). Read the two checks together:
 
-- **CLI missing but module importable** (or vice versa) — this is a `PATH`/environment mismatch
-  between the interpreter running the probe and the one `micromegas-query` was installed for, not
-  "not installed". If `micromegas-query --help` succeeds, that's sufficient to proceed —
-  `micromegas-query` resolves its own connection independently of what the ambient Python
-  interpreter can import, so treat the module probe as best-effort diagnostics only (it just
-  reports the resolved config/OIDC state) and don't block on this mismatch alone. Only treat it as
-  a real problem if `micromegas-query --help` also fails.
+- **Module importable but `micromegas-query --help` fails** — the package is installed for this
+  interpreter but its console-script directory isn't on `PATH` (common with user site-packages or
+  the Windows `Scripts` dir). Since every query in this skill goes through the `micromegas-query`
+  CLI, this is a real problem. Fix it by running `pip install micromegas` for the same interpreter
+  that successfully imported the module — this repairs/reinstalls the console script — or by
+  adding that interpreter's scripts/bin directory to `PATH`.
+- **`micromegas-query --help` succeeds but the module import fails** — this is just a `PATH`/
+  environment mismatch between the interpreter running the probe and the one `micromegas-query`
+  was installed for, not "not installed". `micromegas-query` resolves its own connection
+  independently of what the ambient Python interpreter can import, so treat the module probe as
+  best-effort diagnostics only (it just reports the resolved config/OIDC state) and don't block on
+  this mismatch.
 - **`ModuleNotFoundError: No module named 'micromegas'`, and the CLI is also missing** — the
   package isn't installed. Run:
   ```
