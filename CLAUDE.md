@@ -57,7 +57,7 @@ For an architecture overview (core crates, services, data flow), see `.github/co
 - **Query**: `micromegas-query "SELECT * FROM list_partitions() LIMIT 5"`
   - Installed via `pip install micromegas` (or `poetry install` in dev)
   - Use this tool to run arbitrary SQL queries against the analytics service
-  - Accepts optional `--begin` and `--end` for time range (relative like `1h`, `24h`, `7d` or ISO format)
+  - Accepts optional `--begin` and `--end` for time range (relative like `1h`, `24h`, `7d` or RFC 3339 like `2024-01-01T00:00:00Z`)
   - Accepts `--format` for output: `table` (default), `csv`, `json`
   - Example: `micromegas-query "SELECT time, level, msg FROM log_entries LIMIT 10" --begin 1h --format csv`
 - **Logout**: `micromegas-logout` (clears cached OIDC tokens)

@@ -20,7 +20,7 @@ def format_datetime(value):
         value: The datetime value to format. Can be:
             - datetime.datetime: Must be timezone-aware
             - pandas.Timestamp: Will use its timezone information
-            - str: ISO format string that will be parsed and reformatted
+            - str: RFC 3339 string that will be parsed and reformatted
             - None: Returns None without modification
 
     Returns:
@@ -62,10 +62,36 @@ def format_datetime(value):
     elif value_type == pandas.Timestamp:
         return value.isoformat()
     elif value_type == str:
-        return format_datetime(datetime.datetime.fromisoformat(value))
+        return format_datetime(parse_datetime(value))
     elif value_type == type(None):
         return None
     raise RuntimeError("value of unknown type in format_datetime")
+
+
+def parse_datetime(value):
+    """Parse an RFC 3339 timestamp string into a datetime.
+
+    datetime.fromisoformat() accepts an uppercase 'Z' offset but not a
+    lowercase 'z', which RFC 3339 section 5.6 permits (its ABNF string
+    literals are case-insensitive), so normalize that one case first.
+
+    Args:
+        value (str): RFC 3339 timestamp string, with either an uppercase
+            'Z' or lowercase 'z' UTC designator (e.g. "2024-01-01T12:00:00Z").
+
+    Returns:
+        datetime.datetime: The parsed, timezone-aware datetime.
+
+    Raises:
+        ValueError: If the string is not a valid RFC 3339/ISO 8601 timestamp.
+
+    Example:
+        >>> parse_datetime('2024-01-01T12:00:00z')
+        datetime.datetime(2024, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
+    """
+    if value.endswith("z"):
+        value = value[:-1] + "Z"
+    return datetime.datetime.fromisoformat(value)
 
 
 def parse_time_delta(user_string):
@@ -84,6 +110,8 @@ def parse_time_delta(user_string):
 
     Raises:
         RuntimeError: If the string format is invalid or uses unsupported units.
+        OverflowError: If the number is too large for datetime.timedelta to
+            represent (e.g. an excessive number of days).
 
     Example:
         >>> # Parse various time deltas

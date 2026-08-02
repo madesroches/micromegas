@@ -11,7 +11,7 @@ from tabulate import tabulate
 def parse_timestamp(value):
     """Parse a timestamp string into a timezone-aware datetime.
 
-    Accepts ISO format strings or relative time deltas like '1h', '30m', '7d'.
+    Accepts RFC 3339 timestamps or relative time deltas like '1h', '30m', '7d'.
     """
     if value is None:
         return None
@@ -23,8 +23,8 @@ def parse_timestamp(value):
     except RuntimeError:
         pass
 
-    # Try parsing as ISO format
-    dt = datetime.datetime.fromisoformat(value)
+    # Try parsing as an RFC 3339 timestamp
+    dt = micromegas.time.parse_datetime(value)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
     return dt
@@ -71,11 +71,11 @@ def main():
     )
     parser.add_argument(
         "--begin",
-        help="Begin timestamp (ISO format or relative like '1h', '30m', '7d')",
+        help="Begin timestamp (RFC 3339 like '2024-01-01T00:00:00Z', or relative like '1h', '30m', '7d')",
     )
     parser.add_argument(
         "--end",
-        help="End timestamp (ISO format or relative like '1h', '30m', '7d', defaults to now)",
+        help="End timestamp (RFC 3339 like '2024-01-01T00:00:00Z', or relative like '1h', '30m', '7d', defaults to now)",
     )
     parser.add_argument(
         "--all",
@@ -117,8 +117,18 @@ def main():
     if args.all and args.end:
         parser.error("--all and --end are mutually exclusive")
 
-    begin = parse_timestamp(args.begin)
-    end = parse_timestamp(args.end)
+    def parse_timestamp_arg(flag_name, value):
+        try:
+            return parse_timestamp(value)
+        except (ValueError, OverflowError):
+            parser.error(
+                f"invalid --{flag_name} timestamp '{value}': expected an RFC 3339 "
+                f"timestamp (e.g. 2026-07-31T00:00:00Z) or a relative delta like "
+                f"'1h', '30m', '7d'"
+            )
+
+    begin = parse_timestamp_arg("begin", args.begin)
+    end = parse_timestamp_arg("end", args.end)
     if begin is not None and end is None:
         end = datetime.datetime.now(datetime.timezone.utc)
 

@@ -64,7 +64,7 @@ pip install -e ../micromegas
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - Micromegas services running (telemetry ingestion and flight-sql servers)
 - Async events data (run the telemetry generator to create test data)
 

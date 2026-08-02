@@ -1,5 +1,5 @@
 from . import FlightSql_pb2
-from . import time
+from ..time import format_datetime
 from google.protobuf import any_pb2
 from pyarrow import flight
 from typing import Any, Optional, Callable
@@ -69,14 +69,14 @@ def make_call_headers(begin, end, preserve_dictionary=False):
         call_headers.append(
             (
                 "query_range_begin".encode("utf8"),
-                time.format_datetime(begin).encode("utf8"),
+                format_datetime(begin).encode("utf8"),
             )
         )
     if end is not None:
         call_headers.append(
             (
                 "query_range_end".encode("utf8"),
-                time.format_datetime(end).encode("utf8"),
+                format_datetime(end).encode("utf8"),
             )
         )
     if preserve_dictionary:
