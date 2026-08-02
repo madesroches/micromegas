@@ -115,19 +115,20 @@ so dropping it is not a preemptive break; it is dropping a version that is
 about to stop receiving security fixes upstream. `pyarrow` (23.0.1, locked),
 `grpcio`, and `pandas` already publish cp311 through cp314 wheels at their
 currently locked versions, so there is no dependency-availability reason to
-stay on 3.10 for those three. `numpy` is the exception: it is currently
-locked at 2.2.6 for the `python_version == "3.10"` marker, and that release's
-wheels only go up to cp313 — cp314 wheels start at numpy 2.4.x. Regenerating
-`poetry.lock` after the bump therefore also pulls numpy forward to a 2.4.x
-release for cp314 coverage; that line must be pinned deliberately, since
-numpy 2.4.6 is the newest release that still supports 3.11 (numpy 2.5.x
-requires Python >=3.12), so the lock needs to land on 2.4.x rather than
-whatever is newest overall while 3.11 remains the floor.
+stay on 3.10 for those three. `numpy` needs no attention either: `poetry.lock`
+already carries two marker-gated entries — `numpy 2.2.6` under
+`python_version == "3.10"` (wheel tags cp310–cp313) and `numpy 2.3.4` under
+`python_version >= "3.11"` (wheel tags cp311, cp312, cp313, **cp314**) — so
+raising the floor to `^3.11` simply means the resolver already lands on the
+2.3.4 entry, which ships cp314 wheels today. There is no dependency-
+availability gap and no numpy upgrade involved.
 
 After changing the constraint, `poetry.lock` must be regenerated (`poetry
 lock` from `python/micromegas`) so the lock file's resolution and hashes match
-the new `python` bound — this is also what pulls numpy forward to a 2.4.x
-release, per above; the regenerated lock file is committed alongside the
+the new `python` bound. This drops the now-unreachable `python_version ==
+"3.10"` marker entries — `numpy 2.2.6`, `exceptiongroup 1.3.0`, `tomli
+2.3.0`, and a test-group marker on `typing-extensions 4.15.0` — and nothing
+else changes; the regenerated lock file is committed alongside the
 `pyproject.toml` change.
 
 ### 2. Shared `parse_datetime()` in `micromegas/time.py`
@@ -392,8 +393,6 @@ must be added at that time, following the `build-skip.yml` pattern.
     style, noting: the minimum supported Python version rising from 3.10 to
     3.11 (called out explicitly as a breaking change for anyone still on
     3.10, since it means `pip install micromegas` no longer works there), the
-    resulting `numpy` bump to a 2.4.x release (needed for cp314 wheel
-    coverage; 2.4.6 is the newest release still supporting 3.11), the
     `Z`/`z` acceptance fix, the `flightsql/time.py` removal, the CLI error
     handling, and the new Python CI job, with `(#1405)`.
 11. **Format** — `poetry run black` on every touched Python file (required by
@@ -432,12 +431,10 @@ side of the decision: Python 3.10 reaches end of life in October 2026, about
 two months from now, so dropping it now is dropping a version whose upstream
 security support is about to end anyway, not preempting meaningful runway.
 `pyarrow`, `grpcio`, and `pandas` already publish cp311+ wheels at their
-currently locked versions; `numpy`'s currently-locked 2.2.6 (for the
-`python_version == "3.10"` marker) does not publish cp314 wheels, so the
-`poetry.lock` regeneration in §1 also bumps numpy to a 2.4.x release (2.4.6
-is the newest still supporting 3.11, since 2.5.x requires >=3.12) for cp314
-coverage — a dependency upgrade this decision pulls in, not a blocker
-against it.
+currently locked versions; `numpy` is no different — `poetry.lock` already
+carries a `numpy 2.3.4` entry marker-gated to `python_version >= "3.11"` with
+cp311–cp314 wheels, so the `poetry.lock` regeneration in §1 resolves straight
+to it with no version bump involved.
 
 **Normalize lowercase `z` vs. reject it.** With the floor at 3.11, the only
 remaining gap between what `fromisoformat` accepts and what RFC 3339 permits
