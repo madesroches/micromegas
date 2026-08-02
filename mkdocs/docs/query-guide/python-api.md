@@ -706,7 +706,7 @@ print(formatted)  # "2024-01-01T12:00:00+00:00"
 
 # Parse an RFC 3339 timestamp string (accepts both 'Z' and 'z')
 parsed = parse_datetime('2024-01-01T12:00:00Z')
-print(parsed)  # datetime.datetime(2024, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
+print(parsed)  # 2024-01-01 12:00:00+00:00
 
 # Parse human-readable time deltas
 one_hour = parse_time_delta('1h')

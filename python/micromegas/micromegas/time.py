@@ -74,6 +74,20 @@ def parse_datetime(value):
     datetime.fromisoformat() accepts an uppercase 'Z' offset but not a
     lowercase 'z', which RFC 3339 section 5.6 permits (its ABNF string
     literals are case-insensitive), so normalize that one case first.
+
+    Args:
+        value (str): RFC 3339 timestamp string, with either an uppercase
+            'Z' or lowercase 'z' UTC designator (e.g. "2024-01-01T12:00:00Z").
+
+    Returns:
+        datetime.datetime: The parsed, timezone-aware datetime.
+
+    Raises:
+        ValueError: If the string is not a valid RFC 3339/ISO 8601 timestamp.
+
+    Example:
+        >>> parse_datetime('2024-01-01T12:00:00z')
+        datetime.datetime(2024, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
     """
     if value.endswith("z"):
         value = value[:-1] + "Z"
