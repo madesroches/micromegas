@@ -255,7 +255,7 @@ Verify manually:
 
 - Confirm the edited frontmatter is valid (matches the existing `name/description/argument-hint/
   context/allowed-tools` shape) and that `shell: bash` is present.
-- Confirm no `!`-prefixed interpolation remains in the file (`grep -n '!\`' SKILL.md`).
+- Confirm no `!`-prefixed interpolation remains in the file (``grep -n '!`' SKILL.md``).
 - Confirm the `allowed-tools` line has no bare `Write`, no unscoped `Edit`, and no
   wildcard-suffixed fixed commands other than `Bash(micromegas-query *)`.
 - Manually trace the "not installed" and "not configured" paths through the rewritten
