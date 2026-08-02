@@ -47,8 +47,11 @@ by itself (see the Interactive SSO note below). Read the two checks together:
 
 - **CLI missing but module importable** (or vice versa) — this is a `PATH`/environment mismatch
   between the interpreter running the probe and the one `micromegas-query` was installed for, not
-  "not installed". Don't reinstall; instead locate the right interpreter/environment (e.g. the one
-  that owns the `pip`/`pipx`/`poetry` install) or ask the user which environment to use.
+  "not installed". If `micromegas-query --help` succeeds, that's sufficient to proceed —
+  `micromegas-query` resolves its own connection independently of what the ambient Python
+  interpreter can import, so treat the module probe as best-effort diagnostics only (it just
+  reports the resolved config/OIDC state) and don't block on this mismatch alone. Only treat it as
+  a real problem if `micromegas-query --help` also fails.
 - **`ModuleNotFoundError: No module named 'micromegas'`, and the CLI is also missing** — the
   package isn't installed. Run:
   ```
@@ -116,13 +119,16 @@ can appear interleaved with token-refresh output that suggests the wrong cause. 
 value in `~/.micromegas/config.json` (or the `MICROMEGAS_ANALYTICS_URI` env var) rather than
 troubleshooting auth.
 
-Verify setup: if the probe reported no OIDC configured (`oidc_issuer`/`oidc_client_id` both
-`None`), or a cached token already exists (token-file-exists is `True`), run:
+After writing or changing `~/.micromegas/config.json`, verify it: if no OIDC is configured
+(`oidc_issuer`/`oidc_client_id` both `None`), or a cached token already exists (token-file-exists
+is `True`), run:
 ```
 micromegas-query "SELECT 1" --begin 1h
 ```
 Otherwise (OIDC is configured and no token exists yet), this is the same first-call case covered
 by the Interactive SSO note above — ask the *user* to run that verification query themselves.
+This verification is only needed right after the config file changes — don't run it before
+ordinary queries.
 
 ## CLI syntax
 
