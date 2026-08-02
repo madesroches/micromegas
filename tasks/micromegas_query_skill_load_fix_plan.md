@@ -69,9 +69,11 @@ unrecoverable load-time abort.
 
 ### 2. Declare `shell: bash` in frontmatter
 
-Add `shell: bash` to the frontmatter so any interpolation this skill still uses is explicit about
-which shell runs it, turning the Windows/PowerShell mismatch into an actionable error rather than
-a silent permission miss.
+Add `shell: bash` to the frontmatter as a defensive default: after Design §1 removes the only
+`` !`…` `` interpolations currently in the file, there is nothing left for `shell` to govern, but
+setting it now means any interpolation added to this skill in the future is explicit about which
+shell runs it, turning a Windows/PowerShell mismatch into an actionable error rather than a silent
+permission miss, instead of relying on someone remembering to add the key later.
 
 ### 3. Move persistent config to `~/.micromegas/config.json`
 
@@ -131,9 +133,10 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 - **Connection error interpretation**: note that a connection error to `127.0.0.1:50051` means
   the URI never resolved (falls back to the default), not that authentication failed — call this
   out since it can appear interleaved with token-refresh output that suggests the wrong cause.
-- **UDF listing columns**: fix the `information_schema.routines` guidance to use `routine_name`
-  (not `function_name`), and mention `description` and `syntax_example` as additional useful
-  columns there.
+- **UDF listing**: add new guidance for listing UDFs via `information_schema.routines`, since the
+  skill currently has none. Insert it as a new subsection (e.g. "Discovering UDFs") under
+  `## Key functions`, using `routine_name` as the column to select (not `function_name`) and
+  mentioning `description` and `syntax_example` as additional useful columns.
 
 ## Implementation Steps
 
@@ -144,10 +147,10 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
    `~/.micromegas/config.json` read-merge-write flow, and add the first-use `python3 -c` probe
    (with the "ambiguous localhost default" caveat) as the way to verify the environment before
    running the user's query.
-4. Add the three documentation corrections from Design §5 (interactive SSO note, connection-error
-   note, UDF column fix) in the appropriate existing sections (`## Setup` for the SSO note,
-   `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and
-   wherever UDF/`information_schema.routines` usage is documented).
+4. Apply the three documentation changes from Design §5 (interactive SSO note, connection-error
+   note, new UDF-listing subsection) in the appropriate sections (`## Setup` for the SSO note,
+   `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and a
+   new "Discovering UDFs" subsection under `## Key functions` for the UDF-listing guidance).
 
 ## Files to Modify
 
