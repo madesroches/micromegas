@@ -37,6 +37,13 @@ def test_parse_datetime_invalid_raises_value_error():
         micromegas.time.parse_datetime("not-a-timestamp")
 
 
+def test_parse_time_delta_overflow_raises_overflow_error():
+    # A huge number of days overflows datetime.timedelta's internal C int,
+    # which raises OverflowError rather than RuntimeError.
+    with pytest.raises(OverflowError):
+        micromegas.time.parse_time_delta("9999999999d")
+
+
 def test_parse_datetime_fractional_seconds_z():
     dt = micromegas.time.parse_datetime("2024-08-26T17:32:00.123456Z")
     assert dt.microsecond == 123456

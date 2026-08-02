@@ -120,7 +120,7 @@ def main():
     def parse_timestamp_arg(flag_name, value):
         try:
             return parse_timestamp(value)
-        except ValueError:
+        except (ValueError, OverflowError):
             parser.error(
                 f"invalid --{flag_name} timestamp '{value}': expected an RFC 3339 "
                 f"timestamp (e.g. 2026-07-31T00:00:00Z) or a relative delta like "

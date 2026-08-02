@@ -16,7 +16,7 @@ import textwrap
 
 import pytest
 
-from micromegas.cli.query import parse_timestamp
+from micromegas.cli.query import main, parse_timestamp
 
 NON_ASCII_SQL = "-- em dash —, accented café, CJK 日本語\nSELECT 1"
 
@@ -149,3 +149,22 @@ def test_parse_timestamp_naive_defaults_to_utc():
 def test_parse_timestamp_garbage_raises_value_error():
     with pytest.raises(ValueError):
         parse_timestamp("garbage")
+
+
+def test_parse_timestamp_overflowing_delta_raises_overflow_error():
+    # A number of days too large for datetime.timedelta overflows rather
+    # than hitting the "invalid format" RuntimeError path.
+    with pytest.raises(OverflowError):
+        parse_timestamp("9999999999d")
+
+
+def test_main_overflowing_begin_reports_usage_error(monkeypatch, capsys):
+    """An overflowing --begin delta must be a clean argparse usage error,
+    not an uncaught OverflowError traceback (issue regression)."""
+    monkeypatch.setattr(sys, "argv", ["query", "--begin", "9999999999d", "SELECT 1"])
+    with pytest.raises(SystemExit) as e_info:
+        main()
+    assert e_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid --begin timestamp" in err
+    assert "Traceback" not in err

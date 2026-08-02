@@ -96,6 +96,8 @@ def parse_time_delta(user_string):
 
     Raises:
         RuntimeError: If the string format is invalid or uses unsupported units.
+        OverflowError: If the number is too large for datetime.timedelta to
+            represent (e.g. an excessive number of days).
 
     Example:
         >>> # Parse various time deltas
