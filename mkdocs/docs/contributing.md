@@ -97,6 +97,11 @@ poetry run pytest       # Run tests
 poetry run black <file> # Format code (REQUIRED before commit)
 ```
 
+**CI validation script:**
+```bash
+python3 build/python_ci.py    # Runs the hermetic test subset and black --check (from repo root)
+```
+
 ### Analytics Web App
 
 The analytics web UI is a standalone Vite + React 19 application in `analytics-web-app/`.
@@ -192,6 +197,7 @@ python3 build/rust_ci.py                 # Rust CI validation (from root)
 **Python package:**
 ```bash
 cd python/micromegas && poetry run pytest  # Python tests
+python3 build/python_ci.py                 # Python CI validation (from root)
 ```
 
 **TypeScript/JavaScript workspaces** (use `yarn`):

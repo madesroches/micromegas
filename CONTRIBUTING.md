@@ -252,6 +252,11 @@ poetry run pytest       # Run tests
 poetry run black <file> # Format code (REQUIRED before commit)
 ```
 
+**CI validation script:**
+```bash
+python3 build/python_ci.py    # Runs the hermetic test subset and black --check (from repo root)
+```
+
 ### TypeScript/JavaScript Workspaces
 
 The repository uses Yarn workspaces to manage TypeScript/JavaScript packages.
@@ -323,6 +328,7 @@ python3 build/rust_ci.py                 # Rust CI validation (from root)
 **Python package:**
 ```bash
 cd python/micromegas && poetry run pytest  # Python tests
+python3 build/python_ci.py                 # Python CI validation (from root)
 ```
 
 **TypeScript/JavaScript workspaces** (use `yarn`):
@@ -520,7 +526,7 @@ cd grafana && mage -v build
 Before submitting a PR, test all affected components:
 
 - [ ] **Rust** (primary): Run `python3 build/rust_ci.py` from repo root (format, clippy, tests)
-- [ ] **Python**: Run `poetry run pytest` and `poetry run black .` from `python/micromegas/`
+- [ ] **Python**: Run `poetry run pytest` and `poetry run black .` from `python/micromegas/`, and `python3 build/python_ci.py` from repo root
 - [ ] **Grafana plugin**: Run `python3 build/grafana_ci.py` from repo root (typecheck, lint, test, build)
 - [ ] All builds pass without errors
 - [ ] New features include tests

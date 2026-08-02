@@ -1,0 +1,49 @@
+name: Python
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'python/**'
+      - 'build/python_ci.py'
+      - '.github/workflows/python.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'python/**'
+      - 'build/python_ci.py'
+      - '.github/workflows/python.yml'
+  workflow_dispatch:  # Allow manual runs from the Actions UI
+
+jobs:
+  unit-tests:
+    # Pinned to a fixed runner rather than routed through check-runner.yml:
+    # the version matrix below is the thing under test, so it must stay
+    # deterministic regardless of self-hosted-runner availability.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        # Quoted as strings: bare 3.10-style scalars parse as YAML floats.
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Bind Poetry's venv to the matrix interpreter
+        working-directory: python/micromegas
+        run: poetry env use python
+
+      - name: Install dependencies
+        working-directory: python/micromegas
+        run: poetry install
+
+      - name: Run Python package CI validation
+        run: python build/python_ci.py ${{ matrix.python-version }}

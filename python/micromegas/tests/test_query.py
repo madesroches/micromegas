@@ -8,10 +8,15 @@ back to the platform's locale-preferred encoding and can mis-decode
 non-ASCII content.
 """
 
+import datetime
 import os
 import subprocess
 import sys
 import textwrap
+
+import pytest
+
+from micromegas.cli.query import parse_timestamp
 
 NON_ASCII_SQL = "-- em dash —, accented café, CJK 日本語\nSELECT 1"
 
@@ -87,3 +92,60 @@ def test_read_sql_source_stdin_survives_non_utf8_locale():
     )
     assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
     assert proc.stdout.decode("utf-8") == NON_ASCII_SQL
+
+
+def test_parse_timestamp_none():
+    assert parse_timestamp(None) is None
+
+
+@pytest.mark.parametrize(
+    "value,delta",
+    [
+        ("1h", datetime.timedelta(hours=1)),
+        ("30m", datetime.timedelta(minutes=30)),
+        ("7d", datetime.timedelta(days=7)),
+    ],
+)
+def test_parse_timestamp_relative_delta(value, delta):
+    before = datetime.datetime.now(datetime.timezone.utc)
+    dt = parse_timestamp(value)
+    after = datetime.datetime.now(datetime.timezone.utc)
+    assert dt.tzinfo is not None
+    # `dt` should land roughly `delta` before "now" -- tolerant window
+    # rather than an exact instant, since parse_timestamp calls
+    # datetime.now() internally.
+    assert before - delta <= dt <= after - delta + datetime.timedelta(seconds=1)
+
+
+def test_parse_timestamp_z_suffix():
+    dt = parse_timestamp("2026-07-31T00:00:00Z")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset() == datetime.timedelta(0)
+
+
+def test_parse_timestamp_lowercase_z_suffix():
+    dt = parse_timestamp("2026-07-31T00:00:00z")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset() == datetime.timedelta(0)
+
+
+def test_parse_timestamp_numeric_offset():
+    dt = parse_timestamp("2026-07-31T00:00:00+00:00")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset() == datetime.timedelta(0)
+
+
+def test_parse_timestamp_non_utc_offset_preserved():
+    dt = parse_timestamp("2026-07-31T00:00:00-04:00")
+    assert dt.utcoffset() == datetime.timedelta(hours=-4)
+
+
+def test_parse_timestamp_naive_defaults_to_utc():
+    dt = parse_timestamp("2026-07-31T00:00:00")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset() == datetime.timedelta(0)
+
+
+def test_parse_timestamp_garbage_raises_value_error():
+    with pytest.raises(ValueError):
+        parse_timestamp("garbage")

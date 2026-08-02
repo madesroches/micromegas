@@ -602,8 +602,8 @@ micromegas-query "SELECT * FROM list_partitions() LIMIT 5"
 
 **Options:**
 - `--file`: Read SQL from a file path, or use `-` to read from stdin
-- `--begin`: Begin timestamp (ISO format or relative like `1h`, `30m`, `7d`). Required unless `--all` is used
-- `--end`: End timestamp (ISO format or relative like `1h`, `30m`, `7d`). Default: now
+- `--begin`: Begin timestamp (RFC 3339 like `2024-01-01T00:00:00Z`, or relative like `1h`, `30m`, `7d`). Required unless `--all` is used
+- `--end`: End timestamp (RFC 3339 like `2024-01-01T00:00:00Z`, or relative like `1h`, `30m`, `7d`). Default: now
 - `--all`: Query the entire time range (mutually exclusive with `--begin`/`--end`)
 - `--format`: Output format - `table` (default), `csv`, or `json`
 - `--max-colwidth`: Maximum column width for table format (default: 50, use 0 for unlimited)
@@ -618,7 +618,7 @@ micromegas-query "SELECT * FROM log_entries LIMIT 100" --begin 24h
 
 # Query with specific timestamps
 micromegas-query "SELECT * FROM measures LIMIT 50" \
-    --begin 2024-01-01T00:00:00 --end 2024-01-02T00:00:00
+    --begin 2024-01-01T00:00:00Z --end 2024-01-02T00:00:00Z
 
 # Read SQL from a file (avoids shell quoting issues with JSONPath)
 micromegas-query --file query.sql --begin 1h
@@ -692,17 +692,21 @@ micromegas-logout
 
 ## Time Utilities
 
-### `format_datetime(value)` and `parse_time_delta(user_string)`
+### `format_datetime(value)`, `parse_datetime(value)`, and `parse_time_delta(user_string)`
 
 Utility functions for time handling:
 
 ```python
-from micromegas.time import format_datetime, parse_time_delta
+from micromegas.time import format_datetime, parse_datetime, parse_time_delta
 
 # Format datetime for queries
 dt = datetime.datetime.now(datetime.timezone.utc)
 formatted = format_datetime(dt)
 print(formatted)  # "2024-01-01T12:00:00+00:00"
+
+# Parse an RFC 3339 timestamp string (accepts both 'Z' and 'z')
+parsed = parse_datetime('2024-01-01T12:00:00Z')
+print(parsed)  # datetime.datetime(2024, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
 
 # Parse human-readable time deltas
 one_hour = parse_time_delta('1h')
