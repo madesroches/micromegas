@@ -259,12 +259,14 @@ the pattern every other workflow uses — `rust.yml` → `build/rust_ci.py`,
 `build/build_blender_plugin.py` — the workflow delegates to a new
 `build/python_ci.py` rather than inlining shell in the YAML:
 
-- Workflow steps: `actions/setup-python@v5` pinned to
-  `${{ matrix.python-version }}`, then — binding Poetry's venv to the
-  interpreter `setup-python` just put on `PATH`, rather than whatever
-  `python` the runner defaults to — `poetry env use python`, then
-  `poetry install` in `python/micromegas`, then
-  `python build/python_ci.py ${{ matrix.python-version }}`.
+- Workflow steps: `actions/checkout@v4`, then `actions/setup-python@v5` pinned
+  to `${{ matrix.python-version }}`, then `pipx install poetry` (GitHub-hosted
+  runners don't ship Poetry), then — binding Poetry's venv to the interpreter
+  `setup-python` just put on `PATH`, rather than whatever `python` the runner
+  defaults to — `poetry env use python`, then `poetry install`, then
+  `python build/python_ci.py ${{ matrix.python-version }}`; the three Poetry
+  steps (`poetry env use`, `poetry install`, and the `python_ci.py` call) run
+  with `working-directory: python/micromegas`.
 - `build/python_ci.py` takes the expected Python version as an argument (or
   env var) and, before running tests, runs `poetry run python -c "import sys;
   print('%d.%d' % sys.version_info[:2])"` from `python/micromegas` and compares
@@ -345,13 +347,14 @@ must be added at that time, following the `build-skip.yml` pattern.
    against the expected version), following the existing `build/*_ci.py`
    scripts.
    **`.github/workflows/python.yml`** (new) — the 3.11/3.14 matrix job (as
-   quoted YAML strings) on `runs-on: ubuntu-latest`, with
-   `actions/setup-python` pinned to `${{ matrix.python-version }}` and
-   `poetry env use python` before `poetry install`, calling
-   `build/python_ci.py` with the matrix version; `build/python_ci.py`
-   included in the workflow's path filter. The `unit-tests` checks start out
-   advisory (not added to branch protection), so no companion skip workflow
-   is added in this step.
+   quoted YAML strings) on `runs-on: ubuntu-latest`, starting with
+   `actions/checkout@v4` and `actions/setup-python` pinned to
+   `${{ matrix.python-version }}`, then `pipx install poetry` before
+   `poetry env use python` and `poetry install` (both with
+   `working-directory: python/micromegas`), calling `build/python_ci.py` with
+   the matrix version; `build/python_ci.py` included in the workflow's path
+   filter. The `unit-tests` checks start out advisory (not added to branch
+   protection), so no companion skip workflow is added in this step.
 9. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
    option descriptions (lines 605-606) to say RFC 3339 and show the `Z` form,
    update the "specific timestamps" CLI example (lines 619-621) to use
@@ -361,6 +364,9 @@ must be added at that time, following the `build-skip.yml` pattern.
    **`CLAUDE.md`** (repo root) — update line 60's `--begin`/`--end`
    description from "ISO format" to RFC 3339 wording with a `Z` example,
    matching the mkdocs and argparse-help wording above.
+   **`python/notebooks/README.md`** and **`mkdocs/docs/development/build.md`**
+   — update the stale "Python 3.8+" prerequisite line in each to "Python
+   3.11+", matching the new floor.
 10. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing
     style, noting: the minimum supported Python version rising from 3.10 to
     3.11 (called out explicitly as a breaking change for anyone still on
@@ -385,6 +391,8 @@ must be added at that time, following the `build-skip.yml` pattern.
 - `.github/workflows/python.yml` *(new)*
 - `mkdocs/docs/query-guide/python-api.md`
 - `CLAUDE.md`
+- `python/notebooks/README.md`
+- `mkdocs/docs/development/build.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -453,6 +461,11 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   `--begin`/`--end`, the same stale wording being fixed in the mkdocs guide
   and the argparse help; update it to RFC 3339 wording with a `Z` example so
   it doesn't go stale relative to the CLI it documents.
+- `python/notebooks/README.md:67` and `mkdocs/docs/development/build.md:8` —
+  both state "Python 3.8+" as the prerequisite; update to "Python 3.11+" to
+  match the new floor. The notebooks README is directly affected since those
+  notebooks `import micromegas`, which no longer installs on 3.8–3.10 after
+  the bump.
 - No `.github/copilot-instructions.md` change: it documents only Rust CI, so
   neither the timestamp fix nor the new Python CI workflow touches it. The
   new Python CI workflow itself also needs no `CLAUDE.md` change — it's
