@@ -59,30 +59,36 @@ connection with an ordinary `Bash` call *before* running the user's actual query
 its result:
 
 ```
-python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"
+python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
 ```
 
-This is total (never a non-zero exit on missing config — a missing config just resolves to the
+This is total (never exits non-zero on missing config — a missing config just resolves to the
 default URI) and answers "is `micromegas` installed and importable?", "what will it connect to?",
-and "is OIDC configured?" in one call, without duplicating `resolve_connection()`'s precedence
-rules in the skill text. `resolve_connection()` itself makes no network calls, so this probe can
-never trigger the interactive browser login that only `connect()`'s OIDC path does — it only
-reports whether that path is configured. `connect()` only takes the OIDC branch when
+"is OIDC configured?", and "has a token already been cached for it?" in one call, without
+duplicating `resolve_connection()`'s precedence rules in the skill text. `resolve_connection()`
+itself makes no network calls
+and never touches the token file, so this probe can never trigger the interactive browser login
+that only `connect()`'s OIDC path does — it only reports whether that path is configured and
+whether `oidc_connection.load_or_login()`
+(`python/micromegas/micromegas/oidc_connection.py:73-88`) would find a cached token to try before
+falling back to a browser. `connect()` only takes the OIDC branch when
 `cfg.oidc_issuer and cfg.oidc_client_id` are *both* truthy
 (`python/micromegas/micromegas/cli/connection.py:17`), and `resolve_connection()`'s `_pick()`
 resolves `oidc_issuer` and `oidc_client_id` independently (e.g. via separate env vars), so the
 probe must print both fields rather than `oidc_client_id` alone. Note in the skill body that a
 printed `grpc://localhost:50051` is ambiguous (unconfigured vs. deliberately local) and must not
 by itself trigger overwriting an existing config, and that printed `oidc_issuer` and
-`oidc_client_id` values that are *both* not `None` mean the *first* real `micromegas-query` call
-may open a browser for login — see Design §5.
+`oidc_client_id` values that are *both* not `None` **and** a printed token-file-exists value of
+`False` mean the *first* real `micromegas-query` call may open a browser for login — see Design
+§5. If a token file already exists, the agent may attempt that first call itself, since
+`load_or_login()` will try the cached token before ever considering a browser.
 
 An ordinary `Bash` tool call surfaces a normal, recoverable tool error (e.g.
 `ModuleNotFoundError`) that the agent can read and act on by following `## Setup`, rather than an
 unrecoverable load-time abort.
 
-The two failure shapes must be told apart: `ModuleNotFoundError: No module named 'micromegas'`
-means the package is absent, so `## Setup` should run `pip install micromegas`; but
+Two failure shapes must be told apart: `ModuleNotFoundError: No module named 'micromegas'` means
+the package is absent, so `## Setup` should run `pip install micromegas`; but
 `ModuleNotFoundError: No module named 'micromegas.cli.config'` (or any other import error naming
 something inside an already-resolvable `micromegas` package) means a pre-0.25.0 version is already
 installed, so `## Setup` must run `pip install --upgrade micromegas` instead — plain
@@ -153,7 +159,7 @@ Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip insta
 to:
 
 ```
-Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
+Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
 ```
 
 - Drop `Bash(source ~/.micromegas_env)` / `Bash(source ~/.micromegas_env *)` — no longer used.
@@ -182,9 +188,14 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
   only the *first* real `micromegas-query` call does, via `connect()`'s call to
   `oidc_connection.load_or_login()` when no cached token exists yet, and only when `connect()`'s
   gate (`cfg.oidc_issuer and cfg.oidc_client_id`) is satisfied. Instruct the agent to check the
-  probe's `oidc_issuer` and `oidc_client_id` output and, whenever *both* are not `None`, ask the
-  *user* to run that first `micromegas-query` call themselves (so a browser can open in their
-  session), rather than the agent attempting it and hanging.
+  probe's `oidc_issuer`, `oidc_client_id`, and token-file-exists output and, only when
+  `oidc_issuer` and `oidc_client_id` are *both* not `None` **and** the token file does not yet
+  exist, ask the *user* to run that first `micromegas-query` call themselves (so a browser can
+  open in their session), rather than the agent attempting it and hanging. Once the probe reports
+  the token file exists, the agent should attempt the query itself — `resolve_connection()`'s
+  output is otherwise identical across every fresh, memory-less invocation of this `context: fork`
+  skill, so without the token-file check the handoff would fire on every OIDC-configured query
+  forever instead of only the true first one.
 - **Connection error interpretation**: note that a connection error to `127.0.0.1:50051` means
   the URI never resolved (falls back to the default), not that authentication failed — call this
   out since it can appear interleaved with token-refresh output that suggests the wrong cause.
@@ -202,12 +213,13 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
    the `~/.micromegas/config.json` read-merge-write flow, drop "scope" from the ask-user list and
    add the `MICROMEGAS_OIDC_SCOPE` env-var note in its place, and add the first-use probe (try
    `python3`, falling back to `python` then `py -3`, per §1a, via `Bash` or `PowerShell` as
-   appropriate to the platform) with its `uri`/`oidc_issuer`/`oidc_client_id` output and the
-   "ambiguous localhost default" caveat, as the way to verify the environment before running the
-   user's query. Include the failure-mode distinction from Design §1: on a bare "module not found"
-   for `micromegas` itself, run `pip install micromegas`; on an import error naming something
-   inside `micromegas` (e.g. `micromegas.cli.config`), run `pip install --upgrade micromegas`
-   instead, since the package is already present but predates `cli/config.py`.
+   appropriate to the platform) with its `uri`/`oidc_issuer`/`oidc_client_id`/token-file-exists
+   output and the "ambiguous localhost default" caveat, as the way to verify the environment
+   before running the user's query. Include the failure-mode distinction from Design §1: on a
+   bare "module not found" for `micromegas` itself, run `pip install micromegas`; on an import
+   error naming something inside `micromegas` (e.g. `micromegas.cli.config`), run
+   `pip install --upgrade micromegas` instead, since the package is already present but predates
+   `cli/config.py`.
 4. Apply the three documentation changes from Design §5 (interactive SSO note, connection-error
    note, new UDF-listing subsection) in the appropriate sections (`## Setup` for the SSO note,
    `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and a
