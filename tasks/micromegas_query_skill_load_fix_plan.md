@@ -81,6 +81,21 @@ An ordinary `Bash` tool call surfaces a normal, recoverable tool error (e.g.
 `ModuleNotFoundError`) that the agent can read and act on by following `## Setup`, rather than an
 unrecoverable load-time abort.
 
+The two failure shapes must be told apart: `ModuleNotFoundError: No module named 'micromegas'`
+means the package is absent, so `## Setup` should run `pip install micromegas`; but
+`ModuleNotFoundError: No module named 'micromegas.cli.config'` (or any other import error naming
+something inside an already-resolvable `micromegas` package) means a pre-0.25.0 version is already
+installed, so `## Setup` must run `pip install --upgrade micromegas` instead — plain
+`pip install micromegas` is a no-op once any version is present and would leave the outdated,
+`cli/config.py`-less install in place.
+
+On Windows without Git Bash present, the agent's ordinary shell tool calls route through the
+separate `PowerShell` tool, not `Bash` — the same Bash-vs-PowerShell mismatch Design §2 calls out
+for future interpolations applies equally to this first-use probe. So `## Setup` must instruct the
+agent to run the probe with whichever shell tool it would normally use on the current platform
+(`Bash` or `PowerShell`), and Design §4 must grant matching `PowerShell(...)` rules alongside the
+`Bash(...)` ones for the same probe script variants.
+
 #### 1a. Don't hardcode `python3`
 
 Stock Windows Python installs commonly expose `python` and/or the `py` launcher, not a `python3`
@@ -88,7 +103,9 @@ alias, so a probe that only ever runs `python3 -c "..."` would itself fail on th
 this plan is trying to make more robust. Instruct `## Setup` to try the probe as `python3` first
 and, only if that command is not found, fall back to `python` and then `py -3` (each with the
 identical script content shown above). Since `allowed-tools` matches exact command strings, all
-three interpreter variants must be granted in Design §4, not just `python3`.
+three interpreter variants must be granted in Design §4, not just `python3` — and, per the
+Windows/PowerShell note in Design §1, granted under both the `Bash` and `PowerShell` tool names,
+since which one the agent actually calls depends on the platform, not on this plan's preference.
 
 ### 2. Declare `shell: bash` in frontmatter
 
@@ -136,7 +153,7 @@ Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip insta
 to:
 
 ```
-Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
+Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), PowerShell(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
 ```
 
 - Drop `Bash(source ~/.micromegas_env)` / `Bash(source ~/.micromegas_env *)` — no longer used.
@@ -144,7 +161,9 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
   the first-use config probe above, granted as three separate exact strings (one per interpreter
   variant from Design §1a: `python3`, `python`, `py -3`), not `*`-suffixed prefixes, since a
   trailing `*` on a fixed command compiles to a prefix wildcard and would permit anything sharing
-  that prefix.
+  that prefix. Each of the three is granted twice — once as `Bash(...)` and once as
+  `PowerShell(...)` — per the Windows note in Design §1, since the tool name the agent's shell
+  calls route through depends on the platform, not the interpreter chosen.
 - Add `Bash(pip install --upgrade micromegas)` — `pip install micromegas` alone will not upgrade
   an existing pre-0.25.0 install to one that has `cli/config.py`.
 - Replace bare `Write, Edit` with `Edit(~/.micromegas/config.json)` — the skill's only legitimate
@@ -182,9 +201,13 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 3. Rewrite `## Setup` per Design §1, §1a, and §3: replace the env-file/profile instructions with
    the `~/.micromegas/config.json` read-merge-write flow, drop "scope" from the ask-user list and
    add the `MICROMEGAS_OIDC_SCOPE` env-var note in its place, and add the first-use probe (try
-   `python3`, falling back to `python` then `py -3`, per §1a) with its `uri`/`oidc_issuer`/
-   `oidc_client_id` output and the "ambiguous localhost default" caveat, as the way to verify the
-   environment before running the user's query.
+   `python3`, falling back to `python` then `py -3`, per §1a, via `Bash` or `PowerShell` as
+   appropriate to the platform) with its `uri`/`oidc_issuer`/`oidc_client_id` output and the
+   "ambiguous localhost default" caveat, as the way to verify the environment before running the
+   user's query. Include the failure-mode distinction from Design §1: on a bare "module not found"
+   for `micromegas` itself, run `pip install micromegas`; on an import error naming something
+   inside `micromegas` (e.g. `micromegas.cli.config`), run `pip install --upgrade micromegas`
+   instead, since the package is already present but predates `cli/config.py`.
 4. Apply the three documentation changes from Design §5 (interactive SSO note, connection-error
    note, new UDF-listing subsection) in the appropriate sections (`## Setup` for the SSO note,
    `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and a
