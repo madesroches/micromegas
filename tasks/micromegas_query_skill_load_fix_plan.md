@@ -59,7 +59,7 @@ connection with an ordinary `Bash` call *before* running the user's actual query
 its result:
 
 ```
-python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"
+python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"
 ```
 
 This is total (never a non-zero exit on missing config — a missing config just resolves to the
@@ -67,10 +67,15 @@ default URI) and answers "is `micromegas` installed and importable?", "what will
 and "is OIDC configured?" in one call, without duplicating `resolve_connection()`'s precedence
 rules in the skill text. `resolve_connection()` itself makes no network calls, so this probe can
 never trigger the interactive browser login that only `connect()`'s OIDC path does — it only
-reports whether that path is configured. Note in the skill body that a printed
-`grpc://localhost:50051` is ambiguous (unconfigured vs. deliberately local) and must not by itself
-trigger overwriting an existing config, and that a printed `oidc_client_id` value (not `None`)
-means the *first* real `micromegas-query` call may open a browser for login — see Design §5.
+reports whether that path is configured. `connect()` only takes the OIDC branch when
+`cfg.oidc_issuer and cfg.oidc_client_id` are *both* truthy
+(`python/micromegas/micromegas/cli/connection.py:17`), and `resolve_connection()`'s `_pick()`
+resolves `oidc_issuer` and `oidc_client_id` independently (e.g. via separate env vars), so the
+probe must print both fields rather than `oidc_client_id` alone. Note in the skill body that a
+printed `grpc://localhost:50051` is ambiguous (unconfigured vs. deliberately local) and must not
+by itself trigger overwriting an existing config, and that printed `oidc_issuer` and
+`oidc_client_id` values that are *both* not `None` mean the *first* real `micromegas-query` call
+may open a browser for login — see Design §5.
 
 An ordinary `Bash` tool call surfaces a normal, recoverable tool error (e.g.
 `ModuleNotFoundError`) that the agent can read and act on by following `## Setup`, rather than an
@@ -131,7 +136,7 @@ Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip insta
 to:
 
 ```
-Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
+Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
 ```
 
 - Drop `Bash(source ~/.micromegas_env)` / `Bash(source ~/.micromegas_env *)` — no longer used.
@@ -156,10 +161,11 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 - **Interactive SSO**: add a note that the OIDC login flow is interactive and blocks. The
   `python3 -c` probe from Design §1 makes no network calls, so it cannot itself trigger this —
   only the *first* real `micromegas-query` call does, via `connect()`'s call to
-  `oidc_connection.load_or_login()` when no cached token exists yet. Instruct the agent to check
-  the probe's `oidc_client_id` output and, whenever it is not `None`, ask the *user* to run that
-  first `micromegas-query` call themselves (so a browser can open in their session), rather than
-  the agent attempting it and hanging.
+  `oidc_connection.load_or_login()` when no cached token exists yet, and only when `connect()`'s
+  gate (`cfg.oidc_issuer and cfg.oidc_client_id`) is satisfied. Instruct the agent to check the
+  probe's `oidc_issuer` and `oidc_client_id` output and, whenever *both* are not `None`, ask the
+  *user* to run that first `micromegas-query` call themselves (so a browser can open in their
+  session), rather than the agent attempting it and hanging.
 - **Connection error interpretation**: note that a connection error to `127.0.0.1:50051` means
   the URI never resolved (falls back to the default), not that authentication failed — call this
   out since it can appear interleaved with token-refresh output that suggests the wrong cause.
@@ -176,9 +182,9 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 3. Rewrite `## Setup` per Design §1, §1a, and §3: replace the env-file/profile instructions with
    the `~/.micromegas/config.json` read-merge-write flow, drop "scope" from the ask-user list and
    add the `MICROMEGAS_OIDC_SCOPE` env-var note in its place, and add the first-use probe (try
-   `python3`, falling back to `python` then `py -3`, per §1a) with its `uri`/`oidc_client_id`
-   output and the "ambiguous localhost default" caveat, as the way to verify the environment
-   before running the user's query.
+   `python3`, falling back to `python` then `py -3`, per §1a) with its `uri`/`oidc_issuer`/
+   `oidc_client_id` output and the "ambiguous localhost default" caveat, as the way to verify the
+   environment before running the user's query.
 4. Apply the three documentation changes from Design §5 (interactive SSO note, connection-error
    note, new UDF-listing subsection) in the appropriate sections (`## Setup` for the SSO note,
    `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and a
