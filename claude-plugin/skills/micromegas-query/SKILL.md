@@ -3,7 +3,8 @@ name: micromegas-query
 description: Query micromegas observability data (logs, metrics, spans) using SQL. Use when the user wants to explore telemetry data, investigate errors, check performance, or analyze system behavior.
 argument-hint: "<SQL query or natural language question about observability data>"
 context: fork
-allowed-tools: Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip install micromegas), Bash(micromegas-query *), Bash(which micromegas-query), Bash(printenv MICROMEGAS_ANALYTICS_URI), Read, Write, Edit, Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+shell: bash
+allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
 ---
 
 The user's query or question: $ARGUMENTS
@@ -19,36 +20,84 @@ The user's query or question: $ARGUMENTS
 
 Violating these rules can crash the analytics service by exhausting its memory.
 
-## Environment
-
-- micromegas-query installed: !`which micromegas-query`
-- MICROMEGAS_ANALYTICS_URI: !`printenv MICROMEGAS_ANALYTICS_URI`
-
 ## Setup
 
-If `micromegas-query` is not installed, run:
+Before running the user's actual query, verify the environment with an ordinary shell check
+(use `Bash` on Linux/macOS, or on Windows without Git Bash, `PowerShell`). Try `python3` first;
+if that command is not found, fall back to `python`, then `py -3`:
+
 ```
-pip install micromegas
+python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
 ```
 
-If `MICROMEGAS_ANALYTICS_URI` is not set, ask the user to provide:
+This call is total — it never fails just because nothing is configured yet, since a missing
+config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
+by itself (see the Interactive SSO note below). Read its output/errors as follows:
+
+- **`ModuleNotFoundError: No module named 'micromegas'`** — the package isn't installed. Run:
+  ```
+  pip install micromegas
+  ```
+- **Any other import error naming something inside `micromegas`** (e.g.
+  `No module named 'micromegas.cli.config'`) — an older `micromegas` version is already installed
+  that predates this config module. `pip install micromegas` alone is a no-op in this case; run:
+  ```
+  pip install --upgrade micromegas
+  ```
+- **Prints four lines with no error** — the package is present and importable. Read the four
+  printed values (`uri`, `oidc_issuer`, `oidc_client_id`, token-file-exists) as follows:
+  - A printed `uri` of `grpc://localhost:50051` is ambiguous — it may be a deliberate local
+    deployment, or nothing may be configured yet. Don't treat it as reason to overwrite an
+    existing config on its own; ask the user first if you're unsure whether it's configured.
+  - If `oidc_issuer` and `oidc_client_id` are both `None`, no OIDC is configured — no further
+    setup is implied for auth; either the URI is enough (plain connection) or the user still needs
+    to provide connection details (see below).
+
+If the user hasn't told you where to connect, ask them to provide:
 - Their analytics service URI (e.g. `https://analytics.example.com:443`)
-- If their deployment uses OIDC authentication: the issuer URL, client ID, audience, and scope
+- If their deployment uses OIDC authentication: the issuer URL, client ID, and audience
 
-Once the user provides the values, write `~/.micromegas_env` with them:
-```bash
-export MICROMEGAS_ANALYTICS_URI=<value from user>
-# Include these only if the user provided OIDC values:
-export MICROMEGAS_OIDC_ISSUER=<value from user>
-export MICROMEGAS_OIDC_CLIENT_ID=<value from user>
-export MICROMEGAS_OIDC_AUDIENCE=<value from user>
-export MICROMEGAS_OIDC_SCOPE="openid email profile offline_access"
-```
-Then append `source ~/.micromegas_env` to the user's shell profile (`~/.bashrc` or `~/.zshrc`) only if that source line is not already present. The profile append is what matters: each command runs in a fresh shell, so sourcing the file in one command does **not** carry over to the next `micromegas-query` invocation — the profile line ensures every new shell picks up the config.
+(Scope is not part of this flow — see the OIDC scope note below.)
 
-Verify setup with (source the env in the same command so it applies before the profile append takes effect in new shells):
+Once the user provides the values, read `~/.micromegas/config.json` first (it may already have
+content to preserve) and merge in the new values rather than clobbering the file, writing:
+```json
+{
+  "uri": "<value from user>",
+  "client_id": "<value from user, only if OIDC>",
+  "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
+}
 ```
-source ~/.micromegas_env && micromegas-query "SELECT 1" --begin 1h
+This takes effect immediately for every subsequent `micromegas-query` call in this session or any
+future one — no shell profile edit or new terminal required, since the library reads this file on
+every invocation.
+
+**OIDC scope**: there's no `config.json` field for `oidc_scope` — it's only read from the
+`MICROMEGAS_OIDC_SCOPE` environment variable, with no config-file fallback. The library already
+defaults it to `"openid email profile offline_access"` when unset, which covers the common case.
+If the user needs a non-default scope (e.g. Azure's `api://{client_id}/.default`), tell them to
+set `MICROMEGAS_OIDC_SCOPE` themselves in their own shell profile — that's outside this skill's
+automated config flow.
+
+**Interactive SSO**: the setup probe above makes no network calls and can never trigger a login.
+Only the *first* real `micromegas-query` call can, and only when `oidc_issuer` and
+`oidc_client_id` are both configured — `connect()` takes the OIDC path only when both are truthy.
+When that's the case, check the probe's token-file-exists output:
+- If it's `False`, no cached token exists yet, so that first `micromegas-query` call may open a
+  browser for login and block waiting for the user. Ask the *user* to run that first call
+  themselves, in their own session, rather than attempting it yourself and hanging.
+- If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
+  considering a browser — go ahead and run the query yourself.
+
+**Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
+never resolved to the intended service, not that authentication failed — this matters because it
+can appear interleaved with token-refresh output that suggests the wrong cause. Fix the `uri`
+value in `~/.micromegas/config.json` (or the `MICROMEGAS_ANALYTICS_URI` env var) rather than
+troubleshooting auth.
+
+Verify setup with:
+```
+micromegas-query "SELECT 1" --begin 1h
 ```
 
 ## CLI syntax
@@ -250,6 +299,14 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `variance_from_histogram(h)` — distribution variance
 - `count_from_histogram(h)` — total number of values
 - `sum_from_histogram(h)` — sum of all values
+
+### Discovering UDFs
+List available user-defined functions via `information_schema.routines` instead of guessing names:
+```
+micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines LIMIT 50" --all
+```
+Use `routine_name` as the column to select (not `function_name`), and check `description` and
+`syntax_example` for usage details on a function found this way.
 
 ## Common query patterns
 
