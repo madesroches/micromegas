@@ -223,16 +223,27 @@ already uses.
 
 Add `.github/workflows/python.yml`, triggered on pushes/PRs touching
 `python/**` and `build/python_ci.py` (plus the workflow file itself), running
-a matrix of Python **3.10** and **3.12**. Following the pattern every other
-workflow uses — `rust.yml` → `build/rust_ci.py`, `analytics-web-app.yml` →
-`build/analytics_web_ci.py`, `grafana-plugin.yml` → `build/grafana_ci.py`,
-`blender-extension.yml` → `build/build_blender_plugin.py` — the workflow
-delegates to a new `build/python_ci.py` rather than inlining shell in the
-YAML:
+a matrix of Python **3.10** and **3.12** on `runs-on: ubuntu-latest`. This
+workflow deliberately pins that fixed runner rather than routing through
+`check-runner.yml`: the version matrix is the thing under test, so it must
+stay deterministic regardless of self-hosted-runner availability. Following
+the pattern every other workflow uses — `rust.yml` → `build/rust_ci.py`,
+`analytics-web-app.yml` → `build/analytics_web_ci.py`, `grafana-plugin.yml` →
+`build/grafana_ci.py`, `blender-extension.yml` →
+`build/build_blender_plugin.py` — the workflow delegates to a new
+`build/python_ci.py` rather than inlining shell in the YAML:
 
-- Workflow step: `poetry install` in `python/micromegas`, then
-  `python build/python_ci.py`.
-- `build/python_ci.py` runs
+- Workflow steps: `actions/setup-python@v5` pinned to
+  `${{ matrix.python-version }}`, then — binding Poetry's venv to the
+  interpreter `setup-python` just put on `PATH`, rather than whatever
+  `python` the runner defaults to — `poetry env use python`, then
+  `poetry install` in `python/micromegas`, then
+  `python build/python_ci.py ${{ matrix.python-version }}`.
+- `build/python_ci.py` takes the expected Python version as an argument (or
+  env var) and asserts `sys.version_info` matches it before running tests, so
+  a mis-pinned leg (e.g. Poetry silently resolving to the runner's default
+  3.12 instead of the matrix's 3.10) fails loudly instead of reporting green
+  on an untested interpreter. It then runs
   `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
   from `python/micromegas` and returns its exit code.
 
@@ -247,7 +258,19 @@ connection error), not at collection time. `--doctest-modules` is scoped to
 The 3.10 leg is the part that actually earns its keep here: on 3.11+ the `Z`
 regression tests pass whether or not the shim exists, because `fromisoformat`
 handles `Z` natively. Only the 3.10 leg distinguishes a fixed build from a
-broken one.
+broken one — which is exactly why the interpreter-pinning and
+version-assertion steps above matter: without them, the 3.10 leg could
+silently run on 3.12 and report a false green.
+
+A companion `.github/workflows/python-build-skip.yml`, following the existing
+`build-skip.yml`/`web-build-skip.yml` pattern, emits no-op jobs on PRs whose
+paths don't touch `python/**` or `build/python_ci.py`, named identically to
+`python.yml`'s real jobs so the required status checks resolve instead of
+hanging. Because `python.yml` uses a matrix, GitHub Actions names each leg's
+check `<job-id> (<python-version>)` — e.g. `unit-tests (3.10)` and
+`unit-tests (3.12)` — and the skip workflow's jobs must reproduce those names
+exactly, the same way `build-skip.yml` mirrors `rust.yml`'s `check-runner`,
+`native`, and `wasm` job names.
 
 ## Implementation Steps
 
@@ -273,17 +296,26 @@ broken one.
    live query path, asserting a `Z`-suffixed `begin` produces a
    `query_range_begin` header of `2024-01-01T00:00:00+00:00`.
 7. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
-   above (including the new `tests/test_flightsql_headers.py`), following the
-   existing `build/*_ci.py` scripts.
-   **`.github/workflows/python.yml`** (new) — the 3.10/3.12 matrix job that
-   installs Poetry and calls `build/python_ci.py`, with `build/python_ci.py`
-   included in the workflow's path filter.
+   above (including the new `tests/test_flightsql_headers.py`) plus the
+   interpreter-version assertion, following the existing `build/*_ci.py`
+   scripts.
+   **`.github/workflows/python.yml`** (new) — the 3.10/3.12 matrix job on
+   `runs-on: ubuntu-latest`, with `actions/setup-python` pinned to
+   `${{ matrix.python-version }}` and `poetry env use python` before
+   `poetry install`, calling `build/python_ci.py` with the matrix version;
+   `build/python_ci.py` included in the workflow's path filter.
+   **`.github/workflows/python-build-skip.yml`** (new) — the companion skip
+   workflow, with job names matching `python.yml`'s matrix leg names exactly
+   (e.g. `unit-tests (3.10)`, `unit-tests (3.12)`).
 8. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
    option descriptions (lines 605-606) to say RFC 3339 and show the `Z` form,
    update the "specific timestamps" CLI example (lines 619-621) to use
    `Z`-suffixed values so the docs demonstrate the canonical spelling, and add
    `parse_datetime` to the "Time Utilities" section (lines 693-716) alongside
    `format_datetime`/`parse_time_delta`.
+   **`CLAUDE.md`** (repo root) — update line 60's `--begin`/`--end`
+   description from "ISO format" to RFC 3339 wording with a `Z` example,
+   matching the mkdocs and argparse-help wording above.
 9. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing style,
    noting the `Z` acceptance fix, the `flightsql/time.py` removal, the CLI error
    handling, and the new Python CI job, with `(#1405)`.
@@ -301,7 +333,9 @@ broken one.
 - `python/micromegas/tests/test_flightsql_headers.py` *(new)*
 - `build/python_ci.py` *(new)*
 - `.github/workflows/python.yml` *(new)*
+- `.github/workflows/python-build-skip.yml` *(new)*
 - `mkdocs/docs/query-guide/python-api.md`
+- `CLAUDE.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -361,9 +395,17 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   argparse help strings (the CLI's in-tool documentation).
 - `python/micromegas/micromegas/time.py` — `parse_datetime` docstring; the
   existing `format_datetime` docstring needs no correction.
-- No `CLAUDE.md` or `.github/copilot-instructions.md` change: the new workflow
-  is additive and the existing Python commands (`poetry run pytest`,
-  `poetry run black`) are already documented in `python/CLAUDE.md`.
+- `CLAUDE.md` (repo root) — line 60 currently says "ISO format" for
+  `--begin`/`--end`, the same stale wording being fixed in the mkdocs guide
+  and the argparse help; update it to RFC 3339 wording with a `Z` example so
+  it doesn't go stale relative to the CLI it documents.
+- No `.github/copilot-instructions.md` change: it documents only Rust CI, so
+  neither the timestamp fix nor the new Python CI workflow touches it. The
+  new Python CI workflow itself also needs no `CLAUDE.md` change — it's
+  additive and the existing Python commands (`poetry run pytest`,
+  `poetry run black`) are already documented in `python/CLAUDE.md`; the line
+  60 fix above is about the pre-existing `--begin`/`--end` docs, not the new
+  workflow.
 
 ## Testing Strategy
 
