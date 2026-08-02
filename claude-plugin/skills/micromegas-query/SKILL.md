@@ -22,9 +22,20 @@ Violating these rules can crash the analytics service by exhausting its memory.
 
 ## Setup
 
-Before running the user's actual query, verify the environment with an ordinary shell check
-(use `Bash` on Linux/macOS, or on Windows without Git Bash, `PowerShell`). Try `python3` first;
-if that command is not found, fall back to `python`, then `py -3`:
+Before running the user's actual query, verify the environment with two cheap, no-network checks:
+a CLI-presence check, and a Python config probe. Run both — they test different things, since
+`micromegas-query` (a console script, typically on `PATH` via pipx/poetry/venv) and the `micromegas`
+module importable by the ambient `python3`/`python`/`py -3` interpreter can each be present without
+the other.
+
+First, check the CLI is on `PATH`:
+```
+micromegas-query --help
+```
+
+Second, use an ordinary shell check (use `Bash` on Linux/macOS, or on Windows without Git Bash,
+`PowerShell`) for the config probe. Try `python3` first; if that command is not found, fall back to
+`python`, then `py -3`:
 
 ```
 python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
@@ -32,9 +43,14 @@ python3 -c "import os; from micromegas.cli.config import resolve_connection; c =
 
 This call is total — it never fails just because nothing is configured yet, since a missing
 config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
-by itself (see the Interactive SSO note below). Read its output/errors as follows:
+by itself (see the Interactive SSO note below). Read the two checks together:
 
-- **`ModuleNotFoundError: No module named 'micromegas'`** — the package isn't installed. Run:
+- **CLI missing but module importable** (or vice versa) — this is a `PATH`/environment mismatch
+  between the interpreter running the probe and the one `micromegas-query` was installed for, not
+  "not installed". Don't reinstall; instead locate the right interpreter/environment (e.g. the one
+  that owns the `pip`/`pipx`/`poetry` install) or ask the user which environment to use.
+- **`ModuleNotFoundError: No module named 'micromegas'`, and the CLI is also missing** — the
+  package isn't installed. Run:
   ```
   pip install micromegas
   ```
@@ -100,10 +116,13 @@ can appear interleaved with token-refresh output that suggests the wrong cause. 
 value in `~/.micromegas/config.json` (or the `MICROMEGAS_ANALYTICS_URI` env var) rather than
 troubleshooting auth.
 
-Verify setup with:
+Verify setup: if the probe reported no OIDC configured (`oidc_issuer`/`oidc_client_id` both
+`None`), or a cached token already exists (token-file-exists is `True`), run:
 ```
 micromegas-query "SELECT 1" --begin 1h
 ```
+Otherwise (OIDC is configured and no token exists yet), this is the same first-call case covered
+by the Interactive SSO note above — ask the *user* to run that verification query themselves.
 
 ## CLI syntax
 
@@ -306,9 +325,12 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `sum_from_histogram(h)` — sum of all values
 
 ### Discovering UDFs
-List available user-defined functions via `information_schema.routines` instead of guessing names:
+List available user-defined functions via `information_schema.routines` instead of guessing names.
+This table also lists every DataFusion built-in function alongside micromegas extensions, and
+without a filter it returns hundreds of rows in no guaranteed order, so always filter by name (and
+optionally add `ORDER BY`) rather than paging through with a bare `LIMIT`:
 ```
-micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines LIMIT 50" --begin 1h
+micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines WHERE routine_name LIKE '%histogram%' ORDER BY routine_name" --begin 1h
 ```
 Use `routine_name` as the column to select (not `function_name`), and check `description` and
 `syntax_example` for usage details on a function found this way.
