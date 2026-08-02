@@ -91,6 +91,12 @@ This takes effect immediately for every subsequent `micromegas-query` call in th
 future one — no shell profile edit or new terminal required, since the library reads this file on
 every invocation.
 
+**Legacy env var precedence**: `MICROMEGAS_ANALYTICS_URI`/`MICROMEGAS_OIDC_*` environment variables
+always take precedence over `config.json` (a previous version of this skill instructed setting
+these in `~/.micromegas_env`, sourced from `~/.bashrc`/`~/.zshrc`). If the verification probe below
+still shows stale values after you've written `config.json`, check the user's shell profile for a
+leftover `source ~/.micromegas_env` line or these env vars set directly, and ask them to remove it.
+
 **OIDC scope**: there's no `config.json` field for `oidc_scope` — it's only read from the
 `MICROMEGAS_OIDC_SCOPE` environment variable, with no config-file fallback. The library already
 defaults it to `"openid email profile offline_access"` when unset, which covers the common case.
