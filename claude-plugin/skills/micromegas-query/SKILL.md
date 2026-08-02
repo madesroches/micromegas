@@ -4,7 +4,7 @@ description: Query micromegas observability data (logs, metrics, spans) using SQ
 argument-hint: "<SQL query or natural language question about observability data>"
 context: fork
 shell: bash
-allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
 ---
 
 The user's query or question: $ARGUMENTS
@@ -87,7 +87,12 @@ When that's the case, check the probe's token-file-exists output:
   browser for login and block waiting for the user. Ask the *user* to run that first call
   themselves, in their own session, rather than attempting it yourself and hanging.
 - If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
-  considering a browser — go ahead and run the query yourself.
+  considering a browser — go ahead and run the query yourself. However, if that token has expired
+  or been revoked, `load_or_login()` silently falls back to the same blocking browser login (look
+  for `Token refresh failed` / `Re-authenticating...` in the query's output). If you see that
+  output, or the call blocks/times out, stop — don't wait it out — and ask the *user* to run the
+  query themselves in their own session (optionally after `micromegas-logout` to clear the stale
+  token first).
 
 **Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
 never resolved to the intended service, not that authentication failed — this matters because it
@@ -303,7 +308,7 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 ### Discovering UDFs
 List available user-defined functions via `information_schema.routines` instead of guessing names:
 ```
-micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines LIMIT 50" --all
+micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines LIMIT 50" --begin 1h
 ```
 Use `routine_name` as the column to select (not `function_name`), and check `description` and
 `syntax_example` for usage details on a function found this way.
