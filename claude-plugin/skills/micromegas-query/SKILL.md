@@ -325,15 +325,15 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `sum_from_histogram(h)` — sum of all values
 
 ### Discovering UDFs
-List available user-defined functions via `information_schema.routines` instead of guessing names.
-This table also lists every DataFusion built-in function alongside micromegas extensions, and
-without a filter it returns hundreds of rows in no guaranteed order, so always filter by name (and
-optionally add `ORDER BY`) rather than paging through with a bare `LIMIT`:
-```
-micromegas-query "SELECT routine_name, description, syntax_example FROM information_schema.routines WHERE routine_name LIKE '%histogram%' ORDER BY routine_name" --begin 1h
-```
-Use `routine_name` as the column to select (not `function_name`), and check `description` and
-`syntax_example` for usage details on a function found this way.
+For micromegas extension functions, use the **Key functions** section above or the
+[functions reference](https://micromegas.info/docs/query-guide/functions-reference/) rather than
+querying for them — `information_schema.routines` lists them, but its `description` and
+`syntax_example` columns are only populated for DataFusion built-ins, since DataFusion derives
+them from `documentation()`, which no micromegas UDF implements. For DataFusion built-in scalar or
+aggregate functions, use the
+[DataFusion scalar](https://datafusion.apache.org/user-guide/sql/scalar_functions.html) /
+[aggregate](https://datafusion.apache.org/user-guide/sql/aggregate_functions.html) function docs
+(see **Reference documentation** below).
 
 ## Common query patterns
 
