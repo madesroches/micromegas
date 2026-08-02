@@ -36,8 +36,13 @@ documentation inaccuracies called out in the issue.
   (`grpc://localhost:50051`), and `cli/connection.py:connect()` uses it directly. This has been
   present since `micromegas` 0.25.0; `pyproject.toml` (`python/micromegas/pyproject.toml:3`)
   currently publishes 0.28.0, so it's available in every supported install. There is no
-  config-file key for `oidc_scope` (env-var-only), which is lossless since `auth/oidc.py:69`
-  already defaults it to `"openid email profile offline_access"` when unset.
+  config-file key for `oidc_scope` — `resolve_connection()` reads it only via
+  `_pick("MICROMEGAS_OIDC_SCOPE")`, with no config-file fallback — so a non-default scope (e.g.
+  Azure's `api://{client_id}/.default ...`) can only be set via that environment variable, not
+  written into `~/.micromegas/config.json`. This is fine for the common case, since
+  `auth/oidc.py:69` already defaults it to `"openid email profile offline_access"` when unset,
+  but it means `## Setup` must not promise to persist a scope value the config file has no slot
+  for.
 - The `--begin <ts>Z` failure on Python 3.10 referenced in the issue (and tracked as #1403) was
   fixed by commit `3260dfbca` ("Accept full RFC 3339 timestamps in the Python client and CLI
   (#1407)"), landed on `main` ahead of this plan. No action needed here.
@@ -54,18 +59,31 @@ connection with an ordinary `Bash` call *before* running the user's actual query
 its result:
 
 ```
-python3 -c "from micromegas.cli.config import resolve_connection; print(resolve_connection().uri)"
+python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"
 ```
 
 This is total (never a non-zero exit on missing config — a missing config just resolves to the
-default URI) and answers "is `micromegas` installed and importable?" and "what will it connect
-to?" in one call, without duplicating `resolve_connection()`'s precedence rules in the skill
-text. Note in the skill body that a printed `grpc://localhost:50051` is ambiguous (unconfigured
-vs. deliberately local) and must not by itself trigger overwriting an existing config.
+default URI) and answers "is `micromegas` installed and importable?", "what will it connect to?",
+and "is OIDC configured?" in one call, without duplicating `resolve_connection()`'s precedence
+rules in the skill text. `resolve_connection()` itself makes no network calls, so this probe can
+never trigger the interactive browser login that only `connect()`'s OIDC path does — it only
+reports whether that path is configured. Note in the skill body that a printed
+`grpc://localhost:50051` is ambiguous (unconfigured vs. deliberately local) and must not by itself
+trigger overwriting an existing config, and that a printed `oidc_client_id` value (not `None`)
+means the *first* real `micromegas-query` call may open a browser for login — see Design §5.
 
 An ordinary `Bash` tool call surfaces a normal, recoverable tool error (e.g.
 `ModuleNotFoundError`) that the agent can read and act on by following `## Setup`, rather than an
 unrecoverable load-time abort.
+
+#### 1a. Don't hardcode `python3`
+
+Stock Windows Python installs commonly expose `python` and/or the `py` launcher, not a `python3`
+alias, so a probe that only ever runs `python3 -c "..."` would itself fail on the Windows boxes
+this plan is trying to make more robust. Instruct `## Setup` to try the probe as `python3` first
+and, only if that command is not found, fall back to `python` and then `py -3` (each with the
+identical script content shown above). Since `allowed-tools` matches exact command strings, all
+three interpreter variants must be granted in Design §4, not just `python3`.
 
 ### 2. Declare `shell: bash` in frontmatter
 
@@ -88,6 +106,13 @@ shell-profile append:
 }
 ```
 
+This schema has no `scope` field, matching `resolve_connection()`, which reads `oidc_scope` only
+via `MICROMEGAS_OIDC_SCOPE` with no config-file fallback. Update `## Setup`'s ask-user list
+accordingly: ask only for the issuer URL, client ID, and audience (drop "scope"). If the user
+needs a non-default scope (e.g. Azure's `api://{client_id}/.default ...`), tell them to set
+`MICROMEGAS_OIDC_SCOPE` themselves in their own shell profile — this is outside the skill's
+automated config-file flow, since `config.json` has no slot for it.
+
 This takes effect immediately for every subsequent `micromegas-query` invocation in the same or
 a later session — no profile edit, no `source`, no new terminal. Drop the `~/.bashrc`/`~/.zshrc`
 append step and the caution about not prefixing commands with `source ~/.micromegas_env &&`
@@ -106,14 +131,15 @@ Bash(source ~/.micromegas_env), Bash(source ~/.micromegas_env *), Bash(pip insta
 to:
 
 ```
-Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; print(resolve_connection().uri)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
+Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Bash(python -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Bash(py -3 -c "from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_client_id)"), Read, Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(...)
 ```
 
 - Drop `Bash(source ~/.micromegas_env)` / `Bash(source ~/.micromegas_env *)` — no longer used.
 - Drop `Bash(which micromegas-query)` / `Bash(printenv MICROMEGAS_ANALYTICS_URI)` — replaced by
-  the first-use config probe above (granted as an exact string, not a `*`-suffixed prefix, since
-  a trailing `*` on a fixed command compiles to a prefix wildcard and would permit anything
-  sharing that prefix).
+  the first-use config probe above, granted as three separate exact strings (one per interpreter
+  variant from Design §1a: `python3`, `python`, `py -3`), not `*`-suffixed prefixes, since a
+  trailing `*` on a fixed command compiles to a prefix wildcard and would permit anything sharing
+  that prefix.
 - Add `Bash(pip install --upgrade micromegas)` — `pip install micromegas` alone will not upgrade
   an existing pre-0.25.0 install to one that has `cli/config.py`.
 - Replace bare `Write, Edit` with `Edit(~/.micromegas/config.json)` — the skill's only legitimate
@@ -127,9 +153,13 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 
 ### 5. Documentation corrections in the SKILL.md body
 
-- **Interactive SSO**: add a note that the OIDC login flow is interactive and blocks; the skill
-  should tell the *user* to run the verification query themselves when OIDC is configured,
-  rather than the agent attempting it and hanging.
+- **Interactive SSO**: add a note that the OIDC login flow is interactive and blocks. The
+  `python3 -c` probe from Design §1 makes no network calls, so it cannot itself trigger this —
+  only the *first* real `micromegas-query` call does, via `connect()`'s call to
+  `oidc_connection.load_or_login()` when no cached token exists yet. Instruct the agent to check
+  the probe's `oidc_client_id` output and, whenever it is not `None`, ask the *user* to run that
+  first `micromegas-query` call themselves (so a browser can open in their session), rather than
+  the agent attempting it and hanging.
 - **Connection error interpretation**: note that a connection error to `127.0.0.1:50051` means
   the URI never resolved (falls back to the default), not that authentication failed — call this
   out since it can appear interleaved with token-refresh output that suggests the wrong cause.
@@ -143,10 +173,12 @@ Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micro
 1. Edit `claude-plugin/skills/micromegas-query/SKILL.md` frontmatter: add `shell: bash`; replace
    the `allowed-tools` line per Design §4.
 2. Remove the `## Environment` section (lines 22-25) entirely.
-3. Rewrite `## Setup` per Design §1 and §3: replace the env-file/profile instructions with the
-   `~/.micromegas/config.json` read-merge-write flow, and add the first-use `python3 -c` probe
-   (with the "ambiguous localhost default" caveat) as the way to verify the environment before
-   running the user's query.
+3. Rewrite `## Setup` per Design §1, §1a, and §3: replace the env-file/profile instructions with
+   the `~/.micromegas/config.json` read-merge-write flow, drop "scope" from the ask-user list and
+   add the `MICROMEGAS_OIDC_SCOPE` env-var note in its place, and add the first-use probe (try
+   `python3`, falling back to `python` then `py -3`, per §1a) with its `uri`/`oidc_client_id`
+   output and the "ambiguous localhost default" caveat, as the way to verify the environment
+   before running the user's query.
 4. Apply the three documentation changes from Design §5 (interactive SSO note, connection-error
    note, new UDF-listing subsection) in the appropriate sections (`## Setup` for the SSO note,
    `## Common query patterns` / troubleshooting-adjacent text for the connection-error note, and a
