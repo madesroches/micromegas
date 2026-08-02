@@ -131,6 +131,12 @@ the new `python` bound. This drops the now-unreachable `python_version ==
 else changes; the regenerated lock file is committed alongside the
 `pyproject.toml` change.
 
+The same `pyproject.toml` edit also adds `black` to
+`[tool.poetry.group.dev.dependencies]`: it is absent from the lock file and
+the project venv today, so `poetry run black` only works via a global
+`~/.local/bin/black` fallback and fails in a clean `poetry install`. The
+`poetry lock` regeneration above picks it up in the same pass.
+
 ### 2. Shared `parse_datetime()` in `micromegas/time.py`
 
 Now that the floor is 3.11, `fromisoformat` already handles the `Z` suffix and
@@ -296,7 +302,14 @@ the pattern every other workflow uses — `rust.yml` → `build/rust_ci.py`,
   of the matrix's 3.11 for the `poetry run pytest` subprocess below). It then
   runs
   `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py`
-  from `python/micromegas` and returns its exit code.
+  from `python/micromegas`, then runs `poetry run black --check .` (also
+  `cwd=python/micromegas`) as a second gate, and fails if either subprocess's
+  exit code is non-zero — mirroring `rust_ci.py`'s `cargo fmt --check` gate
+  alongside its test run, and closing the gap that this is otherwise the
+  repo's first Python CI with no formatting check at all. `black` is added to
+  `[tool.poetry.group.dev.dependencies]` in `pyproject.toml` (see §1) so this
+  gate resolves inside the Poetry venv `poetry install` just created, not via
+  a global fallback.
 
 The explicit file list is deliberate: `pytest` over the whole `tests/` directory
 would collect and run the integration suite, and `tests/test_utils.py:5` calls
@@ -360,12 +373,13 @@ must be added at that time, following the `build-skip.yml` pattern.
    `query_range_begin` header of `2024-01-01T00:00:00+00:00`.
 8. **`build/python_ci.py`** (new, at the repo root) — resolves the repo root
    from `__file__` and runs its `poetry run` subprocesses (the version
-   assertion and the `pytest` invocation) with `cwd=python/micromegas`,
-   following `build/rust_ci.py` / `build/analytics_web_ci.py`. Contains the
-   hermetic `pytest` invocation described above (including the new
-   `tests/test_flightsql_headers.py`) plus the venv-interpreter version
-   assertion (`poetry run python -c "..."` compared against the expected
-   version).
+   assertion, the `pytest` invocation, and the `black --check` invocation)
+   with `cwd=python/micromegas`, following `build/rust_ci.py` /
+   `build/analytics_web_ci.py`. Contains the hermetic `pytest` invocation
+   described above (including the new `tests/test_flightsql_headers.py`) plus
+   the venv-interpreter version assertion (`poetry run python -c "..."`
+   compared against the expected version) plus a `poetry run black --check .`
+   gate, propagating a non-zero exit from either check.
    **`.github/workflows/python.yml`** (new) — the 3.11/3.14 matrix job (as
    quoted YAML strings) on `runs-on: ubuntu-latest`, starting with
    `actions/checkout@v4` and `actions/setup-python` pinned to
@@ -389,6 +403,17 @@ must be added at that time, following the `build-skip.yml` pattern.
    **`python/notebooks/README.md`** and **`mkdocs/docs/development/build.md`**
    — update the stale "Python 3.8+" prerequisite line in each to "Python
    3.11+", matching the new floor.
+   **`python/CLAUDE.md`** — add a `- **CI**: python3 ../build/python_ci.py`
+   line, matching `rust/CLAUDE.md:28`'s existing `- **CI**:` entry for
+   `build/rust_ci.py`.
+   **`CONTRIBUTING.md`** — add `python3 build/python_ci.py` to the Python
+   Testing Requirements checklist item (line 523, currently `poetry run
+   pytest` and `poetry run black .`) and to its "CI validation script"
+   analogue in the "Python Package" section (lines 238-241 area, which today
+   only lists `poetry install`/`poetry run pytest`/`poetry run black <file>`).
+   **`mkdocs/docs/contributing.md`** — mirror the same addition in its
+   "Python package" Running Tests block (lines 186-194 area), alongside the
+   existing `cd python/micromegas && poetry run pytest` line.
 10. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing
     style, noting: the minimum supported Python version rising from 3.10 to
     3.11 (called out explicitly as a breaking change for anyone still on
@@ -396,7 +421,8 @@ must be added at that time, following the `build-skip.yml` pattern.
     `Z`/`z` acceptance fix, the `flightsql/time.py` removal, the CLI error
     handling, and the new Python CI job, with `(#1405)`.
 11. **Format** — `poetry run black` on every touched Python file (required by
-    `python/CLAUDE.md`).
+    `python/CLAUDE.md`), which now also passes the new `poetry run black
+    --check .` gate added to `build/python_ci.py` in step 8.
 
 ## Files to Modify
 
@@ -415,6 +441,9 @@ must be added at that time, following the `build-skip.yml` pattern.
 - `CLAUDE.md`
 - `python/notebooks/README.md`
 - `mkdocs/docs/development/build.md`
+- `python/CLAUDE.md`
+- `CONTRIBUTING.md`
+- `mkdocs/docs/contributing.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -491,13 +520,18 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   match the new floor. The notebooks README is directly affected since those
   notebooks `import micromegas`, which no longer installs on 3.8–3.10 after
   the bump.
+- `python/CLAUDE.md` — add a `- **CI**: python3 ../build/python_ci.py` line
+  documenting the new script, matching the precedent set by
+  `rust/CLAUDE.md:28`'s `- **CI**:` entry for `build/rust_ci.py`.
+- `CONTRIBUTING.md` — add `python3 build/python_ci.py` alongside the existing
+  Python commands in the "Python Package" section, and to the Python line of
+  the pre-PR Testing Requirements checklist (line 523), matching how
+  `build/rust_ci.py` and `build/grafana_ci.py` are already listed there.
+- `mkdocs/docs/contributing.md` — mirror the same addition in its "Python
+  package" Running Tests block, alongside the existing
+  `cd python/micromegas && poetry run pytest` line.
 - No `.github/copilot-instructions.md` change: it documents only Rust CI, so
-  neither the timestamp fix nor the new Python CI workflow touches it. The
-  new Python CI workflow itself also needs no `CLAUDE.md` change — it's
-  additive and the existing Python commands (`poetry run pytest`,
-  `poetry run black`) are already documented in `python/CLAUDE.md`; the line
-  60 fix above is about the pre-existing `--begin`/`--end` docs, not the new
-  workflow.
+  neither the timestamp fix nor the new Python CI workflow touches it.
 
 ## Testing Strategy
 
