@@ -113,12 +113,21 @@ only for lowercase `z`, which the stdlib rejects on every version including
 Python 3.10 reaches end of life in October 2026 — about two months from now —
 so dropping it is not a preemptive break; it is dropping a version that is
 about to stop receiving security fixes upstream. `pyarrow` (23.0.1, locked),
-`grpcio`, `pandas`, and `numpy` all already publish cp311 through cp314
-wheels, so there is no dependency-availability reason to stay on 3.10.
+`grpcio`, and `pandas` already publish cp311 through cp314 wheels at their
+currently locked versions, so there is no dependency-availability reason to
+stay on 3.10 for those three. `numpy` is the exception: it is currently
+locked at 2.2.6 for the `python_version == "3.10"` marker, and that release's
+wheels only go up to cp313 — cp314 wheels start at numpy 2.4.x. Regenerating
+`poetry.lock` after the bump therefore also pulls numpy forward to a 2.4.x
+release for cp314 coverage; that line must be pinned deliberately, since
+numpy 2.4.6 is the newest release that still supports 3.11 (numpy 2.5.x
+requires Python >=3.12), so the lock needs to land on 2.4.x rather than
+whatever is newest overall while 3.11 remains the floor.
 
 After changing the constraint, `poetry.lock` must be regenerated (`poetry
 lock` from `python/micromegas`) so the lock file's resolution and hashes match
-the new `python` bound; the regenerated lock file is committed alongside the
+the new `python` bound — this is also what pulls numpy forward to a 2.4.x
+release, per above; the regenerated lock file is committed alongside the
 `pyproject.toml` change.
 
 ### 2. Shared `parse_datetime()` in `micromegas/time.py`
@@ -263,13 +272,20 @@ the pattern every other workflow uses — `rust.yml` → `build/rust_ci.py`,
   to `${{ matrix.python-version }}`, then `pipx install poetry` (GitHub-hosted
   runners don't ship Poetry), then — binding Poetry's venv to the interpreter
   `setup-python` just put on `PATH`, rather than whatever `python` the runner
-  defaults to — `poetry env use python`, then `poetry install`, then
-  `python build/python_ci.py ${{ matrix.python-version }}`; the three Poetry
-  steps (`poetry env use`, `poetry install`, and the `python_ci.py` call) run
-  with `working-directory: python/micromegas`.
-- `build/python_ci.py` takes the expected Python version as an argument (or
-  env var) and, before running tests, runs `poetry run python -c "import sys;
-  print('%d.%d' % sys.version_info[:2])"` from `python/micromegas` and compares
+  defaults to — `poetry env use python` and `poetry install`, both with
+  `working-directory: python/micromegas`, then
+  `python build/python_ci.py ${{ matrix.python-version }}` from the repo root
+  (no `working-directory`), matching how `rust.yml` runs
+  `./build/rust_ci.py native` and `analytics-web-app.yml` runs
+  `python3 build/analytics_web_ci.py` — `build/python_ci.py` lives at the
+  repo root (there is no `python/micromegas/build/`), so it must be invoked
+  from there.
+- `build/python_ci.py` resolves the repo root from `__file__` (as
+  `build/rust_ci.py` and `build/analytics_web_ci.py` already do) and sets
+  `cwd=<repo_root>/python/micromegas` on each `poetry run` subprocess it
+  spawns. It takes the expected Python version as an argument (or env var)
+  and, before running tests, runs `poetry run python -c "import sys;
+  print('%d.%d' % sys.version_info[:2])"` with that `cwd` and compares
   its output against the expected version, failing loudly on a mismatch. The
   assertion must observe the Poetry *venv*'s interpreter this way rather than
   checking its own `sys.version_info`: `python_ci.py` itself is invoked by the
@@ -341,20 +357,25 @@ must be added at that time, following the `build-skip.yml` pattern.
    unit test for `flightsql.client.make_call_headers`, the function on the
    live query path, asserting a `Z`-suffixed `begin` produces a
    `query_range_begin` header of `2024-01-01T00:00:00+00:00`.
-8. **`build/python_ci.py`** (new) — the hermetic `pytest` invocation described
-   above (including the new `tests/test_flightsql_headers.py`) plus the
-   venv-interpreter version assertion (`poetry run python -c "..."` compared
-   against the expected version), following the existing `build/*_ci.py`
-   scripts.
+8. **`build/python_ci.py`** (new, at the repo root) — resolves the repo root
+   from `__file__` and runs its `poetry run` subprocesses (the version
+   assertion and the `pytest` invocation) with `cwd=python/micromegas`,
+   following `build/rust_ci.py` / `build/analytics_web_ci.py`. Contains the
+   hermetic `pytest` invocation described above (including the new
+   `tests/test_flightsql_headers.py`) plus the venv-interpreter version
+   assertion (`poetry run python -c "..."` compared against the expected
+   version).
    **`.github/workflows/python.yml`** (new) — the 3.11/3.14 matrix job (as
    quoted YAML strings) on `runs-on: ubuntu-latest`, starting with
    `actions/checkout@v4` and `actions/setup-python` pinned to
-   `${{ matrix.python-version }}`, then `pipx install poetry` before
+   `${{ matrix.python-version }}`, then `pipx install poetry`, then
    `poetry env use python` and `poetry install` (both with
-   `working-directory: python/micromegas`), calling `build/python_ci.py` with
-   the matrix version; `build/python_ci.py` included in the workflow's path
-   filter. The `unit-tests` checks start out advisory (not added to branch
-   protection), so no companion skip workflow is added in this step.
+   `working-directory: python/micromegas`), then
+   `python build/python_ci.py ${{ matrix.python-version }}` from the repo
+   root (no `working-directory`); `build/python_ci.py` included in the
+   workflow's path filter. The `unit-tests` checks start out advisory (not
+   added to branch protection), so no companion skip workflow is added in
+   this step.
 9. **`mkdocs/docs/query-guide/python-api.md`** — update the `--begin`/`--end`
    option descriptions (lines 605-606) to say RFC 3339 and show the `Z` form,
    update the "specific timestamps" CLI example (lines 619-621) to use
@@ -371,6 +392,8 @@ must be added at that time, following the `build-skip.yml` pattern.
     style, noting: the minimum supported Python version rising from 3.10 to
     3.11 (called out explicitly as a breaking change for anyone still on
     3.10, since it means `pip install micromegas` no longer works there), the
+    resulting `numpy` bump to a 2.4.x release (needed for cp314 wheel
+    coverage; 2.4.6 is the newest release still supporting 3.11), the
     `Z`/`z` acceptance fix, the `flightsql/time.py` removal, the CLI error
     handling, and the new Python CI job, with `(#1405)`.
 11. **Format** — `poetry run black` on every touched Python file (required by
@@ -408,8 +431,13 @@ hand-rolled shim having to reproduce it and stay in sync with it. The other
 side of the decision: Python 3.10 reaches end of life in October 2026, about
 two months from now, so dropping it now is dropping a version whose upstream
 security support is about to end anyway, not preempting meaningful runway.
-`pyarrow`, `grpcio`, `pandas`, and `numpy` already publish cp311+ wheels, so
-there's no dependency blocker either way.
+`pyarrow`, `grpcio`, and `pandas` already publish cp311+ wheels at their
+currently locked versions; `numpy`'s currently-locked 2.2.6 (for the
+`python_version == "3.10"` marker) does not publish cp314 wheels, so the
+`poetry.lock` regeneration in §1 also bumps numpy to a 2.4.x release (2.4.6
+is the newest still supporting 3.11, since 2.5.x requires >=3.12) for cp314
+coverage — a dependency upgrade this decision pulls in, not a blocker
+against it.
 
 **Normalize lowercase `z` vs. reject it.** With the floor at 3.11, the only
 remaining gap between what `fromisoformat` accepts and what RFC 3339 permits
