@@ -45,18 +45,11 @@ This call is total — it never fails just because nothing is configured yet, si
 config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
 by itself (see the Interactive SSO note below). Read the two checks together:
 
-- **Module importable but `micromegas-query --help` fails** — the package is installed for this
-  interpreter but its console-script directory isn't on `PATH` (common with user site-packages or
-  the Windows `Scripts` dir). Since every query in this skill goes through the `micromegas-query`
-  CLI, this is a real problem. Fix it by running `pip install micromegas` for the same interpreter
-  that successfully imported the module — this repairs/reinstalls the console script — or by
-  adding that interpreter's scripts/bin directory to `PATH`.
-- **`micromegas-query --help` succeeds but the module import fails** — this is just a `PATH`/
-  environment mismatch between the interpreter running the probe and the one `micromegas-query`
-  was installed for, not "not installed". `micromegas-query` resolves its own connection
-  independently of what the ambient Python interpreter can import, so treat the module probe as
-  best-effort diagnostics only (it just reports the resolved config/OIDC state) and don't block on
-  this mismatch.
+- **Only one of the two checks succeeds** — this is a `PATH`/interpreter mismatch, not "not
+  installed": use whichever one works (the CLI is what actually runs queries, so prefer it, and
+  treat the Python probe as best-effort diagnostics of the resolved config/OIDC state). Only
+  raise it with the user if neither check works after trying `pip install`/`pip install --upgrade`
+  below.
 - **`ModuleNotFoundError: No module named 'micromegas'`, and the CLI is also missing** — the
   package isn't installed. Run:
   ```
@@ -117,12 +110,11 @@ When that's the case, check the probe's token-file-exists output:
   browser for login and block waiting for the user. Ask the *user* to run that first call
   themselves, in their own session, rather than attempting it yourself and hanging.
 - If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
-  considering a browser — go ahead and run the query yourself. However, if that token has expired
-  or been revoked, `load_or_login()` silently falls back to the same blocking browser login (look
-  for `Token refresh failed` / `Re-authenticating...` in the query's output). If you see that
-  output, or the call blocks/times out, stop — don't wait it out — and ask the *user* to run the
-  query themselves in their own session (optionally after `micromegas-logout` to clear the stale
-  token first).
+  considering a browser — go ahead and run the query yourself. If that token has expired or been
+  revoked, this does not hang: the query fails cleanly with an error like `Token refresh failed:
+  ... Please re-authenticate.` If you see that error, run `micromegas-logout` to clear the stale
+  token, then ask the *user* to re-run the query themselves in their own session (this will
+  trigger a fresh interactive login).
 
 **Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
 never resolved to the intended service, not that authentication failed — this matters because it
@@ -130,9 +122,10 @@ can appear interleaved with token-refresh output that suggests the wrong cause. 
 value in `~/.micromegas/config.json` (or the `MICROMEGAS_ANALYTICS_URI` env var) rather than
 troubleshooting auth.
 
-After writing or changing `~/.micromegas/config.json`, verify it: if no OIDC is configured
-(`oidc_issuer`/`oidc_client_id` both `None`), or a cached token already exists (token-file-exists
-is `True`), run:
+After writing or changing `~/.micromegas/config.json`, re-run the config probe from Setup above —
+the file is read fresh on every invocation, so this reflects what you just wrote — and verify
+against that fresh output, not the pre-write probe: if no OIDC is configured (`oidc_issuer`/
+`oidc_client_id` both `None`), or a cached token already exists (token-file-exists is `True`), run:
 ```
 micromegas-query "SELECT 1" --begin 1h
 ```
