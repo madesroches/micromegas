@@ -126,10 +126,14 @@ availability gap and no numpy upgrade involved.
 After changing the constraint, `poetry.lock` must be regenerated (`poetry
 lock` from `python/micromegas`) so the lock file's resolution and hashes match
 the new `python` bound. This drops the now-unreachable `python_version ==
-"3.10"` marker entries — `numpy 2.2.6`, `exceptiongroup 1.3.0`, `tomli
-2.3.0`, and a test-group marker on `typing-extensions 4.15.0` — and nothing
-else changes; the regenerated lock file is committed alongside the
-`pyproject.toml` change.
+"3.10"` marker entries — `numpy 2.2.6`, `exceptiongroup 1.3.0`, and `tomli
+2.3.0` — and drops `typing-extensions 4.15.0`'s `test`-group membership
+(`groups = ["main", "test"]` → `["main"]`; it carries no version marker).
+The same pass also introduces `black` and its transitive dev dependencies
+(`click`, `mypy-extensions`, `pathspec`, `platformdirs`, `pytokens`) per the
+`black` addition below, and adds `"dev"` to the `colorama`/`packaging` group
+lists; the regenerated lock file is committed alongside the `pyproject.toml`
+change.
 
 The same `pyproject.toml` edit also adds `black = "^25.1"` to
 `[tool.poetry.group.dev.dependencies]`: it is absent from the lock file and
@@ -166,9 +170,12 @@ def parse_datetime(value):
     return datetime.datetime.fromisoformat(value)
 ```
 
-Public (not `_`-prefixed) so both the CLI and the flightsql client can import it
-without reaching into a private name, consistent with the project's preference
-for `pub` over `pub(crate)`-style narrowing. It stays the single shared parse
+Public (not `_`-prefixed) so the CLI can import it directly and it can appear
+in the documented public API (see Documentation), consistent with the
+project's preference for `pub` over `pub(crate)`-style narrowing. The
+flightsql client doesn't import `parse_datetime` itself — it reaches the fix
+transitively through `format_datetime` (§3) — but the helper still needs to be
+public for the CLI and doc-facing uses above. It stays the single shared parse
 site — `format_datetime`, `parse_timestamp` (CLI), and the flightsql client all
 go through it — which is the DRY point of this plan, even though the helper
 itself is now only a few lines: a version-specific shim would have been easy
@@ -359,8 +366,11 @@ must be added at that time, following the `build-skip.yml` pattern.
    up `black`.
 2. **`python/micromegas/micromegas/time.py`** — add `parse_datetime()` with the
    lowercase-`z` normalization and docstring; change `format_datetime`'s
-   string branch (line 65) to use it. Leave the existing docstring example at
-   line 49 as-is — it becomes true rather than aspirational.
+   string branch (line 65) to use it. Update `format_datetime`'s own
+   docstring at line 23 from "ISO format string" to RFC 3339 wording (e.g.
+   "RFC 3339 string that will be parsed and reformatted"). Leave the existing
+   docstring example at line 49 as-is — it becomes true rather than
+   aspirational.
 3. **`python/micromegas/micromegas/flightsql/client.py`** — replace
    `from . import time` (line 2) with `from ..time import format_datetime`;
    update the two call sites at lines 72 and 79.
@@ -424,11 +434,20 @@ must be added at that time, following the `build-skip.yml` pattern.
    currently just `cd python/micromegas && poetry run pytest`).
    **`mkdocs/docs/contributing.md`** — mirror the same addition in its
    "Python package" Running Tests block (lines 186-194 area), alongside the
-   existing `cd python/micromegas && poetry run pytest` line.
+   existing `cd python/micromegas && poetry run pytest` line, and in its
+   "### Python Package" command block (lines 87-99, a byte-for-byte mirror of
+   `CONTRIBUTING.md`'s "### Python Package" section), alongside the existing
+   `poetry install`/`poetry run pytest`/`poetry run black <file>` lines.
+   **`mkdocs/docs/development/build.md`** — also add the same line to its
+   "## Python Development" block (lines 143-155), the counterpart of that
+   file's Rust block, which already lists `python3 ../build/rust_ci.py`
+   (line 69).
 10. **`CHANGELOG.md`** — one entry under `## Unreleased`, in the existing
     style, noting: the minimum supported Python version rising from 3.10 to
     3.11 (called out explicitly as a breaking change for anyone still on
-    3.10, since it means `pip install micromegas` no longer works there), the
+    3.10, since `pip install micromegas` there resolves to the last
+    3.10-compatible release instead of picking up new versions, rather than
+    failing outright), the
     `Z`/`z` acceptance fix, the `flightsql/time.py` removal, the CLI error
     handling, and the new Python CI job, with `(#1405)`.
 11. **Format** — `poetry run black` on every touched Python file (required by
@@ -520,8 +539,11 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   a public function in the same module.
 - `python/micromegas/micromegas/cli/query.py` — `parse_timestamp` docstring and
   argparse help strings (the CLI's in-tool documentation).
-- `python/micromegas/micromegas/time.py` — `parse_datetime` docstring; the
-  existing `format_datetime` docstring needs no correction.
+- `python/micromegas/micromegas/time.py` — `parse_datetime` docstring; also
+  correct the existing `format_datetime` docstring's `Args` entry (line 23),
+  which says "ISO format string" — the same vague wording being fixed
+  elsewhere — to RFC 3339 wording. The docstring's example at line 49 needs no
+  change; it becomes accurate as written.
 - `CLAUDE.md` (repo root) — line 60 currently says "ISO format" for
   `--begin`/`--end`, the same stale wording being fixed in the mkdocs guide
   and the argparse help; update it to RFC 3339 wording with a `Z` example so
@@ -541,7 +563,12 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   `build/rust_ci.py` and `build/grafana_ci.py` are already listed there.
 - `mkdocs/docs/contributing.md` — mirror the same addition in its "Python
   package" Running Tests block, alongside the existing
-  `cd python/micromegas && poetry run pytest` line.
+  `cd python/micromegas && poetry run pytest` line, and in its
+  "### Python Package" command block (lines 87-99), which mirrors
+  `CONTRIBUTING.md`'s "### Python Package" section.
+- `mkdocs/docs/development/build.md` — add the same line to its
+  "## Python Development" block (lines 143-155), the counterpart of the
+  file's Rust block that already lists `python3 ../build/rust_ci.py`.
 - No `.github/copilot-instructions.md` change: it documents only Rust CI, so
   neither the timestamp fix nor the new Python CI workflow touches it.
 
