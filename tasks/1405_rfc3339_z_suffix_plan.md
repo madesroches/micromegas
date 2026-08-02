@@ -131,11 +131,16 @@ the new `python` bound. This drops the now-unreachable `python_version ==
 else changes; the regenerated lock file is committed alongside the
 `pyproject.toml` change.
 
-The same `pyproject.toml` edit also adds `black` to
+The same `pyproject.toml` edit also adds `black = "^25.1"` to
 `[tool.poetry.group.dev.dependencies]`: it is absent from the lock file and
 the project venv today, so `poetry run black` only works via a global
 `~/.local/bin/black` fallback and fails in a clean `poetry install`. The
-`poetry lock` regeneration above picks it up in the same pass.
+version is pinned rather than left floating: the tree is currently formatted
+under the ambient pipx `black` 25.1.0, and an unconstrained `black` would
+resolve to PyPI's current stable (26.x — black promotes a new stable style
+with each calendar-year major), which could reformat files this change never
+touches and red-flag the brand-new `black --check .` gate (§5) on unrelated
+code. The `poetry lock` regeneration above picks it up in the same pass.
 
 ### 2. Shared `parse_datetime()` in `micromegas/time.py`
 
@@ -347,9 +352,11 @@ must be added at that time, following the `build-skip.yml` pattern.
 ## Implementation Steps
 
 1. **`python/micromegas/pyproject.toml`** — change `python = "^3.10"` to
-   `python = "^3.11"`.
+   `python = "^3.11"`, and add `black = "^25.1"` to
+   `[tool.poetry.group.dev.dependencies]`.
    **`python/micromegas/poetry.lock`** — regenerate with `poetry lock` (from
-   `python/micromegas`) so the lock file matches the new constraint.
+   `python/micromegas`) so the lock file matches the new constraint and picks
+   up `black`.
 2. **`python/micromegas/micromegas/time.py`** — add `parse_datetime()` with the
    lowercase-`z` normalization and docstring; change `format_datetime`'s
    string branch (line 65) to use it. Leave the existing docstring example at
@@ -403,14 +410,18 @@ must be added at that time, following the `build-skip.yml` pattern.
    **`python/notebooks/README.md`** and **`mkdocs/docs/development/build.md`**
    — update the stale "Python 3.8+" prerequisite line in each to "Python
    3.11+", matching the new floor.
-   **`python/CLAUDE.md`** — add a `- **CI**: python3 ../build/python_ci.py`
+   **`python/CLAUDE.md`** — add a `- **CI**: python3 ../../build/python_ci.py`
    line, matching `rust/CLAUDE.md:28`'s existing `- **CI**:` entry for
-   `build/rust_ci.py`.
+   `build/rust_ci.py` (the extra `../` accounts for `python/CLAUDE.md`'s
+   commands being run from `python/micromegas/`, one level deeper than
+   `rust/`).
    **`CONTRIBUTING.md`** — add `python3 build/python_ci.py` to the Python
    Testing Requirements checklist item (line 523, currently `poetry run
-   pytest` and `poetry run black .`) and to its "CI validation script"
-   analogue in the "Python Package" section (lines 238-241 area, which today
-   only lists `poetry install`/`poetry run pytest`/`poetry run black <file>`).
+   pytest` and `poetry run black .`), to its "CI validation script"
+   analogue in the "### Python Package" section (lines 249-253, which today
+   only lists `poetry install`/`poetry run pytest`/`poetry run black <file>`),
+   and to its "Running Tests" → "Python package" block (lines 323-326,
+   currently just `cd python/micromegas && poetry run pytest`).
    **`mkdocs/docs/contributing.md`** — mirror the same addition in its
    "Python package" Running Tests block (lines 186-194 area), alongside the
    existing `cd python/micromegas && poetry run pytest` line.
@@ -520,12 +531,13 @@ testable and matches how `read_sql_source` already lets `OSError` propagate to a
   match the new floor. The notebooks README is directly affected since those
   notebooks `import micromegas`, which no longer installs on 3.8–3.10 after
   the bump.
-- `python/CLAUDE.md` — add a `- **CI**: python3 ../build/python_ci.py` line
-  documenting the new script, matching the precedent set by
+- `python/CLAUDE.md` — add a `- **CI**: python3 ../../build/python_ci.py`
+  line documenting the new script, matching the precedent set by
   `rust/CLAUDE.md:28`'s `- **CI**:` entry for `build/rust_ci.py`.
 - `CONTRIBUTING.md` — add `python3 build/python_ci.py` alongside the existing
-  Python commands in the "Python Package" section, and to the Python line of
-  the pre-PR Testing Requirements checklist (line 523), matching how
+  Python commands in the "### Python Package" section (lines 249-253), to its
+  "Running Tests" → "Python package" block (lines 323-326), and to the Python
+  line of the pre-PR Testing Requirements checklist (line 523), matching how
   `build/rust_ci.py` and `build/grafana_ci.py` are already listed there.
 - `mkdocs/docs/contributing.md` — mirror the same addition in its "Python
   package" Running Tests block, alongside the existing
