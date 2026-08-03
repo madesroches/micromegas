@@ -19,9 +19,13 @@ point's argument parser and exposes `micromegas.__version__` for library users.
   - `micromegas-query = "micromegas.cli.query:main"`
   - `micromegas-screens = "micromegas.cli.screens:main"`
 - Each entry point builds its own `argparse.ArgumentParser` in its own `main()`:
-  - `python/micromegas/micromegas/cli/query.py:60` — flat parser, no subcommands.
+  - `python/micromegas/micromegas/cli/query.py:60` — flat parser, no subcommands. Its
+    `prog="query"` doesn't match the installed console-script name (`micromegas-query`).
   - `python/micromegas/micromegas/cli/logout.py:8` — flat parser, no arguments at all today.
-  - `python/micromegas/micromegas/cli/screens.py:649` — parser with `add_subparsers(dest="command", required=True)`.
+    Its `prog="micromegas_logout"` (underscore) doesn't match the installed console-script
+    name (`micromegas-logout`, hyphen).
+  - `python/micromegas/micromegas/cli/screens.py:649` — parser with `add_subparsers(dest="command", required=True)`,
+    whose `prog="micromegas-screens"` already matches its console script.
 - `python/micromegas/micromegas/__init__.py` (23 lines) currently only re-exports submodules
   (`admin`, `auth`, `flightsql`, `oidc_connection`, `perfetto`, `time`) and defines `connect()`.
   It does not read or expose a package version.
@@ -31,9 +35,12 @@ point's argument parser and exposes `micromegas.__version__` for library users.
 ## Design
 
 Use argparse's built-in `action="version"`, resolving the version via
-`importlib.metadata.version("micromegas")` at call time (not import time), so a
-`PackageNotFoundError` in an unusual/dev environment doesn't crash the CLI on unrelated
-invocations before the flag is even used.
+`importlib.metadata.version("micromegas")`. Note this lookup happens once per invocation, at
+parser-construction time in `main()` (argparse's `version=` string is built eagerly when
+`add_argument()` runs, not deferred to when `--version` is actually passed) — a small, cheap
+cost paid by every command run, not just `--version`. Safety against `PackageNotFoundError` in
+an unusual/dev environment comes from `package_version()`'s own try/except, not from deferred
+evaluation.
 
 To avoid duplicating the same three lines across three files, add one small shared helper:
 
@@ -65,11 +72,11 @@ top-level `ArgumentParser`, before `parse_args()`. `%(prog)s` reuses each script
 
 ```
 $ micromegas-query --version
-query 0.29.0
+micromegas-query 0.29.0
 $ micromegas-screens --version
 micromegas-screens 0.29.0
-$ micromegas_logout --version
-micromegas_logout 0.29.0
+$ micromegas-logout --version
+micromegas-logout 0.29.0
 ```
 
 The issue's proposal additionally suggests reporting the interpreter (`... (Python 3.11.0 at
@@ -103,14 +110,17 @@ than duplicating the `importlib.metadata.version` call.
 
 1. Create `python/micromegas/micromegas/cli/version.py` with `package_version()` and
    `add_version_argument()` as shown above.
-2. In `python/micromegas/micromegas/cli/query.py`: import `add_version_argument` from
-   `.version` and call `add_version_argument(parser)` after the `ArgumentParser(...)`
-   construction in `main()` (around `python/micromegas/micromegas/cli/query.py:60`), before
-   the other `add_argument` calls (order among flags doesn't matter to argparse, but keep it
-   near the top for readability).
-3. In `python/micromegas/micromegas/cli/logout.py`: same pattern — call
+2. In `python/micromegas/micromegas/cli/query.py`: fix `prog="query"` to
+   `prog="micromegas-query"` (to match the console-script name declared in
+   `pyproject.toml:38`), import `add_version_argument` from `.version` and call
    `add_version_argument(parser)` after the `ArgumentParser(...)` construction in `main()`
-   (`python/micromegas/micromegas/cli/logout.py:8`).
+   (around `python/micromegas/micromegas/cli/query.py:60`), before the other `add_argument`
+   calls (order among flags doesn't matter to argparse, but keep it near the top for
+   readability).
+3. In `python/micromegas/micromegas/cli/logout.py`: fix `prog="micromegas_logout"` to
+   `prog="micromegas-logout"` (to match the console-script name declared in
+   `pyproject.toml:37`), same pattern — call `add_version_argument(parser)` after the
+   `ArgumentParser(...)` construction in `main()` (`python/micromegas/micromegas/cli/logout.py:8`).
 4. In `python/micromegas/micromegas/cli/screens.py`: call `add_version_argument(parser)`
    right after the top-level `ArgumentParser(...)` construction (`python/micromegas/micromegas/cli/screens.py:649`)
    and before `add_subparsers(...)`.
