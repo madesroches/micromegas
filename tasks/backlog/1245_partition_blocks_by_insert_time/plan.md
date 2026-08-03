@@ -2,6 +2,13 @@
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1245
 **Sub-issues**: #1240 (schema foundation), #1241 (ingestion forward-provisioning), #1242 (daemon roll-off), #1243 (monitoring)
+**Status**: Backlog — not scheduled, no target date. This plan deliberately does **not** claim a
+fixed `LATEST_DATA_LAKE_SCHEMA_VERSION` number for its cutover. Other, unrelated schema work may land
+first and claim the next available version — e.g.
+`tasks/completed/1383_db_api_key_store_plan.md` claimed `v5` for its own additive migration. See
+"Schema (#1240)" below for the notation (`N`) this plan uses in place of a fixed number, and
+[Current State](#current-state) for why the version this cutover ends up claiming is whatever is
+first available when someone actually picks this plan up.
 
 ## Overview
 
@@ -39,7 +46,8 @@ TIMESTAMPTZ` (added in v2, `sql_migration.rs:34`). Indexes: `blocks_block_id_uni
 `block_id`, created in the v2→v3 migration via `CREATE UNIQUE INDEX CONCURRENTLY`,
 `sql_migration.rs:179`), `block_stream_id`, `block_begin_time`, `block_end_time`,
 `block_insert_time`. Current schema version `LATEST_DATA_LAKE_SCHEMA_VERSION = 4`
-(`sql_migration.rs:8`).
+(`sql_migration.rs:8`) — as of this writing; per Status above, this plan does not assume that number
+holds by the time it is implemented, since other plans may claim intervening versions first.
 
 ### Migration mechanism (`rust/ingestion/src/sql_migration.rs`, `remote_data_lake.rs:22-42`)
 `execute_migration` steps versions forward one at a time inside transactions;
@@ -544,10 +552,20 @@ cached statements automatically when new partitions are attached:
   of binding the source value.
 - Neither path ever deletes a blob (Decision 1 hard rule).
 
-### Schema (#1240) — migration v5
+### Schema (#1240) — migration cutover (schema version not yet claimed)
 
-Add `upgrade_data_lake_schema_v5` implementing the cutover from *Critical Design Decision 3*; the
-`LATEST_DATA_LAKE_SCHEMA_VERSION` bump to `5` ships separately, in a later deploy (see
+**Notation**: this plan is backlog, not scheduled (see Status above), so it does not hardcode a
+version number the way an active plan would. Call `N` whatever `LATEST_DATA_LAKE_SCHEMA_VERSION`
+turns out to be immediately *before* this cutover's deploy, at whatever point this plan is actually
+picked up — today that would be `5` (`sql_migration.rs:8`, claimed by
+`tasks/completed/1383_db_api_key_store_plan.md`), but other plans may claim further intervening
+versions before this one is picked up. The cutover below claims `N+1`, whatever `N` turns out to be;
+the migration function is named
+`upgrade_data_lake_schema_v<N+1>` accordingly, filled in with the concrete number at implementation
+time, not before.
+
+Add `upgrade_data_lake_schema_v<N+1>` implementing the cutover from *Critical Design Decision 3*; the
+`LATEST_DATA_LAKE_SCHEMA_VERSION` bump to `N+1` ships separately, in a later deploy (see
 "Rolling-deploy hazard" below for why the two cannot ship together). Because `ATTACH PARTITION`/`CREATE INDEX` on
 a partitioned parent take heavier locks and some steps (per-partition index creation) may be better
 run outside a transaction, model this like the existing v2→v3 migration: run the non-transactional
@@ -557,44 +575,44 @@ retry-safe (guard on `to_regclass('blocks_legacy')` etc.). No dedup table, no ba
 **Rolling-deploy hazard: the cutover must not run until the new insert code is live everywhere.**
 `migrate_db` runs automatically at binary startup (`connect_to_remote_data_lake`,
 `remote_data_lake.rs:60,29`), so during a rolling deploy the *first* new-binary instance to start
-triggers the v5 cutover while old instances — still running today's targeted
+triggers the cutover while old instances — still running today's targeted
 `INSERT INTO blocks ... ON CONFLICT (block_id) DO NOTHING` (`web_ingestion_service.rs:178-179`,
 `replication.rs:197`) — are still live. A partitioned parent cannot carry a unique index on
 `block_id` alone (Decision 1), so those old instances' inserts start failing immediately with "no
 unique or exclusion constraint matching the ON CONFLICT specification." The new no-target
 `ON CONFLICT DO NOTHING` insert code (Implementation Steps, step 5) is schema-agnostic and works
 against both the plain and the partitioned table, so a safe order exists: **the new insert code
-must be live on every ingestion/replication instance before the v5 cutover runs — never the
-reverse, and never interleaved.** Concretely: `upgrade_data_lake_schema_v5` is **never** wired into
+must be live on every ingestion/replication instance before the cutover runs — never the
+reverse, and never interleaved.** Concretely: `upgrade_data_lake_schema_v<N+1>` is **never** wired into
 `execute_migration`'s automatic `if N == current_version` chain — that chain runs unconditionally
 inside `migrate_db` on every process startup (`connect_to_remote_data_lake`,
 `remote_data_lake.rs:60,29`), so any step placed there runs the instant the first new binary
 starts, which is exactly the ordering this section forbids. Instead, expose
-`upgrade_data_lake_schema_v5` through a standalone, explicitly-invoked entry point (a dedicated CLI
+`upgrade_data_lake_schema_v<N+1>` through a standalone, explicitly-invoked entry point (a dedicated CLI
 subcommand) that an operator runs once, out-of-band, after confirming every
 ingestion/replication instance is already running the new insert code (Implementation Steps, step
 5) — never as a side effect of a service starting up. This also means
-`LATEST_DATA_LAKE_SCHEMA_VERSION` cannot be bumped to 5 in the same deploy as the standalone
-subcommand: `execute_migration`'s own chain has no step that advances a database past version 4, so
-if a binary declaring `LATEST_DATA_LAKE_SCHEMA_VERSION == 5` starts against a still-v4 database,
+`LATEST_DATA_LAKE_SCHEMA_VERSION` cannot be bumped to `N+1` in the same deploy as the standalone
+subcommand: `execute_migration`'s own chain has no step that advances a database past version `N`, so
+if a binary declaring `LATEST_DATA_LAKE_SCHEMA_VERSION == N+1` starts against a still-`N` database,
 `migrate_db`'s post-migration `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (and
 `execute_migration`'s own internal one) would fail and crash the process. The bump therefore ships
 in a **later**, separate deploy, made only after an operator has run the standalone cutover and
-confirmed `current_version` is already 5 in the database — see Implementation Steps step 4.
+confirmed `current_version` is already `N+1` in the database — see Implementation Steps step 4.
 
 There is a second hazard in the gap between those two deploys: once the operator's cutover has
-stamped `current_version` to 5, any **already-deployed instance still declaring
-`LATEST_DATA_LAKE_SCHEMA_VERSION == 4`** that *restarts* (rolling restart, crash, redeploy of an
-unrelated fix) re-enters `migrate_db` and finds `current_version(5) != LATEST(4)`; `execute_migration`
-has no `if 5 == current_version` branch to match, so it falls through to its own
+stamped `current_version` to `N+1`, any **already-deployed instance still declaring
+`LATEST_DATA_LAKE_SCHEMA_VERSION == N`** that *restarts* (rolling restart, crash, redeploy of an
+unrelated fix) re-enters `migrate_db` and finds `current_version(N+1) != LATEST(N)`; `execute_migration`
+has no `if N+1 == current_version` branch to match, so it falls through to its own
 `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (`sql_migration.rs:150-200`) and
 panics — and even if that assert were bypassed, `migrate_db`'s own post-migration
 `assert_eq!(current_version, LATEST_DATA_LAKE_SCHEMA_VERSION)` (`remote_data_lake.rs:40`) would still
 fire. The mandated rollout order (cutover before the LATEST bump) therefore cannot ship safely on its
 own: deploy 1 must also relax both asserts — in `execute_migration` and in `migrate_db` — from exact
 equality to **`current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION`** (logging a warning when the
-database is newer than the running binary), so a still-LATEST=4 instance restarting after the
-cutover treats a version-5 database as already up to date instead of crashing. Without this, the
+database is newer than the running binary), so a still-LATEST=`N` instance restarting after the
+cutover treats an `N+1` database as already up to date instead of crashing. Without this, the
 cutover step itself would take down every old-LATEST instance that happens to restart before deploy
 2 lands.
 
@@ -605,18 +623,24 @@ not idempotent against the new partitioned schema (e.g. `upgrade_data_lake_schem
 TABLE blocks ADD insert_time` has no `IF NOT EXISTS` and would fail against a table that already
 has the column) — `create_migration_table` must stamp the `migration` row directly to
 `LATEST_DATA_LAKE_SCHEMA_VERSION`, not `1`, when invoked from the fresh-install path in
-`create_tables`. Note this stamps to whatever the running binary's LATEST is: `4` during deploy 1
-(before the later bump deploy) or `5` after it — so a fresh install during the interim window
-(deploy 1 live, LATEST still 4) creates a partitioned `blocks` but stamps `migration` to `4`, not
-`5`. Because `execute_migration` gates each upgrade step on an exact `if N == current_version` check
-(not `>=`), stamping straight to LATEST causes the `if 1/2/3 == current_version` branches to be
+`create_tables`. **Whoever implements this must check `create_tables` for every table any numbered
+migration added since this plan was written and add it here too** — stamping straight to LATEST
+means a fresh install never runs those numbered arms, so any table they create (e.g.
+`ingestion_api_keys` / `analytics_api_keys` from
+`tasks/completed/1383_db_api_key_store_plan.md`, already landed) must be
+created directly in `create_tables`'s fresh-install path or it silently won't exist on a new
+database. Note this stamps to whatever the running binary's LATEST is: `N` during deploy 1
+(before the later bump deploy) or `N+1` after it — so a fresh install during the interim window
+(deploy 1 live, LATEST still `N`) creates a partitioned `blocks` but stamps `migration` to `N`, not
+`N+1`. Because `execute_migration` gates each upgrade step on an exact `if N == current_version` check
+(not `>=`), stamping straight to LATEST causes the earlier-version `if ... == current_version` branches to be
 skipped naturally — no other change to `execute_migration`'s control flow is needed for fresh
 installs. Consequently, the standalone cutover subcommand must begin with a guard: if `blocks` is
 already a partitioned table (`relkind = 'p'` in `pg_class`) — e.g. exactly this interim-window fresh
-install — it performs no DDL and only stamps the migration version to 5; the same guard is what
-makes a re-run of the cutover a no-op. Existing v4 databases with an **unpartitioned** `blocks` are
+install — it performs no DDL and only stamps the migration version to `N+1`; the same guard is what
+makes a re-run of the cutover a no-op. Existing databases at version `N` with an **unpartitioned** `blocks` are
 untouched by either the fresh-install stamping path or the cutover's no-op guard: `execute_migration`
-gets no new `if 4 == current_version` branch at all, so such a database only reaches v5 through the
+gets no new `if N == current_version` branch at all, so such a database only reaches `N+1` through the
 standalone, operator-invoked cutover actually performing its DDL, as described in "Rolling-deploy
 hazard" above.
 
@@ -626,7 +650,7 @@ A task in the ingestion service ensures the current hour + next `N` hours of par
 Spawn it alongside `serve_ingestion` (from `telemetry-ingestion-srv/src/main.rs`, tied to the same
 shutdown signal).
 
-- Phases 1–2 deploy before the operator runs the cutover (see "Schema (#1240) — migration v5" above),
+- Phases 1–2 deploy before the operator runs the cutover (see "Schema (#1240)" above),
   so on every cycle the provisioner first checks that `blocks` is a partitioned table (`relkind = 'p'`
   in `pg_class`) and quietly no-ops otherwise — it becomes live only once the standalone cutover has
   run.
@@ -702,7 +726,7 @@ property of the deterministic key, not of the arbiter. Rare² — accept and doc
 
 **Phase 1 — Foundation (#1240)** — must deploy together with Phase 2. Within Phase 1, deploy order
 matters and differs from the step-list order below: the insert-code change (step 5) must reach
-every ingestion/replication instance before the v5 migration cutover (steps 3–4) is allowed to run
+every ingestion/replication instance before the migration cutover (steps 3–4) is allowed to run
 — see "Rolling-deploy hazard" under Schema (#1240) above.
 1. Add `rust/ingestion/src/blocks_partition.rs` (shared boundary/naming/SQL helpers); export from
    `ingestion/src/lib.rs`. Unit tests under `ingestion/tests/`.
@@ -710,18 +734,20 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
    `PutMode::Create`; unit-test the `AlreadyExists` mapping against the in-memory/local backend.
 3. Rewrite `create_blocks_table` (`sql_telemetry_db.rs`) to create the partitioned parent + parent
    indexes + `DEFAULT` partition (with local unique-block_id index) for fresh installs.
-4. Add `upgrade_data_lake_schema_v5` (`sql_migration.rs`) implementing the attach-legacy cutover
+4. Add `upgrade_data_lake_schema_v<N+1>` (`sql_migration.rs`, `N` per the notation in "Schema (#1240)"
+   above — the concrete number is filled in at implementation time, whatever `LATEST_DATA_LAKE_SCHEMA_VERSION`
+   is by then) implementing the attach-legacy cutover
    (mirror the v3 non-transactional-DDL-then-transaction structure). Expose it through a standalone,
-   explicitly-invoked entry point (e.g. a dedicated CLI subcommand) — **not** an `if 4 ==
+   explicitly-invoked entry point (e.g. a dedicated CLI subcommand) — **not** an `if N ==
    current_version` step inside `execute_migration` — so it never runs as a side effect of
    `migrate_db`/`connect_to_remote_data_lake`'s automatic startup path (see "Rolling-deploy hazard"
-   above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5 only in a later, separate deploy, made after
-   an operator has run the standalone cutover and confirmed `current_version` is already 5 —
+   above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to `N+1` only in a later, separate deploy, made after
+   an operator has run the standalone cutover and confirmed `current_version` is already `N+1` —
    bumping it any earlier would make every instance's automatic `migrate_db` assert fail at startup,
-   since `execute_migration`'s chain no longer has a step that advances a database past 4. Also
+   since `execute_migration`'s chain no longer has a step that advances a database past `N`. Also
    relax `execute_migration`'s and `migrate_db`'s post-migration asserts from exact equality to
    `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION` (log a warning when the database is ahead of
-   the binary), so an old-LATEST=4 instance that restarts after the operator's cutover does not crash
+   the binary), so an old-LATEST=`N` instance that restarts after the operator's cutover does not crash
    (see "Rolling-deploy hazard" above).
 5. Implement the shared gated-insert helper (lock → probe → insert, hot + recovery arms) in the
    `ingestion` crate; switch `web_ingestion_service.rs`'s `insert_block_typed` to `put_if_absent` +
@@ -763,9 +789,10 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 - `rust/telemetry/src/blob_storage.rs` — `put_if_absent` (conditional PUT) + `head_origin`
   (cache-bypassing origin HEAD).
 - `rust/ingestion/src/sql_telemetry_db.rs` — partitioned `create_blocks_table`.
-- `rust/ingestion/src/sql_migration.rs` — `upgrade_data_lake_schema_v5` (cutover) exposed via a
+- `rust/ingestion/src/sql_migration.rs` — `upgrade_data_lake_schema_v<N+1>` (cutover, version number
+  TBD per "Schema (#1240)" above) exposed via a
   standalone entry point — never wired into `execute_migration`; relax the version assert to `>=`
-  for forward-compat; the bump to 5 ships in a later deploy.
+  for forward-compat; the bump to `N+1` ships in a later deploy.
 - `rust/ingestion/src/remote_data_lake.rs` — relax `migrate_db`'s post-migration assert to
   `current_version >= LATEST_DATA_LAKE_SCHEMA_VERSION` (log a warning when the database is newer
   than the binary), so an old-LATEST instance restarting after the operator cutover doesn't crash;
@@ -829,14 +856,15 @@ every ingestion/replication instance before the v5 migration cutover (steps 3–
 ## Testing Strategy
 - **Unit**: shared boundary function (floor/name/bounds round-trips across DST-free UTC hours,
   boundary instants); `create_partition_sql` output; `put_if_absent` Created/AlreadyExists mapping.
-- **Migration**: on a seeded v4 database with populated `blocks`, invoke the standalone cutover entry
+- **Migration**: on a seeded pre-cutover database (version `N`, per "Schema (#1240)" above) with
+  populated `blocks`, invoke the standalone cutover entry
   point directly (the CLI subcommand's underlying function — `execute_migration` is never wired to
   run it); assert `blocks` is partitioned, `blocks_legacy` attached with the right bound, `DEFAULT`
   present, all indexes (incl. per-partition unique-block_id) present, and existing rows still
   queryable via `BlocksView`. Assert idempotency (re-run is a no-op) and retry-safety. Also assert the
   already-partitioned no-op path: on a fresh-install database (already partitioned, `migration`
   stamped to LATEST), the cutover entry point performs no DDL and only stamps the migration version
-  to 5.
+  to `N+1`.
 - **Insert/dedup**:
   - A resend of the same `block_id` is deduped even when the two attempts fall in **different**
     hourly partitions (simulate the laptop-sleep / proxy-delay case) — the recovery arm's probe

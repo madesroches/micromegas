@@ -4,6 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Auth:**
+  * Add a DB-backed API key store (#1383): `ingestion_api_keys` / `analytics_api_keys` (data-lake schema v5), each holding only a SHA-256 hash of the key plus a `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit trail, validated through `DbApiKeyAuthProvider` behind a short-TTL `moka` cache. Three new OIDC-authenticated, admin-gated HTTP routes on the ingestion service — `POST`/`GET`/`DELETE /auth/api_keys` — let an operator mint, list, and revoke ingestion keys without a redeploy (analytics keys are never mintable over HTTP; see `mkdocs/docs/admin/api-keys.md` for the by-hand runbook). Four new cache/audit env knobs, each with a `{prefix}_*`-with-unprefixed-fallback form: `MICROMEGAS_API_KEY_CACHE_SIZE`, `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE`. A new `db_api_key_error_count` metric (tagged `{table}`) fires on every key-store DB error, independent of the rate-limited `error!` log for the same error.
+  * A DB-backed key-store outage now surfaces as a retryable failure, not a rejected credential, at every surface a DB-backed provider reaches: a new `micromegas_auth::types::ProviderUnavailable` propagates through `MultiAuthProvider` to a new `micromegas_auth::axum::AuthError::Unavailable` (**503**, instead of the previous unconditional 401), to `Status::unavailable` in the gRPC `AuthService` (instead of `Status::unauthenticated`), and to a 503 in the Firehose auth middleware (instead of the previous unconditional 401). **Minor breaking change**: `AuthError` is published API (`rust/auth`, no `publish = false`) with a new variant, so any downstream exhaustive `match` needs a new arm.
+  * **Public-API removal**: `micromegas::servers::key_ring` (a dead, unreferenced duplicate of `api_key.rs`'s keyring half) is deleted.
+  * Add `micromegas::servers::ingestion::serve_ingestion_with_api_key_config` (non-breaking: `serve_ingestion`'s existing signature is unchanged, now a thin wrapper around it).
+  * **One client-visible breaking change**: a key valid on both ingestion and flight-sql today must become two distinct keys once migrated onto the DB-backed store — see `mkdocs/docs/admin/api-keys.md`.
+
 ## v0.28.0 - 2026-08-02
 
 * **Claude Code Plugin:**

@@ -133,3 +133,8 @@ required-features = ["server"]
 name = "firehose_cloudwatch_logs_tests"
 path = "tests/firehose_cloudwatch_logs_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "api_keys_tests"
+path = "tests/api_keys_tests.rs"
+required-features = ["server"]

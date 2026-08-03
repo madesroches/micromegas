@@ -53,8 +53,8 @@ pub mod perfetto;
 /// metadata about this implementation of FlightSQL
 pub mod sqlinfo;
 
-/// named keys for authentication
-pub mod key_ring;
+/// DB-backed API key management HTTP routes (mint/list/revoke, #1383)
+pub mod api_keys;
 
 /// log uris of http requests
 pub mod log_uri_service;

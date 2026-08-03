@@ -4,6 +4,8 @@ use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
+use micromegas_auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
+use micromegas_auth::default_provider::ProviderBuilder;
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -198,6 +200,10 @@ impl FlightSqlServerBuilder {
 
         let partition_provider =
             Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
+        // Cloned here, before `lakehouse` is moved into `FlightSqlServiceImpl::new`
+        // below, so `dedicated_key_store_pool` has a pool to read connect options
+        // from.
+        let lake_pool_for_keys = lakehouse.lake().db_pool.clone();
 
         let session_configurator: Arc<dyn SessionConfigurator> =
             if let Some(cfg) = self.session_configurator {
@@ -218,23 +224,29 @@ impl FlightSqlServerBuilder {
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 
-        let auth_provider: Option<Arc<dyn AuthProvider>> = if let Some(provider) =
-            self.auth_provider
-        {
-            Some(provider)
-        } else if self.use_default_auth {
-            match micromegas_auth::default_provider::provider().await? {
-                Some(provider) => Some(provider),
-                None => {
-                    anyhow::bail!(
-                        "Authentication required but no auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG"
-                    );
+        let auth_provider: Option<Arc<dyn AuthProvider>> =
+            if let Some(provider) = self.auth_provider {
+                Some(provider)
+            } else if self.use_default_auth {
+                let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                match ProviderBuilder::new("")
+                    .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
+                    .build()
+                    .await?
+                {
+                    Some(provider) => Some(provider),
+                    None => {
+                        anyhow::bail!(
+                            "Authentication required but no auth providers configured. Set \
+                         MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, or populate the \
+                         analytics_api_keys DB table"
+                        );
+                    }
                 }
-            }
-        } else {
-            info!("Authentication disabled");
-            None
-        };
+            } else {
+                info!("Authentication disabled");
+                None
+            };
 
         let layer = ServiceBuilder::new()
             .layer(layer_fn(GrpcHealthService::new))

@@ -27,6 +27,7 @@ import sys
 import subprocess
 import time
 import json
+import secrets
 import requests
 import docker
 from pathlib import Path
@@ -63,6 +64,19 @@ def check_env_vars():
 def get_oidc_config():
     """Get OIDC configuration from environment variable"""
     return os.environ["MICROMEGAS_OIDC_CONFIG"]
+
+
+def generate_local_ingestion_key():
+    """Generate a random, local-only ingestion API key for this dev session.
+
+    Enabling auth on the ingestion server (below) means every
+    `#[micromegas_main]` binary's own self-telemetry — ingestion, flight-sql,
+    and the maintenance daemon all POST to port 9000 — needs a credential too:
+    the server-side `MICROMEGAS_OIDC_CONFIG` these processes already share does
+    not feed the *sink* side of `#[micromegas_main]`, only
+    `MICROMEGAS_INGESTION_API_KEY` (or the OIDC client-credentials trio) does.
+    """
+    return "mmk_" + secrets.token_urlsafe(32)
 
 
 def kill_services():
@@ -134,6 +148,15 @@ def main():
         print(f"👑 Admin users: {os.environ['MICROMEGAS_ADMINS']}")
         print()
 
+    # Provision a local ingestion credential: the ingestion server now runs
+    # WITH auth (see below), so every service's own self-telemetry needs a
+    # credential — set MICROMEGAS_INGESTION_API_KEY in the shared env, passed
+    # to all three service processes, before any of them start.
+    local_ingestion_key = generate_local_ingestion_key()
+    env["MICROMEGAS_INGESTION_API_KEY"] = local_ingestion_key
+    print("🔑 Provisioned a local self-telemetry ingestion key for this session")
+    print()
+
     # Build services
     print("🔧 Building services...")
     os.chdir(rust_dir)
@@ -179,8 +202,16 @@ def main():
 
     os.chdir(rust_dir)
 
-    # Start Ingestion Server (no auth)
-    print("📥 Starting Ingestion Server (no auth)...")
+    # Start Ingestion Server (WITH auth): the local self-telemetry key
+    # provisioned above is set on the ingestion process's own MICROMEGAS_API_KEYS,
+    # so it accepts that key from the other processes' self-telemetry sinks —
+    # and so its /auth/api_keys routes are registered, which they are not under
+    # --disable-auth (there is no AuthContext to gate on in that mode).
+    print("📥 Starting Ingestion Server (WITH auth)...")
+    ingestion_env = env.copy()
+    ingestion_env["MICROMEGAS_API_KEYS"] = json.dumps(
+        [{"name": "local-self-telemetry", "key": local_ingestion_key}]
+    )
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen(
             [
@@ -191,11 +222,10 @@ def main():
                 "--",
                 "--listen-endpoint-http",
                 "127.0.0.1:9000",
-                "--disable-auth",
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            env=env,
+            env=ingestion_env,
         )
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")
@@ -240,7 +270,9 @@ def main():
     print("🎉 All services started with OIDC authentication enabled!")
     print("=" * 70)
     print()
-    print("📥 Ingestion Server: http://127.0.0.1:9000 (no auth)")
+    print(
+        "📥 Ingestion Server: http://127.0.0.1:9000 (auth enabled — local API key + OIDC)"
+    )
     print("📊 Analytics Server: grpc://127.0.0.1:50051 (OIDC auth required)")
     print()
     print("🔐 Authentication: See OIDC config above")

@@ -15,7 +15,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
-use micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
+use micromegas_auth::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -107,12 +107,26 @@ pub(crate) async fn firehose_auth_middleware(
             next.run(req).await
         }
         Err(e) => {
-            warn!("[firehose auth_failure] {e}");
-            firehose_response(
-                StatusCode::UNAUTHORIZED,
-                &request_id,
-                Some("invalid access key"),
-            )
+            // A DB-backed `ingestion_api_keys` outage must not look like a
+            // rejected Firehose access key: both Firehose routers validate
+            // through the same `MultiAuthProvider` chain as every other
+            // ingestion route, so an outage here gets the same 503 treatment
+            // `micromegas_auth::axum::auth_middleware` gives the plain routes.
+            if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                debug!("[firehose auth_failure] {e}");
+                firehose_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    &request_id,
+                    Some("auth provider unavailable"),
+                )
+            } else {
+                warn!("[firehose auth_failure] {e}");
+                firehose_response(
+                    StatusCode::UNAUTHORIZED,
+                    &request_id,
+                    Some("invalid access key"),
+                )
+            }
         }
     }
 }
