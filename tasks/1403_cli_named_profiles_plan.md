@@ -150,6 +150,8 @@ def resolve_active_profile(config, profile=None):
     if name is None:
         if len(profiles) == 1:
             name = next(iter(profiles))
+        elif len(profiles) == 0:
+            raise ValueError("no profiles defined in the `profiles` map")
         else:
             raise ValueError(
                 "multiple profiles configured but none selected; pass --profile, "
@@ -323,7 +325,13 @@ path that `resolve_connection` would never have picked.
    next to the existing flat-config example, explicit about the flat shape
    still being supported and with a callout warning against mixing top-level
    flat keys with a `profiles` map in the same file (the flat keys are
-   ignored once `profiles` is present).
+   ignored once `profiles` is present), and noting that `default_profile` has
+   no effect unless a `profiles` map is also present. Also call out that
+   adding a `profiles` map — even a single implicit entry — moves the OIDC
+   token cache to a per-profile `tokens-<profile>.json` file, so turning
+   profiles on forces one fresh login even for an otherwise-unchanged
+   connection (renaming the existing `tokens.json` to match beforehand avoids
+   it).
 9. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
    section's config probe calls `resolve_connection()` with no arguments,
    which will raise `ValueError` (an unhandled Python exception in the probe
