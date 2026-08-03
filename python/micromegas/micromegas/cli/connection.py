@@ -1,5 +1,3 @@
-import importlib
-
 from micromegas.cli.config import resolve_connection
 
 
@@ -9,10 +7,6 @@ def connect():
     Priority: env vars > config file (~/.micromegas/config.json) > defaults.
     """
     cfg = resolve_connection()
-
-    if cfg.python_module_wrapper:
-        wrapper_module = importlib.import_module(cfg.python_module_wrapper)
-        return wrapper_module.connect()
 
     if cfg.oidc_issuer and cfg.oidc_client_id:
         from micromegas import oidc_connection

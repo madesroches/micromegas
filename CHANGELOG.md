@@ -12,6 +12,8 @@ This file documents the historical progress of the Micromegas project. For curre
   * **One client-visible breaking change**: a key valid on both ingestion and flight-sql today must become two distinct keys once migrated onto the DB-backed store — see `mkdocs/docs/admin/api-keys.md`.
 * **Web App:**
   * Fix data source URL validation rejecting `grpc://`/`grpc+tls://` even though data sources are only ever used as FlightSQL/gRPC endpoints: `validate_data_source_config` now accepts `grpc://`, `grpc+tls://`, `http://`, and `https://` (case-insensitive), matching the scheme convention used elsewhere in the codebase (e.g. the Python client's default `grpc://localhost:50051`); `BearerFlightSQLClientFactory::make_client()` normalizes `grpc://`/`grpc+tls://` to `http://`/`https://` before building the tonic channel so a `grpc+tls://` data source actually gets a TLS-enabled connection instead of silently connecting without TLS (#1412)
+* **Python:**
+  * **Breaking change**: remove the deprecated `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch, which let a corporate environment plug a custom `connect()` implementation into the CLI, bypassing the documented URI/OIDC connection path entirely. Corporate auth is now served by the OIDC flow (`MICROMEGAS_OIDC_ISSUER`/`MICROMEGAS_OIDC_CLIENT_ID`/etc., or `~/.micromegas/config.json`'s `issuers` config) — anyone still setting the env var should switch to that instead (#1408)
 
 ## v0.28.0 - 2026-08-02
 

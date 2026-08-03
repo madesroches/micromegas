@@ -18,7 +18,6 @@ class ConnectionConfig:
     oidc_audience: Optional[str] = None
     oidc_scope: Optional[str] = None
     token_file: Optional[str] = None
-    python_module_wrapper: Optional[str] = None
 
 
 def load_config(config_path=None):
@@ -56,5 +55,4 @@ def resolve_connection(config_path=None) -> ConnectionConfig:
         oidc_audience=_pick("MICROMEGAS_OIDC_AUDIENCE", audience),
         oidc_scope=_pick("MICROMEGAS_OIDC_SCOPE"),
         token_file=_pick("MICROMEGAS_TOKEN_FILE", DEFAULT_TOKEN_FILE),
-        python_module_wrapper=_pick("MICROMEGAS_PYTHON_MODULE_WRAPPER"),
     )
