@@ -3,17 +3,19 @@ import argparse
 from pathlib import Path
 
 from micromegas.cli.config import ProfileError, default_token_file
+from micromegas.cli.version import add_version_argument
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="micromegas_logout",
+        prog="micromegas-logout",
         description="Clear saved OIDC authentication tokens",
     )
     parser.add_argument(
         "--profile",
         help="Only clear this profile's cached tokens",
     )
+    add_version_argument(parser)
     args = parser.parse_args()
 
     if args.profile is not None:

@@ -5,6 +5,9 @@ from . import flightsql
 from . import oidc_connection
 from . import perfetto
 from . import time
+from .cli.version import package_version
+
+__version__ = package_version()
 
 
 def connect(uri=None, preserve_dictionary=False):
