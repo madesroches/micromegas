@@ -1,4 +1,4 @@
-use micromegas_auth::types::{AuthProvider, GrpcRequestParts, RequestParts};
+use micromegas_auth::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use tonic::{Request, Status};
@@ -22,7 +22,11 @@ pub async fn check_auth(
         .await
         .map_err(|e| {
             warn!("authentication failed: {e}");
-            Status::unauthenticated("invalid token")
+            if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                Status::unavailable("auth provider unavailable")
+            } else {
+                Status::unauthenticated("invalid token")
+            }
         })?;
 
     info!(

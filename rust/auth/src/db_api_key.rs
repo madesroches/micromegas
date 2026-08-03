@@ -63,14 +63,28 @@ pub struct DbApiKeyConfig {
 }
 
 fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
-    let raw = if prefix.is_empty() {
-        std::env::var(format!("MICROMEGAS_{suffix}")).ok()
+    let (var, raw) = if prefix.is_empty() {
+        let var = format!("MICROMEGAS_{suffix}");
+        let raw = std::env::var(&var).ok();
+        (var, raw)
     } else {
-        std::env::var(format!("{prefix}_{suffix}"))
-            .or_else(|_| std::env::var(format!("MICROMEGAS_{suffix}")))
-            .ok()
+        let prefixed = format!("{prefix}_{suffix}");
+        match std::env::var(&prefixed) {
+            Ok(s) => (prefixed, Some(s)),
+            Err(_) => {
+                let var = format!("MICROMEGAS_{suffix}");
+                let raw = std::env::var(&var).ok();
+                (var, raw)
+            }
+        }
     };
-    raw.and_then(|s| s.parse::<u64>().ok()).unwrap_or(default)
+    match raw {
+        Some(s) => s.parse::<u64>().unwrap_or_else(|_| {
+            micromegas_tracing::warn!("Invalid {var} value '{s}', using default {default}");
+            default
+        }),
+        None => default,
+    }
 }
 
 impl DbApiKeyConfig {
