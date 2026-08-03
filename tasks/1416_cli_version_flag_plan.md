@@ -47,6 +47,8 @@ To avoid duplicating the same three lines across three files, add one small shar
 ```python
 # python/micromegas/micromegas/cli/version.py
 import importlib.metadata
+import platform
+import sys
 
 
 def package_version():
@@ -58,11 +60,15 @@ def package_version():
 
 
 def add_version_argument(parser):
-    """Add a --version flag reporting the micromegas package version."""
+    """Add a --version flag reporting the micromegas package version and interpreter."""
+    version_string = (
+        f"%(prog)s {package_version()} "
+        f"(Python {platform.python_version()} at {sys.executable})"
+    )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {package_version()}",
+        version=version_string,
     )
 ```
 
@@ -72,18 +78,17 @@ top-level `ArgumentParser`, before `parse_args()`. `%(prog)s` reuses each script
 
 ```
 $ micromegas-query --version
-micromegas-query 0.29.0
+micromegas-query 0.29.0 (Python 3.11.9 at /usr/bin/python3.11)
 $ micromegas-screens --version
-micromegas-screens 0.29.0
+micromegas-screens 0.29.0 (Python 3.11.9 at /usr/bin/python3.11)
 $ micromegas-logout --version
-micromegas-logout 0.29.0
+micromegas-logout 0.29.0 (Python 3.11.9 at /usr/bin/python3.11)
 ```
 
-The issue's proposal additionally suggests reporting the interpreter (`... (Python 3.11.0 at
-/usr/bin/python3.11)`). That's a reasonable companion but not required to solve the core
-problem (which interpreter/venv the console script's wheel came from — `--version` alone
-already answers that unambiguously since it's the same process). Adding it is a small
-extension; see Open Questions.
+The issue's proposal additionally suggests reporting the interpreter, matching the exact
+ambiguity this feature is meant to resolve (which interpreter/venv a console script's wheel
+came from). This plan includes it directly in `--version` output via `platform.python_version()`
+and `sys.executable`, rather than leaving it as a follow-up.
 
 For `screens.py`, `--version` is added to the **top-level** parser (before
 `add_subparsers(...)`), not to each subcommand — this matches common CLI convention (git,
@@ -176,11 +181,12 @@ Add `python/micromegas/tests/cli/test_version.py` covering:
 - `package_version()` returns `"unknown"` when `importlib.metadata.version` raises
   `PackageNotFoundError` (monkeypatch `importlib.metadata.version` to raise).
 - Each of the three `main()` entry points exits with code `0` and prints a version string
-  containing the package version when invoked with `--version`, using
+  containing the package version and interpreter details when invoked with `--version`, using
   `monkeypatch.setattr(sys, "argv", [...])` + `pytest.raises(SystemExit)` (the standard
   pattern for testing argparse's `action="version"`, since it calls `parser.exit()`).
-  Capture stdout via `capsys` and assert the printed version matches
-  `importlib.metadata.version("micromegas")`.
+  Capture stdout via `capsys` and assert the printed output contains
+  `importlib.metadata.version("micromegas")`, `platform.python_version()`, and
+  `sys.executable`.
 - `micromegas-screens --version` (top-level, no subcommand) also exits `0` and prints the
   version, confirming the `required=True` subparser check doesn't preempt it.
 - `import micromegas; micromegas.__version__` equals
@@ -190,10 +196,5 @@ Run via `poetry run pytest tests/cli/test_version.py` from `python/micromegas/`.
 
 ## Open Questions
 
-- Whether to also report the interpreter path/version in the `--version` output (the issue's
-  stretch goal, e.g. `micromegas 0.29.0 (Python 3.11.0 at /usr/bin/python3.11)`) or keep it to
-  just the package version shown above. Not required to fix the core ambiguity described in
-  the issue (a single `--version` call already tells you unambiguously which wheel backs that
-  console script, in that process), but it was explicitly proposed. Leaving as-is unless
-  reviewed otherwise, since the added surface (formatting `sys.version_info` and
-  `sys.executable`) is easy to bolt on later without breaking the existing output's prefix.
+None outstanding — the plan previously left open whether `--version` should also report the
+interpreter path/version; the design above now includes it directly.

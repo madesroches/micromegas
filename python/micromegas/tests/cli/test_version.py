@@ -1,4 +1,5 @@
 import importlib.metadata
+import platform
 import sys
 
 import pytest
@@ -31,6 +32,8 @@ def test_query_version_flag(monkeypatch, capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert importlib.metadata.version("micromegas") in out
+    assert platform.python_version() in out
+    assert sys.executable in out
 
 
 def test_logout_version_flag(monkeypatch, capsys):
@@ -40,6 +43,8 @@ def test_logout_version_flag(monkeypatch, capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert importlib.metadata.version("micromegas") in out
+    assert platform.python_version() in out
+    assert sys.executable in out
 
 
 def test_screens_version_flag(monkeypatch, capsys):
@@ -49,3 +54,5 @@ def test_screens_version_flag(monkeypatch, capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert importlib.metadata.version("micromegas") in out
+    assert platform.python_version() in out
+    assert sys.executable in out

@@ -1,4 +1,6 @@
 import importlib.metadata
+import platform
+import sys
 
 
 def package_version():
@@ -10,9 +12,13 @@ def package_version():
 
 
 def add_version_argument(parser):
-    """Add a --version flag reporting the micromegas package version."""
+    """Add a --version flag reporting the micromegas package version and interpreter."""
+    version_string = (
+        f"%(prog)s {package_version()} "
+        f"(Python {platform.python_version()} at {sys.executable})"
+    )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {package_version()}",
+        version=version_string,
     )

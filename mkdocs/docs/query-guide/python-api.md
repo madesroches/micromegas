@@ -608,7 +608,7 @@ micromegas-query "SELECT * FROM list_partitions() LIMIT 5"
 - `--format`: Output format - `table` (default), `csv`, or `json`
 - `--max-colwidth`: Maximum column width for table format (default: 50, use 0 for unlimited)
 - `--profile`: Named connection profile from `~/.micromegas/config.json` (see Named profiles below)
-- `--version`: Print the installed micromegas package version and exit
+- `--version`: Print the installed micromegas package version and interpreter, then exit
 
 **Examples:**
 ```bash
