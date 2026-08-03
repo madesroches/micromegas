@@ -33,18 +33,22 @@ For a production deployment with auth, see [Authentication](#authentication) bel
 
 ## Authentication
 
-The OTLP routes share the same auth chain as the rest of the ingestion service: API-key bearer tokens (configured via `MICROMEGAS_API_KEYS`) and OIDC.
+The OTLP routes share the same auth chain as the rest of the ingestion service:
+DB-backed `ingestion_api_keys` (the steady-state path — mint one via
+`POST /auth/api_keys`, see [API Keys](../admin/api-keys.md)), transitional
+env-keyring bearer tokens (`MICROMEGAS_API_KEYS`), and OIDC.
 
 OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and attach the parsed headers to every export request:
 
 ```bash
-# Server side — same JSON keyring telemetry-ingestion-srv already uses
-export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mm_abc123def..."}]'
+# Server side — mint a key (see admin/api-keys.md), or use the transitional
+# env keyring telemetry-ingestion-srv also accepts:
+export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mmk_2f8c...base64url..."}]'
 
 # Client side
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com/ingestion/otlp"
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def..."
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mmk_2f8c...base64url..."
 ```
 
 If different signals need different keys, use the per-signal headers variants:
@@ -228,7 +232,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com/ingestion/otl
 export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_LOGS_EXPORTER=otlp
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mm_abc123def..."
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mmk_2f8c...base64url..."
 
 # Optional — distributed tracing (Claude Code beta)
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
@@ -363,7 +367,7 @@ URL:     https://micromegas.example.com/ingestion/webhook
 Headers: X-Micromegas-Service-Name: gitlab
          X-Micromegas-Service-Namespace: my-group
          X-Micromegas-Target: gitlab.push
-         Authorization: Bearer mm_abc123def...
+         Authorization: Bearer mmk_2f8c...base64url...
 ```
 
 Every push/merge-request/pipeline event GitLab sends lands as one `log_entries` row
@@ -423,7 +427,7 @@ supported by this endpoint.
 Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination**:
 
 - **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/otlp/v1/metrics/firehose`
-- **Access key**: a micromegas API key — the value from `MICROMEGAS_API_KEYS` — sent by
+- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)), or, transitionally, a value from `MICROMEGAS_API_KEYS` — sent by
   Firehose as `X-Amz-Firehose-Access-Key` on every request (Firehose cannot send
   `Authorization: Bearer`, so this route authenticates via that header instead, reusing
   the same keyring check as every other ingestion route).
@@ -554,7 +558,7 @@ Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination
 subscribed from a CloudWatch Logs log group via a subscription filter:
 
 - **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/cloudwatch/v1/logs/firehose`
-- **Access key**: a micromegas API key — the value from `MICROMEGAS_API_KEYS` — sent by
+- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)), or, transitionally, a value from `MICROMEGAS_API_KEYS` — sent by
   Firehose as `X-Amz-Firehose-Access-Key` on every request, same as the metrics route.
 - **Content encoding**: CloudWatch always gzips each record's payload at the source; this
   is independent of (and unaffected by) any additional `Content-Encoding: gzip` Firehose
@@ -616,7 +620,7 @@ distinct log lines never collide.
 
 **`415 Unsupported Media Type`** — the SDK is sending an unsupported `Content-Type` or omitting it entirely. Accepted types are `application/x-protobuf` and `application/json`. Other compression codecs (`deflate`, `zstd`) also return 415; only gzip is accepted.
 
-**`401 Unauthorized`** — verify the bearer token matches an entry in `MICROMEGAS_API_KEYS` on the server. Check that the SDK is actually attaching the header (`OTEL_EXPORTER_OTLP_HEADERS` is processed at export time, not at SDK init — typos are silently ignored).
+**`401 Unauthorized`** — verify the bearer token matches a live `ingestion_api_keys` row or an entry in `MICROMEGAS_API_KEYS` on the server. Check that the SDK is actually attaching the header (`OTEL_EXPORTER_OTLP_HEADERS` is processed at export time, not at SDK init — typos are silently ignored).
 
 **`413 Payload Too Large`** — the compressed body exceeds 20 MiB. Lower the SDK's batch size (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`) or split into more frequent exports.
 

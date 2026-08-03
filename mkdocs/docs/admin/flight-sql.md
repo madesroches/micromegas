@@ -46,11 +46,17 @@ The gRPC listener binds to `0.0.0.0:50051`. The Docker image
 
 ## Authentication
 
-If neither `MICROMEGAS_API_KEYS` nor `MICROMEGAS_OIDC_CONFIG` is set, the server
-refuses to start unless `--disable-auth` is passed. Admin users (via
-`MICROMEGAS_ADMINS`) gain access to administrative SQL functions — see
-[Admin SQL Functions](functions-reference.md). For provider configuration and
-precedence, see [Authentication](authentication.md).
+If none of `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`, or a non-empty
+`analytics_api_keys` DB table is present, the server refuses to start unless
+`--disable-auth` is passed. Admin users (via `MICROMEGAS_ADMINS`) gain access to
+administrative SQL functions — see [Admin SQL Functions](functions-reference.md).
+For provider configuration and precedence, see [Authentication](authentication.md).
+
+flight-sql validates `analytics_api_keys` (see [API Keys](api-keys.md)) but
+mints nothing over HTTP — it has no key-management routes. Analytics keys are
+issued by hand, following the runbook in [API Keys](api-keys.md). This also
+covers the key-only deployment (no OIDC) some Grafana setups use — see
+[Grafana Authentication](../grafana/authentication.md).
 
 `--disable-auth` treats every FlightSQL caller as admin — it is a development-only
 flag, never for production use. API-key (`MICROMEGAS_API_KEYS`) callers are never

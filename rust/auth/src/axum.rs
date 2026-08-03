@@ -6,7 +6,7 @@
 //! 3. Injects AuthContext into request extensions
 //! 4. Returns 401 Unauthorized on auth failures
 
-use crate::types::{AuthProvider, HttpRequestParts, RequestParts};
+use crate::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use axum::{
     extract::Request,
     http::StatusCode,
@@ -54,7 +54,11 @@ pub async fn auth_middleware(
         .await
         .map_err(|e| {
             warn!("[auth_failure] {e}");
-            AuthError::InvalidToken
+            if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                AuthError::Unavailable
+            } else {
+                AuthError::InvalidToken
+            }
         })?;
 
     // Log successful authentication (trace level to avoid noise on every request)
@@ -84,12 +88,20 @@ pub async fn auth_middleware(
 pub enum AuthError {
     /// Token validation failed
     InvalidToken,
+    /// A DB-backed auth provider could not reach its key store. Distinct from
+    /// `InvalidToken` so the client retries instead of treating the credential as
+    /// permanently rejected (`rust/telemetry-sink/src/http_event_sink.rs` classifies
+    /// `4xx` as terminal and `5xx` as retryable).
+    Unavailable,
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
+            AuthError::Unavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "Auth provider unavailable")
+            }
         };
 
         (status, message).into_response()

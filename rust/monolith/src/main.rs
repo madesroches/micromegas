@@ -23,12 +23,13 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
-use micromegas::auth::default_provider::provider_with_prefix;
+use micromegas::auth::db_api_key::{ApiKeyTable, DbApiKeyConfig, dedicated_key_store_pool};
+use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
-use micromegas::servers::ingestion::serve_ingestion;
+use micromegas::servers::ingestion::serve_ingestion_with_api_key_config;
 use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
 use micromegas::servers::shutdown::{ShutdownFanout, wait_for_sigterm};
 use micromegas::tracing::prelude::*;
@@ -188,14 +189,29 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Taken while `lakehouse` is still borrowed, before the role join_set spawns
+    // below — each dedicated key-store pool is built from this shared lake pool's
+    // connect options, not a clone of the lake pool itself (see
+    // `db_api_key::dedicated_key_store_pool`).
+    let lake_pool = lakehouse.as_ref().map(|lh| lh.lake().db_pool.clone());
+
     // Role-scoped auth providers (ingestion = machine-to-machine, analytics = human/tooling)
     let ingestion_auth = if roles.ingestion && !args.disable_auth && !args.disable_ingestion_auth {
-        match provider_with_prefix("MICROMEGAS_INGESTION").await? {
+        let pool = lake_pool
+            .clone()
+            .expect("lakehouse must be Some when ingestion role is enabled");
+        let key_store_pool = dedicated_key_store_pool(&pool);
+        match ProviderBuilder::new("MICROMEGAS_INGESTION")
+            .with_db_key_store(key_store_pool, ApiKeyTable::Ingestion)
+            .build()
+            .await?
+        {
             Some(p) => Some(p),
             None => {
                 anyhow::bail!(
                     "Ingestion auth required but no providers configured. \
-                     Set MICROMEGAS_INGESTION_API_KEYS, MICROMEGAS_API_KEYS, or --disable-auth"
+                     Set MICROMEGAS_INGESTION_API_KEYS, MICROMEGAS_API_KEYS, populate the \
+                     ingestion_api_keys DB table, or --disable-auth"
                 );
             }
         }
@@ -204,12 +220,21 @@ async fn main() -> Result<()> {
     };
 
     let analytics_auth = if roles.flightsql && !args.disable_auth {
-        match provider_with_prefix("MICROMEGAS_ANALYTICS").await? {
+        let pool = lake_pool
+            .clone()
+            .expect("lakehouse must be Some when flightsql role is enabled");
+        let key_store_pool = dedicated_key_store_pool(&pool);
+        match ProviderBuilder::new("MICROMEGAS_ANALYTICS")
+            .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
+            .build()
+            .await?
+        {
             Some(p) => Some(p),
             None => {
                 anyhow::bail!(
                     "Analytics auth required but no providers configured. \
-                     Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, or --disable-auth. \
+                     Set MICROMEGAS_ANALYTICS_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, populate the \
+                     analytics_api_keys DB table, or --disable-auth. \
                      To also disable analytics auth, pass `--disable-auth` instead of `--disable-ingestion-auth`."
                 );
             }
@@ -242,9 +267,18 @@ async fn main() -> Result<()> {
         let listen_addr = args.listen_endpoint_http;
         let grace_c = grace;
         let auth = ingestion_auth;
-        join_set.spawn(
-            async move { serve_ingestion(listen_addr, lake, auth, shutdown, grace_c).await },
-        );
+        let api_key_config = DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION");
+        join_set.spawn(async move {
+            serve_ingestion_with_api_key_config(
+                listen_addr,
+                lake,
+                auth,
+                shutdown,
+                grace_c,
+                api_key_config,
+            )
+            .await
+        });
     }
 
     // ── FlightSQL ──────────────────────────────────────────────────────────

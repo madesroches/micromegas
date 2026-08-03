@@ -90,6 +90,17 @@ micromegas-monolith --disable-ingestion-auth
 ```
 
 Admin users are controlled by `MICROMEGAS_ANALYTICS_ADMINS` (falls back to `MICROMEGAS_ADMINS`).
+The ingestion role's `/auth/api_keys` gate uses `MICROMEGAS_INGESTION_ADMINS`
+(falls back to `MICROMEGAS_ADMINS`) — see [API Keys](api-keys.md).
+
+### Key management (`/auth/api_keys`)
+
+The ingestion role always attaches a DB-backed key store (`ingestion_api_keys`)
+built from the shared lake connection, and — when its auth is enabled — exposes
+the same three routes documented in [API Keys](api-keys.md) to mint, list, and
+revoke ingestion keys without a redeploy. FlightSQL validates
+`analytics_api_keys` the same way but mints nothing over HTTP: analytics keys
+are issued by hand (see the runbook in [API Keys](api-keys.md)).
 
 ## Role selection
 

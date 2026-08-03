@@ -216,7 +216,19 @@ Cached ranges never need invalidation because the lake is write-once; see [Cachi
 
 ## Authentication
 
-The cache authenticates with API keys only (no OIDC). Configure a key ring with `MICROMEGAS_API_KEYS` and give **each client its own named key**, so keys can be rotated or revoked per service. Issue keys only to the services that actually use the cache — currently **FlightSQL and the maintenance daemon**.
+The cache authenticates with API keys only (no OIDC), and — unlike ingestion and
+flight-sql — **stays on the env keyring permanently**: `object-cache-srv` has no
+`sqlx` dependency and no database connection string, so it cannot participate in
+the DB-backed key store described in [API Keys](api-keys.md). Configure a key
+ring with `MICROMEGAS_API_KEYS` and give **each client its own named key**, so
+keys can be told apart per service. Issue keys only to the services that
+actually use the cache — currently **FlightSQL and the maintenance daemon**.
+
+Because this is the env keyring, its keys are **not revocable without a
+redeploy** — rotating or dropping a key means editing `MICROMEGAS_API_KEYS` and
+restarting the cache. This is an accepted, permanent limitation of this
+service, not an oversight: it has no DB access to hold the revocation state
+that ingestion/flight-sql's DB-backed keys use.
 
 Apply defense in depth: API keys are the application-layer check, but the cache is a purely internal service with no public role, so restrict it at the network layer too. Bind it to a private network and use a security group / firewall / Kubernetes `NetworkPolicy` so that **only the services that use the cache can reach its listen endpoint** — nothing else, the public internet included, should be able to open a connection.
 

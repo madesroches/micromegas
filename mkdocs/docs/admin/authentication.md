@@ -34,21 +34,35 @@ OIDC provides secure federated authentication with automatic token refresh and s
 - Auth0
 - Any standards-compliant OIDC provider
 
-### API Keys (Legacy)
+### API Keys
 
-Simple bearer token authentication using pre-shared keys.
+Bearer token authentication. Two flavors coexist:
 
-**Benefits:**
+- **Env keyring (legacy/bootstrap)** — `MICROMEGAS_API_KEYS`, a JSON array parsed once
+  at startup. Still the only option for `object-cache-srv` (which has no DB
+  connection and stays env-only permanently); a transitional bootstrap path for
+  ingestion and flight-sql.
+- **DB-backed keys (steady state)** — `ingestion_api_keys` / `analytics_api_keys`
+  rows, validated by hash lookup. Minted, listed, and revoked over HTTP without a
+  redeploy. See [API Keys](api-keys.md) for the full reference.
+
+**Benefits (both flavors):**
 
 - Simple to configure
-- Fast validation (HashMap lookup)
-- No external dependencies
+- Fast validation (HashMap lookup for the env keyring; cached hash lookup for
+  DB-backed keys)
+- No external identity provider dependency
 
 **Limitations:**
 
-- Manual key distribution and rotation
-- No automatic expiration
-- No user identity for audit logging
+- No automatic expiration (this design adds *revocation*, not expiry — a
+  DB-backed key with no `revoked_at` is valid indefinitely)
+- Manual key distribution and rotation for the env keyring; DB-backed keys add
+  `created_by`/`revoked_by` audit trail and HTTP mint/list/revoke, but rotation
+  is still a manual operator action, not automatic
+- No user identity for audit logging with the env keyring; DB-backed keys record
+  `created_by`/`revoked_by` (the OIDC identity that minted/revoked), but not a
+  per-request identity beyond the key's own `name`
 
 ## Server Configuration
 
@@ -95,7 +109,15 @@ The `MICROMEGAS_ADMINS` environment variable is a JSON array of user identifiers
 
 ### API Key Configuration
 
-Configure API keys using the `MICROMEGAS_API_KEYS` environment variable with a JSON array:
+**Steady state: DB-backed keys.** Mint a key with `POST /auth/api_keys` on the
+ingestion service (OIDC + admin required) — see [API Keys](api-keys.md) for the
+full route reference, the `mmk_`-prefixed key shape, and the analytics-key runbook
+(analytics keys are never mintable over HTTP; they're issued by hand).
+
+**Legacy/bootstrap: the env keyring.** Still the only option for
+`object-cache-srv` (env-only permanently — see [Object Cache](object-cache.md)),
+and still usable as a bootstrap path for ingestion/flight-sql before any
+DB-backed key exists:
 
 ```bash
 export MICROMEGAS_API_KEYS='[
@@ -108,7 +130,8 @@ export MICROMEGAS_API_KEYS='[
 - JSON array of objects
 - Each object has `name` (identifier for logging) and `key` (the actual API key)
 - The `key` value is sent as the Bearer token by clients
-- Generate keys with: `openssl rand -base64 512`
+- Generate keys with: `openssl rand -base64 512` (or, for a DB-backed key, use
+  the mint route above instead)
 
 ### Disable Authentication (Development Only)
 
@@ -632,20 +655,40 @@ This prevents authorization code interception attacks even if the client secret 
 3. Ensure audience (client_id) matches for each provider
 4. Review server logs for OIDC discovery failures per issuer
 
-## Migration from API Keys to OIDC
+## Migration from Env API Keys to DB-Backed Keys and OIDC
 
-To migrate from API keys to OIDC authentication:
+OIDC is the destination for human/service-account identities. It is **not** the
+destination for machine credentials — service keys and Firehose access keys
+migrate to DB-backed `ingestion_api_keys` instead, not OIDC. See
+[API Keys](api-keys.md) for the full picture (schema, HTTP routes, the manual
+legacy-key import procedure, and the `object-cache-srv` exception, which never
+migrates).
 
-1. **Set up OIDC provider** (Google, Azure AD, etc.)
-2. **Configure server** with both API keys and OIDC
-3. **Update clients** to use OIDC authentication
-4. **Test** with OIDC while API keys still work (parallel operation)
-5. **Remove API keys** from configuration when migration complete
+1. **Deploy the new binaries.** The migration creates `ingestion_api_keys` /
+   `analytics_api_keys` (schema v5). Nothing changes yet: the env keyring still
+   authenticates every existing key, and the DB tables are empty.
+2. **Populate the tables** from the existing env keyring — one hand-written
+   `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key (see
+   [API Keys](api-keys.md) for the exact recipe), or mint fresh keys via
+   `POST /auth/api_keys` for callers you can update. A key valid on both
+   ingestion and flight-sql today must become two distinct keys — "never both"
+   is enforced at the code level once the tables are in use.
+3. **Set up an OIDC provider** (Google, Azure AD, etc.) for human/service-account
+   identities, if you haven't already.
+4. **Update clients**: machine credentials point at their new DB-backed key;
+   human/service-account clients switch to OIDC.
+5. **Remove `MICROMEGAS_API_KEYS`** (and prefixed variants) only after the tables
+   are populated — a non-empty key store counts as "auth configured" on its own,
+   so unsetting the env var is safe once step 2 is done, but unsetting it
+   *before* the tables are populated leaves machine clients unauthenticated.
+   `object-cache-srv` keeps its `MICROMEGAS_API_KEYS` permanently; do not remove
+   it there.
 
 **Example Migration:**
 
 ```bash
-# Step 1: Add OIDC configuration (API keys still work)
+# Step 1/2: Add OIDC configuration and populate ingestion_api_keys (env keys
+# still work during this window)
 export MICROMEGAS_API_KEYS='[{"name": "service1", "key": "old-key"}]'
 export MICROMEGAS_OIDC_CONFIG='{
   "issuers": [{
@@ -653,13 +696,14 @@ export MICROMEGAS_OIDC_CONFIG='{
     "audience": "new-client-id.apps.googleusercontent.com"
   }]
 }'
+# INSERT INTO ingestion_api_keys ... ON CONFLICT (key_hash) DO NOTHING;  -- see api-keys.md
 
-# Step 2: Update clients to use OIDC
-# Test both authentication methods work
+# Step 3/4: Update clients to use OIDC (human/service-account) or their new
+# DB-backed key (machine credentials). Test both authentication methods work.
 
-# Step 3: Remove API keys when all clients migrated
+# Step 5: Remove the env keyring once the tables are confirmed populated
 unset MICROMEGAS_API_KEYS
-# Only OIDC remains
+# DB-backed keys and OIDC remain
 ```
 
 ## Best Practices

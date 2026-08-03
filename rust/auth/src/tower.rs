@@ -4,7 +4,7 @@
 //! into tonic gRPC services. It extracts request parts from gRPC metadata,
 //! validates them using an AuthProvider, and injects the AuthContext into request extensions.
 
-use crate::types::{AuthProvider, GrpcRequestParts, RequestParts};
+use crate::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -144,8 +144,12 @@ where
                     }
                     Err(e) => {
                         warn!("authentication failed: {e}");
-                        Err(Box::new(Status::unauthenticated("invalid token"))
-                            as Box<dyn std::error::Error + Send + Sync>)
+                        let status = if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                            Status::unavailable("auth provider unavailable")
+                        } else {
+                            Status::unauthenticated("invalid token")
+                        };
+                        Err(Box::new(status) as Box<dyn std::error::Error + Send + Sync>)
                     }
                 }
             } else {

@@ -531,11 +531,18 @@ Write credentials and read credentials live in **separate tables** — `ingestio
   resolved from the caller's OIDC identity and never from a key. In one table `audience` would be
   meaningful for exactly one discriminant value — a discriminated union in nullable columns, where
   the discriminant carries no information the table name doesn't.
-- **Postgres grants enforce it, not application logic.** The ingestion role holds `INSERT` on
-  `ingestion_api_keys` and **never** on `analytics_api_keys`, so a defaulting bug anywhere in the
-  mint path (0c) cannot issue a read credential — fail-closed by schema rather than by code that has
-  to stay correct. Each validating service needs only `SELECT` plus column-level
-  `UPDATE (last_used_at)` on the one table it reads.
+- **The split is enforced in code today, with Postgres grants as a documented option, not a
+  guarantee already in place.** #1383's implementation settled this: every service in a deployment
+  as shipped shares one DB role via `MICROMEGAS_SQL_CONNECTION_STRING`, and the schema migration runs
+  as the owner, so "Postgres grants enforce it" is not true out of the box. What ships is a
+  *code*-level boundary instead — `api_keys_router` hardcodes `ingestion_api_keys`, and the analytics
+  provider is constructed bound to `analytics_api_keys`, with no parameter either could point at the
+  other table — plus a documented grant recipe (`mkdocs/docs/admin/api-keys.md`) for operators who do
+  separate DB roles per service: the ingestion role would hold `INSERT` on `ingestion_api_keys` and
+  **never** on `analytics_api_keys`, with each validating service granted only `SELECT` plus
+  column-level `UPDATE (last_used_at)` on the one table it reads. Fail-closed-by-schema is the
+  aspiration for operators who separate roles; fail-closed-by-code is what every deployment gets
+  today.
 - **Shared code, not a shared relation.** The hash lookup, the `moka` cache and the `last_used_at`
   write are identical, so one `DbApiKeyAuthProvider` parameterized by table serves both. That is
   where the single-implementation value lives.
@@ -591,21 +598,35 @@ Steps:
 
 ```sql
 CREATE TABLE ingestion_api_keys (
-  key_hash     BYTEA PRIMARY KEY,      -- sha256 of the full key string
-  name         VARCHAR NOT NULL,
+  key_id       UUID PRIMARY KEY,
+  key_hash     BYTEA NOT NULL,          -- sha256 of the full key string
+  name         VARCHAR(255) NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL,
+  created_by   VARCHAR(255) NOT NULL,
   last_used_at TIMESTAMPTZ,
-  revoked_at   TIMESTAMPTZ
+  revoked_at   TIMESTAMPTZ,
+  revoked_by   VARCHAR(255)
 );
+CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 -- analytics_api_keys: identical, and it never gains the Stage 4 audience column
 ```
 
+**`key_id` is a design change #1383 settled that this outline left implicit**: this schema originally
+put `key_hash` alone as the primary key, but `DELETE /auth/api_keys/<id>` needs a non-secret handle to
+key on, and `GET` must never hand out `key_hash` (there is no reason to distribute the lookup value
+even though it is not reversible) — a UUID PK plus a unique index on `key_hash` gives both without
+making the secret-derived value the row identity. `name` also carries no uniqueness constraint,
+deliberately: rotating a key under a stable name is an expected state while an old key is phased out,
+so every revoke path keys on `key_id`, never `name`.
+
 Do **not** store the key in cleartext — a plaintext column is strictly worse than the env var
-(backups, replicas, read access, query logs). `key_hash` as primary key gives the O(1) lookup. The
-import requirement (existing key strings keep working, 0d) rules out imposing a `key_id.secret`
-shape, so lookup is by hash of the whole string. SHA-256 without a KDF is safe **only** because
-these are high-entropy random keys, not passwords — Argon2 would be both unindexable and too slow
-per request. Pair this with rotating any legacy key that is not actually random.
+(backups, replicas, read access, query logs). A **unique** index on `key_hash` gives the O(1) lookup
+(not merely an index, so a hand-written legacy-key import can use
+`INSERT ... ON CONFLICT (key_hash) DO NOTHING` and be safely re-run). The import requirement
+(existing key strings keep working, 0d) rules out imposing a `key_id.secret` shape, so lookup is by
+hash of the whole string. SHA-256 without a KDF is safe **only** because these are high-entropy random
+keys, not passwords — Argon2 would be both unindexable and too slow per request. Pair this with
+rotating any legacy key that is not actually random.
 
 0b. `DbApiKeyAuthProvider::new(pool, table)` composed via the existing `MultiAuthProvider`; env
     keyring and DB keyring compose during transition, so nothing breaks mid-migration. Requires

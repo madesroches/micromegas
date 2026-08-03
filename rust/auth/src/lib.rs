@@ -78,6 +78,9 @@ pub mod types;
 /// API key authentication
 pub mod api_key;
 
+/// DB-backed API key authentication (#1383)
+pub mod db_api_key;
+
 /// OIDC authentication with JWKS caching
 pub mod oidc;
 

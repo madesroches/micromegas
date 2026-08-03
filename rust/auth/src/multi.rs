@@ -1,6 +1,6 @@
 //! Multi-provider authentication that tries multiple auth methods in sequence.
 
-use crate::types::{AuthContext, AuthProvider};
+use crate::types::{AuthContext, AuthProvider, ProviderUnavailable};
 use async_trait::async_trait;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -81,6 +81,11 @@ impl AuthProvider for MultiAuthProvider {
         &self,
         parts: &dyn crate::types::RequestParts,
     ) -> anyhow::Result<AuthContext> {
+        // Tracks whether any provider in the chain failed because its store was
+        // unreachable, as opposed to a plain credential rejection. A request that
+        // might have matched a live key had the store been reachable must not be
+        // treated as a confirmed rejection once every provider has been tried.
+        let mut unavailable: Option<anyhow::Error> = None;
         for provider in &self.providers {
             match provider.validate_request(parts).await {
                 Ok(auth_ctx) => {
@@ -88,8 +93,14 @@ impl AuthProvider for MultiAuthProvider {
                 }
                 Err(e) => {
                     debug!("partial auth failed: {e:?}");
+                    if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                        unavailable = Some(e);
+                    }
                 }
             }
+        }
+        if let Some(e) = unavailable {
+            return Err(e);
         }
         anyhow::bail!("authentication failed with all providers")
     }

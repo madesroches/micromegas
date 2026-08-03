@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 4;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 5;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -86,6 +86,57 @@ pub async fn upgrade_data_lake_schema_v4(
     tr.execute("UPDATE migration SET version=4;")
         .await
         .with_context(|| "updating data lake schema version to 4")?;
+    Ok(())
+}
+
+/// Upgrades the data lake schema to version 5.
+/// Adds `ingestion_api_keys` and `analytics_api_keys`, the DB-backed API key store
+/// (#1383): a `key_id` UUID primary key (a non-secret handle for `DELETE`/`GET`,
+/// distinct from the `key_hash` lookup value), a SHA-256 `key_hash` with a unique
+/// index for O(1) validation lookups, and a `created_at`/`created_by`/`last_used_at`/
+/// `revoked_at`/`revoked_by` audit trail. The two tables are identical in shape but
+/// deliberately separate (never a shared `scopes` column) so an ingestion (write)
+/// key can never double as an analytics (read) credential.
+pub async fn upgrade_data_lake_schema_v5(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "CREATE TABLE ingestion_api_keys (
+           key_id       UUID PRIMARY KEY,
+           key_hash     BYTEA NOT NULL,
+           name         VARCHAR(255) NOT NULL,
+           created_at   TIMESTAMPTZ NOT NULL,
+           created_by   VARCHAR(255) NOT NULL,
+           last_used_at TIMESTAMPTZ,
+           revoked_at   TIMESTAMPTZ,
+           revoked_by   VARCHAR(255)
+         );",
+    )
+    .await
+    .with_context(|| "creating table ingestion_api_keys")?;
+    tr.execute("CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);")
+        .await
+        .with_context(|| "creating unique index ingestion_api_keys_key_hash")?;
+    tr.execute(
+        "CREATE TABLE analytics_api_keys (
+           key_id       UUID PRIMARY KEY,
+           key_hash     BYTEA NOT NULL,
+           name         VARCHAR(255) NOT NULL,
+           created_at   TIMESTAMPTZ NOT NULL,
+           created_by   VARCHAR(255) NOT NULL,
+           last_used_at TIMESTAMPTZ,
+           revoked_at   TIMESTAMPTZ,
+           revoked_by   VARCHAR(255)
+         );",
+    )
+    .await
+    .with_context(|| "creating table analytics_api_keys")?;
+    tr.execute("CREATE UNIQUE INDEX analytics_api_keys_key_hash ON analytics_api_keys(key_hash);")
+        .await
+        .with_context(|| "creating unique index analytics_api_keys_key_hash")?;
+    tr.execute("UPDATE migration SET version=5;")
+        .await
+        .with_context(|| "updating data lake schema version to 5")?;
     Ok(())
 }
 
@@ -192,6 +243,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v4");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v4(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 4 == current_version {
+        info!("upgrading data_lake_schema to v5");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v5(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

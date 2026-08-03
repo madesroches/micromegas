@@ -1,6 +1,22 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
+/// A DB-backed auth provider (e.g. `DbApiKeyAuthProvider`) could not reach its
+/// key store — distinguishes a store *outage* from a rejected credential all
+/// the way out to the HTTP/gRPC response.
+///
+/// Wraps the underlying `anyhow::Error` rather than replacing it: callers that
+/// only need to log or propagate the error keep using it as an `anyhow::Error`
+/// (via `?`/`From`), while `MultiAuthProvider`, `auth_middleware`, and the gRPC
+/// `AuthService` downcast (`anyhow::Error::downcast_ref`) to detect this specific
+/// kind and map it to a retryable status (503 / `Status::unavailable`) instead of
+/// the blanket "invalid credential" response every other error gets. This is the
+/// one place in this crate a typed error is warranted, per `rust/CLAUDE.md`'s
+/// anyhow-vs-thiserror rule: callers must branch on this specific kind.
+#[derive(thiserror::Error, Debug)]
+#[error("auth provider unavailable: {0}")]
+pub struct ProviderUnavailable(#[source] pub anyhow::Error);
+
 /// Authentication type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthType {

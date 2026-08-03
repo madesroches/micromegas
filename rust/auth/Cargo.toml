@@ -29,11 +29,16 @@ rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sqlx.workspace = true
 subtle.workspace = true
+thiserror.workspace = true
 tonic.workspace = true
 tower.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+micromegas-transit.workspace = true
+serial_test = "3.2"
 tokio.workspace = true
 wiremock.workspace = true
