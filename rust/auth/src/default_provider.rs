@@ -11,8 +11,8 @@ use crate::db_api_key::{
 use crate::multi::MultiAuthProvider;
 use crate::oidc::{OidcAuthProvider, OidcConfig};
 use crate::types::AuthProvider;
-use anyhow::{Context, Result};
-use micromegas_tracing::info;
+use anyhow::Result;
+use micromegas_tracing::{info, warn};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -104,7 +104,10 @@ impl ProviderBuilder {
     /// startup existence query (`key_store_has_live_rows`) and treats a non-empty
     /// result the same as env keys or OIDC being present. A failure of that query
     /// (e.g. a missing relation because the schema has not reached migration v5
-    /// yet) is propagated as an `Err` from `build()`, never treated as "empty".
+    /// yet) is propagated as an `Err` from `build()` — unless env keys or OIDC
+    /// already configured auth, in which case the failure is only `warn!`-logged
+    /// and `has_live_rows` is treated as `false`, since the query's result would
+    /// be unused either way.
     ///
     /// Returns `Ok(None)` when nothing is configured at all (preserving the
     /// "genuinely empty deployment" startup guard every caller relies on).
@@ -142,14 +145,29 @@ impl ProviderBuilder {
             let db_provider = DbApiKeyAuthProvider::new(pool.clone(), table, db_config);
             multi = multi.with_provider(Arc::new(db_provider));
 
-            let has_live_rows = key_store_has_live_rows(&pool, table).await.with_context(|| {
-                format!(
-                    "checking whether {} has any live key — has the schema reached migration v5? \
-                     (rust/ingestion/src/sql_migration.rs; the ingestion binary or monolith must run \
-                     the migration before flight-sql starts in a split deployment)",
-                    table.table_name()
-                )
-            })?;
+            let has_live_rows = match key_store_has_live_rows(&pool, table).await {
+                Ok(has_live_rows) => has_live_rows,
+                Err(e) if !configured => {
+                    return Err(e.context(format!(
+                        "checking whether {} has any live key — has the schema reached migration v5? \
+                         (rust/ingestion/src/sql_migration.rs; the ingestion binary or monolith must run \
+                         the migration before flight-sql starts in a split deployment)",
+                        table.table_name()
+                    )));
+                }
+                Err(e) => {
+                    // Auth is already configured via another provider (env keys or
+                    // OIDC); this query's only purpose is deciding whether an
+                    // otherwise-unconfigured deployment counts as configured, so a
+                    // failure here (e.g. schema not yet at v5) must not abort
+                    // startup.
+                    warn!(
+                        "checking whether {} has any live key failed, ignoring (auth already configured): {e:#}",
+                        table.table_name()
+                    );
+                    false
+                }
+            };
             if has_live_rows {
                 configured = true;
             }

@@ -201,6 +201,9 @@ async fn list_keys(
     // than reject values above MAX_LIMIT.
     let limit = limit.min(MAX_LIMIT);
     let offset = query.offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(ApiKeyError::BadRequest("offset must be >= 0".to_string()));
+    }
     let include_revoked = query.include_revoked.unwrap_or(true);
 
     let rows = if include_revoked {

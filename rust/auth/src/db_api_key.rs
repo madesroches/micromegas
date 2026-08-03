@@ -196,7 +196,9 @@ pub struct DbApiKeyAuthProvider {
     valid: Cache<[u8; 32], Arc<KeyRow>>,
     /// hash -> () for tokens the DB answered "no such live key" for.
     unknown: Cache<[u8; 32], ()>,
-    /// Rate-limit window for the outage `error!` log — mirrors `cache_ttl_secs`.
+    /// Rate-limit window for the outage `error!` log — mirrors `cache_ttl_secs`,
+    /// floored so a zero or very low cache TTL doesn't also disable log
+    /// rate-limiting.
     error_log_window_secs: i64,
     last_logged_at: Arc<AtomicI64>,
 }
@@ -219,7 +221,7 @@ impl DbApiKeyAuthProvider {
             table,
             valid,
             unknown,
-            error_log_window_secs: config.cache_ttl_secs as i64,
+            error_log_window_secs: config.cache_ttl_secs.max(60) as i64,
             last_logged_at: Arc::new(AtomicI64::new(0)),
         }
     }
