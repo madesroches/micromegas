@@ -21,10 +21,11 @@ pub async fn check_auth(
         .validate_request(&parts as &dyn RequestParts)
         .await
         .map_err(|e| {
-            warn!("authentication failed: {e}");
             if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                debug!("authentication failed: {e}");
                 Status::unavailable("auth provider unavailable")
             } else {
+                warn!("authentication failed: {e}");
                 Status::unauthenticated("invalid token")
             }
         })?;

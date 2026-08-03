@@ -53,10 +53,11 @@ pub async fn auth_middleware(
         .validate_request(&parts as &dyn RequestParts)
         .await
         .map_err(|e| {
-            warn!("[auth_failure] {e}");
             if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                debug!("[auth_failure] {e}");
                 AuthError::Unavailable
             } else {
+                warn!("[auth_failure] {e}");
                 AuthError::InvalidToken
             }
         })?;

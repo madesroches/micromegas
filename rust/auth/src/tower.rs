@@ -143,10 +143,11 @@ where
                         inner.call(req).await.map_err(Into::into)
                     }
                     Err(e) => {
-                        warn!("authentication failed: {e}");
                         let status = if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                            debug!("authentication failed: {e}");
                             Status::unavailable("auth provider unavailable")
                         } else {
+                            warn!("authentication failed: {e}");
                             Status::unauthenticated("invalid token")
                         };
                         Err(Box::new(status) as Box<dyn std::error::Error + Send + Sync>)
