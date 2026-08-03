@@ -96,7 +96,7 @@ def test_logout_profile_path_traversal_errors_without_escaping(
     assert not (fake_home.parent / "evil.json").exists()
 
 
-def test_logout_ignores_micromegas_profile_env(fake_home, monkeypatch, capsys):
+def test_logout_ignores_micromegas_profile_env(fake_home, monkeypatch):
     """A bare invocation clears everything even with MICROMEGAS_PROFILE set."""
     token_dir = fake_home / ".micromegas"
     (token_dir / "tokens.json").write_text("{}")

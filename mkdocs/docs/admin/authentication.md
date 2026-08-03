@@ -630,8 +630,8 @@ This prevents authorization code interception attacks even if the client secret 
 
 1. Check if refresh token is present: `cat ~/.micromegas/tokens.json | jq .token.refresh_token` (or `tokens-<profile>.json` if a `profiles` map is in use)
 2. Verify client secret matches (if required by provider)
-3. Check token file permissions: `ls -la ~/.micromegas/tokens.json` (should be 600)
-4. Re-authenticate: `micromegas-logout` then retry
+3. Check token file permissions: `ls -la ~/.micromegas/tokens.json` (should be 600; or `tokens-<profile>.json` if a `profiles` map is in use)
+4. Re-authenticate: `micromegas-logout` then retry (clears every cached token file; use `--profile <name>` to narrow to one)
 
 ### Server Configuration Issues
 

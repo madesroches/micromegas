@@ -207,7 +207,6 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
         oidc_audience=_pick("MICROMEGAS_OIDC_AUDIENCE", audience),
         oidc_scope=_pick("MICROMEGAS_OIDC_SCOPE"),
         token_file=default_token_file(name),
-        python_module_wrapper=_pick("MICROMEGAS_PYTHON_MODULE_WRAPPER"),
     )
 ```
 
@@ -224,17 +223,6 @@ whose `config.json` has a `profiles` map, an env-var-only invocation
 with a usage error unless `--profile`, `MICROMEGAS_PROFILE`, or
 `default_profile` picks one — it is not, in fact, unaffected once profiles
 exist.
-
-`MICROMEGAS_PYTHON_MODULE_WRAPPER` is a deprecated legacy escape hatch for
-corporate auth wrappers, not a path this plan integrates with profiles: it
-stays env-var-only (no config-file key, per-profile or otherwise), and
-`connection.py`'s `connect()` keeps short-circuiting on it *before* using any
-of the other resolved fields (`connection.py:13-15`). Consequently, when it's
-set, it bypasses the selected profile entirely — `--profile`/
-`MICROMEGAS_PROFILE` still pick a `uri`/`client_id`/`issuers`, but `connect()`
-discards them all and defers to the wrapper module, so the flag silently has
-no effect. This is an existing limitation of the deprecated wrapper, not a
-new gap introduced by profiles, and this plan does not attempt to fix it.
 
 There is no implicit selection when only one profile is configured: a
 `profiles` map always requires a selected profile, so even a single-profile
@@ -292,14 +280,6 @@ introduced — stays clearable without a flag.
 `connection.py`:
 ```python
 def connect(profile=None):
-    # MICROMEGAS_PYTHON_MODULE_WRAPPER bypasses profile resolution entirely:
-    # checked before resolve_connection() is called, so a missing/invalid
-    # profile selection never raises when it's set.
-    wrapper = os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER")
-    if wrapper:
-        wrapper_module = importlib.import_module(wrapper)
-        return wrapper_module.connect()
-
     cfg = resolve_connection(profile=profile)
     ...  # rest of body unchanged
 ```
@@ -499,10 +479,7 @@ self-describing, in exchange for logout needing no `load_config`/
    the OIDC token cache to a per-profile `tokens-<profile>.json` file, so
    turning profiles on forces one fresh login even for an otherwise-unchanged
    connection (renaming the existing `tokens.json` to match beforehand avoids
-   it). Also add a single short line noting that the deprecated
-   `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch bypasses `--profile`/
-   `MICROMEGAS_PROFILE` entirely — not new documentation promoting it as a
-   profiles-aware corporate-auth option. Also document `micromegas-logout`'s
+   it). Also document `micromegas-logout`'s
    semantics: a bare invocation clears every cached token file — the plain
    `~/.micromegas/tokens.json` (still used by `micromegas-screens` and any
    other direct `oidc_connection` caller, see Per-profile token caching)

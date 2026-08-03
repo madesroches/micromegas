@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -229,13 +230,13 @@ def test_env_vars_still_win_over_active_profile(tmp_path, monkeypatch):
 
 
 def test_default_token_file_no_profile_returns_plain_default():
-    assert default_token_file(None).endswith("/.micromegas/tokens.json")
+    assert Path(default_token_file(None)) == Path.home() / ".micromegas" / "tokens.json"
     assert "tokens-" not in default_token_file(None)
 
 
 def test_default_token_file_with_profile_returns_suffixed_path():
     path = default_token_file("prod")
-    assert path.endswith("/.micromegas/tokens-prod.json")
+    assert Path(path) == Path.home() / ".micromegas" / "tokens-prod.json"
 
 
 def test_profile_argument_against_flat_config_raises_profile_error(tmp_path):

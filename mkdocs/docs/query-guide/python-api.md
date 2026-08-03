@@ -636,7 +636,7 @@ micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --all -
 
 **Configuration:**
 
-The CLI resolves connection settings from three sources, in this order:
+The CLI resolves connection settings from four sources, in this order:
 
 1. **Profile selection**, if the config file has a `profiles` map (`--profile` > `MICROMEGAS_PROFILE` > `default_profile`) — see Named profiles below
 2. **Environment variables** (highest priority for each individual setting, applied on top of the selected profile — or the flat config file if there's no `profiles` map)
@@ -731,6 +731,11 @@ to a per-profile `~/.micromegas/tokens-<profile>.json`, so switching profiles ne
 profile's cached token. This means turning profiles on forces one fresh login even for an
 otherwise-unchanged connection — rename your existing `tokens.json` to the new profile's
 `tokens-<profile>.json` path beforehand to avoid it.
+
+`micromegas-screens` is not profile-aware: it always authenticates against the plain
+`~/.micromegas/tokens.json`, regardless of any `profiles`/`MICROMEGAS_PROFILE` config. On a machine
+where `micromegas-query` has moved to a per-profile token file, this means `micromegas-screens`
+keeps its own separate login.
 
 ### micromegas-logout
 

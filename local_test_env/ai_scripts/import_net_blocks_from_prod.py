@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(REPO, "python", "micromegas"))
 
 import micromegas  # noqa: E402
 from micromegas.cli import connection as src_connection  # noqa: E402
+from micromegas.cli.config import ProfileError  # noqa: E402
 
 
 def _select_net_blocks(src, begin: dt.datetime, end: dt.datetime, explicit_block_ids):
@@ -224,13 +225,20 @@ def main():
         action="store_true",
         help="Skip importing log/metric/other streams from the same processes.",
     )
+    ap.add_argument(
+        "--profile",
+        help="Named connection profile from ~/.micromegas/config.json",
+    )
     args = ap.parse_args()
 
     print(f"source: {os.environ.get('MICROMEGAS_ANALYTICS_URI', 'local')}")
     print(f"target: {args.target_uri}")
     print(f"window: {args.begin.isoformat()} → {args.end.isoformat()}")
 
-    src = src_connection.connect()
+    try:
+        src = src_connection.connect(profile=args.profile)
+    except ProfileError as e:
+        ap.error(str(e))
     target = micromegas.flightsql.client.FlightSQLClient(args.target_uri)
 
     t0 = time.time()

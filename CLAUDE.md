@@ -59,8 +59,9 @@ For an architecture overview (core crates, services, data flow), see `.github/co
   - Use this tool to run arbitrary SQL queries against the analytics service
   - Accepts optional `--begin` and `--end` for time range (relative like `1h`, `24h`, `7d` or RFC 3339 like `2024-01-01T00:00:00Z`)
   - Accepts `--format` for output: `table` (default), `csv`, `json`
+  - Accepts `--profile` to select a named connection profile from `~/.micromegas/config.json`
   - Example: `micromegas-query "SELECT time, level, msg FROM log_entries LIMIT 10" --begin 1h --format csv`
-- **Logout**: `micromegas-logout` (clears cached OIDC tokens)
+- **Logout**: `micromegas-logout` clears every cached token file (`tokens.json` plus all `tokens-<profile>.json`); pass `--profile <name>` to clear only that profile's token
 
 ## Branding
 
