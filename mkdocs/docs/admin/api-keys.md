@@ -42,7 +42,16 @@ CREATE TABLE ingestion_api_keys (
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 
 -- analytics_api_keys: identical shape; never gains an audience column
-CREATE TABLE analytics_api_keys (LIKE ingestion_api_keys INCLUDING ALL);
+CREATE TABLE analytics_api_keys (
+  key_id       UUID PRIMARY KEY,
+  key_hash     BYTEA NOT NULL,
+  name         VARCHAR(255) NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL,
+  created_by   VARCHAR(255) NOT NULL,
+  last_used_at TIMESTAMPTZ,
+  revoked_at   TIMESTAMPTZ,
+  revoked_by   VARCHAR(255)
+);
 CREATE UNIQUE INDEX analytics_api_keys_key_hash ON analytics_api_keys(key_hash);
 ```
 
@@ -159,8 +168,8 @@ retry rather than treat it as a rejected credential. The signal to alert on is
 the `db_api_key_error_count` metric (tagged `{table}`), emitted on **every**
 DB error the key-lookup path hits, unconditionally — independent of the
 `error!` log line for the same error, which is rate-limited to at most once per
-`cache_ttl_secs` window per table to avoid flooding `log_entries` with the
-outage's own noise during a sustained outage.
+`cache_ttl_secs` (floored at 60s) window per table to avoid flooding
+`log_entries` with the outage's own noise during a sustained outage.
 
 ## Grant recipe (separated DB roles)
 

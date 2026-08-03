@@ -559,10 +559,10 @@ Write credentials and read credentials live in **separate tables** — `ingestio
   that outcome cheap: the read table can be deprecated or dropped without touching the ingestion hot
   path.
 - **`object-cache-srv` stays on env vars (decided 2026-07-30).** It is a fourth key-validating
-  surface (`cli.rs:59`, same `parse_key_ring`) but it has **no database access at all** — no `sqlx`
-  dependency, no connection string in its CLI — and giving a cache service a Postgres pool purely to
-  read a key table is not worth it. It keeps the env keyring and is out of the key-store scope
-  entirely. Two consequences to record rather than rediscover:
+  surface (`cli.rs:59`, same `parse_key_ring`) but it has **no database access at all** — no
+  connection string in its CLI, so it cannot reach the key tables — and giving a cache service a
+  Postgres pool purely to read a key table is not worth it. It keeps the env keyring and is out of
+  the key-store scope entirely. Two consequences to record rather than rediscover:
   - **The env keyring is permanent, not transitional.** `ApiKeyAuthProvider` and `parse_key_ring`
     (`api_key.rs`) must not be deleted once the DB store lands — 0b's "compose during transition"
     applies to ingestion and analytics only. `object-cache-srv` remains a legitimate consumer

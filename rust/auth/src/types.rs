@@ -10,9 +10,15 @@ use chrono::{DateTime, Utc};
 /// (via `?`/`From`), while `MultiAuthProvider`, `auth_middleware`, and the gRPC
 /// `AuthService` downcast (`anyhow::Error::downcast_ref`) to detect this specific
 /// kind and map it to a retryable status (503 / `Status::unavailable`) instead of
-/// the blanket "invalid credential" response every other error gets. This is the
-/// one place in this crate a typed error is warranted, per `rust/CLAUDE.md`'s
-/// anyhow-vs-thiserror rule: callers must branch on this specific kind.
+/// the blanket "invalid credential" response every other error gets.
+///
+/// Per `rust/CLAUDE.md`'s anyhow-vs-thiserror rule, the retryable/terminal
+/// distinction *is* modeled as an explicit type rather than an ad-hoc string —
+/// that's the part of the rule this satisfies. What it doesn't satisfy: callers
+/// still reach that type via `downcast_ref` instead of matching on it directly,
+/// because `AuthProvider::validate_request` returns `anyhow::Result` and this
+/// plan chose not to change that trait's public return type. Treat this as a
+/// deliberate, scoped exception rather than a full application of the rule.
 #[derive(thiserror::Error, Debug)]
 #[error("auth provider unavailable: {0}")]
 pub struct ProviderUnavailable(#[source] pub anyhow::Error);

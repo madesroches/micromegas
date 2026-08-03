@@ -218,10 +218,10 @@ Cached ranges never need invalidation because the lake is write-once; see [Cachi
 
 The cache authenticates with API keys only (no OIDC), and — unlike ingestion and
 flight-sql — **stays on the env keyring permanently**: `object-cache-srv` has no
-`sqlx` dependency and no database connection string, so it cannot participate in
-the DB-backed key store described in [API Keys](api-keys.md). Configure a key
-ring with `MICROMEGAS_API_KEYS` and give **each client its own named key**, so
-keys can be told apart per service. Issue keys only to the services that
+database connection configured, so it cannot reach the key tables and cannot
+participate in the DB-backed key store described in [API Keys](api-keys.md).
+Configure a key ring with `MICROMEGAS_API_KEYS` and give **each client its own
+named key**, so keys can be told apart per service. Issue keys only to the services that
 actually use the cache — currently **FlightSQL and the maintenance daemon**.
 
 Because this is the env keyring, its keys are **not revocable without a

@@ -248,6 +248,13 @@ async fn empty_table_and_nothing_else_yields_none() {
 #[tokio::test]
 #[serial]
 async fn missing_relation_is_err_not_none() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(API_KEYS_VAR);
+        std::env::remove_var(OIDC_CONFIG_VAR);
+    }
+
     let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
         .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live Postgres instance");
     let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)

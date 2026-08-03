@@ -4,7 +4,8 @@
 //! 1. Extracts request parts (headers, method, URI)
 //! 2. Validates using configured AuthProvider
 //! 3. Injects AuthContext into request extensions
-//! 4. Returns 401 Unauthorized on auth failures
+//! 4. Returns 401 Unauthorized on invalid credentials, 503 Service Unavailable
+//!    when a provider's backing store is unreachable
 
 use crate::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use axum::{
