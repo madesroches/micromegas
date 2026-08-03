@@ -84,7 +84,10 @@ gRPC-style scheme to its HTTP-style equivalent before parsing the URL into an `h
 /// Rewrites the `grpc://`/`grpc+tls://` scheme convention used by data source configs into the
 /// `http://`/`https://` scheme tonic's `Channel` expects for its TLS decision. `http://`/`https://`
 /// URLs pass through unchanged.
-fn normalize_channel_scheme(url: &str) -> String {
+///
+/// `pub` (not private) so it can be unit-tested from `rust/public/tests/`, matching this crate's
+/// established pattern for pure helpers (e.g. `analytics_web_srv::app_db::normalize_name`).
+pub fn normalize_channel_scheme(url: &str) -> String {
     if let Some(rest) = url.strip_prefix("grpc+tls://") {
         format!("https://{rest}")
     } else if let Some(rest) = url.strip_prefix("grpc://") {
@@ -122,8 +125,10 @@ changes needed in that file — there's no client-side scheme validation to rela
    `validate_data_source_config` with the four-scheme check described above. Update the error
    message to list all four accepted schemes.
 2. **`rust/public/src/client/flightsql_client_factory.rs`**: add the `normalize_channel_scheme`
-   helper (private `fn`, no need to be `pub` — it's only called from `make_client()` in the same
-   file) and call it in `make_client()` before `self.url.parse::<Uri>()`.
+   helper as a `pub fn` (reachable as `micromegas::client::flightsql_client_factory::normalize_channel_scheme`,
+   since the module and `client` are already `pub`) — it needs to be `pub`, not private, so it can
+   be unit-tested from `rust/public/tests/` per this crate's convention — and call it in
+   `make_client()` before `self.url.parse::<Uri>()`.
 3. **`rust/analytics-web-srv/tests/data_source_tests.rs`**:
    - Replace `test_non_http_scheme_rejected` (`grpc://` is no longer rejected) with
      `test_valid_grpc_url` and `test_valid_grpc_tls_url`, mirroring `test_valid_http_url`/
@@ -131,14 +136,19 @@ changes needed in that file — there's no client-side scheme validation to rela
    - Extend `test_case_insensitive_scheme` to also cover `GRPC://` and `GRPC+TLS://`.
    - Keep `test_ftp_scheme_rejected` and `test_no_scheme_rejected` as-is — still invalid.
 4. **New test file `rust/public/tests/flightsql_client_factory_scheme_tests.rs`** (no existing test
-   file covers this module): since `normalize_channel_scheme` is private, test it indirectly through
-   whatever is externally observable, or make it `pub(crate)` and test from a `#[cfg(test)]` module
-   colocated in `tests/` per this crate's convention — see Testing Strategy below for the exact
-   approach, since the project's rule is "unit tests live under `tests/`, not next to the
-   implementation."
+   file covers this module): call `micromegas::client::flightsql_client_factory::normalize_channel_scheme`
+   directly, per Testing Strategy below — this works because the helper is `pub` (step 2).
 5. **`analytics-web-app/src/routes/DataSourcesPage.tsx`**: update the URL input placeholder to
    `"grpc://flight-sql.example.com:50051"`.
-6. Run `cargo fmt` and `cargo clippy --workspace -- -D warnings` in `rust/` before committing.
+6. **`rust/public/Cargo.toml`**: add a `[[test]]` entry for the new test file, matching the existing
+   entries for every other file under `rust/public/tests/`:
+   ```toml
+   [[test]]
+   name = "flightsql_client_factory_scheme_tests"
+   path = "tests/flightsql_client_factory_scheme_tests.rs"
+   required-features = ["server"]
+   ```
+7. Run `cargo fmt` and `cargo clippy --workspace -- -D warnings` in `rust/` before committing.
 
 ## Files to Modify
 
@@ -146,6 +156,7 @@ changes needed in that file — there's no client-side scheme validation to rela
 - `rust/analytics-web-srv/tests/data_source_tests.rs`
 - `rust/public/src/client/flightsql_client_factory.rs`
 - `rust/public/tests/flightsql_client_factory_scheme_tests.rs` (new)
+- `rust/public/Cargo.toml` (add `[[test]]` entry for the new test file)
 - `analytics-web-app/src/routes/DataSourcesPage.tsx`
 
 ## Trade-offs
@@ -170,16 +181,10 @@ changes needed in that file — there's no client-side scheme validation to rela
 - `rust/public/tests/flightsql_client_factory_scheme_tests.rs`: cover `normalize_channel_scheme`'s
   behavior — `grpc://host:port` → `http://host:port`, `grpc+tls://host:port` → `https://host:port`,
   `http://`/`https://` unchanged, and mixed-case input (`GRPC://Host:1234` → `http://Host:1234`,
-  preserving host casing). Design review / implementation should settle on making the function
-  `pub(crate)` (or restructuring the test to call `make_client()` end-to-end against a local mock
-  gRPC server) to satisfy the project's "tests live under `tests/`, not beside the implementation"
-  rule without exposing normalization as public API surface.
+  preserving host casing) — by calling the `pub` helper directly, per Implementation Step 4.
 - Manual check: point a local data source at `grpc://localhost:50051` (the monolith's default
   FlightSQL port) via the web app's data source form and confirm queries succeed.
 
 ## Open Questions
 
-- None outstanding for the codebase side — see the private-helper testing wrinkle in step 4/Testing
-  Strategy above, which is a mechanical "how do we test a private fn under this crate's test-layout
-  rule" question, not a design decision, and should be resolved by whichever concrete test
-  arrangement the review stage settles on.
+- None outstanding.
