@@ -25,7 +25,7 @@
     "diff": "^8.0.3",
     "dompurify": "^3.4.12",
     "eslint/ajv": "6.14.0",
-    "fast-uri": "^3.1.4",
+    "fast-uri": "^3.1.5",
     "flatted": "^3.4.2",
     "immutable": "^5.1.8",
     "js-cookie": "^3.0.7",
@@ -39,7 +39,7 @@
     "react-router": "patch:react-router@npm%3A8.3.0#~/.yarn/patches/react-router-npm-8.3.0-258476627b.patch",
     "serialize-javascript": "^7.0.5",
     "tar": "^7.5.21",
-    "undici": ">=6.27.0",
+    "undici": ">=8.9.0",
     "uuid": "^14.0.0",
     "websocket-driver": "^0.7.5",
     "ws": "^8.21.0"
