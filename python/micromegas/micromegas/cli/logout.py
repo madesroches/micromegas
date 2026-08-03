@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from micromegas.cli.config import default_token_file
+from micromegas.cli.config import ProfileError, default_token_file
 
 
 def main():
@@ -16,8 +16,11 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.profile:
-        targets = [Path(default_token_file(args.profile))]
+    if args.profile is not None:
+        try:
+            targets = [Path(default_token_file(args.profile))]
+        except ProfileError as e:
+            parser.error(str(e))
     else:
         token_dir = Path.home() / ".micromegas"
         targets = [token_dir / "tokens.json", *sorted(token_dir.glob("tokens-*.json"))]

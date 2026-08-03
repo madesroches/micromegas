@@ -1,11 +1,14 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 CONFIG_PATH = Path.home() / ".micromegas" / "config.json"
 DEFAULT_URI = "grpc://localhost:50051"
+
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class ProfileError(ValueError):
@@ -18,11 +21,27 @@ class ProfileError(ValueError):
     """
 
 
+def _validate_profile_name(name: str) -> None:
+    """Raise `ProfileError` if `name` is unsafe to interpolate into a token
+    file path (see `default_token_file`): it must be non-empty, contain only
+    `[A-Za-z0-9._-]`, and not be the literal `.` or `..` path segments (both
+    of which match that character class but would escape the token dir)."""
+    if not name or not _PROFILE_NAME_RE.match(name) or name in (".", ".."):
+        raise ProfileError(
+            f"invalid profile name {name!r}: only letters, digits, '.', '_', "
+            "and '-' are allowed, and it must not be '.' or '..'"
+        )
+
+
 def default_token_file(profile: Optional[str] = None) -> str:
-    """Return the OIDC token cache path for `profile` (or the plain default when None)."""
-    if profile:
-        return str(Path.home() / ".micromegas" / f"tokens-{profile}.json")
-    return str(Path.home() / ".micromegas" / "tokens.json")
+    """Return the OIDC token cache path for `profile` (or the plain default when None).
+
+    Raises `ProfileError` if `profile` is not a safe, filesystem-path-safe name.
+    """
+    if profile is None:
+        return str(Path.home() / ".micromegas" / "tokens.json")
+    _validate_profile_name(profile)
+    return str(Path.home() / ".micromegas" / f"tokens-{profile}.json")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,9 +84,14 @@ def resolve_active_profile(config, profile=None):
     exists and the flat config is used directly as `active_config`. Raises
     `ProfileError` if `--profile`/`MICROMEGAS_PROFILE` is set but there's no
     `profiles` map, if a `profiles` map exists but no profile is selected,
-    if the resolved name isn't in `profiles`, or if `profiles` (or the
-    selected profile's entry) is malformed (not a map).
+    if the resolved name isn't in `profiles`, if `profiles` (or the
+    selected profile's entry) is malformed (not a map), or if the `profile`
+    argument or the resolved name is empty or otherwise unsafe to use as a
+    filesystem path segment (see `_validate_profile_name`).
     """
+    if profile is not None:
+        _validate_profile_name(profile)
+
     profiles = config.get("profiles")
     if profiles is None:
         if profile or os.environ.get("MICROMEGAS_PROFILE"):
@@ -93,6 +117,7 @@ def resolve_active_profile(config, profile=None):
         )
     if not isinstance(name, str):
         raise ProfileError("default_profile must be a profile name (string)")
+    _validate_profile_name(name)
     if name not in profiles:
         raise ProfileError(
             f"unknown profile '{name}' (available: {', '.join(sorted(profiles))})"

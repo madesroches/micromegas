@@ -336,6 +336,80 @@ def test_resolve_connection_uses_per_profile_token_file(tmp_path):
     assert cfg.token_file != default_token_file(None)
 
 
+# --- Profile name validation ---
+
+
+def test_default_token_file_rejects_empty_string():
+    with pytest.raises(ProfileError):
+        default_token_file("")
+
+
+def test_default_token_file_rejects_path_separator():
+    with pytest.raises(ProfileError):
+        default_token_file("team/prod")
+
+
+def test_default_token_file_rejects_path_traversal():
+    with pytest.raises(ProfileError):
+        default_token_file("../../../evil")
+
+
+def test_default_token_file_rejects_dot_and_dotdot():
+    with pytest.raises(ProfileError):
+        default_token_file(".")
+    with pytest.raises(ProfileError):
+        default_token_file("..")
+
+
+def test_profile_argument_empty_string_raises_profile_error(tmp_path):
+    """An explicit but empty --profile must error, not silently fall back to
+    MICROMEGAS_PROFILE/default_profile (regression guard for the falsy-empty
+    bug)."""
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {"prod": {"uri": "grpc+tls://prod-host:50051"}},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file, profile="")
+
+
+def test_profile_argument_empty_string_raises_profile_error_flat_config(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {"uri": "grpc://simple-host:50051"}
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file, profile="")
+
+
+def test_profile_argument_with_path_separator_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "profiles": {"team/prod": {"uri": "grpc+tls://prod-host:50051"}},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file, profile="team/prod")
+
+
+def test_default_profile_with_path_traversal_raises_profile_error(tmp_path):
+    """Even a name coming from `default_profile` (not just --profile) must be
+    validated, since it also gets interpolated into the token file path."""
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "../../../evil",
+        "profiles": {"../../../evil": {"uri": "grpc://h:1"}},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
 def test_token_file_env_var_has_no_effect(tmp_path, monkeypatch):
     """MICROMEGAS_TOKEN_FILE was removed; setting it must not change
     resolve_connection()'s output (regression guard for the removal)."""

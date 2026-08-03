@@ -63,6 +63,39 @@ def test_logout_no_files_prints_no_saved_tokens(fake_home, monkeypatch, capsys):
     assert "No saved tokens found" in out
 
 
+def test_logout_profile_empty_string_errors_without_deleting(
+    fake_home, monkeypatch, capsys
+):
+    """`--profile ""` must error out, not fall through to clearing every
+    cached token file (regression guard for the falsy-empty bug)."""
+    token_dir = fake_home / ".micromegas"
+    (token_dir / "tokens.json").write_text("{}")
+    (token_dir / "tokens-prod.json").write_text("{}")
+    (token_dir / "tokens-dev.json").write_text("{}")
+
+    monkeypatch.setattr(sys, "argv", ["micromegas-logout", "--profile", ""])
+    with pytest.raises(SystemExit):
+        main()
+
+    assert (token_dir / "tokens.json").exists()
+    assert (token_dir / "tokens-prod.json").exists()
+    assert (token_dir / "tokens-dev.json").exists()
+
+
+def test_logout_profile_path_traversal_errors_without_escaping(
+    fake_home, monkeypatch, capsys
+):
+    """A profile name with path separators/`..` must be rejected instead of
+    being interpolated into a path outside ~/.micromegas."""
+    monkeypatch.setattr(
+        sys, "argv", ["micromegas-logout", "--profile", "../../../evil"]
+    )
+    with pytest.raises(SystemExit):
+        main()
+
+    assert not (fake_home.parent / "evil.json").exists()
+
+
 def test_logout_ignores_micromegas_profile_env(fake_home, monkeypatch, capsys):
     """A bare invocation clears everything even with MICROMEGAS_PROFILE set."""
     token_dir = fake_home / ".micromegas"
