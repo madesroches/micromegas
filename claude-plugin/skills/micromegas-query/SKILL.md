@@ -163,9 +163,12 @@ When that's the case, check the probe's token-file-exists output:
 - If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
   considering a browser — go ahead and run the query yourself. If that token has expired or been
   revoked, this does not hang: the query fails cleanly with an error like `Token refresh failed:
-  ... Please re-authenticate.` If you see that error, run `micromegas-logout` to clear the stale
-  token, then ask the *user* to re-run the query themselves in their own session (this will
-  trigger a fresh interactive login).
+  ... Please re-authenticate.` If you see that error, clear the stale token: if a `profiles` map is
+  in use, run `micromegas-logout --profile <active profile>` to narrow the clear to that one
+  profile — a bare `micromegas-logout` wipes every profile's cached token, not just the stale one.
+  Otherwise (flat config, no `profiles` map), run bare `micromegas-logout`. Either way, then ask the
+  *user* to re-run the query themselves in their own session (this will trigger a fresh interactive
+  login).
 
 **Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
 never resolved to the intended service, not that authentication failed — this matters because it
