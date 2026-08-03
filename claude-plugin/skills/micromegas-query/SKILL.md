@@ -41,9 +41,14 @@ Second, use an ordinary shell check (use `Bash` on Linux/macOS, or on Windows wi
 python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
 ```
 
-This call is total — it never fails just because nothing is configured yet, since a missing
-config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
-by itself (see the Interactive SSO note below). Read the two checks together:
+For a config with no `profiles` map, this call is total — it never fails just because nothing is
+configured yet, since a missing config resolves to the default `grpc://localhost:50051` — and it
+never triggers a browser login by itself (see the Interactive SSO note below). The one exception:
+if `~/.micromegas/config.json` has a `profiles` map but no profile is selected (no `default_profile`
+set, and neither `--profile` nor `MICROMEGAS_PROFILE` given to this probe), or a stale
+`MICROMEGAS_PROFILE` is set against a flat config with no `profiles` map, this call raises a Python
+`ProfileError` instead — see the probe-outcome bullet below for how to handle it. Read the two
+checks together:
 
 - **Only one of the two checks succeeds** — this is a `PATH`/interpreter mismatch, not "not
   installed": use whichever one works (the CLI is what actually runs queries, so prefer it, and
@@ -71,6 +76,13 @@ by itself (see the Interactive SSO note below). Read the two checks together:
   - If `oidc_issuer` and `oidc_client_id` are both `None`, no OIDC is configured — no further
     setup is implied for auth; either the URI is enough (plain connection) or the user still needs
     to provide connection details (see below).
+- **Raises `ProfileError`** (an uncaught traceback naming `ProfileError`, not a clean CLI usage
+  error, since this probe calls `resolve_connection()` directly) — treat this as "no profile
+  selected", not a broken install. The error message lists the available profile names; ask the
+  user which one to use for this session (pass it as `--profile <name>` on every `micromegas-query`/
+  `micromegas-logout` call), or offer to set `default_profile` in `config.json` to one of them so
+  this probe and future calls resolve a profile without needing `--profile`/`MICROMEGAS_PROFILE`
+  every time.
 
 If the user hasn't told you where to connect, ask them to provide:
 - Their analytics service URI (e.g. `https://analytics.example.com:443`)
@@ -78,8 +90,32 @@ If the user hasn't told you where to connect, ask them to provide:
 
 (Scope is not part of this flow — see the OIDC scope note below.)
 
+If the user instead wants to keep multiple named connections around (e.g. prod/dev/local) and
+switch between them, mention `~/.micromegas/config.json`'s `profiles` map, selected via
+`--profile`/`MICROMEGAS_PROFILE`, as the alternative to the single flat `uri`/`client_id`/`issuers`
+keys walked through below — same per-profile shape, just nested under `profiles.<name>` with a
+`default_profile` key picking the one used when no flag/env var is given.
+
 Once the user provides the values, read `~/.micromegas/config.json` first (it may already have
-content to preserve) and merge in the new values rather than clobbering the file, writing:
+content to preserve). If it already has a `profiles` map, write the new values into that profile
+entry — asking the user which profile if none is already active — and set `default_profile` to
+that name, rather than merging into the top-level `uri`/`client_id`/`issuers` keys (which are
+silently ignored once `profiles` is present, and would otherwise leave the skill writing dead
+config and then mis-diagnosing the unchanged active profile on the next probe):
+```json
+{
+  "default_profile": "<selected profile name>",
+  "profiles": {
+    "<selected profile name>": {
+      "uri": "<value from user>",
+      "client_id": "<value from user, only if OIDC>",
+      "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
+    }
+  }
+}
+```
+Otherwise (no `profiles` map exists yet), merge the new values into the flat top-level shape
+instead, exactly as before:
 ```json
 {
   "uri": "<value from user>",
@@ -87,9 +123,9 @@ content to preserve) and merge in the new values rather than clobbering the file
   "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
 }
 ```
-This takes effect immediately for every subsequent `micromegas-query` call in this session or any
-future one — no shell profile edit or new terminal required, since the library reads this file on
-every invocation.
+Either way, this takes effect immediately for every subsequent `micromegas-query` call in this
+session or any future one — no shell profile edit or new terminal required, since the library
+reads this file on every invocation.
 
 **Legacy env var precedence**: `MICROMEGAS_ANALYTICS_URI`/`MICROMEGAS_OIDC_*` environment variables
 always take precedence over `config.json` (a previous version of this skill instructed setting

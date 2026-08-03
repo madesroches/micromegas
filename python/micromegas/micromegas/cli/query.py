@@ -3,6 +3,7 @@ import argparse
 import pathlib
 import sys
 from micromegas.cli import connection
+from micromegas.cli.config import ProfileError
 import datetime
 import micromegas
 from tabulate import tabulate
@@ -93,6 +94,10 @@ def main():
         default=50,
         help="Maximum column width for table format (default: 50, 0 for unlimited)",
     )
+    parser.add_argument(
+        "--profile",
+        help="Named connection profile from ~/.micromegas/config.json",
+    )
     args = parser.parse_args()
 
     if args.file and args.sql:
@@ -131,7 +136,10 @@ def main():
     if begin is not None and end is None:
         end = datetime.datetime.now(datetime.timezone.utc)
 
-    client = connection.connect()
+    try:
+        client = connection.connect(profile=args.profile)
+    except ProfileError as e:
+        parser.error(str(e))
     df = client.query(sql, begin, end)
 
     if df.empty:

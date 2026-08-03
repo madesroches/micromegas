@@ -256,7 +256,7 @@ micromegas-logout
 | `MICROMEGAS_OIDC_CLIENT_SECRET` | OAuth client secret | No* |
 | `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier | No (for Auth0, Azure API) |
 | `MICROMEGAS_OIDC_SCOPE` | OAuth scopes to request | No (default: openid email profile offline_access) |
-| `MICROMEGAS_TOKEN_FILE` | Token storage path | No (default: ~/.micromegas/tokens.json) |
+| `MICROMEGAS_PROFILE` | Named connection profile to select from `~/.micromegas/config.json`'s `profiles` map | No (see [Named profiles](../query-guide/python-api.md)) |
 | `MICROMEGAS_ANALYTICS_URI` | Analytics server URI | No (default: grpc://localhost:50051) |
 
 *Required for some providers (e.g., Google) even with PKCE
@@ -521,7 +521,7 @@ export MICROMEGAS_OIDC_CLIENT_ID="your-client-id"
 
 ### Token Storage
 
-Tokens are stored at `~/.micromegas/tokens.json` with secure file permissions (0600 - owner read/write only).
+Tokens are stored at `~/.micromegas/tokens.json` with secure file permissions (0600 - owner read/write only). If `~/.micromegas/config.json` has a `profiles` map, the cache moves to a per-profile `~/.micromegas/tokens-<profile>.json` instead — see [Named profiles](../query-guide/python-api.md).
 
 **Token File Contents:**
 
@@ -619,8 +619,8 @@ This prevents authorization code interception attacks even if the client secret 
 1. Check server logs: `tail -f /tmp/analytics.log | grep -i auth`
 2. Verify OIDC configuration matches between server and client
 3. Ensure Client ID and Issuer URL are correct
-4. Check token expiration: `cat ~/.micromegas/tokens.json | jq .token.expires_at`
-5. Clear tokens and re-authenticate: `micromegas-logout`
+4. Check token expiration: `cat ~/.micromegas/tokens.json | jq .token.expires_at` (or `tokens-<profile>.json` if a `profiles` map is in use)
+5. Clear tokens and re-authenticate: `micromegas-logout` (clears every cached token file; use `--profile <name>` to narrow to one)
 
 ### Token Refresh Failures
 
@@ -628,7 +628,7 @@ This prevents authorization code interception attacks even if the client secret 
 
 **Solutions:**
 
-1. Check if refresh token is present: `cat ~/.micromegas/tokens.json | jq .token.refresh_token`
+1. Check if refresh token is present: `cat ~/.micromegas/tokens.json | jq .token.refresh_token` (or `tokens-<profile>.json` if a `profiles` map is in use)
 2. Verify client secret matches (if required by provider)
 3. Check token file permissions: `ls -la ~/.micromegas/tokens.json` (should be 600)
 4. Re-authenticate: `micromegas-logout` then retry

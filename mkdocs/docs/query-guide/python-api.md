@@ -607,6 +607,7 @@ micromegas-query "SELECT * FROM list_partitions() LIMIT 5"
 - `--all`: Query the entire time range (mutually exclusive with `--begin`/`--end`)
 - `--format`: Output format - `table` (default), `csv`, or `json`
 - `--max-colwidth`: Maximum column width for table format (default: 50, use 0 for unlimited)
+- `--profile`: Named connection profile from `~/.micromegas/config.json` (see Named profiles below)
 
 **Examples:**
 ```bash
@@ -637,11 +638,12 @@ micromegas-query "SELECT view_set_name, num_rows FROM list_partitions()" --all -
 
 The CLI resolves connection settings from three sources, in this order:
 
-1. **Environment variables** (highest priority)
-2. **Config file**: `~/.micromegas/config.json`
-3. **Built-in defaults** (e.g., `grpc://localhost:50051`)
+1. **Profile selection**, if the config file has a `profiles` map (`--profile` > `MICROMEGAS_PROFILE` > `default_profile`) — see Named profiles below
+2. **Environment variables** (highest priority for each individual setting, applied on top of the selected profile — or the flat config file if there's no `profiles` map)
+3. **Config file**: `~/.micromegas/config.json` (the flat file, or the selected profile's entry)
+4. **Built-in defaults** (e.g., `grpc://localhost:50051`)
 
-Each setting is resolved independently, so you can put stable values in the config file and override individual settings via env vars (e.g., for CI or for switching environments).
+Each setting is resolved independently once a profile (if any) is selected, so you can put stable values in the config file and override individual settings via env vars (e.g., for CI). On a machine with no `profiles` map, this is the whole story and per-field env vars are all you need to switch environments. Once a `profiles` map exists, though, profile selection happens first: an env-var-only invocation (e.g. `MICROMEGAS_ANALYTICS_URI=... micromegas-query ...` in CI) fails with a usage error unless `--profile`, `MICROMEGAS_PROFILE`, or `default_profile` also picks a profile — per-field env vars only override settings *within* the selected profile, they don't substitute for selecting one.
 
 **Environment Variables:**
 
@@ -653,7 +655,7 @@ Each setting is resolved independently, so you can put stable values in the conf
 | `MICROMEGAS_OIDC_CLIENT_SECRET` | OAuth client secret (optional; required by some IdPs) | — |
 | `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier (e.g., for Auth0, Azure) | — |
 | `MICROMEGAS_OIDC_SCOPE` | Custom OAuth scopes | `openid email profile offline_access` |
-| `MICROMEGAS_TOKEN_FILE` | Where to cache OIDC tokens | `~/.micromegas/tokens.json` |
+| `MICROMEGAS_PROFILE` | Named profile to select from the config file's `profiles` map (see Named profiles below) | — |
 
 **Config file (`~/.micromegas/config.json`):**
 
@@ -681,13 +683,74 @@ A small JSON file you can drop in your home directory to avoid setting env vars.
 
 OIDC authentication is activated when both an issuer and a client ID are resolved (from any source). Otherwise the CLI connects without auth.
 
+**Named profiles:**
+
+The config file can hold more than one named connection — prod/dev/local, for instance — under an
+optional `profiles` map, selected by `--profile` or `MICROMEGAS_PROFILE`:
+
+```json
+{
+  "default_profile": "prod",
+  "profiles": {
+    "prod": {
+      "uri": "grpc://analytics.example.com:50051",
+      "client_id": "...",
+      "issuers": [{ "issuer": "https://issuer.example.com/v2.0", "audience": "..." }]
+    },
+    "dev": {
+      "uri": "grpc://analytics-dev.example.com:50051",
+      "client_id": "...",
+      "issuers": [{ "issuer": "https://issuer.example.com/v2.0", "audience": "..." }]
+    },
+    "local": { "uri": "grpc://localhost:50051" }
+  }
+}
+```
+
+Each entry under `profiles` has exactly the shape of the flat config above (`uri`, `client_id`,
+`issuers`). The flat shape shown earlier is still fully supported — omit `profiles` entirely and
+the whole file is used as a single connection, exactly as before.
+
+**Selection precedence**, once a `profiles` map is present: `--profile` (flag) > `MICROMEGAS_PROFILE`
+(env var) > `default_profile` (config key). There is no implicit selection, even with a single
+profile defined — a `profiles` map always requires a selected profile, so set `default_profile`
+even for a single-profile config. If none of `--profile`/`MICROMEGAS_PROFILE`/`default_profile`
+resolves to a profile, or the resolved name isn't one of the keys under `profiles`, the CLI exits
+with a usage error listing the available profile names rather than guessing.
+
+!!! warning "Don't mix flat keys with a `profiles` map"
+    Once a `profiles` map is present, it takes over completely: any top-level `uri`/`client_id`/
+    `issuers` left in the same file are ignored in favor of the selected profile's values. If
+    you're migrating from a flat config to `profiles`, move those values into a profile entry
+    rather than leaving them at the top level — they'd otherwise become dead config with no error
+    or warning. Similarly, `default_profile` has no effect at all unless a `profiles` map is also
+    present.
+
+Adding a `profiles` map also moves the OIDC token cache from the single `~/.micromegas/tokens.json`
+to a per-profile `~/.micromegas/tokens-<profile>.json`, so switching profiles never reuses another
+profile's cached token. This means turning profiles on forces one fresh login even for an
+otherwise-unchanged connection — rename your existing `tokens.json` to the new profile's
+`tokens-<profile>.json` path beforehand to avoid it.
+
 ### micromegas-logout
 
-Clears cached OIDC authentication tokens:
+Clears cached OIDC authentication tokens. A bare invocation clears *every* cached token file — the
+plain `~/.micromegas/tokens.json` plus every `tokens-<profile>.json` — so it always means "log out
+of everything":
 
 ```bash
 micromegas-logout
 ```
+
+Pass `--profile` to narrow this to just one profile's cached token, leaving every other token file
+(including the plain `tokens.json`) untouched:
+
+```bash
+micromegas-logout --profile prod
+```
+
+`micromegas-logout` doesn't read `config.json` and doesn't look at `MICROMEGAS_PROFILE` — `--profile`
+is its only narrowing mechanism.
 
 ## Time Utilities
 
