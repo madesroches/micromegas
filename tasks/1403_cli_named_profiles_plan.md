@@ -96,6 +96,12 @@ free: if `profiles` is absent, `resolve_connection` treats the whole dict as
 today's single connection — the existing flat-config tests keep passing
 unmodified.
 
+`token_file` stays env-only (`MICROMEGAS_TOKEN_FILE`), with no per-profile
+config-file key, consistent with `client_secret`/`oidc_scope` — the flat
+config format has never had a `token_file` key (only `config.py:58`'s
+`MICROMEGAS_TOKEN_FILE` env var), and a profile-entry `token_file` key would
+break the invariant above that a profile entry is exactly the flat shape.
+
 Once `profiles` is present, it takes over completely: any top-level flat keys
 (`uri`, `client_id`, `issuers`) left in the same file are ignored in favor of
 the selected profile's values, since `resolve_active_profile` returns
@@ -128,19 +134,29 @@ active (and therefore which token file it maps to), so profile resolution is
 factored into one shared helper rather than duplicated in each caller:
 
 ```python
+class ProfileError(ValueError):
+    """Raised by `resolve_active_profile` for profile-selection problems only
+    (unknown/ambiguous profile, or --profile/MICROMEGAS_PROFILE with no
+    `profiles` map) — never for downstream connection failures. Subclassing
+    `ValueError` keeps it compatible with any existing `except ValueError`
+    handling of `load_config`'s JSON-decode error, while letting callers that
+    only want profile-selection errors catch `ProfileError` specifically.
+    """
+
+
 def resolve_active_profile(config, profile=None):
     """Resolve the active profile name and its connection dict from `config`.
 
     Returns `(name, active_config)`; `name` is `None` when no `profiles` map
     exists and the flat config is used directly as `active_config`. Raises
-    `ValueError` if `--profile`/`MICROMEGAS_PROFILE` is set but there's no
+    `ProfileError` if `--profile`/`MICROMEGAS_PROFILE` is set but there's no
     `profiles` map, if the profile is ambiguous (multiple profiles configured,
     none selected), or if the resolved name isn't in `profiles`.
     """
     profiles = config.get("profiles")
     if profiles is None:
         if profile or os.environ.get("MICROMEGAS_PROFILE"):
-            raise ValueError(
+            raise ProfileError(
                 "no profiles configured; remove --profile/MICROMEGAS_PROFILE "
                 "or add a `profiles` map to the config file"
             )
@@ -151,15 +167,15 @@ def resolve_active_profile(config, profile=None):
         if len(profiles) == 1:
             name = next(iter(profiles))
         elif len(profiles) == 0:
-            raise ValueError("no profiles defined in the `profiles` map")
+            raise ProfileError("no profiles defined in the `profiles` map")
         else:
-            raise ValueError(
+            raise ProfileError(
                 "multiple profiles configured but none selected; pass --profile, "
                 f"set MICROMEGAS_PROFILE, or set default_profile (available: "
                 f"{', '.join(sorted(profiles))})"
             )
     if name not in profiles:
-        raise ValueError(
+        raise ProfileError(
             f"unknown profile '{name}' (available: {', '.join(sorted(profiles))})"
         )
     return name, profiles[name]
@@ -188,6 +204,17 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
 Individual `MICROMEGAS_*` env vars still win over everything, per the issue's
 requirement that existing single-connection setups using env vars keep working
 untouched — `_pick` already gives them top precedence per field.
+
+`MICROMEGAS_PYTHON_MODULE_WRAPPER` is a deprecated legacy escape hatch for
+corporate auth wrappers, not a path this plan integrates with profiles: it
+stays env-var-only (no config-file key, per-profile or otherwise), and
+`connection.py`'s `connect()` keeps short-circuiting on it *before* using any
+of the other resolved fields (`connection.py:13-15`). Consequently, when it's
+set, it bypasses the selected profile entirely — `--profile`/
+`MICROMEGAS_PROFILE` still pick a `uri`/`client_id`/`issuers`, but `connect()`
+discards them all and defers to the wrapper module, so the flag silently has
+no effect. This is an existing limitation of the deprecated wrapper, not a
+new gap introduced by profiles, and this plan does not attempt to fix it.
 
 The "exactly one profile, none selected → use it implicitly" rule is a small
 UX addition beyond the issue text: it means a user who only ever has one
@@ -229,14 +256,21 @@ parser.add_argument("--profile", help="Named connection profile from ~/.micromeg
 ```
 and the call site becomes:
 ```python
+from micromegas.cli.config import ProfileError
+
 try:
     client = connection.connect(profile=args.profile)
-except ValueError as e:
+except ProfileError as e:
     parser.error(str(e))
 ```
 turning an unknown/ambiguous profile into the same `argparse` usage-error
 treatment every other bad input in `main()` already gets, rather than a raw
-traceback.
+traceback. Catching `ProfileError` specifically (not the broader `ValueError`)
+matters because `connect()` does the whole connection, not just config
+resolution: e.g. a malformed `uri` in a profile makes `FlightSQLClient` raise
+`pyarrow.lib.ArrowInvalid`, itself a `ValueError` subclass, which must
+propagate as a real error rather than being misreported as an argparse usage
+error.
 
 `connect()`/`resolve_connection()` keep the `config_path` parameter (useful
 for callers that already have a path, and for tests), but this plan does not
@@ -286,7 +320,10 @@ path that `resolve_connection` would never have picked.
 2. **`connection.py`**: thread `profile=None, config_path=None` through
    `connect()` into `resolve_connection()`.
 3. **`query.py`**: add `--profile` argument; wrap the `connection.connect()`
-   call in `try/except ValueError` → `parser.error()`.
+   call in `try/except ProfileError` → `parser.error()` (catching the
+   dedicated `ProfileError`, not the broader `ValueError`, so a real
+   connection failure like `pyarrow.lib.ArrowInvalid` from a malformed
+   profile `uri` isn't misreported as a usage error).
 4. **`logout.py`**: add `--profile` argument; resolve the profile name via
    the shared `resolve_active_profile()` + `load_config()` (catching
    `ValueError` → `parser.error()`, matching `query.py`) and the token path
@@ -311,13 +348,30 @@ path that `resolve_connection` would never have picked.
 6. **Tests** (new `tests/cli/test_logout.py` or extend `tests/test_query.py`
    patterns): cover `--profile` selecting the right token file to delete, the
    case where no token file exists, and an unknown `--profile` raising the
-   same `ValueError` (via `resolve_active_profile`) that `resolve_connection`
-   raises for `micromegas-query`.
+   same `ProfileError` (via `resolve_active_profile`) that `resolve_connection`
+   raises for `micromegas-query`. `logout.main()` has no `config_path`/
+   `--config` seam and reads `~/.micromegas/config.json` through the
+   module-level `config.CONFIG_PATH` constant, so these tests must
+   `monkeypatch.setattr(config, "CONFIG_PATH", <tmp file>)` rather than
+   exercising the developer's real config; for the token-file path itself,
+   `default_token_file()` calls `Path.home()` at call time (not import time),
+   so monkeypatching `HOME` (or `Path.home`) is enough to redirect the
+   per-profile `tokens-<profile>.json` case to a tmp directory —
+   `MICROMEGAS_TOKEN_FILE` cannot be used as that seam instead, since setting
+   it short-circuits the very per-profile branch under test. `DEFAULT_TOKEN_FILE`
+   (`config.py:9`), used for the `profile is None` case, is computed once at
+   `config.py` import time from the real `Path.home()`, so a test-time `HOME`
+   patch does *not* affect it — that branch needs `monkeypatch.setattr(config,
+   "DEFAULT_TOKEN_FILE", <tmp file>)` directly instead.
 7. **Tests** (`tests/test_query.py`): a test following the existing
    usage-error pattern (added in PR #1407, issue #1405) — `monkeypatch.setattr(sys,
    "argv", [...])`, call `main()` directly, and assert `pytest.raises(SystemExit)`
    — asserting an unknown `--profile` exits 2 with a usage message, not a
-   traceback.
+   traceback. `main()` has no `--config` flag either, so this test needs the
+   same `monkeypatch.setattr(config, "CONFIG_PATH", <tmp file>)` seam as step 6
+   (pointing at a tmp file with a `profiles` map and an unresolvable name)
+   before calling `main()`, so the test doesn't depend on whatever is in the
+   developer's real `~/.micromegas/config.json`.
 8. **Docs** (`mkdocs/docs/query-guide/python-api.md:636-683`): add
    `MICROMEGAS_PROFILE` to the env var table, document the `--profile` flag
    under `micromegas-query` and `micromegas-logout`, and add a "Named
@@ -331,15 +385,25 @@ path that `resolve_connection` would never have picked.
    token cache to a per-profile `tokens-<profile>.json` file, so turning
    profiles on forces one fresh login even for an otherwise-unchanged
    connection (renaming the existing `tokens.json` to match beforehand avoids
-   it).
+   it). Also add a single short line noting that the deprecated
+   `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch bypasses `--profile`/
+   `MICROMEGAS_PROFILE` entirely — not new documentation promoting it as a
+   profiles-aware corporate-auth option.
 9. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
    section's config probe calls `resolve_connection()` with no arguments,
-   which will raise `ValueError` (an unhandled Python exception in the probe
+   which will raise `ProfileError` (an unhandled Python exception in the probe
    command, not a clean CLI usage error) for a user who has added a
    `profiles` map with more than one entry and no `default_profile`/
-   `MICROMEGAS_PROFILE`. Add a short note to Setup covering this case (treat
-   the error as "no profile selected" and ask the user which profile to use,
-   or to set a `default_profile`), and mention `MICROMEGAS_PROFILE` /
+   `MICROMEGAS_PROFILE`, or who has a stale `MICROMEGAS_PROFILE` set against a
+   flat config. This directly contradicts the existing sentence "This call is
+   total — it never fails just because nothing is configured yet, since a
+   missing config resolves to the default `grpc://localhost:50051`" (added by
+   #1409 specifically so the skill wouldn't mis-diagnose probe failures), so
+   this step must amend that sentence — not just append a note after it — to
+   carve out the new no-profile-selected failure mode, and add a probe-outcome
+   bullet alongside the existing import-error/success bullets covering it
+   (treat the error as "no profile selected" and ask the user which profile
+   to use, or to set a `default_profile`). Also mention `MICROMEGAS_PROFILE` /
    `--profile` as an alternative to the flat `uri`/`client_id`/`issuers` keys
    this section currently walks users through writing.
 10. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
@@ -384,9 +448,11 @@ path that `resolve_connection` would never have picked.
   (`:636-683`) — env var table gets `MICROMEGAS_PROFILE`; new subsection for
   the `profiles`/`default_profile` shape; `--profile` documented under both
   `micromegas-query` and `micromegas-logout` CLI reference entries.
-- `claude-plugin/skills/micromegas-query/SKILL.md`: note in Setup that the
-  config probe (`resolve_connection()` with no arguments) can raise
-  `ValueError` when `profiles` has multiple entries and none is selected, and
+- `claude-plugin/skills/micromegas-query/SKILL.md`: amend the existing "this
+  call is total" sentence in Setup and add a probe-outcome bullet covering the
+  case where the config probe (`resolve_connection()` with no arguments) can
+  raise `ProfileError` when `profiles` has multiple entries and none is
+  selected (or a stale `MICROMEGAS_PROFILE` is set against a flat config), and
   mention `MICROMEGAS_PROFILE`/`--profile` alongside the existing flat-config
   write-up.
 - `CHANGELOG.md`: new entry for the profiles feature.
@@ -399,13 +465,17 @@ path that `resolve_connection` would never have picked.
   `--profile`/`MICROMEGAS_PROFILE` with a flat config raising `ValueError`.
 - `tests/cli/test_logout.py` (new) covers profile-aware token file deletion
   and the unknown-profile error case, also hermetic (just filesystem + env
-  vars, no network).
+  vars, no network) — per Implementation Step 6, hermetic here means
+  monkeypatching `config.CONFIG_PATH` and `HOME`/`Path.home`, not just
+  avoiding the network, since `logout.main()` otherwise reads the developer's
+  real `~/.micromegas/config.json` and could `unlink()` their real token file.
 - `tests/test_query.py` gets one negative test for an unknown `--profile`,
   mirroring the existing `--begin`/`--end` usage-error test (e.g.
   `test_main_overflowing_begin_reports_usage_error`, added in PR #1407, issue
   #1405), which uses `monkeypatch.setattr(sys, "argv", [...])` and
   `pytest.raises(SystemExit)` around a direct `main()` call rather than
-  `subprocess.run`.
+  `subprocess.run` — with the same `config.CONFIG_PATH` monkeypatch as step 6
+  so it doesn't depend on the real config file either.
 - Manual smoke test: create a `~/.micromegas/config.json` with two profiles,
   run `micromegas-query --profile local "SELECT 1" --all` against a locally
   running monolith, then repeat with `MICROMEGAS_PROFILE=local` and no flag,
@@ -414,17 +484,3 @@ path that `resolve_connection` would never have picked.
 - `poetry run pytest` and `poetry run black --check .` from
   `python/micromegas/`, then `python3 build/python_ci.py` per project
   convention.
-
-## Open Questions
-
-1. Should `python_module_wrapper` (currently env-var-only, no config-file key)
-   gain a per-profile config-file key, or stay env-only/global regardless of
-   profile? This plan leaves it as-is (global override) since the issue
-   doesn't mention it and corporate-auth wrapper selection is typically an
-   environment-wide concern, not a per-profile one — but worth confirming.
-2. Should an explicit `token_file` key be allowed inside a profile entry (for
-   users who want to name the cache file themselves rather than accept the
-   `tokens-<profile>.json` convention)? Not required by the issue; omitted
-   here to keep the schema minimal, but easy to add later as
-   `_pick("MICROMEGAS_TOKEN_FILE", active.get("token_file"), default_token_file(name))`
-   if requested.
