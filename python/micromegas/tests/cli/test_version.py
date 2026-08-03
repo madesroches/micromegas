@@ -26,6 +26,9 @@ def test_micromegas_dunder_version():
 
 
 def test_query_version_flag(monkeypatch, capsys):
+    # Narrow terminal width to catch reflowing/mid-token wrapping regressions
+    # (e.g. reverting to argparse's built-in action="version").
+    monkeypatch.setenv("COLUMNS", "30")
     monkeypatch.setattr(sys, "argv", ["micromegas-query", "--version"])
     with pytest.raises(SystemExit) as exc_info:
         query.main()
