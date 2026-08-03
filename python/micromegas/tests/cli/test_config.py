@@ -299,6 +299,30 @@ def test_profile_entry_list_raises_profile_error(tmp_path):
         resolve_connection(config_path=cfg_file)
 
 
+def test_default_profile_list_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": [],
+        "profiles": {"prod": {"uri": "grpc://h:1"}},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
+def test_default_profile_dict_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": {},
+        "profiles": {"prod": {"uri": "grpc://h:1"}},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
 def test_resolve_connection_uses_per_profile_token_file(tmp_path):
     cfg_file = tmp_path / "config.json"
     data = {

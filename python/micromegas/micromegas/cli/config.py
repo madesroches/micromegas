@@ -91,6 +91,8 @@ def resolve_active_profile(config, profile=None):
             "no profile selected; pass --profile, set MICROMEGAS_PROFILE, or "
             f"set default_profile (available: {', '.join(sorted(profiles))})"
         )
+    if not isinstance(name, str):
+        raise ProfileError("default_profile must be a profile name (string)")
     if name not in profiles:
         raise ProfileError(
             f"unknown profile '{name}' (available: {', '.join(sorted(profiles))})"
