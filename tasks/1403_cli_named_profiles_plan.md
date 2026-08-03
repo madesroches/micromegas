@@ -241,8 +241,8 @@ def main():
     parser.add_argument("--profile", help="Named connection profile to log out of")
     args = parser.parse_args()
 
-    config = load_config()
     try:
+        config = load_config()
         name, _ = resolve_active_profile(config, args.profile)
     except ValueError as e:
         parser.error(str(e))
