@@ -4,7 +4,7 @@ description: Query micromegas observability data (logs, metrics, spans) using SQ
 argument-hint: "<SQL query or natural language question about observability data>"
 context: fork
 shell: bash
-allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(micromegas-logout), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), PowerShell(micromegas-logout), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(micromegas-logout *), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), PowerShell(micromegas-logout *), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
 ---
 
 The user's query or question: $ARGUMENTS
@@ -77,12 +77,18 @@ checks together:
     setup is implied for auth; either the URI is enough (plain connection) or the user still needs
     to provide connection details (see below).
 - **Raises `ProfileError`** (an uncaught traceback naming `ProfileError`, not a clean CLI usage
-  error, since this probe calls `resolve_connection()` directly) — treat this as "no profile
-  selected", not a broken install. The error message lists the available profile names; ask the
-  user which one to use for this session (pass it as `--profile <name>` on every `micromegas-query`/
-  `micromegas-logout` call), or offer to set `default_profile` in `config.json` to one of them so
-  this probe and future calls resolve a profile without needing `--profile`/`MICROMEGAS_PROFILE`
-  every time.
+  error, since this probe calls `resolve_connection()` directly) — treat this as a profile-selection
+  problem, not a broken install. There are two distinct causes; read the message to tell them apart:
+  - A `profiles` map exists but no profile is selected — the error message lists the available
+    profile names; ask the user which one to use for this session (pass it as `--profile <name>` on
+    every `micromegas-query`/`micromegas-logout` call), or offer to set `default_profile` in
+    `config.json` to one of them so this probe and future calls resolve a profile without needing
+    `--profile`/`MICROMEGAS_PROFILE` every time.
+  - No `profiles` map exists at all, but `MICROMEGAS_PROFILE` is set (a stale env var left over
+    against a flat config) — the error lists no profile names, and setting `default_profile` does
+    nothing since there's no `profiles` map for it to select from. Advise the user to unset
+    `MICROMEGAS_PROFILE`, or, if they actually want named profiles, migrate the flat config into a
+    `profiles` map.
 
 If the user hasn't told you where to connect, ask them to provide:
 - Their analytics service URI (e.g. `https://analytics.example.com:443`)
