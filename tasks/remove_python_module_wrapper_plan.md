@@ -71,8 +71,12 @@ Straight removal, no replacement behavior:
 5. **`python/micromegas/tests/cli/test_config.py`**
    - Remove `"MICROMEGAS_PYTHON_MODULE_WRAPPER"` from each of the five env-var clear-lists
      (lines 39, 58, 93, 110, 131).
-6. Run `poetry run black python/micromegas/micromegas/cli/config.py python/micromegas/micromegas/cli/connection.py python/micromegas/micromegas/cli/query.py python/micromegas/tests/cli/test_config.py` from `python/micromegas/` (required before commit).
-7. Run `poetry run pytest` from `python/micromegas/` to confirm the suite still passes.
+6. **`CHANGELOG.md`** — add a bullet under the existing `## Unreleased` section, in a new
+   `**Python:**` category (matching the style of the other `## Unreleased` bullets), noting the
+   breaking removal of `MICROMEGAS_PYTHON_MODULE_WRAPPER` and pointing corporate users at the
+   OIDC auth flow instead (#1408).
+7. Run `poetry run black python/micromegas/micromegas/cli/config.py python/micromegas/micromegas/cli/connection.py python/micromegas/micromegas/cli/query.py python/micromegas/tests/cli/test_config.py` from `python/micromegas/` (required before commit).
+8. Run `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py` (the same hermetic file list `build/python_ci.py` runs) from `python/micromegas/` to confirm the suite still passes, without also collecting the integration suite (which requires a live service).
 
 ## Files to Modify
 
@@ -81,6 +85,7 @@ Straight removal, no replacement behavior:
 - `python/micromegas/micromegas/cli/query.py`
 - `mkdocs/docs/query-guide/python-api.md`
 - `python/micromegas/tests/cli/test_config.py`
+- `CHANGELOG.md`
 
 ## Trade-offs
 
@@ -96,11 +101,17 @@ Straight removal, no replacement behavior:
 
 - `mkdocs/docs/query-guide/python-api.md` — remove the env var table row (see above). No other
   docs reference this variable.
+- `CHANGELOG.md` — add the `## Unreleased` / `**Python:**` breaking-removal bullet (see
+  Implementation Steps above); this was a documented, public-facing env var, so its removal
+  needs to be called out for anyone still relying on it.
 
 ## Testing Strategy
 
-- `poetry run pytest` in `python/micromegas/` — existing tests in `test_config.py` continue to
-  pass once the env var is dropped from the clear-lists (they were never asserting wrapper
-  behavior, only clearing it to avoid cross-test env leakage).
+- `poetry run pytest --doctest-modules micromegas/time.py tests/test_time.py tests/test_flightsql_headers.py tests/cli tests/test_query.py tests/test_web_client.py tests/test_screen_files.py tests/auth/test_oidc_unit.py tests/auth/test_client_credentials_unit.py` in `python/micromegas/`
+  (the hermetic file list `build/python_ci.py` runs, not a bare `poetry run pytest`, which would
+  also collect the integration suite and require a live service) — existing tests in
+  `test_config.py` (under `tests/cli`) continue to pass once the env var is dropped from the
+  clear-lists (they were never asserting wrapper behavior, only clearing it to avoid cross-test
+  env leakage).
 - Manual sanity check: `python/micromegas/micromegas/cli/query.py --help` should no longer
   mention the wrapper in its epilog (or should have no epilog if nothing else was in it).
