@@ -109,9 +109,10 @@ change to any other `BearerFlightSQLClientFactory` caller (there is only one).
 ### Web app placeholder
 
 Update the placeholder in `analytics-web-app/src/routes/DataSourcesPage.tsx:205` from
-`"https://flight-sql.example.com:443"` to `"grpc://flight-sql.example.com:50051"`, matching the
-Python client's default (`grpc://localhost:50051`) and the CLI named-profiles convention. No other
-changes needed in that file — there's no client-side scheme validation to relax.
+`"https://flight-sql.example.com:443"` to `"grpc+tls://flight-sql.example.com:50051"` — the
+TLS-enabled scheme, since the previous `https://` example implied TLS and a plaintext `grpc://`
+example against a remote-looking host would model bad practice. No other changes needed in that
+file — there's no client-side scheme validation to relax.
 
 ## Implementation Steps
 
@@ -133,7 +134,7 @@ changes needed in that file — there's no client-side scheme validation to rela
    file covers this module): call `micromegas::client::flightsql_client_factory::normalize_channel_scheme`
    directly, per Testing Strategy below — this works because the helper is `pub` (step 2).
 5. **`analytics-web-app/src/routes/DataSourcesPage.tsx`**: update the URL input placeholder to
-   `"grpc://flight-sql.example.com:50051"`.
+   `"grpc+tls://flight-sql.example.com:50051"`.
 6. **`rust/public/Cargo.toml`**: add a `[[test]]` entry for the new test file, matching the existing
    entries for every other file under `rust/public/tests/`:
    ```toml
