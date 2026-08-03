@@ -78,7 +78,7 @@ checks together:
     to provide connection details (see below).
 - **Raises `ProfileError`** (an uncaught traceback naming `ProfileError`, not a clean CLI usage
   error, since this probe calls `resolve_connection()` directly) — treat this as a profile-selection
-  problem, not a broken install. There are two distinct causes; read the message to tell them apart:
+  problem, not a broken install. There are three distinct causes; read the message to tell them apart:
   - A `profiles` map exists but no profile is selected — the error message lists the available
     profile names. Prefer offering to set `default_profile` in `config.json` to one of them: this
     is the option that keeps the config probe working, since the probe is a fixed command (pinned
@@ -96,6 +96,13 @@ checks together:
     nothing since there's no `profiles` map for it to select from. Advise the user to unset
     `MICROMEGAS_PROFILE`, or, if they actually want named profiles, migrate the flat config into a
     `profiles` map.
+  - The message is `unknown profile '<name>' (available: ...)` — a profile name was resolved but
+    isn't in the `profiles` map. This looks similar to the "no profile selected" case above (both
+    list available profile names), but setting `default_profile` will *not* fix it: `--profile` and
+    `MICROMEGAS_PROFILE` both take precedence over `default_profile`, so a typo'd or stale
+    `MICROMEGAS_PROFILE` env var (or a mistyped `--profile` flag) would keep overriding it. Check
+    `MICROMEGAS_PROFILE` and any `--profile` flag for a typo against the listed available names
+    first, before touching `config.json`.
 
 If the user hasn't told you where to connect, ask them to provide:
 - Their analytics service URI (e.g. `https://analytics.example.com:443`)

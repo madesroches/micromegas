@@ -155,7 +155,8 @@ def resolve_active_profile(config, profile=None):
     exists and the flat config is used directly as `active_config`. Raises
     `ProfileError` if `--profile`/`MICROMEGAS_PROFILE` is set but there's no
     `profiles` map, if a `profiles` map exists but no profile is selected,
-    or if the resolved name isn't in `profiles`.
+    if the resolved name isn't in `profiles`, or if `profiles` (or the
+    selected profile's entry) is malformed (not a map).
     """
     profiles = config.get("profiles")
     if profiles is None:
@@ -166,6 +167,9 @@ def resolve_active_profile(config, profile=None):
             )
         return None, config
 
+    if not isinstance(profiles, dict):
+        raise ProfileError("`profiles` must be a map of profile name to profile config")
+
     if not profiles:
         raise ProfileError("no profiles defined in the `profiles` map")
 
@@ -175,11 +179,16 @@ def resolve_active_profile(config, profile=None):
             "no profile selected; pass --profile, set MICROMEGAS_PROFILE, or "
             f"set default_profile (available: {', '.join(sorted(profiles))})"
         )
+    if not isinstance(name, str):
+        raise ProfileError("default_profile must be a profile name (string)")
     if name not in profiles:
         raise ProfileError(
             f"unknown profile '{name}' (available: {', '.join(sorted(profiles))})"
         )
-    return name, profiles[name]
+    active = profiles[name]
+    if not isinstance(active, dict):
+        raise ProfileError(f"profile '{name}' must be a map of connection settings")
+    return name, active
 
 
 def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
@@ -283,8 +292,16 @@ introduced — stays clearable without a flag.
 `connection.py`:
 ```python
 def connect(profile=None):
+    # MICROMEGAS_PYTHON_MODULE_WRAPPER bypasses profile resolution entirely:
+    # checked before resolve_connection() is called, so a missing/invalid
+    # profile selection never raises when it's set.
+    wrapper = os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER")
+    if wrapper:
+        wrapper_module = importlib.import_module(wrapper)
+        return wrapper_module.connect()
+
     cfg = resolve_connection(profile=profile)
-    ...  # unchanged body
+    ...  # rest of body unchanged
 ```
 
 `query.py` gets one new argument:
@@ -527,10 +544,12 @@ self-describing, in exchange for logout needing no `load_config`/
    the no-argument probe keeps resolving the right profile without needing
    `--profile`/`MICROMEGAS_PROFILE` on every call.
    The existing bare `Bash(micromegas-logout)` / `PowerShell(micromegas-logout)`
-   allowed-tools entries and the Interactive SSO stale-token recovery
-   instruction stay exactly as they are: a bare `micromegas-logout` clears
-   every cached token file, profile or not, so the skill never needs a
-   `--profile` invocation or a new wildcard grant.
+   allowed-tools entries gain `Bash(micromegas-logout *)` / `PowerShell(micromegas-logout *)`
+   wildcard counterparts, and the Interactive SSO stale-token recovery
+   instruction is updated to run `micromegas-logout --profile <active profile>`
+   when a `profiles` map is in use (narrowing the clear to that one profile,
+   since a bare `micromegas-logout` wipes every profile's cached token) and
+   bare `micromegas-logout` otherwise.
 11. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry,
    noting the bare `micromegas-logout` behavior change (it now clears every
    cached token file, not just `tokens.json`) and the removal of the
@@ -545,6 +564,7 @@ self-describing, in exchange for logout needing no `load_config`/
 - `python/micromegas/micromegas/cli/logout.py`
 - `python/micromegas/tests/cli/conftest.py` (new)
 - `python/micromegas/tests/cli/test_config.py`
+- `python/micromegas/tests/cli/test_connection.py` (new)
 - `python/micromegas/tests/cli/test_logout.py` (new)
 - `python/micromegas/tests/test_query.py`
 - `mkdocs/docs/query-guide/python-api.md`
@@ -611,9 +631,12 @@ self-describing, in exchange for logout needing no `load_config`/
   write-up. Also update the config-*writing* step so it writes into the
   selected `profiles.<name>` entry (and sets `default_profile`) instead of
   merging top-level flat keys when a `profiles` map is already present. The
-  existing `micromegas-logout` allowed-tools entries and Interactive SSO
-  recovery instruction stay unchanged (bare logout clears everything) — see
-  Implementation Step 10 for the full rationale.
+  `micromegas-logout` allowed-tools entries gain wildcard
+  (`Bash(micromegas-logout *)` / `PowerShell(micromegas-logout *)`) forms, and
+  the Interactive SSO recovery instruction now runs
+  `micromegas-logout --profile <active profile>` when a profile is active,
+  falling back to bare logout otherwise — see Implementation Step 10 for the
+  full rationale.
 - `mkdocs/docs/admin/authentication.md`: delete the `:236`
   `MICROMEGAS_TOKEN_FILE` row and add a `MICROMEGAS_PROFILE` row (see
   Implementation Step 9), and add a one-line note next to the `:501`
