@@ -7,8 +7,13 @@ into two Postgres tables — `ingestion_api_keys` and `analytics_api_keys` — h
 hash of each key, plus a `created_at` / `last_used_at` / `revoked_at` audit trail. A new
 `DbApiKeyAuthProvider` validates by hash-indexed lookup behind a short-TTL `moka` cache, and three
 OIDC-authenticated, admin-gated HTTP routes on the ingestion service (`POST`/`GET`/`DELETE
-/auth/api_keys`) let an operator mint, list and revoke keys without a redeploy. A python tool
-converts existing env keyrings into rows so current key strings keep working.
+/auth/api_keys`) let an operator mint, list and revoke keys without a redeploy.
+
+**Importing existing env keyrings into these tables is out of scope here** — moved to #1411 (web
+admin UI for key management + a CLI import tool that talks to HTTP, not `psql`). Until #1411 lands,
+a legacy key migrates the same way an `analytics_api_keys` row always will: hand-written SQL,
+following the shape in §4's runbook. This plan's tables and ingestion mint/list/revoke API are fully
+usable without an import tool — it only affects carrying *existing* key strings forward.
 
 This is **Stage 0** of the AbAC rollout (`tasks/data_isolation/audience_based_access_control_plan.md`
 §"Stage 0"), the one stage that depends on neither the policy seam nor any isolation config and the
@@ -152,23 +157,24 @@ CREATE UNIQUE INDEX analytics_api_keys_key_hash ON analytics_api_keys(key_hash);
   handle, and `GET` must never hand out `key_hash` (there is no reason to distribute the lookup value
   even though it is not reversible). A UUID PK plus a unique index on `key_hash` gives both without
   making the secret-derived value the row identity.
-- **Unique** on `key_hash`, not merely indexed: it gives the O(1) validation lookup *and* makes the
-  import tool's `ON CONFLICT (key_hash) DO NOTHING` re-runnable.
+- **Unique** on `key_hash`, not merely indexed: it gives the O(1) validation lookup *and* makes a
+  hand-written legacy-key `INSERT ... ON CONFLICT (key_hash) DO NOTHING` re-runnable (see §4's
+  analytics runbook for the shape; #1411 tracks a proper import path).
 - No cleartext column. A plaintext column would be strictly worse than the env var (backups,
   replicas, read access, query logs).
 - SHA-256 with no KDF is safe **only** because these are high-entropy random keys, not passwords.
   Argon2 would be both unindexable and too slow per request. Freshly minted keys are 256 bits of
-  OS entropy; imported legacy keys are whatever the operator chose, which is why the import tool
-  warns on low-entropy strings (§5).
+  OS entropy; imported legacy keys are whatever the operator chose — rotate any that aren't actually
+  random.
 - `created_by` / `revoked_by` deliver the "no per-key audit" half of the issue's problem statement at
   the cost of two `VARCHAR` columns.
-- **`name` carries no uniqueness constraint, deliberately.** Rotation-under-a-stable-name (§5,
-  [Security](#security): "the migration guide says rotate") means a second live row with the same
+- **`name` carries no uniqueness constraint, deliberately.** Rotation-under-a-stable-name
+  ([Security](#security): "the migration guide says rotate") means a second live row with the same
   `name` is an expected, not exceptional, state while an old key is being phased out — both
-  `POST /auth/api_keys` and the import tool's `ON CONFLICT (key_hash) DO NOTHING` will happily create
-  one. The consequence is that every revoke path (the `DELETE` route, and the analytics runbook in §4)
-  must key on `key_id`, never `name` — a by-name revoke during rotation would match and revoke the
-  freshly minted replacement along with the row being retired.
+  `POST /auth/api_keys` and a hand-written `ON CONFLICT (key_hash) DO NOTHING` insert will happily
+  create one. The consequence is that every revoke path (the `DELETE` route, and the analytics
+  runbook in §4) must key on `key_id`, never `name` — a by-name revoke during rotation would match and
+  revoke the freshly minted replacement along with the row being retired.
 
 ### 2. `DbApiKeyAuthProvider` (`rust/auth/src/db_api_key.rs`, new)
 
@@ -192,13 +198,16 @@ pub struct DbApiKeyConfig {
 }
 
 impl DbApiKeyConfig {
-    /// `from_env()` is `from_env_with_prefix("")`. `from_env_with_prefix(prefix)` resolves each of
-    /// the four names above as `{prefix}_API_KEY_CACHE_*` first, falling back to the unprefixed
-    /// name — the same fallback `provider_with_prefix` already uses for `{prefix}_API_KEYS` /
-    /// `{prefix}_OIDC_CONFIG` / `{prefix}_ADMINS` (`default_provider.rs:53-80`). This is what lets a
-    /// monolith, which runs both providers in one process, give `MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS`
-    /// and `MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` independent values.
-    pub fn from_env() -> Self;
+    /// Resolves each of the four names above as `{prefix}_API_KEY_CACHE_*` first, falling back to
+    /// the unprefixed name — the same fallback `provider_with_prefix` already uses for
+    /// `{prefix}_API_KEYS` / `{prefix}_OIDC_CONFIG` / `{prefix}_ADMINS` (`default_provider.rs:53-80`).
+    /// This is what lets a monolith, which runs both providers in one process, give
+    /// `MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS` and
+    /// `MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` independent values. With an empty prefix the
+    /// behavior is identical to the unprefixed vars — same as `provider_with_prefix("")`
+    /// (`default_provider.rs:38-39`'s own doc comment states this explicitly for that precedent), so
+    /// an unprefixed caller just passes `""` rather than needing a separate `from_env()`: unlike
+    /// `provider()`/`provider_with_prefix()`, this type has no existing published API to preserve.
     pub fn from_env_with_prefix(prefix: &str) -> Self;
 }
 
@@ -414,17 +423,17 @@ the schema has not reached v5 yet — is propagated as an error from `build()`; 
 ingestion binary or monolith must reach v5 before flight-sql starts, per
 [Current State](#current-state)), so a pre-v5 rollout or DB-only deployment fails loudly and legibly
 at startup instead of surfacing later as a confusing auth error or silently starting with no
-providers configured. This is what makes Migration step 3 possible: once
-`micromegas-import-api-keys` has populated the table (step 2) and `MICROMEGAS_API_KEYS` is removed,
-the DB rows alone keep the service serving — no OIDC required. It also covers flight-sql specifically,
-which never mints and is documented (`mkdocs/docs/grafana/authentication.md`) to run key-only for
-Grafana; it must not be forced to stand up OIDC just to satisfy this check. An empty key store still
-does *not* count: `build()` returns `Ok(None)` when the table has no live rows and neither env keys nor
-OIDC are configured, so the startup guard in `telemetry-ingestion-srv` ("Authentication required but
-no auth providers configured") still fires for a genuinely empty deployment, and an operator gets a
-clear failure instead of a process that silently 401s every request. Minting itself still requires
-OIDC — that is unchanged and orthogonal to whether the *table* is empty — but a deployment that only
-ever revokes, or mints via the import tool / direct SQL, no longer needs OIDC merely to pass this
+providers configured. This is what makes Migration step 3 possible: once step 2 has populated the
+table (by hand-written SQL, or #1411's import tool once it exists) and `MICROMEGAS_API_KEYS` is
+removed, the DB rows alone keep the service serving — no OIDC required. It also covers flight-sql
+specifically, which never mints and is documented (`mkdocs/docs/grafana/authentication.md`) to run
+key-only for Grafana; it must not be forced to stand up OIDC just to satisfy this check. An empty key
+store still does *not* count: `build()` returns `Ok(None)` when the table has no live rows and neither
+env keys nor OIDC are configured, so the startup guard in `telemetry-ingestion-srv` ("Authentication
+required but no auth providers configured") still fires for a genuinely empty deployment, and an
+operator gets a clear failure instead of a process that silently 401s every request. Minting itself
+still requires OIDC — that is unchanged and orthogonal to whether the *table* is empty — but a
+deployment that only ever revokes, or mints via direct SQL, no longer needs OIDC merely to pass this
 check.
 
 The four call sites (in three files) each pass a **dedicated** key-store pool, built by
@@ -487,12 +496,14 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router;
   cloned before `lake` moves into `WebIngestionService::new`, but the cache-TTL config is not otherwise
   derivable inside `serve_ingestion` — it has no way to learn which prefix (if any) the caller used
   when building its provider. `serve_ingestion` itself stays a thin wrapper —
-  `serve_ingestion_with_api_key_config(..., DbApiKeyConfig::from_env())` — so its published signature
-  on the `server`-feature crate is unchanged, the same reasoning §3 already applies to `provider()` /
-  `provider_with_prefix()`. `telemetry-ingestion-srv` keeps calling `serve_ingestion` (the unprefixed
-  default is correct for it); the monolith calls `serve_ingestion_with_api_key_config` directly with
-  `DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION")`, since the wrapper's unprefixed default
-  would be the wrong config for it. This is what keeps `effective_within_seconds` matching the TTL the
+  `serve_ingestion_with_api_key_config(..., DbApiKeyConfig::from_env_with_prefix(""))` — so its
+  published signature on the `server`-feature crate is unchanged, the same reasoning §3 already
+  applies to `provider()` / `provider_with_prefix()` (though `DbApiKeyConfig` itself has only the one
+  prefixed constructor — see §2). `telemetry-ingestion-srv` keeps calling `serve_ingestion` (the
+  unprefixed default is correct for it); the monolith calls `serve_ingestion_with_api_key_config`
+  directly with `DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION")`, since the wrapper's
+  unprefixed default would be the wrong config for it. This is what keeps `effective_within_seconds`
+  matching the TTL the
   running provider actually uses. The table is always `Ingestion` for this service. Neither call site's
   public signature breaks — only a new function is added, recorded alongside the `key_ring` removal in
   the `CHANGELOG.md` bullet (see [Documentation](#documentation)).
@@ -532,29 +543,33 @@ RETURNING revoked_at
   `ProviderBuilder::with_db_key_store`, so it cannot silently disagree with the provider actually
   running), so the revocation-latency property shows up where the operator is looking; the docs
   note that a fleet with mixed configuration takes the longest configured TTL.
-- **Analytics keys are not mintable through this API.** They are few, manually issued (§5, or direct
-  SQL by an operator with DB access), and stay out of every HTTP write path: issuing read credentials
-  from the fleet-facing service is the wrong direction for the write/read asymmetry, and keeping them
-  out is what confines the ingestion service's DB writes to one table. The operator procedure for the
-  full lifecycle — list: `SELECT key_id, name, created_at, last_used_at, revoked_at FROM
-  analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP `GET` for this table and the
-  import tool's `uuid.uuid4()`-generated `key_id` is otherwise never surfaced to the operator; mint:
-  generate the key, its digest, and a `key_id` with an explicit, trailing-newline-safe recipe —
-  `KEY="mmk_$(openssl rand -base64 48 | tr -d '=+/\n' | head -c 43)"; HASH=$(printf '%s' "$KEY" |
-  sha256sum | cut -d' ' -f1); ID=$(uuidgen)` (`printf`, not `echo`, because `hash_key` covers the full
-  key string and `echo` would append a newline the validator never sees, silently minting a key that
-  can never authenticate; `uuidgen`, not `gen_random_uuid()`, to keep §5's no-minimum-PG-version
-  property — the table has no `DEFAULT` on `key_id`, so nothing else supplies one) — then the same
-  `INSERT ... ON CONFLICT (key_hash) DO NOTHING` shape the import tool emits (§5), substituting `$ID`
-  for `key_id` and `$HASH` for the hash; revoke: the
-  same `UPDATE ... SET revoked_at = COALESCE(...)` statement `DELETE /auth/api_keys/{key_id}` runs
-  above, keyed **only** on the `key_id` the list step just produced — never on `name`, since `name` has
-  no uniqueness constraint (§1) and a rotation-under-a-stable-name workflow (§5, [Security](#security))
+- **Analytics keys are not mintable through this API.** They are few, manually issued (direct SQL by
+  an operator with DB access — a web admin UI for this is tracked separately, #1411), and stay out of
+  every HTTP write path: issuing read credentials from the fleet-facing service is the wrong direction
+  for the write/read asymmetry, and keeping them out is what confines the ingestion service's DB writes
+  to one table. The operator procedure for the full lifecycle — list: `SELECT key_id, name, created_at,
+  last_used_at, revoked_at FROM analytics_api_keys ORDER BY created_at DESC`, since there is no HTTP
+  `GET` for this table; mint: generate the key, its digest, and a `key_id` with an explicit,
+  trailing-newline-safe recipe — `KEY="mmk_$(openssl rand -base64 48 | tr -d '=+/\n' | head -c 43)";
+  HASH=$(printf '%s' "$KEY" | sha256sum | cut -d' ' -f1); ID=$(uuidgen)` (`printf`, not `echo`, because
+  `hash_key` covers the full key string and `echo` would append a newline the validator never sees,
+  silently minting a key that can never authenticate; `uuidgen`, not `gen_random_uuid()`, so this
+  recipe carries no minimum-PG-version requirement — the table has no `DEFAULT` on `key_id`, so nothing
+  else supplies one) — then:
+
+```sql
+INSERT INTO analytics_api_keys (key_id, key_hash, name, created_at, created_by)
+VALUES ('$ID', decode('$HASH', 'hex'), '<name>', now(), '<operator>')
+ON CONFLICT (key_hash) DO NOTHING;
+```
+
+  revoke: the same `UPDATE ... SET revoked_at = COALESCE(...)` statement `DELETE /auth/api_keys/{key_id}`
+  runs above, keyed **only** on the `key_id` the list step just produced — never on `name`, since `name`
+  has no uniqueness constraint (§1) and a rotation-under-a-stable-name workflow ([Security](#security))
   can leave two live rows sharing a name, where a by-name revoke would silently kill the freshly minted
   replacement along with the old row — is written up as a runbook in `mkdocs/docs/admin/api-keys.md`,
-  recipe and all, rather
-  than left implicit. That runbook, not the import tool, is the durable answer to "how do I revoke an
-  analytics key at 2am."
+  recipe and all, rather than left implicit. That runbook is the durable answer to "how do I revoke an
+  analytics key at 2am" until #1411's UI/API exists.
 - **Rejected: admin-gated lakehouse UDFs** for key management, despite the precedent in #1382. Two
   reasons, both from the umbrella plan: `flight_sql_service_impl.rs:330` logs `sql={sql:?}` at info
   and micromegas ingests its own logs, so key material in a SQL literal would land in `log_entries` —
@@ -564,95 +579,15 @@ RETURNING revoked_at
   the validation lookup (§2). Client-side hashing fixes the first but not the second, and the mint
   route is needed for #1374 regardless.
 
-### 5. Import tool (`python/micromegas/micromegas/cli/import_api_keys.py`, new)
+### 5. Import tool — out of scope, tracked in #1411
 
-A one-shot migration for *legacy key strings* — the one thing the mint route cannot do, since it
-generates fresh keys. Deletable once every deployment has run it **for `ingestion_api_keys`** — but
-the by-hand `INSERT` shape it produces is exactly what the `admin/api-keys.md` runbook (§4) points
-operators at for `analytics_api_keys`, which has no HTTP mint/revoke path of its own, so that statement
-shape stays documented as a template even after this tool is deleted.
-
-**It emits SQL on stdout rather than connecting to Postgres.** The repo has no python DB driver in any
-`pyproject.toml`, and the established convention for python-touches-Postgres here is to shell out to
-`psql` (`local_test_env/db/*.py`). Emitting SQL adds no dependency, lets the operator review exactly
-what will be inserted before applying it, and keeps cleartext keys inside the tool's own process —
-only hashes appear in the output.
-
-```bash
-# monolith deployment: the prefixed keyrings (MICROMEGAS_INGESTION_API_KEYS /
-# MICROMEGAS_ANALYTICS_API_KEYS) route to their tables unambiguously
-micromegas-import-api-keys --from-prefixed | psql "$MICROMEGAS_SQL_CONNECTION_STRING"
-
-# split deployment: only the unprefixed MICROMEGAS_API_KEYS is ever read here
-# (provider() == provider_with_prefix("") never sees the prefixed vars), so
-# an explicit destination per key is required, no default; --skip excludes
-# names used *exclusively* as an object-cache-srv client credential, per
-# docker/README.md and admin/object-cache.md. A name that also doubles as a
-# service's own MICROMEGAS_INGESTION_API_KEY (e.g. flight-sql, maintenance)
-# must go to --ingestion instead, not --skip — see the guidance below.
-micromegas-import-api-keys --keys-env MICROMEGAS_API_KEYS \
-  --ingestion game-client,build-agent,flight-sql,maintenance \
-  --analytics grafana,analyst-tools \
-  --skip object-cache-client
-```
-
-- `--from-prefixed` maps `MICROMEGAS_INGESTION_API_KEYS` → `ingestion_api_keys` and
-  `MICROMEGAS_ANALYTICS_API_KEYS` → `analytics_api_keys`. It reads only those two prefixed names —
-  unlike `default_provider::provider_with_prefix`, it does **not** fall back to the unprefixed
-  `MICROMEGAS_API_KEYS` (`rust/auth/src/default_provider.rs:53-59`), because a single unprefixed
-  keyring has no table to route to on its own. A monolith deployment that relies on that fallback
-  (e.g. `docker/docker-compose.monolith.yaml:52`) would otherwise get a silent no-op migration —
-  note `docker/README.md:131` and `:206` are the unrelated **object-cache** keyring, permanently
-  out of scope, not a monolith fallback. So when neither prefixed variable is set,
-  `--from-prefixed` exits non-zero
-  instead of emitting an empty `BEGIN; COMMIT;`, with a message pointing at the explicit form:
-  `--keys-env MICROMEGAS_API_KEYS --ingestion ... --analytics ...`.
-- Otherwise **every key name in the source keyring must be listed in exactly one of `--ingestion` /
-  `--analytics` / `--skip`**; unassigned names are a non-zero exit listing them. A name in *both*
-  `--ingestion` and `--analytics` is also an error, with a message explaining that a dual-use key must
-  be split into two distinct key strings — see [Migration](#migration). `--skip name1,name2` is the
-  escape hatch for names that must stay env-only rather than land in either table — in particular the
-  `object-cache-srv` client keys (e.g. `flight-sql`, `maintenance`) that `docker/README.md:131` and
-  `mkdocs/docs/admin/object-cache.md:149` document as sharing the unprefixed `MICROMEGAS_API_KEYS`
-  keyring. **`--skip` is correct only for a name used *exclusively* as an object-cache client
-  credential.** A name like `flight-sql` or `maintenance` is commonly *also* that service's own
-  `MICROMEGAS_INGESTION_API_KEY` — the bearer token it presents to ingestion for its own self-telemetry
-  (`rust/telemetry-sink/src/api_key_decorator.rs:22`, via `with_auth_from_env`) — since both env vars
-  are commonly drawn from the same shared unprefixed keyring. A name that is also a service's ingestion
-  self-telemetry credential must instead be passed to `--ingestion`, so it survives in
-  `ingestion_api_keys`; it stays unchanged in `object-cache-srv`'s own env keyring regardless, since
-  that service is validated separately and keeps reading `MICROMEGAS_API_KEYS` permanently. Skipped
-  names are not validated for length/entropy and are not emitted as SQL.
-- **Name validation and quoting.** Names come from operator-authored `MICROMEGAS_API_KEYS` JSON —
-  `parse_key_ring` (`rust/auth/src/api_key.rs:58`) places no constraint on `name` — but they are
-  interpolated into a SQL string literal that gets piped to `psql` running as the schema owner. Before
-  emitting anything, every name is validated: non-empty, ≤255 bytes (deliberately stricter than the
-  `VARCHAR(255)` column, which bounds characters, not bytes — this check can therefore only reject a
-  name early, never let one through that the column would then reject), containing no comma (so it
-  round-trips through the `--ingestion`/`--analytics` comma-separated lists), and containing no `$`
-  (Postgres dollar-quoting terminates at the first repeat of the tag, so a name containing the literal
-  `$mmk$` tag used below would otherwise close the quoted literal early and let the remainder of the
-  name be parsed as SQL). Any violation exits non-zero naming the offending key, before any SQL is
-  emitted. Every name is then emitted with Postgres dollar-quoting (`$mmk$...$mmk$`) rather than a
-  single-quoted literal, so no character other than the quoting tag itself — which validation rejects
-  — can ever break out of the literal or inject SQL.
-- Per key: `uuid.uuid4()` in python (no `gen_random_uuid()`, so no minimum PG version),
-  `hashlib.sha256(key.encode()).hexdigest()`, `created_by = 'import'`:
-
-```sql
-BEGIN;
-INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
-VALUES ('<uuid4>', decode('<hex>', 'hex'), $mmk$game-client$mmk$, now(), 'import')
-ON CONFLICT (key_hash) DO NOTHING;
-COMMIT;
-```
-
-- Warns on **stderr** for any key shorter than 24 characters or drawn from fewer than 16 distinct
-  characters. SHA-256 without a KDF is only safe for high-entropy keys, so a low-entropy legacy key
-  should be rotated rather than imported — the tool is where the operator will notice.
-
-Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`, alongside
-`micromegas-query` / `micromegas-logout`.
+Migrating *legacy key strings* into these tables — the one thing the mint route cannot do, since it
+generates fresh keys — is deferred to #1411, which builds a proper HTTP-API-backed import path
+alongside the web admin UI. Until then, legacy keys migrate the same way an `analytics_api_keys` row
+always will: hand-written SQL following §4's runbook shape, one `INSERT ... ON CONFLICT (key_hash) DO
+NOTHING` per key. This plan's tables and the ingestion mint/list/revoke API (§4) stand on their own
+without it — see [Migration](#migration) step 2 for how a deployment populates the tables in the
+meantime.
 
 ## Implementation Steps
 
@@ -730,7 +665,7 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `rust/public/src/servers/mod.rs`.
 6. `rust/public/src/servers/ingestion.rs`: add `serve_ingestion_with_api_key_config(..., api_key_config:
    DbApiKeyConfig)` as the new entry point, and reimplement `serve_ingestion` as a thin wrapper that
-   calls it with `DbApiKeyConfig::from_env()` — mirroring §3's `ProviderBuilder`/`provider()` split, so
+   calls it with `DbApiKeyConfig::from_env_with_prefix("")` — mirroring §3's `ProviderBuilder`/`provider()` split, so
    `serve_ingestion`'s published signature on the `server`-feature crate is unchanged (non-breaking; see
    the `CHANGELOG.md` bullet in [Documentation](#documentation)); clone `lake.db_pool` before
    constructing `WebIngestionService`; merge
@@ -746,7 +681,7 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 8. `rust/telemetry-ingestion-srv/src/main.rs`: switch to `ProviderBuilder` with
    `(dedicated_key_store_pool(&data_lake.db_pool), ApiKeyTable::Ingestion)` (§2, [Trade-offs](#trade-offs)
    → "A negative cache" — not a clone of `data_lake.db_pool` itself); its `serve_ingestion` call is unchanged —
-   the wrapper's `DbApiKeyConfig::from_env()` default is already the same unprefixed config the
+   the wrapper's `DbApiKeyConfig::from_env_with_prefix("")` default is already the same unprefixed config the
    provider was built with; update the module doc comment (lines 6–10) and the startup error message.
 9. `rust/public/src/servers/flight_sql_server.rs`: clone the pool before `lakehouse` is moved; switch
    to `ProviderBuilder` with `(dedicated_key_store_pool(&pool), ApiKeyTable::Analytics)`. flight-sql
@@ -770,15 +705,11 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
     ingestion provider — as its `api_key_config` argument; the unprefixed default `serve_ingestion`'s
     wrapper supplies would be the wrong config for the monolith.
 
-### Phase 5 — Import tool
+### Phase 5 — Tests and docs
 
-11. `python/micromegas/micromegas/cli/import_api_keys.py` + the `[tool.poetry.scripts]` entry.
-
-### Phase 6 — Tests and docs
-
-12. Tests per [Testing Strategy](#testing-strategy), including the `rust/public/Cargo.toml`
+11. Tests per [Testing Strategy](#testing-strategy), including the `rust/public/Cargo.toml`
     `[[test]]` entry for `api_keys_tests` (see [Files to Modify](#files-to-modify)).
-13. Docs per [Documentation](#documentation).
+12. Docs per [Documentation](#documentation).
 
 ## Files to Modify
 
@@ -789,8 +720,6 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
 - `rust/auth/tests/db_api_key_tests.rs`
 - `rust/auth/tests/default_provider_tests.rs`
 - `rust/public/tests/api_keys_tests.rs`
-- `python/micromegas/micromegas/cli/import_api_keys.py`
-- `python/micromegas/tests/cli/test_import_api_keys.py`
 - `mkdocs/docs/admin/api-keys.md`
 
 **Modified**
@@ -806,7 +735,7 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   `ProviderUnavailable` → 503 path — see [Testing Strategy](#testing-strategy))
 - `rust/public/src/servers/mod.rs`, `rust/public/src/servers/ingestion.rs` (adding
   `serve_ingestion_with_api_key_config`, with `serve_ingestion` reimplemented as a thin
-  `DbApiKeyConfig::from_env()` wrapper around it — mirroring §3's `ProviderBuilder`/`provider()` split,
+  `DbApiKeyConfig::from_env_with_prefix("")` wrapper around it — mirroring §3's `ProviderBuilder`/`provider()` split,
   so the published `serve_ingestion` signature on the `server`-feature crate is unchanged; recorded in
   the `CHANGELOG.md` bullet, see [Documentation](#documentation)),
   `rust/public/src/servers/flight_sql_server.rs`
@@ -815,14 +744,13 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   at lines 97–130; without it the new file is auto-discovered unguarded and fails to compile under
   `cargo test -p micromegas` (`default = []`)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- `python/micromegas/pyproject.toml`
 - `local_test_env/ai_scripts/start_services_with_oidc.py`
 - `mkdocs/mkdocs.yml`, `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
   `mkdocs/docs/admin/monolith.md`, `mkdocs/docs/admin/flight-sql.md`,
   `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/otlp/index.md`, `docker/README.md`,
   `mkdocs/docs/grafana/authentication.md`, `docker/docker-compose.monolith.yaml`
-- `tasks/data_isolation/audience_based_access_control_plan.md` (record the `key_id` column and the
-  single-DB-role caveat)
+- `tasks/data_isolation/audience_based_access_control_plan.md` (record the `key_id` column, the
+  single-DB-role caveat, and the import-tool split into #1411)
 - `CHANGELOG.md` (`Unreleased` bullet — see [Documentation](#documentation))
 
 **Deleted**
@@ -843,11 +771,6 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
   scale one**: #1374's per-user/per-machine keys are what push the live-key population past this
   stage's cardinality assumption (§2's design notes), a separate concern from whether they land in one
   table or two.
-- **Emitting SQL instead of connecting from python.** Costs the operator one extra pipe; avoids
-  adding a Postgres driver to the published `micromegas` pip package for a deletable one-shot tool,
-  and makes the insert reviewable before it runs. Alternative considered: add `psycopg[binary]` as a
-  dev-group dependency — rejected because the tool needs to run wherever the operator's DB
-  credentials are, not only in a poetry dev env.
 - **Surfacing a key-store outage as 503, not 401.** Costs a new `ProviderUnavailable` typed error
   threaded through `AuthProvider`'s otherwise-`anyhow` error path, plus the `downcast_ref` checks in
   `MultiAuthProvider` and `auth_middleware` (§2 step 5). Buys correct retry behavior at the client: the
@@ -934,8 +857,8 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
   every API-key context, and `require_key_admin` rejects any non-OIDC `auth_type` outright.
 - **No timing side channel** on the DB path: the token is hashed, never compared against a secret.
   The env provider's `ct_eq` scan is untouched and still correct for its (small, static) keyring.
-- **Low-entropy legacy keys** are the one place SHA-256-without-KDF is thin. The import tool warns;
-  the migration guide says rotate.
+- **Low-entropy legacy keys** are the one place SHA-256-without-KDF is thin. The migration guide says
+  rotate any legacy key that isn't actually random.
 - **A key-store outage is not client-visible as a rejected credential, at every surface a DB-backed
   provider reaches.** `DbApiKeyAuthProvider`
   wraps every DB error in `ProviderUnavailable` (§2 step 5); `MultiAuthProvider` re-raises it when no
@@ -971,17 +894,20 @@ Ordering, for both split and monolith deployments:
    `tasks/backlog/1245_partition_blocks_by_insert_time`**: that plan is unscheduled backlog and claims
    whatever version is next available whenever it is picked up, so this plan claims v5 outright — see
    [Current State](#current-state) → Schema and migrations.
-2. Run `micromegas-import-api-keys` and apply its SQL, passing `--skip` only for a key name that is an
-   `object-cache-srv` client key used *exclusively* as such (see §5) — those names stay env-only rather
-   than be imported into either table. A name that is also a service's own ingestion self-telemetry
-   credential (`MICROMEGAS_INGESTION_API_KEY`) must instead be passed to `--ingestion`, so it survives
-   in `ingestion_api_keys` once step 3 removes `MICROMEGAS_API_KEYS`; it is unaffected in
-   `object-cache-srv`'s own env keyring either way. Because §3 places the env `ApiKeyAuthProvider`
-   first in the chain, the env provider keeps answering for every existing key for as long as
-   `MICROMEGAS_API_KEYS` is still set — i.e. through the rest of this step — so `DbApiKeyAuthProvider`
-   is never reached and the imported rows are proven only by their presence in the table, not by any
-   traffic; `last_used_at` stays NULL for every imported key until step 3 removes the env keyring and
-   lets the DB provider actually be exercised.
+2. Populate `ingestion_api_keys` (and, for any legacy analytics-only keys, `analytics_api_keys`) from
+   the existing env keyring, one hand-written `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key
+   following §4's runbook shape (#1411 tracks a proper import path; not required to run this stage).
+   Route each key explicitly: a key that is an `object-cache-srv` client key used *exclusively* as
+   such stays env-only, never imported into either table; a key that is also a service's own ingestion
+   self-telemetry credential (`MICROMEGAS_INGESTION_API_KEY`) goes into `ingestion_api_keys`, so it
+   survives once step 3 removes `MICROMEGAS_API_KEYS` (unaffected in `object-cache-srv`'s own env
+   keyring either way); a key valid on both surfaces today must be split into two distinct key
+   strings, one per table (see "The one client-visible change" below). Because §3 places the env
+   `ApiKeyAuthProvider` first in the chain, the env provider keeps answering for every existing key for
+   as long as `MICROMEGAS_API_KEYS` is still set — i.e. through the rest of this step — so
+   `DbApiKeyAuthProvider` is never reached and the imported rows are proven only by their presence in
+   the table, not by any traffic; `last_used_at` stays NULL for every imported key until step 3 removes
+   the env keyring and lets the DB provider actually be exercised.
 3. Remove `MICROMEGAS_API_KEYS` (and the prefixed variants) from ingestion and flight-sql, and
    redeploy. Safe once step 2 has populated the table: per §3, a non-empty key store counts as "auth
    configured" on its own, so both services keep serving without OIDC configured — including the
@@ -999,9 +925,10 @@ Ordering, for both split and monolith deployments:
 `flight_sql_server.rs:226` both read the unprefixed `MICROMEGAS_API_KEYS` today, so in every split
 deployment *every existing key is currently valid on both surfaces*. "Never both" cannot preserve
 that: a genuinely dual-use key must become two keys, and any client that used one key for both
-ingestion and queries must be updated. The import tool refuses to place one key in both tables, and
-the migration guide states this rather than leaving operators to discover it. This is the single
-place the zero-client-change claim in the issue does not hold.
+ingestion and queries must be updated. Whoever populates the tables — by hand today, or #1411's
+import tool once it exists — must refuse to place one key in both, and the migration guide states
+this rather than leaving operators to discover it. This is the single place the zero-client-change
+claim in the issue does not hold.
 
 ## Documentation
 
@@ -1011,15 +938,17 @@ place the zero-client-change claim in the issue does not hold.
   key in the response is otherwise exposed in flight (see [Security](#security)); the two
   tables and why they are split; the three routes with request/response examples; the
   revocation-latency property and the cache env knobs; the `db_api_key_error_count` metric (§2 step 5)
-  as the signal to alert on for a key-store outage, alongside the four cache env knobs; the grant recipe; the import procedure
-  including the dual-use split; the `object-cache-srv` exception; a runbook for listing, minting, and
+  as the signal to alert on for a key-store outage, alongside the four cache env knobs; the grant
+  recipe; the manual legacy-key migration procedure (hand-written `INSERT ... ON CONFLICT (key_hash)
+  DO NOTHING` per key, including the dual-use split) and a pointer to #1411 for the eventual proper
+  import path; the `object-cache-srv` exception; a runbook for listing, minting, and
   revoking an `analytics_api_keys` row by hand (list: `SELECT key_id, name, created_at, last_used_at,
   revoked_at FROM analytics_api_keys ORDER BY created_at DESC` — the only way to discover a `key_id` to
   revoke, since this table has no HTTP `GET`; mint: the full executable recipe from §4 — generate the
   key, compute its digest with a trailing-newline-safe command (`printf '%s' "$KEY" | sha256sum`,
   never `echo`, since `hash_key` covers the full key string and a stray newline would mint a key that
   can never authenticate), and generate the `key_id` with `uuidgen` (the table has no `DEFAULT`, so
-  nothing else supplies one), then the import tool's `INSERT` shape with the computed hash and id; revoke: the
+  nothing else supplies one), then the `INSERT` shape from §4 with the computed hash and id; revoke: the
   same `UPDATE ... SET revoked_at = COALESCE(...)` the `DELETE` route runs, keyed only on the `key_id`
   from the list step — never on `name`, called out explicitly as unsafe during rotation since `name`
   has no uniqueness constraint (§1)), since that table has no HTTP
@@ -1040,9 +969,9 @@ place the zero-client-change claim in the issue does not hold.
   human/service-account identities — machine credentials (service keys, Firehose access keys) migrate
   to DB-backed `ingestion_api_keys`, not OIDC. Retitle it (e.g. "Migration from Env API Keys to
   DB-Backed Keys and OIDC") and rework the worked example so the closing `unset MICROMEGAS_API_KEYS`
-  step is explicitly gated on `micromegas-import-api-keys` having populated the table first, matching
-  this plan's own Migration step 3 — unsetting the env var before the table is populated would leave
-  machine clients unauthenticated.
+  step is explicitly gated on the tables having been populated first (by hand, or #1411's import tool
+  once it exists), matching this plan's own Migration step 3 — unsetting the env var before the table
+  is populated would leave machine clients unauthenticated.
 - **`admin/ingestion.md`**: note the `/auth/api_keys` routes and that they require OIDC + admin; add
   a `MICROMEGAS_ADMINS` row to the environment-variable table (mirroring `admin/flight-sql.md:30`,
   which already documents it), and state plainly that minting/listing/revoking keys 403s until an
@@ -1074,17 +1003,18 @@ place the zero-client-change claim in the issue does not hold.
   stay as published and are not in scope for this placeholder update. **Leave `docker/README.md:131`
   and `:206` alone** — both are
   the object-cache keyring, which stays env-only permanently (see [Current State](#current-state));
-  they must not be pointed at the import tool or `api-keys.md`.
+  they must not be pointed at `api-keys.md` or any import path.
 - **`docker/docker-compose.monolith.yaml:52`**: the comment naming
   `MICROMEGAS_INGESTION_API_KEYS`/`MICROMEGAS_API_KEYS` as the ingestion/FlightSQL auth fallback is
-  the genuine monolith-fallback reference (see §5); update it to also mention the DB-backed path
-  once it exists.
+  the genuine monolith-fallback reference; update it to also mention the DB-backed path once it
+  exists.
 - **`grafana/authentication.md`**: the key-only flight-sql deployment it documents (line 30) is exactly
   the case §3 and Migration rely on; confirm it still applies to DB-backed `analytics_api_keys` and
   cross-link `api-keys.md`.
-- **`tasks/data_isolation/audience_based_access_control_plan.md`**: record the `key_id` column and
+- **`tasks/data_isolation/audience_based_access_control_plan.md`**: record the `key_id` column,
   replace the "Postgres grants enforce it" claim with the code-boundary-plus-documented-grants
-  reality.
+  reality, and update Stage 0's own import-tool step (0d) to point at #1411 instead of describing a
+  python tool built in this stage.
 - **`CHANGELOG.md`**: an `Unreleased` bullet covering the DB-backed key store (`ingestion_api_keys`
   / `analytics_api_keys`, migration v5), the three new `/auth/api_keys`
   HTTP routes, the four new
@@ -1231,29 +1161,6 @@ seven integration test files in this crate:
   is true by construction; a unit test asserts the mint statement names `ingestion_api_keys` to keep
   it that way under refactoring.
 
-**`python/micromegas/tests/cli/test_import_api_keys.py`**:
-
-- The emitted hex digest equals `hashlib.sha256(key.encode()).hexdigest()` for a known key.
-- `--from-prefixed` routes each variable to the right table.
-- `--from-prefixed` with neither `MICROMEGAS_INGESTION_API_KEYS` nor `MICROMEGAS_ANALYTICS_API_KEYS`
-  set (including when only the unprefixed `MICROMEGAS_API_KEYS` is present) exits non-zero and
-  points at the explicit `--keys-env` form, and emits no SQL.
-- An unassigned key name exits non-zero and names the key.
-- A key name given to both `--ingestion` and `--analytics` exits non-zero with the split-it guidance.
-- The output contains `ON CONFLICT (key_hash) DO NOTHING` and is wrapped in `BEGIN`/`COMMIT`.
-- No cleartext key appears anywhere in the output.
-- **§5's name-validation guard**: a name that is empty, a name over 255 bytes, a name containing a
-  comma, and a name containing `$` each exit non-zero naming the offending key, with no SQL emitted
-  on stdout.
-- **Dollar-quoting round-trips arbitrary content**: a name containing a single quote and a name
-  containing a newline are each emitted inside `$mmk$...$mmk$` unmodified, rather than escaped or
-  truncated.
-
-**Round-trip (the zero-client-change claim), `#[ignore]`**: a Rust DB test that computes the same
-digest the python tool emits for a fixture key, inserts the row, and asserts the *original key
-string* authenticates through `DbApiKeyAuthProvider`. Paired with the python test above, this covers
-the claim end to end without needing a live `psql` in CI.
-
 **Full-stack smoke, manual**: `local_test_env/ai_scripts/start_services_with_oidc.py:182-199` currently
 launches `telemetry-ingestion-srv` with `--disable-auth`, so `/auth/api_keys` would not even be
 registered there — even though the process already receives the OIDC config, since `env =
@@ -1272,14 +1179,7 @@ local_test_env/ai_scripts/start_services_with_oidc.py`, mint a key over HTTP, us
 revoke it, and observe the rejection after the TTL.
 
 **Gates**: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`,
-`python3 build/rust_ci.py`, and, from `python/micromegas/`, `poetry run black
-micromegas/cli/import_api_keys.py tests/cli/test_import_api_keys.py` and `poetry run pytest
-tests/cli/test_import_api_keys.py` — scoped to the new file, not a bare `poetry run pytest`: most
-other files under `tests/` need a live analytics service to *run*, so the gate is scoped to the new
-file, which needs no live service. (`pytest` itself is declared in the `test` dependency group,
-`python/micromegas/pyproject.toml:27-30`, so that group must still be installed for `poetry run
-pytest` to work at all, scoped or not — scoping only avoids the live service and the
-`opentelemetry-proto` dependency the other files also need.)
+`python3 build/rust_ci.py`.
 
 ## Open Questions
 

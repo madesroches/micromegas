@@ -636,13 +636,16 @@ per request. Pair this with rotating any legacy key that is not actually random.
     where the DB grant belongs, OIDC is required, and no API key can be admin (`api_key.rs:124`), so
     no key can mint another.
 
-0d. **Import tool** (python, per repo scripting convention) — a one-shot migration for legacy key
-    strings, the one thing the mint route cannot do (it generates fresh keys). Deletable once each
-    deployment has run it. Reads the env keyring, computes hashes, inserts rows, and **requires an
-    explicit destination table per key with no default.** The prefixed vars map cleanly:
+0d. **Import tool — out of scope for this stage, tracked in #1411.** A one-shot migration for legacy
+    key strings (the one thing the mint route cannot do, since it generates fresh keys) is deferred to
+    #1411, which adds a web admin UI plus an HTTP-API-backed import tool, superseding the python/`psql`
+    tool originally planned here. Until it lands, legacy keys migrate via hand-written
+    `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key (see #1383 §4's runbook shape), **requiring
+    an explicit destination table per key with no default** — the prefixed vars still map cleanly:
     `MICROMEGAS_INGESTION_API_KEYS` → ingestion, `MICROMEGAS_ANALYTICS_API_KEYS` → analytics.
 
-    **The unprefixed fallback is the one behavior change in this stage.** In every split deployment
+    **The unprefixed fallback is the one behavior change in this stage**, independent of which tool
+    (or hand) does the importing. In every split deployment
     both `telemetry-ingestion-srv/src/main.rs:51` and `flight_sql_server.rs:226` read the unprefixed
     `MICROMEGAS_API_KEYS`, so *every existing key is currently valid on both surfaces*. "Never both"
     cannot preserve that: a genuinely dual-use key must become two keys, and any client that used one
@@ -714,9 +717,10 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
    gets **no** audience column — read scope comes from the caller's OIDC identity, never from a key.
    The ingestion `DbApiKeyAuthProvider` now produces `AuthContext { bound_audience: Some(audience),
    email: Some(...), allow_delegation: false, is_admin: false }`.
-10. Extend the Stage 0 import tool to assign an audience: existing keys land as `group:everyone`
-    (or a per-key choice) — still zero client changes; this is how open deployments migrate.
-    Keys imported before this stage get the configured default on backfill.
+10. Legacy-key imports assign an audience: existing keys land as `group:everyone` (or a per-key
+    choice) — still zero client changes; this is how open deployments migrate. Keys imported before
+    this stage get the configured default on backfill. (Until #1411's import tool exists, "import"
+    here means the hand-written SQL path from 0d, with the audience set explicitly in the `INSERT`.)
 
 ### Stage 5 — Ingestion stamping
 11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
@@ -871,10 +875,10 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 - **Key store + management API (Stage 0, independent of everything below):** a DB key authenticates
   and an unknown key is rejected; a revoked key stops authenticating within the cache TTL (assert the
   stated revocation-latency property, don't leave it implicit); env keyring and DB keyring compose — a
-  key in either authenticates during the transition; the import tool round-trips existing prefixed
-  `MICROMEGAS_*_API_KEYS` entries so the *same key strings* still authenticate on their own surface
-  afterwards (the zero-client-change claim, so it deserves a real test); no cleartext key is stored —
-  assert the column holds the hash.
+  key in either authenticates during the transition; a hand-imported row (or, once #1411 lands, an
+  imported row) round-trips an existing key string so the *same key string* still authenticates on
+  its own surface afterwards (the zero-client-change claim, so it deserves a real test); no cleartext
+  key is stored — assert the column holds the hash.
   **Surface separation (the load-bearing property of the split):** a key in `ingestion_api_keys` is
   rejected by flight-sql and a key in `analytics_api_keys` is rejected by ingestion — assert both
   directions, since a provider constructed against the wrong table is the failure mode the two-table
@@ -921,8 +925,9 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its non-PII caveat), and the
   confidentiality/integrity properties.
 - Update any auth/deployment docs to mention the two key tables and why they are separate, the
-  key-management routes (create/revoke/list) and the revocation-latency property, the import tool
-  **including the dual-use-key split**, the setup script, and the groups-claim configuration.
+  key-management routes (create/revoke/list) and the revocation-latency property, the manual
+  legacy-key import procedure **including the dual-use-key split** (a proper import tool + web admin
+  UI is tracked in #1411), the setup script, and the groups-claim configuration.
 
 ## Resolved Decisions
 
