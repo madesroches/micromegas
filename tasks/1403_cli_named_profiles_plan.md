@@ -93,8 +93,10 @@ existing flat shape:
 Each entry under `profiles` has exactly the shape today's flat config has
 (`uri`, `client_id`, `issuers`). Backward compatibility falls out of this for
 free: if `profiles` is absent, `resolve_connection` treats the whole dict as
-today's single connection — the existing flat-config tests keep passing
-unmodified.
+today's single connection — the existing flat-config tests keep passing, but
+only once `MICROMEGAS_PROFILE` is added to the env vars those tests already
+scrub (see Implementation Step 5); left set, it would route a flat config
+into the new "no profiles configured" `ProfileError` path.
 
 `token_file` stays env-only (`MICROMEGAS_TOKEN_FILE`), with no per-profile
 config-file key, consistent with `client_secret`/`oidc_scope` — the flat
@@ -201,9 +203,19 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
     )
 ```
 
-Individual `MICROMEGAS_*` env vars still win over everything, per the issue's
-requirement that existing single-connection setups using env vars keep working
-untouched — `_pick` already gives them top precedence per field.
+Individual `MICROMEGAS_*` env vars still win over the active profile's
+values *for each field they set*, once a profile has been selected — `_pick`
+already gives them top precedence per field, per the issue's requirement that
+existing single-connection setups using env vars keep working untouched. This
+precedence is scoped to *after* profile selection, not a bypass of it:
+`resolve_active_profile` runs first and raises `ProfileError` for "multiple
+profiles configured but none selected" regardless of whether env vars alone
+would otherwise fully specify the connection. So on a machine whose
+`config.json` already has two or more profiles, an env-var-only invocation
+(e.g. `MICROMEGAS_ANALYTICS_URI=... micromegas-query ...` in CI) still fails
+with a usage error unless `--profile`, `MICROMEGAS_PROFILE`, or
+`default_profile` picks one — it is not, in fact, unaffected once profiles
+exist.
 
 `MICROMEGAS_PYTHON_MODULE_WRAPPER` is a deprecated legacy escape hatch for
 corporate auth wrappers, not a path this plan integrates with profiles: it
@@ -328,7 +340,15 @@ path that `resolve_connection` would never have picked.
    the shared `resolve_active_profile()` + `load_config()` (catching
    `ValueError` → `parser.error()`, matching `query.py`) and the token path
    via `default_token_file()`, replacing the inline hard-coded default.
-5. **Tests** (`tests/cli/test_config.py`): add cases for
+5. **Tests** (`tests/cli/test_config.py`): first, add `MICROMEGAS_PROFILE` to
+   the `delenv` list every existing test already scrubs (`test_config.py`'s
+   8-var list, e.g. in `test_resolve_reads_config_file`,
+   `test_env_vars_override_config`, `test_config_without_issuers`) — without
+   this, a developer's exported `MICROMEGAS_PROFILE` feeds a flat config into
+   `resolve_active_profile`'s "no profiles configured" `ProfileError` path and
+   breaks these tests. Every new test below must likewise explicitly set or
+   `delenv` `MICROMEGAS_PROFILE` rather than relying on ambient environment.
+   Add cases for:
    - flat config (no `profiles` key) behaves exactly as before (regression)
    - `profiles` map with `default_profile` set, no `--profile`/env
    - `--profile` argument overrides `default_profile`
@@ -345,6 +365,12 @@ path that `resolve_connection` would never have picked.
      and a `tokens-<profile>.json` path otherwise
    - explicit `--profile` (or `MICROMEGAS_PROFILE`) with a flat config (no
      `profiles` key) raises `ValueError`
+   - `resolve_connection()` against a `profiles` config returns
+     `cfg.token_file == default_token_file(name)` (i.e. the
+     `tokens-<profile>.json` path for the active profile), not the plain
+     `DEFAULT_TOKEN_FILE`
+   - `MICROMEGAS_TOKEN_FILE`, when set, still overrides that per-profile
+     default in `resolve_connection()`'s output
 6. **Tests** (new `tests/cli/test_logout.py` or extend `tests/test_query.py`
    patterns): cover `--profile` selecting the right token file to delete, the
    case where no token file exists, and an unknown `--profile` raising the
@@ -406,6 +432,25 @@ path that `resolve_connection` would never have picked.
    to use, or to set a `default_profile`). Also mention `MICROMEGAS_PROFILE` /
    `--profile` as an alternative to the flat `uri`/`client_id`/`issuers` keys
    this section currently walks users through writing.
+   The Setup section's config-*writing* flow (the "read `~/.micromegas/config.json`
+   first ... and merge in the new values" step) must also be amended: as-is, it
+   always merges the user's values into top-level `uri`/`client_id`/`issuers`
+   keys, which are silently ignored once a `profiles` map exists (per the
+   Config schema section above) — so on a `profiles`-bearing config the skill
+   would write dead config and the post-write re-verification probe would then
+   show the unchanged active profile's values, driving a mis-diagnosis loop.
+   Change this step so that when the existing `config.json` already has a
+   `profiles` map, the skill writes the user's values into the selected
+   `profiles.<name>` entry instead (asking the user which profile if none is
+   already active), and additionally sets `default_profile` to that name so
+   the no-argument probe and bare `micromegas-logout` (see below) keep
+   resolving the right profile without needing `--profile`/`MICROMEGAS_PROFILE`
+   on every call.
+   Also widen the two `micromegas-logout` `allowed-tools` entries
+   (`Bash(micromegas-logout)`, `PowerShell(micromegas-logout)`) to
+   `micromegas-logout *`, since the stale-token recovery step (Interactive SSO
+   note) may need `micromegas-logout --profile <name>` once profiles exist, and
+   the exact bare command is otherwise the only permitted form.
 10. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
 
 ## Files to Modify
@@ -454,7 +499,12 @@ path that `resolve_connection` would never have picked.
   raise `ProfileError` when `profiles` has multiple entries and none is
   selected (or a stale `MICROMEGAS_PROFILE` is set against a flat config), and
   mention `MICROMEGAS_PROFILE`/`--profile` alongside the existing flat-config
-  write-up.
+  write-up. Also update the config-*writing* step so it writes into the
+  selected `profiles.<name>` entry (and sets `default_profile`) instead of
+  merging top-level flat keys when a `profiles` map is already present, and
+  widen the `micromegas-logout` `allowed-tools` entries to `micromegas-logout
+  *` so the stale-token recovery step can pass `--profile` — see
+  Implementation Step 9 for the full rationale.
 - `CHANGELOG.md`: new entry for the profiles feature.
 
 ## Testing Strategy
@@ -462,7 +512,10 @@ path that `resolve_connection` would never have picked.
 - Unit tests in `tests/cli/test_config.py` cover the resolution matrix
   described in Implementation Step 5 — these are hermetic (no live service
   needed), consistent with the existing file — including the explicit
-  `--profile`/`MICROMEGAS_PROFILE` with a flat config raising `ValueError`.
+  `--profile`/`MICROMEGAS_PROFILE` with a flat config raising `ValueError`,
+  the per-profile `token_file` wiring in `resolve_connection()`, and
+  `MICROMEGAS_PROFILE` scrubbed from (or explicitly set in) every test's env,
+  per Step 5.
 - `tests/cli/test_logout.py` (new) covers profile-aware token file deletion
   and the unknown-profile error case, also hermetic (just filesystem + env
   vars, no network) — per Implementation Step 6, hermetic here means
