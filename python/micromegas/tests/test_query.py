@@ -9,6 +9,7 @@ non-ASCII content.
 """
 
 import datetime
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import textwrap
 
 import pytest
 
+from micromegas.cli import config
 from micromegas.cli.query import main, parse_timestamp
 
 NON_ASCII_SQL = "-- em dash —, accented café, CJK 日本語\nSELECT 1"
@@ -163,4 +165,34 @@ def test_main_overflowing_begin_reports_usage_error(monkeypatch, capsys):
     assert e_info.value.code == 2
     err = capsys.readouterr().err
     assert "invalid --begin timestamp" in err
+    assert "Traceback" not in err
+
+
+def test_main_unknown_profile_reports_usage_error(tmp_path, monkeypatch, capsys):
+    """An unresolvable --profile must be a clean argparse usage error (via
+    ProfileError), not an uncaught traceback (issue #1403)."""
+    # Hermetic regardless of the developer's shell: a stray MICROMEGAS_PROFILE
+    # would change which profile name is resolved.
+    monkeypatch.delenv("MICROMEGAS_PROFILE", raising=False)
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "default_profile": "prod",
+                "profiles": {"prod": {"uri": "grpc://prod-host:50051"}},
+            }
+        )
+    )
+    monkeypatch.setattr(config, "CONFIG_PATH", cfg_file)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["query", "--profile", "nope", "--all", "SELECT 1"],
+    )
+    with pytest.raises(SystemExit) as e_info:
+        main()
+    assert e_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown profile" in err
+    assert "nope" in err
     assert "Traceback" not in err

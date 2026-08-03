@@ -1,12 +1,12 @@
 from micromegas.cli.config import resolve_connection
 
 
-def connect():
+def connect(profile=None):
     """Create FlightSQL client using resolved configuration.
 
-    Priority: env vars > config file (~/.micromegas/config.json) > defaults.
+    Priority: env vars > active profile (or config file) > defaults.
     """
-    cfg = resolve_connection()
+    cfg = resolve_connection(profile=profile)
 
     if cfg.oidc_issuer and cfg.oidc_client_id:
         from micromegas import oidc_connection

@@ -4,7 +4,7 @@ description: Query micromegas observability data (logs, metrics, spans) using SQ
 argument-hint: "<SQL query or natural language question about observability data>"
 context: fork
 shell: bash
-allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(micromegas-logout), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), PowerShell(micromegas-logout), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(micromegas-logout), Bash(micromegas-logout *), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), PowerShell(micromegas-logout), PowerShell(micromegas-logout *), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
 ---
 
 The user's query or question: $ARGUMENTS
@@ -41,9 +41,14 @@ Second, use an ordinary shell check (use `Bash` on Linux/macOS, or on Windows wi
 python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
 ```
 
-This call is total — it never fails just because nothing is configured yet, since a missing
-config resolves to the default `grpc://localhost:50051` — and it never triggers a browser login
-by itself (see the Interactive SSO note below). Read the two checks together:
+For a config with no `profiles` map, this call is total — it never fails just because nothing is
+configured yet, since a missing config resolves to the default `grpc://localhost:50051` — and it
+never triggers a browser login by itself (see the Interactive SSO note below). The one exception:
+if `~/.micromegas/config.json` has a `profiles` map but no profile is selected (no `default_profile`
+set, and neither `--profile` nor `MICROMEGAS_PROFILE` given to this probe), or a stale
+`MICROMEGAS_PROFILE` is set against a flat config with no `profiles` map, this call raises a Python
+`ProfileError` instead — see the probe-outcome bullet below for how to handle it. Read the two
+checks together:
 
 - **Only one of the two checks succeeds** — this is a `PATH`/interpreter mismatch, not "not
   installed": use whichever one works (the CLI is what actually runs queries, so prefer it, and
@@ -71,6 +76,33 @@ by itself (see the Interactive SSO note below). Read the two checks together:
   - If `oidc_issuer` and `oidc_client_id` are both `None`, no OIDC is configured — no further
     setup is implied for auth; either the URI is enough (plain connection) or the user still needs
     to provide connection details (see below).
+- **Raises `ProfileError`** (an uncaught traceback naming `ProfileError`, not a clean CLI usage
+  error, since this probe calls `resolve_connection()` directly) — treat this as a profile-selection
+  problem, not a broken install. There are three distinct causes; read the message to tell them apart:
+  - A `profiles` map exists but no profile is selected — the error message lists the available
+    profile names. Prefer offering to set `default_profile` in `config.json` to one of them: this
+    is the option that keeps the config probe working, since the probe is a fixed command (pinned
+    in this skill's `allowed-tools`) that always calls `resolve_connection()` with no arguments and
+    has no way to take a `--profile` flag itself. If the user instead wants a session-only
+    `--profile <name>` (passed on every `micromegas-query`/`micromegas-logout` call, without
+    touching `config.json`), be explicit that this leaves the probe permanently raising
+    `ProfileError` for the rest of the session — token/login state for that profile is then
+    unknown to you. In that case, don't run the first `micromegas-query --profile <name>` call
+    yourself; ask the *user* to run it themselves, since you can't tell from the broken probe
+    whether it's safe (see the Interactive SSO note below on why running a possibly-first,
+    possibly-token-less call yourself risks blocking on a browser login.)
+  - No `profiles` map exists at all, but `MICROMEGAS_PROFILE` is set (a stale env var left over
+    against a flat config) — the error lists no profile names, and setting `default_profile` does
+    nothing since there's no `profiles` map for it to select from. Advise the user to unset
+    `MICROMEGAS_PROFILE`, or, if they actually want named profiles, migrate the flat config into a
+    `profiles` map.
+  - The message is `unknown profile '<name>' (available: ...)` — a profile name was resolved but
+    isn't in the `profiles` map. This looks similar to the "no profile selected" case above (both
+    list available profile names), but setting `default_profile` will *not* fix it: `--profile` and
+    `MICROMEGAS_PROFILE` both take precedence over `default_profile`, so a typo'd or stale
+    `MICROMEGAS_PROFILE` env var (or a mistyped `--profile` flag) would keep overriding it. Check
+    `MICROMEGAS_PROFILE` and any `--profile` flag for a typo against the listed available names
+    first, before touching `config.json`.
 
 If the user hasn't told you where to connect, ask them to provide:
 - Their analytics service URI (e.g. `https://analytics.example.com:443`)
@@ -78,8 +110,32 @@ If the user hasn't told you where to connect, ask them to provide:
 
 (Scope is not part of this flow — see the OIDC scope note below.)
 
+If the user instead wants to keep multiple named connections around (e.g. prod/dev/local) and
+switch between them, mention `~/.micromegas/config.json`'s `profiles` map, selected via
+`--profile`/`MICROMEGAS_PROFILE`, as the alternative to the single flat `uri`/`client_id`/`issuers`
+keys walked through below — same per-profile shape, just nested under `profiles.<name>` with a
+`default_profile` key picking the one used when no flag/env var is given.
+
 Once the user provides the values, read `~/.micromegas/config.json` first (it may already have
-content to preserve) and merge in the new values rather than clobbering the file, writing:
+content to preserve). If it already has a `profiles` map, write the new values into that profile
+entry — asking the user which profile if none is already active — and set `default_profile` to
+that name, rather than merging into the top-level `uri`/`client_id`/`issuers` keys (which are
+silently ignored once `profiles` is present, and would otherwise leave the skill writing dead
+config and then mis-diagnosing the unchanged active profile on the next probe):
+```json
+{
+  "default_profile": "<selected profile name>",
+  "profiles": {
+    "<selected profile name>": {
+      "uri": "<value from user>",
+      "client_id": "<value from user, only if OIDC>",
+      "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
+    }
+  }
+}
+```
+Otherwise (no `profiles` map exists yet), merge the new values into the flat top-level shape
+instead, exactly as before:
 ```json
 {
   "uri": "<value from user>",
@@ -87,9 +143,9 @@ content to preserve) and merge in the new values rather than clobbering the file
   "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
 }
 ```
-This takes effect immediately for every subsequent `micromegas-query` call in this session or any
-future one — no shell profile edit or new terminal required, since the library reads this file on
-every invocation.
+Either way, this takes effect immediately for every subsequent `micromegas-query` call in this
+session or any future one — no shell profile edit or new terminal required, since the library
+reads this file on every invocation.
 
 **Legacy env var precedence**: `MICROMEGAS_ANALYTICS_URI`/`MICROMEGAS_OIDC_*` environment variables
 always take precedence over `config.json` (a previous version of this skill instructed setting
@@ -114,9 +170,12 @@ When that's the case, check the probe's token-file-exists output:
 - If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
   considering a browser — go ahead and run the query yourself. If that token has expired or been
   revoked, this does not hang: the query fails cleanly with an error like `Token refresh failed:
-  ... Please re-authenticate.` If you see that error, run `micromegas-logout` to clear the stale
-  token, then ask the *user* to re-run the query themselves in their own session (this will
-  trigger a fresh interactive login).
+  ... Please re-authenticate.` If you see that error, clear the stale token: if a `profiles` map is
+  in use, run `micromegas-logout --profile <active profile>` to narrow the clear to that one
+  profile — a bare `micromegas-logout` wipes every profile's cached token, not just the stale one.
+  Otherwise (flat config, no `profiles` map), run bare `micromegas-logout`. Either way, then ask the
+  *user* to re-run the query themselves in their own session (this will trigger a fresh interactive
+  login).
 
 **Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
 never resolved to the intended service, not that authentication failed — this matters because it
