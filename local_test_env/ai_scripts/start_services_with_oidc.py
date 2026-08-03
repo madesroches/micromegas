@@ -270,7 +270,9 @@ def main():
     print("🎉 All services started with OIDC authentication enabled!")
     print("=" * 70)
     print()
-    print("📥 Ingestion Server: http://127.0.0.1:9000 (auth enabled — local API key + OIDC)")
+    print(
+        "📥 Ingestion Server: http://127.0.0.1:9000 (auth enabled — local API key + OIDC)"
+    )
     print("📊 Analytics Server: grpc://127.0.0.1:50051 (OIDC auth required)")
     print()
     print("🔐 Authentication: See OIDC config above")

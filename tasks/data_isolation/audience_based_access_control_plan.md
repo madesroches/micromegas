@@ -494,6 +494,10 @@ reduced to audience resolution on an existing route plus the setup script.
 
 ### Stage 0 — DB-backed API key store + key-management API (no audience yet; independent of the AbAC seam)
 
+**Landed** as #1383 — see `tasks/completed/1383_db_api_key_store_plan.md` for what actually shipped
+(this section is the design rationale, kept for the stages that hang off it). The import tool this
+section assumes was split out to #1411 and has not landed.
+
 Split out of the original Stage 4 (revised 2026-07-30). Moving the *key store* ahead of the policy
 seam, and leaving only the *audience column* behind it, for four reasons:
 

@@ -5,7 +5,7 @@
 **Status**: Backlog — not scheduled, no target date. This plan deliberately does **not** claim a
 fixed `LATEST_DATA_LAKE_SCHEMA_VERSION` number for its cutover. Other, unrelated schema work may land
 first and claim the next available version — e.g.
-`tasks/data_isolation/1383_db_api_key_store_plan.md` claims `v5` for its own additive migration. See
+`tasks/completed/1383_db_api_key_store_plan.md` claimed `v5` for its own additive migration. See
 "Schema (#1240)" below for the notation (`N`) this plan uses in place of a fixed number, and
 [Current State](#current-state) for why the version this cutover ends up claiming is whatever is
 first available when someone actually picks this plan up.
@@ -557,9 +557,10 @@ cached statements automatically when new partitions are attached:
 **Notation**: this plan is backlog, not scheduled (see Status above), so it does not hardcode a
 version number the way an active plan would. Call `N` whatever `LATEST_DATA_LAKE_SCHEMA_VERSION`
 turns out to be immediately *before* this cutover's deploy, at whatever point this plan is actually
-picked up — today that would be `4` (`sql_migration.rs:8`), but other plans may claim intervening
-versions first (e.g. `tasks/data_isolation/1383_db_api_key_store_plan.md` claims `5`). The cutover
-below claims `N+1`, whatever `N` turns out to be; the migration function is named
+picked up — today that would be `5` (`sql_migration.rs:8`, claimed by
+`tasks/completed/1383_db_api_key_store_plan.md`), but other plans may claim further intervening
+versions before this one is picked up. The cutover below claims `N+1`, whatever `N` turns out to be;
+the migration function is named
 `upgrade_data_lake_schema_v<N+1>` accordingly, filled in with the concrete number at implementation
 time, not before.
 
@@ -626,7 +627,7 @@ has the column) — `create_migration_table` must stamp the `migration` row dire
 migration added since this plan was written and add it here too** — stamping straight to LATEST
 means a fresh install never runs those numbered arms, so any table they create (e.g.
 `ingestion_api_keys` / `analytics_api_keys` from
-`tasks/data_isolation/1383_db_api_key_store_plan.md`, if that plan has landed by then) must be
+`tasks/completed/1383_db_api_key_store_plan.md`, already landed) must be
 created directly in `create_tables`'s fresh-install path or it silently won't exist on a new
 database. Note this stamps to whatever the running binary's LATEST is: `N` during deploy 1
 (before the later bump deploy) or `N+1` after it — so a fresh install during the interim window
