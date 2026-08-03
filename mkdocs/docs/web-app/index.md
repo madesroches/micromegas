@@ -70,7 +70,7 @@ This means sharing a URL shares the exact time range. After saving a screen, URL
 
 Data sources define which FlightSQL analytics service to query. A default data source is configured at the system level. Individual screens and notebook cells can override the data source to query different backends.
 
-Data sources are managed from the **Admin** page.
+Data sources are managed from the **Admin** page. The URL accepts the `grpc://`, `grpc+tls://`, `http://`, and `https://` schemes; `grpc+tls://` and `https://` enable TLS, while `grpc://` and `http://` do not.
 
 ## Maps
 

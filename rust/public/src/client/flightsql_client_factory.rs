@@ -75,9 +75,6 @@ impl BearerFlightSQLClientFactory {
 /// Rewrites the `grpc://`/`grpc+tls://` scheme convention used by data source configs into the
 /// `http://`/`https://` scheme tonic's `Channel` expects for its TLS decision. `http://`/`https://`
 /// URLs pass through unchanged.
-///
-/// `pub` (not private) so it can be unit-tested from `rust/public/tests/`, matching this crate's
-/// established pattern for pure helpers (e.g. `analytics_web_srv::app_db::normalize_name`).
 pub fn normalize_channel_scheme(url: &str) -> String {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("grpc+tls://") {

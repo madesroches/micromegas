@@ -202,7 +202,7 @@ function DataSourcesPageContent() {
                     <input
                       type="text"
                       className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-none focus:border-accent-link"
-                      placeholder="grpc://flight-sql.example.com:50051"
+                      placeholder="grpc+tls://flight-sql.example.com:50051"
                       value={form.url}
                       onChange={(e) => setForm((f) => (f ? { ...f, url: e.target.value } : null))}
                     />

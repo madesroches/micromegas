@@ -84,14 +84,12 @@ gRPC-style scheme to its HTTP-style equivalent before parsing the URL into an `h
 /// Rewrites the `grpc://`/`grpc+tls://` scheme convention used by data source configs into the
 /// `http://`/`https://` scheme tonic's `Channel` expects for its TLS decision. `http://`/`https://`
 /// URLs pass through unchanged.
-///
-/// `pub` (not private) so it can be unit-tested from `rust/public/tests/`, matching this crate's
-/// established pattern for pure helpers (e.g. `analytics_web_srv::app_db::normalize_name`).
 pub fn normalize_channel_scheme(url: &str) -> String {
-    if let Some(rest) = url.strip_prefix("grpc+tls://") {
-        format!("https://{rest}")
-    } else if let Some(rest) = url.strip_prefix("grpc://") {
-        format!("http://{rest}")
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("grpc+tls://") {
+        format!("https://{}", &url["grpc+tls://".len()..])
+    } else if lower.starts_with("grpc://") {
+        format!("http://{}", &url["grpc://".len()..])
     } else {
         url.to_string()
     }
@@ -100,13 +98,9 @@ pub fn normalize_channel_scheme(url: &str) -> String {
 
 `make_client()` calls `normalize_channel_scheme(&self.url)` before `.parse::<Uri>()`; the existing
 `flight_url.scheme_str() == Some("https")` TLS check is untouched, since by the time it runs the
-scheme is always `http` or `https`. Case-sensitivity note: `validate_data_source_config` accepts
-any case, but stores the URL as typed, so `normalize_channel_scheme` should match case-insensitively
-too — use `url.to_ascii_lowercase()` for the prefix check while rewriting the original string's
-tail (host/port/path), the same pattern the Python client already uses for its own case (it doesn't
-lowercase, but its inputs come from its own config, not arbitrary user text). Concretely: compute
-`let lower = url.to_ascii_lowercase();` and match/strip against `lower`, then reconstruct using
-`&url[prefix.len()..]` from the *original* string so the host/port casing (relevant for punycode
+scheme is always `http` or `https`. The match is case-insensitive (`validate_data_source_config`
+accepts any case but stores the URL as typed): the prefix check runs against a lowercased copy,
+while the rewrite slices the *original* string's tail so host/port casing (relevant for punycode
 domains, unusual but possible) is preserved.
 
 This keeps the change surgical: one helper, one call site, no change to the TLS `if` condition, no
