@@ -1,7 +1,19 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.27.0 (2026-07-13)
+Last updated: v0.28.0 (2026-08-02)
+
+---
+
+## Lessons Learned from v0.28.0
+
+### `cargo release` refuses to run with ANY untracked file, not just dirty tracked files
+
+Phase 1 failed immediately on the first crate (`micromegas-derive-transit`) with "uncommitted changes detected" because the freshly-written `tasks/release_v0.28_plan.md` was untracked — it had never been committed. `cargo release`'s clean-tree check rejects untracked files just like modified ones. **Commit the release plan doc itself (along with the changelog/doc updates) before running Phase 1**, not just the tracked-file changes.
+
+### Docker phase estimate revised: budget ~2–2.5h, not ~1h
+
+The prior template said "~1h of real compute" for 7 services × 2 arches. This cycle, 5 of 7 services (both arches) were done at 87 minutes elapsed; the last two services (`analytics-web`, `monolith`) are the heaviest — `analytics-web` bundles the wasm/frontend build on top of the Rust binary, and `monolith` links every service's code into one binary — so they take noticeably longer per-arch than the thin single-binary services. Total wall-clock this cycle was well over 2 hours. Plan accordingly when scheduling this phase; it is not a "run it and check back in an hour" step.
 
 ---
 

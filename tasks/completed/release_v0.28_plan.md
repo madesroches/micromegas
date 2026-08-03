@@ -39,24 +39,24 @@ Checked `git diff --name-status v0.27.0..HEAD -- rust/` for added `Cargo.toml` f
 ### 1. Code Quality & Testing
 
 #### Rust Workspace (from `rust/` directory)
-- [ ] Run full CI pipeline: `python3 ../build/rust_ci.py` (native + WASM, fmt, clippy, tests, `cargo audit`/`cargo deny`)
+- [x] Run full CI pipeline: `python3 ../build/rust_ci.py` (native + WASM, fmt, clippy, tests, `cargo audit`/`cargo deny`) — all green
 
 #### Python Package (from `python/micromegas/` directory)
-- [ ] `poetry run black . --check`
-- [ ] `poetry run pytest` (integration test failures due to missing server are expected)
+- [x] `poetry run black . --check` — clean
+- [x] `poetry run pytest` — 112 passed, 71 failed (all connection-refused to analytics/ingestion servers not running locally, expected), 6 skipped
 
 #### Grafana Plugin (from `grafana/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint:fix`
-- [ ] `yarn test:ci`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint:fix`
+- [x] `yarn test:ci` — 47/47 passed
+- [x] `yarn build` — succeeded (pre-existing `immutable`/react-awesome-query-builder warnings only)
 
 #### Analytics Web App (from `analytics-web-app/` directory)
-- [ ] `yarn install`
-- [ ] `yarn lint`
-- [ ] `yarn type-check`
-- [ ] `yarn test`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint` — clean (pre-existing fast-refresh warnings only)
+- [x] `yarn type-check`
+- [x] `yarn test` — 1244/1244 passed
+- [x] `yarn build`
 
 ### 2. Version Verification (all should already be 0.28.0)
 
@@ -69,25 +69,25 @@ Checked `git diff --name-status v0.27.0..HEAD -- rust/` for added `Cargo.toml` f
 
 ### 3. Documentation Updates
 
-- [ ] Review git log: `git log --oneline v0.27.0..HEAD`
-- [ ] Update `CHANGELOG.md` — rename `## Unreleased` to `## v0.28.0 - 2026-08-02`, add a fresh empty `## Unreleased` above it
-- [ ] Update `grafana/CHANGELOG.md` — add a `## 0.28.0 (2026-08-02)` version-sync entry
-- [ ] Update `README.md` roadmap — add a `### v0.28.0 (August 2026)` block under "Recent Releases"
+- [x] Review git log: `git log --oneline v0.27.0..HEAD`
+- [x] Update `CHANGELOG.md` — renamed `## Unreleased` to `## v0.28.0 - 2026-08-02`, added a fresh empty `## Unreleased` above it
+- [x] Update `grafana/CHANGELOG.md` — added a `## 0.28.0 (2026-08-02)` version-sync entry
+- [x] Update `README.md` roadmap — added a `### v0.28.0 (August 2026)` block under "Recent Releases"
 
 ### 4. Grafana Plugin Preparation
 
-- [ ] Build plugin archive: `./build-plugin.sh` (from `grafana/`) → `grafana/micromegas-micromegas-datasource.zip`
+- [x] Build plugin archive: `./build-plugin.sh` (from `grafana/`) → `grafana/micromegas-micromegas-datasource.zip`
 
 ### 5. Git Preparation
 
 All four tags must point to the same release commit (workspace at 0.28.0, before the Phase 4 bump):
 
-- [ ] Commit the changelog/doc updates ("Release v0.28.0")
-- [ ] Create release tags:
+- [x] Commit the changelog/doc updates ("Release v0.28.0")
+- [x] Create release tags:
   ```bash
   git tag v0.28.0 grafana-v0.28.0 capi-v0.28.0 blender-v0.28.0
   ```
-- [ ] Push release branch and all tags:
+- [x] Push release branch and all tags:
   ```bash
   git push origin release && git push origin v0.28.0 grafana-v0.28.0 capi-v0.28.0 blender-v0.28.0
   ```
@@ -148,13 +148,13 @@ docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:0.28.0
 
 ### Phase 5: Cleanup
 
-- Move this plan from `tasks/` to `tasks/completed/release_v0.28_plan.md`
-- Update `tasks/release_plan_template.md` "Lessons Learned" if anything new came up
+- [x] Move this plan from `tasks/` to `tasks/completed/release_v0.28_plan.md`
+- [x] Update `tasks/release_plan_template.md` "Lessons Learned"
 
 ### Phase 6: Merge to Main
 
-- Open PR from `release` → `main`
-- Merge after review
+- [ ] Open PR from `release` → `main`
+- [ ] Merge after review
 
 ## Rollback Plan
 
