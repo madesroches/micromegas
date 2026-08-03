@@ -33,9 +33,7 @@ def test_async_events_basic_query():
     FROM view_instance('async_events', '{process_id}')
     ORDER BY time
     LIMIT 10;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     async_events = client.query(sql, process_begin, process_end)
     print("Async events found:")
@@ -106,9 +104,7 @@ def test_async_events_with_process_join():
     JOIN processes p ON s.process_id = p.process_id
     ORDER BY ae.time
     LIMIT 5;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     results = client.query(sql, process_begin, process_end)
     print("Async events with process info:")
@@ -162,9 +158,7 @@ def test_async_events_parent_child_relationships():
          ON parent.span_id = child.parent_span_id
     WHERE parent.event_type = 'begin' AND child.event_type = 'begin'
     LIMIT 5;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     relationships = client.query(sql, process_begin, process_end)
     print("Parent-child async span relationships:")
@@ -215,9 +209,7 @@ def test_async_events_duration_analysis():
     ON begin_events.span_id = end_events.span_id
     ORDER BY duration_ms DESC
     LIMIT 10;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     durations = client.query(sql, process_begin, process_end)
     print("Async operation durations:")
@@ -266,9 +258,7 @@ def test_async_events_cross_stream_analysis():
     WHERE event_type = 'begin'
     GROUP BY stream_id
     ORDER BY event_count DESC;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     stream_summary = client.query(sql, process_begin, process_end)
     print("Async events per stream (thread):")
@@ -335,9 +325,7 @@ def test_async_events_named_spans():
         'real_time_processing_operation'
     )
     ORDER BY time, name
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     named_spans = client.query(sql, process_begin, process_end)
     print("Named async spans found:")

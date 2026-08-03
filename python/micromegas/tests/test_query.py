@@ -24,8 +24,7 @@ NON_ASCII_SQL = "-- em dash —, accented café, CJK 日本語\nSELECT 1"
 def test_read_sql_source_file_survives_non_utf8_locale(tmp_path):
     """--file <path> must be read as UTF-8 regardless of process locale."""
     sql_path = tmp_path / "query.sql"
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import argparse
         import os
         import sys
@@ -38,8 +37,7 @@ def test_read_sql_source_file_survives_non_utf8_locale(tmp_path):
         args = argparse.Namespace(file=sql_path, sql=None)
         sql = query.read_sql_source(args)
         sys.stdout.buffer.write(sql.encode("utf-8"))
-        """
-    )
+        """)
     # Write the fixture file directly as UTF-8 bytes so its on-disk
     # encoding doesn't depend on this (parent) process's locale.
     sql_path.write_bytes(NON_ASCII_SQL.encode("utf-8"))
@@ -63,8 +61,7 @@ def test_read_sql_source_stdin_survives_non_utf8_locale():
     # Embed the content as an ASCII-only \\uXXXX-escaped literal (via
     # ascii()) so no non-ASCII bytes travel through argv or os.environ,
     # only through the piped stdin bytes under test.
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import argparse
         import sys
 
@@ -77,8 +74,7 @@ def test_read_sql_source_stdin_survives_non_utf8_locale():
         expected = {expected_literal}
         assert sql == expected, (sql, expected)
         sys.stdout.buffer.write(sql.encode("utf-8"))
-        """
-    ).format(expected_literal=ascii(NON_ASCII_SQL))
+        """).format(expected_literal=ascii(NON_ASCII_SQL))
 
     env = dict(os.environ)
     env["LC_ALL"] = "C"

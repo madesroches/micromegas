@@ -29,9 +29,7 @@ def test_expand_histogram():
          FROM measures
          WHERE process_id='{process_id}' AND name='{name}')
     )
-    """.format(
-        process_id=process_id, name=name
-    )
+    """.format(process_id=process_id, name=name)
 
     res = client.query(sql)
     print(res)

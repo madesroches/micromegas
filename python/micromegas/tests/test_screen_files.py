@@ -840,8 +840,7 @@ class TestNonAsciiEncodingRegression:
         )
         screen_path.write_bytes(screen_json.encode("utf-8"))
 
-        script = textwrap.dedent(
-            """
+        script = textwrap.dedent("""
             import os
             import sys
 
@@ -853,8 +852,7 @@ class TestNonAsciiEncodingRegression:
             result = read_screen_file(screen_path)
             loaded_content = result["config"]["cells"][0]["content"]
             sys.stdout.buffer.write(loaded_content.encode("utf-8"))
-            """
-        )
+            """)
         env = dict(os.environ)
         env["LC_ALL"] = "C"
         env["PYTHONUTF8"] = "0"
@@ -891,8 +889,7 @@ class TestNonAsciiEncodingRegression:
         default.
         """
         screen_path = tmp_path / "non-ascii-write.json"
-        script = textwrap.dedent(
-            """
+        script = textwrap.dedent("""
             import os
             import sys
 
@@ -910,8 +907,7 @@ class TestNonAsciiEncodingRegression:
                     "config": {{"cells": [{{"type": "markdown", "content": content}}]}},
                 }},
             )
-            """
-        ).format(content_literal=ascii(NON_ASCII_CONTENT))
+            """).format(content_literal=ascii(NON_ASCII_CONTENT))
         env = dict(os.environ)
         env["LC_ALL"] = "C"
         env["PYTHONUTF8"] = "0"

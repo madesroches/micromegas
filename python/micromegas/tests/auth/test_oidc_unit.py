@@ -112,8 +112,7 @@ def test_oidc_token_load_non_ascii_locale(tmp_path):
     }
     token_file.write_bytes(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import os
         import sys
         from unittest.mock import MagicMock, patch
@@ -141,8 +140,7 @@ def test_oidc_token_load_non_ascii_locale(tmp_path):
 
             provider = OidcAuthProvider.from_file(token_file)
             sys.stdout.buffer.write(provider.client_id.encode("utf-8"))
-        """
-    )
+        """)
     env = dict(os.environ)
     env["LC_ALL"] = "C"
     env["PYTHONUTF8"] = "0"

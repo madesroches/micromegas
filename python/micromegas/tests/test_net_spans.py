@@ -35,9 +35,7 @@ def test_net_spans_basic_query():
     FROM view_instance('net_spans', '{process_id}')
     ORDER BY begin_time
     LIMIT 50;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     rows = client.query(sql, process_begin, process_end)
     print("Net spans found:")
@@ -107,9 +105,7 @@ def test_net_spans_inclusive_size_invariant():
     WHERE p.kind = 'connection'
     GROUP BY p.span_id, p.bit_size
     LIMIT 100;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     summary = client.query(sql, process_begin, process_end)
     print("Connection bit rollups:")

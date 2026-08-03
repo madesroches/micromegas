@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Tests for DataFusion information_schema support (SHOW TABLES, etc.)"""
+
 from .test_utils import client
 
 

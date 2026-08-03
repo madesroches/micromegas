@@ -24,7 +24,6 @@ import requests
 from .otlp_helpers import assert_eventually, discover_process_id_by_property
 from .test_utils import client
 
-
 INGESTION_URL = os.environ.get("MICROMEGAS_INGESTION_URL", "http://127.0.0.1:9000")
 FIREHOSE_ENDPOINT = f"{INGESTION_URL}/ingestion/cloudwatch/v1/logs/firehose"
 

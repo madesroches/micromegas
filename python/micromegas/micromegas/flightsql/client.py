@@ -816,9 +816,7 @@ class FlightSQLClient:
             SELECT *
             FROM processes
             WHERE process_id='{process_id}';
-            """.format(
-            process_id=process_id
-        )
+            """.format(process_id=process_id)
         return self.query(sql)
 
     def query_streams(self, begin, end, limit, process_id=None, tag_filter=None):
@@ -881,9 +879,7 @@ class FlightSQLClient:
             FROM streams
             {where}
             LIMIT {limit};
-            """.format(
-            where=where, limit=limit
-        )
+            """.format(where=where, limit=limit)
         return self.query(sql, begin, end)
 
     def query_blocks(self, begin, end, limit, stream_id):
@@ -928,9 +924,7 @@ class FlightSQLClient:
             FROM blocks
             WHERE stream_id='{stream_id}'
             LIMIT {limit};
-            """.format(
-            limit=limit, stream_id=stream_id
-        )
+            """.format(limit=limit, stream_id=stream_id)
         return self.query(sql, begin, end)
 
     def query_spans(self, begin, end, limit, stream_id):
@@ -978,7 +972,5 @@ class FlightSQLClient:
             SELECT *
             FROM view_instance('thread_spans', '{stream_id}')
             LIMIT {limit};
-            """.format(
-            limit=limit, stream_id=stream_id
-        )
+            """.format(limit=limit, stream_id=stream_id)
         return self.query(sql, begin, end)
