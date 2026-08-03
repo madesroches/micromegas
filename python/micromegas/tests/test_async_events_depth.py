@@ -48,9 +48,7 @@ def test_async_events_depth_field_present():
     FROM view_instance('async_events', '{process_id}')
     ORDER BY time
     LIMIT 5;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     async_events = client.query(sql, process_begin, process_end)
     print("Async events with depth field:")
@@ -110,9 +108,7 @@ def test_async_events_depth_hierarchy_validation():
     WHERE parent.event_type = 'begin' AND child.event_type = 'begin'
     ORDER BY parent.depth, child.depth
     LIMIT 20;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     relationships = client.query(sql, process_begin, process_end)
     print("Parent-child depth relationships:")
@@ -168,9 +164,7 @@ def test_async_events_depth_based_filtering():
     WHERE event_type = 'begin' AND depth = 0
     GROUP BY name, depth
     ORDER BY count DESC;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     top_level = client.query(sql_top_level, process_begin, process_end)
     print("Top-level async operations (depth = 0):")
@@ -183,9 +177,7 @@ def test_async_events_depth_based_filtering():
     WHERE event_type = 'begin' AND depth <= 2
     GROUP BY depth
     ORDER BY depth;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     shallow = client.query(sql_shallow, process_begin, process_end)
     print("Shallow async operations (depth <= 2):")
@@ -199,9 +191,7 @@ def test_async_events_depth_based_filtering():
     GROUP BY name, depth
     ORDER BY depth DESC, count DESC
     LIMIT 10;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     deep = client.query(sql_deep, process_begin, process_end)
     print("Deep async operations (depth >= 3):")
@@ -263,9 +253,7 @@ def test_async_events_depth_performance_analysis():
     WHERE depth < 3  -- Only shallow operations (top-level and immediate children)
     GROUP BY name, depth
     ORDER BY avg_duration DESC;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     performance_results = client.query(sql, process_begin, process_end)
     print("Performance analysis by depth (shallow operations):")
@@ -287,9 +275,7 @@ def test_async_events_depth_performance_analysis():
     )
     GROUP BY depth
     ORDER BY depth;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     depth_comparison = client.query(sql_depth_comparison, process_begin, process_end)
     print("Performance comparison by call depth:")
@@ -350,9 +336,7 @@ def test_async_events_depth_nested_operations():
     HAVING COUNT(*) > 1  -- Functions that create multiple nested async operations
     ORDER BY nested_count DESC, depth DESC
     LIMIT 10;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     nested_operations = client.query(sql, process_begin, process_end)
     print("Operations with many nested async calls:")
@@ -365,9 +349,7 @@ def test_async_events_depth_nested_operations():
     WHERE event_type = 'begin'
     GROUP BY depth
     ORDER BY depth;
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     depth_distribution = client.query(sql_distribution, process_begin, process_end)
     print("Async operation depth distribution:")
@@ -424,9 +406,7 @@ def test_async_events_depth_range_validation():
            AVG(depth) as avg_depth, COUNT(DISTINCT depth) as unique_depths
     FROM view_instance('async_events', '{process_id}')
     WHERE event_type = 'begin';
-    """.format(
-        process_id=process_id
-    )
+    """.format(process_id=process_id)
 
     depth_stats = client.query(sql, process_begin, process_end)
     print("Depth value statistics:")

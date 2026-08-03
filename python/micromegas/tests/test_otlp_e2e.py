@@ -36,7 +36,6 @@ from .otlp_helpers import (
 )
 from .test_utils import client
 
-
 INGESTION_URL = os.environ.get("MICROMEGAS_INGESTION_URL", "http://127.0.0.1:9000")
 LOGS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/logs"
 METRICS_ENDPOINT = f"{INGESTION_URL}/ingestion/otlp/v1/metrics"
