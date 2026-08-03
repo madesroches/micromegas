@@ -171,6 +171,11 @@ def test_main_overflowing_begin_reports_usage_error(monkeypatch, capsys):
 def test_main_unknown_profile_reports_usage_error(tmp_path, monkeypatch, capsys):
     """An unresolvable --profile must be a clean argparse usage error (via
     ProfileError), not an uncaught traceback (issue #1403)."""
+    # Hermetic regardless of the developer's shell: MICROMEGAS_PYTHON_MODULE_WRAPPER
+    # would make connect() bypass profile resolution entirely, and a stray
+    # MICROMEGAS_PROFILE would change which profile name is resolved.
+    monkeypatch.delenv("MICROMEGAS_PYTHON_MODULE_WRAPPER", raising=False)
+    monkeypatch.delenv("MICROMEGAS_PROFILE", raising=False)
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(
         json.dumps(

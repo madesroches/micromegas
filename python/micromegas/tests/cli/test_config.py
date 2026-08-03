@@ -257,6 +257,48 @@ def test_env_profile_against_flat_config_raises_profile_error(tmp_path, monkeypa
         resolve_connection(config_path=cfg_file)
 
 
+def test_profiles_not_a_map_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {"profiles": "prod"}
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
+def test_profiles_list_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {"profiles": ["prod", "dev"]}
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
+def test_profile_entry_not_a_map_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {"prod": "grpc://h:1"},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
+def test_profile_entry_list_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {"prod": ["grpc://h:1"]},
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
 def test_resolve_connection_uses_per_profile_token_file(tmp_path):
     cfg_file = tmp_path / "config.json"
     data = {

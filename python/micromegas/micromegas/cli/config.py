@@ -65,7 +65,8 @@ def resolve_active_profile(config, profile=None):
     exists and the flat config is used directly as `active_config`. Raises
     `ProfileError` if `--profile`/`MICROMEGAS_PROFILE` is set but there's no
     `profiles` map, if a `profiles` map exists but no profile is selected,
-    or if the resolved name isn't in `profiles`.
+    if the resolved name isn't in `profiles`, or if `profiles` (or the
+    selected profile's entry) is malformed (not a map).
     """
     profiles = config.get("profiles")
     if profiles is None:
@@ -75,6 +76,9 @@ def resolve_active_profile(config, profile=None):
                 "or add a `profiles` map to the config file"
             )
         return None, config
+
+    if not isinstance(profiles, dict):
+        raise ProfileError("`profiles` must be a map of profile name to profile config")
 
     if not profiles:
         raise ProfileError("no profiles defined in the `profiles` map")
@@ -91,7 +95,10 @@ def resolve_active_profile(config, profile=None):
         raise ProfileError(
             f"unknown profile '{name}' (available: {', '.join(sorted(profiles))})"
         )
-    return name, profiles[name]
+    active = profiles[name]
+    if not isinstance(active, dict):
+        raise ProfileError(f"profile '{name}' must be a map of connection settings")
+    return name, active
 
 
 def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
