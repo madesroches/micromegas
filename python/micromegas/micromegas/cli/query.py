@@ -4,6 +4,7 @@ import pathlib
 import sys
 from micromegas.cli import connection
 from micromegas.cli.config import ProfileError
+from micromegas.cli.version import add_version_argument
 import datetime
 import micromegas
 from tabulate import tabulate
@@ -59,9 +60,10 @@ def read_sql_source(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="query",
+        prog="micromegas-query",
         description="Run arbitrary SQL queries on the analytics service",
     )
+    add_version_argument(parser)
     parser.add_argument(
         "sql", nargs="?", default=None, help="SQL query to execute (or use --file)"
     )

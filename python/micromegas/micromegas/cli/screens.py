@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from micromegas.cli.version import add_version_argument
 from micromegas.web_client import WebClient
 
 CONFIG_FILE = "micromegas-screens.json"
@@ -650,6 +651,7 @@ def main():
         prog="micromegas-screens",
         description="Manage micromegas screens as code",
     )
+    add_version_argument(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # init
