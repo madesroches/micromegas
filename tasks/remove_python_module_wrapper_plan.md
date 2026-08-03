@@ -28,7 +28,7 @@ help text, documentation row, and tests.
   - Line 657 documents `MICROMEGAS_PYTHON_MODULE_WRAPPER` in the environment variable
     reference table, between `MICROMEGAS_TOKEN_FILE` and the config-file section.
 - `python/micromegas/tests/cli/test_config.py`:
-  - Six tests reference the env var, each just adding it to a list of vars cleared via
+  - Five tests reference the env var, each just adding it to a list of vars cleared via
     `monkeypatch.delenv(..., raising=False)` before asserting on unrelated config resolution
     (lines 39, 58, 93, 110, 131). None of these tests assert on `python_module_wrapper`
     itself — no dedicated test exists for the wrapper's resolution or delegation behavior, so
