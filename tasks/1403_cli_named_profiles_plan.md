@@ -96,6 +96,16 @@ free: if `profiles` is absent, `resolve_connection` treats the whole dict as
 today's single connection — the existing flat-config tests keep passing
 unmodified.
 
+Once `profiles` is present, it takes over completely: any top-level flat keys
+(`uri`, `client_id`, `issuers`) left in the same file are ignored in favor of
+the selected profile's values, since `resolve_active_profile` returns
+`profiles[name]` as `active_config` rather than merging it with the
+top-level dict. This matters for a user migrating from a flat config to
+`profiles` who leaves the old flat keys in place — they become dead config,
+silently. The docs (Implementation Step 8) should call this out explicitly as
+a warning against mixing the two shapes in one file, rather than just showing
+the two shapes side by side.
+
 ### Profile name resolution
 
 New helper in `config.py`:
@@ -311,8 +321,20 @@ path that `resolve_connection` would never have picked.
    under `micromegas-query` and `micromegas-logout`, and add a "Named
    profiles" subsection showing the `profiles`/`default_profile` config shape
    next to the existing flat-config example, explicit about the flat shape
-   still being supported.
-9. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
+   still being supported and with a callout warning against mixing top-level
+   flat keys with a `profiles` map in the same file (the flat keys are
+   ignored once `profiles` is present).
+9. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
+   section's config probe calls `resolve_connection()` with no arguments,
+   which will raise `ValueError` (an unhandled Python exception in the probe
+   command, not a clean CLI usage error) for a user who has added a
+   `profiles` map with more than one entry and no `default_profile`/
+   `MICROMEGAS_PROFILE`. Add a short note to Setup covering this case (treat
+   the error as "no profile selected" and ask the user which profile to use,
+   or to set a `default_profile`), and mention `MICROMEGAS_PROFILE` /
+   `--profile` as an alternative to the flat `uri`/`client_id`/`issuers` keys
+   this section currently walks users through writing.
+10. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
 
 ## Files to Modify
 
@@ -324,6 +346,7 @@ path that `resolve_connection` would never have picked.
 - `python/micromegas/tests/cli/test_logout.py` (new)
 - `python/micromegas/tests/test_query.py`
 - `mkdocs/docs/query-guide/python-api.md`
+- `claude-plugin/skills/micromegas-query/SKILL.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -353,6 +376,11 @@ path that `resolve_connection` would never have picked.
   (`:636-683`) — env var table gets `MICROMEGAS_PROFILE`; new subsection for
   the `profiles`/`default_profile` shape; `--profile` documented under both
   `micromegas-query` and `micromegas-logout` CLI reference entries.
+- `claude-plugin/skills/micromegas-query/SKILL.md`: note in Setup that the
+  config probe (`resolve_connection()` with no arguments) can raise
+  `ValueError` when `profiles` has multiple entries and none is selected, and
+  mention `MICROMEGAS_PROFILE`/`--profile` alongside the existing flat-config
+  write-up.
 - `CHANGELOG.md`: new entry for the profiles feature.
 
 ## Testing Strategy
