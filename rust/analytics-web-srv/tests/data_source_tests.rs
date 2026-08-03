@@ -39,10 +39,17 @@ fn test_missing_url_field_rejected() {
 }
 
 #[test]
-fn test_non_http_scheme_rejected() {
+fn test_valid_grpc_url() {
     let result = validate_data_source_config(&config_json("grpc://localhost:50051"));
-    let err = result.unwrap_err();
-    assert_eq!(err.code, "INVALID_URL");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().url, "grpc://localhost:50051");
+}
+
+#[test]
+fn test_valid_grpc_tls_url() {
+    let result = validate_data_source_config(&config_json("grpc+tls://flight.example.com:443"));
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().url, "grpc+tls://flight.example.com:443");
 }
 
 #[test]
@@ -64,6 +71,8 @@ fn test_case_insensitive_scheme() {
     assert!(validate_data_source_config(&config_json("HTTP://localhost:50051")).is_ok());
     assert!(validate_data_source_config(&config_json("HTTPS://localhost:50051")).is_ok());
     assert!(validate_data_source_config(&config_json("Https://localhost:50051")).is_ok());
+    assert!(validate_data_source_config(&config_json("GRPC://localhost:50051")).is_ok());
+    assert!(validate_data_source_config(&config_json("GRPC+TLS://localhost:50051")).is_ok());
 }
 
 #[test]

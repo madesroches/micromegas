@@ -134,11 +134,15 @@ pub fn validate_data_source_config(
             "Config must include a non-empty 'url' field",
         ));
     }
+    const ACCEPTED_URL_SCHEMES: &[&str] = &["http://", "https://", "grpc://", "grpc+tls://"];
     let url_lower = parsed.url.to_lowercase();
-    if !url_lower.starts_with("http://") && !url_lower.starts_with("https://") {
+    if !ACCEPTED_URL_SCHEMES
+        .iter()
+        .any(|scheme| url_lower.starts_with(scheme))
+    {
         return Err(ValidationError::new(
             "INVALID_URL",
-            "URL must start with http:// or https://",
+            "URL must start with grpc://, grpc+tls://, http://, or https://",
         ));
     }
     Ok(parsed)
