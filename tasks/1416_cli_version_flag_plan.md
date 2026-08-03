@@ -127,7 +127,14 @@ than duplicating the `importlib.metadata.version` call.
 5. In `python/micromegas/micromegas/__init__.py`: import `package_version` from
    `.cli.version` and set `__version__ = package_version()`.
 6. Add tests (see Testing Strategy).
-7. Run `poetry run black` on all changed files.
+7. Update the "**Options:**" list for `query.py` in
+   `mkdocs/docs/query-guide/python-api.md` (around lines 603-609) to add a `--version` bullet;
+   the `micromegas-logout` and `micromegas-screens` sections on the same page don't enumerate
+   options the same way, so nothing to change there.
+8. Append a bullet under the `## Unreleased` section of `CHANGELOG.md` (under a `**Python:**`
+   heading, adding one if not already present) describing the new `--version` flag on all
+   three console scripts and the new `micromegas.__version__`.
+9. Run `poetry run black` on all changed files.
 
 ## Files to Modify
 
@@ -137,6 +144,8 @@ than duplicating the `importlib.metadata.version` call.
 - `python/micromegas/micromegas/cli/screens.py`
 - `python/micromegas/micromegas/__init__.py`
 - `python/micromegas/tests/cli/test_version.py` (new)
+- `mkdocs/docs/query-guide/python-api.md`
+- `CHANGELOG.md`
 
 ## Trade-offs
 
