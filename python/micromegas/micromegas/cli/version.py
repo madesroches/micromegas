@@ -38,14 +38,14 @@ class _VerbatimVersionAction(argparse.Action):
         version = self.version
         if version is None:
             version = parser.version
-        print(version % {"prog": parser.prog})
+        print(version)
         parser.exit(0)
 
 
 def add_version_argument(parser):
     """Add a --version flag reporting the micromegas package version and interpreter."""
     version_string = (
-        f"%(prog)s {package_version()} "
+        f"{parser.prog} {package_version()} "
         f"(Python {platform.python_version()} at {sys.executable})"
     )
     parser.add_argument(
