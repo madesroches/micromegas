@@ -61,14 +61,15 @@ override, no-issuers case). No test file exists for `connection.py` or
 `mkdocs/docs/query-guide/python-api.md:636-683` documents the three-source
 resolution order, the env var table, and the flat config file shape/key
 mapping table. `mkdocs/docs/admin/authentication.md:215-237` documents
-`MICROMEGAS_ANALYTICS_URI` and friends for server-side auth setup, and also
-hard-codes the client-side token cache as *the* single path: `:236` lists
-`MICROMEGAS_TOKEN_FILE`'s default as `~/.micromegas/tokens.json`, `:501`
-states tokens "are stored at `~/.micromegas/tokens.json`", and the
-troubleshooting steps at `:599-611` tell the reader to `cat
-~/.micromegas/tokens.json` / run `micromegas-logout`. Once a `profiles` map
-exists, the real path is `tokens-<profile>.json` and logout needs
-`--profile`, so this file needs a one-line update too (see Files to Modify).
+`MICROMEGAS_ANALYTICS_URI` and friends in the client-side `CLI Tools with
+OIDC` env-var section, and also hard-codes the client-side token cache as
+*the* single path: `:236` lists `MICROMEGAS_TOKEN_FILE`'s default as
+`~/.micromegas/tokens.json`, `:501` states tokens "are stored at
+`~/.micromegas/tokens.json`", and the troubleshooting steps at `:599-611`
+tell the reader to `cat ~/.micromegas/tokens.json` / run `micromegas-logout`.
+Once a `profiles` map exists, the real path is `tokens-<profile>.json` and
+logout needs `--profile`, so this file needs a one-line update too (see
+Files to Modify).
 
 ## Design
 
@@ -170,12 +171,13 @@ def resolve_active_profile(config, profile=None):
             )
         return None, config
 
+    if not profiles:
+        raise ProfileError("no profiles defined in the `profiles` map")
+
     name = resolve_profile_name(profile, config)
     if name is None:
         if len(profiles) == 1:
             name = next(iter(profiles))
-        elif len(profiles) == 0:
-            raise ProfileError("no profiles defined in the `profiles` map")
         else:
             raise ProfileError(
                 "multiple profiles configured but none selected; pass --profile, "
@@ -240,7 +242,7 @@ environment doesn't need `default_profile` boilerplate, while anyone with more
 than one profile gets a clear error instead of a silently wrong connection.
 
 An explicit `--profile`/`MICROMEGAS_PROFILE` against a legacy flat config (no
-`profiles` key) also raises `ValueError` rather than silently falling back to
+`profiles` key) also raises `ProfileError` rather than silently falling back to
 the flat config: a user with a stale `MICROMEGAS_PROFILE` env var or a typo'd
 `--profile` gets an explicit error instead of being routed to a connection
 with no indication the flag had any effect.
@@ -257,7 +259,12 @@ def default_token_file(profile: Optional[str] = None) -> str:
 Used as the fallback in `resolve_connection` (above) and reused by
 `logout.py` (below) so both places derive the same path from the same
 profile. `MICROMEGAS_TOKEN_FILE` still overrides it explicitly when set,
-matching today's precedence for the non-profile case.
+matching today's precedence for the non-profile case. This means an
+exported `MICROMEGAS_TOKEN_FILE` — which both `authentication.md:236` and
+`python-api.md`'s env var table advertise — overrides the per-profile
+fallback for *every* profile, collapsing them onto one shared token cache;
+this defeats the point of per-profile caching, so a user adopting profiles
+needs to leave `MICROMEGAS_TOKEN_FILE` unset (see Implementation Step 8).
 
 This plan only changes `micromegas-query`/`micromegas-logout`'s own
 resolution path. `python/micromegas/micromegas/cli/screens.py`'s
@@ -336,7 +343,7 @@ have used. Going through `resolve_active_profile` (the same helper
 `resolve_connection` uses) rather than calling `resolve_profile_name`
 directly means `logout.py` can't disagree with `resolve_connection` about
 which profile/token file is active: an unknown `--profile` (e.g. a typo'd
-`pro` for `prod`) raises the same `ValueError`, surfaced the same way via
+`pro` for `prod`) raises the same `ProfileError`, surfaced the same way via
 `parser.error`, instead of silently printing "No saved tokens found"; and an
 explicit `--profile`/`MICROMEGAS_PROFILE` against a flat config with no
 `profiles` map raises instead of quietly resolving a `tokens-<profile>.json`
@@ -347,7 +354,7 @@ path that `resolve_connection` would never have picked.
 1. **`config.py`**: add `resolve_profile_name()`, `default_token_file()`, and
    the shared `resolve_active_profile(config, profile)` helper; rewrite
    `resolve_connection()` to call it and use `default_token_file(name)` as
-   the token-file fallback. `resolve_active_profile()` raises `ValueError`
+   the token-file fallback. `resolve_active_profile()` raises `ProfileError`
    for an unknown or ambiguous profile, and also for an explicit
    `--profile`/`MICROMEGAS_PROFILE` when the config has no `profiles` map.
 2. **`connection.py`**: thread `profile=None, config_path=None` through
@@ -367,9 +374,11 @@ path that `resolve_connection` would never have picked.
    and the token path via `default_token_file()`, replacing the inline
    hard-coded default.
 5. **Tests** (`tests/cli/test_config.py`): first, add `MICROMEGAS_PROFILE` to
-   the `delenv` list every existing test already scrubs (`test_config.py`'s
-   8-var list, e.g. in `test_resolve_reads_config_file`,
-   `test_env_vars_override_config`, `test_config_without_issuers`) — without
+   each existing test's env scrubbing — the 8-var `delenv` lists in
+   `test_resolve_no_config_no_env`, `test_resolve_reads_config_file`, and
+   `test_config_without_issuers`; the 7-var list in
+   `test_uri_from_env_without_oidc`; and the individual `delenv` calls in
+   `test_env_vars_override_config` — without
    this, a developer's exported `MICROMEGAS_PROFILE` feeds a flat config into
    `resolve_active_profile`'s "no profiles configured" `ProfileError` path and
    breaks these tests. Every new test below must likewise explicitly set or
@@ -380,17 +389,17 @@ path that `resolve_connection` would never have picked.
    - `--profile` argument overrides `default_profile`
    - `MICROMEGAS_PROFILE` env var overrides `default_profile` but loses to an
      explicit `profile` argument
-   - unknown profile name raises `ValueError` mentioning the available names
+   - unknown profile name raises `ProfileError` mentioning the available names
    - `profiles` map with exactly one entry and nothing selected → used
      implicitly
    - `profiles` map with more than one entry and nothing selected →
-     `ValueError`
+     `ProfileError`
    - individual `MICROMEGAS_*` env vars still win over the active profile's
      values
    - `default_token_file()` returns the plain default when `profile is None`
      and a `tokens-<profile>.json` path otherwise
    - explicit `--profile` (or `MICROMEGAS_PROFILE`) with a flat config (no
-     `profiles` key) raises `ValueError`
+     `profiles` key) raises `ProfileError`
    - `resolve_connection()` against a `profiles` config returns
      `cfg.token_file == default_token_file(name)` (i.e. the
      `tokens-<profile>.json` path for the active profile), not the plain
@@ -435,12 +444,28 @@ path that `resolve_connection` would never have picked.
    still being supported and with a callout warning against mixing top-level
    flat keys with a `profiles` map in the same file (the flat keys are
    ignored once `profiles` is present), and noting that `default_profile` has
-   no effect unless a `profiles` map is also present. Also call out that
-   adding a `profiles` map — even a single implicit entry — moves the OIDC
-   token cache to a per-profile `tokens-<profile>.json` file, so turning
-   profiles on forces one fresh login even for an otherwise-unchanged
+   no effect unless a `profiles` map is also present. This subsection must
+   also spell out the profile *selection* rules themselves — the precedence
+   chain (`--profile` > `MICROMEGAS_PROFILE` > `default_profile`), the
+   implicit-selection rule when exactly one profile is configured and none is
+   selected, and the usage error raised when two or more profiles are
+   configured and none is selected — matching how `:636-645` today documents
+   the (pre-profiles) three-source resolution order. Also amend that existing
+   `:638-644` "three sources" text itself: once a `profiles` map exists,
+   per-field env vars are no longer the documented way to switch
+   environments/configure CI on a machine with 2+ profiles (an env-var-only
+   invocation now fails with the usage error above unless a profile is also
+   selected), so the "override individual settings via env vars ... for
+   switching environments" sentence needs to be corrected to describe
+   profile selection as happening first, with per-field env vars only
+   overriding individual settings *within* the selected profile. Also call
+   out that adding a `profiles` map — even a single implicit entry — moves
+   the OIDC token cache to a per-profile `tokens-<profile>.json` file, so
+   turning profiles on forces one fresh login even for an otherwise-unchanged
    connection (renaming the existing `tokens.json` to match beforehand avoids
-   it). Also add a single short line noting that the deprecated
+   it), and that an exported `MICROMEGAS_TOKEN_FILE` overrides that
+   per-profile fallback for every profile, so it should be left unset when
+   using profiles. Also add a single short line noting that the deprecated
    `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch bypasses `--profile`/
    `MICROMEGAS_PROFILE` entirely — not new documentation promoting it as a
    profiles-aware corporate-auth option. Also note that `micromegas-logout`
@@ -448,7 +473,14 @@ path that `resolve_connection` would never have picked.
    `oidc_connection` caller keep using the plain `~/.micromegas/tokens.json`
    default (see Per-profile token caching), which a profile-scoped
    `micromegas-logout` invocation cannot clear.
-9. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
+9. **Docs** (`mkdocs/docs/admin/authentication.md`): update the `:236`
+   `MICROMEGAS_TOKEN_FILE` row in the `### CLI Tools with OIDC` env-var
+   table — its documented default (`~/.micromegas/tokens.json`) only holds
+   when no `profiles` map is active — and add a `MICROMEGAS_PROFILE` row to
+   the same table, alongside the one-line notes already planned next to the
+   `:501` token-storage statement and the `:599-611` troubleshooting steps
+   (see Documentation).
+10. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
    section's config probe calls `resolve_connection()` with no arguments,
    which will raise `ProfileError` (an unhandled Python exception in the probe
    command, not a clean CLI usage error) for a user who has added a
@@ -484,9 +516,11 @@ path that `resolve_connection` would never have picked.
    `PowerShell(micromegas-logout)` entries (keep both — a trailing `*` on a
    fixed command compiles to a prefix wildcard that matches
    `micromegas-logout <args>` but not the bare, argument-less command the
-   Interactive SSO note still runs), since the stale-token recovery step may
-   now also need `micromegas-logout --profile <name>` once profiles exist.
-10. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
+   Interactive SSO note still runs), and amend that Interactive SSO stale-token
+   recovery instruction itself to run `micromegas-logout --profile <name>`
+   when a profile is active, falling back to the bare command otherwise — the
+   new wildcard grant is otherwise never exercised by anything in the skill.
+11. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
 
 ## Files to Modify
 
@@ -514,7 +548,7 @@ path that `resolve_connection` would never have picked.
   `default_profile` even for a single-profile setup, to minimize config
   boilerplate for the common case (one non-default environment). Risk: a
   second profile added later silently changes behavior from "just works" to
-  "must specify" — mitigated by the `ValueError` being immediate and
+  "must specify" — mitigated by the `ProfileError` being immediate and
   explicit, not a wrong-but-silent connection.
 - **Token file naming (`tokens-<profile>.json`) vs. a profile-keyed map inside
   one `tokens.json`**: the issue proposes both; this plan picks the
@@ -527,8 +561,15 @@ path that `resolve_connection` would never have picked.
 
 - `mkdocs/docs/query-guide/python-api.md`: update the "Configuration" section
   (`:636-683`) — env var table gets `MICROMEGAS_PROFILE`; new subsection for
-  the `profiles`/`default_profile` shape; `--profile` documented under both
-  `micromegas-query` and `micromegas-logout` CLI reference entries.
+  the `profiles`/`default_profile` shape that also documents the selection
+  precedence (`--profile` > `MICROMEGAS_PROFILE` > `default_profile`), the
+  implicit single-profile rule, and the multiple-profiles-none-selected usage
+  error; `--profile` documented under both `micromegas-query` and
+  `micromegas-logout` CLI reference entries; the existing `:638-644`
+  "three sources"/"switching environments" wording corrected to describe
+  profile selection happening before per-field env-var overrides; and a note
+  that an exported `MICROMEGAS_TOKEN_FILE` overrides per-profile token
+  caching for every profile.
 - `claude-plugin/skills/micromegas-query/SKILL.md`: amend the existing "this
   call is total" sentence in Setup and add a probe-outcome bullet covering the
   case where the config probe (`resolve_connection()` with no arguments) can
@@ -539,11 +580,15 @@ path that `resolve_connection` would never have picked.
   selected `profiles.<name>` entry (and sets `default_profile`) instead of
   merging top-level flat keys when a `profiles` map is already present, and
   add `micromegas-logout *` `allowed-tools` entries alongside the existing
-  bare-command ones so the stale-token recovery step can pass `--profile` —
-  see Implementation Step 9 for the full rationale.
-- `mkdocs/docs/admin/authentication.md`: add a one-line note next to the
-  `:501` token-storage statement and the `:599-611` troubleshooting steps
-  that a `profiles` map moves the cache to `tokens-<profile>.json` and that
+  bare-command ones, and amend the Interactive SSO stale-token recovery
+  instruction to run `micromegas-logout --profile <name>` when a profile is
+  active (so the new grant is actually exercised) — see Implementation Step
+  10 for the full rationale.
+- `mkdocs/docs/admin/authentication.md`: update the `:236`
+  `MICROMEGAS_TOKEN_FILE` default and add a `MICROMEGAS_PROFILE` row (see
+  Implementation Step 9), and add a one-line note next to the `:501`
+  token-storage statement and the `:599-611` troubleshooting steps that a
+  `profiles` map moves the cache to `tokens-<profile>.json` and that
   `micromegas-logout --profile <name>` (not the bare command) clears it.
 - `CHANGELOG.md`: new entry for the profiles feature.
 
@@ -552,7 +597,7 @@ path that `resolve_connection` would never have picked.
 - Unit tests in `tests/cli/test_config.py` cover the resolution matrix
   described in Implementation Step 5 — these are hermetic (no live service
   needed), consistent with the existing file — including the explicit
-  `--profile`/`MICROMEGAS_PROFILE` with a flat config raising `ValueError`,
+  `--profile`/`MICROMEGAS_PROFILE` with a flat config raising `ProfileError`,
   the per-profile `token_file` wiring in `resolve_connection()`, and
   `MICROMEGAS_PROFILE` scrubbed from (or explicitly set in) every test's env,
   per Step 5.
