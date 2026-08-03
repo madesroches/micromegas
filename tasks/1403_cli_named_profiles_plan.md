@@ -398,9 +398,12 @@ path that `resolve_connection` would never have picked.
    - `MICROMEGAS_TOKEN_FILE`, when set, still overrides that per-profile
      default in `resolve_connection()`'s output
 6. **Tests** (new `tests/cli/test_logout.py` or extend `tests/test_query.py`
-   patterns): cover `--profile` selecting the right token file to delete, the
-   case where no token file exists, and an unknown `--profile` raising the
-   same `ProfileError` (via `resolve_active_profile`) that `resolve_connection`
+   patterns): cover `--profile` selecting the right token file to delete, a
+   bare `micromegas-logout` (no `--profile`) against a flat config deleting
+   the plain `DEFAULT_TOKEN_FILE` — today's behavior, and the one most at
+   risk of regressing here — the case where no token file exists, and an
+   unknown `--profile` raising the same `ProfileError` (via
+   `resolve_active_profile`) that `resolve_connection`
    raises for `micromegas-query`. `logout.main()` has no `config_path`/
    `--config` seam and reads `~/.micromegas/config.json` through the
    module-level `config.CONFIG_PATH` constant, so these tests must
@@ -553,8 +556,10 @@ path that `resolve_connection` would never have picked.
   the per-profile `token_file` wiring in `resolve_connection()`, and
   `MICROMEGAS_PROFILE` scrubbed from (or explicitly set in) every test's env,
   per Step 5.
-- `tests/cli/test_logout.py` (new) covers profile-aware token file deletion
-  and the unknown-profile error case, also hermetic (just filesystem + env
+- `tests/cli/test_logout.py` (new) covers profile-aware token file deletion,
+  the bare `micromegas-logout` flat-config case (deleting the plain
+  `DEFAULT_TOKEN_FILE` via the `config.DEFAULT_TOKEN_FILE` monkeypatch), and
+  the unknown-profile error case, also hermetic (just filesystem + env
   vars, no network) — per Implementation Step 6, hermetic here means
   monkeypatching `config.CONFIG_PATH` and `HOME`/`Path.home`, not just
   avoiding the network, since `logout.main()` otherwise reads the developer's
