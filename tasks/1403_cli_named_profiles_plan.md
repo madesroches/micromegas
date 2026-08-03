@@ -86,12 +86,12 @@ existing flat shape:
   "default_profile": "prod",
   "profiles": {
     "prod": {
-      "uri": "https://analytics.example.com:443",
+      "uri": "grpc://analytics.example.com:50051",
       "client_id": "...",
       "issuers": [{ "issuer": "https://issuer.example.com/v2.0", "audience": "..." }]
     },
     "dev": {
-      "uri": "https://analytics-dev.example.com:443",
+      "uri": "grpc://analytics-dev.example.com:50051",
       "client_id": "...",
       "issuers": [{ "issuer": "https://issuer.example.com/v2.0", "audience": "..." }]
     },
