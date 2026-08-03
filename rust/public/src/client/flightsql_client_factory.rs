@@ -72,11 +72,25 @@ impl BearerFlightSQLClientFactory {
     }
 }
 
+/// Rewrites the `grpc://`/`grpc+tls://` scheme convention used by data source configs into the
+/// `http://`/`https://` scheme tonic's `Channel` expects for its TLS decision. `http://`/`https://`
+/// URLs pass through unchanged.
+pub fn normalize_channel_scheme(url: &str) -> String {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("grpc+tls://") {
+        format!("https://{}", &url["grpc+tls://".len()..])
+    } else if lower.starts_with("grpc://") {
+        format!("http://{}", &url["grpc://".len()..])
+    } else {
+        url.to_string()
+    }
+}
+
 #[async_trait]
 impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
     async fn make_client(&self) -> Result<Client> {
-        let flight_url = self
-            .url
+        let normalized_url = normalize_channel_scheme(&self.url);
+        let flight_url = normalized_url
             .parse::<Uri>()
             .with_context(|| "parsing flightsql url")?;
         let mut endpoint = Channel::builder(flight_url.clone());
