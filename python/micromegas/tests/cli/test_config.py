@@ -36,7 +36,6 @@ def test_resolve_no_config_no_env(tmp_path, monkeypatch):
         "MICROMEGAS_OIDC_AUDIENCE",
         "MICROMEGAS_OIDC_SCOPE",
         "MICROMEGAS_TOKEN_FILE",
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER",
     ]:
         monkeypatch.delenv(var, raising=False)
     missing = tmp_path / "nonexistent.json"
@@ -55,7 +54,6 @@ def test_resolve_reads_config_file(tmp_path, monkeypatch):
         "MICROMEGAS_OIDC_AUDIENCE",
         "MICROMEGAS_OIDC_SCOPE",
         "MICROMEGAS_TOKEN_FILE",
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER",
     ]:
         monkeypatch.delenv(var, raising=False)
 
@@ -90,7 +88,6 @@ def test_env_vars_override_config(tmp_path, monkeypatch):
     monkeypatch.delenv("MICROMEGAS_OIDC_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("MICROMEGAS_OIDC_SCOPE", raising=False)
     monkeypatch.delenv("MICROMEGAS_TOKEN_FILE", raising=False)
-    monkeypatch.delenv("MICROMEGAS_PYTHON_MODULE_WRAPPER", raising=False)
 
     cfg = resolve_connection(config_path=cfg_file)
     assert cfg.uri == "grpc://env-host:9999"
@@ -107,7 +104,6 @@ def test_uri_from_env_without_oidc(tmp_path, monkeypatch):
         "MICROMEGAS_OIDC_AUDIENCE",
         "MICROMEGAS_OIDC_SCOPE",
         "MICROMEGAS_TOKEN_FILE",
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER",
     ]:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MICROMEGAS_ANALYTICS_URI", "grpc://remote:50051")
@@ -128,7 +124,6 @@ def test_config_without_issuers(tmp_path, monkeypatch):
         "MICROMEGAS_OIDC_AUDIENCE",
         "MICROMEGAS_OIDC_SCOPE",
         "MICROMEGAS_TOKEN_FILE",
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER",
     ]:
         monkeypatch.delenv(var, raising=False)
 

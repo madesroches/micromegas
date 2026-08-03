@@ -654,7 +654,6 @@ Each setting is resolved independently, so you can put stable values in the conf
 | `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier (e.g., for Auth0, Azure) | — |
 | `MICROMEGAS_OIDC_SCOPE` | Custom OAuth scopes | `openid email profile offline_access` |
 | `MICROMEGAS_TOKEN_FILE` | Where to cache OIDC tokens | `~/.micromegas/tokens.json` |
-| `MICROMEGAS_PYTHON_MODULE_WRAPPER` | Python module providing `connect()` for corporate auth (takes precedence over OIDC) | — |
 
 **Config file (`~/.micromegas/config.json`):**
 

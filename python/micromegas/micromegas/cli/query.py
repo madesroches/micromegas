@@ -60,7 +60,6 @@ def main():
     parser = argparse.ArgumentParser(
         prog="query",
         description="Run arbitrary SQL queries on the analytics service",
-        epilog="If you are in a corporate environment, you may need to set the MICROMEGAS_PYTHON_MODULE_WRAPPER environment variable to specify the python module responsible to authenticate your requests.",
     )
     parser.add_argument(
         "sql", nargs="?", default=None, help="SQL query to execute (or use --file)"
