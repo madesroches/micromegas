@@ -197,9 +197,16 @@ import tool — it only affects carrying *existing* key strings forward.
 1. **Deploy the new binaries.** The migration creates the tables (schema v5).
    Nothing changes yet: the env keyring still authenticates every existing key,
    and the DB tables start empty. In a split deployment, start ingestion (or
-   the monolith) before flight-sql — flight-sql never runs the migration itself,
-   and its own startup check fails loudly, naming the table, if this ordering
-   is violated.
+   the monolith) before flight-sql — flight-sql never runs the migration itself.
+   Its startup check for a live key store only *aborts* startup when no other
+   auth provider is configured; since the env keyring (or OIDC) is still
+   authenticating at this stage, violating this ordering instead surfaces as a
+   `warn!` log line naming the table, and flight-sql starts anyway. That
+   warning is not safe to ignore: once step 3 removes `MICROMEGAS_API_KEYS`,
+   the DB-backed provider is the only thing left, and a schema still short of
+   v5 then means every request gets a `503` instead of a startup failure. Fix
+   the ordering as soon as the warning appears, rather than waiting for step 3
+   to surface it as an outage.
 2. **Populate the tables** — one hand-written `INSERT ... ON CONFLICT (key_hash)
    DO NOTHING` per key (see [Minting an analytics key by hand](#minting-an-analytics-key-by-hand)
    for the exact recipe; the ingestion-table shape is identical). Route each

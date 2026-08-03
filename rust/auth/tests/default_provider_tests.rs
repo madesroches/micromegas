@@ -151,9 +151,21 @@ async fn non_empty_table_alone_counts_as_configured() {
 /// **Empty table + nothing else configured ⇒ `Ok(None)`**, preserving the
 /// "genuinely empty deployment" startup guard.
 ///
-/// Assumes this runs against a scratch/test database whose `ingestion_api_keys`
-/// table currently has no live rows — the same assumption every other
-/// live-Postgres test in this repo makes about its schema/tables.
+/// Uses the same throwaway-schema / `search_path` trick as
+/// `missing_relation_is_err_not_none` below, but here the schema is created
+/// up front with an empty `ingestion_api_keys` table (just the `revoked_at`
+/// column `key_store_has_live_rows`'s query touches), so this test never
+/// depends on the *real* `ingestion_api_keys` table in the shared
+/// `MICROMEGAS_SQL_CONNECTION_STRING` database being empty. Other live-DB
+/// test binaries (`rust/public/tests/api_keys_tests.rs`,
+/// `rust/auth/tests/db_api_key_tests.rs`) insert rows into that same shared
+/// table, and cargo runs test binaries as separate concurrent processes —
+/// `#[serial]` only serializes within one binary, so asserting against the
+/// shared table directly would be spuriously flaky.
+///
+/// The throwaway schema is dropped unconditionally at the end (even if an
+/// assertion below fails) by deferring the actual checks into a `Result`
+/// and only `expect`-ing it after cleanup has run.
 #[ignore]
 #[tokio::test]
 #[serial]
@@ -165,21 +177,66 @@ async fn empty_table_and_nothing_else_yields_none() {
         std::env::remove_var(OIDC_CONFIG_VAR);
     }
 
-    let pool = live_pool().await;
-    let has_rows = key_store_has_live_rows(&pool, ApiKeyTable::Ingestion)
-        .await
-        .expect("query should succeed against a migrated schema");
-    assert!(
-        !has_rows,
-        "this test requires a scratch DB with no live ingestion_api_keys rows"
-    );
+    let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live, migrated Postgres");
+    let schema = "mm_1383_test_empty_live_rows_schema";
 
-    let result = ProviderBuilder::new("")
-        .with_db_key_store(pool, ApiKeyTable::Ingestion)
-        .build()
+    let setup_pool = sqlx::PgPool::connect(&base_conn_str)
         .await
-        .expect("build should succeed");
-    assert!(result.is_none());
+        .expect("connecting to metadata Postgres");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping any stale throwaway schema from a previous failed run");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&setup_pool)
+        .await
+        .expect("creating throwaway schema");
+    sqlx::query(&format!(
+        "CREATE TABLE {schema}.ingestion_api_keys (key_id UUID PRIMARY KEY, revoked_at TIMESTAMPTZ)"
+    ))
+    .execute(&setup_pool)
+    .await
+    .expect("creating throwaway empty ingestion_api_keys table");
+
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)
+        .expect("valid connection string")
+        .options([("search_path", schema)]);
+    let throwaway_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("connecting with a throwaway search_path");
+
+    let test_result: Result<(), String> = async {
+        let has_rows = key_store_has_live_rows(&throwaway_pool, ApiKeyTable::Ingestion)
+            .await
+            .map_err(|e| format!("query should succeed against the throwaway schema: {e:#}"))?;
+        if has_rows {
+            return Err("throwaway table must start with no live rows".to_string());
+        }
+
+        let result = ProviderBuilder::new("")
+            .with_db_key_store(throwaway_pool.clone(), ApiKeyTable::Ingestion)
+            .build()
+            .await
+            .map_err(|e| format!("build should succeed: {e:#}"))?;
+        if result.is_some() {
+            return Err(
+                "an empty key store with nothing else configured must yield None".to_string(),
+            );
+        }
+        Ok(())
+    }
+    .await;
+
+    throwaway_pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping throwaway schema");
+
+    test_result.expect("test assertions");
 }
 
 /// **Missing relation ⇒ `Err` naming the table**: a throwaway single-connection
