@@ -170,9 +170,9 @@ changes needed in that file — there's no client-side scheme validation to rela
   (the tonic channel's TLS decision). An alternative — rewriting to canonical `http`/`https` at
   validation time — would silently change what the user typed and offers no benefit since there is
   only one consumer of the URL.
-- **Private helper function, not a shared utility**: `BearerFlightSQLClientFactory` has exactly one
-  caller in the workspace, so there's no second call site to share logic with; introducing a shared
-  scheme-normalization utility now would be speculative.
+- **Free function scoped to this module, not a shared utility**: `normalize_channel_scheme` has
+  exactly one caller in the workspace, so there's no second call site to share logic with;
+  introducing a shared scheme-normalization utility now would be speculative.
 
 ## Testing Strategy
 
