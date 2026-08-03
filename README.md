@@ -77,6 +77,16 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.28.0 (August 2026)
+* Audience-based Access Control: the five mutating lakehouse SQL functions (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are now gated on the caller's admin status via a new gRPC header, matched against `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`
+* CloudWatch Firehose ingestion: new endpoints let CloudWatch Metric Streams and CloudWatch Logs reach micromegas via Kinesis Data Firehose HTTP Endpoint Delivery with no Lambda or collector in between, partitioned per CloudWatch namespace
+* Order-preserving k-way merge for `SqlBatchView`s and `blocks_view` via a new per-file scan mode, collapsing sorted partitions in one pass instead of buffering a full sort
+* Python client: raised the minimum supported Python version to 3.11, enabling native RFC 3339 `Z`-suffixed timestamp parsing across the FlightSQL client and `micromegas-query` CLI
+* Screens folders: folder organization for saved screens (list/create/rename/move/delete), sidebar tree, and a Save-dialog folder picker
+* Observability: per-query FlightSQL audit log, a `pg_stat_*` self-observability collector on the maintenance daemon, process RSS/jemalloc gauges on every service, and per-view failure isolation in the materialization pass
+* Object-cache hardening: client-side circuit breaker, a two-step read replacing a foyer race, disk→RAM promotion metrics, and graceful-shutdown drain fixes
+* DataFusion 54.1; Rust toolchain 1.97.1; Grafana plugin SDK 12.4.6; `analytics-web-app` migrated from Jest to Vitest; assorted Dependabot fixes
+
 ### v0.27.0 (July 2026)
 * Tiered object read cache: new `micromegas-object-cache` engine powering a standalone range-aware S3 read cache service (`micromegas-object-cache-srv`, Foyer RAM+disk) and an in-process L1 cache; single-flight coalescing, priority budgeting, memory-bounded prefetch, NDJSON-streamed `/prefetch`, streamed range responses, write-time cache warming, and extensive performance telemetry
 * Removed the Postgres `partition_metadata` table (schema v6): partition Parquet metadata is now read solely from the Parquet footer via the object-cache-backed reader, eliminating TOAST and write-path overhead

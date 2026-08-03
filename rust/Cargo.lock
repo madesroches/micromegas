@@ -54,7 +54,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "analytics-web-srv"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "arrow-ipc",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "clap",
  "micromegas",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "http-gateway"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3673,7 +3673,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-auth"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3747,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-capi"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "micromegas-telemetry-sink",
  "micromegas-tracing",
@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-datafusion-extensions"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3768,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "quote",
  "syn",
@@ -3776,7 +3776,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3795,7 +3795,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-monolith"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "analytics-web-srv",
  "anyhow",
@@ -3809,7 +3809,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-object-cache"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-object-cache-srv"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-otel-ingestion"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-perfetto"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3892,7 +3892,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-proc-macros"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3901,7 +3901,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3919,7 +3919,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3951,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -3981,7 +3981,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -6090,7 +6090,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6101,7 +6101,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-maintenance-srv"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -7275,7 +7275,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "write-perfetto"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "chrono",

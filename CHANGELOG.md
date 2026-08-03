@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+## v0.28.0 - 2026-08-02
+
 * **Claude Code Plugin:**
   * Fix the `micromegas-query` skill failing to load outright whenever `micromegas-query` isn't installed or its connection isn't configured yet — precisely the two cases its own `## Setup` section exists to repair. Replace the load-time `!`-prefixed shell probes (which aborted the whole skill load on a non-zero exit) with an ordinary first-use check the agent runs and reacts to, and switch persistent configuration from a `~/.micromegas_env` file sourced by the shell profile (which never reached the agent's own subsequent tool calls) to `~/.micromegas/config.json`, already read by the library on every invocation; also tighten `allowed-tools` to the minimum the skill needs (#1404)
 * **Python:**
