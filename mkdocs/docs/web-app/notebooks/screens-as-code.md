@@ -96,6 +96,8 @@ Each screen is a single `.json` file:
 
 ## Commands
 
+Pass `--version` to print the installed micromegas package and interpreter version and exit.
+
 ### `init`
 
 ```bash

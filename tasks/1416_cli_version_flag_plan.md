@@ -34,18 +34,25 @@ point's argument parser and exposes `micromegas.__version__` for library users.
 
 ## Design
 
-Use argparse's built-in `action="version"`, resolving the version via
-`importlib.metadata.version("micromegas")`. Note this lookup happens once per invocation, at
-parser-construction time in `main()` (argparse's `version=` string is built eagerly when
-`add_argument()` runs, not deferred to when `--version` is actually passed) — a small, cheap
-cost paid by every command run, not just `--version`. Safety against `PackageNotFoundError` in
-an unusual/dev environment comes from `package_version()`'s own try/except, not from deferred
-evaluation.
+Resolve the version via `importlib.metadata.version("micromegas")`. Note this lookup happens
+once per invocation, at parser-construction time in `main()` (the version string is built
+eagerly when `add_argument()` runs, not deferred to when `--version` is actually passed) — a
+small, cheap cost paid by every command run, not just `--version`. Safety against
+`PackageNotFoundError` in an unusual/dev environment comes from `package_version()`'s own
+try/except, not from deferred evaluation.
 
-To avoid duplicating the same three lines across three files, add one small shared helper:
+To avoid duplicating the same three lines across three files, add one small shared helper.
+Rather than argparse's built-in `action="version"`, define a custom `_VerbatimVersionAction`:
+argparse's built-in action routes the version string through `HelpFormatter`, which reflows
+text to the terminal width and can break long tokens (like the interpreter path) mid-word at
+narrow widths; printing the string as-is avoids that. The version string is also built as a
+plain f-string embedding `parser.prog` directly, rather than a `%(prog)s`-style template
+string, since `%`-style formatting corrupts (or crashes on) values that themselves contain a
+literal `%` character, which can happen when the interpreter path does:
 
 ```python
 # python/micromegas/micromegas/cli/version.py
+import argparse
 import importlib.metadata
 import platform
 import sys
@@ -59,22 +66,53 @@ def package_version():
         return "unknown"
 
 
+class _VerbatimVersionAction(argparse.Action):
+    """Like argparse's built-in "version" action, but prints the string as-is
+    instead of routing it through HelpFormatter, which reflows (and can break
+    mid-token) long paths such as the interpreter path."""
+
+    def __init__(
+        self,
+        option_strings,
+        version=None,
+        dest=argparse.SUPPRESS,
+        default=argparse.SUPPRESS,
+        help="show program's version number and exit",
+    ):
+        super().__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help,
+        )
+        self.version = version
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        version = self.version
+        if version is None:
+            version = parser.version
+        print(version)
+        parser.exit(0)
+
+
 def add_version_argument(parser):
     """Add a --version flag reporting the micromegas package version and interpreter."""
     version_string = (
-        f"%(prog)s {package_version()} "
+        f"{parser.prog} {package_version()} "
         f"(Python {platform.python_version()} at {sys.executable})"
     )
     parser.add_argument(
         "--version",
-        action="version",
+        action=_VerbatimVersionAction,
         version=version_string,
     )
 ```
 
 Each CLI's `main()` calls `add_version_argument(parser)` right after constructing its
-top-level `ArgumentParser`, before `parse_args()`. `%(prog)s` reuses each script's existing
-`prog=` value, so output stays consistent with existing help text, e.g.:
+top-level `ArgumentParser`, before `parse_args()`. The version string is built eagerly from
+`parser.prog`, reusing each script's existing `prog=` value, so output stays consistent with
+existing help text, e.g.:
 
 ```
 $ micromegas-query --version
@@ -183,14 +221,21 @@ Add `python/micromegas/tests/cli/test_version.py` covering:
 - Each of the three `main()` entry points exits with code `0` and prints a version string
   containing the package version and interpreter details when invoked with `--version`, using
   `monkeypatch.setattr(sys, "argv", [...])` + `pytest.raises(SystemExit)` (the standard
-  pattern for testing argparse's `action="version"`, since it calls `parser.exit()`).
-  Capture stdout via `capsys` and assert the printed output contains
+  pattern for testing `parser.exit()`-based version actions, which `_VerbatimVersionAction`
+  also uses). Capture stdout via `capsys` and assert the printed output contains
   `importlib.metadata.version("micromegas")`, `platform.python_version()`, and
   `sys.executable`.
 - `micromegas-screens --version` (top-level, no subcommand) also exits `0` and prints the
   version, confirming the `required=True` subparser check doesn't preempt it.
 - `import micromegas; micromegas.__version__` equals
   `importlib.metadata.version("micromegas")`.
+- A narrow-terminal regression test (`COLUMNS=30`) confirms `--version` output isn't reflowed
+  or split mid-token by `HelpFormatter`, which `_VerbatimVersionAction` fixes by printing the
+  version string directly instead of going through argparse's built-in `action="version"`.
+- A regression test with `sys.executable` monkeypatched to a path containing a literal `%`
+  character confirms the interpreter path is embedded verbatim (not `%`-interpolated), which
+  `_VerbatimVersionAction`'s plain f-string construction of the version string fixes relative
+  to `%(prog)s`-style templating.
 
 Run via `poetry run pytest tests/cli/test_version.py` from `python/micromegas/`.
 

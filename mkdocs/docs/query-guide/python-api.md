@@ -26,6 +26,8 @@ client = micromegas.connect(preserve_dictionary=True)
 
 The `connect()` function connects to the analytics service at `grpc://localhost:50051`.
 
+The installed package version is available as `micromegas.__version__`.
+
 **Parameters:**
 - `preserve_dictionary` (bool, optional): Enable dictionary encoding preservation for memory-efficient data transfer. Default: `False`
 
@@ -757,6 +759,8 @@ micromegas-logout --profile prod
 
 `micromegas-logout` doesn't read `config.json` and doesn't look at `MICROMEGAS_PROFILE` — `--profile`
 is its only narrowing mechanism.
+
+Pass `--version` to print the installed package and interpreter version and exit.
 
 ## Time Utilities
 

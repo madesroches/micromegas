@@ -59,3 +59,16 @@ def test_screens_version_flag(monkeypatch, capsys):
     assert importlib.metadata.version("micromegas") in out
     assert platform.python_version() in out
     assert sys.executable in out
+
+
+def test_query_version_flag_percent_in_interpreter_path(monkeypatch, capsys):
+    # Regression test: a %-style formatted version string (e.g. via "%(prog)s")
+    # would mangle or crash on a literal "%" in sys.executable.
+    weird_executable = "/weird/pa%th/py%(prog)s/python3.11"
+    monkeypatch.setattr(sys, "executable", weird_executable)
+    monkeypatch.setattr(sys, "argv", ["micromegas-query", "--version"])
+    with pytest.raises(SystemExit) as exc_info:
+        query.main()
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert weird_executable in out
