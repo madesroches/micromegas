@@ -1,11 +1,15 @@
 # API Keys
 
-Micromegas keys have moved out of `MICROMEGAS_API_KEYS` (a plaintext JSON env
-var, parsed once at startup) and into two Postgres tables — `ingestion_api_keys`
-and `analytics_api_keys` — holding only a SHA-256 hash of each key plus a
-`created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit trail.
-Three OIDC-authenticated, admin-gated HTTP routes on the ingestion service let
-an operator mint, list, and revoke keys without a redeploy.
+Micromegas keys can live in two Postgres tables — `ingestion_api_keys` and
+`analytics_api_keys` — instead of `MICROMEGAS_API_KEYS` (a plaintext JSON env
+var, parsed once at startup). The tables hold only a SHA-256 hash of each key
+plus a `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit
+trail, and three OIDC-authenticated, admin-gated HTTP routes on the ingestion
+service let an operator mint, list, and revoke keys without a redeploy.
+
+The env keyring still works and is still checked; adopting the key store is an
+operator decision, not an automatic upgrade — see
+[Migration from the env keyring](#migration-from-the-env-keyring).
 
 !!! warning "TLS is a prerequisite for minting"
     `POST /auth/api_keys` returns the cleartext key exactly once, over whatever
@@ -199,9 +203,9 @@ GRANT UPDATE (last_used_at) ON analytics_api_keys TO micromegas_analytics;
 
 Importing *existing* key strings is a manual, hand-written-SQL operation today
 — a proper HTTP-API-backed import tool (and a web admin UI for key management)
-is tracked separately; until it lands, follow the recipe below. This plan's
-tables and the ingestion mint/list/revoke API stand on their own without an
-import tool — it only affects carrying *existing* key strings forward.
+is tracked separately; until it lands, follow the recipe below. The tables and
+the ingestion mint/list/revoke API stand on their own without an import tool —
+it only affects carrying *existing* key strings forward.
 
 1. **Deploy the new binaries.** The migration creates the tables (schema v5).
    Nothing changes yet: the env keyring still authenticates every existing key,
