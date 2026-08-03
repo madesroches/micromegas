@@ -129,8 +129,10 @@ than duplicating the `importlib.metadata.version` call.
 6. Add tests (see Testing Strategy).
 7. Update the "**Options:**" list for `query.py` in
    `mkdocs/docs/query-guide/python-api.md` (around lines 603-609) to add a `--version` bullet;
-   the `micromegas-logout` and `micromegas-screens` sections on the same page don't enumerate
-   options the same way, so nothing to change there.
+   the `micromegas-logout` section on the same page doesn't enumerate options the same way, so
+   nothing to change there. `micromegas-screens` isn't documented on `python-api.md` at all —
+   its docs live in `mkdocs/docs/web-app/notebooks/screens-as-code.md`, which also needs no
+   change since it doesn't enumerate a top-level flag list either.
 8. Append a bullet under the `## Unreleased` section of `CHANGELOG.md` (under a `**Python:**`
    heading, adding one if not already present) describing the new `--version` flag on all
    three console scripts and the new `micromegas.__version__`.
