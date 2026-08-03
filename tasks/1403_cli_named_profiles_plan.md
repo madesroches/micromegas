@@ -301,9 +301,11 @@ path that `resolve_connection` would never have picked.
    case where no token file exists, and an unknown `--profile` raising the
    same `ValueError` (via `resolve_active_profile`) that `resolve_connection`
    raises for `micromegas-query`.
-7. **Tests** (`tests/test_query.py`): a subprocess-style test (matching the
-   existing usage-error tests added for #1405) asserting an unknown
-   `--profile` exits 2 with a usage message, not a traceback.
+7. **Tests** (`tests/test_query.py`): a test following the existing
+   usage-error pattern (added in PR #1407, issue #1405) — `monkeypatch.setattr(sys,
+   "argv", [...])`, call `main()` directly, and assert `pytest.raises(SystemExit)`
+   — asserting an unknown `--profile` exits 2 with a usage message, not a
+   traceback.
 8. **Docs** (`mkdocs/docs/query-guide/python-api.md:636-683`): add
    `MICROMEGAS_PROFILE` to the env var table, document the `--profile` flag
    under `micromegas-query` and `micromegas-logout`, and add a "Named
@@ -362,9 +364,12 @@ path that `resolve_connection` would never have picked.
 - `tests/cli/test_logout.py` (new) covers profile-aware token file deletion
   and the unknown-profile error case, also hermetic (just filesystem + env
   vars, no network).
-- `tests/test_query.py` gets one subprocess-based negative test for an
-  unknown `--profile`, mirroring the existing `--begin`/`--end` usage-error
-  tests added for #1407.
+- `tests/test_query.py` gets one negative test for an unknown `--profile`,
+  mirroring the existing `--begin`/`--end` usage-error test (e.g.
+  `test_main_overflowing_begin_reports_usage_error`, added in PR #1407, issue
+  #1405), which uses `monkeypatch.setattr(sys, "argv", [...])` and
+  `pytest.raises(SystemExit)` around a direct `main()` call rather than
+  `subprocess.run`.
 - Manual smoke test: create a `~/.micromegas/config.json` with two profiles,
   run `micromegas-query --profile local "SELECT 1" --all` against a locally
   running monolith, then repeat with `MICROMEGAS_PROFILE=local` and no flag,
