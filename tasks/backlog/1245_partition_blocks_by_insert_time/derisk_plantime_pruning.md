@@ -50,7 +50,7 @@ throwaway Aurora Serverless v2 instance, otherwise a local PG of the same major.
 count to production (90 days × hourly ≈ 2,160 child partitions + `DEFAULT`).
 
 Script it in Python (per project convention) under
-`tasks/1245_partition_blocks_by_insert_time/scripts/` (or a temp harness); steps:
+`tasks/backlog/1245_partition_blocks_by_insert_time/scripts/` (or a temp harness); steps:
 
 1. **Build a production-shaped hierarchy.** Create `blocks` `PARTITION BY RANGE (insert_time)`,
    2,160 hourly partitions each with a local `UNIQUE (block_id)` index, plus the `DEFAULT`. Populate

@@ -57,24 +57,20 @@ Consequence of the two unprefixed call sites: in a split deployment, *every key 
 creates the v1 schema via `sql_telemetry_db.rs::create_tables` when the version reads 0, then applies
 `upgrade_data_lake_schema_v2/v3/v4` in sequence and asserts the final version. New tables therefore
 belong **only** in a new step, never in `create_tables` (same shape as v4, which adds
-`streams.format` even though `create_tables` creates `streams`). **v5 is not exclusively claimed**:
-`tasks/1245_partition_blocks_by_insert_time/plan.md:550,577` also reserves v5 for the
-blocks-partitioning work (plan committed 2026-07-15, not yet implemented). **Hard prerequisite: this
-plan claims v5 and must merge and deploy before `tasks/1245`'s schema work lands.** Coordinate with
-that plan's owner if it is close to landing. **This coordination is two-sided, not just an ordering
-question, and merging first does not by itself protect this migration**: `tasks/1245`'s plan
-(`tasks/1245_partition_blocks_by_insert_time/plan.md:600-620`) changes `create_migration_table` to
-stamp a fresh install directly to `LATEST_DATA_LAKE_SCHEMA_VERSION` rather than 1, which skips *every*
-numbered `if N == current_version` arm on a fresh install — including this plan's v5 arm — once it
-lands, regardless of which plan merged first. So whichever plan lands second, `tasks/1245`'s
-fresh-install path (`create_tables` / `create_migration_table`) must also be updated to create
-`ingestion_api_keys` / `analytics_api_keys`, or the numbered-arm chain must be preserved for fresh
-installs — this is a coordination item to raise with #1245's owner, not a fact this plan can guarantee
-by merging first. Separately, if `tasks/1245` lands first, a same-numbered v5 migration added
-afterward would never run on a new database either way, so this plan must additionally be re-versioned
-as a deliberate follow-up edit against whatever version is then latest. See Implementation Steps
-Phase 1 step 1 for the version this migration claims, and for the caveat this implies for
-`create_tables`.
+`streams.format` even though `create_tables` creates `streams`). **v5 is uncontested**:
+`tasks/backlog/1245_partition_blocks_by_insert_time/plan.md` (blocks-partitioning, moved to backlog,
+not scheduled) no longer hardcodes v5 for its own cutover — it claims whatever version is next
+available at the time it is actually implemented, deliberately deferring to whichever plan lands
+first. Since this plan is being actively implemented now, it claims v5 outright, no coordination
+needed on the number itself. **What #1245 must still do when it is eventually picked up, regardless
+of number**: its plan already notes that its `create_migration_table` change — stamping a fresh
+install directly to `LATEST_DATA_LAKE_SCHEMA_VERSION` rather than `1` — skips *every* numbered
+`if N == current_version` arm on a fresh install, including this plan's v5 arm. So whoever implements
+#1245 must also update its fresh-install path (`create_tables` / `create_migration_table`) to create
+`ingestion_api_keys` / `analytics_api_keys`, or preserve the numbered-arm chain for fresh installs —
+this is called out in #1245's own plan as a TODO for its implementer, not something this plan needs
+to guard against today. See Implementation Steps Phase 1 step 1 for the version this migration
+claims, and for the caveat this implies for `create_tables`.
 
 `connect_to_remote_data_lake` (`rust/ingestion/src/remote_data_lake.rs:45`) runs `execute_migration`
 under a DB lock (the `execute_migration` call at `:34` runs under the advisory lock taken at `:29`),
@@ -667,15 +663,15 @@ Registered as `micromegas-import-api-keys` in `python/micromegas/pyproject.toml`
    `upgrade_data_lake_schema_vN`, e.g. `rust/ingestion/src/sql_migration.rs:52,72,86`, and required
    because `execute_migration` re-reads the version in the same transaction and asserts
    `current_version == LATEST_DATA_LAKE_SCHEMA_VERSION`); bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 5;
-   add the corresponding `if 4 == current_version` arm to `execute_migration`. This requires this plan
-   to merge and deploy before `tasks/1245_partition_blocks_by_insert_time`'s schema work lands (see
-   [Current State](#current-state) → Schema and migrations); if `tasks/1245` lands first instead, this
-   plan must be re-versioned as a deliberate follow-up edit rather than claiming v5. **Do not** touch
+   add the corresponding `if 4 == current_version` arm to `execute_migration`. No coordination needed
+   on the version number: `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md` (blocks
+   partitioning) is unscheduled backlog and no longer hardcodes v5 for its own cutover — see
+   [Current State](#current-state) → Schema and migrations. **Do not** touch
    `sql_telemetry_db.rs::create_tables` — fresh databases reach the new version through the same
    upgrade path, **but this holds only as long as `create_migration_table` still stamps a fresh install
    to `1`**; if `tasks/1245`'s fresh-install stamping change lands (see [Current State](#current-state)
    → Schema and migrations), the fresh-install path must be revisited so new databases still get these
-   two tables.
+   two tables — #1245's own plan now carries this as a TODO for its implementer.
 
 ### Phase 2 — Provider
 
@@ -971,10 +967,10 @@ Ordering, for both split and monolith deployments:
    (`rust/ingestion/src/sql_migration.rs:150-199`) is never exercised by a stale binary here — that
    failure mode is a property of an unsupported deployment model, not a live constraint under
    coordinated upgrades. flight-sql and the maintenance daemon do not run `execute_migration` and are
-   unaffected. **The version-number coordination with `tasks/1245_partition_blocks_by_insert_time`** is
-   a hard sequencing prerequisite, not a deploy-time risk: this plan must land and claim v5 before that
-   plan's schema work lands — see [Current State](#current-state) → Schema and migrations for what
-   happens if the ordering is violated.
+   unaffected. **No version-number coordination is needed with
+   `tasks/backlog/1245_partition_blocks_by_insert_time`**: that plan is unscheduled backlog and claims
+   whatever version is next available whenever it is picked up, so this plan claims v5 outright — see
+   [Current State](#current-state) → Schema and migrations.
 2. Run `micromegas-import-api-keys` and apply its SQL, passing `--skip` only for a key name that is an
    `object-cache-srv` client key used *exclusively* as such (see §5) — those names stay env-only rather
    than be imported into either table. A name that is also a service's own ingestion self-telemetry

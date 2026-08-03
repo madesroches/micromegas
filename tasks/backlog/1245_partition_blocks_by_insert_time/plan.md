@@ -622,7 +622,13 @@ not idempotent against the new partitioned schema (e.g. `upgrade_data_lake_schem
 TABLE blocks ADD insert_time` has no `IF NOT EXISTS` and would fail against a table that already
 has the column) — `create_migration_table` must stamp the `migration` row directly to
 `LATEST_DATA_LAKE_SCHEMA_VERSION`, not `1`, when invoked from the fresh-install path in
-`create_tables`. Note this stamps to whatever the running binary's LATEST is: `N` during deploy 1
+`create_tables`. **Whoever implements this must check `create_tables` for every table any numbered
+migration added since this plan was written and add it here too** — stamping straight to LATEST
+means a fresh install never runs those numbered arms, so any table they create (e.g.
+`ingestion_api_keys` / `analytics_api_keys` from
+`tasks/data_isolation/1383_db_api_key_store_plan.md`, if that plan has landed by then) must be
+created directly in `create_tables`'s fresh-install path or it silently won't exist on a new
+database. Note this stamps to whatever the running binary's LATEST is: `N` during deploy 1
 (before the later bump deploy) or `N+1` after it — so a fresh install during the interim window
 (deploy 1 live, LATEST still `N`) creates a partitioned `blocks` but stamps `migration` to `N`, not
 `N+1`. Because `execute_migration` gates each upgrade step on an exact `if N == current_version` check
