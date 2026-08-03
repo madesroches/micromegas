@@ -61,8 +61,14 @@ override, no-issuers case). No test file exists for `connection.py` or
 `mkdocs/docs/query-guide/python-api.md:636-683` documents the three-source
 resolution order, the env var table, and the flat config file shape/key
 mapping table. `mkdocs/docs/admin/authentication.md:215-237` documents
-`MICROMEGAS_ANALYTICS_URI` and friends for server-side auth setup (not
-directly affected, but cross-references the same env vars).
+`MICROMEGAS_ANALYTICS_URI` and friends for server-side auth setup, and also
+hard-codes the client-side token cache as *the* single path: `:236` lists
+`MICROMEGAS_TOKEN_FILE`'s default as `~/.micromegas/tokens.json`, `:501`
+states tokens "are stored at `~/.micromegas/tokens.json`", and the
+troubleshooting steps at `:599-611` tell the reader to `cat
+~/.micromegas/tokens.json` / run `micromegas-logout`. Once a `profiles` map
+exists, the real path is `tokens-<profile>.json` and logout needs
+`--profile`, so this file needs a one-line update too (see Files to Modify).
 
 ## Design
 
@@ -253,6 +259,21 @@ Used as the fallback in `resolve_connection` (above) and reused by
 profile. `MICROMEGAS_TOKEN_FILE` still overrides it explicitly when set,
 matching today's precedence for the non-profile case.
 
+This plan only changes `micromegas-query`/`micromegas-logout`'s own
+resolution path. `python/micromegas/micromegas/cli/screens.py`'s
+`make_client()` builds its OIDC provider straight from `MICROMEGAS_OIDC_*`
+env vars and calls `load_or_login()` with no `token_file`, so it keeps
+reading/writing the plain default `~/.micromegas/tokens.json` regardless of
+any `profiles`/`MICROMEGAS_PROFILE` config — as does any other direct
+`oidc_connection` caller. Once `micromegas-logout` becomes profile-scoped
+(deleting `tokens-<profile>.json` instead), it can no longer clear that
+shared default file — including any pre-adoption `tokens.json` left over
+from before a `profiles` map was introduced. This plan leaves that default
+path outside `micromegas-logout`'s reach rather than having the bare,
+no-`--profile` invocation delete both; a user who needs to clear
+`micromegas-screens`' cached token still has to `rm
+~/.micromegas/tokens.json` by hand.
+
 ### `connect()` and `--profile`
 
 `connection.py`:
@@ -337,9 +358,14 @@ path that `resolve_connection` would never have picked.
    connection failure like `pyarrow.lib.ArrowInvalid` from a malformed
    profile `uri` isn't misreported as a usage error).
 4. **`logout.py`**: add `--profile` argument; resolve the profile name via
-   the shared `resolve_active_profile()` + `load_config()` (catching
-   `ValueError` → `parser.error()`, matching `query.py`) and the token path
-   via `default_token_file()`, replacing the inline hard-coded default.
+   the shared `resolve_active_profile()` + `load_config()`, catching the
+   broader `ValueError` (not just `ProfileError`) → `parser.error()`, since
+   this also covers `load_config`'s malformed-JSON error — unlike
+   `connect()` in `query.py`, `load_config()`/`resolve_active_profile()` here
+   is the only thing that can raise, so there's no unrelated `ValueError`
+   (e.g. `pyarrow.lib.ArrowInvalid`) to avoid misreporting as a usage error —
+   and the token path via `default_token_file()`, replacing the inline
+   hard-coded default.
 5. **Tests** (`tests/cli/test_config.py`): first, add `MICROMEGAS_PROFILE` to
    the `delenv` list every existing test already scrubs (`test_config.py`'s
    8-var list, e.g. in `test_resolve_reads_config_file`,
@@ -414,7 +440,11 @@ path that `resolve_connection` would never have picked.
    it). Also add a single short line noting that the deprecated
    `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch bypasses `--profile`/
    `MICROMEGAS_PROFILE` entirely — not new documentation promoting it as a
-   profiles-aware corporate-auth option.
+   profiles-aware corporate-auth option. Also note that `micromegas-logout`
+   is profile-scoped: `micromegas-screens` and any other direct
+   `oidc_connection` caller keep using the plain `~/.micromegas/tokens.json`
+   default (see Per-profile token caching), which a profile-scoped
+   `micromegas-logout` invocation cannot clear.
 9. **Skill doc** (`claude-plugin/skills/micromegas-query/SKILL.md`): the Setup
    section's config probe calls `resolve_connection()` with no arguments,
    which will raise `ProfileError` (an unhandled Python exception in the probe
@@ -446,11 +476,13 @@ path that `resolve_connection` would never have picked.
    the no-argument probe and bare `micromegas-logout` (see below) keep
    resolving the right profile without needing `--profile`/`MICROMEGAS_PROFILE`
    on every call.
-   Also widen the two `micromegas-logout` `allowed-tools` entries
-   (`Bash(micromegas-logout)`, `PowerShell(micromegas-logout)`) to
-   `micromegas-logout *`, since the stale-token recovery step (Interactive SSO
-   note) may need `micromegas-logout --profile <name>` once profiles exist, and
-   the exact bare command is otherwise the only permitted form.
+   Also add `Bash(micromegas-logout *)` / `PowerShell(micromegas-logout *)`
+   alongside the existing `Bash(micromegas-logout)` /
+   `PowerShell(micromegas-logout)` entries (keep both — a trailing `*` on a
+   fixed command compiles to a prefix wildcard that matches
+   `micromegas-logout <args>` but not the bare, argument-less command the
+   Interactive SSO note still runs), since the stale-token recovery step may
+   now also need `micromegas-logout --profile <name>` once profiles exist.
 10. **CHANGELOG.md**: add an entry, following the pattern of the #1407 entry.
 
 ## Files to Modify
@@ -463,6 +495,7 @@ path that `resolve_connection` would never have picked.
 - `python/micromegas/tests/cli/test_logout.py` (new)
 - `python/micromegas/tests/test_query.py`
 - `mkdocs/docs/query-guide/python-api.md`
+- `mkdocs/docs/admin/authentication.md`
 - `claude-plugin/skills/micromegas-query/SKILL.md`
 - `CHANGELOG.md`
 
@@ -502,9 +535,13 @@ path that `resolve_connection` would never have picked.
   write-up. Also update the config-*writing* step so it writes into the
   selected `profiles.<name>` entry (and sets `default_profile`) instead of
   merging top-level flat keys when a `profiles` map is already present, and
-  widen the `micromegas-logout` `allowed-tools` entries to `micromegas-logout
-  *` so the stale-token recovery step can pass `--profile` — see
-  Implementation Step 9 for the full rationale.
+  add `micromegas-logout *` `allowed-tools` entries alongside the existing
+  bare-command ones so the stale-token recovery step can pass `--profile` —
+  see Implementation Step 9 for the full rationale.
+- `mkdocs/docs/admin/authentication.md`: add a one-line note next to the
+  `:501` token-storage statement and the `:599-611` troubleshooting steps
+  that a `profiles` map moves the cache to `tokens-<profile>.json` and that
+  `micromegas-logout --profile <name>` (not the bare command) clears it.
 - `CHANGELOG.md`: new entry for the profiles feature.
 
 ## Testing Strategy
