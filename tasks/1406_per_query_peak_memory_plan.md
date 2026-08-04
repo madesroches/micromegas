@@ -230,6 +230,8 @@ Add to `QueryAuditRecord` (`query_audit.rs`):
 
 ```rust
 pub peak_memory_bytes: u64,
+pub spilled_bytes: u64,
+pub spill_count: u64,
 ```
 
 `QueryAuditState` gains `pool: Arc<ScopedMemoryPool>`; `emit()` reads `self.pool.peak() as u64`.
@@ -239,11 +241,29 @@ grew it is fine — `emit` on the success path runs after the stream yielded `Re
 already establishes happens-before through the task scheduler, and on the error/`Drop` paths a
 slightly stale relaxed read of a monotonic counter is acceptable for a diagnostic.
 
+Spilling is enabled deliberately, and that is the motivation for the other two fields.
+`make_runtime_env()` (`runtime.rs:9-27`) builds via plain `RuntimeEnvBuilder::new()`, which inherits
+DataFusion's default `DiskManager`: the OS temp directory, capped at 100 GB (`DiskManagerConfig`'s
+`#[default]` is `NewOs`, `disk_manager.rs:122-132`; the cap is `DEFAULT_MAX_TEMP_DIRECTORY_SIZE`,
+`disk_manager.rs:33,45-52`). That is a deliberate safety valve, preferable to hard-failing a query
+outright. Precisely *because* it is a safety valve rather than a normal operating mode, an actual
+spill is an event operators need to see: the analytics service and maintenance daemon run on Fargate
+instances with little local disk, so a spilling query is consuming scarce container storage.
+`spilled_bytes`/`spill_count` are the alarm for that; `peak_memory_bytes` is the leading indicator
+that finds expensive queries before they get there.
+
+Spill metrics come from the plan tree, extending `ScanMetrics` / `aggregate_scan_metrics`
+(`query_audit.rs:13-39`) with a second accumulator in the same walk. **`sum_by_name` cannot be used
+here**: `MetricsSet::sum_by_name` explicitly returns `false` for `MetricValue::SpillCount` and
+`SpilledBytes` (`datafusion-physical-expr-common-54.1.0/src/metrics/mod.rs:298-315`), so it would
+silently report zero. Use the dedicated accessors `MetricsSet::spill_count()` /
+`MetricsSet::spilled_bytes()` (`:245-254`), summed over the tree.
+
 In deployments `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` is set, so the inner pool is a real
 `GreedyMemoryPool` with a budget (it defaults to `UnboundedMemoryPool` only locally, when the var is
 absent). `peak_memory_bytes` is precisely what tells operators whether that budget is set correctly
-and which queries are pushing against it (see Out of Scope for why spill metrics aren't part of this
-picture).
+and which queries are pushing against it; `spilled_bytes`/`spill_count` distinguish queries that
+actually leaned on the disk-spill safety valve from those that merely came close.
 
 Also emit `imetric!("query_peak_memory_bytes", "bytes", peak)` for dashboards — low cardinality,
 no `PropertySet` needed. Cheap and additive; include it. It must be emitted from
@@ -254,6 +274,30 @@ the setup-error `map_err` closures), so putting the `imetric!` there means error
 records contribute a sample too, typically ~0 for setup failures since the pool has barely been
 used at that point. That is the intended, uniform behavior: every audited query — success, error,
 or incomplete — reports one `query_peak_memory_bytes` sample.
+
+### Bounding the spill blast radius
+
+The safety valve above has no cap that operators control today: `make_runtime_env()`
+(`runtime.rs:9-27`) never touches the disk manager, so DataFusion's 100 GB default
+(`DEFAULT_MAX_TEMP_DIRECTORY_SIZE`, `disk_manager.rs:33`) is always in force. On a Fargate instance
+with little local disk, that default is effectively no cap at all — the container's disk fills long
+before DataFusion's limit trips.
+
+Add `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB`, read in `make_runtime_env()` the same way as
+`MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` — parse to `usize`, propagate a parse error with `?` — and,
+when set, apply it via `RuntimeEnvBuilder::with_max_temp_directory_size(mb * 1024 * 1024)`. Unset
+keeps DataFusion's 100 GB default, so behavior is unchanged for anyone not setting it. This is a few
+lines in one function, not a redesign of `make_runtime_env`.
+
+`make_runtime_env()` is shared by both services — `LakehouseContext::new`/`with_caches`
+(`lakehouse_context.rs:41`, `:56`) build from it, and `telemetry-maintenance-srv` constructs its
+`LakehouseContext` the same way `flight-sql-srv` does — so both variables govern the maintenance
+daemon's query engine too. The daemon's merges and materialization run on the shared, unscoped pool,
+with no audit record and no per-query attribution (see Out of Scope), so there the memory budget is a
+process-wide ceiling rather than something traceable to one query; the spill cap applies the same way
+on both services regardless. Once the cap is set, `spilled_bytes`/`spill_count` are what tell
+operators a query is actually leaning on the valve; the cap is what bounds how far a leaning query
+can go on a small disk.
 
 ### Scope and limits of the metric
 
@@ -276,12 +320,19 @@ are where an expensive query blows up, and those all register consumers. Note th
 reserves that amount against the memory pool as a merge-reservation floor in
 `sort_or_spill_in_mem_batches` (`sorts/sort.rs:714-719`) — reserved precisely because
 `DiskManager::tmp_files_enabled()` is true here, which gates `reserve_memory_for_merge`
-(`sorts/sort.rs:716-726`; see Out of Scope on spilling being enabled).
+(`sorts/sort.rs:716-726`; see Reporting, above, on why spilling is enabled).
 
-`peak_memory_bytes` comes from the `ScopedMemoryPool` instance, so it naturally includes nested
-session contexts built during execution (Perfetto trace queries, `fetch_block_metadata`, JIT
-materialization) — that inheritance is the whole point of scoping at `LakehouseContext` rather than
-per-session.
+`peak_memory_bytes` and `spilled_bytes`/`spill_count` do not share the same scope. The peak comes
+from the `ScopedMemoryPool` instance, so it naturally includes nested session contexts built during
+execution (Perfetto trace queries, `fetch_block_metadata`, JIT materialization) — that inheritance is
+the whole point of scoping at `LakehouseContext` rather than per-session. The spill counters instead
+come from walking `plan.children()` of the *outer* physical plan in `aggregate_scan_metrics`
+(`query_audit.rs:22-32`); a nested session context built inside a leaf node (e.g.
+`perfetto_trace_execution_plan.rs:232`, `parse_block_table_function.rs:81`,
+`process_spans_table_function.rs:254`) is an opaque leaf in that tree, so any spill inside it is
+invisible to the sum. A query can therefore legitimately show `peak_memory_bytes > 0` with
+`spilled_bytes == 0` even when nested work spilled — this is not a bug, just a narrower scope for the
+spill counters than for the peak.
 
 ### Complement to the existing bounded-memory guardrails
 
@@ -322,23 +373,33 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
 3. **`LakehouseContext::with_runtime`** — struct-update clone in
    `rust/analytics/src/lakehouse/lakehouse_context.rs`, with a doc comment stating that the metadata
    cache and reader factory are shared.
-4. **Audit record field** — add `peak_memory_bytes` to `QueryAuditRecord` in
-   `rust/public/src/servers/query_audit.rs`. Update the module doc comment.
+4. **Audit record fields** — add `peak_memory_bytes`, `spilled_bytes`, `spill_count` to
+   `QueryAuditRecord`; extend `ScanMetrics` and `aggregate_scan_metrics` in
+   `rust/public/src/servers/query_audit.rs` to sum spills via `MetricsSet::spill_count()` /
+   `spilled_bytes()` in the existing tree walk. Update the module doc comment.
 5. **FlightSQL wiring** — in `execute_query`: construct the `ScopedMemoryPool` before `audit_state`
    and add it as `pool: Arc<ScopedMemoryPool>` on `QueryAuditState` from the start; build the scoped
    `RuntimeEnv`/context after, `map_err`-ing into `audit_state.emit("error", ...)` like every other
-   setup stage; populate the new field in `emit()`; pass the scoped `LakehouseContext` to
+   setup stage; populate the three new fields in `emit()`; pass the scoped `LakehouseContext` to
    `make_session_context`; and emit the
    `query_peak_memory_bytes` `imetric!` from `emit()` itself — not the setup-phase timing-metrics
    block (`:451-462`), where the peak is still ~0. Since `emit()` is also called from the
    setup-error `map_err` closures and from the `Drop` impl for abandoned streams, those paths will
    contribute a (possibly ~0) sample too — intentional, so every audited query reports one point.
-6. **Tests** — new `rust/analytics/tests/scoped_memory_pool_tests.rs` (auto-discovered;
+6. **Configurable spill cap** — in `make_runtime_env()` (`rust/analytics/src/lakehouse/runtime.rs`),
+   read a new `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` env var the same way the function already
+   parses `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` (parse to `usize`, propagate a parse error with
+   `?`), and when set apply it via `RuntimeEnvBuilder::with_max_temp_directory_size(mb * 1024 *
+   1024)`. Unset keeps DataFusion's 100 GB default, so behavior is unchanged for anyone not setting
+   it. A few lines in one function — not a redesign of `make_runtime_env`.
+7. **Tests** — new `rust/analytics/tests/scoped_memory_pool_tests.rs` (auto-discovered;
    `analytics/Cargo.toml` has no `[[test]]` blocks) plus the `QueryAuditRecord` constructor/assertion
    updates in `rust/public/tests/query_audit_tests.rs`.
-7. **Docs** — `mkdocs/docs/query-guide/query-audit-log.md` field table, a "most memory-hungry
-   queries" example, and a Notes bullet on what the peak does and doesn't cover. CHANGELOG entry
-   under `## Unreleased` → `**Analytics:**`.
+8. **Docs** — `mkdocs/docs/query-guide/query-audit-log.md` field table, a "most memory-hungry
+   queries" example, and a Notes bullet on what the peak does and doesn't cover; a new env-var table
+   in `mkdocs/docs/admin/flight-sql.md` covering `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` and
+   `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB`. CHANGELOG entry under `## Unreleased` →
+   `**Analytics:**`.
 
 ## Files to Modify
 
@@ -346,13 +407,15 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
 |------|--------|
 | `rust/analytics/src/lakehouse/scoped_memory_pool.rs` | **new** — the wrapper |
 | `rust/analytics/src/lakehouse/mod.rs` | declare the module |
-| `rust/analytics/src/lakehouse/runtime.rs` | add `scoped_runtime` |
+| `rust/analytics/src/lakehouse/runtime.rs` | add `scoped_runtime`; read `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` in `make_runtime_env` |
 | `rust/analytics/src/lakehouse/lakehouse_context.rs` | add `with_runtime` |
-| `rust/public/src/servers/query_audit.rs` | 1 new record field |
+| `rust/public/src/servers/query_audit.rs` | 3 new record fields; spill sums in `ScanMetrics` |
 | `rust/public/src/servers/flight_sql_service_impl.rs` | scoped context in `execute_query`; `pool` on `QueryAuditState`; new `imetric!` |
 | `rust/analytics/tests/scoped_memory_pool_tests.rs` | **new** — isolation + balance tests |
 | `rust/public/tests/query_audit_tests.rs` | update the two record constructors + assertions |
 | `mkdocs/docs/query-guide/query-audit-log.md` | field table, example, notes |
+| `mkdocs/docs/admin/flight-sql.md` | env-var table entries for the DataFusion memory budget and the new spill cap |
+| `mkdocs/docs/admin/maintenance.md` | same two rows in the existing env-var table, with a note on the daemon's process-wide (unscoped) budget |
 | `CHANGELOG.md` | Unreleased entry |
 
 ## Trade-offs
@@ -378,20 +441,35 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
 ## Documentation
 
 - `mkdocs/docs/query-guide/query-audit-log.md`:
-  - One row in the **Fields** table: `peak_memory_bytes` (always; peak tracked DataFusion reservation
-    for this query alone).
+  - Three rows in the **Fields** table: `peak_memory_bytes` (always; peak tracked DataFusion
+    reservation for this query alone), `spilled_bytes` and `spill_count` (always; nonzero only once
+    the query actually spills to disk — the exceptional safety-valve path, not the common case).
   - A new example query under the existing "Slowest individual queries" section — same
     `jsonb_parse`/`jsonb_get`/`jsonb_as_i64` shape, `ORDER BY peak_memory_bytes DESC`, selecting
     `sql` for drill-down.
   - A **Notes** bullet: the peak is a per-query lower bound on process cost (list the untracked
     categories); it is a monotonic high-water mark, so it is valid on `error` and `incomplete`
     records too; and it is the signal to use when judging whether the deployed
-    `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` is set correctly and which queries are pushing against it.
+    `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` is set correctly and which queries are pushing against
+    it, with `spilled_bytes`/`spill_count` as the alarm for when a query actually leans on the
+    disk-spill safety valve rather than merely coming close.
   - A second **Notes** bullet: `peak_memory_bytes` covers nested session contexts (Perfetto trace
-    queries, JIT materialization), since the peak comes from the `ScopedMemoryPool` instance shared
-    by the whole query, not from the outer plan alone. Also: a query that runs
-    `materialize_partitions`/`regenerate_partitions` reports the merge's peak against the calling
-    query, understated by the row-group-buffer caveat above.
+    queries, JIT materialization) but `spilled_bytes`/`spill_count` only sum the outer plan tree, so
+    a query can show `peak_memory_bytes > 0` with `spilled_bytes == 0` even once nested work has
+    spilled. Also: a query that runs `materialize_partitions`/`regenerate_partitions` reports the
+    merge's peak against the calling query, understated by the row-group-buffer caveat above.
+- `mkdocs/docs/admin/flight-sql.md`: add a short env-var table (variable / required / description,
+  matching the style at `mkdocs/docs/admin/object-cache.md:52`) covering
+  `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` (the query memory budget; unset means an unbounded pool;
+  note that it **is** set in deployments — this variable is currently documented nowhere in
+  `mkdocs/`, its own gap) and `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` (cap on total spill-file
+  bytes; default 100 GB, DataFusion's; note that the default is far larger than available Fargate
+  container disk).
+- `mkdocs/docs/admin/maintenance.md`: add the same two variables as rows in the existing
+  environment-variable table (`MICROMEGAS_SQL_CONNECTION_STRING`, `MICROMEGAS_OBJECT_STORE_URI`), with
+  a sentence noting that the daemon's merges and materialization run on the shared, unscoped pool, so
+  here the budget is a process-wide ceiling rather than attributable to one query; the spill cap
+  applies the same way as on `flight-sql-srv`.
 - `CHANGELOG.md` under `## Unreleased`, new `**Analytics:**` bullet.
 - No new page needed — the audit-log page is the natural home, and this is additive to a documented
   record.
@@ -420,8 +498,14 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
    inner pool, rather than asserting `reserved() == 0`, which would hold even without that forwarding.
 
 **Unit — `rust/public/tests/query_audit_tests.rs`**: extend `full_record` and the
-`omits_absent_optionals` record with the new field and assert it serializes (it is a non-optional
-`u64`, so it must always be present).
+`omits_absent_optionals` record with the three new fields and assert they serialize (all three are
+non-optional `u64`, so they must always be present); extend the `aggregate_scan_metrics` `FakeExec`
+tests with, on two different child nodes, `MetricBuilder::new(&metrics).spill_count(0).add(n)` and
+`.spilled_bytes(0).add(m)` for distinct non-zero `n`/`m` (the `0` argument is the partition index,
+per the existing `.output_rows(0).add(rows)` pattern at `:61` — not a value), then assert the
+tree-summed totals equal `n` and `m`. Non-zero values on non-root nodes are essential: they are what
+makes a broken `sum_by_name`-based implementation (which returns `false`, hence `0`, for
+`SpillCount`/`SpilledBytes`) actually fail the test instead of coincidentally matching.
 
 **Integration**: start the local test env
 (`python3 local_test_env/ai_scripts/start_services.py`), run a memory-hungry query
@@ -436,7 +520,8 @@ FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY peak DESC
 
 Confirm the sort's `peak_memory_bytes > 0`, the trivial query's is `0`, and that a Perfetto-trace
 query (`perfetto_trace_chunks`) reports non-zero — proving the nested-context inheritance.
-Re-run once with `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` set low enough to make the query fail with
+Re-run once with `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` set low enough to force a spill and confirm
+`spilled_bytes > 0`; re-run again with the budget set low enough instead to make the query fail with
 an out-of-memory error, and confirm the resulting `error` audit record still carries a non-zero
 `peak_memory_bytes` and that the OOM message still lists top consumers.
 
@@ -457,16 +542,5 @@ an out-of-memory error, and confirm the resulting `error` audit record still car
 - **A per-operator breakdown.** Explicitly not an objective; `TrackConsumersPool`'s existing
   top-consumers text remains the tool for that, and now it is reachable per query via the scoped
   chain if that ever changes.
-- **Spill metrics (`spilled_bytes`/`spill_count`)**: out of scope. Spilling to disk *is* enabled —
-  `make_runtime_env()` (`runtime.rs:9-27`) builds the runtime with plain `RuntimeEnvBuilder::new()`,
-  which inherits DataFusion's default `DiskManager`: the OS temp directory, capped at 100 GB
-  (`DiskManagerConfig`'s `#[default]` is `NewOs`, `disk_manager.rs:122-132`; the cap is
-  `DEFAULT_MAX_TEMP_DIRECTORY_SIZE`, `disk_manager.rs:33,45-52`). That is left as-is deliberately: a
-  rarely-exercised safety valve, preferable to hard-failing a query outright. The analytics service
-  and maintenance daemon run on Fargate instances with little local disk, though, so that spill path
-  has limited headroom in practice and isn't something to rely on routinely. Spilling is the
-  exceptional path; `peak_memory_bytes` is the signal that finds expensive queries before they get
-  there, and it is what tells operators whether the `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` budget
-  is set correctly.
 - **A normalized SQL fingerprint** on the audit record (still deferred, as in #1288).
 
