@@ -419,7 +419,7 @@ describe('useAuth hook', () => {
       const handleLogout = async () => {
         try {
           await logout()
-        } catch (err) {
+        } catch {
           // Error is caught and handled
         }
       }
@@ -489,7 +489,7 @@ describe('useAuth hook', () => {
       try {
         button?.click()
         await new Promise(resolve => setTimeout(resolve, 10))
-      } catch (err) {
+      } catch {
         // Expected to fail
       }
     })

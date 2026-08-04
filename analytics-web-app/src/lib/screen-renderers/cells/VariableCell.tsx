@@ -171,7 +171,6 @@ function DatasourceDefaultValue({ value, onChange }: { value: string; onChange: 
 // cell header; the body is only uncollapsed to show CellContainer error state)
 // =============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function VariableCell(_props: CellRendererProps) {
   return null
 }

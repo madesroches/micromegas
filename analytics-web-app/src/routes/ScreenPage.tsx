@@ -183,7 +183,6 @@ function ScreenPageContent() {
     }
 
     load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, name, typeParam])
 
   // Handle config changes from renderer - supports both direct config and updater function

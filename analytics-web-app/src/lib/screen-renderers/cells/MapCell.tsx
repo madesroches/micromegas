@@ -517,7 +517,6 @@ export function MapCell({
  * scalars stored as raw numbers/RGBA-u32 still load — they're rendered in
  * their canonical string form (`"10"` or `"#bf360cff"`) on first edit.
  */
-// eslint-disable-next-line react-refresh/only-export-components
 export function ChannelBindingControl({
   label,
   kind,

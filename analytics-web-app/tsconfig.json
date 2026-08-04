@@ -4,6 +4,7 @@
       "dom",
       "dom.iterable",
       "ES2020",
+      "ES2022.Error",
       "ES2022.Intl"
     ],
     "allowJs": true,

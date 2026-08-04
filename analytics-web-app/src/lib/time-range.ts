@@ -127,7 +127,7 @@ export function parseTimeRange(from: string, to: string): ParsedTimeRange {
   const isRelative = isRelativeTime(from) || isRelativeTime(to)
 
   // Find matching preset label
-  let label = ''
+  let label: string
   if (isRelative && to === 'now') {
     const preset = TIME_RANGE_PRESETS.find((p) => p.value === from)
     if (preset) {
