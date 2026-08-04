@@ -255,10 +255,13 @@ actually hit the limit from those that merely came close.
 
 Also emit `imetric!("query_peak_memory_bytes", "bytes", peak)` for dashboards — low cardinality,
 no `PropertySet` needed. Cheap and additive; include it. It must be emitted from
-`QueryAuditState::emit()` itself (or equivalently, in both `CompletionTrackedStream::poll_next`
-terminal arms, `:203` and `:217`, right after their existing `imetric!`s) — **not** from the
-setup-phase block at `:451-462`, which runs before `execute_stream` (`:434`) returns a stream that
-anything has polled, so the pool's peak is still ~0 at that point.
+`QueryAuditState::emit()` itself — not from the two `CompletionTrackedStream::poll_next` terminal
+arms, `:204` and `:218`. `emit()` is the single `&self` method called from every terminal path
+(the two `poll_next` arms, the `Drop` impl for abandoned streams with status `"incomplete"`, and
+the setup-error `map_err` closures), so putting the `imetric!` there means error and incomplete
+records contribute a sample too, typically ~0 for setup failures since the pool has barely been
+used at that point. That is the intended, uniform behavior: every audited query — success, error,
+or incomplete — reports one `query_peak_memory_bytes` sample.
 
 ### Scope and limits of the metric
 
@@ -311,9 +314,10 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
    `RuntimeEnv`/context after, `map_err`-ing into `audit_state.emit("error", ...)` like every other
    setup stage; populate the three new fields in `emit()`; pass the scoped `LakehouseContext` to
    `make_session_context`; and emit the
-   `query_peak_memory_bytes` `imetric!` from `emit()` (or the two `CompletionTrackedStream::poll_next`
-   terminal arms, `:203`/`:217`) — not the setup-phase timing-metrics block (`:451-462`), where the
-   peak is still ~0.
+   `query_peak_memory_bytes` `imetric!` from `emit()` itself — not the setup-phase timing-metrics
+   block (`:451-462`), where the peak is still ~0. Since `emit()` is also called from the
+   setup-error `map_err` closures and from the `Drop` impl for abandoned streams, those paths will
+   contribute a (possibly ~0) sample too — intentional, so every audited query reports one point.
 6. **Tests** — new `rust/analytics/tests/scoped_memory_pool_tests.rs` (auto-discovered;
    `analytics/Cargo.toml` has no `[[test]]` blocks) plus the `QueryAuditRecord` constructor/assertion
    updates in `rust/public/tests/query_audit_tests.rs`.
