@@ -368,7 +368,8 @@ Two changes close this:
   `thread_spans_view.rs` and `net_spans_view.rs` (the two `BlockOrder::EventTime` call sites, reached
   via the write-path chain) pass `RetireMatch::Overlap`, whose SELECT and DELETE both use the union of
   the overlap and containment predicates: `(tstzrange(begin_insert_time, end_insert_time) &&
-  tstzrange($3, $4)) OR (begin_insert_time >= $3 AND end_insert_time <= $4)`. The containment half is
+  tstzrange($3, $4)) OR (begin_insert_time >= $3 AND end_insert_time <= $4 AND NOT
+  (begin_insert_time = end_insert_time AND begin_insert_time = $3))`. The containment half is
   not optional: `tstzrange(t, t)` is Postgres's empty range, so `&&` is always false whenever *either*
   side's range is degenerate (`begin_insert_time == end_insert_time`) — including an *existing*
   single-timestamp stale partition being retired by a non-degenerate new range, not only the reverse
@@ -379,7 +380,26 @@ Two changes close this:
   earlier, narrower idea of keeping only an exact-match branch for a degenerate *new* range: that
   branch alone does not retire a degenerate *existing* partition against a non-degenerate new range,
   so the `Overlap` arm uses the union predicate unconditionally rather than switching between two
-  branches. Every other call site — `block_partition_spec.rs` (the five
+  branches.
+
+  **The containment half's left-boundary exclusion.** `jit_update` writes a regrouping run's
+  partitions left to right in increasing insert-time order (`thread_spans_view.rs:315-329`,
+  `net_spans_view.rs:328-343`). §3's cut rule allows a cut where `prefix_max_insert == suffix_min[j]`
+  (equality is legal — `tstzrange` is `[)`), so a degenerate partition (a single block, or all blocks
+  sharing one `insert_time`, `:130-132`) can legitimately end at exactly `t` where the very next
+  partition in the *same run* begins at `t`. Without the `AND NOT (begin_insert_time =
+  end_insert_time AND begin_insert_time = $3)` clause, writing that next partition
+  (`begin_insert_time = t, end_insert_time = b`) matches its own immediately-preceding, just-written,
+  up-to-date sibling via the plain containment test alone (`begin_insert_time >= $3` is `t >= t`,
+  `end_insert_time <= $4` is `t <= b`) and deletes it — deterministically, on every run, since
+  grouping is deterministic, permanently losing that partition's data rather than merely masking it
+  transiently. The exclusion leaves the genuine cross-run case intact: a stale degenerate partition
+  left over from a *previous* run's grouping, now absorbed into a bigger new range, generally sits at
+  some timestamp *strictly inside* `[$3, $4]` rather than exactly at `$3` (its old cut point is
+  unrelated to the new run's cut points), so it still matches the containment half and is retired as
+  intended.
+
+  Every other call site — `block_partition_spec.rs` (the five
   `BlockOrder::InsertTime` process views, whose cut points are stable across runs, so containment
   stays correct for them), `merge.rs`, `sql_partition_spec.rs`, `metadata_partition_spec.rs` (batch
   views), and `retire_partitions_table_function.rs` (the public admin UDF, unchanged, no new SQL
@@ -402,6 +422,28 @@ Two changes close this:
   completion reconverges the block-to-partition mapping, so the exposure window is bounded by "next
   successful `jit_update`", not permanent, and a partial run leaves no data loss — only a transient
   read-time gap that a retry closes.
+
+  **Concurrent writers.** The above covers one interrupted run; the same waiver must also cover two
+  *concurrent* `jit_update` runs for the same view instance — routine, since every query triggers
+  `MaterializedView::scan` → `jit_update` (`materialized_view.rs:70`). `insert_partition_transaction`'s
+  advisory lock is keyed on the exact `(view_set_name, view_instance_id, begin_insert_time,
+  end_insert_time)` tuple (`write_partition.rs:317-322`), so it only serializes two writers proposing
+  the *identical* range; correctness against writers of *different* ranges is otherwise left to the
+  `lakehouse_partitions_no_overlap` exclusion constraint (`write_partition.rs:335-339`). Two concurrent
+  runs that observe `blocks_view` at slightly different moments can disagree on cut points and so
+  propose different, overlapping ranges under different lock keys — neither blocks the other. Under
+  `Containment` the loser's insert trips the exclusion constraint and fails loudly, same as the
+  single-run case above. Under `Overlap` the loser's `retire_partitions` call can delete the winner's
+  already-committed partition before inserting its own, silently replacing a fresher result with a
+  staler one — no exclusion-constraint error, no log line beyond the routine `RETIRE_FOUND` entry.
+  This is covered by the same reconvergence argument as the interrupted-loop case, not a new one:
+  whichever run's partition ends up committed, `is_jit_partition_up_to_date` (tightened to exact
+  range-and-count equality in step 6) always compares it against a *fresh* grouping of the current
+  `blocks_view`, not against what either racing run computed — so a partition left behind by the loser
+  of a race is indistinguishable, to the next `jit_update`, from a partition left behind by a crashed
+  loop, and gets recomputed and rewritten the same way. The exposure window is therefore bounded
+  identically: "next successful `jit_update`", not permanent, and no data is lost — only transiently
+  masked by a partition one run stale.
 
 Add a unit test that regroups the same stream across two synthetic runs — a block inserted between
 them that legally shifts a cut point — and assert the second run's `is_jit_partition_up_to_date` /
@@ -466,13 +508,18 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
    rather than alongside the comment cleanup in Phase 4: without it, a stale wider partition left
    behind by a moved cut point overlaps, but does not contain, the new narrower one, so containment
    retire fails to remove it and the write trips `lakehouse_partitions_no_overlap`
-   (`write_partition.rs:439-454`) for everything landed between this step and Phase 4. Call sites in
-   `block_partition_spec.rs`, `merge.rs`, `sql_partition_spec.rs`, `metadata_partition_spec.rs`,
-   `retire_partitions_table_function.rs`, and the two integration-test helpers that call
-   `retire_partitions` directly — `analytics/tests/sql_view_test.rs:338` and
-   `analytics/tests/histo_view_test.rs:86` — pass `RetireMatch::Containment` (today's behavior,
-   unchanged); `thread_spans_view.rs` and `net_spans_view.rs` are wired to pass `RetireMatch::Overlap`
-   in Phase 2/3 (steps 9 and 15).
+   (`write_partition.rs:439-454`) for everything landed between this step and Phase 4. `retire_partitions`
+   is called directly (not just transitively) by `block_partition_spec.rs`, `merge.rs`,
+   `sql_partition_spec.rs`, `metadata_partition_spec.rs`, `retire_partitions_table_function.rs`, the two
+   integration-test helpers `analytics/tests/sql_view_test.rs:338` and
+   `analytics/tests/histo_view_test.rs:86`, **and** `thread_spans_view.rs:139` /
+   `net_spans_view.rs:135` (both already call `write_partition_from_rows` today, so the new parameter
+   is a required argument at every one of these call sites, not an opt-in) — this step must update all
+   of them or Phase 1 does not compile. All of them, including the two JIT views, pass
+   `RetireMatch::Containment` here: at this point in the plan the views still group by
+   `BlockOrder::InsertTime` (Phase 2/3 haven't landed yet), so `Containment` is the behavior-preserving
+   choice. Steps 9 and 15 flip `thread_spans_view.rs` and `net_spans_view.rs` to `RetireMatch::Overlap`
+   once `BlockOrder::EventTime` lands for each.
 
 ### Phase 2 — thread spans (`thread_spans_view.rs`)
 
@@ -506,9 +553,13 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 16. `view.rs:158-163` — the `Concatenated` contract note: drop "documented but not enforced", state
     that `ThreadSpansView` obtains it from `BlockOrder::EventTime` grouping, and keep the residual
     caveats (cross-hour-segment inversions, TSC-frequency drift).
-17. `partitioned_execution_plan.rs:52-58` and `:78-82` — the non-overlap error message and doc
-    currently list "blocks registered out of event-time order" as a likely cause; that cause is now
-    structurally excluded within a segment. Reduce it to the residual cases.
+17. `partitioned_execution_plan.rs:78-82` — the non-overlap error message names "a stream's blocks
+    were registered out of event-time order" as a likely cause; within a segment that cause is now
+    structurally excluded. Narrow the phrase to the cross-segment case (an inversion straddling a
+    segment boundary, Trade-offs) rather than dropping it outright — that residual is still exactly
+    "blocks registered out of event-time order", just no longer possible *within* one segment. The doc
+    comment at `:46-58` needs no change: it already attributes the overlap to TSC-frequency drift only
+    and never mentions block registration order.
 18. `write_partition.rs:365-366` — the same stale "we assume that the blocks were registered in
     order" comment sits above the call to `retire_partitions`; it is unrelated to what that call does.
     Replace it with a note pointing at `RetireMatch` (added in step 7) and the containment/overlap
@@ -520,7 +571,13 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
     retire in this transaction did not replace it") and the `anyhow::bail!` message at `:443-448`
     ("...cannot replace it (likely a concurrent materialization or merge)") to name the `RetireMatch`
     arm in effect rather than assuming `Containment` — for a `thread_spans`/`net_spans` write under
-    `RetireMatch::Overlap`, "containment-based" is no longer the correct diagnosis.
+    `RetireMatch::Overlap`, "containment-based" is no longer the correct diagnosis. Also amend the
+    advisory-lock comment at `:335-339` ("correctness against overlapping writers of *different*
+    ranges is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time"):
+    that is only true for `RetireMatch::Containment` callers; for `RetireMatch::Overlap` callers, note
+    that two concurrent writers of different, overlapping ranges are instead reconciled by the next
+    `jit_update`'s exact-equality `is_jit_partition_up_to_date` check (Design §6, "Concurrent
+    writers"), not by the exclusion constraint, which the `Overlap` retire step routes around.
 
 ### Phase 5 — tests
 
@@ -546,8 +603,8 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 | `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, monotonicity `error!` + `ensure!`, comment, `SCHEMA_VERSION` → 2, `update_partition` made `pub` (test reachability) |
 | `rust/analytics/src/lakehouse/net_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, comment, `SCHEMA_VERSION` → 2 |
 | `rust/analytics/src/lakehouse/view.rs` | `get_scan_output_ordering` doc: assumption → enforced |
-| `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | non-overlap doc + error message: drop the now-excluded cause |
-| `rust/analytics/src/lakehouse/write_partition.rs` | remove stale block-ordering comment at `:365`; add `RetireMatch { Containment, Overlap }` param to `retire_partitions`, threaded through `write_partition_from_rows`/`insert_partition`/`insert_partition_transaction`; reword the `:434-448` stale-partition comment and bail message to name the `RetireMatch` arm in effect |
+| `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | non-overlap error message (`:78-82`): narrow "blocks registered out of event-time order" to the cross-segment case |
+| `rust/analytics/src/lakehouse/write_partition.rs` | remove stale block-ordering comment at `:365`; add `RetireMatch { Containment, Overlap }` param to `retire_partitions`, threaded through `write_partition_from_rows`/`insert_partition`/`insert_partition_transaction`; reword the `:434-448` stale-partition comment and bail message, and the `:335-339` advisory-lock comment, to name the `RetireMatch` arm in effect |
 | `rust/analytics/src/lakehouse/block_partition_spec.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
 | `rust/analytics/src/lakehouse/merge.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
 | `rust/analytics/src/lakehouse/sql_partition_spec.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
@@ -654,11 +711,11 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 ## Documentation
 
 - Rustdoc is the primary surface: `jit_partitions.rs` (the two orderings and the insert-range
-  invariant), `view.rs:150-176` (the `Concatenated` contract), `partitioned_execution_plan.rs:52-87`
-  (remaining causes of a non-overlap failure), `thread_spans_view.rs:132` and
-  `write_partition.rs:365` (stale comments), and `retire_partitions`'s own rustdoc
-  (`write_partition.rs:120-121`), which documents `RetireMatch { Containment, Overlap }` once the
-  match rule becomes a parameter.
+  invariant), `view.rs:150-176` (the `Concatenated` contract), `partitioned_execution_plan.rs:78-82`
+  (narrow the non-overlap error message's causes to the cross-segment case), `thread_spans_view.rs:132`
+  and `write_partition.rs:335-339`/`:365`/`:434-448` (stale comments, per step 18), and
+  `retire_partitions`'s own rustdoc (`write_partition.rs:120-121`), which documents `RetireMatch {
+  Containment, Overlap }` once the match rule becomes a parameter.
 - `tasks/completed/1297_perfetto_redundant_sort_plan.md` flagged the unenforced assumption only in
   the cross-partition dimension; this plan supersedes that note. Cross-link from this file rather
   than editing the completed plan.
@@ -744,6 +801,15 @@ directly.
    stale partition is actually retired (not left alongside the new one), which requires the
    containment half of the `Overlap` arm's union predicate to fire (the `&&` half alone would not
    match, since an empty `tstzrange` never overlaps anything).
+
+   Also cover the *same-run* sub-case (Design §6, "The containment half's left-boundary exclusion"):
+   arrange blocks so a legal cut lands a degenerate partition (single block, or several blocks sharing
+   one `insert_time` `t`) immediately before a following partition that begins at that same `t`, drive
+   `generate_stream_jit_partitions` with a `max_nb_objects` small enough to force exactly that cut, and
+   run `jit_update` once. Assert both partitions are present afterward — the degenerate one is *not*
+   retired by writing its successor — which requires the containment half's left-boundary exclusion
+   (`AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)`) to hold; without it
+   this sub-case would fail deterministically on every run, not just once.
 
    Also cover reconvergence after an interrupted regrouping run (Design §6, "Why the `Overlap` waiver
    is tolerable"): drive `generate_stream_jit_partitions` to get a multi-partition spec, write only
