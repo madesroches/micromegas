@@ -155,7 +155,7 @@ function ExportScreensPageContent() {
                 <div className="flex items-center gap-2 mb-4">
                   <input
                     type="text"
-                    className="bg-app-panel border border-theme-border rounded-md px-3 py-1.5 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-none focus:border-accent-link w-64"
+                    className="bg-app-panel border border-theme-border rounded-md px-3 py-1.5 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link w-64"
                     placeholder="Search screens..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
@@ -179,7 +179,7 @@ function ExportScreensPageContent() {
                         <th className="text-left p-2.5 px-4 w-10">
                           <input
                             type="checkbox"
-                            className="accent-[var(--color-accent-link)] cursor-pointer"
+                            className="accent-accent-link cursor-pointer"
                             checked={allFilteredSelected}
                             onChange={toggleAll}
                             aria-label="Select all screens"
@@ -206,7 +206,7 @@ function ExportScreensPageContent() {
                           <td className="p-2.5 px-4">
                             <input
                               type="checkbox"
-                              className="accent-[var(--color-accent-link)] cursor-pointer"
+                              className="accent-accent-link cursor-pointer"
                               checked={selected.has(screen.name)}
                               onChange={() => toggleScreen(screen.name)}
                               onClick={(e) => e.stopPropagation()}
@@ -217,7 +217,7 @@ function ExportScreensPageContent() {
                             <span className="text-accent-link font-medium">{screen.name}</span>
                           </td>
                           <td className="p-2.5 px-4">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-app-card rounded text-xs text-theme-text-muted">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-app-card rounded-sm text-xs text-theme-text-muted">
                               {renderIcon(screenTypeMap.get(screen.screen_type)?.icon ?? 'file-text', 'w-3.5 h-3.5')}
                               {screenTypeMap.get(screen.screen_type)?.display_name ?? screen.screen_type}
                             </span>
@@ -244,7 +244,7 @@ function ExportScreensPageContent() {
               </div>
 
               {/* Summary panel */}
-              <div className="w-72 flex-shrink-0">
+              <div className="w-72 shrink-0">
                 <div className="bg-app-panel border border-theme-border rounded-lg p-5 sticky top-0">
                   <h3 className="text-sm font-semibold text-theme-text-primary mb-3">Export Summary</h3>
                   <div className="flex justify-between text-sm py-1">

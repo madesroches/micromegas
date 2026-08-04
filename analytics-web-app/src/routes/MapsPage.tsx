@@ -297,7 +297,7 @@ function MapsPageContent() {
                       <td className="p-2.5 px-4 text-right">
                         <button
                           onClick={() => setDeleteTarget(entry.file)}
-                          className="p-1.5 rounded text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                          className="p-1.5 rounded-sm text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
                           title="Delete"
                           aria-label={`Delete ${entry.file}`}
                         >

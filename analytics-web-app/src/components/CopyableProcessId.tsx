@@ -42,7 +42,7 @@ export function CopyableProcessId({
 
   return (
     <span 
-      className={`inline-flex items-center gap-1 cursor-pointer hover:bg-theme-border rounded px-1 py-0.5 transition-colors ${className}`}
+      className={`inline-flex items-center gap-1 cursor-pointer hover:bg-theme-border rounded-sm px-1 py-0.5 transition-colors ${className}`}
       onClick={handleCopy}
 title={processId}
     >

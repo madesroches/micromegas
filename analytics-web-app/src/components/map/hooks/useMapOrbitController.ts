@@ -273,7 +273,7 @@ export function useMapOrbitController<
       domElement.removeEventListener('mouseleave', onMouseLeave)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur', onWindowBlur)
+      window.removeEventListener('blur-sm', onWindowBlur)
       // Restore cursor on unmount in case we tear down mid-drag — the
       // gate in MapViewer unmounts this controller on mapUrl changes, and a
       // mouseup we'd otherwise rely on never fires.

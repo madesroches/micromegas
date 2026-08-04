@@ -80,7 +80,7 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
         <button
           type="button"
           onClick={() => setIsCalendarOpen(!isCalendarOpen)}
-          className="w-full flex items-center gap-2 px-3 py-2 bg-app-card border border-theme-border rounded-md text-sm text-theme-text-primary hover:border-theme-border-hover focus:outline-none focus:ring-2 focus:ring-accent-link/50"
+          className="w-full flex items-center gap-2 px-3 py-2 bg-app-card border border-theme-border rounded-md text-sm text-theme-text-primary hover:border-theme-border-hover focus:outline-hidden focus:ring-2 focus:ring-accent-link/50"
         >
           <Calendar className="w-4 h-4 text-theme-text-secondary" />
           <span className="flex-1 text-left">
@@ -111,7 +111,7 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
           max={23}
           value={hours.toString().padStart(2, '0')}
           onChange={(e) => handleTimeChange('hours', e.target.value)}
-          className="w-14 px-2 py-1.5 bg-app-card border border-theme-border rounded text-sm text-theme-text-primary text-center focus:outline-none focus:ring-2 focus:ring-accent-link/50"
+          className="w-14 px-2 py-1.5 bg-app-card border border-theme-border rounded-sm text-sm text-theme-text-primary text-center focus:outline-hidden focus:ring-2 focus:ring-accent-link/50"
         />
         <span className="text-theme-text-secondary">:</span>
         <input
@@ -120,7 +120,7 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
           max={59}
           value={minutes.toString().padStart(2, '0')}
           onChange={(e) => handleTimeChange('minutes', e.target.value)}
-          className="w-14 px-2 py-1.5 bg-app-card border border-theme-border rounded text-sm text-theme-text-primary text-center focus:outline-none focus:ring-2 focus:ring-accent-link/50"
+          className="w-14 px-2 py-1.5 bg-app-card border border-theme-border rounded-sm text-sm text-theme-text-primary text-center focus:outline-hidden focus:ring-2 focus:ring-accent-link/50"
         />
       </div>
 
@@ -128,21 +128,21 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
         <button
           type="button"
           onClick={handleNow}
-          className="px-2 py-1 text-xs bg-theme-border rounded hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
+          className="px-2 py-1 text-xs bg-theme-border rounded-sm hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
         >
           Now
         </button>
         <button
           type="button"
           onClick={handleStartOfDay}
-          className="px-2 py-1 text-xs bg-theme-border rounded hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
+          className="px-2 py-1 text-xs bg-theme-border rounded-sm hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
         >
           Start of day
         </button>
         <button
           type="button"
           onClick={handleEndOfDay}
-          className="px-2 py-1 text-xs bg-theme-border rounded hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
+          className="px-2 py-1 text-xs bg-theme-border rounded-sm hover:bg-theme-border-hover text-theme-text-secondary transition-colors"
         >
           End of day
         </button>

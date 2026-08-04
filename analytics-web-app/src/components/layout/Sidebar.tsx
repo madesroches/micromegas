@@ -316,7 +316,7 @@ export function Sidebar() {
               value={searchQuery}
               onChange={(e) => updateSearch(e.target.value)}
               placeholder="Search screens & folders"
-              className="flex-1 min-w-0 bg-transparent outline-none text-sm text-theme-text-primary placeholder-theme-text-muted"
+              className="flex-1 min-w-0 bg-transparent outline-hidden text-sm text-theme-text-primary placeholder-theme-text-muted"
             />
             {searchQuery && (
               <button

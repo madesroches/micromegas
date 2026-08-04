@@ -141,7 +141,7 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
           onChange={handleInputChange}
           onBlur={onBlur}
           onKeyDown={onKeyDown}
-          className="w-20 px-3 py-2 bg-app-panel border border-theme-border rounded-l-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+          className="w-20 px-3 py-2 bg-app-panel border border-theme-border rounded-l-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
         />
         <button
           type="button"
@@ -149,7 +149,7 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
           aria-expanded={isOpen}
           aria-label="Select preset limit"
           tabIndex={-1}
-          className="px-2 py-2 bg-app-panel border border-l-0 border-theme-border rounded-r-md text-theme-text-secondary hover:bg-theme-bg-hover focus:outline-none focus:border-accent-link"
+          className="px-2 py-2 bg-app-panel border border-l-0 border-theme-border rounded-r-md text-theme-text-secondary hover:bg-theme-bg-hover focus:outline-hidden focus:border-accent-link"
         >
           <ChevronDown className="w-4 h-4" />
         </button>
@@ -526,13 +526,13 @@ function ProcessLogContent() {
             onBlur={handleSearchBlur}
             onKeyDown={handleSearchKeyDown}
             placeholder="Search target or message..."
-            className="w-64 px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link placeholder:text-theme-text-muted"
+            className="w-64 px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link placeholder:text-theme-text-muted"
           />
 
           <select
             value={logLevel}
             onChange={(e) => updateLogLevel(e.target.value)}
-            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
           >
             <option value="all">Max Level: TRACE (all)</option>
             <option value="debug">Max Level: DEBUG</option>
@@ -607,7 +607,7 @@ function ProcessLogContent() {
                   >
                     {String(row.target ?? '')}
                   </span>
-                  <span className="text-theme-text-primary flex-1 break-words">{String(row.msg ?? '')}</span>
+                  <span className="text-theme-text-primary flex-1 wrap-break-word">{String(row.msg ?? '')}</span>
                 </div>
               ))}
             </div>

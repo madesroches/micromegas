@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
 
 @layer base {
   :root {
@@ -88,6 +87,18 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Tailwind v4 preflight drops the v3 default `cursor: pointer` on buttons. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Tailwind v4 preflight no longer falls back to a gray-400 placeholder color. */
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-secondary);
   }
 }
 

@@ -171,7 +171,7 @@ export function SyntaxEditor({
 
   const preClass = isSql
     ? 'absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre pointer-events-none overflow-hidden m-0'
-    : 'absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0'
+    : 'absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-break-word pointer-events-none overflow-hidden m-0'
 
   return (
     <div
@@ -193,7 +193,7 @@ export function SyntaxEditor({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
+          className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-hidden"
           style={isSql ? { whiteSpace: 'pre' } : undefined}
           placeholder={placeholder}
           spellCheck={false}
@@ -206,7 +206,7 @@ export function SyntaxEditor({
           <button
             type="button"
             onClick={handleFormat}
-            className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-theme-text-secondary border border-theme-border rounded hover:text-theme-text-primary hover:border-accent-link hover:bg-accent-link/10 transition-all"
+            className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-theme-text-secondary border border-theme-border rounded-sm hover:text-theme-text-primary hover:border-accent-link hover:bg-accent-link/10 transition-all"
             title="Format SQL"
           >
             <Braces className="w-3.5 h-3.5" />
@@ -215,11 +215,11 @@ export function SyntaxEditor({
           {onRunShortcut && (
             <span className="flex items-center gap-1 ml-auto text-[11px] text-theme-text-muted">
               <Keyboard className="w-3.5 h-3.5" />
-              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded text-theme-text-secondary">
+              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded-sm text-theme-text-secondary">
                 Ctrl
               </kbd>
               +
-              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded text-theme-text-secondary">
+              <kbd className="px-1 py-px text-[10px] bg-app-panel border border-theme-border rounded-sm text-theme-text-secondary">
                 Enter
               </kbd>
               {' '}to run

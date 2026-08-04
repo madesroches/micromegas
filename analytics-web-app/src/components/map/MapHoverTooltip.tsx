@@ -69,7 +69,7 @@ export function MapHoverTooltip({
   return createPortal(
     <div
       ref={ref}
-      className="fixed pointer-events-none z-50 origin-top-left scale-[0.68] w-fit max-w-[50%] max-h-[60%] overflow-hidden border border-theme-border rounded-lg shadow-lg backdrop-blur-sm"
+      className="fixed pointer-events-none z-50 origin-top-left scale-[0.68] w-fit max-w-[50%] max-h-[60%] overflow-hidden border border-theme-border rounded-lg shadow-lg backdrop-blur-xs"
       // Semi-transparent panel so the map reads through; `color-mix` keeps it
       // tied to the theme `--panel-bg` rather than a hardcoded hex.
       style={{

@@ -131,11 +131,11 @@ export function ThreadCoverageTimeline({
           {threads.map((thread) => (
             <div key={thread.streamId} className="flex items-center h-8">
               {/* Spacer to align with chart Y-axis area */}
-              <div className="flex-shrink-0" style={{ width: leftOffset }} />
+              <div className="shrink-0" style={{ width: leftOffset }} />
 
               {/* Timeline bar area - matches chart plot area */}
               <div
-                className={`h-6 relative bg-app-bg rounded ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
+                className={`h-6 relative bg-app-bg rounded-sm ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
                 style={{ width: plotWidth ?? '100%' }}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -160,7 +160,7 @@ export function ThreadCoverageTimeline({
                   className="absolute inset-y-0 left-1 flex items-center z-10 pointer-events-none"
                   title={thread.threadName}
                 >
-                  <span className="text-xs font-medium px-1 rounded text-brand-blue bg-black/60">
+                  <span className="text-xs font-medium px-1 rounded-sm text-brand-blue bg-black/60">
                     {thread.threadName}
                   </span>
                 </div>
@@ -177,7 +177,7 @@ export function ThreadCoverageTimeline({
                   return (
                     <div
                       key={idx}
-                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity pointer-events-none"
+                      className="absolute top-1 bottom-1 bg-chart-line rounded-xs opacity-80 hover:opacity-100 transition-opacity pointer-events-none"
                       style={{
                         left: `${startPercent}%`,
                         width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility

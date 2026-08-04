@@ -152,7 +152,7 @@ function ReferenceTableCellEditor({ config, onChange }: CellEditorProps) {
       <textarea
         value={refConfig.csv}
         onChange={(e) => onChange({ ...refConfig, csv: e.target.value })}
-        className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary font-mono resize-y min-h-[120px] focus:outline-none focus:border-accent-link"
+        className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary font-mono resize-y min-h-[120px] focus:outline-hidden focus:border-accent-link"
         placeholder="column1,column2&#10;value1,value2"
         spellCheck={false}
       />

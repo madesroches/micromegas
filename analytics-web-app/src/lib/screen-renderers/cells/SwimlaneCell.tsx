@@ -312,7 +312,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
             <div key={lane.id} className="flex items-center h-8">
               {/* Lane name */}
               <div
-                className="flex-shrink-0 px-2 text-xs font-medium text-theme-text-secondary truncate"
+                className="shrink-0 px-2 text-xs font-medium text-theme-text-secondary truncate"
                 style={{ width: LABEL_WIDTH }}
                 title={lane.name}
               >
@@ -321,7 +321,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
 
               {/* Timeline bar area */}
               <div
-                className={`flex-1 h-6 relative bg-app-bg rounded ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
+                className={`flex-1 h-6 relative bg-app-bg rounded-sm ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
@@ -352,7 +352,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
                   return (
                     <div
                       key={idx}
-                      className="absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden transition-opacity hover:opacity-85 hover:ring-1 hover:ring-brand-gold"
+                      className="absolute top-1 bottom-1 rounded-xs flex items-center overflow-hidden transition-opacity hover:opacity-85 hover:ring-1 hover:ring-brand-gold"
                       style={{
                         left: `${startPercent}%`,
                         width: `${Math.max(widthPercent, 0.5)}%`,
@@ -392,7 +392,7 @@ function Swimlane({ lanes, timeRange, onTimeRangeSelect }: SwimlaneProps) {
       </div>
 
       {/* Time axis - fixed at bottom, outside scrollable area */}
-      <div className="flex-shrink-0 flex items-center h-6 text-[10px] text-theme-text-muted border-t border-theme-border/30 pt-1">
+      <div className="shrink-0 flex items-center h-6 text-[10px] text-theme-text-muted border-t border-theme-border/30 pt-1">
         <div style={{ width: LABEL_WIDTH }} />
         <div className="flex-1 relative">
           <TimeAxis from={timeRange.from} to={timeRange.to} />

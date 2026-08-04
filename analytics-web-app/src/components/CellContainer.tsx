@@ -212,7 +212,7 @@ export function CellContainer({
           >
             {onSelect && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden first:rounded-t-md"
                 onSelect={() => onSelect()}
               >
                 <Pencil className="w-4 h-4" />
@@ -221,7 +221,7 @@ export function CellContainer({
             )}
             {onRunFromHere && canRun && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none first:rounded-t-md"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden first:rounded-t-md"
                 onSelect={() => onRunFromHere()}
               >
                 <Play className="w-4 h-4" />
@@ -230,7 +230,7 @@ export function CellContainer({
             )}
             {onToggleAutoRunFromHere && canRun && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                 onSelect={() => onToggleAutoRunFromHere()}
               >
                 <Zap className={`w-4 h-4 ${autoRunFromHere ? 'text-accent-link' : ''}`} />
@@ -239,7 +239,7 @@ export function CellContainer({
             )}
             {onDownloadCsv && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                 onSelect={() => onDownloadCsv()}
               >
                 <Download className="w-4 h-4" />
@@ -251,7 +251,7 @@ export function CellContainer({
             )}
             {onInsertAbove && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                 onSelect={() => onInsertAbove()}
               >
                 <Plus className="w-4 h-4" />
@@ -260,7 +260,7 @@ export function CellContainer({
             )}
             {onInsertBelow && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                 onSelect={() => onInsertBelow()}
               >
                 <Plus className="w-4 h-4" />
@@ -269,7 +269,7 @@ export function CellContainer({
             )}
             {onDuplicate && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                 onSelect={() => onDuplicate()}
               >
                 <Copy className="w-4 h-4" />
@@ -278,7 +278,7 @@ export function CellContainer({
             )}
             {onDelete && (
               <DropdownMenu.Item
-                className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none last:rounded-b-md"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-hidden last:rounded-b-md"
                 onSelect={() => onDelete()}
               >
                 <Trash2 className="w-4 h-4" />
@@ -294,7 +294,7 @@ export function CellContainer({
   const renderContent = () => {
     if (status === 'error' && error) {
       return (
-        <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-3 flex items-start gap-3">
+        <div className="bg-(--error-bg) border border-accent-error rounded-md p-3 flex items-start gap-3">
           <span className="text-accent-error text-lg">!</span>
           <div>
             <div className="font-medium text-accent-error">Query execution failed</div>
@@ -318,9 +318,9 @@ export function CellContainer({
     return (
       <div
         ref={ref}
-        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded cursor-pointer group/cell transition-colors border-l-2 ${
+        className={`flex items-center gap-1.5 py-0.5 px-1.5 rounded-sm cursor-pointer group/cell transition-colors border-l-2 ${
           isSelected
-            ? 'bg-[var(--selection-bg)] border-l-accent-link'
+            ? 'bg-(--selection-bg) border-l-accent-link'
             : 'border-l-transparent bg-app-panel/30 hover:bg-app-panel/50'
         } ${isDragging ? 'opacity-50' : ''}`}
         style={style}
@@ -361,8 +361,8 @@ export function CellContainer({
         onDoubleClick={() => onSelect?.()}
         {...divProps}
       >
-        <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded transition-colors border-l-2 ${
-          isSelected ? 'bg-[var(--selection-bg)] border-l-accent-link' : 'border-l-transparent hover:bg-app-panel/30'
+        <div className={`flex items-center gap-2 py-0.5 px-1.5 rounded-sm transition-colors border-l-2 ${
+          isSelected ? 'bg-(--selection-bg) border-l-accent-link' : 'border-l-transparent hover:bg-app-panel/30'
         }`}>
           {gripHandle}
           <span className="text-[11px] font-medium text-theme-text-secondary shrink-0">{name}</span>
@@ -424,7 +424,7 @@ export function CellContainer({
       ) : (
         // Pane label for regular expanded cells
         <div className={`flex items-center gap-1.5 px-1.5 py-0.5 ${
-          isSelected ? 'bg-[var(--selection-bg)]' : ''
+          isSelected ? 'bg-(--selection-bg)' : ''
         }`}>
           {gripHandle}
           {collapseToggle}
@@ -432,7 +432,7 @@ export function CellContainer({
             <span className="text-[11px] font-medium text-theme-text-secondary">{name}</span>
           ) : (
             <>
-              <span className="text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+              <span className="text-[10px] px-1 py-0.5 rounded-sm bg-app-panel text-theme-text-secondary uppercase font-medium">
                 {meta.label}
               </span>
               <span className="text-[11px] font-medium text-theme-text-secondary">{name}</span>

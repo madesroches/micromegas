@@ -30,7 +30,7 @@ export function RowSelectionEditor({
           <span className="text-sm font-semibold text-theme-text-primary">Row Selection</span>
           {!isExpanded && (
             <span
-              className={`px-1.5 py-0.5 text-xs rounded ${
+              className={`px-1.5 py-0.5 text-xs rounded-sm ${
                 selectionMode === 'single'
                   ? 'bg-accent-link/20 text-accent-link'
                   : 'bg-theme-border text-theme-text-muted'
@@ -74,7 +74,7 @@ export function RowSelectionEditor({
               Selected row values are available as:
             </div>
             <div>
-              <code className="px-1 py-0.5 bg-theme-border rounded">${cellName}.selected.column</code>
+              <code className="px-1 py-0.5 bg-theme-border rounded-sm">${cellName}.selected.column</code>
             </div>
           </div>
         </div>

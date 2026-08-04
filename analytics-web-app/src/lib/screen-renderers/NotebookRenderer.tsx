@@ -62,7 +62,7 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
           <h2 className="text-lg font-medium text-theme-text-primary">Delete Cell?</h2>
           <button
             onClick={onClose}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -76,7 +76,7 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={onConfirm} className="bg-[var(--accent-error)] hover:bg-[var(--accent-error-bright)] text-white">
+          <Button onClick={onConfirm} className="bg-(--accent-error) hover:bg-(--accent-error-bright) text-white">
             Delete
           </Button>
         </div>
@@ -186,14 +186,14 @@ function HgEditorPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-card text-theme-text-secondary uppercase font-medium">
+          <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-app-card text-theme-text-secondary uppercase font-medium">
             Group
           </span>
           <span className="font-medium text-theme-text-primary truncate">{config.name}</span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+          className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           title="Close"
         >
           <X className="w-5 h-5" />
@@ -211,7 +211,7 @@ function HgEditorPanel({
               type="text"
               value={editedName}
               onChange={(e) => handleNameChange(e.target.value)}
-              className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+              className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-hidden ${
                 nameError
                   ? 'border-accent-error focus:border-accent-error'
                   : 'border-theme-border focus:border-accent-link'
@@ -516,9 +516,9 @@ export function NotebookRenderer({
         ? dragOverZone === 'into'
           ? 'ring-2 ring-accent-link ring-inset'
           : dragOverZone === 'before'
-            ? 'border-t-4 border-t-[var(--accent-link)]'
+            ? 'border-t-4 border-t-(--accent-link)'
             : dragOverZone === 'after'
-              ? 'border-b-4 border-b-[var(--accent-link)]'
+              ? 'border-b-4 border-b-(--accent-link)'
               : ''
         : ''
       const hgStatusText = buildHgStatusText(hgConfig.children, cellStates)
@@ -707,7 +707,7 @@ export function NotebookRenderer({
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-2 min-w-0 overflow-auto">
         {engineError && (
-          <div className="mb-3 px-4 py-2 bg-accent-error/10 border border-accent-error/30 rounded text-xs text-accent-error">
+          <div className="mb-3 px-4 py-2 bg-accent-error/10 border border-accent-error/30 rounded-sm text-xs text-accent-error">
             WASM engine failed to load: {engineError}
           </div>
         )}
@@ -750,7 +750,7 @@ export function NotebookRenderer({
                 {activeDragId ? (
                   <div className="bg-app-panel border-2 border-accent-link rounded-lg shadow-xl opacity-90">
                     <div className="flex items-center gap-2 px-3 py-2 bg-app-card rounded-t-lg">
-                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+                      <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-app-panel text-theme-text-secondary uppercase font-medium">
                         {cells.find((c) => c.name === activeDragId)?.type}
                       </span>
                       <span className="font-medium text-theme-text-primary">{activeDragId}</span>
@@ -768,7 +768,7 @@ export function NotebookRenderer({
         <>
           <ResizeHandle orientation="horizontal" onResize={handleEditorPanelResize} />
           <div
-            className="h-full bg-app-panel border-l border-theme-border flex flex-col flex-shrink-0 overflow-hidden"
+            className="h-full bg-app-panel border-l border-theme-border flex flex-col shrink-0 overflow-hidden"
             style={{ width: editorPanelWidth }}
           >
             {selectedCell.type === 'hg' ? (

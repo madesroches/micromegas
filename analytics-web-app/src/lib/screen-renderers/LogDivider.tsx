@@ -68,13 +68,13 @@ export function LogDivider({
           <ContextMenu.Item
             onSelect={onResetToAuto}
             disabled={!pinned}
-            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none data-[disabled]:opacity-40 data-[disabled]:cursor-default"
+            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden data-disabled:opacity-40 data-disabled:cursor-default"
           >
             Reset to auto
           </ContextMenu.Item>
           <ContextMenu.Item
             onSelect={onResetAll}
-            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+            className="flex items-center px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
           >
             Reset all columns
           </ContextMenu.Item>

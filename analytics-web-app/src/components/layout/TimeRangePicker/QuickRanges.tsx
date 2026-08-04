@@ -15,7 +15,7 @@ export function QuickRanges({ currentFrom, currentTo, onSelect }: QuickRangesPro
           <button
             key={preset.value}
             onClick={() => onSelect(preset.value, 'now')}
-            className={`w-full flex items-center justify-between px-2 py-1.5 text-sm rounded hover:bg-theme-border transition-colors ${
+            className={`w-full flex items-center justify-between px-2 py-1.5 text-sm rounded-sm hover:bg-theme-border transition-colors ${
               isSelected(preset.value)
                 ? 'text-accent-link bg-app-card'
                 : 'text-theme-text-primary'

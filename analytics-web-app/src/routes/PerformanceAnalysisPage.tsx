@@ -341,7 +341,7 @@ function PerformanceAnalysisContent() {
         {trace.traceError && (
           <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">
             <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-accent-error flex-shrink-0 mt-0.5" />
+              <AlertCircle className="w-5 h-5 text-accent-error shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <h3 className="text-sm font-medium text-accent-error">
                   {trace.cachedTraceBuffer ? 'Could not open in Perfetto' : 'Trace generation failed'}

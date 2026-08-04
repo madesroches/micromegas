@@ -302,7 +302,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           )
         })}
       </div>
-      <div className="flex justify-between items-center flex-shrink-0">
+      <div className="flex justify-between items-center shrink-0">
         <PaginationBar pagination={pagination} />
         <div className="flex items-center">
           {hasPinnedWidths && (

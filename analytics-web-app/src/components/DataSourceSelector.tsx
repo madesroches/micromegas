@@ -109,7 +109,7 @@ export function DataSourceSelector({ value, onChange, datasourceVariables, showN
     <div className="flex items-center gap-1.5">
       <Database className="w-3.5 h-3.5 text-theme-text-muted" />
       <select
-        className="bg-app-panel border border-theme-border rounded px-2 py-1 text-xs text-theme-text-primary outline-none focus:border-accent-link cursor-pointer"
+        className="bg-app-panel border border-theme-border rounded-sm px-2 py-1 text-xs text-theme-text-primary outline-hidden focus:border-accent-link cursor-pointer"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >

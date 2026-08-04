@@ -1,15 +1,15 @@
 /* DateTimePicker custom styles for react-day-picker */
 .rdp-custom {
-  --rdp-accent-color: var(--color-accent-link);
-  --rdp-background-color: var(--color-app-card);
+  --rdp-accent-color: var(--accent-link);
+  --rdp-background-color: var(--card-bg);
 }
 
 .rdp-custom .rdp-day_button {
-  color: var(--color-theme-text-primary);
+  color: var(--text-primary);
 }
 
 .rdp-custom .rdp-day_button:hover {
-  background-color: var(--color-theme-border);
+  background-color: var(--border-color);
 }
 
 .rdp-custom .rdp-selected .rdp-day_button {
@@ -18,21 +18,21 @@
 }
 
 .rdp-custom .rdp-month_caption {
-  color: var(--color-theme-text-primary);
+  color: var(--text-primary);
 }
 
 .rdp-custom .rdp-weekday {
-  color: var(--color-theme-text-muted);
+  color: var(--text-muted);
 }
 
 .rdp-custom .rdp-button_previous,
 .rdp-custom .rdp-button_next {
-  color: var(--color-theme-text-secondary);
+  color: var(--text-secondary);
 }
 
 .rdp-custom .rdp-button_previous:hover,
 .rdp-custom .rdp-button_next:hover {
-  background-color: var(--color-theme-border);
+  background-color: var(--border-color);
 }
 
 .rdp-custom .rdp-outside {

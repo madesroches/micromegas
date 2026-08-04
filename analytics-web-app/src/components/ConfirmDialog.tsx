@@ -64,7 +64,7 @@ export function ConfirmDialog({
           <button
             onClick={onClose}
             disabled={isLoading}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors disabled:opacity-50"
+            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>

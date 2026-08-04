@@ -67,7 +67,7 @@ export function ColumnHeaderWarningIcon({ warnings }: ColumnHeaderWarningIconPro
   if (warnings.length === 0) return null
   return (
     <span title={warnings.join('\n')} className="inline-flex items-center">
-      <AlertTriangle className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />
+      <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
     </span>
   )
 }

@@ -424,7 +424,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 type="color"
                 value={(query.color ?? SERIES_COLORS[i % SERIES_COLORS.length]).slice(0, 7)}
                 onChange={(e) => updateQuery(i, { color: e.target.value })}
-                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                className="w-5 h-5 rounded-sm cursor-pointer border-0 p-0 bg-transparent"
                 title="Series color (legend token and default mark color)"
               />
               Query {i + 1}
@@ -432,7 +432,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
             {v2.queries.length > 1 && (
               <button
                 onClick={() => removeQuery(i)}
-                className="text-theme-text-muted hover:text-accent-error text-base px-1.5 rounded transition-colors"
+                className="text-theme-text-muted hover:text-accent-error text-base px-1.5 rounded-sm transition-colors"
                 title="Remove query"
               >
                 &times;
@@ -488,7 +488,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                   type="text"
                   value={query.unit ?? ''}
                   onChange={(e) => updateQuery(i, { unit: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
                   placeholder="e.g., percent, bytes, ms"
                 />
               </div>
@@ -500,7 +500,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                   type="text"
                   value={query.label ?? ''}
                   onChange={(e) => updateQuery(i, { label: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                  className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
                   placeholder="defaults to column name"
                 />
               </div>
@@ -529,41 +529,41 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
                 type="text"
                 value={line.name ?? ''}
                 onChange={(e) => updateReferenceLine(i, { name: e.target.value || undefined })}
-                className="flex-1 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                className="flex-1 px-2 py-1 bg-app-panel border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
                 placeholder="Name (optional)"
               />
               <input
                 type="text"
                 value={String(line.value)}
                 onChange={(e) => updateReferenceLine(i, { value: e.target.value })}
-                className="w-24 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                className="w-24 px-2 py-1 bg-app-panel border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
                 placeholder="Value or $var"
               />
               <input
                 type="text"
                 value={line.unit ?? ''}
                 onChange={(e) => updateReferenceLine(i, { unit: e.target.value || undefined })}
-                className="w-16 px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                className="w-16 px-2 py-1 bg-app-panel border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
                 placeholder="Unit"
               />
               <input
                 type="color"
                 value={(line.color ?? DEFAULT_REFERENCE_LINE_COLOR).slice(0, 7)}
                 onChange={(e) => updateReferenceLine(i, { color: e.target.value })}
-                className="w-7 h-7 rounded cursor-pointer border border-theme-border p-0.5 bg-transparent"
+                className="w-7 h-7 rounded-sm cursor-pointer border border-theme-border p-0.5 bg-transparent"
                 title="Line color"
               />
               <select
                 value={line.style ?? 'dashed'}
                 onChange={(e) => updateReferenceLine(i, { style: e.target.value as 'solid' | 'dashed' })}
-                className="px-2 py-1 bg-app-panel border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+                className="px-2 py-1 bg-app-panel border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
               >
                 <option value="dashed">Dashed</option>
                 <option value="solid">Solid</option>
               </select>
               <button
                 onClick={() => removeReferenceLine(i)}
-                className="text-theme-text-muted hover:text-accent-error text-base px-1 rounded transition-colors"
+                className="text-theme-text-muted hover:text-accent-error text-base px-1 rounded-sm transition-colors"
                 title="Remove"
               >
                 &times;
@@ -572,7 +572,7 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
           ))}
           <button
             onClick={addReferenceLine}
-            className="w-full py-1.5 border border-dashed border-theme-border rounded text-theme-text-muted text-xs hover:border-accent-link hover:text-accent-link transition-colors"
+            className="w-full py-1.5 border border-dashed border-theme-border rounded-sm text-theme-text-muted text-xs hover:border-accent-link hover:text-accent-link transition-colors"
           >
             + Add Reference Line
           </button>

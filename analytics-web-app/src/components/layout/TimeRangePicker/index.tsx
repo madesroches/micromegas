@@ -216,7 +216,7 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary bg-theme-border rounded hover:bg-theme-border-hover hover:text-theme-text-primary transition-colors"
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary bg-theme-border rounded-sm hover:bg-theme-border-hover hover:text-theme-text-primary transition-colors"
                   title="Copy time range to clipboard"
                 >
                   <Copy className="w-3.5 h-3.5" />
@@ -225,7 +225,7 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
                 <button
                   type="button"
                   onClick={handlePaste}
-                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary bg-theme-border rounded hover:bg-theme-border-hover hover:text-theme-text-primary transition-colors"
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary bg-theme-border rounded-sm hover:bg-theme-border-hover hover:text-theme-text-primary transition-colors"
                   title="Paste time range from clipboard"
                 >
                   <ClipboardPaste className="w-3.5 h-3.5" />
@@ -250,19 +250,19 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
                       }
                     }}
                     placeholder='Paste JSON here: {"from":"now-1h","to":"now"}'
-                    className="flex-1 px-3 py-1.5 bg-app-panel border border-theme-border rounded text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:ring-2 focus:ring-accent-link/50"
+                    className="flex-1 px-3 py-1.5 bg-app-panel border border-theme-border rounded-sm text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-hidden focus:ring-2 focus:ring-accent-link/50"
                   />
                   <button
                     type="button"
                     onClick={handlePasteInputSubmit}
-                    className="px-3 py-1.5 text-xs font-medium text-white bg-accent-link rounded hover:bg-accent-link/90 transition-colors"
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-accent-link rounded-sm hover:bg-accent-link/90 transition-colors"
                   >
                     Apply
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowPasteInput(false)}
-                    className="px-2 py-1.5 text-xs text-theme-text-secondary bg-theme-border rounded hover:bg-theme-border-hover transition-colors"
+                    className="px-2 py-1.5 text-xs text-theme-text-secondary bg-theme-border rounded-sm hover:bg-theme-border-hover transition-colors"
                   >
                     Cancel
                   </button>

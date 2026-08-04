@@ -112,7 +112,7 @@ export function HgChildPane({
       {/* Pane label */}
       <div
         className={`flex items-center justify-between px-2 py-0.5 cursor-pointer ${
-          isSelected ? 'bg-[var(--selection-bg)]' : ''
+          isSelected ? 'bg-(--selection-bg)' : ''
         }`}
         onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }}
         onDoubleClick={(e) => {
@@ -182,7 +182,7 @@ export function HgChildPane({
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenu.Item
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none rounded-t-md"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden rounded-t-md"
                   onSelect={onSelect}
                 >
                   <Pencil className="w-3.5 h-3.5" />
@@ -190,7 +190,7 @@ export function HgChildPane({
                 </DropdownMenu.Item>
                 {onDownloadCsv && (
                   <DropdownMenu.Item
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
                     onSelect={() => onDownloadCsv()}
                   >
                     <Download className="w-3.5 h-3.5" />
@@ -198,7 +198,7 @@ export function HgChildPane({
                   </DropdownMenu.Item>
                 )}
                 <DropdownMenu.Item
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-none rounded-b-md"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-accent-error hover:bg-theme-border/50 cursor-pointer outline-hidden rounded-b-md"
                   onSelect={onDeleteChild}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -220,7 +220,7 @@ export function HgChildPane({
         }}
       >
         {state.status === 'error' && state.error ? (
-          <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-2 text-xs">
+          <div className="bg-(--error-bg) border border-accent-error rounded-md p-2 text-xs">
             <span className="text-accent-error font-medium">Error: </span>
             <span className="text-theme-text-secondary">{state.error}</span>
           </div>

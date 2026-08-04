@@ -62,7 +62,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
         >
           &larr; Back to notebook
         </button>
-        <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-card text-theme-text-secondary font-mono font-medium">
+        <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-app-card text-theme-text-secondary font-mono font-medium">
           JSON
         </span>
         <span className="text-sm text-theme-text-primary font-medium">Notebook Configuration</span>
@@ -79,7 +79,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
               // ignore clipboard errors
             }
           }}
-          className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+          className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           title="Copy to clipboard"
         >
           {copied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
@@ -92,7 +92,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
                 setEditingSource(false)
                 setSourceText('')
               }}
-              className="px-3 py-1 text-xs rounded border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-app-card transition-colors"
+              className="px-3 py-1 text-xs rounded-sm border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-app-card transition-colors"
             >
               Cancel
             </button>
@@ -102,7 +102,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
                 onConfigChange(JSON.parse(sourceText))
                 onBack()
               }}
-              className="px-3 py-1 text-xs rounded bg-accent-link text-white hover:bg-accent-link/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-xs rounded-sm bg-accent-link text-white hover:bg-accent-link/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Apply
             </button>
@@ -114,7 +114,7 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
               setSourceText(configJson)
               setBaselineJson(configJson)
             }}
-            className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+            className="p-1.5 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
             title="Edit source"
           >
             <Pencil className="w-4 h-4" />
@@ -126,11 +126,11 @@ export function NotebookSourceView({ notebookConfig, onConfigChange, onBack }: N
           <textarea
             value={sourceText}
             onChange={(e) => setSourceText(e.target.value)}
-            className="bg-app-card border border-theme-border rounded-lg p-4 overflow-auto text-xs font-mono text-theme-text-secondary whitespace-pre flex-1 min-h-0 w-full focus:outline-none focus:border-accent-link"
+            className="bg-app-card border border-theme-border rounded-lg p-4 overflow-auto text-xs font-mono text-theme-text-secondary whitespace-pre flex-1 min-h-0 w-full focus:outline-hidden focus:border-accent-link"
             spellCheck={false}
           />
           {jsonError && (
-            <div className="px-3 py-2 bg-accent-error/10 border border-accent-error/30 rounded text-xs text-accent-error shrink-0">
+            <div className="px-3 py-2 bg-accent-error/10 border border-accent-error/30 rounded-sm text-xs text-accent-error shrink-0">
               {jsonError}
             </div>
           )}

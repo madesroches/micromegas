@@ -105,7 +105,7 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
   const isLast = currentPage >= totalPages - 1
 
   return (
-    <div className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 shrink-0" onClick={(e) => e.stopPropagation()}>
       <div />
       {/* Centered navigation */}
       <div className="flex items-center gap-0.5">
@@ -139,7 +139,7 @@ export function PaginationBar({ pagination }: PaginationBarProps) {
         <select
           value={pageSize}
           onChange={(e) => setPageSize(Number(e.target.value))}
-          className="text-[10px] px-0.5 bg-transparent text-theme-text-muted border-none cursor-pointer outline-none hover:text-theme-text-secondary"
+          className="text-[10px] px-0.5 bg-transparent text-theme-text-muted border-none cursor-pointer outline-hidden hover:text-theme-text-secondary"
         >
           {PAGE_SIZE_OPTIONS.map((size) => (
             <option key={size} value={size}>
@@ -172,7 +172,7 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="w-[18px] h-[18px] inline-flex items-center justify-center rounded-sm text-theme-text-muted transition-colors hover:text-theme-text-primary hover:bg-theme-border/40 disabled:opacity-25 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-muted"
+      className="w-[18px] h-[18px] inline-flex items-center justify-center rounded-xs text-theme-text-muted transition-colors hover:text-theme-text-primary hover:bg-theme-border/40 disabled:opacity-25 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-muted"
     >
       {children}
     </button>

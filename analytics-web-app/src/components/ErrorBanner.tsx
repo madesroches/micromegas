@@ -30,12 +30,12 @@ export function ErrorBanner({
 
   return (
     <div className={`flex items-start gap-3 p-3.5 ${bgColor} border ${borderColor} rounded-lg mb-4`}>
-      <Icon className={`w-5 h-5 ${iconColor} flex-shrink-0 mt-0.5`} />
+      <Icon className={`w-5 h-5 ${iconColor} shrink-0 mt-0.5`} />
       <div className="flex-1 min-w-0">
         <div className={`text-sm font-semibold ${titleColor}`}>{title}</div>
         <div className={`text-sm ${messageColor} mt-1`}>{message}</div>
         {details && (
-          <div className="mt-2 px-2.5 py-1.5 bg-black/20 rounded text-xs font-mono text-theme-text-muted">
+          <div className="mt-2 px-2.5 py-1.5 bg-black/20 rounded-sm text-xs font-mono text-theme-text-muted">
             {details}
           </div>
         )}
@@ -44,7 +44,7 @@ export function ErrorBanner({
             {onRetry && (
               <button
                 onClick={onRetry}
-                className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                className={`px-3 py-1.5 text-xs rounded-sm transition-colors ${
                   isWarning
                     ? 'bg-accent-warning text-black hover:opacity-80'
                     : 'bg-accent-error text-white hover:opacity-80'
@@ -60,7 +60,7 @@ export function ErrorBanner({
       {onDismiss && (
         <button
           onClick={onDismiss}
-          className={`p-1 rounded transition-colors flex-shrink-0 ${
+          className={`p-1 rounded-sm transition-colors shrink-0 ${
             isWarning
               ? 'text-accent-warning/60 hover:text-accent-warning hover:bg-accent-warning/20'
               : 'text-accent-error/60 hover:text-accent-error hover:bg-accent-error/20'

@@ -93,14 +93,14 @@ export function CellEditor({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-card text-theme-text-secondary uppercase font-medium">
+          <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-app-card text-theme-text-secondary uppercase font-medium">
             {meta.label}
           </span>
           <span className="font-medium text-theme-text-primary truncate">{cell.name}</span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+          className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           title="Close"
         >
           <X className="w-5 h-5" />
@@ -118,7 +118,7 @@ export function CellEditor({
             type="text"
             value={editedName}
             onChange={(e) => handleNameChange(e.target.value)}
-            className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+            className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-hidden ${
               nameError
                 ? 'border-accent-error focus:border-accent-error'
                 : 'border-theme-border focus:border-accent-link'

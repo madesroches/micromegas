@@ -119,7 +119,7 @@ export interface RenderLogColumnOptions {
 }
 
 function textCellClasses(wrap: boolean | undefined): string {
-  return wrap ? 'whitespace-pre-wrap break-words' : 'truncate'
+  return wrap ? 'whitespace-pre-wrap wrap-break-word' : 'truncate'
 }
 
 export function renderLogColumn(

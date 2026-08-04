@@ -75,7 +75,7 @@ export function SplitButton({
               <DropdownMenu.Item
                 key={index}
                 onClick={action.onClick}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
               >
                 {action.icon}
                 {action.label}

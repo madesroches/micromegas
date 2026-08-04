@@ -42,7 +42,7 @@ function CellSelectionEntry({ cellName, selection, cellResults }: { cellName: st
     <div className="space-y-0.5">
       <button
         type="button"
-        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded cursor-pointer text-left"
+        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded-sm cursor-pointer text-left"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-theme-text-secondary font-mono font-medium">
@@ -72,7 +72,7 @@ function CellResultEntry({ cellName, table }: { cellName: string; table: Table }
     <div className="space-y-0.5">
       <button
         type="button"
-        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded cursor-pointer text-left"
+        className="flex justify-between items-center w-full py-0.5 hover:bg-app-hover rounded-sm cursor-pointer text-left"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-theme-text-secondary font-mono font-medium">
