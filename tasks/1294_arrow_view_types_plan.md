@@ -147,24 +147,35 @@ not produced by the functions in this issue; no attempt to handle them.
 2. **Make the predicates view-aware.** `src/lib/arrow-utils.ts`: extend `isStringType` (`:139-141`)
    with `DataType.isUtf8View(t)` and `isBinaryType` (`:159-166`) with `DataType.isBinaryView(inner)`
    — both already imported via `DataType`, no new import needed. Update the doc comments on both to
-   name the view types.
-3. **Fixtures.** `src/lib/__tests__/arrow-ipc-fixtures.ts`: add a `createViewTypeFramedIpc(...)`
-   alongside `createDictionaryFramedIpc` (`:103`) and `createPlainFramedIpc` (`:154`), reusing the
-   existing `splitIpcMessages` framing. Build the table with `vectorFromArray(values, new Utf8View())`
-   and a `BinaryView` column, and include **both** a short inline value (≤12 bytes) and a long
-   out-of-line value (>12 bytes, which forces a variadic data buffer) plus a null — that trio is what
-   distinguishes a real decode from a lucky one. Emit through
+   name the view types. This changes the branch every call in `arrow-utils.test.ts` exercises through
+   its hand-rolled `apache-arrow` mock, which has no `isUtf8View`/`isBinaryView` statics — see step 6
+   for the required mock update, which must land together with this step so the existing suite keeps
+   passing.
+3. **Fixtures.** `src/lib/__tests__/arrow-ipc-fixtures.ts`: add a `createViewTypeIpc(...)` alongside
+   `createDictionaryFramedIpc` (`:103`) and `createPlainFramedIpc` (`:154`), returning both the raw
+   IPC bytes and the framed chunks, e.g. `{ raw, chunks }` — the framed `chunks` reuse the existing
+   `splitIpcMessages` framing for the streaming-path test (step 4), while the raw bytes are what
+   step 5 needs directly, since `combineChunks` concatenates the JSON frame lines together with the
+   message bytes and the result is not valid input to `tableFromIPC`. Build the table with
+   `vectorFromArray(values, new Utf8View())` and a `BinaryView` column, and include **both** a short
+   inline value (≤12 bytes) and a long out-of-line value (>12 bytes, which forces a variadic data
+   buffer) plus a null — that trio is what distinguishes a real decode from a lucky one. Emit through
    `RecordBatchStreamWriter.writeAll(table, { compressionType: CompressionType.LZ4_FRAME }).toUint8Array(true)`
    — the constructor only takes an options object, not the table; `writeAll` is the static entry point
    that builds and finishes the writer, and is verified working end-to-end through the existing
    `splitIpcMessages` framing. Register a single codec on `compressionRegistry` covering both
-   directions, `{ encode: lz4js.compress, decode: lz4js.decompress }`: `compressionRegistry.set()`
-   replaces the whole entry rather than merging, so an encode-only registration would clobber the
-   `decode` that `arrow-compression.ts:10` registers in any test importing both, leaving the fixture
-   undecodable. arrow-js computes the variadic-buffer length prefixes itself; `lz4js.compress` and
-   `lz4js.decompress` are already declared in `src/types/lz4js.d.ts`. This matches what
-   `stream_query.rs:296-297` actually produces; keep an uncompressed variant alongside it for the
-   plain-IPC case.
+   directions, `{ encode: lz4js.compress, decode: lz4js.decompress }`, **inside the fixture factory
+   function itself** (not at module scope): `compressionRegistry.set()` replaces the whole entry
+   rather than merging, and `arrow-stream.ts:11`'s `import './arrow-compression'` registers a
+   decode-only codec — if the fixture registered at module scope, whichever import runs last would
+   win, and a test file that imports `../arrow-stream` after `./arrow-ipc-fixtures` would get the
+   decode-only entry and hit `Codec for compression type "LZ4_FRAME" has invalid encode method` when
+   the writer tries to encode. Registering inside the factory (called from each test, or from a
+   `beforeEach`/`beforeAll`) guarantees the fixture's `{ encode, decode }` pair always applies last,
+   regardless of import order. arrow-js computes the variadic-buffer length prefixes itself;
+   `lz4js.compress` and `lz4js.decompress` are already declared in `src/types/lz4js.d.ts`. This
+   matches what `stream_query.rs:296-297` actually produces; keep an uncompressed variant alongside it
+   for the plain-IPC case.
 4. **Streaming-path test.** New `src/lib/__tests__/arrow-stream-view-types.test.ts` (or a
    `describe` block in `arrow-stream-dictionary.test.ts`, which already has the mock-fetch/
    `createMockStream` harness): drive `streamQuery` over both the compressed and uncompressed step-3
@@ -175,8 +186,9 @@ not produced by the functions in this issue; no attempt to handle them.
    duration of the test, since `set()` overwrites rather than merges). This is the direct regression
    test for the reported error over the exact framing and compression the server uses.
 5. **Whole-buffer-path test.** In `src/lib/__tests__/arrow-ipc-fixtures.test.ts` (or alongside it),
-   add two cases that call the real `tableFromIPC` directly on the step-3 view-typed IPC bytes — one
-   over the uncompressed fixture, one over the LZ4_FRAME-compressed fixture — and assert the decode
+   add two cases that call the real `tableFromIPC` directly on the raw (unframed) IPC bytes returned
+   by step 3's `createViewTypeIpc(...)` — one over the uncompressed `raw` buffer, one over the
+   LZ4_FRAME-compressed `raw` buffer — and assert the decode
    succeeds and values round-trip in both. This must live where `apache-arrow` is not mocked:
    `useCellExecution.test.ts:35-65` has a blanket `vi.mock('apache-arrow', …)` whose
    `tableFromIPC: () => new MockTable([{}])` ignores its input entirely, so a case added there would
@@ -185,10 +197,18 @@ not produced by the functions in this issue; no attempt to handle them.
    server output collected via `fetchQueryIPC` (`:234,271`) — neither of which is covered by step 4's
    streaming-reader test, and neither of which can be fixed server-side; the assertion has to run
    against the real library to mean anything.
-6. **Predicate tests.** `src/lib/__tests__/arrow-utils.test.ts`: `isStringType(new Utf8View())` and
-   `isBinaryType(new BinaryView())` true; the chart-validity check at `:282` accepts a `Utf8View` X
-   column; the color-kind checks at `:235,237`/`:301` accept a `Utf8View`/`BinaryView` color-by
-   column — these are the assertions that actually flip with the fix (`detectXAxisMode`'s
+6. **Mock update, then predicate tests.** `src/lib/__tests__/arrow-utils.test.ts`: first extend the
+   hand-rolled `apache-arrow` mock (`:6-99`) — add `Utf8View: 14, BinaryView: 15` to its `TypeId` map,
+   `static isUtf8View`/`isBinaryView` to `MockDataType` mirroring the existing statics, and
+   `createUtf8ViewType`/`createBinaryViewType` factories exported alongside the others in `__test__`.
+   Without this the step-2 predicate change throws `DataType.isUtf8View is not a function` in every
+   existing test whose type falls through the `||` chain (int, float, decimal, bool, dictionary,
+   etc.) — the mock has no such statics today. Then add cases using that mock's own factory
+   convention (the mock exports no `Utf8View`/`BinaryView` classes, so `new Utf8View()` is not
+   constructible here): `isStringType(__test__.createUtf8ViewType())` and
+   `isBinaryType(__test__.createBinaryViewType())` true; the chart-validity check at `:282` accepts a
+   `Utf8View` X column; the color-kind checks at `:235,237`/`:301` accept a `Utf8View`/`BinaryView`
+   color-by column — these are the assertions that actually flip with the fix (`detectXAxisMode`'s
    `'categorical'` default already passes today, with or without it).
 7. **`formatCell` test.** `src/lib/screen-renderers/__tests__/table-utils.test.tsx`: a `BinaryView`
    column formats as the ASCII preview with length, not `"97,98,99"`.
