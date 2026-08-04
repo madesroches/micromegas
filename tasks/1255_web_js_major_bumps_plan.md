@@ -97,22 +97,44 @@ declares `^10.0.0` in its peer range (table above). `grafana/` stays on 9 becaus
 `@grafana/eslint-config`-driven and therefore Grafana's to move, not ours; a version skew between two
 independently-linted packages costs nothing.
 
-### ESLint 10 breaking changes that apply here
+### ESLint 8 → 10 breaking changes that apply here
 
-From the ESLint 10 migration guide, screened against this codebase:
+The migration skips 9 entirely, so the screened delta is the full 8 → 10 span, not just 9 → 10:
 
 - **eslintrc removed** → `.eslintrc.json` must become `eslint.config.js`. This is the whole of the work.
 - **`/* eslint-env */` comments now error** → grep over `analytics-web-app/src` found **zero**
   occurrences. No impact.
-- **Three rules added to `eslint:recommended`**: `no-unassigned-vars`, `no-useless-assignment`,
-  `preserve-caught-error`. These may produce new findings; fixing them is part of the commit.
+- **`eslint:recommended` changed across both skipped majors.** Diffing the installed `@eslint/js@8.57.1`
+  recommended set against `@eslint/js@10.0.1` gives **7 rules added**: `no-constant-binary-expression`,
+  `no-empty-static-block`, `no-new-native-nonconstructor`, `no-unused-private-class-members` (all added
+  in ESLint 9), plus `no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error` (added in
+  ESLint 10) — and **4 rules removed**: `no-extra-semi`, `no-inner-declarations`,
+  `no-mixed-spaces-and-tabs`, `no-new-symbol`. The 7 additions may produce new findings; fixing them is
+  part of the commit.
+- **ESLint 9 changed `no-constant-condition`'s `checkLoops` default** from `true` to
+  `"allExceptWhileTrue"`. This makes the 3 existing `no-constant-condition` disables in
+  `analytics-web-app/src/lib/arrow-stream.ts` stale under the target version (see the disable-directive
+  inventory below).
 - **Config lookup now walks up from each linted file** — irrelevant with a single root config.
 - Removed deprecated `context`/`SourceCode` methods — no custom rules or plugins in this repo.
 
 Existing inline disables reference `react-refresh/only-export-components` (28),
 `react-hooks/exhaustive-deps` (22), `react-hooks/rules-of-hooks` (4), `no-constant-condition` (3),
 `no-control-regex` (2), `require-yield` (1), `@typescript-eslint/no-unused-vars` (1). All of those rule
-names survive in the target versions, so no disable-comment rewriting is expected.
+names survive in the target versions — but flat config defaults `linterOptions.reportUnusedDisableDirectives`
+to `warn` (eslintrc left it off entirely), so a disable that no longer matches a live finding now surfaces
+as a lint warning. A measured run of the plan's exact `eslint.config.js` against the real `src/` produced
+exactly **12** "Unused eslint-disable directive" reports:
+- 3x `no-constant-condition` in `lib/arrow-stream.ts` (stale from the `checkLoops` default change above)
+- 4x `react-hooks/rules-of-hooks` in `__tests__/useNotebookVariables.test.tsx`
+- 3x `react-hooks/exhaustive-deps` in `routes/ProcessMetricsPage.tsx`, `routes/ScreenPage.tsx`,
+  `perf-analysis/PerformanceMetricsChart.tsx`
+- 1x `react-refresh/only-export-components` in `cells/MapCell.tsx`
+- 1x `@typescript-eslint/no-unused-vars` in `cells/VariableCell.tsx`
+
+So disable-comment rewriting **is** needed, not skipped: Commit 2 removes these 12 stale directives.
+(Alternative, not taken: set `linterOptions.reportUnusedDisableDirectives: 'off'` in `eslint.config.js`
+to keep them — rejected since they are genuinely stale and removing them is cheap.)
 
 ### Flat config shape
 
@@ -135,6 +157,13 @@ export default tseslint.config(
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // React Compiler rules that fire on this codebase (106 findings, see below) — turned off,
+      // adopted as a separate follow-up rather than hand-fixed here.
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/static-components': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'off',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
@@ -146,27 +175,35 @@ export default tseslint.config(
 ```
 
 **`eslint-plugin-react-hooks` v7's flat-config export is confirmed, not assumed** — `grafana/` already
-depends on `eslint-plugin-react-hooks ^7.0.0`, and the installed
-`grafana/node_modules/eslint-plugin-react-hooks` (7.0.1) exposes `configs.recommended`,
-`configs['recommended-latest']`, and `configs.flat.{recommended,recommended-latest}`.
-`configs.recommended` is eslintrc-shaped (`plugins: ['react-hooks']`) but carries a usable `.rules`
-object, so the `...reactHooks.configs.recommended.rules` spread in the config above works as written.
-That `.rules` object has **17** rules: `rules-of-hooks`, `exhaustive-deps`, plus 15 React-Compiler rules
-(`static-components`, `use-memo`, `component-hook-factories`, `preserve-manual-memoization`,
-`incompatible-library`, `immutability`, `globals`, `refs`, `set-state-in-effect`, `error-boundaries`,
-`purity`, `set-state-in-render`, `unsupported-syntax`, `config`, `gating`), all set to `error` by default
-— confirming the rule-set-growth concern below is real rather than hypothetical.
+depends on `eslint-plugin-react-hooks ^7.0.0`; the installed `grafana/node_modules/eslint-plugin-react-hooks`
+was 7.0.1 at the time of that check, but the version targeted here is **7.1.1**. Re-verified directly
+against `7.1.1`: it exposes the same `configs.recommended`, `configs['recommended-latest']`, and
+`configs.flat.{recommended,recommended-latest}` shape, and `configs.recommended` is eslintrc-shaped
+(`plugins: ['react-hooks']`) but carries a usable `.rules` object, so the
+`...reactHooks.configs.recommended.rules` spread in the config above works as written. That `.rules`
+object has **16** rules in `7.1.1`, not 17 — `component-hook-factories` (present in `7.0.1`) is gone:
+`rules-of-hooks`, `exhaustive-deps`, plus 14 React-Compiler rules (`static-components`, `use-memo`,
+`preserve-manual-memoization`, `incompatible-library`, `immutability`, `globals`, `refs`,
+`set-state-in-effect`, `error-boundaries`, `purity`, `set-state-in-render`, `unsupported-syntax`,
+`config`, `gating`). Not all default to `error`: `exhaustive-deps`, `incompatible-library`, and
+`unsupported-syntax` default to `warn`; the other 13 default to `error`.
 
-**`react-hooks` v7 rule-set growth.** v7's `recommended` pulls in that React Compiler rule family in
-addition to `rules-of-hooks`/`exhaustive-deps`. On a codebase with 22 existing `exhaustive-deps`
-disables this could surface a large batch of new findings — the one thing that stays open until
-`yarn install` + `yarn lint` actually runs is *how many* of the 15 fire here. Mitigation, in order of
-preference: (a) fix them if few and mechanical; (b) demote the noisy new rules to `warn` — `yarn lint`
-has no `--max-warnings`, so warnings do not fail CI, matching how the two pre-existing overrides are
-already set to `warn`; (c) if v7 is disproportionate, stay on `^7.1.1` (v6's peer range caps at
-`eslint@^9.0.0` and does not satisfy `eslint@^10`, so downgrading the plugin is not an option) and
-instead explicitly turn off the React-Compiler rule family in the flat config, keeping only
-`rules-of-hooks`/`exhaustive-deps`. Any of the three keeps the ESLint-10 goal intact.
+**`react-hooks` v7 rule-set growth — measured, not open-ended.** v7's `recommended` pulls in the React
+Compiler rule family in addition to `rules-of-hooks`/`exhaustive-deps`. Running the plan's exact
+`eslint.config.js` (ESLint 10.8.0 + `typescript-eslint@8.66.0` + `eslint-plugin-react-hooks@7.1.1`)
+against the real `src/` produces **106 errors across 48 files** (50 files have at least one finding)
+from 5 rules: `react-hooks/refs` 60, `react-hooks/set-state-in-effect` 33, `react-hooks/static-components`
+8, `react-hooks/immutability` 4, `react-hooks/purity` 1. `rules-of-hooks` and `exhaustive-deps` report
+**zero** new findings under v7 — the 22 existing `exhaustive-deps` disables are not where this flood
+comes from; that rule is exactly as noisy as it is today, and stays `warn` in v7's recommended set
+regardless. Baseline under ESLint 8 is 0 errors / 4 warnings, so a green `yarn lint` in Commit 2 is not
+reachable by fixing the React-Compiler findings by hand — 106 errors across 48 files is out of
+proportion to a dependency bump. Mitigation, decided in-plan: turn off the 5 rules that actually fire
+(`refs`, `set-state-in-effect`, `static-components`, `immutability`, `purity`) in `eslint.config.js`,
+keeping `rules-of-hooks`/`exhaustive-deps` at their v7 severities. This is narrower and more honest than
+blanket-demoting the whole `react-hooks` plugin to `warn`, and it means the React Compiler rules are
+adopted as a separate follow-up, not silently dropped. `^6` is not a fallback option regardless — its
+peer range caps at `eslint@^9.0.0` and does not satisfy `eslint@^10`.
 
 Because flat config lints only JS by default, `files: ['**/*.{ts,tsx}']` is required for the TS rules to
 apply; `tseslint.configs.recommended` supplies the TS parser wiring. Verify coverage did not silently
@@ -233,6 +270,14 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
 - **Default ring color `blue-500` → `currentColor`**: a `ring-1`/`ring-2` with no companion color class
   will change hue. Enumerate those sites during implementation and add an explicit ring color where the
   rendered color mattered. Low count, visual-only.
+- **`hover:` now gated behind `@media (hover: hover)`.** v3 emits `.hover\:underline:hover { … }`
+  unconditionally; v4 wraps it in `@media (hover: hover) { … }`, so hover-only styles stop applying on
+  touch/pen-primary devices where `hover: hover` doesn't match. Verified by compiling `hover:underline`
+  under `tailwindcss@4.3.3` via `@config`. `analytics-web-app/src` has 284 `hover:` and 9 `group-hover:`
+  occurrences (293 total) — the largest count of any screened default change here. Accept v4's behavior:
+  it is the intended modern default and this is a desktop-oriented analytics app; `@custom-variant hover
+  (&:hover)` in `globals.css` is the one-line override if touch regressions show up. Cover these sites in
+  Commit 3 step 6's visual pass and call this out as user-visible in the changelog bullet.
 - **Browser support floor rises to Safari 16.4+ / Chrome 111+ / Firefox 128+.** `package.json` has no
   `browserslist` field and there is no `.browserslistrc` — the `browserslist ^4.28.1` and
   `baseline-browser-mapping` devDeps (plus the `baseline-browser-mapping` `resolutions` pin) exist solely
@@ -322,7 +367,7 @@ conflicting classes would stop cancelling and last-wins overrides would silently
 v3 is the Tailwind-v4-aware line (target `3.6.0`). This is why the Tailwind work cannot be split
 finer than one commit.
 
-#### Latent bug to verify (not to fix speculatively)
+#### `DateTimePicker.css` repoint (verified dead, not a speculative check)
 
 `analytics-web-app/src/components/ui/DateTimePicker.css` references `var(--color-accent-link)`,
 `var(--color-app-card)`, `var(--color-theme-text-primary)`, `var(--color-theme-text-muted)`,
@@ -330,11 +375,17 @@ finer than one commit.
 variable names**. Tailwind v3 with a JS config emits no `--color-*` variables, and `globals.css` defines
 the raw names (`--accent-link`, `--card-bg`, `--text-primary`, `--text-muted`, `--border-color`,
 `--text-secondary`), so these six references resolve to nothing today and those react-day-picker styles
-are silently inert. Under v4 they may start resolving (v4 materializes theme colors as `--color-*`),
-which would be a *behavior change* — a previously-dead rule coming to life. During implementation,
-check in the browser whether the calendar picker's colors change; if they resolve to something wrong, or
-do not resolve at all under `@config`, point them at the raw variables `globals.css` actually defines.
-Either way this is a small, contained fix inside the Tailwind commit's blast radius.
+are silently inert.
+
+They stay inert under v4 too — verified, not speculative: compiling the repo's actual
+`tailwind.config.ts` + `globals.css` (`@import "tailwindcss"` + `@config "../../tailwind.config.ts"`)
+under `tailwindcss@4.3.3` produces output containing **zero** `--color-*` custom properties. v4 only
+materializes `--color-*` from a CSS `@theme` block; on the `@config` path it inlines legacy-JS-config
+colors directly instead (e.g. `.bg-accent-link\/20 { background-color: var(--accent-link) }`). So this
+is an unconditional edit, not a browser check: repoint the six references at the raw names `globals.css`
+actually defines (`--accent-link`, `--card-bg`, `--text-primary`, `--text-muted`, `--border-color`,
+`--text-secondary`) as part of Commit 3. (The eventual `@theme` migration — the deferred follow-up in
+Trade-offs — is what would make the `--color-*` names valid instead.)
 
 ## Implementation Steps
 
@@ -370,10 +421,15 @@ branch bisects cleanly.
 3. Create `analytics-web-app/eslint.config.js` per the Design shape (the
    `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
    install-time unknown — see Design); `git rm analytics-web-app/.eslintrc.json`.
-4. `yarn lint`. Triage findings in two buckets: **(a)** the three new `eslint:recommended` rules
-   (`no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) — fix these; **(b)** new
-   `react-hooks` v7 rules — apply the Design's mitigation ladder (fix / demote to `warn` / turn off the
-   React-Compiler rule family). Whichever is chosen, note it in the commit message.
+4. `yarn lint`. Triage findings in three buckets: **(a)** the seven newly-recommended
+   `eslint:recommended` rules added across the skipped 9 and 10 majors (`no-constant-binary-expression`,
+   `no-empty-static-block`, `no-new-native-nonconstructor`, `no-unused-private-class-members`,
+   `no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) — fix these; **(b)** the 5
+   React-Compiler `react-hooks` v7 rules that fire (`refs`, `set-state-in-effect`, `static-components`,
+   `immutability`, `purity`) — turn them off in `eslint.config.js` per the Design's decision, adopting
+   them as a separate follow-up rather than hand-fixing the 106 findings; **(c)** the 12 stale
+   `eslint-disable` directives flagged by flat config's `reportUnusedDisableDirectives: 'warn'` default
+   (see Design) — remove them. Note the bucket (b) decision in the commit message.
 5. Confirm the 253 `.ts`/`.tsx` files are all still linted, plus the two newly-in-scope non-TS files (see
    Testing Strategy) — 255 files total at this point, not 253.
 6. Full `python3 build/analytics_web_ci.py`, then commit.
@@ -381,7 +437,9 @@ branch bisects cleanly.
 ### Commit 3 — `tailwindcss` 3 → 4 (+ `tailwind-merge` 3)
 
 1. From `analytics-web-app/`, run `yarn dlx @tailwindcss/upgrade`. Do not accept the run blindly —
-   `git diff` it in full.
+   `git diff` it in full. Note: the codemod's bundle also installs `@tailwindcss/postcss` as a
+   devDependency and rewrites `postcss.config.mjs`'s `tailwindcss:` entry to `'@tailwindcss/postcss':`;
+   both are superseded by step 3's switch to `@tailwindcss/vite` and must be removed there.
 2. Reconcile the codemod's output with the deliberate decisions here:
    - `src/styles/globals.css` must end up as `@import "tailwindcss";` +
      `@config "../../tailwind.config.ts";`, with both `@layer base` blocks and both `@apply` uses
@@ -391,32 +449,35 @@ branch bisects cleanly.
      alone) so `rounded-xs` stays value-preserving.
 3. Switch the build pipeline to the Vite plugin: add `@tailwindcss/vite ^4.3.3` to devDeps, add
    `tailwindcss()` to the `plugins` array in `analytics-web-app/vite.config.ts`, delete
-   `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep. `autoprefixer` is the only
-   dependent of `browserslist` and `baseline-browser-mapping` (`yarn why` confirms both resolve through it
-   alone; `tasks/completed/vitest_migration_plan.md` records this same pair being kept specifically "for
-   `autoprefixer`"), so remove the `browserslist` and `baseline-browser-mapping` devDeps and the
-   `baseline-browser-mapping` entry in `resolutions` too. Keep the `postcss` devDep and the `postcss`
-   `resolutions` pin (both are security-pin machinery for transitive users, independent of Tailwind).
+   `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep, plus the
+   `@tailwindcss/postcss` devDep that step 1's codemod added (superseded by the Vite plugin).
+   `autoprefixer` is the only dependent of `browserslist` and `baseline-browser-mapping` (`yarn why`
+   confirms both resolve through it alone; `tasks/completed/vitest_migration_plan.md` records this same
+   pair being kept specifically "for `autoprefixer`"), so remove the `browserslist` and
+   `baseline-browser-mapping` devDeps and the `baseline-browser-mapping` entry in `resolutions` too. Keep
+   the `postcss` devDep and the `postcss` `resolutions` pin (both are security-pin machinery for
+   transitive users, independent of Tailwind).
 4. `analytics-web-app/package.json`: `"tailwindcss": "^3.3.0"` → `"^4.3.3"`,
    `"tailwind-merge": "^2.0.0"` → `"^3.6.0"`. Leave `@tailwindcss/typography ^0.5.19` alone — the
    existing caret range already admits the v4-compatible `0.5.20`.
 5. `yarn install`, then `yarn build`, and diff the emitted CSS bundle size/shape for anything alarming.
 6. Manual visual pass against a running app (`python3 local_test_env/ai_scripts/start_services.py
-   --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, the
-   `DateTimePicker` calendar for the `--color-*` variable question above, that buttons/`role="button"`
-   elements still show a pointer cursor, that input/textarea placeholders still render in the expected
-   muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites (dropping the modifier where
-   the opaque color was the intended look), and the 66 `space-*`/`divide-*` layouts affected by the
-   selector rewrite.
+   --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, that
+   buttons/`role="button"` elements still show a pointer cursor, that input/textarea placeholders still
+   render in the expected muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites
+   (dropping the modifier where the opaque color was the intended look), the 66 `space-*`/`divide-*`
+   layouts affected by the selector rewrite, and the 293 `hover:`/`group-hover:` sites now gated behind
+   `@media (hover: hover)`.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Final — changelog
 
 Add three bullets under `## Unreleased` → `**Web App:**` in `CHANGELOG.md`, matching the existing
 dependency-bump entry style, referencing `(#1255)`. The Tailwind bullet must call out the raised browser
-floor (Safari 16.4+ / Chrome 111+ / Firefox 128+) as user-visible, and the `tailwind-merge` v3 bump as
-part of the same change. Also record the documented hold on `grafana/`'s React 18 with its reason
-(`@grafana/ui@12.4.6` peers `react: ^18.0.0`).
+floor (Safari 16.4+ / Chrome 111+ / Firefox 128+) and the `hover:` variant now requiring true hover
+support (`@media (hover: hover)`) as user-visible, and the `tailwind-merge` v3 bump as part of the same
+change. Also record the documented hold on `grafana/`'s React 18 with its reason (`@grafana/ui@12.4.6`
+peers `react: ^18.0.0`).
 
 ## Files to Modify
 
@@ -433,14 +494,15 @@ part of the same change. Also record the documented hold on `grafana/`'s React 1
 
 **Commit 3**
 - `analytics-web-app/package.json` — `tailwindcss`, `tailwind-merge`, `@tailwindcss/vite`; drop
-  `autoprefixer`, `browserslist`, `baseline-browser-mapping`, and the `baseline-browser-mapping`
-  `resolutions` entry
+  `autoprefixer`, `@tailwindcss/postcss` (added by step 1's codemod, superseded by `@tailwindcss/vite`),
+  `browserslist`, `baseline-browser-mapping`, and the `baseline-browser-mapping` `resolutions` entry
 - `analytics-web-app/yarn.lock`
 - `analytics-web-app/src/styles/globals.css` — `@import` + `@config`
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
 - `analytics-web-app/postcss.config.mjs` — **deleted**
 - `analytics-web-app/src/**/*.tsx` — ~253 utility-class renames
-- `analytics-web-app/src/components/ui/DateTimePicker.css` — only if the `--color-*` check says so
+- `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the six `--color-*` references to
+  the raw variable names `globals.css` defines (verified dead under `@config`, not conditional)
 - `analytics-web-app/tailwind.config.ts` — add `borderRadius.xs` entry so `rounded-sm` → `rounded-xs`
   stays value-preserving (kept, still loaded via `@config`)
 
@@ -513,11 +575,12 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
 
 ## Risks
 
-- **`eslint-plugin-react-hooks` v7 rule-set expansion is the one genuinely open-ended item.** If its
-  `recommended` set floods the codebase with React Compiler findings, the mitigation ladder in Design
-  (fix → demote to `warn` → turn off the React-Compiler rule family, staying on `^7.1.1` — `^6` is not a
-  fallback option, its peer range caps at `eslint@^9.0.0`) keeps the commit shippable without an
-  unbounded fix-up. The ESLint-10 objective does not depend on which rung is used.
+- **`eslint-plugin-react-hooks` v7 rule-set expansion is measured, not open-ended.** Its `recommended`
+  set fires 106 errors across 48 files from 5 React-Compiler rules (`refs`, `set-state-in-effect`,
+  `static-components`, `immutability`, `purity` — see Design). The plan turns those 5 off in
+  `eslint.config.js` and keeps `rules-of-hooks`/`exhaustive-deps` at their v7 severities, staying on
+  `^7.1.1` (`^6` is not a fallback option, its peer range caps at `eslint@^9.0.0`), deferring the
+  React-Compiler rules to a separate follow-up rather than hand-fixing them here.
 - **The Tailwind codemod's output needs real review**, not just a passing build — the renames are
   visual, and `yarn build` succeeding proves nothing about whether a `rounded` became the right
   `rounded-sm`. The manual pass in step 6 is load-bearing, not ceremonial.
@@ -531,5 +594,5 @@ None. Two decisions are deliberately made in-plan and recorded so review can ove
 **ESLint 10 rather than 9** (Trade-offs), and **`@config` rather than porting the theme to `@theme`**
 (Trade-offs). A third — **one PR rather than the issue's "separate PRs"** — was raised with the repo
 owner and confirmed as one PR (Trade-offs); it is settled, not open. The `react-hooks` v7 noise level is
-unknown until `yarn install` + `yarn lint` runs, which is why it is written as a mitigation ladder rather
-than a question — implementation resolves it from the actual output.
+now measured (106 errors from 5 rules across 48 files, see Design), not unknown — the plan turns those 5
+rules off rather than leaving it as an open question.
