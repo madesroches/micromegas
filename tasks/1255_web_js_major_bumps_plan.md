@@ -109,8 +109,10 @@ The migration skips 9 entirely, so the screened delta is the full 8 → 10 span,
   `no-empty-static-block`, `no-new-native-nonconstructor`, `no-unused-private-class-members` (all added
   in ESLint 9), plus `no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error` (added in
   ESLint 10) — and **4 rules removed**: `no-extra-semi`, `no-inner-declarations`,
-  `no-mixed-spaces-and-tabs`, `no-new-symbol`. The 7 additions may produce new findings; fixing them is
-  part of the commit.
+  `no-mixed-spaces-and-tabs`, `no-new-symbol`. Of the 7 additions, a measured run against the real `src/`
+  shows only **2** produce findings: `preserve-caught-error` (`src/lib/arrow-stream.ts:352`) and
+  `no-useless-assignment` (`src/lib/time-range.ts:130`); the other 5 report zero. Fixing the two live ones
+  is part of the commit.
 - **ESLint 9 changed `no-constant-condition`'s `checkLoops` default** from `true` to
   `"allExceptWhileTrue"`. This makes the 3 existing `no-constant-condition` disables in
   `analytics-web-app/src/lib/arrow-stream.ts` stale under the target version (see the disable-directive
@@ -138,7 +140,10 @@ to keep them — rejected since they are genuinely stale and removing them is ch
 
 ### Flat config shape
 
-New `analytics-web-app/eslint.config.js`, replacing `.eslintrc.json` one-for-one in behavior:
+New `analytics-web-app/eslint.config.js`, replacing `.eslintrc.json` one-for-one in *shape* (same three
+extends collapsed into flat form, same two rule overrides) — not in exact findings: the bumped
+`eslint:recommended` set and plugin majors add a measured 20 warnings where the baseline had 4 (see
+Commit 2 step 5 triage), none of which fail `yarn lint`.
 
 ```js
 import js from '@eslint/js'
@@ -213,6 +218,10 @@ devDep churn for this commit: add `@eslint/js`, `typescript-eslint`, `globals`; 
 `eslint-plugin-react-hooks` to `^7.1.1`, `eslint-plugin-react-refresh` to `^0.5`;
 **remove** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser` (superseded by the unified
 `typescript-eslint` package) and `@eslint/eslintrc` (dead — see Current State). Delete `.eslintrc.json`.
+Removing the split `@typescript-eslint/*` packages also orphans the `@typescript-eslint/utils@7.18.0`
+`packageExtensions` entry in `analytics-web-app/.yarnrc.yml` and its root mirror `/.yarnrc.yml` (it exists
+solely to patch that v7-only package's peer range — `typescript-eslint@8.66.0`'s own `utils` declares its
+own `typescript` peer, which is why the pin is version-exact); remove both entries in this commit.
 
 ### date-fns 2 → 4
 
@@ -328,22 +337,28 @@ Counts are `grep` occurrences over `analytics-web-app/src`:
 | v3 | v4 | count |
 |---|---|---|
 | `outline-none` | `outline-hidden` | 83 |
-| `rounded` (bare) | `rounded-sm` | 123 |
+| `rounded` (bare) | `rounded-sm` | 126 |
 | `rounded-sm` | `rounded-xs` | 6 |
 | `flex-shrink-*` | `shrink-*` | 22 |
-| `blur` (bare) | `blur-sm` | 15 |
-| `blur-sm` | `blur-xs` | 1 |
 | `backdrop-blur-sm` | `backdrop-blur-xs` | 1 |
 | `shadow` (bare) | `shadow-sm` | 1 |
 | `shadow-sm` | `shadow-xs` | 1 |
 
-**Ordering hazard**: the `rounded`/`blur`/`shadow` scales are *shifted*, not remapped — a naive
-find-and-replace that rewrites `rounded` → `rounded-sm` before `rounded-sm` → `rounded-xs` will
-double-shift the 6 original `rounded-sm` sites into `rounded-xs`-then-nothing. Run
-`yarn dlx @tailwindcss/upgrade` (the official codemod, Node 20+) rather than hand-editing; it applies
-the renames in the correct order and is the sanctioned migration path. Review its diff before
-committing, and reject any part of it that tries to convert `tailwind.config.ts` into `@theme` (that is
-the deliberate `@config` decision above).
+The 126 bare-`rounded` occurrences include three variant-prefixed forms — `prose-code:rounded` in
+`src/lib/screen-renderers/table-utils.tsx:420`, `src/lib/screen-renderers/cells/MarkdownCell.tsx:26`,
+and `src/components/map/EventDetailContent.tsx:82` — which also need the rename.
+
+There is no bare-`blur` or standalone-`blur-sm` row: all matches of bare `blur` in `src` are JavaScript
+DOM uses (`e.currentTarget.blur()`, `addEventListener('blur', …)`, `fireEvent.blur(input)`) or comment
+prose, not Tailwind classes — a hand-edit must not touch them. The only `blur`-scale utility class
+present is `backdrop-blur-sm`, covered by its own row above.
+
+**Ordering hazard**: the `rounded`/`shadow` scales are *shifted*, not remapped — a naive find-and-replace
+that rewrites `rounded` → `rounded-sm` before `rounded-sm` → `rounded-xs` will double-shift the 6
+original `rounded-sm` sites into `rounded-xs`-then-nothing. Run `yarn dlx @tailwindcss/upgrade` (the
+official codemod, Node 20+) rather than hand-editing; it applies the renames in the correct order and is
+the sanctioned migration path. Review its diff before committing, and reject any part of it that tries
+to convert `tailwind.config.ts` into `@theme` (that is the deliberate `@config` decision above).
 
 **`rounded-sm` → `rounded-xs` is not value-preserving here.** `tailwind.config.ts` overrides
 `borderRadius.sm` to `calc(var(--radius) - 4px)` (with `--radius: 0.5rem` in `globals.css`), so v3
@@ -407,8 +422,8 @@ branch bisects cleanly.
 0. **Before touching `package.json`**, with ESLint 8 still installed, capture the pre-migration baseline
    against the still-live `.eslintrc.json`: `yarn eslint . -f json | jq 'length'` (or the file list). On
    the current tree this is **253 files (131 `.tsx`, 122 `.ts`)**, and **zero** `.js`/`.mjs` files — record
-   the `.ts`/`.tsx` split for the step 5 comparison, since ESLint 10 removes eslintrc support entirely and
-   no eslintrc-based run is possible once step 2 installs it. Flat config lints `**/*.js`/`.cjs`/`.mjs` by
+   the `.ts`/`.tsx` split for the step 6 comparison, since ESLint 10 removes eslintrc support entirely and
+   no eslintrc-based run is possible once step 3 installs it. Flat config lints `**/*.js`/`.cjs`/`.mjs` by
    default in addition to whatever `files` names, so the post-migration total is **not** expected to stay
    at 253 — it additionally picks up the new `eslint.config.js` and, until Commit 3 deletes it,
    `postcss.config.mjs` (255 files here; 254 once Commit 3 removes `postcss.config.mjs`). Comparing raw
@@ -417,22 +432,33 @@ branch bisects cleanly.
    `eslint-plugin-react-refresh` → `^0.5.3`, `eslint-plugin-react-hooks` → `^7.1.1`; add
    `@eslint/js ^10.0.1`, `typescript-eslint ^8.66.0`, `globals ^17.9.0`; remove
    `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@eslint/eslintrc`.
-2. `yarn install`.
-3. Create `analytics-web-app/eslint.config.js` per the Design shape (the
+2. Remove the now-orphaned `@typescript-eslint/utils@7.18.0` `packageExtensions` entry from
+   `analytics-web-app/.yarnrc.yml` and its root mirror `/.yarnrc.yml` (see Design).
+3. `yarn install`.
+4. Create `analytics-web-app/eslint.config.js` per the Design shape (the
    `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
    install-time unknown — see Design); `git rm analytics-web-app/.eslintrc.json`.
-4. `yarn lint`. Triage findings in three buckets: **(a)** the seven newly-recommended
-   `eslint:recommended` rules added across the skipped 9 and 10 majors (`no-constant-binary-expression`,
+5. `yarn lint`. Triage findings in four buckets: **(a)** of the seven newly-recommended
+   `eslint:recommended` rules added across the skipped 9 and 10 majors, the two that actually fire —
+   `preserve-caught-error` (`src/lib/arrow-stream.ts:352`) and `no-useless-assignment`
+   (`src/lib/time-range.ts:130`); the other five (`no-constant-binary-expression`,
    `no-empty-static-block`, `no-new-native-nonconstructor`, `no-unused-private-class-members`,
-   `no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) — fix these; **(b)** the 5
+   `no-unassigned-vars`) report zero findings here — fix the two live ones; **(b)** the 5
    React-Compiler `react-hooks` v7 rules that fire (`refs`, `set-state-in-effect`, `static-components`,
    `immutability`, `purity`) — turn them off in `eslint.config.js` per the Design's decision, adopting
    them as a separate follow-up rather than hand-fixing the 106 findings; **(c)** the 12 stale
    `eslint-disable` directives flagged by flat config's `reportUnusedDisableDirectives: 'warn'` default
-   (see Design) — remove them. Note the bucket (b) decision in the commit message.
-5. Confirm the 253 `.ts`/`.tsx` files are all still linted, plus the two newly-in-scope non-TS files (see
+   (see Design) — remove them; **(d)** four new rule-warnings introduced by the bumped plugins, left
+   as-is since they are warnings and `yarn lint` has no `--max-warnings` gate: two
+   `react-refresh/only-export-components` (from `eslint-plugin-react-refresh` 0.4.26 → 0.5.3) at
+   `src/components/ErrorBoundary.tsx:74` and `src/lib/screen-type-utils.tsx:14`, and two
+   `@typescript-eslint/no-unused-vars` (from `@typescript-eslint` 7 → 8) at
+   `src/lib/__tests__/auth.test.tsx:422` and `:492`. Note the bucket (b) decision in the commit message.
+   Measured total after this step: **20 warnings**, up from the 4-warning baseline (all
+   `react-refresh/only-export-components` in `src/components/FolderTree.tsx`).
+6. Confirm the 253 `.ts`/`.tsx` files are all still linted, plus the two newly-in-scope non-TS files (see
    Testing Strategy) — 255 files total at this point, not 253.
-6. Full `python3 build/analytics_web_ci.py`, then commit.
+7. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Commit 3 — `tailwindcss` 3 → 4 (+ `tailwind-merge` 3)
 
@@ -444,7 +470,7 @@ branch bisects cleanly.
    - `src/styles/globals.css` must end up as `@import "tailwindcss";` +
      `@config "../../tailwind.config.ts";`, with both `@layer base` blocks and both `@apply` uses
      intact. **Revert** any attempt to inline `tailwind.config.ts` into `@theme`.
-   - Confirm it applied all nine renames from the Design table, in the correct shifted order, and that
+   - Confirm it applied all seven renames from the Design table, in the correct shifted order, and that
      `tailwind.config.ts` gained the `borderRadius.xs` entry (or the 6 `rounded-sm` sites were left
      alone) so `rounded-xs` stays value-preserving.
 3. Switch the build pipeline to the Vite plugin: add `@tailwindcss/vite ^4.3.3` to devDeps, add
@@ -488,6 +514,9 @@ peers `react: ^18.0.0`).
 **Commit 2**
 - `analytics-web-app/package.json` — eslint devDep set
 - `analytics-web-app/yarn.lock`
+- `analytics-web-app/.yarnrc.yml` — remove the orphaned `@typescript-eslint/utils@7.18.0`
+  `packageExtensions` entry
+- `/.yarnrc.yml` (root) — remove the same mirrored entry
 - `analytics-web-app/eslint.config.js` — **new**
 - `analytics-web-app/.eslintrc.json` — **deleted**
 - `analytics-web-app/src/**` — only if new-rule findings need fixes
@@ -500,7 +529,7 @@ peers `react: ^18.0.0`).
 - `analytics-web-app/src/styles/globals.css` — `@import` + `@config`
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
 - `analytics-web-app/postcss.config.mjs` — **deleted**
-- `analytics-web-app/src/**/*.tsx` — ~253 utility-class renames
+- `analytics-web-app/src/**/*.tsx` — ~240 utility-class renames
 - `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the six `--color-*` references to
   the raw variable names `globals.css` defines (verified dead under `@config`, not conditional)
 - `analytics-web-app/tailwind.config.ts` — add `borderRadius.xs` entry so `rounded-sm` → `rounded-xs`
@@ -564,10 +593,13 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   pre-migration baseline captured in Commit 2 step 0: all 253 `.ts`/`.tsx` files (131 `.tsx`, 122 `.ts`)
   must still be present. The raw total is expected to be **255** in Commit 2 (253 + `eslint.config.js` +
   `postcss.config.mjs`) and **254** after Commit 3 removes `postcss.config.mjs` — not equal to 253.
-- **Commit 3 specific**: `yarn build` must succeed and emit CSS; then a manual pass in `yarn dev`
-  covering the areas the default-value analysis flagged — the colorless `ring-1`/`ring-2` sites, and the
-  `DateTimePicker` calendar (the `--color-*` question). Spot-check a few high-traffic screens for the
-  renamed `rounded`/`outline-none` utilities rendering as before.
+- **Commit 3 specific**: `yarn build` must succeed and emit CSS; then the manual visual pass in
+  Implementation step 6, covering its full checklist (not restated here to avoid the two copies drifting):
+  the colorless `ring-1`/`ring-2` sites, the button/`role="button"` cursors, the input/textarea
+  placeholders, the ~106 now-live `/opacity`-modified sites, the 66 `space-*`/`divide-*` layouts, the 293
+  `hover:`/`group-hover:` sites, and the DateTimePicker calendar (now that the six `--color-*` references
+  are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
+  rendering as before.
 - **Grafana plugin**: untouched by this change, but `grafana/`'s own CI
   (`.github/workflows/grafana-plugin.yml`) runs on a path filter that this branch does not trip, so no
   action needed. The issue's acceptance criterion "`yarn lint`/`type-check`/`build`/`test` pass for both
