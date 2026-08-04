@@ -62,9 +62,8 @@ Consumers, all of which mis-handle a view column today:
 
 | Site | Effect of the gap |
 | --- | --- |
-| `arrow-utils.ts:174` (`detectXAxisMode`-style classification) | `Utf8View` → neither `'numeric'` nor `'categorical'` |
 | `arrow-utils.ts:235,237` / `:301` | color-by column rejected as unsupported |
-| `arrow-utils.ts:282` | `Utf8View` X-axis rejected by the chart validity check |
+| `arrow-utils.ts:282` | `Utf8View` X-axis rejected by `validateChartColumns`'s validity check — `detectXAxisMode` (`:171-177`) already defaults unrecognized types to `'categorical'`, so it isn't the classification that fails here |
 | `lib/screen-renderers/cells/SwimlaneCell.tsx:89,91` | lane color-by falls through |
 | `components/map/overlay.ts:236,238` | marker color-by falls through |
 | `lib/screen-renderers/table-utils.tsx:730,782` | `BinaryView` misses the ASCII-preview branch in `formatCell` (`:782-795`) and falls to `String(value)` → `"97,98,99"`; the `:730` tooltip picks the wrong branch too |
@@ -72,9 +71,10 @@ Consumers, all of which mis-handle a view column today:
 Plain table rendering of a `Utf8View` column is already fine — `formatCell` falls through to
 `String(value)`, which is correct for a string.
 
-Note that 21.2.0 exposes **no** `DataType.isUtf8View` / `isBinaryView` static predicates (verified:
-the set of `View`-matching keys on `DataType` is empty), only the `Utf8View` / `BinaryView`
-constructors and the `Type` enum entries. Detection must go through `typeId`.
+Note that 21.2.0 *does* expose `DataType.isUtf8View` / `isBinaryView` static predicates
+(`node_modules/apache-arrow/type.d.ts:50,53`), implemented as `x?.typeId === Type.Utf8View` /
+`Type.BinaryView` — the same `typeId` check the fix below needs, already written. No custom helper
+or `Type` import required.
 
 ### What is *not* a workaround for this bug
 
@@ -109,23 +109,19 @@ generated in-process instead of checking in binary blobs.
 
 ### 2. View-aware type predicates
 
-In `arrow-utils.ts`, add two narrow helpers next to the existing predicates and fold them in, keeping
-each predicate's current dictionary semantics unchanged:
+In `arrow-utils.ts`, extend the two existing predicates with arrow-js's own view-type statics — no
+new helpers, no new import:
 
 ```
-import { DataType, Type } from 'apache-arrow'   // Type is a new import here
-
-isUtf8ViewType(t)   => t.typeId === Type.Utf8View
-isBinaryViewType(t) => t.typeId === Type.BinaryView
-
-isStringType(t) => isUtf8(t) || isLargeUtf8(t) || isUtf8ViewType(t)
+isStringType(t) => DataType.isUtf8(t) || DataType.isLargeUtf8(t) || DataType.isUtf8View(t)
 isBinaryType(t) => { const i = unwrapDictionary(t)
-                     return isBinary(i) || isLargeBinary(i) || isFixedSizeBinary(i)
-                            || isBinaryViewType(i) }
+                     return DataType.isBinary(i) || DataType.isLargeBinary(i)
+                            || DataType.isFixedSizeBinary(i) || DataType.isBinaryView(i) }
 ```
 
-`typeId` rather than `instanceof Utf8View` — it matches how arrow-js's own `DataType.isX` statics
-work, survives duplicated module instances, and needs no value import of the type classes.
+`DataType.isUtf8View` / `DataType.isBinaryView` are the same `typeId` check a hand-rolled helper
+would need, already implemented and exported — consistent with every other predicate in this file,
+which all go through `DataType.isX`.
 
 Every consumer in the table above then picks up view support with no further edits, because they all
 route through these two predicates (open/closed: one definition, six call sites unchanged).
@@ -143,26 +139,42 @@ not produced by the functions in this issue; no attempt to handle them.
 
 1. **Bump the dependency.** `analytics-web-app/`: `yarn up apache-arrow@^21.2.0` (already present in
    the working tree — verify `package.json:28` reads `^21.2.0` and `yarn.lock` resolves 21.2.0).
-2. **Make the predicates view-aware.** `src/lib/arrow-utils.ts`: add `Type` to the `apache-arrow`
-   import, add `isUtf8ViewType` / `isBinaryViewType`, extend `isStringType` (`:139-141`) and
-   `isBinaryType` (`:159-166`). Update the doc comments on both to name the view types.
+2. **Make the predicates view-aware.** `src/lib/arrow-utils.ts`: extend `isStringType` (`:139-141`)
+   with `DataType.isUtf8View(t)` and `isBinaryType` (`:159-166`) with `DataType.isBinaryView(inner)`
+   — both already imported via `DataType`, no new import needed. Update the doc comments on both to
+   name the view types.
 3. **Fixtures.** `src/lib/__tests__/arrow-ipc-fixtures.ts`: add a `createViewTypeFramedIpc(...)`
    alongside `createDictionaryFramedIpc` (`:103`) and `createPlainFramedIpc` (`:154`), reusing the
    existing `splitIpcMessages` framing. Build the table with `vectorFromArray(values, new Utf8View())`
    and a `BinaryView` column, and include **both** a short inline value (≤12 bytes) and a long
    out-of-line value (>12 bytes, which forces a variadic data buffer) plus a null — that trio is what
-   distinguishes a real decode from a lucky one.
+   distinguishes a real decode from a lucky one. Emit through
+   `new RecordBatchStreamWriter(table, { compressionType: CompressionType.LZ4_FRAME })` with an
+   `encode: lz4js.compress` codec registered on `compressionRegistry` (arrow-js computes the
+   variadic-buffer length prefixes itself; `lz4js.compress` is already declared in
+   `src/types/lz4js.d.ts`), so the fixture matches what `stream_query.rs:296-297` actually produces;
+   keep an uncompressed variant alongside it for the plain-IPC case.
 4. **Streaming-path test.** New `src/lib/__tests__/arrow-stream-view-types.test.ts` (or a
    `describe` block in `arrow-stream-dictionary.test.ts`, which already has the mock-fetch/
-   `createMockStream` harness): drive `streamQuery` over the step-3 fixture split across chunk
-   boundaries, assert the schema frame arrives with `Utf8View`/`BinaryView` fields and that the batch
-   values round-trip. This is the direct regression test for the reported error.
-5. **Whole-buffer-path test.** In `src/lib/screen-renderers/__tests__/useCellExecution.test.ts`, add a
-   case whose mocked wasm result is view-typed IPC, asserting `tableFromIPC` succeeds — the
-   `datafusion-wasm` path is not covered by step 4 and cannot be fixed server-side.
+   `createMockStream` harness): drive `streamQuery` over both the compressed and uncompressed step-3
+   fixtures split across chunk boundaries, assert the schema frame arrives with `Utf8View`/
+   `BinaryView` fields and that the batch values round-trip through the real
+   `arrow-compression.ts` LZ4 codec. This is the direct regression test for the reported error over
+   the exact framing and compression the server uses.
+5. **Whole-buffer-path test.** In `src/lib/__tests__/arrow-ipc-fixtures.test.ts` (or alongside it),
+   add a case that calls the real `tableFromIPC` directly on the step-3 view-typed IPC bytes and
+   asserts the decode succeeds and values round-trip. This must live where `apache-arrow` is not
+   mocked: `useCellExecution.test.ts:35-65` has a blanket `vi.mock('apache-arrow', …)` whose
+   `tableFromIPC: () => new MockTable([{}])` ignores its input entirely, so a case added there would
+   assert nothing about view decoding. The whole-buffer path (`useCellExecution.ts:214,234,252,271`
+   calling `tableFromIPC` on `datafusion-wasm` output) is what this test represents — it is not
+   covered by step 4 and cannot be fixed server-side — but the assertion has to run against the real
+   library to mean anything.
 6. **Predicate tests.** `src/lib/__tests__/arrow-utils.test.ts`: `isStringType(new Utf8View())` and
-   `isBinaryType(new BinaryView())` true; the column classification at `:174` returns `'categorical'`
-   for `Utf8View`; the chart-validity check at `:282` accepts a `Utf8View` X column.
+   `isBinaryType(new BinaryView())` true; the chart-validity check at `:282` accepts a `Utf8View` X
+   column; the color-kind checks at `:235,237`/`:301` accept a `Utf8View`/`BinaryView` color-by
+   column — these are the assertions that actually flip with the fix (`detectXAxisMode`'s
+   `'categorical'` default already passes today, with or without it).
 7. **`formatCell` test.** `src/lib/screen-renderers/__tests__/table-utils.test.tsx`: a `BinaryView`
    column formats as the ASCII preview with length, not `"97,98,99"`.
 8. **CHANGELOG.** Add a `## Unreleased` → `**Web App:**` bullet: view-type decode fix via the
@@ -172,11 +184,11 @@ not produced by the functions in this issue; no attempt to handle them.
 
 - `analytics-web-app/package.json` — dependency bump (done, uncommitted)
 - `analytics-web-app/yarn.lock` — lockfile (done, uncommitted)
-- `analytics-web-app/src/lib/arrow-utils.ts` — view-aware `isStringType` / `isBinaryType` + helpers
-- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` — view-type fixture
+- `analytics-web-app/src/lib/arrow-utils.ts` — view-aware `isStringType` / `isBinaryType`
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` — view-type fixture (compressed + uncompressed)
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.test.ts` — whole-buffer `tableFromIPC` case (real library, wasm-path regression)
 - `analytics-web-app/src/lib/__tests__/arrow-stream-view-types.test.ts` — new (streaming path)
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` — predicate + classification cases
-- `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts` — wasm path case
 - `analytics-web-app/src/lib/screen-renderers/__tests__/table-utils.test.tsx` — `formatCell` case
 - `CHANGELOG.md` — Unreleased / Web App entry
 
