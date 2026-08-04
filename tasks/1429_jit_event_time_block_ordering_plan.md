@@ -283,6 +283,20 @@ the writer in the stack trace, instead of an export error one layer removed from
 read-time guard in `perfetto_trace_execution_plan.rs` stays as the backstop for pre-existing
 partitions.
 
+**Log the violation at the check site, don't rely on propagation.** `anyhow::ensure!` returns `Err`,
+it does not panic, and nothing on the path up logs that error at error level. `MaterializedView::scan`
+converts it to `DataFusionError::External` (`materialized_view.rs:72`); because `scan` runs at
+planning time, it surfaces in the `create_physical_plan()` arm of
+`flight_sql_service_impl.rs:424-427`, whose `status!` macro (`:58-62`) only formats a
+`Status::internal` — the `error!("stream error occurred: …")` at `:197` fires only for errors raised
+while polling the stream. The failure would therefore reach the operator only as the `error` field of
+the `info!(target: "flightsql_query_audit", …)` audit record (`:139-145`) and as a gRPC status on the
+client. So emit an explicit `error!` in `write_partition` immediately before the `ensure!`, naming the
+`stream_id`, the offending row index, and the two `begin` values. `micromegas_tracing::prelude::*` is
+already imported in `thread_spans_view.rs:29`, so no new dependency. This keeps the diagnosis in the
+service log where a corrupted-partition investigation starts, independent of whether anyone reads the
+audit stream.
+
 `net_spans` gets no equivalent check. `NetSpansView` does not override `get_scan_output_ordering`,
 so it inherits `ScanOrdering::Unordered` (`view.rs:174-176`) and nothing consumes `begin_time`
 monotonicity today; `net_spans_view.rs` also already prefers `record_builder.get_time_range()` over
@@ -362,7 +376,7 @@ thread_spans_view::write_partition
         │  tick-contiguous runs → one call tree each, appended in event order
         │  insert_range  = min/max insert_time over blocks
         │  rows_time_range = min/max event time over blocks
-        │  ensure! begin non-decreasing
+        │  error! + ensure! begin non-decreasing
         ▼
 parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 ```
@@ -391,7 +405,9 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 7. Pass `block_order: BlockOrder::EventTime` in `jit_update`.
 8. Replace the first/last `insert_time` reads (`:134-135`) with `insert_time_range`, and the
    `rows_time_range` endpoints (`:181-183`) with min/max over the blocks.
-9. Add the `begin`-monotonicity `ensure!` after `record_builder.finish()`.
+9. Add the `begin`-monotonicity `ensure!` after `record_builder.finish()`, preceded by an `error!`
+   naming the `stream_id`, offending row index and the two `begin` values — the propagated `Err` is
+   never logged at error level on the way out (Design §5).
 10. Rewrite the `:132-133` comment from an assumption to an enforced invariant, pointing at
     `BlockOrder::EventTime`.
 11. Bump `SCHEMA_VERSION` to `2`.
@@ -434,7 +450,7 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 | File | Change |
 |---|---|
 | `rust/analytics/src/lakehouse/jit_partitions.rs` | `BlockOrder`, config field, `insert_time_range`, `group_blocks_into_partitions`, both segment fns delegate, `is_jit_partition_up_to_date` tightened to exact range + count match |
-| `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, min/max bounds, monotonicity `ensure!`, comment, `SCHEMA_VERSION` → 2 |
+| `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, min/max bounds, monotonicity `error!` + `ensure!`, comment, `SCHEMA_VERSION` → 2 |
 | `rust/analytics/src/lakehouse/net_spans_view.rs` | `EventTime` config, min/max bounds, comment, `SCHEMA_VERSION` → 2 |
 | `rust/analytics/src/lakehouse/view.rs` | `get_scan_output_ordering` doc: assumption → enforced |
 | `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | non-overlap doc + error message: drop the now-excluded cause |
@@ -566,7 +582,8 @@ permuted) and assert on `group_blocks_into_partitions`:
 9. `insert_time_range` over a permuted list returns true min/max, and equals the endpoints for a
    sorted list.
 10. `thread_spans_view`'s monotonicity `ensure!` rejects a hand-built batch with a regressing `begin`
-    and passes a monotone one.
+    and passes a monotone one. Assert the returned error names the stream and the offending row, so
+    the same detail is guaranteed present in the `error!` log line.
 
 ### Integration — `thread_spans_ordering_db_test.rs` (live lake)
 
