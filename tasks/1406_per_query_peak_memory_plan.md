@@ -280,6 +280,18 @@ are where an expensive query blows up, and those all register consumers. Note th
 `datafusion.execution.sort_spill_reservation_bytes` (default 10 MB) per partition — the sorter grows
 its merge reservation by that amount in `sort_or_spill_in_mem_batches` (`sorts/sort.rs:714-719`).
 
+`peak_memory_bytes` and `spilled_bytes`/`spill_count` do not share the same scope. The peak comes
+from the `ScopedMemoryPool` instance, so it naturally includes nested session contexts built during
+execution (Perfetto trace queries, `fetch_block_metadata`, JIT materialization) — that inheritance is
+the whole point of scoping at `LakehouseContext` rather than per-session. The spill counters instead
+come from walking `plan.children()` of the *outer* physical plan in `aggregate_scan_metrics`
+(`query_audit.rs:22-32`); a nested session context built inside a leaf node (e.g.
+`perfetto_trace_execution_plan.rs:232`, `parse_block_table_function.rs:81`,
+`process_spans_table_function.rs:254`) is an opaque leaf in that tree, so any spill inside it is
+invisible to the sum. A query can therefore legitimately show `peak_memory_bytes > 0` with
+`spilled_bytes == 0` even when nested work spilled — this is not a bug, just a narrower scope for the
+spill counters than for the peak.
+
 Anything built from an unscoped `LakehouseContext` (maintenance merges, `export_log_view.rs`,
 process-level view-factory setup) lands on the shared pool only. The wrapper is purely additive:
 `shared.reserved()` stays ground truth and `sum(scoped current) <= shared.reserved()`. The gap is
@@ -374,6 +386,11 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
     records too; and it is the signal to use when choosing a value for
     `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB`, with `spilled_bytes`/`spill_count` staying `0` until
     that budget is set.
+  - A second **Notes** bullet: `peak_memory_bytes` covers nested session contexts (Perfetto trace
+    queries, JIT materialization) but `spilled_bytes`/`spill_count` only sum the outer plan tree, so
+    a query can show `peak_memory_bytes > 0` with `spilled_bytes == 0` even once nested work has
+    spilled. Also: a query that runs `materialize_partitions`/`regenerate_partitions` reports the
+    merge's peak against the calling query, understated by the row-group-buffer caveat above.
 - `CHANGELOG.md` under `## Unreleased`, new `**Analytics:**` bullet.
 - No new page needed — the audit-log page is the natural home, and this is additive to a documented
   record.
@@ -402,8 +419,12 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
 **Unit — `rust/public/tests/query_audit_tests.rs`**: extend `full_record` and the
 `omits_absent_optionals` record with the three new fields and assert they serialize (all three are
 non-optional `u64`, so they must always be present); extend the `aggregate_scan_metrics` `FakeExec`
-tests with `MetricBuilder::new(&metrics).spill_count(0)` / `.spilled_bytes(0)` on child nodes to
-confirm the tree-sum works and that the values are *not* silently zero (the `sum_by_name` trap).
+tests with, on two different child nodes, `MetricBuilder::new(&metrics).spill_count(0).add(n)` and
+`.spilled_bytes(0).add(m)` for distinct non-zero `n`/`m` (the `0` argument is the partition index,
+per the existing `.output_rows(0).add(rows)` pattern at `:61` — not a value), then assert the
+tree-summed totals equal `n` and `m`. Non-zero values on non-root nodes are essential: they are what
+makes a broken `sum_by_name`-based implementation (which returns `false`, hence `0`, for
+`SpillCount`/`SpilledBytes`) actually fail the test instead of coincidentally matching.
 
 **Integration**: start the local test env
 (`python3 local_test_env/ai_scripts/start_services.py`), run a memory-hungry query
@@ -426,9 +447,15 @@ confirm `spilled_bytes > 0` and that the OOM message still lists top consumers.
 
 ## Out of Scope
 
-- **Maintenance merges** (`merge.rs:400`, `batch_update.rs`, `export_log_view.rs`) keep the shared
-  pool. They have no audit record to report into, and the caveat that bites hardest there — the
-  parquet writer's row-group buffers being invisible to the pool — would make the number misleading.
+- **Daemon/maintenance-service merges** (`merge.rs:400`, `batch_update.rs`, `export_log_view.rs`,
+  driven from `telemetry-maintenance-srv`) keep the shared pool. They have no audit record to report
+  into, and the caveat that bites hardest there — the parquet writer's row-group buffers being
+  invisible to the pool — would make the number misleading.
+  Merges reached through the admin `materialize_partitions`/`regenerate_partitions` table functions
+  (`materialize_partitions_table_function.rs`, `regenerate_partitions_table_function.rs`) are a
+  different case: they run inside a FlightSQL query on the (now scoped) `LakehouseContext`, so they
+  *are* in scope and will report a non-zero `peak_memory_bytes` for that query — understated by the
+  same invisible-row-group-buffer caveat, since that's the dominant cost of a merge.
 - **A per-operator breakdown.** Explicitly not an objective; `TrackConsumersPool`'s existing
   top-consumers text remains the tool for that, and now it is reachable per query via the scoped
   chain if that ever changes.
