@@ -63,15 +63,14 @@ export function MapInstancedMarkers({
   if (overlayForHover !== overlay) {
     setOverlayForHover(overlay)
     setHoveredRowIndex(null)
-  }
-
-  // Cancel any pending hover-flush frame in a layout effect (not a render-time
-  // call, which react-hooks/refs flags since cancelHoverFlush touches refs) —
-  // layout effects still run synchronously before paint, so a rAF queued by a
-  // pointer-move just before the swap still can't fire against the new table.
-  useLayoutEffect(() => {
+    // MapCell wraps the overlay-recomputing config update in startTransition,
+    // so this render can be interrupted before it commits — the browser may
+    // paint (and run a queued rAF) in that window. Cancelling here, in the
+    // render phase, closes that gap; a layout effect would only cancel at
+    // commit, which is too late if a hover-flush frame fires in between.
+    // eslint-disable-next-line react-hooks/refs -- cancelHoverFlush touches refs but must run during this render to close the startTransition interruption window; see comment above
     cancelHoverFlush()
-  }, [overlay, cancelHoverFlush])
+  }
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
