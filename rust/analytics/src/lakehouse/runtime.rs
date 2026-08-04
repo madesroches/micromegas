@@ -21,7 +21,8 @@ pub fn apply_max_temp_directory_mb(builder: RuntimeEnvBuilder, mb: u64) -> Runti
 pub fn parse_max_temp_directory_mb(var: Result<String, std::env::VarError>) -> Result<Option<u64>> {
     match var {
         Ok(mb_str) => Ok(Some(mb_str.parse::<u64>()?)),
-        Err(_) => Ok(None),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(err @ std::env::VarError::NotUnicode(_)) => Err(err.into()),
     }
 }
 

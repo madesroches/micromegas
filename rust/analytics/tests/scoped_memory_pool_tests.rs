@@ -14,7 +14,7 @@ use datafusion::execution::memory_pool::{
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use micromegas_analytics::lakehouse::runtime::{
-    apply_max_temp_directory_mb, parse_max_temp_directory_mb,
+    apply_max_temp_directory_mb, parse_max_temp_directory_mb, scoped_runtime,
 };
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use std::num::NonZeroUsize;
@@ -199,4 +199,37 @@ fn parse_max_temp_directory_mb_rejects_non_numeric_value() {
 fn parse_max_temp_directory_mb_is_none_when_unset() {
     let result = parse_max_temp_directory_mb(Err(std::env::VarError::NotPresent));
     assert_eq!(result.expect("should not error"), None);
+}
+
+#[test]
+fn parse_max_temp_directory_mb_errors_on_non_unicode_value() {
+    // The exact bytes don't matter here, only that a set-but-non-UTF-8 value is treated
+    // as an error rather than silently coerced to "unset" (which `VarError::NotPresent`
+    // represents).
+    let result =
+        parse_max_temp_directory_mb(Err(std::env::VarError::NotUnicode("not-unicode".into())));
+    assert!(
+        result.is_err(),
+        "a set-but-non-UTF-8 value must be treated as an error, not as unset"
+    );
+}
+
+#[test]
+fn scoped_runtime_preserves_shared_disk_manager_and_its_spill_cap() {
+    let shared_builder = apply_max_temp_directory_mb(RuntimeEnvBuilder::new(), 42);
+    let shared: RuntimeEnv = shared_builder.build().expect("build shared runtime");
+
+    let scoped_pool = Arc::new(ScopedMemoryPool::new(shared.memory_pool.clone()));
+    let scoped: Arc<RuntimeEnv> =
+        scoped_runtime(&shared, scoped_pool).expect("build scoped runtime");
+
+    assert!(
+        Arc::ptr_eq(&shared.disk_manager, &scoped.disk_manager),
+        "scoped_runtime must reuse the exact same DiskManager instance, not just an equal value"
+    );
+    assert_eq!(
+        scoped.disk_manager.max_temp_directory_size(),
+        42 * 1024 * 1024,
+        "the configured spill cap must still apply to the per-query runtime"
+    );
 }
