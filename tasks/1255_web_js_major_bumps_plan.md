@@ -227,12 +227,14 @@ devDep churn for this commit: add `@eslint/js`, `typescript-eslint`, `globals`; 
 Removing the split `@typescript-eslint/*` packages orphans the `@typescript-eslint/utils@7.18.0`
 `packageExtensions` entry in `analytics-web-app/.yarnrc.yml` (it exists solely to patch that v7-only
 package's peer range — `typescript-eslint@8.66.0`'s own `utils` declares its own `typescript` peer, which
-is why the pin is version-exact). The root mirror in `/.yarnrc.yml` is a separate, already-dead entry in
-the root yarn project regardless of this commit: `analytics-web-app/` is a standalone yarn project (root
-`package.json`'s `workspaces` list only `grafana` and `typescript/*`), and the root `yarn.lock` never
-resolved `@typescript-eslint/utils@7.18.0` in the first place (only `8.52.0`/`8.65.0` appear there). Remove
-both entries in this commit — the web app's because this commit orphans it, the root's because it was
-already inert — and verify the root removal is a no-op (see step 2 below).
+is why the pin is version-exact). The root mirror in `/.yarnrc.yml` is **not** orphaned by this commit —
+it is live for `welcome/` (a separate standalone yarn project, out of scope here — see Current State):
+`welcome/package.json` is still on `@typescript-eslint/{eslint-plugin,parser} ^7.0.0`, which resolves
+`@typescript-eslint/utils@7.18.0` in `welcome/yarn.lock`, and a reproduced `welcome/` install with the
+root extensions removed fails to satisfy that package's peer requirements (`YN0086`; `yarn
+explain peer-requirements` reports `@typescript-eslint/utils@npm:7.18.0 doesn't provide typescript to
+@typescript-eslint/typescript-estree@npm:7.18.0`). So only `analytics-web-app/.yarnrc.yml`'s own copy of
+the entry is orphaned by this commit and gets removed; the root file is left alone entirely.
 
 This commit also orphans the `js-yaml` `resolutions` pin (`"js-yaml": "^4.3.0"` in
 `analytics-web-app/package.json`), the same way Commit 3 orphans `baseline-browser-mapping`: in
@@ -401,7 +403,7 @@ conflicting classes would stop cancelling and last-wins overrides would silently
 v3 is the Tailwind-v4-aware line (target `3.6.0`). This is why the Tailwind work cannot be split
 finer than one commit.
 
-#### `DateTimePicker.css` repoint (verified dead, not a speculative check)
+#### Dead `--color-*` references repoint (verified dead, not a speculative check)
 
 `analytics-web-app/src/components/ui/DateTimePicker.css` references `var(--color-accent-link)`,
 `var(--color-app-card)`, `var(--color-theme-text-primary)`, `var(--color-theme-text-muted)`,
@@ -411,15 +413,23 @@ the raw names (`--accent-link`, `--card-bg`, `--text-primary`, `--text-muted`, `
 `--text-secondary`), so these six references resolve to nothing today and those react-day-picker styles
 are silently inert.
 
+A repo-wide grep for `--color-` in `analytics-web-app/src` finds five more occurrences of the same dead
+pattern, all `className="accent-[var(--color-accent-link)]"`: `src/routes/ExportScreensPage.tsx:182,209`,
+`src/routes/ImportScreensPage.tsx:289,318`, and `src/routes/DataSourcesPage.tsx:213`. Same cause, same
+fix — eleven dead `--color-*` references total across four files.
+
 They stay inert under v4 too — verified, not speculative: compiling the repo's actual
 `tailwind.config.ts` + `globals.css` (`@import "tailwindcss"` + `@config "../../tailwind.config.ts"`)
-under `tailwindcss@4.3.3` produces output containing **zero** `--color-*` custom properties. v4 only
-materializes `--color-*` from a CSS `@theme` block; on the `@config` path it inlines legacy-JS-config
-colors directly instead (e.g. `.bg-accent-link\/20 { background-color: var(--accent-link) }`). So this
-is an unconditional edit, not a browser check: repoint the six references at the raw names `globals.css`
-actually defines (`--accent-link`, `--card-bg`, `--text-primary`, `--text-muted`, `--border-color`,
-`--text-secondary`) as part of Commit 3. (The eventual `@theme` migration — the deferred follow-up in
-Trade-offs — is what would make the `--color-*` names valid instead.)
+under `tailwindcss@4.3.3` produces no definition for any of the six `--color-*` names above (v4 emits
+`--color-*` only for the built-in palette entries actually in use elsewhere in the app — e.g.
+`--color-red-500`, `--color-gray-400`, `--color-blue-500` — 25 such properties are emitted, just none of
+these six). On the `@config` path v4 inlines legacy-JS-config colors directly instead (e.g.
+`.bg-accent-link\/20 { background-color: var(--accent-link) }`). So this is an unconditional edit, not a
+browser check: repoint all eleven references at the raw names `globals.css` actually defines —
+`--accent-link` for the five route-file sites and for `DateTimePicker.css`'s own `--color-accent-link`
+reference, plus `--card-bg`, `--text-primary`, `--text-muted`, `--border-color`, `--text-secondary` for
+`DateTimePicker.css`'s other five — as part of Commit 3. (The eventual `@theme` migration — the deferred
+follow-up in Trade-offs — is what would make the `--color-*` names valid instead.)
 
 ## Implementation Steps
 
@@ -457,11 +467,11 @@ branch bisects cleanly.
    `baseline-browser-mapping`; `ajv`, `minimatch`, and `flatted` stay live under ESLint 10 and keep their
    `resolutions` pins.
 2. Remove the now-orphaned `@typescript-eslint/utils@7.18.0` `packageExtensions` entry from
-   `analytics-web-app/.yarnrc.yml` and the already-dead mirrored entry in the root `/.yarnrc.yml` (see
-   Design). Run `yarn install` at the repo root afterward and confirm the root `yarn.lock` is unchanged —
-   this verifies the root entry was inert, since no CI path filter covers `.yarnrc.yml` (see Testing
-   Strategy).
-3. `yarn install`.
+   `analytics-web-app/.yarnrc.yml` only (see Design). Leave the root `/.yarnrc.yml` untouched — its copy
+   of the entry is still live for `welcome/`.
+3. `yarn install`. `packageExtensions` changes leave no trace in `yarn.lock`, so confirm no `YN0068 "No
+   matching package"` warning is emitted for the remaining `packageExtensions` entries instead of diffing
+   the lockfile.
 4. Create `analytics-web-app/eslint.config.js` per the Design shape (the
    `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
    install-time unknown — see Design); `git rm analytics-web-app/.eslintrc.json`.
@@ -471,9 +481,11 @@ branch bisects cleanly.
    (`src/lib/time-range.ts:130`); the other five (`no-constant-binary-expression`,
    `no-empty-static-block`, `no-new-native-nonconstructor`, `no-unused-private-class-members`,
    `no-unassigned-vars`) report zero findings here — fix the two live ones; **(b)** the 5
-   React-Compiler `react-hooks` v7 rules that fire (`refs`, `set-state-in-effect`, `static-components`,
-   `immutability`, `purity`) — turn them off in `eslint.config.js` per the Design's decision, adopting
-   them as a separate follow-up rather than hand-fixing the 106 findings; **(c)** the 12 stale
+   React-Compiler `react-hooks` v7 rules (`refs`, `set-state-in-effect`, `static-components`,
+   `immutability`, `purity`) that would otherwise fire — already turned off in step 4's
+   `eslint.config.js` per the Design's decision, so this run reports none of the 106 findings they'd
+   otherwise produce; noted here as the rationale for keeping them off rather than hand-fixing, adopting
+   them as a separate follow-up instead; **(c)** the 12 stale
    `eslint-disable` directives flagged by flat config's `reportUnusedDisableDirectives: 'warn'` default
    (see Design) — remove them; **(d)** four new rule-warnings introduced by the bumped plugins: two
    `@typescript-eslint/no-unused-vars` (from `@typescript-eslint` 7 → 8) at
@@ -505,6 +517,11 @@ branch bisects cleanly.
    - Confirm it applied all seven renames from the Design table, in the correct shifted order, and that
      `tailwind.config.ts` gained the `borderRadius.xs` entry (or the 6 `rounded-sm` sites were left
      alone) so `rounded-xs` stays value-preserving.
+   - Repoint the eleven dead `--color-*` references at the raw names `globals.css` defines — six in
+     `src/components/ui/DateTimePicker.css`, plus the `accent-[var(--color-accent-link)]` sites at
+     `src/routes/ExportScreensPage.tsx:182,209`, `src/routes/ImportScreensPage.tsx:289,318`, and
+     `src/routes/DataSourcesPage.tsx:213` (see Design). The codemod does not touch these; this is a
+     manual edit.
 3. Switch the build pipeline to the Vite plugin: add `@tailwindcss/vite ^4.3.3` to devDeps, add
    `tailwindcss()` to the `plugins` array in `analytics-web-app/vite.config.ts`, delete
    `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep, plus the
@@ -552,8 +569,8 @@ peers `react: ^18.0.0`).
 - `analytics-web-app/package.json` — eslint devDep set
 - `analytics-web-app/yarn.lock`
 - `analytics-web-app/.yarnrc.yml` — remove the orphaned `@typescript-eslint/utils@7.18.0`
-  `packageExtensions` entry
-- `/.yarnrc.yml` (root) — remove the same mirrored entry
+  `packageExtensions` entry (root `/.yarnrc.yml` is untouched — its copy is still live for `welcome/`,
+  see Design)
 - `analytics-web-app/eslint.config.js` — **new**
 - `analytics-web-app/.eslintrc.json` — **deleted**
 - `analytics-web-app/src/**` — only if new-rule findings need fixes
@@ -569,6 +586,12 @@ peers `react: ^18.0.0`).
 - `analytics-web-app/src/**/*.tsx` — ~240 utility-class renames
 - `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the six `--color-*` references to
   the raw variable names `globals.css` defines (verified dead under `@config`, not conditional)
+- `analytics-web-app/src/routes/ExportScreensPage.tsx` — repoint the two
+  `accent-[var(--color-accent-link)]` sites to `accent-[var(--accent-link)]`
+- `analytics-web-app/src/routes/ImportScreensPage.tsx` — repoint the two
+  `accent-[var(--color-accent-link)]` sites to `accent-[var(--accent-link)]`
+- `analytics-web-app/src/routes/DataSourcesPage.tsx` — repoint the one
+  `accent-[var(--color-accent-link)]` site to `accent-[var(--accent-link)]`
 - `analytics-web-app/tailwind.config.ts` — add `borderRadius.xs` entry so `rounded-sm` → `rounded-xs`
   stays value-preserving (kept, still loaded via `@config`)
 
@@ -641,16 +664,15 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   Implementation step 6, covering its full checklist (not restated here to avoid the two copies drifting):
   the colorless `ring-1`/`ring-2` sites, the button/`role="button"` cursors, the input/textarea
   placeholders, the ~106 now-live `/opacity`-modified sites, the 66 `space-*`/`divide-*` layouts, the 293
-  `hover:`/`group-hover:` sites, and the DateTimePicker calendar (now that the six `--color-*` references
-  are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
+  `hover:`/`group-hover:` sites, and the DateTimePicker calendar plus the checkbox accent colors on the
+  Export/Import/DataSources screens (now that the eleven `--color-*` references are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
   rendering as before.
 - **Grafana plugin**: untouched by this change's `analytics-web-app/` edits, but `grafana/`'s own CI
   (`.github/workflows/grafana-plugin.yml`) runs on a path filter (`grafana/**`, `typescript/**`,
   `package.json`, `yarn.lock`, the workflow file) that this branch does not trip. The root `/.yarnrc.yml`
-  edit in Commit 2 is not covered by that filter either, so its verification (root `yarn.lock` unchanged)
-  must be run locally, not relied on to surface in CI. The issue's acceptance criterion
-  "`yarn lint`/`type-check`/`build`/`test` pass for both packages" is satisfied for `grafana/` by its
-  unchanged, already-passing state.
+  is not touched by this plan (see Design), so there is nothing there to verify. The issue's acceptance
+  criterion "`yarn lint`/`type-check`/`build`/`test` pass for both packages" is satisfied for `grafana/`
+  by its unchanged, already-passing state.
 
 ## Risks
 
