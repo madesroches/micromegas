@@ -1,4 +1,4 @@
-import { Suspense, useState, useCallback, useMemo, useEffect, useRef, ComponentType } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type ComponentType } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'

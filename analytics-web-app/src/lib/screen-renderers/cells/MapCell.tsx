@@ -1,4 +1,4 @@
-import { Suspense, use, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef, startTransition } from 'react'
+import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef, startTransition } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -19,6 +19,7 @@ import { MapViewer } from '@/components/map/MapViewer'
 import { MAP_MODE_KINDS, MAP_MODE_LABELS, type MapModeKind } from '@/components/map/modes'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import {
   buildOverlay,
   columnTypeMap,
@@ -283,10 +284,7 @@ export function MapCell({
   // Stable ref for onSelectionChange to avoid infinite re-render loops:
   // the callback is an inline arrow in NotebookRenderer, so including it
   // in effect deps would fire on every render.
-  const onSelectionChangeRef = useRef(onSelectionChange)
-  useLayoutEffect(() => {
-    onSelectionChangeRef.current = onSelectionChange
-  })
+  const onSelectionChangeRef = useLatestRef(onSelectionChange)
 
   // Publish the clear to upstream cells after commit — calling
   // onSelectionChange during render would trigger React's "Cannot update a
@@ -294,7 +292,7 @@ export function MapCell({
   // resolves to a parent setState through updateCellSelection.
   useEffect(() => {
     onSelectionChangeRef.current?.(null)
-  }, [overlay])
+  }, [overlay, onSelectionChangeRef])
 
   // Read visual options with defaults. `mapUrl` is stored as the bare
   // filename — the renderer composes the blob URL at render time so saved
@@ -323,7 +321,7 @@ export function MapCell({
         onSelectionChangeRef.current?.(rowValues(overlay.table, rowIndex))
       }
     },
-    [overlay]
+    [overlay, onSelectionChangeRef]
   )
 
   const selectedRow = useMemo(

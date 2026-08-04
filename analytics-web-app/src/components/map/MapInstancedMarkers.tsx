@@ -12,6 +12,7 @@ import { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Overlay, OverlayConstants, Shape } from './overlay'
 import { patchInstanceColorRGBA } from './shader-patches'
+import { useLatestRef } from '@/hooks/useLatestRef'
 
 interface InstancedMarkersProps {
   overlay: Overlay
@@ -106,10 +107,7 @@ export function MapInstancedMarkers({
   // most one tooltip reposition lands per paint regardless of move frequency.
   // `onHover` lives in a ref so the pointer handlers stay stable (the prop is
   // an inline arrow from MapCell that would otherwise re-create them).
-  const onHoverRef = useRef(onHover)
-  useLayoutEffect(() => {
-    onHoverRef.current = onHover
-  })
+  const onHoverRef = useLatestRef(onHover)
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh
@@ -361,7 +359,7 @@ export function MapInstancedMarkers({
       // Surface the tooltip on enter even before the first move.
       onHoverRef.current?.(rowIdx, e.clientX, e.clientY)
     },
-    [overlay]
+    [overlay, onHoverRef]
   )
 
   // rAF-throttled: stash the latest instance id + cursor position, then flush
@@ -384,7 +382,7 @@ export function MapInstancedMarkers({
         onHoverRef.current?.(pending.rowIndex, pending.x, pending.y)
       })
     },
-    [overlay]
+    [overlay, onHoverRef]
   )
 
   const handlePointerOut = useCallback(() => {
@@ -392,7 +390,7 @@ export function MapInstancedMarkers({
     document.body.style.cursor = 'auto'
     cancelHoverFlush()
     onHoverRef.current?.(null, 0, 0)
-  }, [cancelHoverFlush])
+  }, [cancelHoverFlush, onHoverRef])
 
   if (overlay.table.numRows === 0) return null
 

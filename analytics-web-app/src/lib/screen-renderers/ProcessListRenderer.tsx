@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType, Field } from 'apache-arrow'
@@ -13,6 +13,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDurationMs, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 
@@ -116,10 +117,7 @@ export function ProcessListRenderer({
 
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(processListConfig.sql)
-  const executeRef = useRef(streamQuery.execute)
-  useLayoutEffect(() => {
-    executeRef.current = streamQuery.execute
-  })
+  const executeRef = useLatestRef(streamQuery.execute)
 
   // Build ORDER BY value from sort state
   const orderByValue =
@@ -143,7 +141,7 @@ export function ProcessListRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [rawTimeRange, orderByValue, effectiveDataSource]
+    [rawTimeRange, orderByValue, effectiveDataSource, executeRef]
   )
 
   // Initial query execution

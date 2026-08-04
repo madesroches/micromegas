@@ -1,4 +1,4 @@
-import { Suspense, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
@@ -11,6 +11,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { ParseErrorWarning } from '@/components/ParseErrorWarning'
 import { MetricsChart } from '@/components/MetricsChart'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
@@ -292,10 +293,7 @@ function ProcessMetricsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [metricsQuery.isComplete, metricsQuery.error])
 
-  const discoveryExecuteRef = useRef(discoveryQuery.execute)
-  useLayoutEffect(() => {
-    discoveryExecuteRef.current = discoveryQuery.execute
-  })
+  const discoveryExecuteRef = useLatestRef(discoveryQuery.execute)
 
   const loadDiscovery = useCallback(() => {
     if (!processId) return
@@ -306,13 +304,10 @@ function ProcessMetricsContent() {
       end: apiTimeRange.end,
       dataSource,
     })
-  }, [processId, apiTimeRange, dataSource])
+  }, [processId, apiTimeRange, dataSource, discoveryExecuteRef])
 
   // Stable ref to metricsQuery.execute for the declarative effect
-  const executeRef = useRef(metricsQuery.execute)
-  useLayoutEffect(() => {
-    executeRef.current = metricsQuery.execute
-  })
+  const executeRef = useLatestRef(metricsQuery.execute)
 
   // Single declarative execution effect — fires when any input changes
   useEffect(() => {
@@ -331,7 +326,7 @@ function ProcessMetricsContent() {
     }
   // refreshCounter forces re-execution; executeRef is stable
   }, [discoveryDone, selectedMeasure, processId, dataSource, binInterval,
-      apiTimeRange.begin, apiTimeRange.end, activeSql, refreshCounter])
+      apiTimeRange.begin, apiTimeRange.end, activeSql, refreshCounter, executeRef])
 
   // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(

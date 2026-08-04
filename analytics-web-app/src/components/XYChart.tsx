@@ -8,6 +8,7 @@ import {
 } from '@/lib/time-units'
 import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
@@ -294,10 +295,7 @@ export function XYChart({
   const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
-  const onWidthChangeRef = useRef(onWidthChange)
-  useLayoutEffect(() => {
-    onWidthChangeRef.current = onWidthChange
-  })
+  const onWidthChangeRef = useLatestRef(onWidthChange)
 
   // Track last reported width to avoid duplicate callbacks
   const lastReportedWidthRef = useRef<number | null>(null)
@@ -333,7 +331,7 @@ export function XYChart({
     }
 
     return () => resizeObserver.disconnect()
-  }, [measureContainer])
+  }, [measureContainer, onWidthChangeRef])
 
   // Handle window resize
   useEffect(() => {
@@ -347,7 +345,7 @@ export function XYChart({
 
     window.addEventListener('resize', handleWindowResize)
     return () => window.removeEventListener('resize', handleWindowResize)
-  }, [measureContainer])
+  }, [measureContainer, onWidthChangeRef])
 
   // Keep ref-line state in sync without recreating the chart
   useEffect(() => {

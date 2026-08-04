@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -193,7 +193,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     keyAnimRef.current = requestAnimationFrame(() => keyTickRef.current())
   }, [index, requestRender])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     keyTickRef.current = keyTick
   })
 

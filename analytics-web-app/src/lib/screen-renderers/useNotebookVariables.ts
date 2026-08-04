@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import {
   CellConfig,
@@ -104,14 +105,10 @@ export function useNotebookVariables(
   )
 
   // Ref for synchronous access during sequential cell execution. Resynced
-  // from variableValues state after every render (see the useLayoutEffect
-  // below) — the render-time recompute below reads/writes `variableValues`
-  // state directly, not this ref.
-  const variableValuesRef = useRef<Record<string, VariableValue>>(variableValues)
-
-  useLayoutEffect(() => {
-    variableValuesRef.current = variableValues
-  })
+  // from variableValues state after every render via useLatestRef — the
+  // render-time recompute below reads/writes `variableValues` state
+  // directly, not this ref.
+  const variableValuesRef = useLatestRef<Record<string, VariableValue>>(variableValues)
 
   // Sync cell list changes into state: when cells are added/removed in the
   // editor, ensure new variables get their defaults and removed ones are pruned.
@@ -209,7 +206,7 @@ export function useNotebookVariables(
       // Update React state for re-render
       setVariableValues(prev => ({ ...prev, [cellName]: value }))
     },
-    []
+    [variableValuesRef]
   )
 
   // Migrate variable from old name to new name when cell is renamed
@@ -224,7 +221,7 @@ export function useNotebookVariables(
         setVariableValues(nextValues)
       }
     },
-    []
+    [variableValuesRef]
   )
 
   // Remove variable when cell is deleted
@@ -235,7 +232,7 @@ export function useNotebookVariables(
       variableValuesRef.current = nextValues
       setVariableValues(nextValues)
     },
-    []
+    [variableValuesRef]
   )
 
   return {

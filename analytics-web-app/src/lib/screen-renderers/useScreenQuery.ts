@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { getTimeRangeForApi } from '@/lib/time-range'
 
@@ -62,10 +63,7 @@ export function useScreenQuery({
   const currentSqlRef = useRef<string>(initialSql)
 
   // Stable reference to execute function
-  const executeRef = useRef(streamQuery.execute)
-  useLayoutEffect(() => {
-    executeRef.current = streamQuery.execute
-  })
+  const executeRef = useLatestRef(streamQuery.execute)
 
   // Execute query
   const executeQuery = useCallback(
@@ -86,7 +84,7 @@ export function useScreenQuery({
         dataSource,
       })
     },
-    [rawTimeRange, params, transformSql, dataSource]
+    [rawTimeRange, params, transformSql, dataSource, executeRef]
   )
 
   // Initial query execution (wait for dataSource to resolve)

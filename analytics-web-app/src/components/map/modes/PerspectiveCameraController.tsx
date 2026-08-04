@@ -16,6 +16,7 @@ import {
   zUpOffsetToSphericalInput,
 } from '../map-camera-math'
 import { useMapOrbitController } from '../hooks/useMapOrbitController'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { MapModeRenderProps } from './types'
 
 // WASD speed derives from the current orbit radius so flying feels the same
@@ -41,12 +42,9 @@ export function PerspectiveCameraController({
 
   // mapScene is fixed for the controller's mount lifetime (MapViewer keys the
   // mode on mapUrl), but the hook and handlers read it through a ref.
-  const mapSceneRef = useRef<THREE.Object3D>(mapScene)
-  // useLayoutEffect (not useEffect): refs are attached during commit —
+  // useLatestRef (not useEffect): refs are attached during commit —
   // before any effect fires — matching useMapOrbitController's ordering.
-  useLayoutEffect(() => {
-    mapSceneRef.current = mapScene
-  })
+  const mapSceneRef = useLatestRef<THREE.Object3D>(mapScene)
 
   const { targetRef, sphericalRef } = useMapOrbitController<THREE.PerspectiveCamera>({
     cameraRef,

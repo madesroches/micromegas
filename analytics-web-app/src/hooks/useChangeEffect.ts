@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
+import { useLatestRef } from './useLatestRef'
 
 /**
  * Runs a callback when a string value changes, skipping the initial render
@@ -8,10 +9,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
  */
 export function useChangeEffect(value: string | undefined, callback: () => void) {
   const prevRef = useRef<string | null>(null)
-  const callbackRef = useRef(callback)
-  useLayoutEffect(() => {
-    callbackRef.current = callback
-  })
+  const callbackRef = useLatestRef(callback)
 
   useEffect(() => {
     const normalized = value || ''
@@ -26,5 +24,5 @@ export function useChangeEffect(value: string | undefined, callback: () => void)
         callbackRef.current()
       }
     }
-  }, [value])
+  }, [value, callbackRef])
 }
