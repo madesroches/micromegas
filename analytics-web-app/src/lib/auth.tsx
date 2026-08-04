@@ -42,45 +42,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Retry-once loop instead of self-recursion: allowRefresh starts true and is
+  // cleared after one refresh attempt, so `continue` here runs at most twice.
   const checkAuth = useCallback(async (skipRefresh = false) => {
-    try {
-      const response = await fetch(`${getAuthBase()}/auth/me`, {
-        credentials: 'include',
-      })
+    let allowRefresh = !skipRefresh
+    while (true) {
+      try {
+        const response = await fetch(`${getAuthBase()}/auth/me`, {
+          credentials: 'include',
+        })
 
-      if (response.ok) {
-        const userData = await response.json()
-        setUser(userData)
-        setStatus('authenticated')
-        setError(null)
-      } else if (response.status === 401) {
-        // Token expired - try to refresh if we haven't already tried
-        if (!skipRefresh) {
+        if (response.ok) {
+          const userData = await response.json()
+          setUser(userData)
+          setStatus('authenticated')
+          setError(null)
+          return
+        }
+
+        if (response.status === 401 && allowRefresh) {
           const refreshed = await refreshTokens()
           if (refreshed) {
-            // Retry checkAuth after successful refresh (but skip refresh retry to avoid loops)
-            await checkAuth(true)
-          } else {
-            // Refresh failed - user needs to login again
-            setUser(null)
-            setStatus('unauthenticated')
-            setError(null)
+            // Retry after successful refresh, but don't allow a second refresh attempt
+            allowRefresh = false
+            continue
           }
-        } else {
-          // Already tried refresh or explicitly skipped
+        }
+
+        if (response.status === 401) {
+          // Refresh failed, wasn't attempted, or was already tried - user needs to login again
           setUser(null)
           setStatus('unauthenticated')
           setError(null)
+        } else {
+          setUser(null)
+          setStatus('error')
+          setError(`Server error: ${response.status}`)
         }
-      } else {
+        return
+      } catch (err) {
         setUser(null)
         setStatus('error')
-        setError(`Server error: ${response.status}`)
+        setError(err instanceof Error ? err.message : 'Network error')
+        return
       }
-    } catch (err) {
-      setUser(null)
-      setStatus('error')
-      setError(err instanceof Error ? err.message : 'Network error')
     }
   }, [refreshTokens])
 

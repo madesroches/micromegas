@@ -19,7 +19,6 @@ export default tseslint.config(
       // (see tasks/completed/1255_web_js_major_bumps_plan.md).
       'react-hooks/refs': 'off',
       'react-hooks/set-state-in-effect': 'off',
-      'react-hooks/immutability': 'off',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },

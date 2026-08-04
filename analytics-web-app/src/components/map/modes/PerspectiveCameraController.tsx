@@ -166,9 +166,11 @@ export function PerspectiveCameraController({
     if (resetViewTrigger !== prevResetViewTriggerRef.current && initialViewRef.current && camera) {
       prevResetViewTriggerRef.current = resetViewTrigger
       targetRef.current.copy(initialViewRef.current.target)
-      sphericalRef.current.radius = initialViewRef.current.spherical.radius
-      sphericalRef.current.phi = initialViewRef.current.spherical.phi
-      sphericalRef.current.theta = initialViewRef.current.spherical.theta
+      sphericalRef.current.set(
+        initialViewRef.current.spherical.radius,
+        initialViewRef.current.spherical.phi,
+        initialViewRef.current.spherical.theta
+      )
       zoomFactorRef.current = 1.0
       // Restore fitRadius alongside the spherical state. The GLB seed set
       // fitRadius equal to the initial spherical.radius; without restoring
