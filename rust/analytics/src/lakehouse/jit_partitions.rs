@@ -1,3 +1,18 @@
+//! Just-in-time (JIT) partition generation groups a view's source blocks (queried from
+//! `blocks_view` in `ORDER BY insert_time, block_id` order) into `SourceDataBlocksInMemory`
+//! partitions no larger than `JitPartitionConfig::max_nb_objects`.
+//!
+//! `JitPartitionConfig::block_order` (see `BlockOrder`) picks between two orderings for the
+//! blocks a partition ends up holding: `InsertTime` (the SQL order, unchanged) for views that
+//! decode blocks independently, and `EventTime` for views that build cross-block trees or rely on
+//! event-time-sorted rows within a partition file. `group_blocks_into_partitions` is the single
+//! place both variants are cut, and it upholds one invariant regardless of ordering: every emitted
+//! partition's `[min_insert_time, max_insert_time]` range is non-overlapping with, and
+//! non-decreasing relative to, every other emitted partition's -- the precondition the
+//! `lakehouse_partitions_no_overlap` exclusion constraint enforces at insert time. See
+//! `group_blocks_into_partitions`'s own docs for how that invariant is upheld under
+//! `BlockOrder::EventTime`, where the natural size-based cut point is not always safe.
+
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessorMap},
     blocks_view::BlocksView,
@@ -31,10 +46,32 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// How source blocks are ordered before being cut into JIT partitions.
+///
+/// The choice matters because `generate_stream_jit_partitions_segment` /
+/// `generate_process_jit_partitions_segment` query blocks with `ORDER BY insert_time, block_id`,
+/// and that SQL order is what `group_blocks_into_partitions` starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockOrder {
+    /// Registration order (`insert_time`, `block_id`), i.e. the SQL order is kept as-is. Correct
+    /// for views that decode each block independently and declare no scan ordering: cutting an
+    /// insert-ordered list always yields insert-time ranges that are non-decreasing and
+    /// non-overlapping across partitions, by construction.
+    InsertTime,
+    /// Event order (`begin_ticks`, `end_ticks`). Required by views that build cross-block trees or
+    /// derive event-time bounds from the list endpoints, and by any view declaring
+    /// `ScanOrdering::Concatenated` over an event-time column. Sorting by event time can put blocks
+    /// with out-of-order `insert_time` inside one partition or straddling a cut point, so
+    /// `group_blocks_into_partitions` additionally enforces insert-safe cut points (see its docs)
+    /// to keep JIT partitions' insert-time ranges non-overlapping.
+    EventTime,
+}
+
 /// Configuration for Just-In-Time (JIT) partition generation.
 pub struct JitPartitionConfig {
     pub max_nb_objects: i64,
     pub max_insert_time_slice: TimeDelta,
+    pub block_order: BlockOrder,
 }
 
 impl Default for JitPartitionConfig {
@@ -42,8 +79,191 @@ impl Default for JitPartitionConfig {
         JitPartitionConfig {
             max_nb_objects: 20 * 1024 * 1024,
             max_insert_time_slice: TimeDelta::hours(1),
+            block_order: BlockOrder::InsertTime,
         }
     }
+}
+
+/// Returns the real `[min, max]` `insert_time` range covered by `blocks`, independent of list
+/// order. Always use this instead of reading `blocks[0]`/`blocks[last]`: under
+/// `BlockOrder::EventTime` the list is sorted by event time, not insert time, so its endpoints are
+/// no longer the insert-time extremes.
+pub fn insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange> {
+    let mut blocks_iter = blocks.iter();
+    let first = blocks_iter
+        .next()
+        .with_context(|| "insert_time_range: empty block list")?;
+    let mut min_insert_time = first.block.insert_time;
+    let mut max_insert_time = first.block.insert_time;
+    for block in blocks_iter {
+        min_insert_time = min_insert_time.min(block.block.insert_time);
+        max_insert_time = max_insert_time.max(block.block.insert_time);
+    }
+    Ok(TimeRange::new(min_insert_time, max_insert_time))
+}
+
+/// Emits one partition (if it holds any objects) from `blocks[start..end]`, warning once if the
+/// window's cut was perturbed (deferred or moved back) by an insert-time inversion.
+fn emit_partition(
+    out: &mut Vec<SourceDataBlocksInMemory>,
+    blocks: &[Arc<PartitionSourceBlock>],
+    start: usize,
+    end: usize,
+    nb_objects: i64,
+    perturbed: i64,
+    max_nb_objects: i64,
+) {
+    // Matches today's guard: a trailing window whose blocks all report nb_objects == 0 emits
+    // nothing, not "if the block list is non-empty".
+    if nb_objects == 0 {
+        return;
+    }
+    if perturbed > 0 {
+        let process_id = blocks[start].process.process_id;
+        let stream_id = blocks[start].stream.stream_id;
+        warn!(
+            "group_blocks_into_partitions: process={process_id} stream={stream_id} emitted a \
+             partition of {nb_objects} objects (soft limit max_nb_objects={max_nb_objects}) after \
+             {perturbed} cut(s) deferred or moved back by insert-time inversions"
+        );
+    }
+    out.push(SourceDataBlocksInMemory {
+        blocks: blocks[start..end].to_vec(),
+        block_ids_hash: nb_objects.to_le_bytes().to_vec(),
+    });
+}
+
+/// Groups a segment's source blocks into JIT partitions.
+///
+/// Two invariants must both hold across the returned partitions:
+/// - **Size** -- `max_nb_objects` is a soft, whole-block-granularity limit (a block is never
+///   split, so a single oversized block already exceeds it).
+/// - **Insert-time non-overlap** -- the `lakehouse_partitions_no_overlap` exclusion constraint
+///   requires each partition's `[min_insert_time, max_insert_time]` to be non-overlapping with
+///   (and non-decreasing relative to) every other partition's.
+///
+/// Under `BlockOrder::InsertTime` both invariants hold for free: `blocks` is already sorted by
+/// `insert_time`, so every candidate cut point is insert-safe and this function cuts at exactly
+/// `max_nb_objects`, bit-identical to a naive greedy cut.
+///
+/// Under `BlockOrder::EventTime`, `blocks` is stable-sorted by `(begin_ticks, end_ticks)` first
+/// (ties keep the incoming, insert-ordered position, so grouping stays deterministic); a cut
+/// point is then only taken where it is *insert-safe*: every block already in the partition being
+/// closed must have an `insert_time` no later than every remaining block's, computed via a
+/// suffix-minimum of `insert_time` over the event-time-sorted list. When the natural
+/// `max_nb_objects` cut point isn't safe, the cut looks back to the most recent safe index instead
+/// (bounding the partition preceding an insert-time straggler); when no safe index exists at all
+/// in the window (a straggler's own re-seeded window, or a continuous inversion chain), the window
+/// grows past the soft limit and a `warn!` fires once the partition is finally emitted. See
+/// `tasks/1429_jit_event_time_block_ordering_plan.md` §3 for the full derivation.
+pub fn group_blocks_into_partitions(
+    config: &JitPartitionConfig,
+    mut blocks: Vec<Arc<PartitionSourceBlock>>,
+) -> Vec<SourceDataBlocksInMemory> {
+    if config.block_order == BlockOrder::EventTime {
+        // Stable sort: ties keep the incoming (insert_time, block_id) order.
+        blocks.sort_by(|a, b| {
+            (a.block.begin_ticks, a.block.end_ticks).cmp(&(b.block.begin_ticks, b.block.end_ticks))
+        });
+    }
+    let n = blocks.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    // suffix_min[i] = min(insert_time of blocks[i..n]) over the (possibly event-time-sorted)
+    // list; suffix_min[n] = DateTime::<Utc>::MAX_UTC so a cut at n (the tail) is always safe.
+    let mut suffix_min = vec![DateTime::<Utc>::MAX_UTC; n + 1];
+    for i in (0..n).rev() {
+        suffix_min[i] = suffix_min[i + 1].min(blocks[i].block.insert_time);
+    }
+
+    let mut out = vec![];
+    let mut start = 0usize;
+    let mut nb_objects: i64 = 0;
+    let mut prefix_max_insert = DateTime::<Utc>::MIN_UTC;
+    // (index, nb_objects of blocks[start..index]) of the most recent safe cut point seen since
+    // the current window started.
+    let mut last_safe: Option<(usize, i64)> = None;
+    let mut perturbed: i64 = 0;
+
+    let mut i = 0usize;
+    while i < n {
+        // A cut at i is safe iff every block already accumulated (blocks[start..i]) was
+        // inserted no later than every remaining block (blocks[i..]): the emitted partition's
+        // insert range then cannot overlap any later partition's.
+        let safe_here = prefix_max_insert <= suffix_min[i];
+        if safe_here && i > start {
+            last_safe = Some((i, nb_objects));
+        }
+        let block_nb_objects = blocks[i].block.nb_objects as i64;
+        let full = nb_objects + block_nb_objects > config.max_nb_objects && i > start;
+        if full {
+            if safe_here {
+                // The natural cut point is insert-safe: cut here, <= max_nb_objects.
+                emit_partition(
+                    &mut out,
+                    &blocks,
+                    start,
+                    i,
+                    nb_objects,
+                    perturbed,
+                    config.max_nb_objects,
+                );
+                start = i;
+                nb_objects = 0;
+                prefix_max_insert = DateTime::<Utc>::MIN_UTC;
+                last_safe = None;
+                perturbed = 0;
+                continue;
+            } else if let Some((j, j_nb_objects)) = last_safe {
+                // Look back to the most recent safe index: emit the already-safe prefix, then
+                // re-seed the window from j and replay blocks[j..i) to recompute running state
+                // before reprocessing block i (which may itself still be unsafe -- a straggler's
+                // window is not bounded by this rule, see the module docs).
+                perturbed += 1;
+                emit_partition(
+                    &mut out,
+                    &blocks,
+                    start,
+                    j,
+                    j_nb_objects,
+                    perturbed,
+                    config.max_nb_objects,
+                );
+                start = j;
+                nb_objects = 0;
+                prefix_max_insert = DateTime::<Utc>::MIN_UTC;
+                last_safe = None;
+                perturbed = 0;
+                for k in start..i {
+                    nb_objects += blocks[k].block.nb_objects as i64;
+                    prefix_max_insert = prefix_max_insert.max(blocks[k].block.insert_time);
+                    if prefix_max_insert <= suffix_min[k + 1] {
+                        last_safe = Some((k + 1, nb_objects));
+                    }
+                }
+                continue;
+            } else {
+                // No safe cut point exists anywhere in this window: grow past the soft limit
+                // rather than emit a partition whose insert range could overlap a later one.
+                perturbed += 1;
+            }
+        }
+        nb_objects += block_nb_objects;
+        prefix_max_insert = prefix_max_insert.max(blocks[i].block.insert_time);
+        i += 1;
+    }
+    emit_partition(
+        &mut out,
+        &blocks,
+        start,
+        n,
+        nb_objects,
+        perturbed,
+        config.max_nb_objects,
+    );
+    out
 }
 
 async fn get_insert_time_range(
@@ -137,53 +357,22 @@ pub async fn generate_stream_jit_partitions_segment(
     .collect()
     .await?;
 
-    let mut partitions = vec![];
-    let mut partition_blocks = vec![];
-    let mut partition_nb_objects: i64 = 0;
+    let mut blocks = vec![];
     for rb in rbs {
         let format_column = string_column_by_name(&rb, "streams.format")?;
         for ir in 0..rb.num_rows() {
             let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
-            let block_nb_objects = block.nb_objects as i64;
             let format = format_column.value(ir)?.to_string();
-
-            // Check if adding this block would exceed the limit
-            if partition_nb_objects + block_nb_objects > config.max_nb_objects
-                && !partition_blocks.is_empty()
-            {
-                // Push current partition without this block
-                partitions.push(SourceDataBlocksInMemory {
-                    blocks: partition_blocks,
-                    block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-                });
-                // Start new partition with this block
-                partition_blocks = vec![Arc::new(PartitionSourceBlock {
-                    block,
-                    stream: stream.clone(),
-                    process: process.clone(),
-                    format,
-                })];
-                partition_nb_objects = block_nb_objects;
-            } else {
-                // Add block to current partition
-                partition_nb_objects += block_nb_objects;
-                partition_blocks.push(Arc::new(PartitionSourceBlock {
-                    block,
-                    stream: stream.clone(),
-                    process: process.clone(),
-                    format,
-                }));
-            }
+            blocks.push(Arc::new(PartitionSourceBlock {
+                block,
+                stream: stream.clone(),
+                process: process.clone(),
+                format,
+            }));
         }
     }
-    if partition_nb_objects != 0 {
-        partitions.push(SourceDataBlocksInMemory {
-            blocks: partition_blocks,
-            block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-        });
-    }
 
-    Ok(partitions)
+    Ok(group_blocks_into_partitions(config, blocks))
 }
 
 /// generate_stream_jit_partitions lists the partitiions that are needed to cover a time span
@@ -294,14 +483,11 @@ pub async fn generate_process_jit_partitions_segment(
     .await?;
     let rbs = instrument_named!(df.collect(), "collect_partition_blocks").await?;
 
-    let mut partitions = vec![];
-    let mut partition_blocks = vec![];
-    let mut partition_nb_objects: i64 = 0;
+    let mut blocks = vec![];
 
     for rb in rbs {
         for ir in 0..rb.num_rows() {
             let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
-            let block_nb_objects = block.nb_objects as i64;
 
             // Build StreamMetadata from the query results
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
@@ -347,42 +533,15 @@ pub async fn generate_process_jit_partitions_segment(
 
             let format = stream_format_column.value(ir)?.to_string();
 
-            // Check if adding this block would exceed the limit
-            if partition_nb_objects + block_nb_objects > config.max_nb_objects
-                && !partition_blocks.is_empty()
-            {
-                // Push current partition without this block
-                partitions.push(SourceDataBlocksInMemory {
-                    blocks: partition_blocks,
-                    block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-                });
-                // Start new partition with this block
-                partition_blocks = vec![Arc::new(PartitionSourceBlock {
-                    block,
-                    stream: stream.clone(),
-                    process: process.clone(),
-                    format,
-                })];
-                partition_nb_objects = block_nb_objects;
-            } else {
-                // Add block to current partition
-                partition_nb_objects += block_nb_objects;
-                partition_blocks.push(Arc::new(PartitionSourceBlock {
-                    block,
-                    stream: stream.clone(),
-                    process: process.clone(),
-                    format,
-                }));
-            }
+            blocks.push(Arc::new(PartitionSourceBlock {
+                block,
+                stream: stream.clone(),
+                process: process.clone(),
+                format,
+            }));
         }
     }
-    if partition_nb_objects != 0 {
-        partitions.push(SourceDataBlocksInMemory {
-            blocks: partition_blocks,
-            block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-        });
-    }
-    Ok(partitions)
+    Ok(group_blocks_into_partitions(config, blocks))
 }
 
 /// generate_process_jit_partitions lists the partitions that are needed to cover a time span for a specific process
@@ -510,44 +669,42 @@ pub async fn is_jit_partition_up_to_date(
         *view_meta.view_instance_id,
     );
 
-    // CRITICAL: Use inclusive inequalities (<=, >=) to prevent race conditions.
-    // With exclusive inequalities (<, >), identical time ranges never match, causing
-    // partitions to be unnecessarily recreated on every query, leading to non-deterministic
-    // results. See: https://github.com/madesroches/micromegas/issues/488
+    // Exact insert-range equality, not the overlap+`>=`-count test this replaced.
     //
-    // ADDITIONAL FIX: For identical timestamps (min_insert_time == max_insert_time),
-    // we need exact equality matching to handle single-timestamp partitions correctly.
+    // The original #488 concern still applies and is not reintroduced here: use an inclusive
+    // comparison (`=`) rather than something that would reject an identical range. Exact equality
+    // *is* that inclusive comparison -- a spec whose range is byte-identical to a stored
+    // partition's still matches, so #488's "partitions unnecessarily recreated on every query"
+    // failure mode does not return. What equality additionally rejects, that overlap plus `>=`
+    // used to accept, is a *different* range that merely overlaps: under `BlockOrder::EventTime` a
+    // block arriving between two `jit_update` runs can legally shift an earlier cut point (see
+    // `group_blocks_into_partitions`'s docs and
+    // `tasks/1429_jit_event_time_block_ordering_plan.md` §6), so a later run's spec can have a
+    // smaller, different insert range than an already-written partition that still overlaps it.
+    // The old overlap/`>=` test would call that stale, wider partition "up to date"; exact
+    // range-and-count equality does not, so the stale partition falls through to "not up to date"
+    // here and is then replaced by `retire_partitions`'s `RetireMatch::Overlap` arm (see
+    // `write_partition.rs`). Under `BlockOrder::InsertTime` cut points are stable across runs, so
+    // the exact range and count already coincide with what the overlap/`>=` test would have
+    // matched -- this is a no-op there, not a config-gated special case. This also collapses the
+    // previous `min_insert_time == max_insert_time` degenerate-range branch: both branches produced
+    // this same single-row-exact-match query once the range check is `=` instead of `<=`/`>=`, so
+    // there is only one query left.
+    // See: https://github.com/madesroches/micromegas/issues/488
     let rows = instrument_named!(
-        if min_insert_time == max_insert_time {
-            // For identical timestamps, look for exact matches
-            sqlx::query(
-                "SELECT file_schema_hash, source_data_hash
+        sqlx::query(
+            "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
-             AND end_insert_time = $3
+             AND end_insert_time = $4
              ;",
-            )
-            .bind(&*view_meta.view_set_name)
-            .bind(&*view_meta.view_instance_id)
-            .bind(min_insert_time)
-        } else {
-            // For time ranges, use inclusive inequalities
-            sqlx::query(
-                "SELECT file_schema_hash, source_data_hash
-             FROM lakehouse_partitions
-             WHERE view_set_name = $1
-             AND view_instance_id = $2
-             AND begin_insert_time <= $3
-             AND end_insert_time >= $4
-             ;",
-            )
-            .bind(&*view_meta.view_set_name)
-            .bind(&*view_meta.view_instance_id)
-            .bind(max_insert_time)
-            .bind(min_insert_time)
-        }
+        )
+        .bind(&*view_meta.view_set_name)
+        .bind(&*view_meta.view_instance_id)
+        .bind(min_insert_time)
+        .bind(max_insert_time)
         .fetch_all(pool),
         "sql_select_matching_partitions"
     )
@@ -578,8 +735,11 @@ pub async fn is_jit_partition_up_to_date(
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
     let existing_count = hash_to_object_count(&part_source_data)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
-    if existing_count < required_count {
-        info!("{desc}: existing partition lacks source data: creating a new partition");
+    if existing_count != required_count {
+        info!(
+            "{desc}: existing partition object count differs (existing={existing_count}, \
+             required={required_count}): creating a new partition"
+        );
         return Ok(false);
     }
     info!("{desc}: partition up to date");
@@ -587,17 +747,13 @@ pub async fn is_jit_partition_up_to_date(
 }
 
 /// get_event_time_range returns the time range covered by a partition spec
-/// Returns the event time range covered by a partition spec.
+/// Returns the insert time range covered by a partition spec.
 fn get_part_insert_time_range(
     spec: &SourceDataBlocksInMemory,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    if spec.blocks.is_empty() {
-        anyhow::bail!("empty partition should not exist");
-    }
-    // blocks need to be sorted by (event & insert) time
-    let min_insert_time = spec.blocks[0].block.insert_time;
-    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
-    Ok((min_insert_time, max_insert_time))
+    let range =
+        insert_time_range(&spec.blocks).with_context(|| "empty partition should not exist")?;
+    Ok((range.begin, range.end))
 }
 
 /// Writes a partition from a set of blocks.
@@ -615,15 +771,12 @@ pub async fn write_partition_from_blocks(
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    // blocks need to be sorted by (event & insert) time
-    let min_insert_time = source_data.blocks[0].block.insert_time;
-    let max_insert_time = source_data.blocks[source_data.blocks.len() - 1]
-        .block
-        .insert_time;
+    let insert_range =
+        insert_time_range(&source_data.blocks).with_context(|| "insert_time_range")?;
     let block_spec = BlockPartitionSpec {
         view_metadata,
         schema,
-        insert_range: TimeRange::new(min_insert_time, max_insert_time),
+        insert_range,
         source_data: Arc::new(source_data),
         block_processors,
     };

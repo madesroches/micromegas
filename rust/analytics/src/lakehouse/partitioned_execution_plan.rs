@@ -76,9 +76,10 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering this can happen when a stream's blocks were registered out of event-time order, or -- for tsc_frequency == 0 processes -- when TSC-frequency \
-                 re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on View::get_scan_output_ordering in view.rs). \
-                 Retire the affected stream's partitions so they rebuild with a single, consistent time converter.",
+                 For event-time ordering this can happen when an insert-time inversion straddles a JIT segment boundary (blocks registered out of event-time order across two \
+                 independently-grouped segments -- within one segment this is now structurally excluded by insert-safe cut points, see jit_partitions::group_blocks_into_partitions), \
+                 or -- for tsc_frequency == 0 processes -- when TSC-frequency re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant \
+                 notes on View::get_scan_output_ordering in view.rs). Retire the affected stream's partitions so they rebuild with a single, consistent time converter.",
                 prev.file_path, next.file_path
             )));
         }

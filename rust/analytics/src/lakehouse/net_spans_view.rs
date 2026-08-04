@@ -2,7 +2,8 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, JitPartitionConfig, generate_process_jit_partitions, insert_time_range,
+        is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -11,7 +12,7 @@ use super::{
     view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
     metadata::{StreamMetadata, find_process_with_latest_timing},
     net_span_tree::make_net_span_tree,
     net_spans_table::{NetSpanRecordBuilder, net_spans_table_schema},
@@ -30,7 +31,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "net_spans";
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 2;
 const NET_STREAM_TAG: &str = "net";
 
 lazy_static::lazy_static! {
@@ -127,8 +128,10 @@ async fn write_partition(
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    let min_insert_time = spec.blocks[0].block.insert_time;
-    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
+    // NetSpansView is grouped under BlockOrder::EventTime (see jit_update below), so spec.blocks
+    // is event-time ordered, not insert-time ordered -- insert_time_range computes the real
+    // min/max rather than reading list endpoints.
+    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -136,9 +139,10 @@ async fn write_partition(
         lake.clone(),
         view_meta,
         schema,
-        TimeRange::new(min_insert_time, max_insert_time),
+        insert_range,
         spec.block_ids_hash.clone(),
         None,
+        RetireMatch::Overlap,
         rx,
         null_response_writer,
     ));
@@ -186,12 +190,26 @@ async fn write_partition(
             )
             .await?;
         }
-        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-        let max_time_row =
-            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
-        let rows_time_range = record_builder
-            .get_time_range()
-            .unwrap_or(TimeRange::new(min_time_row, max_time_row));
+        // Real min/max over the blocks, not list endpoints: fallback only, since
+        // record_builder.get_time_range() normally supplies the actual row bounds below.
+        let rows_time_range = record_builder.get_time_range().unwrap_or_else(|| {
+            let min_ticks = spec
+                .blocks
+                .iter()
+                .map(|b| b.block.begin_ticks)
+                .min()
+                .unwrap_or_default();
+            let max_ticks = spec
+                .blocks
+                .iter()
+                .map(|b| b.block.end_ticks)
+                .max()
+                .unwrap_or_default();
+            TimeRange::new(
+                convert_ticks.delta_ticks_to_time(min_ticks),
+                convert_ticks.delta_ticks_to_time(max_ticks),
+            )
+        });
         let nb_rows = record_builder.len();
         let rows = record_builder
             .finish()
@@ -313,8 +331,17 @@ impl View for NetSpansView {
         .with_context(|| "make_time_converter_from_latest_timing")?;
 
         let blocks_view = BlocksView::new()?;
+        // NetSpansView builds cross-block net span trees, so its JIT partitions must be
+        // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs. (Unlike
+        // ThreadSpansView, NetSpansView declares no ScanOrdering::Concatenated today, so it does
+        // not also need a monotonicity check -- see thread_spans_view.rs's
+        // ensure_begin_non_decreasing.)
+        let config = JitPartitionConfig {
+            block_order: BlockOrder::EventTime,
+            ..Default::default()
+        };
         let all_partitions = generate_process_jit_partitions(
-            &JitPartitionConfig::default(),
+            &config,
             lakehouse.clone(),
             &blocks_view,
             &query_range,

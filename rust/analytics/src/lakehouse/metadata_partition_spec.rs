@@ -3,7 +3,7 @@ use super::{
     view::{PartitionSpec, ViewMetadata},
 };
 use crate::{
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
     response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
     time::TimeRange,
@@ -138,6 +138,7 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.insert_range,
             self.get_source_data_hash(),
             self.sort_order.clone(),
+            RetireMatch::Containment,
             rx,
             logger.clone(),
         ));

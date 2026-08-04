@@ -117,62 +117,153 @@ pub async fn retire_expired_partitions(
     Ok(())
 }
 
+/// Which SQL predicate `retire_partitions` uses to find partitions to replace.
+///
+/// There is no JIT registry to infer "this view regroups blocks across runs" from
+/// `view_set_name`/`view_instance_id` alone, so callers must say which rule applies to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetireMatch {
+    /// The existing partition is fully contained in the new
+    /// `[begin_insert_time, end_insert_time]` range (`begin_insert_time >= $3 AND end_insert_time
+    /// <= $4`, with an exact-match special case when the new range is degenerate). Correct
+    /// whenever a view's cut points are stable across materialization runs: a rewritten range
+    /// either exactly reproduces an old partition's range (matched by the exact-match case) or
+    /// strictly extends it (matched by containment). This holds for every JIT view under
+    /// `BlockOrder::InsertTime` and for every non-JIT (batch/merge) partition write. Used by
+    /// everything except the two `BlockOrder::EventTime` JIT views.
+    Containment,
+    /// The union of the overlap and containment predicates:
+    /// `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
+    /// (begin_insert_time >= $3 AND end_insert_time <= $4 AND NOT (begin_insert_time =
+    /// end_insert_time AND begin_insert_time = $3))`.
+    ///
+    /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
+    /// grouping can move an *earlier* cut point between `jit_update` runs (see
+    /// `jit_partitions::group_blocks_into_partitions`'s docs), so a later run's narrower spec can
+    /// leave behind a stale, wider partition that merely *overlaps* the new range instead of being
+    /// contained by it -- `Containment` alone would never retire it, and the subsequent insert
+    /// would trip the `lakehouse_partitions_no_overlap` exclusion constraint. The containment half
+    /// of the union is not redundant with the overlap half: `tstzrange(t, t)` is Postgres's empty
+    /// range, so `&&` is always false whenever *either* side's range is degenerate
+    /// (`begin_insert_time == end_insert_time`), so a degenerate existing partition being retired
+    /// by a non-degenerate new range needs the containment half to be matched at all.
+    ///
+    /// The containment half's `AND NOT (begin_insert_time = end_insert_time AND begin_insert_time
+    /// = $3)` clause excludes one specific, legitimate case: `jit_update` writes a regrouping run's
+    /// partitions left to right, and the cut rule allows a degenerate partition (`tstzrange` is
+    /// `[)`, so an equal boundary is legal) to end at exactly `t` where the very next partition in
+    /// the *same* run begins at `t`. Without the exclusion, writing that next partition would
+    /// match and delete its own just-written, up-to-date, immediately-preceding sibling on every
+    /// run -- the clause leaves that in place while still matching the genuine cross-run case (a
+    /// stale degenerate partition from a previous run's different cut points, generally sitting
+    /// strictly inside `[$3, $4]` rather than exactly at `$3`).
+    ///
+    /// Tolerated gap: under `Overlap`, retiring a stale wider partition and inserting the new,
+    /// narrower one are two separate statements in the same transaction, so a range that the old
+    /// partition covered but the new one does not yet (because a sibling partition later in the
+    /// same `jit_update` loop covers it) is transiently missing from the lakehouse until that
+    /// sibling is written -- or, if the loop errors out or is cancelled, until the next successful
+    /// `jit_update`. This is judged tolerable because JIT partitions are regenerated on demand from
+    /// `blocks_view`, not the source of truth for their own data (see
+    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the full argument, including the
+    /// concurrent-writers case).
+    Overlap,
+}
+
 /// Retires partitions from the active set.
-/// Overlap is determined by the insert_time of the telemetry.
+///
+/// `retire_match` selects the SQL predicate (see `RetireMatch`): `Containment` is an insert-range
+/// containment test on the *existing* partition (with an exact-match special case for a
+/// degenerate new range), correct whenever a view's cut points are stable across runs.
+/// `Overlap` additionally matches (and retires) an existing partition that merely overlaps the new
+/// range without containing it, which `BlockOrder::EventTime` JIT views need because their cut
+/// points can move between runs.
 pub async fn retire_partitions(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     view_set_name: &str,
     view_instance_id: &str,
     begin_insert_time: DateTime<Utc>,
     end_insert_time: DateTime<Utc>,
+    retire_match: RetireMatch,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    // this is not an overlap test, we need to assume that we are not making a new smaller partition
-    // where a bigger one existed
-    // its gets tricky in the jit case where a partition can have only one block and begin_insert == end_insert
+    // For RetireMatch::Containment: this is not an overlap test, we need to assume that we are
+    // not making a new smaller partition where a bigger one existed. It gets tricky in the jit
+    // case where a partition can have only one block and begin_insert == end_insert -- handled by
+    // the exact-match branch below. RetireMatch::Overlap (thread_spans/net_spans only) additionally
+    // matches a stale, wider partition that only overlaps the new range; see RetireMatch's docs.
 
     //todo: use DELETE+RETURNING
-    let old_partitions = if begin_insert_time == end_insert_time {
-        // For identical timestamps, look for exact matches to handle single-block partitions
-        instrument_named!(
-            sqlx::query(
-                "SELECT file_path, file_size
+    let old_partitions = match retire_match {
+        RetireMatch::Containment if begin_insert_time == end_insert_time => {
+            // For identical timestamps, look for exact matches to handle single-block partitions
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_path, file_size
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .fetch_all(&mut **transaction),
+                "sql_select_old_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(begin_insert_time)
-            .fetch_all(&mut **transaction),
-            "sql_select_old_partitions"
-        )
-        .await
-        .with_context(|| "listing old partitions (exact match)")?
-    } else {
-        // For time ranges, use inclusive inequalities
-        instrument_named!(
-            sqlx::query(
-                "SELECT file_path, file_size
+            .await
+            .with_context(|| "listing old partitions (exact match)")?
+        }
+        RetireMatch::Containment => {
+            // For time ranges, use inclusive inequalities
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_path, file_size
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time >= $3
              AND end_insert_time <= $4
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .bind(end_insert_time)
+                .fetch_all(&mut **transaction),
+                "sql_select_old_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(begin_insert_time)
-            .bind(end_insert_time)
-            .fetch_all(&mut **transaction),
-            "sql_select_old_partitions"
-        )
-        .await
-        .with_context(|| "listing old partitions (range)")?
+            .await
+            .with_context(|| "listing old partitions (range)")?
+        }
+        RetireMatch::Overlap => {
+            // Union of the overlap and containment predicates; see RetireMatch::Overlap's docs
+            // for why the containment half (and its left-boundary exclusion) is required.
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_path, file_size
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND (
+                 (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
+                 OR (begin_insert_time >= $3 AND end_insert_time <= $4
+                     AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
+             )
+             ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .bind(end_insert_time)
+                .fetch_all(&mut **transaction),
+                "sql_select_old_partitions"
+            )
+            .await
+            .with_context(|| "listing old partitions (overlap)")?
+        }
     };
 
     // LOG: Found partitions for retirement (only if any found)
@@ -204,45 +295,73 @@ pub async fn retire_partitions(
         }
     }
 
-    if begin_insert_time == end_insert_time {
-        // For identical timestamps, delete exact matches to handle single-block partitions
-        instrument_named!(
-            sqlx::query(
-                "DELETE from lakehouse_partitions
+    match retire_match {
+        RetireMatch::Containment if begin_insert_time == end_insert_time => {
+            // For identical timestamps, delete exact matches to handle single-block partitions
+            instrument_named!(
+                sqlx::query(
+                    "DELETE from lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $3
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .execute(&mut **transaction),
+                "sql_delete_old_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(begin_insert_time)
-            .execute(&mut **transaction),
-            "sql_delete_old_partitions"
-        )
-        .await
-        .with_context(|| "deleting out of date partitions (exact match)")?
-    } else {
-        // For time ranges, use inclusive inequalities
-        instrument_named!(
-            sqlx::query(
-                "DELETE from lakehouse_partitions
+            .await
+            .with_context(|| "deleting out of date partitions (exact match)")?
+        }
+        RetireMatch::Containment => {
+            // For time ranges, use inclusive inequalities
+            instrument_named!(
+                sqlx::query(
+                    "DELETE from lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time >= $3
              AND end_insert_time <= $4
              ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .bind(end_insert_time)
+                .execute(&mut **transaction),
+                "sql_delete_old_partitions"
             )
-            .bind(view_set_name)
-            .bind(view_instance_id)
-            .bind(begin_insert_time)
-            .bind(end_insert_time)
-            .execute(&mut **transaction),
-            "sql_delete_old_partitions"
-        )
-        .await
-        .with_context(|| "deleting out of date partitions (range)")?
+            .await
+            .with_context(|| "deleting out of date partitions (range)")?
+        }
+        RetireMatch::Overlap => {
+            // Same union predicate as the SELECT above, so exactly the rows just listed (and
+            // scheduled for cleanup) are deleted.
+            instrument_named!(
+                sqlx::query(
+                    "DELETE from lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND (
+                 (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
+                 OR (begin_insert_time >= $3 AND end_insert_time <= $4
+                     AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
+             )
+             ;",
+                )
+                .bind(view_set_name)
+                .bind(view_instance_id)
+                .bind(begin_insert_time)
+                .bind(end_insert_time)
+                .execute(&mut **transaction),
+                "sql_delete_old_partitions"
+            )
+            .await
+            .with_context(|| "deleting out of date partitions (overlap)")?
+        }
     };
     Ok(())
 }
@@ -292,9 +411,10 @@ async fn delete_if_orphan(lake: &DataLakeConnection, file_path: &str) -> Result<
 async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
+    retire_match: RetireMatch,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let result = insert_partition_transaction(lake, partition, logger).await;
+    let result = insert_partition_transaction(lake, partition, retire_match, logger).await;
     if result.is_err()
         && let Some(file_path) = &partition.file_path
     {
@@ -311,6 +431,7 @@ async fn insert_partition(
 async fn insert_partition_transaction(
     lake: &DataLakeConnection,
     partition: &Partition,
+    retire_match: RetireMatch,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // Generate deterministic lock key for this partition
@@ -335,8 +456,16 @@ async fn insert_partition_transaction(
     // Acquire advisory lock - this will block until we can proceed
     // pg_advisory_xact_lock automatically releases when transaction ends.
     // The lock only serializes writers of this exact (view, instance, range) key, avoiding
-    // duplicate work; correctness against overlapping writers of *different* ranges is enforced
-    // by the lakehouse_partitions_no_overlap exclusion constraint at insert time.
+    // duplicate work. Correctness against overlapping writers of *different* ranges depends on
+    // retire_match: under RetireMatch::Containment (every caller except thread_spans/net_spans),
+    // it is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time --
+    // a losing writer's insert fails loudly. Under RetireMatch::Overlap (thread_spans/net_spans),
+    // the Overlap retire step below routes around that constraint (it can delete a
+    // differently-ranged, already-committed partition before this insert), so two concurrent
+    // writers of different, overlapping ranges are instead reconciled by the next `jit_update`'s
+    // exact-equality `is_jit_partition_up_to_date` check, not by the exclusion constraint -- see
+    // `RetireMatch::Overlap`'s docs and `tasks/1429_jit_event_time_block_ordering_plan.md` §6
+    // ("Concurrent writers").
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)
@@ -362,14 +491,17 @@ async fn insert_partition_transaction(
         ))
         .await?;
 
-    // for jit partitions, we assume that the blocks were registered in order
-    // since they are built based on begin_ticks, not insert_time
+    // Which partitions this call replaces depends on retire_match (see RetireMatch's docs):
+    // Containment only replaces partitions fully covered by this write's range; Overlap (the two
+    // BlockOrder::EventTime JIT views) also replaces a stale partition that merely overlaps it,
+    // since their grouping can move an earlier cut point between runs.
     retire_partitions(
         &mut transaction,
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
         partition.begin_insert_time(),
         partition.end_insert_time(),
+        retire_match,
         logger.clone(),
     )
     .await
@@ -433,19 +565,22 @@ async fn insert_partition_transaction(
                 .await?;
             // Translate an exclusion-constraint violation (raw SQLSTATE 23P01) into a legible
             // domain error: it means an existing partition overlaps this one without being
-            // contained by it, so the containment-based retire in this transaction did not
-            // replace it -- e.g. a concurrent maintenance merge committed a wider partition.
+            // matched by this transaction's retire step (RetireMatch::Containment: not fully
+            // contained by the new range; RetireMatch::Overlap: not matched by the union
+            // predicate either, e.g. still committed by a concurrent writer racing this one --
+            // see RetireMatch::Overlap's "Concurrent writers" docs) -- e.g. a concurrent
+            // maintenance merge committed a wider partition.
             let overlap_detail = e.as_database_error().and_then(|db_err| {
                 (db_err.constraint() == Some("lakehouse_partitions_no_overlap"))
                     .then(|| db_err.to_string())
             });
             if let Some(detail) = overlap_detail {
                 anyhow::bail!(
-                    "new partition {}/{} [{}, {}] overlaps an existing partition it does not \
-                     fully contain, so this write cannot replace it (likely a concurrent \
-                     materialization or merge). Retire the conflicting partition (e.g. \
-                     retire_partition_by_metadata) or align the requested range/delta, then \
-                     retry. Postgres detail: {detail}",
+                    "new partition {}/{} [{}, {}] overlaps an existing partition that this \
+                     write's retire step ({retire_match:?}) did not replace, so this write \
+                     cannot replace it (likely a concurrent materialization or merge). Retire \
+                     the conflicting partition (e.g. retire_partition_by_metadata) or align the \
+                     requested range/delta, then retry. Postgres detail: {detail}",
                     partition.view_metadata.view_set_name,
                     partition.view_metadata.view_instance_id,
                     partition.begin_insert_time().to_rfc3339(),
@@ -632,6 +767,10 @@ async fn finalize_partition_write(
 ///
 /// `sort_order` is recorded on the resulting `Partition` as-is (see
 /// `View::get_merged_partition_sort_order` and `MetadataPartitionSpec::sort_order`).
+///
+/// `retire_match` is forwarded to `retire_partitions` (see `RetireMatch`'s docs): pass
+/// `RetireMatch::Containment` unless this call is one of the two `BlockOrder::EventTime` JIT
+/// views (`thread_spans_view.rs` / `net_spans_view.rs`), which must pass `RetireMatch::Overlap`.
 #[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
@@ -640,6 +779,7 @@ pub async fn write_partition_from_rows(
     insert_range: TimeRange,
     source_data_hash: Vec<u8>,
     sort_order: Option<Vec<String>>,
+    retire_match: RetireMatch,
     mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -736,6 +876,7 @@ pub async fn write_partition_from_rows(
             num_rows: result.num_rows,
             sort_order,
         },
+        retire_match,
         logger,
     )
     .await

@@ -155,12 +155,17 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// - `Concatenated { columns, .. }`: rows within each partition file are already sorted by
     ///   `columns`, the leading column is the view's min-event-time column, and partition
     ///   event-time ranges are non-overlapping (so files concatenate in globally-sorted order).
-    ///   For `ThreadSpansView`, the non-overlapping-ranges half of this rests on JIT partitions
-    ///   being sliced in event-time order, which in turn assumes a stream's blocks are registered
-    ///   in event-time order — an assumption documented but not enforced (see
-    ///   `thread_spans_view.rs`). If that assumption is ever violated, output would be silently
-    ///   mis-ordered rather than re-sorted, since no `Sort` node remains once this ordering is
-    ///   declared.
+    ///   For `ThreadSpansView`, both halves of this are obtained from JIT partitions being
+    ///   grouped under `jit_partitions::BlockOrder::EventTime`: `group_blocks_into_partitions`
+    ///   sorts a segment's blocks by event time and only cuts at insert-safe points (see its
+    ///   docs), so within a segment blocks land in event order and partitions' event-time ranges
+    ///   come out non-overlapping by construction, rather than by an unenforced assumption about
+    ///   registration order. Two narrower residual caveats remain, both backstopped by
+    ///   `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs`) failing the query
+    ///   loudly rather than returning wrong rows: an insert-time inversion straddling a JIT
+    ///   *segment* boundary (segments are still grouped independently, see
+    ///   `generate_stream_jit_partitions`), and TSC-frequency re-estimation drift across
+    ///   materialization epochs for `tsc_frequency == 0` processes.
     /// - `PerFile { columns }`: rows within each partition file are already sorted, ascending, by
     ///   `columns`, but partitions may overlap each other arbitrarily on those columns. A false
     ///   declaration here is not merely mis-ordered rows but, under order-aware aggregation, wrong

@@ -1,7 +1,7 @@
 use super::{
     partition_source_data::{PartitionBlocksSource, PartitionSourceBlock},
     view::{PartitionSpec, ViewMetadata},
-    write_partition::{PartitionRowSet, write_partition_from_rows},
+    write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
@@ -90,6 +90,7 @@ impl PartitionSpec for BlockPartitionSpec {
             self.insert_range,
             self.source_data.get_source_data_hash(),
             None,
+            RetireMatch::Containment,
             rx,
             logger.clone(),
         ));

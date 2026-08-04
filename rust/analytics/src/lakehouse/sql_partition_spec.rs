@@ -5,8 +5,11 @@ use super::{
     write_partition::write_partition_from_rows,
 };
 use crate::{
-    dfext::typed_column::typed_column_by_name, lakehouse::write_partition::PartitionRowSet,
-    record_batch_transformer::RecordBatchTransformer, response_writer::Logger, time::TimeRange,
+    dfext::typed_column::typed_column_by_name,
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch},
+    record_batch_transformer::RecordBatchTransformer,
+    response_writer::Logger,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -151,6 +154,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.insert_range,
             self.get_source_data_hash(),
             self.sort_order.clone(),
+            RetireMatch::Containment,
             rx,
             logger.clone(),
         ));

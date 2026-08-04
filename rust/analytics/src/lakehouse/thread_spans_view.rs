@@ -2,7 +2,8 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, JitPartitionConfig, generate_stream_jit_partitions, insert_time_range,
+        is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -13,7 +14,8 @@ use super::{
 };
 use crate::{
     call_tree::make_call_tree,
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    dfext::typed_column::typed_column_by_name,
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
     metadata::{find_process_with_latest_timing, find_stream_from_view},
     response_writer::ResponseWriter,
     span_table::{SpanRecordBuilder, get_spans_schema},
@@ -22,6 +24,8 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::array::TimestampNanosecondArray;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::{arrow::datatypes::Schema, logical_expr::expr_fn::col};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -31,7 +35,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 2;
 lazy_static::lazy_static! {
     static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
@@ -115,6 +119,36 @@ async fn append_call_tree(
     Ok(())
 }
 
+/// Verifies that `batch`'s `begin` column is non-decreasing, naming `stream_id` and the offending
+/// row/values in both the returned error and (unlike a plain `anyhow::ensure!`) an `error!` log
+/// line emitted immediately before it: nothing on `ensure_begin_non_decreasing`'s callers' error
+/// propagation path (`MaterializedView::scan` -> DataFusion planning -> the flight SQL service)
+/// logs a planning-time error at error level, so the check logs itself instead of relying on that
+/// propagation (see the plan's Design §5 for the full trace).
+///
+/// `pub`, not inlined into `write_partition`, so `rust/analytics/tests/` (an external integration
+/// crate that can only reach `pub` items) can call it directly with a hand-built batch.
+pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()> {
+    let begins: &TimestampNanosecondArray = typed_column_by_name(batch, "begin")?;
+    let mut previous: Option<i64> = None;
+    for i in 0..begins.len() {
+        let begin = begins.value(i);
+        if let Some(prev) = previous {
+            if begin < prev {
+                error!(
+                    "thread_spans stream {stream_id}: begin regressed at row {i}: {begin} < {prev}"
+                );
+            }
+            anyhow::ensure!(
+                begin >= prev,
+                "thread_spans stream {stream_id}: begin regressed at row {i}: {begin} < {prev}"
+            );
+        }
+        previous = Some(begin);
+    }
+    Ok(())
+}
+
 /// Writes a partition from a set of blocks.
 #[span_fn]
 async fn write_partition(
@@ -129,10 +163,11 @@ async fn write_partition(
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    // for jit partitions, we assume that the blocks were registered in order
-    // since they are built based on begin_ticks, not insert_time
-    let min_insert_time = spec.blocks[0].block.insert_time;
-    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
+    // JIT partitions here are grouped under BlockOrder::EventTime (see jit_update below), so
+    // spec.blocks is event-time ordered, not insert-time ordered -- insert_time_range computes
+    // the real min/max rather than reading list endpoints.
+    let stream_id = spec.blocks[0].stream.stream_id.to_string();
+    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -140,9 +175,10 @@ async fn write_partition(
         lake.clone(),
         view_meta,
         schema,
-        TimeRange::new(min_insert_time, max_insert_time),
+        insert_range,
         spec.block_ids_hash.clone(),
         None,
+        RetireMatch::Overlap,
         rx,
         null_response_writer,
     ));
@@ -178,12 +214,25 @@ async fn write_partition(
             )
             .await?;
         }
-        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-        let max_time_row =
-            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
+        let min_ticks = spec
+            .blocks
+            .iter()
+            .map(|b| b.block.begin_ticks)
+            .min()
+            .with_context(|| "empty partition spec")?;
+        let max_ticks = spec
+            .blocks
+            .iter()
+            .map(|b| b.block.end_ticks)
+            .max()
+            .with_context(|| "empty partition spec")?;
+        let min_time_row = convert_ticks.delta_ticks_to_time(min_ticks);
+        let max_time_row = convert_ticks.delta_ticks_to_time(max_ticks);
         let rows = record_builder
             .finish()
             .with_context(|| "record_builder.finish()")?;
+        ensure_begin_non_decreasing(&stream_id, &rows)
+            .with_context(|| "ensure_begin_non_decreasing")?;
         info!("writing {} rows", rows.num_rows());
         Ok(PartitionRowSet {
             rows_time_range: TimeRange::new(min_time_row, max_time_row),
@@ -222,8 +271,12 @@ async fn write_partition(
     }
 }
 /// Rebuilds the partition if it's missing or out of date.
+///
+/// `pub` (not module-private) so `rust/analytics/tests/` -- which compiles as an external
+/// integration crate and can only reach `pub` items -- can write a single JIT partition directly
+/// for the cross-run-regrouping and degenerate-range integration test sub-cases.
 #[span_fn]
-async fn update_partition(
+pub async fn update_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
     schema: Arc<Schema>,
@@ -302,8 +355,15 @@ impl View for ThreadSpansView {
         )
         .with_context(|| "make_time_converter_from_latest_timing")?;
         let blocks_view = BlocksView::new()?;
+        // ThreadSpansView builds cross-block call trees and declares ScanOrdering::Concatenated
+        // over `begin` (see get_scan_output_ordering below), so its JIT partitions must be
+        // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs.
+        let config = JitPartitionConfig {
+            block_order: BlockOrder::EventTime,
+            ..Default::default()
+        };
         let partitions = generate_stream_jit_partitions(
-            &JitPartitionConfig::default(),
+            &config,
             lakehouse.clone(),
             &blocks_view,
             &query_range,
