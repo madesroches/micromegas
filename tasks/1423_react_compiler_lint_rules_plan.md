@@ -188,8 +188,14 @@ getter, at the two render call sites only:
   `SCREEN_RENDERERS` straight from `index.ts` instead would drop `init` from the module graph and leave the
   registry empty. Fix: change the import to `import { SCREEN_RENDERERS } from '@/lib/screen-renderers/init'`
   (`init.ts` re-exports everything from `index.ts` via `export * from './index'`, so this keeps the
-  registration side effects) and change `const Renderer = getRenderer(screenType)` to `const Renderer =
-  SCREEN_RENDERERS[screenType]`. `getRenderer` has exactly one caller in the codebase — this one — so it
+  registration side effects) and change `const Renderer = getRenderer(screenType)` to `const Renderer:
+  ComponentType<ScreenRendererProps> | undefined = SCREEN_RENDERERS[screenType]`, importing `ComponentType`
+  from `react` and `ScreenRendererProps` from the screen-renderers module if not already imported in
+  `ScreenPage.tsx`. `SCREEN_RENDERERS` is a plain `Record<string, ComponentType<ScreenRendererProps>>` and
+  `tsconfig.json` doesn't set `noUncheckedIndexedAccess`, so a bare index read types as non-nullable — an
+  explicit annotation is needed to keep the existing `if (!Renderer)` "Unknown screen type" fallback backed
+  by a real type, rather than becoming type-level dead code; verified clean against `static-components`.
+  `getRenderer` has exactly one caller in the codebase — this one — so it
   becomes dead code; delete it from `index.ts` (`getCellRenderer` stays: it's still used at
   `NotebookRenderer.tsx:608`).
 
@@ -365,63 +371,38 @@ The remaining one — `ImportScreensPage.tsx`'s `loadExistingScreens` (`:87`) �
 mount effect itself (`:98`), so it takes React's plain documented fix instead: move the loader's body
 directly into the effect, no IIFE, no `useCallback`.
 
-**(b) Fully-derived state duplicated via effect — 8 sites, 5 files, two different shapes and two different
-fixes depending on whether the source query ever re-executes.** All eight are a `useEffect` gated on
+**(b) Fully-derived state duplicated via effect — 8 sites, 5 files, all re-executing, so all keep `useState`
++ the wrapped-effect treatment (no `useMemo` conversions).** All eight are a `useEffect` gated on
 `query.isComplete && !query.error` that reads `query.getTable()` — a pure, idempotent read of
 already-resolved data — and writes it into `useState`. There is no asynchrony left at this point (the
-actual network wait already happened inside `query`'s own state machine), which is exactly "derived state
-that belongs in render" (the rule's own stated rationale) *when* the value can safely be recomputed to
-`null`/empty on every render where the guard doesn't hold. That's true only for queries that execute
-exactly once per page visit; queries that re-execute (filter change, `refreshTrigger`, time-range/data-source
-change) must keep showing the previous result while the new one streams in — `execute()` unconditionally
-resets `isComplete` to `false` and clears the accumulated batches on every call
-(`useStreamQuery.ts:52-62`), so a `useMemo` keyed on `[query.isComplete, query.error]` recomputes to
-`null`/empty the instant a re-execute starts, blanking the UI mid-fetch where today's state-based version
-keeps the last result on screen (`useMetricsData.ts:56-57` even has a comment to this effect: "Don't clear
-data immediately - keep showing existing data until new data arrives").
+actual network wait already happened inside `query`'s own state machine), which looks at first like exactly
+"derived state that belongs in render" (the rule's own stated rationale) — but that conversion is only safe
+for a query that executes exactly once per page visit: `execute()` unconditionally resets `isComplete` to
+`false` and clears the accumulated batches on every call (`useStreamQuery.ts:52-62`), so a `useMemo` keyed
+on `[query.isComplete, query.error]` recomputes to `null`/empty the instant a re-execute starts, blanking
+the UI mid-fetch where today's state-based version keeps the last result on screen (`useMetricsData.ts:56-57`
+even has a comment to this effect: "Don't clear data immediately - keep showing existing data until new
+data arrives"). None of the 8 sites qualifies as "executes exactly once": `ProcessPage.tsx`'s
+`processQuery`/`statsQuery`/`propertiesQuery` (`:157,178,198`) look like mount-once reads guarded by
+`hasLoadedRef.current` (`:247-253`), but that latch only guards the *mount* effect at `:249-254` —
+`PageLayout`'s `onRefresh={loadData}` (`:324`) calls `loadData` (`:222-246`), which calls `execute` on all
+three queries directly, bypassing the latch entirely, so `process`/`statistics`/`properties`+
+`propertiesError` do re-execute on every refresh click, and a `useMemo` conversion would blank the four stat
+tiles and the properties panel mid-refresh exactly like the `LogRenderer`/`useMetricsData` cases below.
+`LogRenderer.tsx:329`'s `resultTable`, `ProcessLogPage.tsx:273`'s `rows`, `useMetricsData.ts:80-111`'s
+`chartData`/`rawPropertiesData`/`propertyParseErrors` (three states from one loop, only `chartData`'s site
+is listed as `:106`), and `ProcessMetricsPage.tsx:242-274`'s identical three-state shape (`:268`) re-execute
+on filter/time-range/refresh changes for the same reason, and additionally are multi-state (a single memo
+returning an object wouldn't help — the object itself would still get recomputed to empty mid-fetch).
 
-**No re-execution — genuine `useMemo` candidates.** `ProcessPage.tsx`'s `processQuery`/`statsQuery` each
-execute exactly once per page visit (guarded by `hasLoadedRef.current`, `:247-253`), so recomputing to
-`null` between renders is indistinguishable from the initial loading state. `:157`'s `process` and `:178`'s
-`statistics` convert to `useMemo` as shown:
-
-```tsx
-const process = useMemo<ProcessRow | null>(() => {
-  if (!processQuery.isComplete || processQuery.error) return null
-  const table = processQuery.getTable()
-  const row = table && table.numRows > 0 ? table.get(0) : null
-  return row ? { exe: String(row.exe ?? ''), /* ...same fields... */ } : null
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [processQuery.isComplete, processQuery.error])
-```
-
-removing `setProcess`/the effect, but *keeping* the narrowed `[processQuery.isComplete, processQuery.error]`
-deps and the `eslint-disable-next-line react-hooks/exhaustive-deps` comment guarding them: `useStreamQuery`
-returns a fresh object every render (`useStreamQuery.ts:124`'s `{ ...state, execute, cancel, retry,
-getTable, getBatches }`), so keying the memo on `processQuery` itself would invalidate it — and every
-downstream memo keyed on its result (`classifyLogColumns`/`computeFlexWidths` in `LogRenderer.tsx:335-345`,
-`availablePropertyKeys` in `useMetricsData.ts:115-121`) — on every render. `exhaustive-deps` is only
-`"warn"` in `reactHooks.configs.recommended`, so the narrowed deps plus the disable comment don't fail
-`yarn lint`. `ProcessPage.tsx:190-213`'s `properties`/`propertiesError` (the `:198` finding) is the same
-"no re-execution" case but sets two states with a `try/catch` parse branch and a trailing `else if
-(propertiesQuery.error)` arm; it converts to one `useMemo` returning `{ properties, propertiesError }`,
-destructured at the call site, preserving the parse-error and error-arm branches unchanged inside the memo
-body — still safe to recompute since `propertiesQuery` never re-executes either.
-
-**Re-executes — retain the last result, so these stay `useState` + effect (wrapped, not converted to
-`useMemo`).** `LogRenderer.tsx:329`'s `resultTable` and `ProcessLogPage.tsx:273`'s `rows` are read from
-queries that re-execute on filter/time-range/refresh changes; `useMetricsData.ts:80-111`'s `chartData`/
-`rawPropertiesData`/`propertyParseErrors` (three states from one loop, only `chartData`'s site is listed as
-`:106`) and `ProcessMetricsPage.tsx:242-274`'s identical three-state shape (`:268`) are the same
-re-executing case, and additionally multi-state (a single memo returning an object wouldn't help — the
-object itself would still get recomputed to empty mid-fetch). For all four of these, the existing effect
-body already only assigns when `isComplete && !error` holds and never clears on re-execute start, which is
-exactly what preserves the previous value today — so the fix is *not* a `useMemo` conversion but the same
-wrapped-effect treatment as sub-pattern (a): wrap the unchanged body in a function declared and invoked
-inside the effect (`const run = () => { /* unchanged body */ }; run()`), which satisfies the rule without
-touching the assign-only-on-completion logic that retention depends on. The already-present
-`// eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full
-hook object` comment on each of these effects is unaffected by the wrap.
+For all 8 sites across these 5 files, the existing effect body already only assigns when `isComplete &&
+!error` holds and never clears on re-execute start, which is exactly what preserves the previous value
+today — so the fix is *not* a `useMemo` conversion but the same wrapped-effect treatment as sub-pattern (a):
+wrap the unchanged body in a function declared and invoked inside the effect (`const run = () => { /*
+unchanged body */ }; run()`), which satisfies the rule without touching the assign-only-on-completion logic
+that retention depends on. The already-present `// eslint-disable-next-line react-hooks/exhaustive-deps --
+Only react to completion/error, not the full hook object` comment on each of these effects is unaffected by
+the wrap.
 
 `LogRenderer.tsx:329` also sets `hasLoaded` alongside `resultTable`; `ProcessLogPage.tsx:273` sets
 `hasLoaded` alongside `rows` at `:278`. Both `hasLoaded` latches are monotonic (gating the filter-change
@@ -530,9 +511,11 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
 
 1. `src/routes/ProcessesPage.tsx` — hoist `SortHeader` per Pattern 2a; update the 6 call sites.
 2. `src/lib/screen-renderers/cells/HgChildPane.tsx` — `meta.renderer` per Pattern 2b.
-3. `src/routes/ScreenPage.tsx` — `SCREEN_RENDERERS[screenType]` per Pattern 2b (import `SCREEN_RENDERERS`
-   from `screen-renderers/init`, not `index`, so the renderer-registration side effects stay in the module
-   graph); delete the now-unused `getRenderer` export from `screen-renderers/index.ts`.
+3. `src/routes/ScreenPage.tsx` — `const Renderer: ComponentType<ScreenRendererProps> | undefined =
+   SCREEN_RENDERERS[screenType]` per Pattern 2b (import `SCREEN_RENDERERS` from `screen-renderers/init`, not
+   `index`, so the renderer-registration side effects stay in the module graph; import `ComponentType` /
+   `ScreenRendererProps` if not already present), keeping the `if (!Renderer)` fallback backed by a real
+   type; delete the now-unused `getRenderer` export from `screen-renderers/index.ts`.
 4. Remove `'react-hooks/static-components': 'off',`.
 5. Per-commit gate (Testing Strategy); commit.
 
@@ -555,16 +538,16 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
 
 1. Sub-pattern (a) — wrap each reused loader's mount-effect call in an inline async IIFE, with a one-line
    comment stating why the wrap exists (`Sidebar.tsx`, `DataSourcesPage.tsx`, `MapsPage.tsx`,
-   `ScreensPage.tsx`); inline the loader body directly into the effect (no IIFE) for the one single-caller
-   loader (`ImportScreensPage.tsx`). Also wrap `auth.tsx:87-89`'s `checkAuth()` mount effect the same way —
-   the 34th `set-state-in-effect` site introduced by Commit 3's Pattern 3a rewrite (see Design).
-2. Sub-pattern (b) — two groups per Design: `ProcessPage.tsx`'s `process`/`statistics`/`properties`+
-   `propertiesError` (never re-execute) convert to `useMemo`; `LogRenderer.tsx`'s `resultTable`+`hasLoaded`,
-   `ProcessLogPage.tsx`'s `rows`+`hasLoaded`, `useMetricsData.ts`'s `chartData`/`rawPropertiesData`/
-   `propertyParseErrors`, and `ProcessMetricsPage.tsx:242-274`'s same three states (all of which re-execute
-   and must retain their last result) keep their `useState` and instead get the sub-pattern-(a)-style
-   wrapped-effect treatment; `ProcessMetricsPage.tsx:227` is not (b)-shaped either and gets the same wrap
+   `ScreensPage.tsx`, `ExportScreensPage.tsx`); inline the loader body directly into the effect (no IIFE) for
+   the one single-caller loader (`ImportScreensPage.tsx`). Also wrap `auth.tsx:87-89`'s `checkAuth()` mount
+   effect the same way — the 34th `set-state-in-effect` site introduced by Commit 3's Pattern 3a rewrite
    (see Design).
+2. Sub-pattern (b) — all 8 sites re-execute (per Design) and keep their `useState`, getting the
+   sub-pattern-(a)-style wrapped-effect treatment instead of a `useMemo` conversion: `ProcessPage.tsx`'s
+   `process`/`statistics`/`properties`+`propertiesError`, `LogRenderer.tsx`'s `resultTable`+`hasLoaded`,
+   `ProcessLogPage.tsx`'s `rows`+`hasLoaded`, `useMetricsData.ts`'s `chartData`/`rawPropertiesData`/
+   `propertyParseErrors`, and `ProcessMetricsPage.tsx:242-274`'s same three states; `ProcessMetricsPage.tsx:227`
+   is not (b)-shaped either and gets the same wrap (see Design).
 3. Sub-pattern (c) — remaining files: "adjust state when a prop changes" rewrite (`Sidebar.tsx`'s other 3
    sites, `MetricsRenderer.tsx`, `ImageCell.tsx:43` only, `CellEditor.tsx`, `XYChart.tsx`, `CustomRange.tsx`,
    `useDataSourceState.ts`, `NotebookRenderer.tsx`, `HorizontalGroupCell.tsx`, `LogCell.tsx`,
@@ -572,8 +555,7 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
    inline-function-wrap (returning the wrapper's invocation, with an explanatory comment) for
    `useFadeOnIdle.ts` and `ImageCell.tsx:55` (the blob-URL effect, which keeps its revoke cleanup).
 4. Remove `'react-hooks/set-state-in-effect': 'off',`.
-5. Per-commit gate (Testing Strategy); full CI (pay particular attention to `ProcessPage` tests, since only
-   its sub-pattern (b) sites change state shape from settable to derived); commit.
+5. Per-commit gate (Testing Strategy); full CI; commit.
 
 ### Commit 5 — `react-hooks/refs`, part 1: Pattern 4 mechanical moves
 
@@ -684,10 +666,12 @@ per-commit CI gate above does not apply to this commit.
   fetches whose loader can't be inlined without duplicating logic at another call site;
   `ProcessMetricsPage.tsx:227` — a router write plus conditional auto-selection, not a derivable value;
   `useFadeOnIdle.ts:17` and `ImageCell.tsx:55` — genuine effects with timer/object-URL cleanup that a
-  render-time rewrite can't replace; and the sub-pattern (b) re-executing sites (`LogRenderer.tsx`'s
-  `resultTable`/`hasLoaded`, `ProcessLogPage.tsx`'s `rows`/`hasLoaded`, `useMetricsData.ts`'s and
-  `ProcessMetricsPage.tsx:268`'s three-state extractions) — effects that must keep their previous result
-  across a re-execute, which a `useMemo` would blank. A reader should not "clean up" any of these wraps as
+  render-time rewrite can't replace; and the sub-pattern (b) re-executing sites (`ProcessPage.tsx`'s
+  `process`/`statistics`/`properties`+`propertiesError`, `LogRenderer.tsx`'s `resultTable`/`hasLoaded`,
+  `ProcessLogPage.tsx`'s `rows`/`hasLoaded`, `useMetricsData.ts`'s and `ProcessMetricsPage.tsx:268`'s
+  three-state extractions) — effects that must keep their previous result across a re-execute (`ProcessPage`'s
+  refresh button, `:324`, calls `execute` on all three of its queries directly, bypassing the mount-only
+  `hasLoadedRef` latch), which a `useMemo` would blank. A reader should not "clean up" any of these wraps as
   pointless indirection; each one is load-bearing for satisfying the rule.
 - **`useNotebookVariables.ts`'s ref→state conversion (Pattern 5) is the one non-mechanical change in the
   whole plan.** It's also the largest single cluster (11 of 60 `refs` findings), so it can't be deferred to
@@ -728,8 +712,3 @@ per-commit CI gate above does not apply to this commit.
   orthographic camera modes (exercises `useMapOrbitController`'s Pattern 4 rewrite and
   `PerspectiveCameraController`'s reset-view fix), and a notebook screen with a variable cell whose
   default/value tracking was touched by Pattern 5.
-- Sub-pattern (b)'s `useMemo` conversions (Commit 4, `ProcessPage.tsx`'s `process`/`statistics`/`properties`/
-  `propertiesError` only — the re-executing sites keep their setters, see Design) change state shape from
-  settable to derived; confirm no other code in the touched files calls the removed setters (a
-  `grep -n 'setProcess\|setStatistics\|setProperties\|...'` sweep of each file being converted) before
-  deleting them.
