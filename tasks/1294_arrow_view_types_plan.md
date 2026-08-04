@@ -6,7 +6,7 @@
 
 Notebook cells fail with `Unrecognized type: "undefined" (24)` whenever a query returns an Arrow
 `Utf8View` column — which modern DataFusion produces from ordinary string functions (`LEFT(...)`,
-`replace(...)`). The cause is entirely client-side: `analytics-web-app` pins `apache-arrow@^21.1.0`,
+`replace(...)`). The cause is entirely client-side: `analytics-web-app` pinned `apache-arrow@^21.1.0`,
 which has no notion of Arrow type ids 23/24. Support was merged into arrow-js on 2025-11-19
 ([apache/arrow-js#320](https://github.com/apache/arrow-js/pull/320)) and shipped in **21.2.0 on
 2026-07-21**, so the decode fix is a dependency bump. A second, separate defect survives the bump:
@@ -96,9 +96,10 @@ No `arrow_cast(..., 'Utf8')` view-type workaround exists in the repo to remove.
 
 ### Working-tree state
 
-The dependency bump has already been trialled in the working tree (uncommitted):
-`package.json` + `yarn.lock` moved to `apache-arrow@21.2.0`. `yarn test` (64 files / 1273 tests) and
-`yarn type-check` pass, and the tree shrinks by 20 packages / ~468 KiB. No source change yet.
+The dependency bump already landed on this branch in commit `b4aef408a` ("Bump apache-arrow to
+21.2.0 for Utf8View/BinaryView decode support (#1294)"): `package.json` + `yarn.lock` moved to
+`apache-arrow@21.2.0`. `yarn test` (64 files / 1273 tests) and `yarn type-check` pass, and the tree
+shrinks by 20 packages / ~468 KiB. No source change yet.
 
 ## Design
 
@@ -137,13 +138,15 @@ Dictionary-wrapped view types (`Dictionary<_, Utf8View>`) are not something Data
 
 ### 3. Out of scope, deliberately
 
-`ListView` / `LargeListView` (ids 22/23-adjacent) are still unimplemented in arrow-js 21.2.0 and are
-not produced by the functions in this issue; no attempt to handle them.
+`RunEndEncoded` (id 22), `ListView` (id 25), and `LargeListView` (id 26) have no entry at all in
+arrow-js 21.2.0's `Type` enum (`node_modules/apache-arrow/enum.d.ts:55-57` jumps from
+`LargeList = 21` straight to `BinaryView = 23`) and are not produced by the functions in this issue;
+no attempt to handle them.
 
 ## Implementation Steps
 
-1. **Bump the dependency.** `analytics-web-app/`: `yarn up apache-arrow@^21.2.0` (already present in
-   the working tree — verify `package.json:28` reads `^21.2.0` and `yarn.lock` resolves 21.2.0).
+1. **Bump the dependency (already landed).** Done in commit `b4aef408a` — verify `package.json:28`
+   reads `^21.2.0` and `yarn.lock` resolves 21.2.0; no further edit needed here.
 2. **Make the predicates view-aware.** `src/lib/arrow-utils.ts`: extend `isStringType` (`:139-141`)
    with `DataType.isUtf8View(t)` and `isBinaryType` (`:159-166`) with `DataType.isBinaryView(inner)`
    — both already imported via `DataType`, no new import needed. Update the doc comments on both to
@@ -151,16 +154,19 @@ not produced by the functions in this issue; no attempt to handle them.
    its hand-rolled `apache-arrow` mock, which has no `isUtf8View`/`isBinaryView` statics — see step 6
    for the required mock update, which must land together with this step so the existing suite keeps
    passing.
-3. **Fixtures.** `src/lib/__tests__/arrow-ipc-fixtures.ts`: add a `createViewTypeIpc(...)` alongside
-   `createDictionaryFramedIpc` (`:103`) and `createPlainFramedIpc` (`:154`), returning both the raw
-   IPC bytes and the framed chunks, e.g. `{ raw, chunks }` — the framed `chunks` reuse the existing
-   `splitIpcMessages` framing for the streaming-path test (step 4), while the raw bytes are what
-   step 5 needs directly, since `combineChunks` concatenates the JSON frame lines together with the
-   message bytes and the result is not valid input to `tableFromIPC`. Build the table with
+3. **Fixtures.** `src/lib/__tests__/arrow-ipc-fixtures.ts`: add
+   `createViewTypeIpc({ compressed }: { compressed: boolean }) => { raw, chunks }` alongside
+   `createDictionaryFramedIpc` (`:103`) and `createPlainFramedIpc` (`:154`) — the `compressed` flag
+   picks LZ4_FRAME vs. no compression for that single call, so step 4 and step 5 each call it twice
+   (once with `compressed: false`, once with `compressed: true`) to get all four artifacts they need.
+   The returned `chunks` reuse the existing `splitIpcMessages` framing for the streaming-path test
+   (step 4), while `raw` is what step 5 needs directly, since `combineChunks` concatenates the JSON
+   frame lines together with the message bytes and the result is not valid input to `tableFromIPC`.
+   Build the table with
    `vectorFromArray(values, new Utf8View())` and a `BinaryView` column, and include **both** a short
    inline value (≤12 bytes) and a long out-of-line value (>12 bytes, which forces a variadic data
    buffer) plus a null — that trio is what distinguishes a real decode from a lucky one. Emit through
-   `RecordBatchStreamWriter.writeAll(table, { compressionType: CompressionType.LZ4_FRAME }).toUint8Array(true)`
+   `RecordBatchStreamWriter.writeAll(table, compressed ? { compressionType: CompressionType.LZ4_FRAME } : {}).toUint8Array(true)`
    — the constructor only takes an options object, not the table; `writeAll` is the static entry point
    that builds and finishes the writer, and is verified working end-to-end through the existing
    `splitIpcMessages` framing. Register a single codec on `compressionRegistry` covering both
@@ -173,13 +179,14 @@ not produced by the functions in this issue; no attempt to handle them.
    the writer tries to encode. Registering inside the factory (called from each test, or from a
    `beforeEach`/`beforeAll`) guarantees the fixture's `{ encode, decode }` pair always applies last,
    regardless of import order. arrow-js computes the variadic-buffer length prefixes itself;
-   `lz4js.compress` and `lz4js.decompress` are already declared in `src/types/lz4js.d.ts`. This
-   matches what `stream_query.rs:296-297` actually produces; keep an uncompressed variant alongside it
-   for the plain-IPC case.
+   `lz4js.compress` and `lz4js.decompress` are already declared in `src/types/lz4js.d.ts`. The
+   `compressed: true` call matches what `stream_query.rs:296-297` actually produces; the
+   `compressed: false` call covers the plain-IPC case (the uncompressed wasm output in step 5).
 4. **Streaming-path test.** New `src/lib/__tests__/arrow-stream-view-types.test.ts` (or a
    `describe` block in `arrow-stream-dictionary.test.ts`, which already has the mock-fetch/
-   `createMockStream` harness): drive `streamQuery` over both the compressed and uncompressed step-3
-   fixtures split across chunk boundaries, assert the schema frame arrives with `Utf8View`/
+   `createMockStream` harness): drive `streamQuery` over both `createViewTypeIpc({ compressed: false }).chunks`
+   and `createViewTypeIpc({ compressed: true }).chunks` split across chunk boundaries, assert the
+   schema frame arrives with `Utf8View`/
    `BinaryView` fields and that the batch values round-trip through the LZ4 codec registered by the
    step-3 fixture (which wraps the same `lz4js.decompress` `arrow-compression.ts:10` uses for decode —
    note the fixture's `compressionRegistry.set()` call replaces that production registration for the
@@ -187,8 +194,8 @@ not produced by the functions in this issue; no attempt to handle them.
    test for the reported error over the exact framing and compression the server uses.
 5. **Whole-buffer-path test.** In `src/lib/__tests__/arrow-ipc-fixtures.test.ts` (or alongside it),
    add two cases that call the real `tableFromIPC` directly on the raw (unframed) IPC bytes returned
-   by step 3's `createViewTypeIpc(...)` — one over the uncompressed `raw` buffer, one over the
-   LZ4_FRAME-compressed `raw` buffer — and assert the decode
+   by step 3's fixture — one over `createViewTypeIpc({ compressed: false }).raw`, one over
+   `createViewTypeIpc({ compressed: true }).raw` — and assert the decode
    succeeds and values round-trip in both. This must live where `apache-arrow` is not mocked:
    `useCellExecution.test.ts:35-65` has a blanket `vi.mock('apache-arrow', …)` whose
    `tableFromIPC: () => new MockTable([{}])` ignores its input entirely, so a case added there would
@@ -217,8 +224,8 @@ not produced by the functions in this issue; no attempt to handle them.
 
 ## Files to Modify
 
-- `analytics-web-app/package.json` — dependency bump (done, uncommitted)
-- `analytics-web-app/yarn.lock` — lockfile (done, uncommitted)
+- `analytics-web-app/package.json` — dependency bump (done, commit `b4aef408a`)
+- `analytics-web-app/yarn.lock` — lockfile (done, commit `b4aef408a`)
 - `analytics-web-app/src/lib/arrow-utils.ts` — view-aware `isStringType` / `isBinaryType`
 - `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` — view-type fixture (compressed + uncompressed)
 - `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.test.ts` — whole-buffer `tableFromIPC` cases, uncompressed (wasm-path) and compressed (server-path via `fetchQueryIPC`), real library
@@ -251,6 +258,11 @@ No Rust changes. No changes to `arrow-stream.ts`, `arrow-compression.ts`, or `st
   web path, but still misses the wasm path and adds a per-batch copy on the hot streaming path.
 - **`yarn patch` on 21.1.0.** Was the only option before 21.2.0 existed; pointless now.
 
+**Follow-up.** Watch whether other Arrow types DataFusion 54 can return (`RunEndEncoded`, `ListView`,
+`LargeListView`) show up in practice — arrow-js 21.2.0 still doesn't decode them (see Design §3), and
+they would surface as the same `Unrecognized type` error. Out of scope here; worth its own issue if
+it ever appears.
+
 ## Documentation
 
 `CHANGELOG.md` only. No documentation page describes the web app's supported Arrow types or an
@@ -279,7 +291,4 @@ dictionary-unwrapping swimlane example described in Current State and must be le
 
 ## Open Questions
 
-None blocking. One thing to keep an eye on: whether other Arrow types DataFusion 54 can return
-(`RunEndEncoded`, `ListView`) show up in practice — arrow-js 21.2.0 still doesn't decode them, and
-they would surface as the same `Unrecognized type` error. Out of scope here; worth its own issue if
-it ever appears.
+None.
