@@ -52,6 +52,23 @@ impl FakeExec {
         })
     }
 
+    /// A leaf that also reports spill metrics, as a real spilling operator
+    /// (e.g. `ExternalSorter`) would. The `0` argument to `spill_count`/
+    /// `spilled_bytes` is the partition index, per the existing
+    /// `.output_rows(0)` convention -- not a value.
+    fn spilling_leaf(spill_count: usize, spilled_bytes: usize) -> Arc<dyn ExecutionPlan> {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).spill_count(0).add(spill_count);
+        MetricBuilder::new(&metrics)
+            .spilled_bytes(0)
+            .add(spilled_bytes);
+        Arc::new(Self {
+            children: vec![],
+            metrics,
+            properties: fake_properties(),
+        })
+    }
+
     fn node(
         children: Vec<Arc<dyn ExecutionPlan>>,
         output_rows: Option<usize>,
@@ -150,6 +167,23 @@ fn aggregate_scan_metrics_ignores_output_rows_on_non_root_nodes() {
     assert_eq!(scan.output_rows, None);
 }
 
+#[test]
+fn aggregate_scan_metrics_sums_spill_metrics_across_the_tree() {
+    // root -> [spilling_leaf(spill_count=2, spilled_bytes=1000), spilling_leaf(spill_count=3, spilled_bytes=2000)]
+    // Non-zero, distinct values on two different non-root nodes are essential: they are
+    // what makes a broken `sum_by_name`-based implementation (which returns `false`,
+    // hence `0`, for `SpillCount`/`SpilledBytes`) actually fail this test instead of
+    // coincidentally matching.
+    let left = FakeExec::spilling_leaf(2, 1000);
+    let right = FakeExec::spilling_leaf(3, 2000);
+    let root = FakeExec::node(vec![left, right], None);
+
+    let scan = aggregate_scan_metrics(root.as_ref());
+
+    assert_eq!(scan.spill_count, 5);
+    assert_eq!(scan.spilled_bytes, 3000);
+}
+
 fn full_record(sql: &str) -> QueryAuditRecord {
     QueryAuditRecord {
         client: "python".to_string(),
@@ -171,6 +205,9 @@ fn full_record(sql: &str) -> QueryAuditRecord {
         error: None,
         output_rows: Some(123),
         bytes_scanned: 4096,
+        peak_memory_bytes: 8192,
+        spilled_bytes: 0,
+        spill_count: 0,
     }
 }
 
@@ -197,6 +234,9 @@ fn query_audit_record_serializes_required_fields() {
     assert_eq!(value["status"], "ok");
     assert_eq!(value["output_rows"], 123);
     assert_eq!(value["bytes_scanned"], 4096);
+    assert_eq!(value["peak_memory_bytes"], 8192);
+    assert_eq!(value["spilled_bytes"], 0);
+    assert_eq!(value["spill_count"], 0);
 }
 
 #[test]
@@ -221,6 +261,9 @@ fn query_audit_record_omits_absent_optionals() {
         error: Some("boom".to_string()),
         output_rows: None,
         bytes_scanned: 0,
+        peak_memory_bytes: 0,
+        spilled_bytes: 0,
+        spill_count: 0,
     };
 
     let json = serde_json::to_string(&record).expect("serialization should succeed");
@@ -239,6 +282,9 @@ fn query_audit_record_omits_absent_optionals() {
     assert_eq!(value["status"], "error");
     assert_eq!(value["error"], "boom");
     assert_eq!(value["bytes_scanned"], 0);
+    assert_eq!(value["peak_memory_bytes"], 0);
+    assert_eq!(value["spilled_bytes"], 0);
+    assert_eq!(value["spill_count"], 0);
 }
 
 #[test]

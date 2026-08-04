@@ -6,6 +6,11 @@
 //! metrics (whose `PropertySet` can't carry high-cardinality values such as
 //! SQL text), a free-text log `msg` has no cardinality constraint, so it can
 //! carry both attribution and cost in one self-contained, queryable record.
+//!
+//! `peak_memory_bytes`/`spilled_bytes`/`spill_count` complement the cost
+//! fields above: the peak comes from the query's `ScopedMemoryPool` (see
+//! `micromegas_analytics::lakehouse::scoped_memory_pool`), while the spill
+//! counters are summed from the physical plan tree, same as `bytes_scanned`.
 
 use datafusion::physical_plan::ExecutionPlan;
 
@@ -13,11 +18,18 @@ use datafusion::physical_plan::ExecutionPlan;
 pub struct ScanMetrics {
     pub output_rows: Option<u64>,
     pub bytes_scanned: u64,
+    pub spilled_bytes: u64,
+    pub spill_count: u64,
 }
 
 /// Walk the physical-plan tree: `output_rows` from the root node (final result
-/// grain), `bytes_scanned` summed across every node (leaf `DataSourceExec`
-/// nodes carry it).
+/// grain), `bytes_scanned`/`spilled_bytes`/`spill_count` summed across every
+/// node (leaf `DataSourceExec` nodes carry `bytes_scanned`; spilling operators
+/// such as `ExternalSorter` carry the other two). `sum_by_name` cannot be used
+/// for the spill counters: `MetricsSet::sum_by_name` explicitly returns
+/// `false` for `MetricValue::SpillCount`/`SpilledBytes`, so it would silently
+/// report zero; the dedicated `MetricsSet::spill_count()`/`spilled_bytes()`
+/// accessors are used instead.
 pub fn aggregate_scan_metrics(plan: &dyn ExecutionPlan) -> ScanMetrics {
     fn sum_bytes(plan: &dyn ExecutionPlan) -> u64 {
         let mut total = plan
@@ -30,12 +42,34 @@ pub fn aggregate_scan_metrics(plan: &dyn ExecutionPlan) -> ScanMetrics {
         }
         total
     }
+    fn sum_spills(plan: &dyn ExecutionPlan) -> (u64, u64) {
+        let metrics = plan.metrics();
+        let mut spilled_bytes = metrics
+            .as_ref()
+            .and_then(|m| m.spilled_bytes())
+            .map(|v| v as u64)
+            .unwrap_or(0);
+        let mut spill_count = metrics
+            .as_ref()
+            .and_then(|m| m.spill_count())
+            .map(|v| v as u64)
+            .unwrap_or(0);
+        for child in plan.children() {
+            let (child_bytes, child_count) = sum_spills(child.as_ref());
+            spilled_bytes += child_bytes;
+            spill_count += child_count;
+        }
+        (spilled_bytes, spill_count)
+    }
+    let (spilled_bytes, spill_count) = sum_spills(plan);
     ScanMetrics {
         output_rows: plan
             .metrics()
             .and_then(|m| m.output_rows())
             .map(|r| r as u64),
         bytes_scanned: sum_bytes(plan),
+        spilled_bytes,
+        spill_count,
     }
 }
 
@@ -70,4 +104,7 @@ pub struct QueryAuditRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_rows: Option<u64>,
     pub bytes_scanned: u64,
+    pub peak_memory_bytes: u64,
+    pub spilled_bytes: u64,
+    pub spill_count: u64,
 }

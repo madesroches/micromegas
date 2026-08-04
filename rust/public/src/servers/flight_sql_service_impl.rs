@@ -36,6 +36,8 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::runtime::scoped_runtime;
+use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
@@ -99,6 +101,10 @@ struct QueryAuditState {
     /// still `None` for a record emitted on a setup failure that happens
     /// before that point.
     plan: Option<Arc<dyn ExecutionPlan>>,
+    /// This query's per-query memory-pool wrapper; owned from construction so
+    /// `emit()` can read its peak on every terminal path, including setup
+    /// failures.
+    pool: Arc<ScopedMemoryPool>,
 }
 
 impl QueryAuditState {
@@ -117,8 +123,12 @@ impl QueryAuditState {
             None => ScanMetrics {
                 output_rows: None,
                 bytes_scanned: 0,
+                spilled_bytes: 0,
+                spill_count: 0,
             },
         };
+        let peak_memory_bytes = self.pool.peak() as u64;
+        imetric!("query_peak_memory_bytes", "bytes", peak_memory_bytes);
         let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
         let record = QueryAuditRecord {
             client: self.client.clone(),
@@ -140,6 +150,9 @@ impl QueryAuditState {
             error,
             output_rows: scan.output_rows,
             bytes_scanned: scan.bytes_scanned,
+            peak_memory_bytes,
+            spilled_bytes: scan.spilled_bytes,
+            spill_count: scan.spill_count,
         };
         match serde_json::to_string(&record) {
             Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
@@ -341,12 +354,19 @@ impl FlightSqlServiceImpl {
             );
         }
 
+        // The per-query memory-pool wrapper is infallible to construct, so it's built
+        // before `audit_state` and owned by it from the start -- every subsequent
+        // setup failure (session context, planning, limit, physical plan, stream
+        // construction) can then still emit an "error" audit record carrying whatever
+        // peak the pool had accrued by that point, instead of silently disappearing on
+        // an early `?` return.
+        let scoped_pool = Arc::new(ScopedMemoryPool::new(
+            self.lakehouse.runtime().memory_pool.clone(),
+        ));
+
         // Attribution is resolved from here on, so build the audit state now
         // (durations/limit/plan filled in as they become known) instead of
-        // only after the physical plan exists. This lets every subsequent
-        // setup failure (session context, planning, limit, physical plan,
-        // stream construction) still emit an "error" audit record instead of
-        // silently disappearing on an early `?` return.
+        // only after the physical plan exists.
         let mut audit_state = QueryAuditState {
             client: client_type.to_string(),
             user: attr.user_id.clone(),
@@ -364,13 +384,25 @@ impl FlightSqlServiceImpl {
             setup_ms: 0.0,
             request_start,
             plan: None,
+            pool: scoped_pool.clone(),
         };
+
+        // Build a `RuntimeEnv`/`LakehouseContext` scoped to this query's memory-pool
+        // wrapper, so every session context created from it (including nested ones,
+        // e.g. Perfetto trace queries and JIT materialization) attributes its memory
+        // to this query alone instead of the process-shared pool.
+        let scoped_env =
+            scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone()).map_err(|e| {
+                audit_state.emit("error", Some(format!("error building scoped runtime: {e}")));
+                status!("error building scoped runtime", e)
+            })?;
+        let lakehouse = self.lakehouse.with_runtime(scoped_env);
 
         // Session context creation phase
         let session_begin = now();
         let session_begin_instant = Instant::now();
         let ctx = make_session_context(
-            self.lakehouse.clone(),
+            lakehouse,
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
