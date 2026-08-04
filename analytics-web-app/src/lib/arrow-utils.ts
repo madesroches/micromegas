@@ -421,7 +421,7 @@ export function extractMultiSeriesChartData(
         const yVal = row[v.yColumnName]
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
-        if (isNaN(yNum)) continue
+        if (!Number.isFinite(yNum)) continue
         data.push({ x: 0, y: yNum }) // placeholder x; rebuilt below
       }
     } else {
@@ -438,7 +438,7 @@ export function extractMultiSeriesChartData(
           xNum = Number(xVal)
         }
         const yNum = Number(yVal)
-        if (isNaN(xNum) || isNaN(yNum)) continue
+        if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
         const point: ChartPoint = { x: xNum, y: yNum }
         if (v.colorColumnName && v.colorColumnKind) {
@@ -470,7 +470,9 @@ export function extractMultiSeriesChartData(
         const row = table.get(r)
         if (!row) continue
         const xVal = row[v.xColumnName]
-        if (xVal == null) continue
+        const yVal = row[v.yColumnName]
+        if (xVal == null || yVal == null) continue
+        if (!Number.isFinite(Number(yVal))) continue
         const str = String(xVal)
         if (!labelMap.has(str)) {
           labelMap.set(str, xLabels.length)
@@ -498,7 +500,7 @@ export function extractMultiSeriesChartData(
         const yVal = row[v.yColumnName]
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
-        if (isNaN(yNum)) continue
+        if (!Number.isFinite(yNum)) continue
         const str = String(xVal)
         const idx = labelMap.get(str)
         if (idx == null) continue
@@ -564,7 +566,7 @@ export function extractChartData(table: Table):
       const str = String(xVal)
       const yNum = Number(yVal)
 
-      if (isNaN(yNum)) continue
+      if (!Number.isFinite(yNum)) continue
 
       if (!labelMap.has(str)) {
         labelMap.set(str, xLabels.length)
@@ -583,7 +585,7 @@ export function extractChartData(table: Table):
     }
 
     if (data.length === 0) {
-      return { ok: false, error: 'No valid data points (all values are null)' }
+      return { ok: false, error: 'No valid data points (all values are null or non-finite)' }
     }
 
     // Categorical: preserve SQL order (don't sort)
@@ -610,7 +612,7 @@ export function extractChartData(table: Table):
 
       const yNum = Number(yVal)
 
-      if (isNaN(xNum) || isNaN(yNum)) continue
+      if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
       const point: ChartPoint = { x: xNum, y: yNum }
       if (colorColumnName && colorColumnKind) {
@@ -624,7 +626,7 @@ export function extractChartData(table: Table):
     }
 
     if (data.length === 0) {
-      return { ok: false, error: 'No valid data points (all values are null)' }
+      return { ok: false, error: 'No valid data points (all values are null or non-finite)' }
     }
 
     // Time/numeric: sort by X ascending (uPlot requirement)

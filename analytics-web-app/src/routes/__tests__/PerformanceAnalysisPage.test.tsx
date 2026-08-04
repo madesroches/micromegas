@@ -67,16 +67,32 @@ vi.mock('@/components/layout', () => ({
   ),
 }))
 
+// Captures the `data` prop MetricsChart is rendered with, so tests can assert
+// on the chart points that survived extraction (e.g. non-finite filtering).
 vi.mock('@/components/MetricsChart', () => ({
-  MetricsChart: () => <div data-testid="metrics-chart" />,
+  MetricsChart: ({ data }: { data: { time: number; value: number }[] }) => (
+    <div data-testid="metrics-chart" data-points={JSON.stringify(data)} />
+  ),
 }))
 
 vi.mock('@/components/ThreadCoverageTimeline', () => ({
   ThreadCoverageTimeline: () => <div data-testid="thread-coverage" />,
 }))
 
+// Captures `onRun` (mirroring the PageLayout mock's onRefresh/onTimeRangeChange
+// pattern above) so tests can drive a custom query through the real
+// `loadCustomQuery` path in `PerformanceMetricsChart`.
 vi.mock('@/components/QueryEditor', () => ({
-  QueryEditor: () => <div data-testid="query-editor" />,
+  QueryEditor: ({ onRun }: { onRun?: (sql: string) => void }) => (
+    <div data-testid="query-editor">
+      <button
+        data-testid="trigger-run-query"
+        onClick={() => onRun?.('CUSTOM_INFINITY_TEST')}
+      >
+        run query
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('@/lib/perfetto-trace', () => ({
@@ -131,10 +147,11 @@ vi.mock('@/lib/arrow-stream', () => ({
   executeStreamQuery: (...args: unknown[]) => executeStreamQuery(...args),
 }))
 
-function classifySql(sql: string): 'discovery' | 'coverage' | 'count' | 'other' {
+function classifySql(sql: string): 'discovery' | 'coverage' | 'count' | 'custom' | 'other' {
   if (sql.includes('DISTINCT name')) return 'discovery'
   if (sql.includes('event_count')) return 'count'
   if (sql.includes('begin_time') && sql.includes("array_has")) return 'coverage'
+  if (sql.includes('CUSTOM_INFINITY_TEST')) return 'custom'
   return 'other'
 }
 
@@ -188,6 +205,18 @@ beforeEach(() => {
         return {
           schema: null,
           batches: [fakeBatch([{ event_count: 42 }])],
+          error: null,
+        }
+      case 'custom':
+        return {
+          schema: null,
+          batches: [
+            fakeBatch([
+              { time: 1000, value: 10 },
+              { time: 2000, value: Infinity },
+              { time: Infinity, value: 30 },
+            ]),
+          ],
           error: null,
         }
       default:
@@ -258,6 +287,22 @@ describe('PerformanceAnalysisPage orchestration', () => {
       const c = callsByKind()
       expect(c.discovery).toBe(1)
       expect(c.coverage).toBe(1)
+    })
+  })
+
+  it('custom query drops rows with non-finite time/value (issue #1424)', async () => {
+    renderPage()
+    await waitFor(() => expect(callsByKind().discovery).toBe(1))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('trigger-run-query'))
+    })
+
+    await waitFor(() => {
+      const points = JSON.parse(
+        screen.getByTestId('metrics-chart').getAttribute('data-points') || '[]'
+      )
+      expect(points).toEqual([{ time: 1000, value: 10 }])
     })
   })
 })
