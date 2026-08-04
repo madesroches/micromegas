@@ -242,9 +242,28 @@ The Grafana plugin requires both Node.js and Go:
 
 **Prerequisites:**
 - Node.js 22+ (matches `grafana/.nvmrc` and the `grafana-plugin` CI workflow; Yarn 4 requires ≥18.12)
-- Go 1.23+ (for backend plugin)
+- Go 1.25+ (matches `grafana/go.mod` and the `grafana-plugin` CI workflow's `go-version: '1.25'`)
 - `corepack enable` — activates the pinned Yarn version (run once per machine)
 - mage (for Go builds): `go install github.com/magefile/mage@latest`
+
+!!! note "`mage coverage` needs a `covdata` binary in GOROOT"
+    If your system Go is older than `grafana/go.mod`'s version, `GOTOOLCHAIN=auto`
+    downloads a matching toolchain automatically — but that auto-downloaded
+    toolchain ships a trimmed tool set (`asm cgo compile cover link preprofile
+    vet` only) and omits `covdata`, `pprof`, `trace`, and others. `go test
+    -coverpkg ./...` (which `mage coverage` runs) needs `covdata` to merge
+    coverage across packages, and unlike the interactive `go tool covdata`
+    command, its internal invocation does not fall back to building the tool
+    on demand — it fails with `go: no such tool "covdata"` even though every
+    individual test passes. Installing a Go SDK that already satisfies
+    `go.mod` (so no toolchain auto-download is needed) doesn't fully fix this
+    either, since even the official `go1.25.x` tarball omits a prebuilt
+    `covdata`. Build it once into your GOROOT:
+    ```bash
+    GOROOT=$(go env GOROOT)
+    cd "$GOROOT/src/cmd/covdata"
+    go build -o "$GOROOT/pkg/tool/$(go env GOOS)_$(go env GOARCH)/covdata" .
+    ```
 
 **Development workflow:**
 ```bash
