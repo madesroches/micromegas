@@ -42,7 +42,11 @@ export function PerspectiveCameraController({
   // mapScene is fixed for the controller's mount lifetime (MapViewer keys the
   // mode on mapUrl), but the hook and handlers read it through a ref.
   const mapSceneRef = useRef<THREE.Object3D>(mapScene)
-  mapSceneRef.current = mapScene
+  // useLayoutEffect (not useEffect): refs are attached during commit —
+  // before any effect fires — matching useMapOrbitController's ordering.
+  useLayoutEffect(() => {
+    mapSceneRef.current = mapScene
+  })
 
   const { targetRef, sphericalRef } = useMapOrbitController<THREE.PerspectiveCamera>({
     cameraRef,
