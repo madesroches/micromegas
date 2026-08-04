@@ -14,7 +14,17 @@ preserved). The non-obvious part is that reordering blocks by event time breaks 
 the reorder makes easy to miss: JIT partitions' `insert_time` ranges must stay non-overlapping, or
 the `lakehouse_partitions_no_overlap` exclusion constraint rejects the write. The design therefore
 pairs event-time ordering with *insert-safe cut points*, and scopes the ordering change to the two
-views that need it.
+views that need it. This is also the gap in the issue's proposed fix (`ORDER BY begin_ticks,
+block_id` in SQL): reordering alone converts the read-time export failure into a write-time
+exclusion-constraint failure on the ~10% of streams where an inversion straddles a cut point.
+
+A second requirement shapes the cut rule: **write-time memory is proportional to partition size**.
+`thread_spans_view::write_partition` holds an entire partition's rows in one `SpanRecordBuilder`, so
+the cut rule should keep partitions near `max_nb_objects` even when inversions make the natural cut
+point unsafe. `max_nb_objects` is a *soft* limit applied at whole-block granularity — a block is
+never split, so a single oversized block already exceeds it today — and stays soft here: the cut
+rule prefers moving a cut *earlier* (look-back) over deferring it, and warns loudly when overshoot
+happens anyway.
 
 ## Current State
 
@@ -43,6 +53,14 @@ retry/backoff), so two consecutive blocks of one thread stream can be registered
 Measured on one thread stream over ~2.5 minutes: **430 blocks, 6 event-time inversions** (~1.4%).
 Inversions are local — the observed pairs are ~12 ms apart in insert time and adjacent in event time
 (`B.end_ticks == A.begin_ticks`).
+
+The *measured* inversions are local, but the mechanism does not bound them. One slow or retried
+upload gives a single block a late `insert_time` while keeping its early event position — a
+*straggler* whose inversion window is the length of its delay, not milliseconds. With
+`HttpSinkConfig`'s defaults that window is roughly bounded — traces get 2 attempts × 10 s
+`request_timeout` plus ~10 ms backoff (`http_event_sink.rs`), so ~20 s — but the config is
+caller-tunable and the Unreal sink sets no socket timeout at all, so the design treats the inversion
+window as unbounded rather than relying on sink defaults.
 
 ### The three failures this causes today
 
@@ -153,49 +171,63 @@ Both `generate_*_jit_partitions_segment` functions collect their record batches 
 *stable* sort on `(begin_ticks, end_ticks)`, so ties break on `(insert_time, block_id)` and grouping
 is deterministic.
 
-### 3. Insert-safe cut points
+### 3. Insert-safe cut points and look-back cuts
 
 A cut before block `i` is legal only if every block already in the current partition was inserted no
-later than every remaining block. Precompute suffix minima of `insert_time` and test that before
-cutting:
+later than every remaining block. Precompute suffix minima of `insert_time` — **after** the
+event-time sort; computing them over the SQL order would be wrong and the code shape makes that
+mistake easy — and use them for two things: cut at `i` when that is safe, otherwise fall back to the
+most recent safe index (look-back). `max_nb_objects` remains what it is today: a soft limit at
+whole-block granularity. Blocks are never split, and when no safe cut point exists the window grows
+past the limit and warns, exactly as a single oversized block does.
 
 ```rust
-// suffix_min[i] = min(insert_time of blocks[i..]);  suffix_min[n] = DateTime::<Utc>::MAX_UTC
-let mut out = vec![];
-let mut start = 0usize;
-let mut nb_objects = 0i64;
-let mut prefix_max_insert = DateTime::<Utc>::MIN_UTC;   // max insert_time of blocks[start..i]
-
+// suffix_min[i] = min(insert_time of blocks[i..]) over the event-time-sorted list;
+// suffix_min[n] = DateTime::<Utc>::MAX_UTC.
+// A cut at index j is *safe* iff prefix_max(start..j) <= suffix_min[j]: the emitted
+// partition's insert range then cannot overlap any later partition's, so the
+// lakehouse_partitions_no_overlap exclusion constraint cannot reject a later insert.
 for i in 0..n {
-    let block_nb = blocks[i].block.nb_objects as i64;
-    let full = nb_objects + block_nb > config.max_nb_objects && i > start;
-    // Cutting here would give blocks[start..i] an insert range ending at prefix_max_insert and
-    // every later partition an insert range starting at >= suffix_min[i]. Only cut when those
-    // cannot overlap, or the lakehouse_partitions_no_overlap exclusion constraint rejects the
-    // second insert.
-    if full && prefix_max_insert <= suffix_min[i] {
-        out.push(make_partition(&blocks[start..i], nb_objects));
-        start = i;
-        nb_objects = 0;
-        prefix_max_insert = DateTime::<Utc>::MIN_UTC;
-    } else if full {
-        // deferred cut: count it, warn once per partition below
+    let safe_here = prefix_max_insert <= suffix_min[i];
+    if safe_here && i > start {
+        last_safe = Some(i);  // also remembers nb_objects of blocks[start..i]
     }
-    nb_objects += block_nb;
-    prefix_max_insert = prefix_max_insert.max(blocks[i].block.insert_time);
+    let full = nb_objects + block_nb(i) > config.max_nb_objects && i > start;
+    if full {
+        if safe_here {
+            cut_at(i);            // partition = blocks[start..i], <= max_nb_objects
+        } else if let Some(j) = last_safe {
+            cut_at(j);            // look-back: partition = blocks[start..j], < max_nb_objects;
+                                  // blocks[j..=i] re-seed the window and the running state
+                                  // (nb_objects, prefix_max_insert, last_safe) is recomputed
+                                  // over that short tail
+        } else {
+            deferred += 1;        // no safe cut point exists anywhere in this window:
+                                  // grow past the soft limit, warn below
+        }
+    }
+    // push block i into the current window; update nb_objects, prefix_max_insert
 }
-if start < n {
-    out.push(make_partition(&blocks[start..n], nb_objects));
-}
+// emit the final window
 ```
 
 Properties:
 
-- Under `BlockOrder::InsertTime` the guard is always satisfied (`prefix_max_insert ==
-  blocks[i-1].insert_time <= blocks[i].insert_time == suffix_min[i]`), so behavior is **bit-identical
-  to today** for the five untouched views.
-- Under `BlockOrder::EventTime` a deferred cut costs one or two extra blocks in practice (observed
-  inversions are adjacent, ~12 ms apart).
+- Under `BlockOrder::InsertTime` every index is safe (`prefix_max_insert ==
+  blocks[i-1].insert_time <= blocks[i].insert_time == suffix_min[i]`), so `full` always cuts at `i`
+  and behavior is **bit-identical to today** for the five untouched views.
+- Under `BlockOrder::EventTime` with the measured local inversions, a cut occasionally moves by one
+  or two blocks in either direction; partition sizes stay at `max_nb_objects`.
+- The look-back cut is what contains a **straggler** (see Current State): a retry-delayed block
+  makes every forward index unsafe for the length of its delay, and without the look-back it pins
+  the partition open — `write_partition` holds the entire partition's rows in one
+  `SpanRecordBuilder`, so the partition's memory grows with the delay. With the look-back, every
+  emitted partition stays `<= max_nb_objects` whenever *any* safe index exists in its window; the
+  straggler seeds the next partition instead.
+- The only remaining overshoot is a continuous inversion chain with no safe index anywhere in the
+  window. No safe cut exists there by definition, and `max_nb_objects` is a soft, block-granular
+  limit (a single oversized block exceeds it today), so the window grows and the `warn!` below is
+  the signal — same policy as today's oversized-block case, now with observability.
 - `<=` rather than `<` matches today's tolerance for equal insert timestamps: `tstzrange` is `[)`, so
   `[a, t)` and `[t, b)` do not conflict.
 - Because `suffix_min` covers the whole remainder (not just the next partition), non-overlap is
@@ -204,9 +236,9 @@ Properties:
 Cross-segment safety is unchanged and free: segments are queried with `insert_time >= begin AND
 insert_time < end`, so blocks from different segments have disjoint insert times.
 
-When a cut is deferred, `warn!` once per emitted partition with the stream/process id, the deferred
-block count, and the final object count — the observability hook for the pathological case where a
-long inversion chain pushes a partition well past `max_nb_objects`.
+When a cut is deferred or moved back, `warn!` once per emitted partition with the stream/process id,
+the deferred count, and the final object count — the observability hook for how often inversions
+perturb grouping in practice.
 
 ### 4. Real min/max instead of list endpoints
 
@@ -261,10 +293,13 @@ blocks_view (SQL: ORDER BY insert_time, block_id)
         ▼
 group_blocks_into_partitions(config, blocks)
         │  1. stable sort by (begin_ticks, end_ticks)     [EventTime only]
-        │  2. cut on max_nb_objects, deferring any cut that
-        │     would overlap insert ranges
+        │  2. cut on max_nb_objects at insert-safe points only,
+        │     falling back to the last safe point (look-back);
+        │     grow past the soft limit + warn if none exists
         ▼
 Vec<SourceDataBlocksInMemory>
+        │   every partition <= max_nb_objects when a safe cut existed
+        │   (soft limit, whole-block granularity — as today)
         │   event-time ordered within a partition
         │   event-time ranges ascending & non-overlapping across partitions
         │   insert-time ranges non-overlapping across partitions
@@ -287,8 +322,8 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 2. Add `insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange>` returning real
    min/max, and use it in `get_part_insert_time_range` and `write_partition_from_blocks`.
 3. Extract `group_blocks_into_partitions(config, blocks)` with the stable event-time sort, the
-   suffix-min insert-safe cut rule, and the deferred-cut `warn!`. Preserve `block_ids_hash =
-   partition_nb_objects.to_le_bytes()`.
+   suffix-min insert-safe cut rule, the look-back cut, and the deferred-cut `warn!`. Preserve
+   `block_ids_hash = partition_nb_objects.to_le_bytes()`.
 4. Rewrite `generate_stream_jit_partitions_segment` and `generate_process_jit_partitions_segment` to
    collect blocks into a `Vec` and delegate to the helper, deleting both duplicated cut loops.
 5. Update the module/function docs to describe the two orderings and the insert-range invariant the
@@ -363,10 +398,17 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
   saving a block or two per cut. Deferring the cut keeps one invariant instead of introducing a
   second, weaker one.
 
-- **Deferred cuts can exceed `max_nb_objects`.** Bounded in the worst case by the segment (one hour
-  of one stream). Observed inversions defer by one block. Mitigated by the `warn!`, not by a cap: a
-  cap would have to either cut unsafely (write fails) or silently drop blocks. Revisit only if the
-  warning is ever seen with a large deferral count.
+- **Look-back cut vs. defer-only.** A defer-only rule (wait for a future safe index) bounds
+  overshoot by the segment — one hour of one stream — which is a weak memory bound:
+  `write_partition` holds a whole partition's rows in one `SpanRecordBuilder`, an hour of a hot
+  process can be very large (the reported window holds 44.5M spans across 24 threads), and a single
+  straggler block pins the partition open for the length of its upload delay. The look-back cut
+  keeps every partition at the soft limit whenever a safe point exists, at the cost of sometimes
+  cutting a partition *smaller* than `max_nb_objects` (the slice before the straggler) — harmless,
+  partitions have no minimum size. With no safe point at all, the window grows past the soft limit
+  and warns; `max_nb_objects` is soft and block-granular today (a block is never split, an oversized
+  block already exceeds it) and stays that way. No hard ceiling: a hard failure would turn a
+  functioning-but-large partition into an unusable view instance for that window.
 
 - **Per-view `BlockOrder` vs. event-time ordering everywhere.** A global switch would be simpler to
   reason about and would make partition event-time bounds structural for all JIT views. It also
@@ -378,7 +420,10 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 - **Sorting in Rust vs. changing the SQL `ORDER BY`.** The issue proposes `ORDER BY begin_ticks,
   block_id` in SQL. Sorting inside `group_blocks_into_partitions` instead makes grouping unit-testable
   without a live lake and keeps the ordering decision next to the cut rule that depends on it. The
-  SQL `ORDER BY insert_time, block_id` is retained as the stable tiebreak base.
+  SQL `ORDER BY insert_time, block_id` is retained as the stable tiebreak base. The issue's proposal
+  is also insufficient on its own: with no cut rule attached, event ordering converts the read-time
+  failure into the write-time exclusion-constraint failure described under "The invariant that
+  constrains the fix".
 
 - **Schema-hash bump vs. waiting for JIT expiry.** JIT partitions age out via
   `retire_expired_partitions`, so doing nothing eventually converges — but until then queries keep
@@ -414,23 +459,31 @@ permuted) and assert on `group_blocks_into_partitions`:
    the exclusion-constraint precondition. Include a case with an inversion placed exactly on the
    `max_nb_objects` cut point (the ~10% case that would otherwise fail the write) and assert the cut
    moved rather than overlapped.
-4. **`InsertTime` is unchanged.** Same inputs under `BlockOrder::InsertTime` produce exactly today's
+4. **Look-back cut contains a straggler.** One block whose `insert_time` is far later than its
+   event-time neighbors (simulating a slow/retried upload), positioned so every forward index stays
+   unsafe past the `max_nb_objects` point: the cut falls back to the last safe index, every emitted
+   partition stays `<= max_nb_objects`, no block is split, and insert ranges still do not overlap.
+5. **No safe point: soft limit grows, safety holds.** A continuous inversion chain (e.g. strictly
+   decreasing `insert_time` across the window) with no safe index: grouping still emits a single
+   partition past `max_nb_objects` (soft limit, matching today's oversized-block behavior), insert
+   ranges stay non-overlapping, and the deferred count driving the `warn!` is reported.
+6. **`InsertTime` is unchanged.** Same inputs under `BlockOrder::InsertTime` produce exactly today's
    grouping, including partition boundaries and `block_ids_hash`.
-5. **Size respected when it can be.** With no inversions, `EventTime` grouping matches `InsertTime`
+7. **Size respected when it can be.** With no inversions, `EventTime` grouping matches `InsertTime`
    grouping block-for-block.
-6. **Degenerate inputs.** Empty list; one block; all blocks with identical `insert_time`; identical
+8. **Degenerate inputs.** Empty list; one block; all blocks with identical `insert_time`; identical
    `begin_ticks` (tiebreak determinism — same input order in, same grouping out).
 
 ### Unit — bounds helpers
 
-7. `insert_time_range` over a permuted list returns true min/max, and equals the endpoints for a
+9. `insert_time_range` over a permuted list returns true min/max, and equals the endpoints for a
    sorted list.
-8. `thread_spans_view`'s monotonicity `ensure!` rejects a hand-built batch with a regressing `begin`
-   and passes a monotone one.
+10. `thread_spans_view`'s monotonicity `ensure!` rejects a hand-built batch with a regressing `begin`
+    and passes a monotone one.
 
 ### Integration — `thread_spans_ordering_db_test.rs` (live lake)
 
-9. New case mirroring the existing harness: push N blocks to one thread stream but insert them into
+11. New case mirroring the existing harness: push N blocks to one thread stream but insert them into
    the ingestion service **out of event order** (swap an adjacent pair, and a second pair positioned
    to straddle a partition cut by lowering `max_nb_objects` in the test config). Then assert:
    - `jit_update` succeeds (no exclusion-constraint error) — the write-side regression this plan's
@@ -441,12 +494,12 @@ permuted) and assert on `group_blocks_into_partitions`:
    - `list_partitions()` shows non-overlapping `[min_event_time, max_event_time]` and
      `[begin_insert_time, end_insert_time]` ranges, and the union of event ranges covers every
      ingested block (guards the truncated-bounds data loss).
-10. Confirm the existing `net_spans_test.rs` and `span_tests.rs` still pass with the bumped schema
+12. Confirm the existing `net_spans_test.rs` and `span_tests.rs` still pass with the bumped schema
     versions.
 
 ### Manual verification against the live lake
 
-11. On the process/stream from the issue: `perfetto_trace_chunks` over the failing window succeeds;
+13. On the process/stream from the issue: `perfetto_trace_chunks` over the failing window succeeds;
     `ORDER BY "begin"` and `ORDER BY "begin", "end"` return identical row sequences (today they
     differ — 4 regressions in the reported ~627k-row window); `process_spans(process_id, 'thread')`
     row count is unchanged.
@@ -456,9 +509,12 @@ permuted) and assert on `group_blocks_into_partitions`:
 1. **Should `SCHEMA_VERSION` be bumped, or is JIT expiry acceptable?** Bumping is deterministic but
    strands storage until `retire_incompatible_partitions` runs. Recommendation: bump — the silent
    mis-order and the row-dropping bounds bug are both live on existing partitions.
-2. **Is the deferred-cut `warn!` enough, or should a hard ceiling exist?** No safe cut exists once the
-   ceiling is hit, so any cap would have to accept an insert-range overlap. Recommendation: ship the
-   warning, add a metric only if it fires in practice.
+2. **Resolved: soft limit, no hard ceiling.** `max_nb_objects` is a soft limit at whole-block
+   granularity (a block is never split; an oversized block exceeds it today). The look-back cut
+   keeps partitions at the limit whenever any safe index exists; when none does, the window grows
+   and the `warn!` is the signal. A hard failure was considered and rejected — it would make a
+   functioning-but-large partition an unusable view instance for that window. Add a metric only if
+   the warning fires with large deferral counts in practice.
 3. **Cross-segment inversions stay possible.** `generate_stream_jit_partitions` segments on 1-hour
    `insert_time` slices, so an inversion straddling an hour boundary still produces overlapping
    partition event ranges and trips `sort_and_check_non_overlapping`. Observed inversions are ~12 ms,
@@ -467,3 +523,25 @@ permuted) and assert on `group_blocks_into_partitions`:
 4. **`net_spans` monotonicity check.** `net_spans` declares no scan ordering, so nothing requires
    `begin_time` monotonicity today. Leave it unchecked, or add the same `ensure!` so a future
    `Concatenated` declaration starts from an enforced invariant?
+5. **Whole-query-range spec list is held in memory (pre-existing, out of scope).**
+   `generate_stream_jit_partitions` accumulates every segment's `SourceDataBlocksInMemory` before
+   `jit_update` writes them one at a time (`jit_partitions.rs:233-250`; process variant likewise).
+   Metadata-only, and this plan does not make it worse — but for multi-day query ranges over many
+   streams the eventual fix is to materialize each segment's partitions before generating the next.
+   Worth filing as a follow-up issue rather than widening this change.
+6. **Partition materialization buffers the whole partition in memory (pre-existing, out of scope —
+   but this plan is its prerequisite).** A partition must contain all the blocks of its insert
+   range, but nothing requires its *content* to fit in memory at once: `write_partition_from_rows`
+   already streams — it consumes a channel of `PartitionRowSet`s and writes row groups incrementally
+   to object storage (`write_partition.rs:636`), and the other JIT views feed it one row set per
+   block. `thread_spans_view::write_partition` is what buffers: one `SpanRecordBuilder` accumulates
+   every row and sends a single row set, and beneath it `make_call_tree` builds a full `CallTree`
+   per tick-contiguous run — commonly the whole partition — before any row is appended. Write-time
+   memory is therefore proportional to partition size regardless of the cut rule; `max_nb_objects`
+   is the de-facto memory budget. The follow-up fix has two layers: (a) flush the record builder
+   into multiple row sets every N rows between call trees; (b) stream span emission from call-tree
+   construction, emitting each top-level subtree when it closes (buffer = largest open top-level
+   span, typically one frame; a span open for the whole partition degrades to full buffering).
+   Both are only *correct* once blocks are event-time ordered — flushed row sets append in emission
+   order, so incremental flushing under today's insert-ordered blocks would write mis-ordered
+   files. Filed as #1431, building on this change.
