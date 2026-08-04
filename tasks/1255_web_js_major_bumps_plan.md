@@ -145,26 +145,35 @@ export default tseslint.config(
 )
 ```
 
-Two things to confirm against the installed packages rather than assume:
+**`eslint-plugin-react-hooks` v7's flat-config export is confirmed, not assumed** — `grafana/` already
+depends on `eslint-plugin-react-hooks ^7.0.0`, and the installed
+`grafana/node_modules/eslint-plugin-react-hooks` (7.0.1) exposes `configs.recommended`,
+`configs['recommended-latest']`, and `configs.flat.{recommended,recommended-latest}`.
+`configs.recommended` is eslintrc-shaped (`plugins: ['react-hooks']`) but carries a usable `.rules`
+object, so the `...reactHooks.configs.recommended.rules` spread in the config above works as written.
+That `.rules` object has **17** rules: `rules-of-hooks`, `exhaustive-deps`, plus 15 React-Compiler rules
+(`static-components`, `use-memo`, `component-hook-factories`, `preserve-manual-memoization`,
+`incompatible-library`, `immutability`, `globals`, `refs`, `set-state-in-effect`, `error-boundaries`,
+`purity`, `set-state-in-render`, `unsupported-syntax`, `config`, `gating`), all set to `error` by default
+— confirming the rule-set-growth concern below is real rather than hypothetical.
 
-1. **`eslint-plugin-react-hooks` v7's flat-config export name.** The plugin has shipped
-   `configs.recommended` (flat-shaped), `configs['recommended-latest']`, and `configs.flat.recommended`
-   at different points in its 5.x→7.x line. Read `node_modules/eslint-plugin-react-hooks/package.json`
-   + its exported `configs` keys after install and use whichever the installed 7.1.x actually provides.
-2. **`react-hooks` v7 rule-set growth.** v7's `recommended` pulls in the React Compiler rule family in
-   addition to `rules-of-hooks`/`exhaustive-deps`. On a codebase with 22 existing `exhaustive-deps`
-   disables this could surface a large batch of new findings. Mitigation, in order of preference:
-   (a) fix them if few and mechanical; (b) demote the noisy new rules to `warn` — `yarn lint` has no
-   `--max-warnings`, so warnings do not fail CI, matching how the two pre-existing overrides are already
-   set to `warn`; (c) if v7 is disproportionate, install `eslint-plugin-react-hooks@^6` instead, which
-   still satisfies `eslint@^10`. Any of the three keeps the ESLint-10 goal intact.
+**`react-hooks` v7 rule-set growth.** v7's `recommended` pulls in that React Compiler rule family in
+addition to `rules-of-hooks`/`exhaustive-deps`. On a codebase with 22 existing `exhaustive-deps`
+disables this could surface a large batch of new findings — the one thing that stays open until
+`yarn install` + `yarn lint` actually runs is *how many* of the 15 fire here. Mitigation, in order of
+preference: (a) fix them if few and mechanical; (b) demote the noisy new rules to `warn` — `yarn lint`
+has no `--max-warnings`, so warnings do not fail CI, matching how the two pre-existing overrides are
+already set to `warn`; (c) if v7 is disproportionate, stay on `^7.1.1` (v6's peer range caps at
+`eslint@^9.0.0` and does not satisfy `eslint@^10`, so downgrading the plugin is not an option) and
+instead explicitly turn off the React-Compiler rule family in the flat config, keeping only
+`rules-of-hooks`/`exhaustive-deps`. Any of the three keeps the ESLint-10 goal intact.
 
 Because flat config lints only JS by default, `files: ['**/*.{ts,tsx}']` is required for the TS rules to
 apply; `tseslint.configs.recommended` supplies the TS parser wiring. Verify coverage did not silently
 shrink (see Testing Strategy — file-count check).
 
 devDep churn for this commit: add `@eslint/js`, `typescript-eslint`, `globals`; bump `eslint` to `^10`,
-`eslint-plugin-react-hooks` to `^7` (or `^6`, see above), `eslint-plugin-react-refresh` to `^0.5`;
+`eslint-plugin-react-hooks` to `^7.1.1`, `eslint-plugin-react-refresh` to `^0.5`;
 **remove** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser` (superseded by the unified
 `typescript-eslint` package) and `@eslint/eslintrc` (dead — see Current State). Delete `.eslintrc.json`.
 
@@ -228,6 +237,19 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
   `browserslist` field and there is no `.browserslistrc` (the `browserslist ^4.28.1` devDep is a
   transitive-pin artifact, not a target declaration), so nothing to edit — but this is a user-visible
   change and belongs in the changelog entry.
+- **Buttons lose default `cursor: pointer`.** Installed `tailwindcss@3.4.19`'s
+  `src/css/preflight.css:343-346` sets `button, [role="button"] { cursor: pointer }`; that rule does not
+  exist in `tailwindcss@4.3.3`'s preflight. The app has 117 `<button>` tags plus 6 `role="button"`
+  elements against only 58 `cursor-pointer` occurrences repo-wide (and some of those are on non-buttons),
+  so most buttons would silently lose their pointer cursor. Add the v4 upgrade guide's compat rule to
+  `globals.css`'s `@layer base`: `button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer
+  }`.
+- **Input placeholder color changes.** Installed `tailwindcss@3.4.19`'s `src/css/preflight.css:333-337`
+  sets `input::placeholder, textarea::placeholder { color: theme('colors.gray.400') }`; that rule is also
+  absent from v4's preflight, so placeholders fall back to the browser default. 43 `placeholder=`
+  attributes exist in `src` against only 7 explicit `placeholder-*` color classes. Add an explicit
+  `input::placeholder, textarea::placeholder` color rule to `globals.css`'s `@layer base` to preserve the
+  current look.
 
 #### Utility renames required
 
@@ -241,6 +263,7 @@ Counts are `grep` occurrences over `analytics-web-app/src`:
 | `flex-shrink-*` | `shrink-*` | 22 |
 | `blur` (bare) | `blur-sm` | 15 |
 | `blur-sm` | `blur-xs` | 1 |
+| `backdrop-blur-sm` | `backdrop-blur-xs` | 1 |
 | `shadow` (bare) | `shadow-sm` | 1 |
 | `shadow-sm` | `shadow-xs` | 1 |
 
@@ -251,6 +274,15 @@ double-shift the 6 original `rounded-sm` sites into `rounded-xs`-then-nothing. R
 the renames in the correct order and is the sanctioned migration path. Review its diff before
 committing, and reject any part of it that tries to convert `tailwind.config.ts` into `@theme` (that is
 the deliberate `@config` decision above).
+
+**`rounded-sm` → `rounded-xs` is not value-preserving here.** `tailwind.config.ts` overrides
+`borderRadius.sm` to `calc(var(--radius) - 4px)` (with `--radius: 0.5rem` in `globals.css`), so v3
+`rounded-sm` renders 4px today. The config only overrides `lg`/`md`/`sm`, so nothing defines
+`--radius-xs` under `@config`, and v4's built-in default `--radius-xs` is `0.125rem` (2px) — the rename
+would silently halve the radius at the 6 affected sites. Add a `borderRadius.xs:
+'calc(var(--radius) - 4px)'` entry to `tailwind.config.ts` as part of Commit 3's reconciliation step so
+the rename stays value-preserving (alternative: leave those 6 sites at `rounded-sm`). This makes
+`tailwind.config.ts` a modified file in this commit, not an unchanged one (see Files to Modify).
 
 No `bg-opacity-*` / `text-opacity-*` / `border-opacity-*` occurrences exist (count 0), so the
 opacity-modifier removals do not apply.
@@ -296,21 +328,25 @@ branch bisects cleanly.
 
 ### Commit 2 — `eslint` 8 → 10 + flat config
 
+0. **Before touching `package.json`**, with ESLint 8 still installed, capture the pre-migration baseline
+   against the still-live `.eslintrc.json`: `yarn eslint . -f json | jq 'length'` (or the file list). On
+   the current tree this is **253 files (131 `.tsx`, 122 `.ts`)** — record this number for the step 5
+   comparison, since ESLint 10 removes eslintrc support entirely and no eslintrc-based run is possible
+   once step 2 installs it.
 1. `analytics-web-app/package.json` devDeps: bump `eslint` → `^10.8.0`,
    `eslint-plugin-react-refresh` → `^0.5.3`, `eslint-plugin-react-hooks` → `^7.1.1`; add
    `@eslint/js ^10.0.1`, `typescript-eslint ^8.66.0`, `globals ^17.9.0`; remove
    `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@eslint/eslintrc`.
 2. `yarn install`.
-3. Inspect the installed `eslint-plugin-react-hooks` for its actual flat-config export key before
-   writing the config (see Design, point 1).
-4. Create `analytics-web-app/eslint.config.js` per the Design shape; `git rm
-   analytics-web-app/.eslintrc.json`.
-5. `yarn lint`. Triage findings in two buckets: **(a)** the three new `eslint:recommended` rules
+3. Create `analytics-web-app/eslint.config.js` per the Design shape (the
+   `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
+   install-time unknown — see Design); `git rm analytics-web-app/.eslintrc.json`.
+4. `yarn lint`. Triage findings in two buckets: **(a)** the three new `eslint:recommended` rules
    (`no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) — fix these; **(b)** new
-   `react-hooks` v7 rules — apply the Design's mitigation ladder (fix / demote to `warn` / drop the
-   plugin to `^6`). Whichever is chosen, note it in the commit message.
-6. Confirm lint coverage did not shrink (see Testing Strategy).
-7. Full `python3 build/analytics_web_ci.py`, then commit.
+   `react-hooks` v7 rules — apply the Design's mitigation ladder (fix / demote to `warn` / turn off the
+   React-Compiler rule family). Whichever is chosen, note it in the commit message.
+5. Confirm lint coverage did not shrink (see Testing Strategy).
+6. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Commit 3 — `tailwindcss` 3 → 4 (+ `tailwind-merge` 3)
 
@@ -320,7 +356,9 @@ branch bisects cleanly.
    - `src/styles/globals.css` must end up as `@import "tailwindcss";` +
      `@config "../../tailwind.config.ts";`, with both `@layer base` blocks and both `@apply` uses
      intact. **Revert** any attempt to inline `tailwind.config.ts` into `@theme`.
-   - Confirm it applied all eight renames from the Design table, in the correct shifted order.
+   - Confirm it applied all nine renames from the Design table, in the correct shifted order, and that
+     `tailwind.config.ts` gained the `borderRadius.xs` entry (or the 6 `rounded-sm` sites were left
+     alone) so `rounded-xs` stays value-preserving.
 3. Switch the build pipeline to the Vite plugin: add `@tailwindcss/vite ^4.3.3` to devDeps, add
    `tailwindcss()` to the `plugins` array in `analytics-web-app/vite.config.ts`, delete
    `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep. Keep the `postcss`
@@ -331,8 +369,10 @@ branch bisects cleanly.
    existing caret range already admits the v4-compatible `0.5.20`.
 5. `yarn install`, then `yarn build`, and diff the emitted CSS bundle size/shape for anything alarming.
 6. Manual visual pass against a running app (`python3 local_test_env/ai_scripts/start_services.py
-   --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, and the
-   `DateTimePicker` calendar for the `--color-*` variable question above.
+   --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, the
+   `DateTimePicker` calendar for the `--color-*` variable question above, that buttons/`role="button"`
+   elements still show a pointer cursor, and that input/textarea placeholders still render in the
+   expected muted color.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Final — changelog
@@ -362,9 +402,10 @@ part of the same change. Also record the documented hold on `grafana/`'s React 1
 - `analytics-web-app/src/styles/globals.css` — `@import` + `@config`
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
 - `analytics-web-app/postcss.config.mjs` — **deleted**
-- `analytics-web-app/src/**/*.tsx` — ~252 utility-class renames
+- `analytics-web-app/src/**/*.tsx` — ~253 utility-class renames
 - `analytics-web-app/src/components/ui/DateTimePicker.css` — only if the `--color-*` check says so
-- `analytics-web-app/tailwind.config.ts` — **unchanged** (kept, loaded via `@config`)
+- `analytics-web-app/tailwind.config.ts` — add `borderRadius.xs` entry so `rounded-sm` → `rounded-xs`
+  stays value-preserving (kept, still loaded via `@config`)
 
 **Final**
 - `CHANGELOG.md`
@@ -419,8 +460,8 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
 - **Commit 2 specific — lint coverage must not silently shrink.** Flat config lints only JS unless
   `files` says otherwise, so a mis-scoped config can pass `yarn lint` by checking almost nothing.
   Compare `yarn eslint . --debug 2>&1 | grep -c 'Linting'` (or the file list from
-  `yarn eslint . -f json`) against the pre-migration count from the same command on the `.eslintrc.json`
-  config, captured before deleting it. The counts should match.
+  `yarn eslint . -f json`) against the pre-migration baseline captured in Commit 2 step 0, before
+  `eslint` was bumped: **253 files (131 `.tsx`, 122 `.ts`)**. The counts should match.
 - **Commit 3 specific**: `yarn build` must succeed and emit CSS; then a manual pass in `yarn dev`
   covering the areas the default-value analysis flagged — the colorless `ring-1`/`ring-2` sites, and the
   `DateTimePicker` calendar (the `--color-*` question). Spot-check a few high-traffic screens for the
@@ -434,8 +475,9 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
 
 - **`eslint-plugin-react-hooks` v7 rule-set expansion is the one genuinely open-ended item.** If its
   `recommended` set floods the codebase with React Compiler findings, the mitigation ladder in Design
-  (fix → demote to `warn` → pin `^6`) keeps the commit shippable without an unbounded fix-up. The
-  ESLint-10 objective does not depend on which rung is used.
+  (fix → demote to `warn` → turn off the React-Compiler rule family, staying on `^7.1.1` — `^6` is not a
+  fallback option, its peer range caps at `eslint@^9.0.0`) keeps the commit shippable without an
+  unbounded fix-up. The ESLint-10 objective does not depend on which rung is used.
 - **The Tailwind codemod's output needs real review**, not just a passing build — the renames are
   visual, and `yarn build` succeeding proves nothing about whether a `rounded` became the right
   `rounded-sm`. The manual pass in step 6 is load-bearing, not ceremonial.
