@@ -103,15 +103,43 @@ function splitIpcMessages(ipcBytes: Uint8Array): Uint8Array[] {
 }
 
 /**
+ * Frames split IPC messages into the JSON protocol chunks used by our backend:
+ *   {"type":"schema","size":N}\n[schema bytes]
+ *   {"type":"batch","size":N}\n[batch bytes]
+ *   {"type":"done"}\n
+ */
+function frameMessages(raw: Uint8Array): Uint8Array[] {
+  const messages = splitIpcMessages(raw)
+
+  if (messages.length === 0) {
+    throw new Error('No IPC messages generated')
+  }
+
+  const chunks: Uint8Array[] = []
+  const encoder = new TextEncoder()
+
+  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
+  chunks.push(encoder.encode(schemaFrame))
+  chunks.push(messages[0])
+
+  for (let i = 1; i < messages.length; i++) {
+    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
+    chunks.push(encoder.encode(batchFrame))
+    chunks.push(messages[i])
+  }
+
+  chunks.push(encoder.encode('{"type":"done"}\n'))
+
+  return chunks
+}
+
+/**
  * Creates a framed IPC stream with dictionary-encoded string columns.
  * Returns chunks that can be fed to a mock ReadableStream.
  */
 export function createDictionaryFramedIpc(
   batches: Array<{ level: string[] }>
 ): Uint8Array[] {
-  const chunks: Uint8Array[] = []
-  const encoder = new TextEncoder()
-
   // Create dictionary type
   const dictType = new Dictionary(new Utf8(), new Int32())
 
@@ -129,29 +157,7 @@ export function createDictionaryFramedIpc(
 
   const ipcBytes = tableToIPC(combined, 'stream')
 
-  // Split IPC into messages
-  const messages = splitIpcMessages(ipcBytes)
-
-  if (messages.length === 0) {
-    throw new Error('No IPC messages generated')
-  }
-
-  // First message is schema
-  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
-  chunks.push(encoder.encode(schemaFrame))
-  chunks.push(messages[0])
-
-  // Remaining messages are batches (may include dictionary batches)
-  for (let i = 1; i < messages.length; i++) {
-    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
-    chunks.push(encoder.encode(batchFrame))
-    chunks.push(messages[i])
-  }
-
-  // Done frame
-  chunks.push(encoder.encode('{"type":"done"}\n'))
-
-  return chunks
+  return frameMessages(ipcBytes)
 }
 
 /**
@@ -160,9 +166,6 @@ export function createDictionaryFramedIpc(
 export function createPlainFramedIpc(
   batches: Array<{ name: string[] }>
 ): Uint8Array[] {
-  const chunks: Uint8Array[] = []
-  const encoder = new TextEncoder()
-
   // Build tables for each batch (plain Utf8, no dictionary)
   const tables: Table[] = batches.map((batch) => {
     return tableFromArrays({ name: batch.name })
@@ -175,28 +178,8 @@ export function createPlainFramedIpc(
   }
 
   const ipcBytes = tableToIPC(combined, 'stream')
-  const messages = splitIpcMessages(ipcBytes)
 
-  if (messages.length === 0) {
-    throw new Error('No IPC messages generated')
-  }
-
-  // Schema frame
-  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
-  chunks.push(encoder.encode(schemaFrame))
-  chunks.push(messages[0])
-
-  // Batch frames
-  for (let i = 1; i < messages.length; i++) {
-    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
-    chunks.push(encoder.encode(batchFrame))
-    chunks.push(messages[i])
-  }
-
-  // Done frame
-  chunks.push(encoder.encode('{"type":"done"}\n'))
-
-  return chunks
+  return frameMessages(ipcBytes)
 }
 
 /**
@@ -243,25 +226,7 @@ export function createViewTypeIpc({ compressed }: { compressed: boolean }): {
   )
   const raw = writer.toUint8Array(true)
 
-  const messages = splitIpcMessages(raw)
-  if (messages.length === 0) {
-    throw new Error('No IPC messages generated')
-  }
-
-  const chunks: Uint8Array[] = []
-  const encoder = new TextEncoder()
-
-  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
-  chunks.push(encoder.encode(schemaFrame))
-  chunks.push(messages[0])
-
-  for (let i = 1; i < messages.length; i++) {
-    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
-    chunks.push(encoder.encode(batchFrame))
-    chunks.push(messages[i])
-  }
-
-  chunks.push(encoder.encode('{"type":"done"}\n'))
+  const chunks = frameMessages(raw)
 
   return { raw, chunks }
 }

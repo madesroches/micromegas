@@ -1096,6 +1096,5 @@ describe('formatCell', () => {
     const value = new Uint8Array([97, 98, 99])
     const result = formatCell(value, new BinaryView())
     expect(result).toBe('abc (3)')
-    expect(result).not.toBe('97,98,99')
   })
 })

@@ -77,56 +77,35 @@ describe('arrow-ipc-fixtures', () => {
   // `tableFromIPC` entirely, so these assertions must run against the real
   // library to mean anything about view-type decoding.
   describe('createViewTypeIpc', () => {
-    it('decodes a Utf8View/BinaryView table from an uncompressed whole IPC buffer', () => {
-      const { raw } = createViewTypeIpc({ compressed: false })
+    describe.each([
+      { label: 'uncompressed', compressed: false },
+      { label: 'LZ4_FRAME-compressed', compressed: true },
+    ])('$label whole IPC buffer', ({ compressed }) => {
+      it('decodes a Utf8View/BinaryView table', () => {
+        const { raw } = createViewTypeIpc({ compressed })
 
-      const table = tableFromIPC(raw)
+        const table = tableFromIPC(raw)
 
-      const nameField = table.schema.fields.find((f) => f.name === 'name')!
-      const dataField = table.schema.fields.find((f) => f.name === 'data')!
-      expect(DataType.isUtf8View(nameField.type)).toBe(true)
-      expect(DataType.isBinaryView(dataField.type)).toBe(true)
+        const nameField = table.schema.fields.find((f) => f.name === 'name')!
+        const dataField = table.schema.fields.find((f) => f.name === 'data')!
+        expect(DataType.isUtf8View(nameField.type)).toBe(true)
+        expect(DataType.isBinaryView(dataField.type)).toBe(true)
 
-      expect(table.numRows).toBe(3)
-      const row0 = table.get(0)!
-      const row1 = table.get(1)!
-      const row2 = table.get(2)!
+        expect(table.numRows).toBe(3)
+        const row0 = table.get(0)!
+        const row1 = table.get(1)!
+        const row2 = table.get(2)!
 
-      expect(row0.name).toBe('short')
-      expect(row1.name).toBe('this string is well over twelve bytes long')
-      expect(row2.name).toBeNull()
+        expect(row0.name).toBe('short')
+        expect(row1.name).toBe('this string is well over twelve bytes long')
+        expect(row2.name).toBeNull()
 
-      expect(Array.from(row0.data as Uint8Array)).toEqual([97, 98, 99])
-      expect(new TextDecoder().decode(row1.data as Uint8Array)).toBe(
-        'this binary value is well over twelve bytes long'
-      )
-      expect(row2.data).toBeNull()
-    })
-
-    it('decodes a Utf8View/BinaryView table from an LZ4_FRAME-compressed whole IPC buffer', () => {
-      const { raw } = createViewTypeIpc({ compressed: true })
-
-      const table = tableFromIPC(raw)
-
-      const nameField = table.schema.fields.find((f) => f.name === 'name')!
-      const dataField = table.schema.fields.find((f) => f.name === 'data')!
-      expect(DataType.isUtf8View(nameField.type)).toBe(true)
-      expect(DataType.isBinaryView(dataField.type)).toBe(true)
-
-      expect(table.numRows).toBe(3)
-      const row0 = table.get(0)!
-      const row1 = table.get(1)!
-      const row2 = table.get(2)!
-
-      expect(row0.name).toBe('short')
-      expect(row1.name).toBe('this string is well over twelve bytes long')
-      expect(row2.name).toBeNull()
-
-      expect(Array.from(row0.data as Uint8Array)).toEqual([97, 98, 99])
-      expect(new TextDecoder().decode(row1.data as Uint8Array)).toBe(
-        'this binary value is well over twelve bytes long'
-      )
-      expect(row2.data).toBeNull()
+        expect(Array.from(row0.data as Uint8Array)).toEqual([97, 98, 99])
+        expect(new TextDecoder().decode(row1.data as Uint8Array)).toBe(
+          'this binary value is well over twelve bytes long'
+        )
+        expect(row2.data).toBeNull()
+      })
     })
   })
 })
