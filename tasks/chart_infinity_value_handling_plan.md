@@ -12,7 +12,9 @@ non-finite values, matching how `null` rows are already skipped. It also covers 
 independent extraction path — the perf-analysis metrics chart's own row extraction in
 `useMetricsData.ts` and `PerformanceMetricsChart.tsx` — which feeds the same downstream
 `XYChart.tsx` internals but currently has no null/NaN/finiteness guard at all, and is reachable
-today via arbitrary user-typed SQL (the custom-query editor).
+today via arbitrary user-typed SQL (the custom-query editor). A third, independent extraction
+path — `ProcessMetricsPage.tsx`'s own "Unified extraction effect" — has the identical unguarded
+pattern and is likewise reachable via arbitrary user-typed SQL (its own custom-query editor).
 
 ## Current State
 
@@ -66,6 +68,19 @@ zero denominator reproduces the identical Y-axis-explosion bug through this rout
 sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushing unconditionally
 — the same `Number.isFinite` pattern used in `arrow-utils.ts`.
 
+**Third extraction path: process-metrics page.** `ProcessMetricsPage.tsx`'s "Unified extraction
+effect" (`ProcessMetricsPage.tsx:256`) has the same unguarded pattern:
+`points.push({ time, value: Number(row.value) })`, with no null/NaN/finiteness guard at all. This
+effect is fed by `activeSql`, which is set from arbitrary user-typed SQL via a `QueryEditor`'s
+`onRun={handleRunQuery}` (`ProcessMetricsPage.tsx:296-311, 378-384, 423-438`) — the same
+"reachable via arbitrary user-typed SQL" condition as the perf-analysis path above. The resulting
+`chartData` is rendered via `<MetricsChart data={chartData} .../>` (`ProcessMetricsPage.tsx:526`),
+the same `MetricsChart` → `TimeSeriesChart` → `XYChart.tsx` pipeline (`computeStats`/`range()` at
+`XYChart.tsx:146, 726-731`) targeted above, and `/process_metrics` is a live, routed page
+(`router.tsx:9,40`), not dead code. A `numerator`/`denominator` custom query run on this page
+reproduces the identical Y-axis-explosion bug. Fix: at this site too, skip the row when
+`!Number.isFinite(Number(row.value))` instead of pushing unconditionally.
+
 ## Implementation Steps
 
 1. In `analytics-web-app/src/lib/arrow-utils.ts`, replace `isNaN(yNum)` with
@@ -79,7 +94,9 @@ sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushin
 4. In `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`'s
    `loadCustomQuery` (line 188), apply the same `!Number.isFinite` guard before
    `points.push(...)`.
-5. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
+5. In `analytics-web-app/src/routes/ProcessMetricsPage.tsx`'s "Unified extraction effect"
+   (line 256), apply the same `!Number.isFinite` guard before `points.push(...)`.
+6. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
    `extractChartData` and `extractMultiSeriesChartData` (numeric/time path and categorical path)
    for rows containing `Infinity`/`-Infinity` in the Y column, and one covering `Infinity` in the
    X column of the numeric path — asserting the row is dropped and the remaining finite points
@@ -101,6 +118,7 @@ sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushin
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`
 - `analytics-web-app/src/hooks/useMetricsData.ts`
 - `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`
+- `analytics-web-app/src/routes/ProcessMetricsPage.tsx`
 
 ## Trade-offs
 
@@ -112,7 +130,7 @@ sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushin
 
 ## Testing Strategy
 
-- Extend `arrow-utils.test.ts` with the cases in Implementation Step 5.
+- Extend `arrow-utils.test.ts` with the cases in Implementation Step 6.
 - Run `yarn test` (and `yarn lint` / `yarn type-check`) in `analytics-web-app/`.
 - Manual repro (optional): chart a SQL column with a `numerator / denominator` ratio where some
   rows have `denominator = 0`, confirm the Y-axis no longer explodes and remaining points render
@@ -120,6 +138,9 @@ sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushin
 - Manual repro for the perf-analysis path (optional): in Performance Analysis, run a custom SQL
   query (Steps 3-4's path) whose value column divides by zero for some rows; confirm the Y-axis
   no longer explodes there either.
+- Manual repro for the process-metrics path (optional): on `/process_metrics`, run a custom SQL
+  query (Step 5's path) whose value column divides by zero for some rows; confirm the Y-axis no
+  longer explodes there either.
 
 ## Open Questions
 
