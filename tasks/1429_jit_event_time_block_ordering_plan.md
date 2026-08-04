@@ -264,8 +264,9 @@ wrong. Replace with real min/max:
   `insert_range`.
 
 These are the same value under `InsertTime` ordering, so the change is a no-op for the untouched
-views. Factor it as one helper on the block slice (e.g. `insert_time_range(blocks) -> TimeRange`) so
-there is a single implementation to keep right.
+views. Factor it as one `pub` helper on the block slice (`insert_time_range(blocks) -> TimeRange`) so
+there is a single implementation to keep right, and so it is directly unit-testable from
+`rust/analytics/tests/` (Testing Strategy #9).
 
 Recorded **event-time** bounds get the same treatment. Under event-time ordering
 `blocks[0].begin_ticks` / `blocks[last].end_ticks` become correct by construction, but relying on
@@ -275,13 +276,17 @@ in `thread_spans_view.rs:181-183` and `net_spans_view.rs:189-191`. (`net_spans_v
 
 ### 5. Materialization-time monotonicity check
 
-Move the failure from every read to one write. After `record_builder.finish()` in
-`thread_spans_view::write_partition`, scan the `begin` column of the produced batch and
-`anyhow::ensure!` it is non-decreasing, naming the stream and the offending row. One pass over one
-already-materialized column; it turns a contract breach into a single loud materialization error with
-the writer in the stack trace, instead of an export error one layer removed from the cause. The
-read-time guard in `perfetto_trace_execution_plan.rs` stays as the backstop for pre-existing
-partitions.
+Move the failure from every read to one write. Extract the check into
+`pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()>` in
+`thread_spans_view.rs` — `pub`, not inline in the private `async fn write_partition`, so
+`rust/analytics/tests/`, which compiles as an external integration crate and can only reach `pub`
+items, can call it directly with a hand-built batch (Testing Strategy #10). After
+`record_builder.finish()` in `thread_spans_view::write_partition`, call it on the produced batch's
+`begin` column; it `anyhow::ensure!`s the column is non-decreasing, naming the stream and the
+offending row. One pass over one already-materialized column; it turns a contract breach into a
+single loud materialization error with the writer in the stack trace, instead of an export error one
+layer removed from the cause. The read-time guard in `perfetto_trace_execution_plan.rs` stays as the
+backstop for pre-existing partitions.
 
 **Log the violation at the check site, don't rely on propagation.** `anyhow::ensure!` returns `Err`,
 it does not panic, and nothing on the path up logs that error at error level. `MaterializedView::scan`
@@ -291,11 +296,12 @@ planning time, it surfaces in the `create_physical_plan()` arm of
 `Status::internal` — the `error!("stream error occurred: …")` at `:197` fires only for errors raised
 while polling the stream. The failure would therefore reach the operator only as the `error` field of
 the `info!(target: "flightsql_query_audit", …)` audit record (`:139-145`) and as a gRPC status on the
-client. So emit an explicit `error!` in `write_partition` immediately before the `ensure!`, naming the
-`stream_id`, the offending row index, and the two `begin` values. `micromegas_tracing::prelude::*` is
-already imported in `thread_spans_view.rs:29`, so no new dependency. This keeps the diagnosis in the
-service log where a corrupted-partition investigation starts, independent of whether anyone reads the
-audit stream.
+client. So `ensure_begin_non_decreasing` itself emits an explicit `error!` immediately before the
+`ensure!`, naming the `stream_id`, the offending row index, and the two `begin` values — keeping the
+log and the check together in the one `pub` function, so the log fires wherever the function is
+called from, not just from `write_partition`. `micromegas_tracing::prelude::*` is already imported in
+`thread_spans_view.rs:29`, so no new dependency. This keeps the diagnosis in the service log where a
+corrupted-partition investigation starts, independent of whether anyone reads the audit stream.
 
 `net_spans` gets no equivalent check. `NetSpansView` does not override `get_scan_output_ordering`,
 so it inherits `ScanOrdering::Unordered` (`view.rs:174-176`) and nothing consumes `begin_time`
@@ -343,10 +349,25 @@ Two changes close this:
   instead of `>=`. Under `BlockOrder::InsertTime`, cut points are stable across runs, so the exact
   range and count already coincide with the containment/`>=` result — this is a no-op there, not a
   config-gated special case.
-- **`retire_partitions`**: for JIT-managed view sets, match by insert-range *overlap*
-  (`tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)`) rather than containment, so
-  a stale partition whose range only overlaps — rather than contains — the newly written range is
-  retired instead of tripping `lakehouse_partitions_no_overlap`.
+- **`retire_partitions`**: there is no JIT registry to infer "JIT-managed" from
+  `view_set_name`/`view_instance_id` alone (`view_factory.rs`/`catalog.rs` expose no such list, and
+  instantiating a view just to classify it is not worth it), so the caller must say which matching
+  rule applies. Add a `RetireMatch { Containment, Overlap }` parameter to `retire_partitions`, threaded
+  through its write-path call chain — `write_partition_from_rows` → `insert_partition` →
+  `insert_partition_transaction` → `retire_partitions` — and as an explicit argument at
+  `retire_partitions`'s other, direct caller, `retire_partitions_table_function.rs`.
+  `thread_spans_view.rs` and `net_spans_view.rs` (the two `BlockOrder::EventTime` call sites, reached
+  via the write-path chain) pass `RetireMatch::Overlap`
+  (`tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)`), so a stale partition whose
+  range only overlaps — rather than contains — the newly written range is retired instead of tripping
+  `lakehouse_partitions_no_overlap`. Every other call site — `block_partition_spec.rs` (the five
+  `BlockOrder::InsertTime` process views, whose cut points are stable across runs, so containment
+  stays correct for them), `merge.rs`, `sql_partition_spec.rs`, `metadata_partition_spec.rs` (batch
+  views), and `retire_partitions_table_function.rs` (the public admin UDF, unchanged, no new SQL
+  argument) — passes `RetireMatch::Containment`, i.e. today's query and today's behavior, unchanged.
+  The `write_partition.rs:122-125` comment ("this is not an overlap test...") stays correct and
+  in force for the `Containment` arm; it is superseded only for the `Overlap` arm used by the two
+  JIT views changed here.
 
 Add a unit test that regroups the same stream across two synthetic runs — a block inserted between
 them that legally shifts a cut point — and assert the second run's `is_jit_partition_up_to_date` /
@@ -387,8 +408,10 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 
 1. Add `BlockOrder` and the `block_order` field on `JitPartitionConfig`; `Default` →
    `BlockOrder::InsertTime`.
-2. Add `insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange>` returning real
-   min/max, and use it in `get_part_insert_time_range` and `write_partition_from_blocks`.
+2. Add `pub fn insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange>` returning
+   real min/max, and use it in `get_part_insert_time_range` and `write_partition_from_blocks`. `pub`
+   (not module-private) so `rust/analytics/tests/` — which compiles as an external integration crate
+   and can only reach `pub` items — can exercise it directly (Testing Strategy #9).
 3. Extract `group_blocks_into_partitions(config, blocks)` with the stable event-time sort, the
    suffix-min insert-safe cut rule, the look-back cut, and the deferred-cut `warn!`. Preserve
    `block_ids_hash = partition_nb_objects.to_le_bytes()`.
@@ -399,50 +422,64 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 6. Tighten `is_jit_partition_up_to_date` from `existing_count >= required_count` over a containment
    range query to exact insert-range equality plus exact count equality, so a partition from an
    earlier grouping run with different cut points is never mistaken for up to date (Design §6).
+7. Add `RetireMatch { Containment, Overlap }` to `retire_partitions` and thread it through
+   `write_partition_from_rows` → `insert_partition` → `insert_partition_transaction` (Design §6). This
+   is a correctness dependency of steps 6 and 8-13, not documentation, so it lands in this phase
+   rather than alongside the comment cleanup in Phase 4: without it, a stale wider partition left
+   behind by a moved cut point overlaps, but does not contain, the new narrower one, so containment
+   retire fails to remove it and the write trips `lakehouse_partitions_no_overlap`
+   (`write_partition.rs:439-454`) for everything landed between this step and Phase 4. Call sites in
+   `block_partition_spec.rs`, `merge.rs`, `sql_partition_spec.rs`, `metadata_partition_spec.rs`, and
+   `retire_partitions_table_function.rs` pass `RetireMatch::Containment` (today's behavior, unchanged);
+   `thread_spans_view.rs` and `net_spans_view.rs` are wired to pass `RetireMatch::Overlap` in Phase 2/3
+   (steps 9 and 14).
 
 ### Phase 2 — thread spans (`thread_spans_view.rs`)
 
-7. Pass `block_order: BlockOrder::EventTime` in `jit_update`.
-8. Replace the first/last `insert_time` reads (`:134-135`) with `insert_time_range`, and the
-   `rows_time_range` endpoints (`:181-183`) with min/max over the blocks.
-9. Add the `begin`-monotonicity `ensure!` after `record_builder.finish()`, preceded by an `error!`
-   naming the `stream_id`, offending row index and the two `begin` values — the propagated `Err` is
-   never logged at error level on the way out (Design §5).
-10. Rewrite the `:132-133` comment from an assumption to an enforced invariant, pointing at
+8. Pass `block_order: BlockOrder::EventTime` in `jit_update`.
+9. Pass `RetireMatch::Overlap` at this view's `write_partition_from_rows` call site (Design §6, step 7).
+10. Replace the first/last `insert_time` reads (`:134-135`) with `insert_time_range`, and the
+    `rows_time_range` endpoints (`:181-183`) with min/max over the blocks.
+11. Add `pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()>`,
+    logging an `error!` naming the `stream_id`, offending row index and the two `begin` values
+    immediately before its internal `ensure!` — the propagated `Err` is never logged at error level on
+    the way out (Design §5) — and call it after `record_builder.finish()` in `write_partition`.
+12. Rewrite the `:132-133` comment from an assumption to an enforced invariant, pointing at
     `BlockOrder::EventTime`.
-11. Bump `SCHEMA_VERSION` to `2`.
+13. Bump `SCHEMA_VERSION` to `2`.
 
 ### Phase 3 — net spans (`net_spans_view.rs`)
 
-12. Same as steps 7, 8, 10, 11 (`:130-131`, `:189-191`; the `get_time_range()` fallback). No
-    monotonicity check — `net_spans` declares no scan ordering.
+14. Same as steps 8-10, 12, 13 (`:130-131`, `:189-191`; the `get_time_range()` fallback; pass
+    `RetireMatch::Overlap`). No monotonicity check — `net_spans` declares no scan ordering.
 
 ### Phase 4 — stale documentation
 
-13. `view.rs:158-163` — the `Concatenated` contract note: drop "documented but not enforced", state
+15. `view.rs:158-163` — the `Concatenated` contract note: drop "documented but not enforced", state
     that `ThreadSpansView` obtains it from `BlockOrder::EventTime` grouping, and keep the residual
     caveats (cross-hour-segment inversions, TSC-frequency drift).
-14. `partitioned_execution_plan.rs:52-58` and `:78-82` — the non-overlap error message and doc
+16. `partitioned_execution_plan.rs:52-58` and `:78-82` — the non-overlap error message and doc
     currently list "blocks registered out of event-time order" as a likely cause; that cause is now
     structurally excluded within a segment. Reduce it to the residual cases.
-15. `write_partition.rs:365-366` — the same stale "we assume that the blocks were registered in
+17. `write_partition.rs:365-366` — the same stale "we assume that the blocks were registered in
     order" comment sits above `retire_partitions`; it is unrelated to what that call does. Replace it
-    with a note about the containment-based retirement query, and change that query to match by
-    insert-range overlap instead of containment for JIT view sets, so a stale partition left behind
-    by a moved cut point (Design §6) gets retired instead of tripping the exclusion constraint.
+    with a note pointing at `RetireMatch` (added in step 7) and the containment/overlap split it
+    encodes. This step is comment-only — the query-behavior change itself already landed in step 7.
 
 ### Phase 5 — tests
 
-16. New `rust/analytics/tests/jit_partition_grouping_tests.rs` (see Testing Strategy).
-17. Extend `rust/analytics/tests/thread_spans_ordering_db_test.rs` with a reversed-registration case
+18. New `rust/analytics/tests/jit_partition_grouping_tests.rs` (see Testing Strategy).
+19. New `rust/analytics/tests/jit_partition_bounds_tests.rs` for `insert_time_range` and
+    `ensure_begin_non_decreasing` (see Testing Strategy).
+20. Extend `rust/analytics/tests/thread_spans_ordering_db_test.rs` with a reversed-registration case
     and a cross-run regrouping case (see Testing Strategy, Integration #11); drive
     `generate_stream_jit_partitions` directly — not `ThreadSpansView::jit_update`, which hardcodes
     `JitPartitionConfig::default()` — for the sub-case that needs a lowered `max_nb_objects`.
 
 ### Phase 6 — rollout
 
-18. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
-19. After deploy, run `micromegas.admin.retire_incompatible_partitions` for `thread_spans` and
+21. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
+22. After deploy, run `micromegas.admin.retire_incompatible_partitions` for `thread_spans` and
     `net_spans`.
 
 ## Files to Modify
@@ -450,12 +487,13 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
 | File | Change |
 |---|---|
 | `rust/analytics/src/lakehouse/jit_partitions.rs` | `BlockOrder`, config field, `insert_time_range`, `group_blocks_into_partitions`, both segment fns delegate, `is_jit_partition_up_to_date` tightened to exact range + count match |
-| `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, min/max bounds, monotonicity `error!` + `ensure!`, comment, `SCHEMA_VERSION` → 2 |
-| `rust/analytics/src/lakehouse/net_spans_view.rs` | `EventTime` config, min/max bounds, comment, `SCHEMA_VERSION` → 2 |
+| `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, monotonicity `error!` + `ensure!`, comment, `SCHEMA_VERSION` → 2 |
+| `rust/analytics/src/lakehouse/net_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, comment, `SCHEMA_VERSION` → 2 |
 | `rust/analytics/src/lakehouse/view.rs` | `get_scan_output_ordering` doc: assumption → enforced |
 | `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | non-overlap doc + error message: drop the now-excluded cause |
-| `rust/analytics/src/lakehouse/write_partition.rs` | remove stale block-ordering comment at `:365`; `retire_partitions` matches by insert-range overlap instead of containment for JIT view sets |
+| `rust/analytics/src/lakehouse/write_partition.rs` | remove stale block-ordering comment at `:365`; add `RetireMatch { Containment, Overlap }` param to `retire_partitions`, threaded through `write_partition_from_rows`/`insert_partition`/`insert_partition_transaction` |
 | `rust/analytics/tests/jit_partition_grouping_tests.rs` | new — pure grouping invariants |
+| `rust/analytics/tests/jit_partition_bounds_tests.rs` | new — `insert_time_range` and `ensure_begin_non_decreasing` unit tests |
 | `rust/analytics/tests/thread_spans_ordering_db_test.rs` | new case: blocks registered out of event order |
 
 ## Trade-offs
@@ -511,6 +549,27 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
   `retire_expired_partitions`, so doing nothing eventually converges — but until then queries keep
   reading the mis-grouped partitions and the bug persists on existing data. A hash bump makes the
   cutover immediate and deterministic, at the cost of dead storage until the retirement sweep runs.
+
+- **Cross-segment inversions (accepted residual case, not filed).** Segments are half-open
+  insert-time slices (`generate_stream_jit_partitions`, `jit_partitions.rs:122-123`, `:231-249`), so an
+  inversion straddling an hour boundary can still leave two partitions' event ranges overlapping —
+  unchanged by this plan, since it is exactly today's situation and neither of this plan's changes
+  touches cross-segment grouping. Observed inversions are ~12 ms, so this is theoretical in practice.
+  Both existing guards stay as backstops: `sort_and_check_non_overlapping`
+  (`partitioned_execution_plan.rs:60-88`) fails the query loudly rather than returning wrong rows, and
+  the perfetto monotonicity guard (`perfetto_trace_execution_plan.rs:405-411`) stays. A follow-up issue
+  could widen the cut rule across segment boundaries; none is filed yet, unlike the buffer-then-write
+  gap below (#1431).
+
+- **Whole-query-range spec list held in memory (pre-existing, not in scope).**
+  `generate_stream_jit_partitions` accumulates every segment's `SourceDataBlocksInMemory` before
+  `jit_update` writes them one at a time (`jit_partitions.rs:233-250`; the process variant likewise,
+  `:472-492`), and `SourceDataBlocksInMemory` holds `Vec<Arc<PartitionSourceBlock>>` — `BlockMetadata`
+  plus shared `Arc` metadata (`partition_source_data.rs:34-64`), no row payloads. This plan does not
+  add to that list or change its lifetime, so it is metadata-only and pre-existing either way. For
+  multi-day query ranges over many streams the eventual fix is to materialize each segment's
+  partitions before generating the next; worth a follow-up issue if it becomes a problem in practice,
+  not filed yet.
 
 - **Buffer-then-write partition materialization (out of scope, filed as #1431).** A partition must
   contain all the blocks of its insert range, but nothing requires its *content* to fit in memory at
@@ -577,13 +636,16 @@ permuted) and assert on `group_blocks_into_partitions`:
 8. **Degenerate inputs.** Empty list; one block; all blocks with identical `insert_time`; identical
    `begin_ticks` (tiebreak determinism — same input order in, same grouping out).
 
-### Unit — bounds helpers
+### Unit — `rust/analytics/tests/jit_partition_bounds_tests.rs` (no DB)
+
+Both targets are `pub` (Design §1 step 2, §5), so this new integration-test file can call them
+directly.
 
 9. `insert_time_range` over a permuted list returns true min/max, and equals the endpoints for a
    sorted list.
-10. `thread_spans_view`'s monotonicity `ensure!` rejects a hand-built batch with a regressing `begin`
-    and passes a monotone one. Assert the returned error names the stream and the offending row, so
-    the same detail is guaranteed present in the `error!` log line.
+10. `ensure_begin_non_decreasing` rejects a hand-built batch with a regressing `begin` and passes a
+    monotone one. Assert the returned error names the stream and the offending row, so the same
+    detail is guaranteed present in the `error!` log line.
 
 ### Integration — `thread_spans_ordering_db_test.rs` (live lake)
 
@@ -619,16 +681,3 @@ permuted) and assert on `group_blocks_into_partitions`:
     differ — 4 regressions in the reported ~627k-row window); `process_spans(process_id, 'thread')`
     row count is unchanged.
 
-## Open Questions
-
-1. **Cross-segment inversions stay possible.** `generate_stream_jit_partitions` segments on 1-hour
-   `insert_time` slices, so an inversion straddling an hour boundary still produces overlapping
-   partition event ranges and trips `sort_and_check_non_overlapping`. Observed inversions are ~12 ms,
-   so this is theoretical; both guards stay as backstops. Worth a follow-up issue rather than
-   widening this change?
-2. **Whole-query-range spec list is held in memory (pre-existing, out of scope).**
-   `generate_stream_jit_partitions` accumulates every segment's `SourceDataBlocksInMemory` before
-   `jit_update` writes them one at a time (`jit_partitions.rs:233-250`; process variant likewise).
-   Metadata-only, and this plan does not make it worse — but for multi-day query ranges over many
-   streams the eventual fix is to materialize each segment's partitions before generating the next.
-   Worth filing as a follow-up issue rather than widening this change.
