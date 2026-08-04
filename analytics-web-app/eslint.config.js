@@ -14,8 +14,9 @@ export default tseslint.config(
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      // React Compiler rules that fire on this codebase (106 findings across 48 files, see below) —
-      // turned off here; adoption is tracked in a dedicated follow-up issue (see Trade-offs).
+      // React Compiler rules that fire on this codebase (106 findings across 48 files) —
+      // turned off here; adoption is deferred and not yet tracked by an issue
+      // (see tasks/completed/1255_web_js_major_bumps_plan.md).
       'react-hooks/refs': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/static-components': 'off',

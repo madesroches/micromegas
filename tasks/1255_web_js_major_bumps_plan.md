@@ -409,7 +409,6 @@ Counts are `grep` occurrences over `analytics-web-app/src`:
 | `rounded-sm` | `rounded-xs` | 6 |
 | `flex-shrink-*` | `shrink-*` | 22 |
 | `backdrop-blur-sm` | `backdrop-blur-xs` | 1 |
-| `shadow` (bare) | `shadow-sm` | 1 |
 | `shadow-sm` | `shadow-xs` | 1 |
 
 The 126 bare-`rounded` occurrences include three variant-prefixed forms — `prose-code:rounded` in
@@ -421,7 +420,11 @@ DOM uses (`e.currentTarget.blur()`, `addEventListener('blur', …)`, `fireEvent.
 prose, not Tailwind classes — a hand-edit must not touch them. The only `blur`-scale utility class
 present is `backdrop-blur-sm`, covered by its own row above.
 
-**Ordering hazard**: the `rounded`/`shadow` scales are *shifted*, not remapped — a naive find-and-replace
+There is likewise no bare-`shadow` row: the only match of bare `shadow` in `src` is comment prose in
+`src/components/map/MapCell.tsx:141` ("doesn't shadow the default"), not a Tailwind class — it must not
+be rewritten. The only `shadow`-scale utility class present is `shadow-sm`, covered by its own row above.
+
+**Ordering hazard**: the `rounded` scale is *shifted*, not remapped — a naive find-and-replace
 that rewrites `rounded` → `rounded-sm` before `rounded-sm` → `rounded-xs` will double-shift the 6
 original `rounded-sm` sites into `rounded-xs`-then-nothing. Run `yarn dlx @tailwindcss/upgrade` (the
 official codemod, Node 20+) rather than hand-editing; it applies the renames in the correct order and is
@@ -571,7 +574,7 @@ CI gate does not apply to it.
    - `src/styles/globals.css` must end up as `@import "tailwindcss";` +
      `@config "../../tailwind.config.ts";`, with both `@layer base` blocks and both `@apply` uses
      intact. **Revert** any attempt to inline `tailwind.config.ts` into `@theme`.
-   - Confirm it applied all seven renames from the Design table, in the correct shifted order, and that
+   - Confirm it applied all six renames from the Design table, in the correct shifted order, and that
      `tailwind.config.ts` gained the `borderRadius.xs` entry (or the 6 `rounded-sm` sites were left
      alone) so `rounded-xs` stays value-preserving.
    - Add `fontFamily.sans: ['ui-sans-serif', 'system-ui', 'sans-serif', '"Apple Color Emoji"', '"Segoe UI
@@ -671,7 +674,7 @@ contribute spacing).
 - `analytics-web-app/src/styles/globals.css` — `@import` + `@config`
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
 - `analytics-web-app/postcss.config.mjs` — **deleted**
-- `analytics-web-app/src/**/*.tsx` — ~240 utility-class renames
+- `analytics-web-app/src/**/*.tsx` — ~239 utility-class renames
 - `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the eight `--color-*` references
   (six distinct names) to the raw variable names `globals.css` defines (verified dead under `@config`,
   not conditional)
