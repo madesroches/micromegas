@@ -19,6 +19,8 @@ vi.mock('apache-arrow', () => {
     LargeBinary: 11,
     FixedSizeBinary: 12,
     Dictionary: 13,
+    Utf8View: 14,
+    BinaryView: 15,
   }
 
   // Mock DataType class with static type checking methods
@@ -52,6 +54,9 @@ vi.mock('apache-arrow', () => {
     static isLargeUtf8(dt: MockDataType): boolean {
       return dt.typeId === TypeId.LargeUtf8
     }
+    static isUtf8View(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.Utf8View
+    }
     static isBinary(dt: MockDataType): boolean {
       return dt.typeId === TypeId.Binary
     }
@@ -60,6 +65,9 @@ vi.mock('apache-arrow', () => {
     }
     static isFixedSizeBinary(dt: MockDataType): boolean {
       return dt.typeId === TypeId.FixedSizeBinary
+    }
+    static isBinaryView(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.BinaryView
     }
     static isDictionary(dt: MockDataType): boolean {
       return dt.typeId === TypeId.Dictionary
@@ -71,10 +79,12 @@ vi.mock('apache-arrow', () => {
   const createIntType = () => new MockDataType(TypeId.Int)
   const createFloatType = () => new MockDataType(TypeId.Float)
   const createUtf8Type = () => new MockDataType(TypeId.Utf8)
+  const createUtf8ViewType = () => new MockDataType(TypeId.Utf8View)
   const createBoolType = () => new MockDataType(TypeId.Bool)
   const createBinaryType = () => new MockDataType(TypeId.Binary)
   const createLargeBinaryType = () => new MockDataType(TypeId.LargeBinary)
   const createFixedSizeBinaryType = () => new MockDataType(TypeId.FixedSizeBinary)
+  const createBinaryViewType = () => new MockDataType(TypeId.BinaryView)
   const createDictionaryType = (valueType: MockDataType) =>
     new MockDataType(TypeId.Dictionary, valueType)
 
@@ -89,10 +99,12 @@ vi.mock('apache-arrow', () => {
       createIntType,
       createFloatType,
       createUtf8Type,
+      createUtf8ViewType,
       createBoolType,
       createBinaryType,
       createLargeBinaryType,
       createFixedSizeBinaryType,
+      createBinaryViewType,
       createDictionaryType,
     },
   }
@@ -119,10 +131,12 @@ const { __test__ } = (await import('apache-arrow')) as unknown as {
     createIntType: () => MockArrowType
     createFloatType: () => MockArrowType
     createUtf8Type: () => MockArrowType
+    createUtf8ViewType: () => MockArrowType
     createBoolType: () => MockArrowType
     createBinaryType: () => MockArrowType
     createLargeBinaryType: () => MockArrowType
     createFixedSizeBinaryType: () => MockArrowType
+    createBinaryViewType: () => MockArrowType
     createDictionaryType: (valueType: MockArrowType) => MockArrowType
   }
 }
@@ -131,10 +145,12 @@ const {
   createIntType,
   createFloatType,
   createUtf8Type,
+  createUtf8ViewType,
   createBoolType,
   createBinaryType,
   createLargeBinaryType,
   createFixedSizeBinaryType,
+  createBinaryViewType,
   createDictionaryType,
 } = __test__
 
@@ -217,6 +233,10 @@ describe('dictionary type utilities', () => {
       expect(isBinaryType(dictFixedBinary)).toBe(true)
     })
 
+    it('should return true for BinaryView type', () => {
+      expect(isBinaryType(createBinaryViewType())).toBe(true)
+    })
+
     it('should return false for Utf8 type', () => {
       expect(isBinaryType(createUtf8Type())).toBe(false)
     })
@@ -268,6 +288,10 @@ describe('type detection functions', () => {
   describe('isStringType', () => {
     it('should return true for utf8 type', () => {
       expect(isStringType(createUtf8Type())).toBe(true)
+    })
+
+    it('should return true for Utf8View type', () => {
+      expect(isStringType(createUtf8ViewType())).toBe(true)
     })
 
     it('should return false for int type', () => {
@@ -379,6 +403,38 @@ describe('validateChartColumns', () => {
     }
   })
 
+  it('should detect a Utf8View color column as string kind', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'color', type: createUtf8ViewType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.colorColumnKind).toBe('string')
+    }
+  })
+
+  it('should detect a BinaryView color column as binary kind', () => {
+    const table = createMockTable(
+      [
+        { name: 'x', type: createIntType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'color', type: createBinaryViewType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.colorColumnKind).toBe('binary')
+    }
+  })
+
   it('should detect color column regardless of position (color first)', () => {
     const table = createMockTable(
       [
@@ -471,6 +527,18 @@ describe('validateChartColumns', () => {
     const table = createMockTable(
       [
         { name: 'category', type: createUtf8Type() },
+        { name: 'count', type: createIntType() },
+      ],
+      []
+    )
+    const result = validateChartColumns(table as never)
+    expect(result.valid).toBe(true)
+  })
+
+  it('should accept a Utf8View X column, numeric Y table', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8ViewType() },
         { name: 'count', type: createIntType() },
       ],
       []
