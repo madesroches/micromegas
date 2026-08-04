@@ -242,7 +242,7 @@ slightly stale relaxed read of a monotonic counter is acceptable for a diagnosti
 In deployments `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` is set, so the inner pool is a real
 `GreedyMemoryPool` with a budget (it defaults to `UnboundedMemoryPool` only locally, when the var is
 absent). `peak_memory_bytes` is precisely what tells operators whether that budget is set correctly
-and which queries are pushing against it (see Out of Scope for why spilling isn't part of this
+and which queries are pushing against it (see Out of Scope for why spill metrics aren't part of this
 picture).
 
 Also emit `imetric!("query_peak_memory_bytes", "bytes", peak)` for dashboards — low cardinality,
@@ -274,8 +274,9 @@ are where an expensive query blows up, and those all register consumers. Note th
 `SortExec` that grows past its in-memory threshold will show at least
 `datafusion.execution.sort_spill_reservation_bytes` (default 10 MB) per partition — the sorter
 reserves that amount against the memory pool as a merge-reservation floor in
-`sort_or_spill_in_mem_batches` (`sorts/sort.rs:714-719`), regardless of whether an actual spill to
-disk ever happens (it doesn't, here — see Out of Scope).
+`sort_or_spill_in_mem_batches` (`sorts/sort.rs:714-719`) — reserved precisely because
+`DiskManager::tmp_files_enabled()` is true here, which gates `reserve_memory_for_merge`
+(`sorts/sort.rs:716-726`; see Out of Scope on spilling being enabled).
 
 `peak_memory_bytes` comes from the `ScopedMemoryPool` instance, so it naturally includes nested
 session contexts built during execution (Perfetto trace queries, `fetch_block_metadata`, JIT
@@ -413,8 +414,10 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
    unbalanced grow/shrink in the wrapper.
 3. *Delegation.* With a `GreedyMemoryPool` of a small fixed size behind the wrapper: a `try_grow`
    past the limit returns `Err` **and** leaves `current()`/`peak()` unchanged; `memory_limit()`
-   reports `Finite(n)` through the wrapper; a registered-then-dropped consumer leaves
-   `shared.reserved() == 0` (proving `register`/`unregister` forwarding reached the inner pool).
+   reports `Finite(n)` through the wrapper; and, with a `TrackConsumersPool` in the chain, a consumer
+   registered through the wrapper shows up in `TrackConsumersPool::report_top()`/`metrics()`
+   (`pool.rs:477`, `pool.rs:486`) — proving `register`/`unregister` forwarding actually reached the
+   inner pool, rather than asserting `reserved() == 0`, which would hold even without that forwarding.
 
 **Unit — `rust/public/tests/query_audit_tests.rs`**: extend `full_record` and the
 `omits_absent_optionals` record with the new field and assert it serializes (it is a non-optional
@@ -454,12 +457,16 @@ an out-of-memory error, and confirm the resulting `error` audit record still car
 - **A per-operator breakdown.** Explicitly not an objective; `TrackConsumersPool`'s existing
   top-consumers text remains the tool for that, and now it is reachable per query via the scoped
   chain if that ever changes.
-- **Spill metrics (`spilled_bytes`/`spill_count`)**: out of scope, and spilling is not a behavior this
-  system wants. A query that exceeds the memory budget should fail rather than degrade to disk:
-  unbounded spilling would let a single expensive query balloon server load instead of being
-  rejected. `make_runtime_env()` (`runtime.rs:9-25`) accordingly configures no `DiskManager`, and the
-  analytics service and maintenance daemon run on Fargate instances with little local disk anyway.
-  Fail-fast is what makes `peak_memory_bytes` the actionable signal — queries have to fit in the
-  budget, so the peak tells operators which ones are close to it.
+- **Spill metrics (`spilled_bytes`/`spill_count`)**: out of scope. Spilling to disk *is* enabled —
+  `make_runtime_env()` (`runtime.rs:9-27`) builds the runtime with plain `RuntimeEnvBuilder::new()`,
+  which inherits DataFusion's default `DiskManager`: the OS temp directory, capped at 100 GB
+  (`DiskManagerConfig`'s `#[default]` is `NewOs`, `disk_manager.rs:122-132`; the cap is
+  `DEFAULT_MAX_TEMP_DIRECTORY_SIZE`, `disk_manager.rs:33,45-52`). That is left as-is deliberately: a
+  rarely-exercised safety valve, preferable to hard-failing a query outright. The analytics service
+  and maintenance daemon run on Fargate instances with little local disk, though, so that spill path
+  has limited headroom in practice and isn't something to rely on routinely. Spilling is the
+  exceptional path; `peak_memory_bytes` is the signal that finds expensive queries before they get
+  there, and it is what tells operators whether the `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` budget
+  is set correctly.
 - **A normalized SQL fingerprint** on the audit record (still deferred, as in #1288).
 
