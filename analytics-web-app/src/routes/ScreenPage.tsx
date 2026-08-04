@@ -1,4 +1,4 @@
-import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef, ComponentType } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
@@ -11,7 +11,7 @@ import { ConfigDiffModal } from '@/components/ConfigDiffModal'
 import { Button } from '@/components/ui/button'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { renderIcon } from '@/lib/screen-type-utils'
-import { getRenderer } from '@/lib/screen-renderers/init'
+import { SCREEN_RENDERERS, type ScreenRendererProps } from '@/lib/screen-renderers/init'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import {
@@ -342,7 +342,7 @@ function ScreenPageContent() {
   }
 
   // Get renderer for this screen type
-  const Renderer = getRenderer(screenType)
+  const Renderer: ComponentType<ScreenRendererProps> | undefined = SCREEN_RENDERERS[screenType]
 
   if (!Renderer) {
     return (

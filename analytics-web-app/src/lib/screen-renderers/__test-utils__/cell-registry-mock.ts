@@ -218,6 +218,13 @@ export function createCellRegistryMock(options: MockOptions = {}) {
     // Add getRendererProps (always a simple stub)
     meta.getRendererProps = () => ({})
 
+    // Add renderer component if requested (mirrors getCellRenderer's return value,
+    // since consumers now read metadata.renderer directly instead of calling
+    // getCellRenderer)
+    if (withRenderers) {
+      meta.renderer = createMockRenderer(type)
+    }
+
     // Add createDefaultConfig
     switch (type) {
       case 'table':

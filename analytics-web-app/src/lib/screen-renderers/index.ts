@@ -65,13 +65,3 @@ export function registerRenderer(
 ): void {
   SCREEN_RENDERERS[typeName] = component
 }
-
-/**
- * Get a renderer for a screen type.
- * Returns undefined if no renderer is registered.
- */
-export function getRenderer(
-  typeName: string
-): ComponentType<ScreenRendererProps> | undefined {
-  return SCREEN_RENDERERS[typeName]
-}
