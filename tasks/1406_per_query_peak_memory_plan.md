@@ -172,11 +172,14 @@ cost is one small `CacheManager` allocation plus a handful of Arc bumps.
 
 ```rust
 // rust/analytics/src/lakehouse/runtime.rs
-/// Wraps `shared`'s memory pool in a per-query `ScopedMemoryPool`, reusing the shared
-/// disk manager, caches and object-store registry.
+/// Builds a `RuntimeEnv` that reuses `shared`'s disk manager, caches and object-store
+/// registry but installs `scoped_pool` (already wrapping `shared`'s memory pool) as its
+/// memory pool. Takes the pool as a parameter, rather than constructing it internally, so
+/// callers can hand the (infallible) pool to `QueryAuditState` before this fallible step runs.
 pub fn scoped_runtime(
     shared: &RuntimeEnv,
-) -> Result<(Arc<RuntimeEnv>, Arc<ScopedMemoryPool>)>;
+    scoped_pool: Arc<ScopedMemoryPool>,
+) -> Result<Arc<RuntimeEnv>>;
 ```
 
 Scope at `LakehouseContext`, **not** inside `make_session_context`:
@@ -201,13 +204,20 @@ query's context through `register_functions`, so their memory counts toward the 
 of vanishing into the process pool. Same for JIT materialization —
 `jit_partitions.rs:77/129/285/430` all go through `lakehouse.runtime()`.
 
-Then in `execute_query` (`flight_sql_service_impl.rs:369-384`), before building `audit_state`:
+Then in `execute_query` (`flight_sql_service_impl.rs:369-384`): construct the `ScopedMemoryPool`
+(infallible — it's just `ScopedMemoryPool::new(...)` over the shared pool) *before* `audit_state`,
+so `audit_state` can own it from the start; build the `RuntimeEnv` (fallible) after, with the same
+`map_err(...).emit("error", ...)` pattern as every other setup stage:
 
 ```rust
-let (scoped_runtime, scoped_pool) = scoped_runtime(self.lakehouse.runtime())
-    .map_err(|e| status!("error building scoped runtime", e))?;
-let lakehouse = self.lakehouse.with_runtime(scoped_runtime);
-// ... audit_state { pool: scoped_pool.clone(), .. }
+let scoped_pool = Arc::new(ScopedMemoryPool::new(self.lakehouse.runtime().memory_pool.clone()));
+let mut audit_state = QueryAuditState { pool: scoped_pool.clone(), /* unchanged */ .. };
+// ...
+let scoped_env = scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone()).map_err(|e| {
+    audit_state.emit("error", Some(format!("error building scoped runtime: {e}")));
+    status!("error building scoped runtime", e)
+})?;
+let lakehouse = self.lakehouse.with_runtime(scoped_env);
 let ctx = make_session_context(lakehouse, /* unchanged */ ...).await?;
 ```
 
@@ -243,8 +253,12 @@ inner pool is `UnboundedMemoryPool` and nothing spills or fails. `peak_memory_by
 what tells us where to set that budget; `spilled_bytes`/`spill_count` then distinguish queries that
 actually hit the limit from those that merely came close.
 
-Optionally also `imetric!("query_peak_memory_bytes", "bytes", peak)` for dashboards — low
-cardinality, no `PropertySet` needed. Cheap and additive; include it.
+Also emit `imetric!("query_peak_memory_bytes", "bytes", peak)` for dashboards — low cardinality,
+no `PropertySet` needed. Cheap and additive; include it. It must be emitted from
+`QueryAuditState::emit()` itself (or equivalently, in both `CompletionTrackedStream::poll_next`
+terminal arms, `:203` and `:217`, right after their existing `imetric!`s) — **not** from the
+setup-phase block at `:451-462`, which runs before `execute_stream` (`:434`) returns a stream that
+anything has polled, so the pool's peak is still ~0 at that point.
 
 ### Scope and limits of the metric
 
@@ -282,9 +296,9 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
    `Display`, `peak()`, `current()`. Declare `pub mod scoped_memory_pool;` in
    `rust/analytics/src/lakehouse/mod.rs` (alphabetical, between `retire_partitions_table_function`
    and `session_configurator`), with a one-line doc comment matching the surrounding style.
-2. **`scoped_runtime`** — add to `rust/analytics/src/lakehouse/runtime.rs`, returning
-   `(Arc<RuntimeEnv>, Arc<ScopedMemoryPool>)` from
-   `RuntimeEnvBuilder::from_runtime_env(shared).with_memory_pool(scoped).build()`.
+2. **`scoped_runtime`** — add to `rust/analytics/src/lakehouse/runtime.rs`, taking the caller-built
+   `Arc<ScopedMemoryPool>` and returning `Arc<RuntimeEnv>` from
+   `RuntimeEnvBuilder::from_runtime_env(shared).with_memory_pool(scoped_pool).build()`.
 3. **`LakehouseContext::with_runtime`** — struct-update clone in
    `rust/analytics/src/lakehouse/lakehouse_context.rs`, with a doc comment stating that the metadata
    cache and reader factory are shared.
@@ -292,10 +306,14 @@ than what already runs. Memory is roughly 1 KB per in-flight query (pool + `Runt
    `QueryAuditRecord`; extend `ScanMetrics` and `aggregate_scan_metrics` in
    `rust/public/src/servers/query_audit.rs` to sum spills via `MetricsSet::spill_count()` /
    `spilled_bytes()` in the existing tree walk. Update the module doc comment.
-5. **FlightSQL wiring** — in `execute_query`: build the scoped runtime/context before `audit_state`,
-   add `pool: Arc<ScopedMemoryPool>` to `QueryAuditState`, populate the three new fields in `emit()`,
-   pass the scoped `LakehouseContext` to `make_session_context`, and add the
-   `query_peak_memory_bytes` `imetric!` next to the existing timing metrics (`:451-462`).
+5. **FlightSQL wiring** — in `execute_query`: construct the `ScopedMemoryPool` before `audit_state`
+   and add it as `pool: Arc<ScopedMemoryPool>` on `QueryAuditState` from the start; build the scoped
+   `RuntimeEnv`/context after, `map_err`-ing into `audit_state.emit("error", ...)` like every other
+   setup stage; populate the three new fields in `emit()`; pass the scoped `LakehouseContext` to
+   `make_session_context`; and emit the
+   `query_peak_memory_bytes` `imetric!` from `emit()` (or the two `CompletionTrackedStream::poll_next`
+   terminal arms, `:203`/`:217`) — not the setup-phase timing-metrics block (`:451-462`), where the
+   peak is still ~0.
 6. **Tests** — new `rust/analytics/tests/scoped_memory_pool_tests.rs` (auto-discovered;
    `analytics/Cargo.toml` has no `[[test]]` blocks) plus the `QueryAuditRecord` constructor/assertion
    updates in `rust/public/tests/query_audit_tests.rs`.
@@ -412,8 +430,3 @@ confirm `spilled_bytes > 0` and that the OOM message still lists top consumers.
   chain if that ever changes.
 - **A normalized SQL fingerprint** on the audit record (still deferred, as in #1288).
 
-## Open Questions
-
-- **`imetric!("query_peak_memory_bytes")`** — included above as an additive, low-cardinality
-  dashboard signal. Drop it if the preference is to keep peak memory audit-record-only, as
-  `bytes_scanned` is today.
