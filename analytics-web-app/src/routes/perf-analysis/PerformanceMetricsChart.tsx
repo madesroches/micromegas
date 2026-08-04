@@ -185,7 +185,12 @@ export function PerformanceMetricsChart({
             const row = batch.get(i)
             if (row) {
               const time = timestampToMs(row.time)
-              points.push({ time, value: Number(row.value) })
+              if (!Number.isFinite(time)) continue
+
+              const value = Number(row.value)
+              if (row.value != null && Number.isFinite(value)) {
+                points.push({ time, value })
+              }
               if (hasPropertiesColumn) {
                 propsRows.push({ time, properties: row.properties != null ? String(row.properties) : null })
               }

@@ -421,7 +421,7 @@ export function extractMultiSeriesChartData(
         const yVal = row[v.yColumnName]
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
-        if (isNaN(yNum)) continue
+        if (!Number.isFinite(yNum)) continue
         data.push({ x: 0, y: yNum }) // placeholder x; rebuilt below
       }
     } else {
@@ -438,7 +438,7 @@ export function extractMultiSeriesChartData(
           xNum = Number(xVal)
         }
         const yNum = Number(yVal)
-        if (isNaN(xNum) || isNaN(yNum)) continue
+        if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
         const point: ChartPoint = { x: xNum, y: yNum }
         if (v.colorColumnName && v.colorColumnKind) {
@@ -498,7 +498,7 @@ export function extractMultiSeriesChartData(
         const yVal = row[v.yColumnName]
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
-        if (isNaN(yNum)) continue
+        if (!Number.isFinite(yNum)) continue
         const str = String(xVal)
         const idx = labelMap.get(str)
         if (idx == null) continue
@@ -564,7 +564,7 @@ export function extractChartData(table: Table):
       const str = String(xVal)
       const yNum = Number(yVal)
 
-      if (isNaN(yNum)) continue
+      if (!Number.isFinite(yNum)) continue
 
       if (!labelMap.has(str)) {
         labelMap.set(str, xLabels.length)
@@ -610,7 +610,7 @@ export function extractChartData(table: Table):
 
       const yNum = Number(yVal)
 
-      if (isNaN(xNum) || isNaN(yNum)) continue
+      if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
       const point: ChartPoint = { x: xNum, y: yNum }
       if (colorColumnName && colorColumnKind) {

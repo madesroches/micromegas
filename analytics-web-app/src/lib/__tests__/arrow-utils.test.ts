@@ -100,6 +100,7 @@ vi.mock('apache-arrow', () => {
 
 import {
   extractChartData,
+  extractMultiSeriesChartData,
   validateChartColumns,
   detectXAxisMode,
   isTimeType,
@@ -585,6 +586,51 @@ describe('extractChartData', () => {
         expect(result.error).toContain('No valid data points')
       }
     })
+
+    it('should skip rows with non-finite Y values (Infinity/-Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [
+          { x: 1, y: 10 },
+          { x: 2, y: Infinity },
+          { x: 3, y: -Infinity },
+          { x: 4, y: 40 },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data).toEqual([
+          { x: 1, y: 10 },
+          { x: 4, y: 40 },
+        ])
+      }
+    })
+
+    it('should skip rows with non-finite X values (Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [
+          { x: 1, y: 10 },
+          { x: Infinity, y: 20 },
+          { x: 3, y: 30 },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.data).toEqual([
+          { x: 1, y: 10 },
+          { x: 3, y: 30 },
+        ])
+      }
+    })
   })
 
   describe('time mode', () => {
@@ -708,6 +754,30 @@ describe('extractChartData', () => {
           { x: 0, y: 10 },
           { x: 0, y: 15 },
           { x: 1, y: 20 },
+        ])
+      }
+    })
+
+    it('should skip rows with non-finite Y values (Infinity/-Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'category', type: createUtf8Type() },
+          { name: 'count', type: createIntType() },
+        ],
+        [
+          { category: 'A', count: 10 },
+          { category: 'B', count: Infinity },
+          { category: 'C', count: -Infinity },
+          { category: 'D', count: 40 },
+        ]
+      )
+      const result = extractChartData(table as never)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.xLabels).toEqual(['A', 'D'])
+        expect(result.data).toEqual([
+          { x: 0, y: 10 },
+          { x: 1, y: 40 },
         ])
       }
     })
@@ -838,6 +908,133 @@ describe('extractChartData', () => {
       )
       const result = extractChartData(table as never)
       expect(result.ok).toBe(false)
+    })
+  })
+})
+
+describe('extractMultiSeriesChartData', () => {
+  describe('numeric/time mode', () => {
+    it('should extract numeric x/y data for a single series', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [
+          { x: 1, y: 10 },
+          { x: 2, y: 20 },
+          { x: 3, y: 30 },
+        ]
+      )
+      const result = extractMultiSeriesChartData([{ table: table as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.xAxisMode).toBe('numeric')
+        expect(result.xColumnName).toBe('x')
+        expect(result.series).toHaveLength(1)
+        expect(result.series[0].data).toEqual([
+          { x: 1, y: 10 },
+          { x: 2, y: 20 },
+          { x: 3, y: 30 },
+        ])
+      }
+    })
+
+    it('should skip rows with non-finite Y values (Infinity/-Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [
+          { x: 1, y: 10 },
+          { x: 2, y: Infinity },
+          { x: 3, y: -Infinity },
+          { x: 4, y: 40 },
+        ]
+      )
+      const result = extractMultiSeriesChartData([{ table: table as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.series[0].data).toEqual([
+          { x: 1, y: 10 },
+          { x: 4, y: 40 },
+        ])
+      }
+    })
+
+    it('should skip rows with non-finite X values (Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'x', type: createIntType() },
+          { name: 'y', type: createFloatType() },
+        ],
+        [
+          { x: 1, y: 10 },
+          { x: Infinity, y: 20 },
+          { x: 3, y: 30 },
+        ]
+      )
+      const result = extractMultiSeriesChartData([{ table: table as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.series[0].data).toEqual([
+          { x: 1, y: 10 },
+          { x: 3, y: 30 },
+        ])
+      }
+    })
+  })
+
+  describe('categorical mode', () => {
+    it('should extract string x data as indices with labels for a single series', () => {
+      const table = createMockTable(
+        [
+          { name: 'category', type: createUtf8Type() },
+          { name: 'count', type: createIntType() },
+        ],
+        [
+          { category: 'A', count: 10 },
+          { category: 'B', count: 20 },
+          { category: 'C', count: 30 },
+        ]
+      )
+      const result = extractMultiSeriesChartData([{ table: table as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.xAxisMode).toBe('categorical')
+        expect(result.series[0].data).toEqual([
+          { x: 0, y: 10 },
+          { x: 1, y: 20 },
+          { x: 2, y: 30 },
+        ])
+      }
+    })
+
+    it('should skip rows with non-finite Y values (Infinity/-Infinity)', () => {
+      const table = createMockTable(
+        [
+          { name: 'category', type: createUtf8Type() },
+          { name: 'count', type: createIntType() },
+        ],
+        [
+          { category: 'A', count: 10 },
+          { category: 'B', count: Infinity },
+          { category: 'C', count: -Infinity },
+          { category: 'D', count: 40 },
+        ]
+      )
+      const result = extractMultiSeriesChartData([{ table: table as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        // Label-to-index map is built from ALL x values (A,B,C,D) before the
+        // Infinity/-Infinity rows are dropped, so 'D' keeps its alphabetical
+        // index (3), not a re-compacted index.
+        expect(result.series[0].data).toEqual([
+          { x: 0, y: 10 },
+          { x: 3, y: 40 },
+        ])
+      }
     })
   })
 })

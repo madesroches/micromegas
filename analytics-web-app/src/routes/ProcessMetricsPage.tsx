@@ -253,7 +253,12 @@ function ProcessMetricsContent() {
           const row = table.get(i)
           if (row) {
             const time = timestampToMs(row.time)
-            points.push({ time, value: Number(row.value) })
+            if (!Number.isFinite(time)) continue
+
+            const value = Number(row.value)
+            if (row.value != null && Number.isFinite(value)) {
+              points.push({ time, value })
+            }
 
             if (hasProps && row.properties != null) {
               try {
