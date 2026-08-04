@@ -79,9 +79,12 @@ property-timeline feature (`MetricsChart.tsx`, `useMetricsData.ts`'s `getPropert
 entirely independently of `value` — a guard that drops the whole row whenever `value` is
 non-finite would silently discard a valid property-timeline entry for a row whose `time` and
 `properties` are otherwise fine. Fix: at both sites, only skip `points.push(...)` when `value` is
-non-finite; only skip the property recording (and the row as a whole) when `time` itself is
-non-finite, since there is no valid X position to plot or key properties on — `value`'s
-finiteness has no bearing on whether properties get recorded.
+`row.value == null || !Number.isFinite(value)` (mirroring `arrow-utils.ts`'s `yVal == null` check
+before `Number(...)`, since `Number(null) === 0`, which is finite, and would otherwise pass a
+plain `!Number.isFinite(value)` guard unnoticed); only skip the property recording (and the row as
+a whole) when `time` itself is non-finite, since there is no valid X position to plot or key
+properties on — `value`'s finiteness (or nullness) has no bearing on whether properties get
+recorded.
 
 **Third extraction path: process-metrics page.** `ProcessMetricsPage.tsx`'s "Unified extraction
 effect" (`ProcessMetricsPage.tsx:256`) has the same unguarded pattern:
@@ -99,8 +102,8 @@ reproduces the identical Y-axis-explosion bug, on either the `value` column or (
 perf-analysis path above. This site also records `row.properties` into `propsMap`
 (`ProcessMetricsPage.tsx:260`) independently of `value`, feeding the same property-timeline
 feature — so the same surgical guard applies. Fix: at this site too, only skip
-`points.push(...)` when `value` is non-finite; only skip the property recording (and the row as
-a whole) when `time` itself is non-finite.
+`points.push(...)` when `row.value == null || !Number.isFinite(value)`; only skip the property
+recording (and the row as a whole) when `time` itself is non-finite.
 
 ## Implementation Steps
 
@@ -113,19 +116,24 @@ a whole) when `time` itself is non-finite.
    row-dropping `continue`: right after `time` is computed via `timestampToMs(row.time)`, `continue`
    the loop when `!Number.isFinite(time)` (no valid X position to plot, or to key
    `propsMap` on); otherwise compute `value = Number(row.value)` and only call
-   `points.push({ time, value })` when `Number.isFinite(value)`, leaving the `propsMap.set(time, ...)`
-   read from `row.properties` unconditional on `value`'s finiteness so a row with a bad `value`
-   but a good `time`/`properties` still contributes to the property timeline.
+   `points.push({ time, value })` when `row.value != null && Number.isFinite(value)` — the
+   `row.value != null` half is required because `Number(null) === 0`, which is finite, so a plain
+   `Number.isFinite(value)` check would silently plot a SQL `NULL` as `0` (mirroring
+   `arrow-utils.ts`'s `yVal == null` check, which runs before `Number(...)` for the same reason) —
+   leaving the `propsMap.set(time, ...)` read from `row.properties` unconditional on `value`'s
+   finiteness or nullness so a row with a bad/missing `value` but a good `time`/`properties` still
+   contributes to the property timeline.
 4. In `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`'s
    `loadCustomQuery` (line 188), apply the same two-part restructuring: `continue` when `time` is
-   non-finite; otherwise push `{ time, value }` to `points` only when `value` is finite, while the
-   `propsRows.push(...)` (guarded by `hasPropertiesColumn`) still runs regardless of `value`'s
-   finiteness.
+   non-finite; otherwise push `{ time, value }` to `points` only when
+   `row.value != null && Number.isFinite(value)`, while the `propsRows.push(...)` (guarded by
+   `hasPropertiesColumn`) still runs regardless of `value`'s finiteness or nullness.
 5. In `analytics-web-app/src/routes/ProcessMetricsPage.tsx`'s "Unified extraction effect"
    (line 256), apply the same two-part restructuring: `continue` when `time` is non-finite;
-   otherwise push `{ time, value }` to `points` only when `value` is finite, while the
-   `propsMap.set(...)` read from `row.properties` (guarded by `hasProps`) still runs regardless of
-   `value`'s finiteness.
+   otherwise push `{ time, value }` to `points` only when
+   `row.value != null && Number.isFinite(value)`, while the `propsMap.set(...)` read from
+   `row.properties` (guarded by `hasProps`) still runs regardless of `value`'s finiteness or
+   nullness.
 6. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
    `extractChartData` and `extractMultiSeriesChartData` (numeric/time path and categorical path)
    for rows containing `Infinity`/`-Infinity` in the Y column, and one covering `Infinity` in the
