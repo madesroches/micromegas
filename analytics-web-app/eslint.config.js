@@ -21,7 +21,6 @@ export default tseslint.config(
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/static-components': 'off',
       'react-hooks/immutability': 'off',
-      'react-hooks/purity': 'off',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
