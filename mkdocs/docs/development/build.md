@@ -7,6 +7,9 @@ This guide covers building Micromegas from source and setting up a development e
 - **[Rust](https://rustup.rs/)** - Toolchain version pinned in `rust/rust-toolchain.toml`; `rustup` will install it automatically on first build
 - **[Python 3.11+](https://www.python.org/downloads/)**
 - **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
+- **Python `docker` package** - The `local_test_env` scripts that manage the PostgreSQL
+  container (`start_services.py`, `local_test_env/db/run.py`) import the `docker` SDK:
+  `pip install --user docker`
 - **[Git](https://git-scm.com/downloads)**
 - **Build tools** - C/C++ compiler and linker (required for Rust compilation)
   - Linux: `sudo apt-get install build-essential clang mold`
@@ -15,6 +18,14 @@ This guide covers building Micromegas from source and setting up a development e
 
 !!! note "mold linker requirement"
     On Linux, the project requires the [mold linker](https://github.com/rui314/mold) as configured in `.cargo/config.toml`. This provides faster linking for large projects.
+
+!!! note "Don't use apt's `python3-docker` on Ubuntu 24.04+ (noble)"
+    Ubuntu noble pins `python3-docker` at docker-py 5.0.3, which raises
+    `docker.errors.DockerException: ... Not supported URL scheme http+docker` once
+    urllib3 2.x is on the path (pulled in by `requests` from any other tool installed
+    in user site-packages, which take precedence over apt's `dist-packages`). Install
+    from PyPI instead: `pip install --user docker` (add `--break-system-packages` if
+    pip refuses on an externally-managed system Python).
 
 ### Additional CI Tools
 
