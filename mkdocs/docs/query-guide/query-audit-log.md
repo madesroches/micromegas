@@ -76,6 +76,26 @@ ORDER BY total_ms DESC
 LIMIT 20;
 ```
 
+### Most memory-hungry individual queries, with SQL for drill-down
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '1 hour'
+)
+SELECT
+  time,
+  jsonb_as_string(jsonb_get(j, 'email')) AS email,
+  jsonb_as_i64(jsonb_get(j, 'peak_memory_bytes')) AS peak_memory_bytes,
+  jsonb_as_i64(jsonb_get(j, 'spilled_bytes')) AS spilled_bytes,
+  jsonb_as_string(jsonb_get(j, 'sql')) AS sql
+FROM q
+ORDER BY peak_memory_bytes DESC
+LIMIT 20;
+```
+
 ## Fields
 
 | Field | Type | Present | Description |
@@ -99,6 +119,9 @@ LIMIT 20;
 | `error` | string | on error | Error message, when `status` is `"error"` |
 | `output_rows` | integer | if available | Rows produced by the query's physical plan root |
 | `bytes_scanned` | integer | always | Bytes read from the lakehouse's parquet reader (object-store bytes requested, which may be served from the in-process L1 cache rather than fetched from origin) |
+| `peak_memory_bytes` | integer | always | Peak tracked DataFusion reservation for this query alone |
+| `spilled_bytes` | integer | always | Total bytes spilled to disk by this query's plan; nonzero only once the query actually spills — the exceptional safety-valve path, not the common case |
+| `spill_count` | integer | always | Number of spill events for this query's plan; nonzero only once the query actually spills |
 
 `context_init_ms` / `planning_ms` / `execution_ms` / `setup_ms` / `total_ms` are measured with
 `std::time::Instant`, independently of the raw-TSC-tick `imetric!` timings emitted elsewhere in
@@ -121,3 +144,22 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
 - **No fingerprint field (yet).** The raw `sql` field is enough to drill down into individual
   expensive queries; a normalized fingerprint (with literals stripped) could be added later as an
   additive field without breaking existing consumers.
+- **`peak_memory_bytes` is a per-query lower bound on process cost, not the full picture.** It's the
+  peak of *tracked* DataFusion reservation — the same mechanism DataFusion's own memory-limit
+  enforcement uses — but it doesn't count in-flight `RecordBatch`es and parquet decode buffers
+  (DataFusion documents this as deliberate), the L1 byte cache or micromegas' metadata cache
+  (separately accounted), or `AsyncArrowWriter` row-group buffers used by JIT materialization
+  inside a query (bounded, since row groups are capped at 128K rows). It is a monotonic
+  high-water mark, so it stays valid on `error` and `incomplete` records too — even a record whose
+  query failed or was abandoned reports the real peak reached before that point. It is the signal
+  to use when judging whether the deployed `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` is set
+  correctly and which queries are pushing against it; `spilled_bytes`/`spill_count` are the alarm
+  for when a query actually leans on the disk-spill safety valve rather than merely coming close.
+- **`peak_memory_bytes` and `spilled_bytes`/`spill_count` don't share the same scope.** The peak
+  naturally includes nested session contexts built during execution (Perfetto trace queries, JIT
+  materialization), since it comes from the query's own memory-pool instance. The spill counters
+  instead come from summing the *outer* physical plan tree, so a nested session context built
+  inside a leaf node is opaque to that sum — a query can legitimately show `peak_memory_bytes > 0`
+  with `spilled_bytes == 0` even when nested work spilled. Also, a query that runs
+  `materialize_partitions()`/`regenerate_partitions()` reports the merge's peak against the calling
+  query, understated by the row-group-buffer caveat above.

@@ -116,6 +116,17 @@ impl LakehouseContext {
         &self.runtime
     }
 
+    /// Clones this context with `runtime` swapped, sharing the metadata cache and reader
+    /// factory. Deliberately a struct-update clone rather than a call to `new()`/
+    /// `with_caches()` — those rebuild the `MetadataCache` and `ReaderFactory`, which would
+    /// throw away the shared metadata cache per query.
+    pub fn with_runtime(&self, runtime: Arc<RuntimeEnv>) -> Arc<Self> {
+        Arc::new(Self {
+            runtime,
+            ..self.clone()
+        })
+    }
+
     /// Returns the shared `ReaderFactory`.
     pub fn reader_factory(&self) -> &Arc<ReaderFactory> {
         &self.reader_factory

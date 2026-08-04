@@ -101,6 +101,8 @@ pub mod retire_partition_by_metadata_udf;
 pub mod retire_partitions_table_function;
 /// Runtime resources
 pub mod runtime;
+/// Per-query `MemoryPool` wrapper that adds accounting on top of a shared pool
+pub mod scoped_memory_pool;
 /// SessionConfigurator trait for custom session context configuration
 pub mod session_configurator;
 /// Sql-defined view updated in batch
