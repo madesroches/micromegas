@@ -342,17 +342,25 @@ overlapping partition with `existing_count >= required_count`" as up to date. Un
 `BlockOrder::EventTime`, a block that arrives between two runs and sorts into the middle of the list
 can move an *earlier* cut point (§3's last bullet), so a later run's spec can have a smaller,
 different insert range than an already-written partition that still overlaps it. Matched by the
-current containment query (`begin_insert_time <= $3 AND end_insert_time >= $4`) that stale, wider
-partition satisfies `existing_count >= required_count` and is wrongly declared up to date, while
+current *overlap* query (`begin_insert_time <= $3 AND end_insert_time >= $4`, where `$3` is the
+spec's max and `$4` its min — an overlap test, despite sitting behind a `>=` count check that reads
+like containment) that stale, wider partition satisfies `existing_count >= required_count` and is
+wrongly declared up to date, while
 `retire_partitions` (`write_partition.rs:155-176`) — containment-based (`begin_insert_time >= $3 AND
 end_insert_time <= $4`) — never removes it because it isn't contained in the new, narrower range.
 Two changes close this:
 
 - **`is_jit_partition_up_to_date`**: match on exact insert-range equality (`begin_insert_time = $3
-  AND end_insert_time = $4`) instead of containment, and require `existing_count == required_count`
+  AND end_insert_time = $4`) instead of overlap, and require `existing_count == required_count`
   instead of `>=`. Under `BlockOrder::InsertTime`, cut points are stable across runs, so the exact
-  range and count already coincide with the containment/`>=` result — this is a no-op there, not a
-  config-gated special case. This makes the function's existing degenerate-range (`min == max`)
+  range and count already coincide with the overlap/`>=` result — this is a no-op there, not a
+  config-gated special case. One residual stays: `block_ids_hash` encodes only the object count
+  (`partition_nb_objects.to_le_bytes()`, preserved by Phase 1 step 3), so "exact range + exact
+  count" is the strongest check the stored hash supports — a cross-run regrouping that changed
+  block *membership* while preserving both would be missed. Grouping is deterministic given the
+  segment's block list, so constructing that case requires the list itself to change in a
+  count-and-range-preserving way; this is a pre-existing weakness of the hash, unchanged here, and
+  a real content hash of block ids is the follow-up if it ever matters. This makes the function's existing degenerate-range (`min == max`)
   branch redundant with the general query — both now produce identical SQL — so it collapses into
   one exact-equality query. The `#488` "CRITICAL: Use inclusive inequalities (`<=`, `>=`) to prevent
   race conditions" comment at `jit_partitions.rs:513-550` must be rewritten, not deleted: it should
@@ -495,7 +503,7 @@ parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
    collect blocks into a `Vec` and delegate to the helper, deleting both duplicated cut loops.
 5. Update the module/function docs to describe the two orderings and the insert-range invariant the
    cut rule upholds.
-6. Tighten `is_jit_partition_up_to_date` from `existing_count >= required_count` over a containment
+6. Tighten `is_jit_partition_up_to_date` from `existing_count >= required_count` over an overlap
    range query to exact insert-range equality plus exact count equality, so a partition from an
    earlier grouping run with different cut points is never mistaken for up to date (Design §6). This
    collapses the function's existing `min == max` degenerate-range branch into the single
