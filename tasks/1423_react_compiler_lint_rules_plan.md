@@ -9,9 +9,10 @@
 `analytics-web-app/eslint.config.js:20-24` to keep #1422 reviewable (106 findings across 48 files —
 documented in `tasks/completed/1255_web_js_major_bumps_plan.md`). This plan re-enables all five —
 `react-hooks/purity`, `react-hooks/static-components`, `react-hooks/immutability`,
-`react-hooks/set-state-in-effect`, `react-hooks/refs` — fixing every finding except the small remainder
-of `refs` sites the issue explicitly allows to end up as a justified per-site `eslint-disable`, and
-removes the five `'off'` overrides plus their explanatory comment from `eslint.config.js`.
+`react-hooks/set-state-in-effect`, `react-hooks/refs` — fixing the two large mechanically-fixable `refs`
+clusters and triaging the remaining 42 sites, some of which end as justified per-site `eslint-disable`s
+(as the issue explicitly allows), and removes the five `'off'` overrides plus their explanatory comment
+from `eslint.config.js`.
 
 The findings were reproduced directly (not taken on faith from the issue): a scratch config spreading
 `eslint.config.js` with the five rules flipped to `'error'`, run via `yarn eslint . -c <scratch> -f json`,
@@ -22,8 +23,12 @@ was linted in isolation against the same scratch config before being adopted as 
 fix, so the patterns in Design are confirmed to satisfy the rule, not assumed.
 
 Ordered as five phases, one per rule, matching the issue's own suggested order (easiest/highest-signal
-first) and its acceptance criteria. Each phase is its own commit, gated green on
-`python3 build/analytics_web_ci.py`, so the branch bisects cleanly and each commit's diff stays reviewable.
+first) and its acceptance criteria. Four of the five phases are a single commit each; `refs` — by far the
+largest, spanning a mechanical ref-write pattern, one behavioral refactor, and an open-ended 42-site
+triage — splits into three commits of its own (Pattern 4 moves, the `useNotebookVariables` refactor, then
+the long tail plus the rule flip), for seven commits total (eight counting the optional changelog commit).
+Each commit is gated green on `python3 build/analytics_web_ci.py`, so the branch bisects cleanly and each
+commit's diff stays reviewable.
 
 ## Current State
 
@@ -299,6 +304,17 @@ one site in the whole issue that's a real behavioral refactor rather than a mech
 its own careful pass with `useNotebookVariables.test.tsx` run before/after (existing coverage — see
 Testing Strategy) rather than a one-line change.
 
+`variableValuesRef` itself is not removed: it's a documented member of `UseNotebookVariablesResult`
+("Ref for synchronous access during sequential cell execution", `useNotebookVariables.ts:18`) that
+`useCellExecution.ts` reads synchronously mid-execution (`:141-142`, `:293`), and `setVariableValue`'s
+eager, same-tick write to it (`:195`) must keep working for that contract to hold — an existing test
+already asserts it ("variableValuesRef is updated immediately after setVariableValue",
+`useNotebookVariables.test.tsx:252`). So only the render-time *reads* (`:134-136`, `:149`) move from the
+ref to the new `variableValues` state; the ref stays in the returned API and is resynced from that state
+via a `useLayoutEffect` (`variableValuesRef.current = variableValues`, the Pattern 4 shape), so
+`useCellExecution`'s synchronous contract is unaffected while the render-time write at `:154` moves to
+`variableValues` state instead.
+
 ### `set-state-in-effect` — three sub-patterns, no single fix
 
 Reproducing the false-positive/true-positive split needed one more empirical check: does the rule flag
@@ -309,24 +325,33 @@ an Effect (`useEffect(() => { async function run() { ...; setState(x) }; run() }
 top-level call, or a call to a function declared *outside* the effect, is flagged. This distinguishes
 three real categories among the 33 findings:
 
-**(a) Fetch-on-mount via an already-extracted, reused loader — 6 sites.** `Sidebar.tsx:105`
-(`loadFolders`), `DataSourcesPage.tsx:65`, `ExportScreensPage.tsx:44`, `ImportScreensPage.tsx:98`,
-`MapsPage.tsx:67`, `ScreensPage.tsx:77` all call a `useCallback`-memoized loader from a mount effect, and
-each loader is *also* called elsewhere (e.g. `Sidebar.tsx:108`'s `useFoldersChangedListener(loadFolders)`),
-so it can't just be inlined into the effect. Fix: wrap the call in an inline async IIFE inside the effect —
+**(a) Fetch-on-mount via an already-extracted loader — 6 sites.** `Sidebar.tsx:105` (`loadFolders`),
+`DataSourcesPage.tsx:65`, `ExportScreensPage.tsx:44`, `ImportScreensPage.tsx:98`, `MapsPage.tsx:67`,
+`ScreensPage.tsx:77` all call a `useCallback`-memoized loader from a mount effect. Four of the six loaders
+are genuinely reused elsewhere — `Sidebar.tsx:108`'s `useFoldersChangedListener(loadFolders)`, and
+similarly `DataSourcesPage.tsx:108,121,133`, `MapsPage.tsx:81`, `ScreensPage.tsx:120,147` — so those can't
+just be inlined into the effect without duplicating logic at the other call site. Fix: wrap the call in an
+inline async IIFE inside the effect, with a one-line comment explaining why the wrap exists (a future
+cleanup could otherwise mistake it for pointless indirection and delete it, silently re-breaking lint) —
 verified clean, and it's the loader identity (not its body) doing the wrapping, so nothing else that
 references the loader changes:
 
 ```tsx
 useEffect(() => {
+  // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
   void (async () => {
     await loadFolders()
   })()
 }, [loadFolders])
 ```
 
-**(b) Fully-derived state duplicated via effect (should be `useMemo`, not `useState` + effect) — 9
-sites, 5 files.** `ProcessPage.tsx:157,178,198`, `ProcessMetricsPage.tsx:227,268`, `useMetricsData.ts:106`,
+The other two — `ExportScreensPage.tsx`'s `loadData` (`:29`) and `ImportScreensPage.tsx`'s
+`loadExistingScreens` (`:87`) — have exactly one caller, the mount effect itself (`:44`, `:98`), so they
+take React's plain documented fix instead: move the loader's body directly into the effect, no IIFE, no
+`useCallback`.
+
+**(b) Fully-derived state duplicated via effect (should be `useMemo`, not `useState` + effect) — 8
+sites, 5 files.** `ProcessPage.tsx:157,178,198`, `ProcessMetricsPage.tsx:268`, `useMetricsData.ts:106`,
 `LogRenderer.tsx:329`, `ProcessLogPage.tsx:273`. All five share the identical shape: a `useEffect` gated on
 `query.isComplete && !query.error` that reads `query.getTable()` — a pure, idempotent read of already-resolved
 data — and writes it into a separate `useState`. There is no asynchrony left at this point (the actual
@@ -340,13 +365,38 @@ const process = useMemo<ProcessRow | null>(() => {
   const table = processQuery.getTable()
   const row = table && table.numRows > 0 ? table.get(0) : null
   return row ? { exe: String(row.exe ?? ''), /* ...same fields... */ } : null
-}, [processQuery.isComplete, processQuery.error, processQuery])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [processQuery.isComplete, processQuery.error])
 ```
 
-removing `setProcess`/the effect/the `eslint-disable-next-line react-hooks/exhaustive-deps` comment
-guarding its narrowed deps entirely. `LogRenderer.tsx:329` sets two states (`resultTable`, `hasLoaded`);
-`hasLoaded` becomes `resultTable !== null || (streamQuery.isComplete && streamQuery.error != null)` (loaded
-successfully, or loaded-and-failed — both should stop a loading spinner).
+removing `setProcess`/the effect, but *keeping* the narrowed `[processQuery.isComplete, processQuery.error]`
+deps and the `eslint-disable-next-line react-hooks/exhaustive-deps` comment guarding them: `useStreamQuery`
+returns a fresh object every render (`useStreamQuery.ts:124`'s `{ ...state, execute, cancel, retry,
+getTable, getBatches }`), so keying the memo on `processQuery` itself would invalidate it — and every
+downstream memo keyed on its result (`classifyLogColumns`/`computeFlexWidths` in `LogRenderer.tsx:335-345`,
+`availablePropertyKeys` in `useMetricsData.ts:115-121`) — on every render. `exhaustive-deps` is only
+`"warn"` in `reactHooks.configs.recommended`, so the narrowed deps plus the disable comment don't fail
+`yarn lint`. `LogRenderer.tsx:329` sets two states (`resultTable`, `hasLoaded`); only `resultTable` is
+fully-derived and converts to `useMemo` as above. `hasLoaded` is a monotonic latch (it gates the
+filter-change re-execute effect at `:417-422` and the initial spinner at `:575`), not state derivable from
+`resultTable`: `resultTable !== null || (streamQuery.isComplete && streamQuery.error != null)` would go
+back to `false` after a successful *empty* query (`getTable()` returns `null` when there are no batches,
+even though the query succeeded) and would flip `true` after an error, neither of which matches today's
+behavior. Instead `hasLoaded` becomes its own `useMemo` derived straight from the query's completion
+signal, `streamQuery.isComplete && !streamQuery.error`, which reproduces today's semantics exactly (true
+once a successful load lands, never true after an error) without depending on `resultTable`'s nullness.
+`ProcessLogPage.tsx:273` has the same shape: its effect sets `rows` (fully-derived, converts to `useMemo`)
+alongside `setHasLoaded(true)` at `:278`, which gates two re-execute effects (`:386-395`, `:400-409`) and
+the spinner (`:580`) — the same monotonic-latch treatment applies: its own `useMemo` derived from the
+query's completion signal, not from `rows`.
+
+`ProcessMetricsPage.tsx:227` looks superficially like this shape but isn't — its effect performs a
+router write (`updateConfig(..., { replace: true })`) and a conditional auto-selection
+(`setSelectedMeasure(autoMeasure)`) alongside `setMeasures(measureList)` and `setDiscoveryDone(true)`,
+none of which is a pure derived-value assignment. It gets the same inline-function wrap as sub-pattern (a)
+below (the rule doesn't care what the wrapped body does, only that the `setState` calls sit inside a
+function declared and invoked inside the effect) rather than a `useMemo`. Only `ProcessMetricsPage.tsx:268`
+is a genuine (b) `useMemo` candidate there.
 
 **(c) Local editable/UI state reset when a prop or dependency changes — 18 sites.** The remainder:
 `Sidebar.tsx:113,126,137`, `MetricsRenderer.tsx:82,89`, `ImageCell.tsx:43,55`, `CellEditor.tsx:52`,
@@ -376,23 +426,26 @@ comparison and equally clean under the rule: `const [recentRanges] = useState(()
 getRecentTimeRanges())`. `useFadeOnIdle.ts:17` sets state as part of a genuine timer-driven state machine
 (`setTimeout` cleanup, not a plain prop mirror) — this one is a legitimate Effect, so it takes the (a)-style
 inline-function wrap rather than a render-time rewrite: wrap the existing effect body in a nested function
-declared and invoked inside the effect.
+declared and invoked *and returned* — `const run = () => { /* existing body, including both early
+`return`s */ }; return run()`, not a bare invocation — so the effect's cleanup function
+(`() => clearTimeout(id)`, `:26`) and its early returns still propagate out of the effect callback. As with
+the (a) IIFEs, add a one-line comment at the wrap site stating why it's there.
 
 ### `refs` — fix what Patterns 4 and 5 cover, disable-with-reason for the rest
 
 Patterns 4 and 5 above account for the two largest, mechanically-fixable clusters:
 `useMapOrbitController.ts` (5), `PerspectiveCameraController.tsx`/`OrthographicCameraController.tsx` (2, via
 Pattern 4), and `useNotebookVariables.ts` (11, via Pattern 5) — 18 of the 60. One more site needs a
-small API addition rather than a pure move: `PerspectiveCameraController.tsx:164-169` mutates
-`sphericalRef.current`/`targetRef.current` — refs *returned by* `useMapOrbitController`, not owned locally
-— inside its reset-view effect. `useMapOrbitController` should expose a small imperative
-`resetTo(spherical, target)` that performs the mutation internally (since it owns the refs), and
-`PerspectiveCameraController`'s reset effect calls that instead of reaching into the refs directly. This
-also resolves the corresponding `immutability` finding at the same lines (Design's Pattern 3 area — see
-Files to Modify), since the mutation moves from "an external hook mutating another hook's returned ref" to
-"the owning hook mutating its own state."
+small fix rather than an API addition: `PerspectiveCameraController.tsx:164-166`'s reset-view effect
+directly assigns `sphericalRef.current.radius`/`.phi`/`.theta` — a ref *returned by*
+`useMapOrbitController`, not owned locally. THREE.Spherical has its own setter method; replacing the three
+property assignments with `sphericalRef.current.set(radius, phi, theta)` is a method call rather than a
+direct property write, so the rule doesn't flag it (the adjacent `targetRef.current.copy(...)` on the next
+line is already a method call and was never flagged in the first place). This also resolves the
+corresponding `immutability` finding at the same lines (Design's Pattern 3 area — see Files to Modify),
+since both findings only fire on the direct property assignments.
 
-The remaining ~40 sites are spread across 22 files, concentrated in canvas/imperative rendering code
+The remaining 42 sites are spread across 22 files, concentrated in canvas/imperative rendering code
 (`XYChart.tsx`, `MapCell.tsx`, `NotebookRenderer.tsx`, `useScreenQuery.ts`, `ProcessPage.tsx`, and ~19 files
 with 1-2 sites each). Per the issue's own framing and its acceptance criteria (the only rule of the five
 allowed a per-site escape hatch), each gets triaged during implementation against the same two questions:
@@ -408,10 +461,13 @@ here>` at that exact line, per the issue's acceptance criterion. No blanket file
 
 ## Implementation Steps
 
-One branch, five commits (one per rule, in the issue's suggested order), each green on
-`python3 build/analytics_web_ci.py` before moving to the next so the branch bisects cleanly. Each commit
-removes exactly one `'off'` line (plus, on the last commit, the now-empty explanatory comment block) from
-`analytics-web-app/eslint.config.js`.
+One branch, seven commits (four single-rule commits plus `refs` split into three — Pattern 4, the
+`useNotebookVariables` refactor, then the long-tail triage — in the issue's suggested rule order), each
+green on `python3 build/analytics_web_ci.py` before moving to the next so the branch bisects cleanly. The
+first four commits and the last of the three `refs` commits each remove exactly one `'off'` line from
+`analytics-web-app/eslint.config.js` (the last `refs` commit also removes the now-empty explanatory comment
+block); the other two `refs` commits leave `eslint.config.js` untouched since the rule can't flip to
+`'error'` until all its findings are resolved.
 
 ### Commit 1 — `react-hooks/purity`
 
@@ -435,50 +491,64 @@ removes exactly one `'off'` line (plus, on the last commit, the now-empty explan
    should need no test changes.
 2. `src/lib/screen-renderers/cells/FlameGraphCell.tsx` — `keyTickRef` per Pattern 3b. Run
    `FlameGraphCell.test.tsx`/`FlameGraphLayout.test.ts`.
-3. `src/components/map/hooks/useMapOrbitController.ts` — add the `resetTo(spherical, target)` API (see
-   `refs` section above); `src/components/map/modes/PerspectiveCameraController.tsx:164-169` calls it
-   instead of mutating the refs directly.
+3. `src/components/map/modes/PerspectiveCameraController.tsx:164-166` — replace the three direct property
+   assignments (`sphericalRef.current.radius/.phi/.theta = …`) with `sphericalRef.current.set(radius, phi,
+   theta)`, per the `refs` section above.
 4. Remove `'react-hooks/immutability': 'off',`.
 5. `yarn lint` zero findings for this rule; full CI; commit.
 
 ### Commit 4 — `react-hooks/set-state-in-effect`
 
-1. Sub-pattern (a) — 6 files: wrap each mount-effect's loader call in an inline async IIFE
-   (`Sidebar.tsx`, `DataSourcesPage.tsx`, `ExportScreensPage.tsx`, `ImportScreensPage.tsx`,
-   `MapsPage.tsx`, `ScreensPage.tsx`).
+1. Sub-pattern (a) — wrap each reused loader's mount-effect call in an inline async IIFE, with a one-line
+   comment stating why the wrap exists (`Sidebar.tsx`, `DataSourcesPage.tsx`, `MapsPage.tsx`,
+   `ScreensPage.tsx`); inline the loader body directly into the effect (no IIFE) for the two single-caller
+   loaders (`ExportScreensPage.tsx`, `ImportScreensPage.tsx`).
 2. Sub-pattern (b) — 5 files: replace state+effect with `useMemo` (`ProcessPage.tsx`,
-   `ProcessMetricsPage.tsx`, `useMetricsData.ts`, `LogRenderer.tsx`, `ProcessLogPage.tsx`).
+   `ProcessMetricsPage.tsx`, `useMetricsData.ts`, `LogRenderer.tsx`, `ProcessLogPage.tsx`);
+   `ProcessMetricsPage.tsx:227` is not (b)-shaped and instead gets the sub-pattern-(a) inline-function wrap
+   (see Design); `LogRenderer.tsx`'s and `ProcessLogPage.tsx`'s `hasLoaded` latches each become their own
+   `useMemo` derived from the query's completion signal, per the Design section above.
 3. Sub-pattern (c) — remaining files: "adjust state when a prop changes" rewrite (`Sidebar.tsx`'s other 3
    sites, `MetricsRenderer.tsx`, `ImageCell.tsx`, `CellEditor.tsx`, `XYChart.tsx`, `CustomRange.tsx`,
    `useDataSourceState.ts`, `NotebookRenderer.tsx`, `HorizontalGroupCell.tsx`, `LogCell.tsx`,
    `PerfettoExportCell.tsx`, `TableCell.tsx`, `pagination.tsx`); lazy-init for `RecentRanges.tsx`;
-   inline-function-wrap for `useFadeOnIdle.ts`.
+   inline-function-wrap (returning the wrapper's invocation, with an explanatory comment) for
+   `useFadeOnIdle.ts`.
 4. Remove `'react-hooks/set-state-in-effect': 'off',`.
 5. `yarn lint` zero findings for this rule; full CI (pay particular attention to
    `useMetricsData`/`ProcessMetricsPage`/`ProcessLogPage`/`LogRenderer` tests, since sub-pattern (b)
    changes state shape from settable to derived); commit.
 
-### Commit 5 — `react-hooks/refs`
+### Commit 5 — `react-hooks/refs`, part 1: Pattern 4 mechanical moves
 
 1. Apply Pattern 4 to `useMapOrbitController.ts`, `PerspectiveCameraController.tsx`,
    `OrthographicCameraController.tsx`.
-2. Apply Pattern 5 to `useNotebookVariables.ts`; run `useNotebookVariables.test.tsx` before and after —
+2. `yarn lint` shows these 7 sites clear (the rule stays `'off'` in `eslint.config.js` — most `refs`
+   findings are still unresolved); full CI; commit.
+
+### Commit 6 — `react-hooks/refs`, part 2: `useNotebookVariables.ts` behavioral refactor
+
+1. Apply Pattern 5 to `useNotebookVariables.ts`; run `useNotebookVariables.test.tsx` before and after —
    this is the one substantial behavioral refactor in the plan.
-3. Triage the remaining ~40 sites across the other 22 files per the two-question framework above; fix
+2. `yarn lint` shows these 11 sites clear (rule still `'off'`); full CI; commit.
+
+### Commit 7 — `react-hooks/refs`, part 3: long-tail triage and rule flip
+
+1. Triage the remaining 42 sites across the other 22 files per the two-question framework above; fix
    what's mechanically a Pattern 4/5 shape, add a justified `eslint-disable-next-line react-hooks/refs`
    comment at every site that isn't.
-4. Remove `'react-hooks/refs': 'off',` and the now-fully-empty five-line comment block above it.
-5. `yarn lint` zero *unjustified* findings (every remaining `react-hooks/refs` disable has a reason
+2. Remove `'react-hooks/refs': 'off',` and the now-fully-empty five-line comment block above it.
+3. `yarn lint` zero *unjustified* findings (every remaining `react-hooks/refs` disable has a reason
    comment); full CI; manual smoke pass on the map viewer (orbit/fly camera controls, both perspective and
    orthographic modes) and a notebook screen with variables, per Testing Strategy; commit.
 
-### Commit 6 (optional, docs-only) — changelog
+### Commit 8 (optional, docs-only) — changelog
 
-Add a `**Build:**` bullet under `## Unreleased` in `CHANGELOG.md`, matching the style of the deferral's own
-entry (`tasks/completed/1255_web_js_major_bumps_plan.md`'s "Migrate `analytics-web-app` from `eslint`..."
-bullet): note that the five React Compiler rules deferred in #1255 are now enabled at `error` with zero
-(or justified-disable) findings, referencing `(#1423)`. The per-commit CI gate above does not apply to
-this commit.
+Amend the existing `**Build:**` bullet at `CHANGELOG.md:27` (under `## Unreleased`) rather than appending a
+second one — that bullet currently says the five React Compiler rules "are disabled for now; adopting them
+is deferred and not yet tracked by an issue"; drop that clause and replace it with a note that the five
+rules are now enabled at `error` with zero (or justified-disable) findings, referencing `(#1423)`. The
+per-commit CI gate above does not apply to this commit.
 
 ## Files to Modify
 
@@ -488,7 +558,6 @@ this commit.
 `src/routes/ScreenPage.tsx`, `eslint.config.js`
 
 **Commit 3**: `src/lib/auth.tsx`, `src/lib/screen-renderers/cells/FlameGraphCell.tsx`,
-`src/components/map/hooks/useMapOrbitController.ts`,
 `src/components/map/modes/PerspectiveCameraController.tsx`, `eslint.config.js`
 
 **Commit 4**: `src/components/layout/Sidebar.tsx`, `src/routes/DataSourcesPage.tsx`,
@@ -504,32 +573,39 @@ this commit.
 `src/lib/screen-renderers/cells/PerfettoExportCell.tsx`, `src/lib/screen-renderers/cells/TableCell.tsx`,
 `src/lib/screen-renderers/pagination.tsx`, `eslint.config.js`
 
-**Commit 5**: `src/lib/screen-renderers/useNotebookVariables.ts`,
-`src/components/map/hooks/useMapOrbitController.ts`,
+**Commit 5**: `src/components/map/hooks/useMapOrbitController.ts`,
 `src/components/map/modes/PerspectiveCameraController.tsx`,
-`src/components/map/modes/OrthographicCameraController.tsx`, plus a subset of the 22 files in the `refs`
-long tail (`NotebookRenderer.tsx`, `XYChart.tsx`, `cells/MapCell.tsx`, `useScreenQuery.ts`,
-`ProcessPage.tsx`, `MapInstancedMarkers.tsx`, `LogRenderer.tsx`, `useNotebookAutoRun.ts`,
-`warning-reporter.tsx`, `ProcessLogPage.tsx`, `ProcessMetricsPage.tsx`, `ProcessesPage.tsx`,
-`PerformanceMetricsChart.tsx`, `useChangeEffect.ts`, `useRefreshInterval.ts`, `useScreenConfig.ts`,
-`ProcessListRenderer.tsx`, `TableRenderer.tsx`, `cells/HgChildPane.tsx`, `cells/TableCell.tsx`,
-`MeasureDiscovery.tsx`, `ThreadCoveragePanel.tsx`), `eslint.config.js`
+`src/components/map/modes/OrthographicCameraController.tsx`
 
-**Commit 6**: `CHANGELOG.md`
+**Commit 6**: `src/lib/screen-renderers/useNotebookVariables.ts`
+
+**Commit 7**: a subset of the 22 files in the `refs` long tail (`NotebookRenderer.tsx`, `XYChart.tsx`,
+`cells/MapCell.tsx`, `useScreenQuery.ts`, `ProcessPage.tsx`, `MapInstancedMarkers.tsx`, `LogRenderer.tsx`,
+`useNotebookAutoRun.ts`, `warning-reporter.tsx`, `ProcessLogPage.tsx`, `ProcessMetricsPage.tsx`,
+`ProcessesPage.tsx`, `PerformanceMetricsChart.tsx`, `useChangeEffect.ts`, `useRefreshInterval.ts`,
+`useScreenConfig.ts`, `ProcessListRenderer.tsx`, `TableRenderer.tsx`, `cells/HgChildPane.tsx`,
+`cells/TableCell.tsx`, `MeasureDiscovery.tsx`, `ThreadCoveragePanel.tsx`), `eslint.config.js`
+
+**Commit 8**: `CHANGELOG.md`
 
 ## Trade-offs
 
 - **Wrapping a loader call in an inline IIFE (sub-pattern (a)) vs. inlining the whole loader body into the
-  effect.** The loaders (`loadFolders`, `loadData`, etc.) are all reused outside their mount effect (a
-  change listener, a manual refresh path), so they can't be inlined without duplicating logic at the other
-  call site. The IIFE wrapper is the minimal change that satisfies the rule without touching the loader's
-  own definition or its other callers.
-- **`useMapOrbitController` gains a `resetTo` method instead of `PerspectiveCameraController` keeping
-  direct ref access.** Broader alternative considered: make the hook not return raw refs at all, replacing
-  every external read (not just the one write) with accessor functions. Rejected as disproportionate — only
-  one call site *writes* to the returned refs; the reads elsewhere (Pattern 4's per-frame reads, all inside
-  effects/`useFrame`, none flagged) are fine as-is under the rule's own analysis, so only the one mutating
-  call site needs an API change.
+  effect.** Four of the six loaders (`Sidebar.tsx`'s `loadFolders`, `DataSourcesPage.tsx`'s,
+  `MapsPage.tsx`'s, `ScreensPage.tsx`'s) are reused outside their mount effect (a change listener, a manual
+  refresh path, etc.), so they can't be inlined without duplicating logic at the other call site — the IIFE
+  wrapper is the minimal change that satisfies the rule without touching the loader's own definition or its
+  other callers. The remaining two (`ExportScreensPage.tsx`'s `loadData`, `ImportScreensPage.tsx`'s
+  `loadExistingScreens`) have no other caller, so they get the plain inline-into-the-effect fix instead —
+  no IIFE needed there.
+- **`PerspectiveCameraController`'s reset-view effect switches to `sphericalRef.current.set(...)` rather
+  than `useMapOrbitController` gaining a new imperative API.** Broader alternative considered: make the
+  hook not return raw refs at all, replacing every external read/write with accessor functions. Rejected as
+  disproportionate — the rule only flags *direct property assignment* to a ref's contents, not method
+  calls; the other writes to `targetRef`/`sphericalRef` from `PerspectiveCameraController` (the GLB-seed
+  `useLayoutEffect`'s `.copy()`/`.setFromVector3()` calls, and `onRightDragReAnchor`'s
+  `zoomAnchorTarget(targetRef.current, ...)`) are already method calls and stay untouched, so a one-line
+  change to the three property writes is enough.
 - **`refs`'s long tail ends up part-fixed, part-disabled**, per the issue's own acceptance criterion — the
   only one of the five rules where that's allowed. `purity`, `static-components`, `immutability`, and
   `set-state-in-effect` all reach zero findings with no disables anywhere.
@@ -538,27 +614,26 @@ long tail (`NotebookRenderer.tsx`, `XYChart.tsx`, `cells/MapCell.tsx`, `useScree
   a disable without leaving the biggest finding in the issue unaddressed. Existing test coverage
   (`useNotebookVariables.test.tsx`) is the safety net; no new tests are planned unless that suite doesn't
   already exercise the recompute-on-change path being touched.
+- **`welcome/` is out of scope here.** It's 9 `.ts`/`.tsx` source files on `eslint-plugin-react-hooks@^4.6.0`
+  (`welcome/package.json:36-37`) and isn't linted in CI at all (`.github/workflows/publish-docs.yml` only
+  builds it, `:56-58`) — its eventual v4→v7 migration is a much smaller job than this plan's, and the fix
+  patterns in this plan's Design section are reusable when that happens.
 
 ## Testing Strategy
 
 - Per-commit: `python3 build/analytics_web_ci.py` (type-check → lint → test → build) green.
 - Per-commit: `yarn lint` (or the scratch-config repro technique used to write this plan) shows zero
-  findings for that commit's rule, and — from Commit 5 on — that every remaining `react-hooks/refs`
+  findings for that commit's rule, and — from Commit 7 on — that every remaining `react-hooks/refs`
   finding carries a disable comment with a stated reason, not that the rule is silent.
 - Existing unit-test suites double as regression coverage for the two behavioral refactors:
   `src/lib/__tests__/auth.test.tsx` + `AuthGuard.test.tsx` (Pattern 3a), and
   `useNotebookVariables.test.tsx` (Pattern 5) — run before touching each file to record the current
   passing baseline, then after the refactor.
 - Manual smoke pass (dev workflow per `analytics-web-app/README.md`: split-mode services +
-  `start_analytics_web.py`) after Commit 5: map viewer orbit/pan/zoom/WASD-fly in both perspective and
-  orthographic camera modes (exercises `useMapOrbitController`'s `resetTo` and the "latest ref" rewrite),
-  and a notebook screen with a variable cell whose default/value tracking was touched by Pattern 5.
+  `start_analytics_web.py`) after Commit 7: map viewer orbit/pan/zoom/WASD-fly in both perspective and
+  orthographic camera modes (exercises `useMapOrbitController`'s Pattern 4 rewrite and
+  `PerspectiveCameraController`'s reset-view fix), and a notebook screen with a variable cell whose
+  default/value tracking was touched by Pattern 5.
 - Sub-pattern (b)'s `useMemo` conversions (Commit 4) change state shape from settable to derived; confirm
   no other code in the touched files calls the removed setters (a `grep -n 'setProcess\|setStatistics\|...'`
   sweep of each file being converted) before deleting them.
-
-## Open Questions
-
-- **`welcome/`'s eventual `eslint-plugin-react-hooks` v4 → v7 migration** (out of scope here, tracked in
-  #1255 as a follow-up) will hit this same 106-ish-finding wall. Nothing to do about it now, but the fix
-  patterns in this plan's Design section are reusable when that migration happens.
