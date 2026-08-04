@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { Suspense, useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react'
 import { AppLink } from '@/components/AppLink'
 import { ArrowLeft, FileText, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -227,11 +227,13 @@ function ProcessPageContent() {
   }, [propertiesQuery.isComplete, propertiesQuery.error])
 
   const processExecuteRef = useRef(processQuery.execute)
-  processExecuteRef.current = processQuery.execute
   const statsExecuteRef = useRef(statsQuery.execute)
-  statsExecuteRef.current = statsQuery.execute
   const propertiesExecuteRef = useRef(propertiesQuery.execute)
-  propertiesExecuteRef.current = propertiesQuery.execute
+  useLayoutEffect(() => {
+    processExecuteRef.current = processQuery.execute
+    statsExecuteRef.current = statsQuery.execute
+    propertiesExecuteRef.current = propertiesQuery.execute
+  })
 
   const loadData = useCallback(() => {
     if (!processId) return

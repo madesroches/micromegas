@@ -1,4 +1,4 @@
-import { Suspense, use, useState, useCallback, useMemo, useEffect, useRef, startTransition } from 'react'
+import { Suspense, use, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef, startTransition } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -284,7 +284,9 @@ export function MapCell({
   // the callback is an inline arrow in NotebookRenderer, so including it
   // in effect deps would fire on every render.
   const onSelectionChangeRef = useRef(onSelectionChange)
-  onSelectionChangeRef.current = onSelectionChange
+  useLayoutEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange
+  })
 
   // Publish the clear to upstream cells after commit — calling
   // onSelectionChange during render would trigger React's "Cannot update a
@@ -567,13 +569,13 @@ export function ChannelBindingControl({
   // the parent update in `startTransition`); the deferred re-render then
   // resyncs `value` mid-typing and the browser resets the cursor position.
   //
-  // The ref-guarded sync block adopts the prop value when it changes from
-  // outside this control — mode switch, color-picker pick, saved-config
+  // The prev-value-tracked sync block adopts the prop value when it changes
+  // from outside this control — mode switch, color-picker pick, saved-config
   // reload — so external updates win over uncommitted typing.
   const [draft, setDraft] = useState(scalarString)
-  const lastSyncedScalarRef = useRef(scalarString)
-  if (lastSyncedScalarRef.current !== scalarString) {
-    lastSyncedScalarRef.current = scalarString
+  const [lastSyncedScalar, setLastSyncedScalar] = useState(scalarString)
+  if (lastSyncedScalar !== scalarString) {
+    setLastSyncedScalar(scalarString)
     setDraft(scalarString)
   }
   // Escape resets the draft and then blurs the input — but React batches the

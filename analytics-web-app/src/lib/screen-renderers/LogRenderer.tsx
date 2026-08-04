@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChevronDown } from 'lucide-react'
 import type { Table } from 'apache-arrow'
@@ -274,7 +274,9 @@ export function LogRenderer({
   } | null>(null)
   // Track SQL separately so filter effect can preserve it without depending on full config
   const sqlRef = useRef(logConfig.sql)
-  sqlRef.current = logConfig.sql
+  useLayoutEffect(() => {
+    sqlRef.current = logConfig.sql
+  })
 
   useEffect(() => {
     const current = {
@@ -353,7 +355,9 @@ export function LogRenderer({
   // Refs for query execution
   const currentSqlRef = useRef<string>(logConfig.sql)
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    executeRef.current = streamQuery.execute
+  })
   const lastQueryFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string }>({
     logLevel: DEFAULT_LOG_LEVEL,
     logLimit: DEFAULT_LOG_LIMIT,

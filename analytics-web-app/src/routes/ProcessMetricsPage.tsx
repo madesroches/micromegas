@@ -1,4 +1,4 @@
-import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
@@ -293,7 +293,9 @@ function ProcessMetricsContent() {
   }, [metricsQuery.isComplete, metricsQuery.error])
 
   const discoveryExecuteRef = useRef(discoveryQuery.execute)
-  discoveryExecuteRef.current = discoveryQuery.execute
+  useLayoutEffect(() => {
+    discoveryExecuteRef.current = discoveryQuery.execute
+  })
 
   const loadDiscovery = useCallback(() => {
     if (!processId) return
@@ -308,7 +310,9 @@ function ProcessMetricsContent() {
 
   // Stable ref to metricsQuery.execute for the declarative effect
   const executeRef = useRef(metricsQuery.execute)
-  executeRef.current = metricsQuery.execute
+  useLayoutEffect(() => {
+    executeRef.current = metricsQuery.execute
+  })
 
   // Single declarative execution effect — fires when any input changes
   useEffect(() => {

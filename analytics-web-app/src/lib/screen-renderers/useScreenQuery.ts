@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -34,8 +34,6 @@ export interface ScreenQueryResult {
   execute: (sql: string) => void
   /** Retry last query */
   retry: () => void
-  /** Current SQL (may differ from initialSql if user edited) */
-  currentSql: string
 }
 
 /**
@@ -65,7 +63,9 @@ export function useScreenQuery({
 
   // Stable reference to execute function
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    executeRef.current = streamQuery.execute
+  })
 
   // Execute query
   const executeQuery = useCallback(
@@ -135,6 +135,5 @@ export function useScreenQuery({
     isRetryable: streamQuery.error?.retryable ?? false,
     execute: executeQuery,
     retry,
-    currentSql: currentSqlRef.current,
   }
 }

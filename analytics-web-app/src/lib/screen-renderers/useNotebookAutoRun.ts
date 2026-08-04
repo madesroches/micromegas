@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
 interface UseNotebookAutoRunParams {
   executeFromCellByName: (name: string) => Promise<void>
@@ -37,11 +37,14 @@ export function useNotebookAutoRun({
 
   // Ref to always access the latest executeFromCellByName inside debounced timers
   const executeFromCellByNameRef = useRef(executeFromCellByName)
-  executeFromCellByNameRef.current = executeFromCellByName
 
   // Ref for executeAfterCellByName (used by triggerAutoRun for value changes)
   const executeAfterCellByNameRef = useRef(executeAfterCellByName)
-  executeAfterCellByNameRef.current = executeAfterCellByName
+
+  useLayoutEffect(() => {
+    executeFromCellByNameRef.current = executeFromCellByName
+    executeAfterCellByNameRef.current = executeAfterCellByName
+  })
 
   // Debounced auto-run timers (per cell name) for config changes like SQL editing
   const autoRunTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())

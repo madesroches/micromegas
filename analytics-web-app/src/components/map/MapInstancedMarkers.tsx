@@ -57,16 +57,21 @@ export function MapInstancedMarkers({
   // Clear hover synchronously when the overlay changes. Without this, a
   // stale hoveredRowIndex from the previous table would index a different
   // point in the new one, briefly highlighting the wrong marker until the
-  // next pointer event corrected it. Also cancel any pending hover-flush frame:
-  // a rAF queued by a pointer-move just before the swap would otherwise fire
-  // against the new table, re-surfacing a stale/empty tooltip for one frame.
-  // Mirrors the selection-clear pattern in MapCell.
+  // next pointer event corrected it. Mirrors the selection-clear pattern in
+  // MapCell.
   const [overlayForHover, setOverlayForHover] = useState(overlay)
   if (overlayForHover !== overlay) {
     setOverlayForHover(overlay)
     setHoveredRowIndex(null)
-    cancelHoverFlush()
   }
+
+  // Cancel any pending hover-flush frame in a layout effect (not a render-time
+  // call, which react-hooks/refs flags since cancelHoverFlush touches refs) —
+  // layout effects still run synchronously before paint, so a rAF queued by a
+  // pointer-move just before the swap still can't fire against the new table.
+  useLayoutEffect(() => {
+    cancelHoverFlush()
+  }, [overlay, cancelHoverFlush])
 
   const tempObject = useMemo(() => new THREE.Object3D(), [])
 
@@ -103,7 +108,9 @@ export function MapInstancedMarkers({
   // `onHover` lives in a ref so the pointer handlers stay stable (the prop is
   // an inline arrow from MapCell that would otherwise re-create them).
   const onHoverRef = useRef(onHover)
-  onHoverRef.current = onHover
+  useLayoutEffect(() => {
+    onHoverRef.current = onHover
+  })
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh

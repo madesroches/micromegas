@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 /**
  * Runs a callback at a fixed interval, skipping ticks while busy.
@@ -8,7 +8,9 @@ import { useEffect, useRef } from 'react'
  */
 export function useRefreshInterval(intervalMs: number, isExecuting: boolean, onTick: () => void): void {
   const tickRef = useRef(onTick)
-  tickRef.current = onTick
+  useLayoutEffect(() => {
+    tickRef.current = onTick
+  })
 
   useEffect(() => {
     if (intervalMs <= 0 || isExecuting) return

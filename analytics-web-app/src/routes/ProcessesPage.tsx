@@ -1,4 +1,4 @@
-import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { Suspense, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -165,11 +165,13 @@ function ProcessesPageContent() {
   const queryError = streamQuery.error?.message ?? null
 
   const currentSqlRef = useRef(currentSql)
-  currentSqlRef.current = currentSql
 
   // Use ref to get latest execute function without causing re-renders
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    currentSqlRef.current = currentSql
+    executeRef.current = streamQuery.execute
+  })
 
   const loadData = useCallback(
     (sql: string) => {

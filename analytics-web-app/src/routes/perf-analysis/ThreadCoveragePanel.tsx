@@ -7,7 +7,7 @@
  * toolbar. Renders the bottom coverage timeline and registers its loader into
  * the page-held ref so the gate re-triggers it exactly as before (#1089).
  */
-import { useCallback, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useLayoutEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { executeStreamQuery } from '@/lib/arrow-stream'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
@@ -129,7 +129,9 @@ export function ThreadCoveragePanel({
   }, [processId, timeRange.begin, timeRange.end, dataSource, setTraceEventCount, setTraceEventCountLoading])
 
   // Always expose the latest loader to the page without re-running effects.
-  loadRef.current = loadThreadCoverage
+  useLayoutEffect(() => {
+    loadRef.current = loadThreadCoverage
+  })
 
   if (!chartTimeRange || threadCoverage.length === 0) return null
 

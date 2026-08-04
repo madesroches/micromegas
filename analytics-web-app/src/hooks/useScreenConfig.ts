@@ -78,14 +78,18 @@ export function useScreenConfig<T extends BaseScreenConfig>(
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Capture defaults and initial search on first render
+  // Capture defaults on first render, for use in the popstate handler below
+  // (an effect, not render) — mount-time defaults may differ from later
+  // re-renders if the caller doesn't memoize its `defaults` argument.
   const defaultsRef = useRef(defaults)
-  const initialSearchRef = useRef(location.search)
 
-  // Initialize from URL on mount
+  // Initialize from URL on mount. Reads `defaults`/`location.search` directly
+  // (not through a ref) since a useState lazy initializer only ever runs
+  // once, at mount — there's no later render for a ref snapshot to guard
+  // against.
   const [config, setConfig] = useState<T>(() => {
-    const fromUrl = parseUrlParams(new URLSearchParams(initialSearchRef.current))
-    return { ...defaultsRef.current, ...fromUrl } as T
+    const fromUrl = parseUrlParams(new URLSearchParams(location.search))
+    return { ...defaults, ...fromUrl } as T
   })
 
   // Handle browser back/forward - restore config from defaults + URL

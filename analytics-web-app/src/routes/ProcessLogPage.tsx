@@ -1,4 +1,4 @@
-import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, ChevronDown } from 'lucide-react'
@@ -287,10 +287,11 @@ function ProcessLogContent() {
   }, [streamQuery.isComplete, streamQuery.error])
 
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
-
   const currentSqlRef = useRef(currentSql)
-  currentSqlRef.current = currentSql
+  useLayoutEffect(() => {
+    executeRef.current = streamQuery.execute
+    currentSqlRef.current = currentSql
+  })
 
   const loadData = useCallback(
     (sql: string) => {

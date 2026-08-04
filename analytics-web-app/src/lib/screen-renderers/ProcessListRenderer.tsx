@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType, Field } from 'apache-arrow'
@@ -117,7 +117,9 @@ export function ProcessListRenderer({
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(processListConfig.sql)
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    executeRef.current = streamQuery.execute
+  })
 
   // Build ORDER BY value from sort state
   const orderByValue =

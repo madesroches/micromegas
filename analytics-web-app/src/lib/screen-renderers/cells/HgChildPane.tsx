@@ -6,7 +6,7 @@
  * run/menu controls, and the nested cell renderer). Both are presentational —
  * the parent owns drag-and-drop orchestration and child state.
  */
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useLayoutEffect } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
@@ -68,7 +68,9 @@ export function HgChildPane({
   dragHandleProps, isDragging, setNodeRef, style, showDivider, onChildRef,
 }: HgChildPaneProps) {
   const setNodeRefStable = useRef(setNodeRef)
-  setNodeRefStable.current = setNodeRef
+  useLayoutEffect(() => {
+    setNodeRefStable.current = setNodeRef
+  })
 
   const combinedRef = useCallback((el: HTMLElement | null) => {
     setNodeRefStable.current(el)

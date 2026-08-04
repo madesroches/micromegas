@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import {
@@ -184,9 +184,11 @@ export function XYChart({
 
   // Use refs for callbacks to avoid chart recreation when callbacks change
   const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
-  onTimeRangeSelectRef.current = onTimeRangeSelect
   const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
-  onAxisBoundsChangeRef.current = onAxisBoundsChange
+  useLayoutEffect(() => {
+    onTimeRangeSelectRef.current = onTimeRangeSelect
+    onAxisBoundsChangeRef.current = onAxisBoundsChange
+  })
 
   // Reference line plugin state (updated without recreating chart)
   const refLineStateRef = useRef<{
@@ -293,7 +295,9 @@ export function XYChart({
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)
-  onWidthChangeRef.current = onWidthChange
+  useLayoutEffect(() => {
+    onWidthChangeRef.current = onWidthChange
+  })
 
   // Track last reported width to avoid duplicate callbacks
   const lastReportedWidthRef = useRef<number | null>(null)

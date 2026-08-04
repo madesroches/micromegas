@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { Table2 } from 'lucide-react'
 import type {
   CellTypeMetadata,
@@ -41,7 +41,9 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   // the callback is an inline arrow in NotebookRenderer, so including it
   // in the useEffect deps would fire the effect on every render.
   const onSelectionChangeRef = useRef(onSelectionChange)
-  onSelectionChangeRef.current = onSelectionChange
+  useLayoutEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange
+  })
 
   // Clear selection when data changes (re-execution). Body wrapped in a
   // function declared and invoked here — see react-hooks/set-state-in-effect

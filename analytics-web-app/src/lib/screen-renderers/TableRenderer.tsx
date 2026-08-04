@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { ChevronLeft, ChevronRight, ChevronDown, Play } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
@@ -80,7 +80,9 @@ export function TableRenderer({
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(tableConfig.sql)
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    executeRef.current = streamQuery.execute
+  })
 
   // Build ORDER BY value from sort state
   const orderByValue = buildOrderByClause(sortColumn, sortDirection)

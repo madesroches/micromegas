@@ -8,7 +8,7 @@
  * component owns the fetch logic and the dropdown, and registers its loader
  * into the page-held ref so the gate triggers it exactly as before (#1089).
  */
-import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useLayoutEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { executeStreamQuery } from '@/lib/arrow-stream'
 import { DISCOVERY_SQL, type Measure } from './queries'
 
@@ -109,7 +109,9 @@ export function MeasureDiscovery({
   ])
 
   // Always expose the latest loader to the page without re-running effects.
-  loadRef.current = loadDiscovery
+  useLayoutEffect(() => {
+    loadRef.current = loadDiscovery
+  })
 
   return (
     <select

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router'
 import { Plus, X, Trash2 } from 'lucide-react'
 import {
@@ -104,7 +104,9 @@ interface SortableCellProps {
 function SortableCell({ id, onNodeRef, children }: SortableCellProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   const setNodeRefStable = useRef(setNodeRef)
-  setNodeRefStable.current = setNodeRef
+  useLayoutEffect(() => {
+    setNodeRefStable.current = setNodeRef
+  })
 
   const combinedRef = useCallback((el: HTMLElement | null) => {
     setNodeRefStable.current(el)
@@ -116,6 +118,11 @@ function SortableCell({ id, onNodeRef, children }: SortableCellProps) {
     transition,
   }
 
+  // combinedRef is handed to a caller-supplied render prop (`children`) that
+  // assigns it as a DOM ref callback, so React invokes it during commit, not
+  // render — the lint rule flags it here because it can't trace the
+  // ref-reading closure through the render-prop indirection to see that.
+  // eslint-disable-next-line react-hooks/refs -- combinedRef is a DOM ref callback invoked at commit via a render-prop, not during render
   return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef: combinedRef, style })}</>
 }
 
@@ -732,6 +739,12 @@ export function NotebookRenderer({
             >
               <SortableContext items={cells.map((c) => c.name)} strategy={hgAwareSortingStrategy}>
                 <div className="flex flex-col gap-1">
+                  {/* renderCell embeds setCellRef (a DOM ref-registration callback invoked at
+                      commit, not render) and cellSelectionsRef reads (a synchronous-access
+                      ref mirroring useNotebookVariables' variableValuesRef, used by
+                      useCellExecution during sequential execution) into its returned JSX —
+                      both are safe uses the lint rule can't trace through this indirection. */}
+                  {/* eslint-disable-next-line react-hooks/refs -- renderCell embeds a commit-time ref callback (setCellRef) and cellSelectionsRef reads; see comment above */}
                   {cells.map((cell, index) => renderCell(cell, index))}
 
                   <button
@@ -784,6 +797,9 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                // cellSelectionsRef mirrors useNotebookVariables' variableValuesRef — a
+                // synchronous-access ref for useCellExecution, read here for display only.
+                // eslint-disable-next-line react-hooks/refs -- reads cellSelectionsRef via getAvailableCellSelections, synchronous-access ref (see comment above)
                 cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 allCellNames={existingNames}
                 defaultDataSource={dataSource}
@@ -799,6 +815,7 @@ export function NotebookRenderer({
                 variables={getAvailableVariables(selectedCellIndex!)}
                 timeRange={getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)}
                 cellResults={getAvailableCellResults(selectedCellIndex!)}
+                // eslint-disable-next-line react-hooks/refs -- reads cellSelectionsRef via getAvailableCellSelections, synchronous-access ref (see HgEditorPanel branch above)
                 cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
