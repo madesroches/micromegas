@@ -60,26 +60,37 @@ chart points are built independently of `arrow-utils.ts` and have no guard whats
 
 - `useMetricsData.ts:93` (the unified measures-query effect) and
   `PerformanceMetricsChart.tsx:188` (`loadCustomQuery`, the custom-SQL path driven by the SQL
-  editor) both do `points.push({ time, value: Number(row.value) })` unconditionally — weaker than
-  even the pre-existing null/`isNaN` guard being patched above.
+  editor) both do
+  `const time = timestampToMs(row.time); points.push({ time, value: Number(row.value) })`
+  unconditionally — weaker than even the pre-existing null/`isNaN` guard being patched above.
 
 Since `loadCustomQuery` runs arbitrary user-typed SQL, a `numerator / denominator` query with a
-zero denominator reproduces the identical Y-axis-explosion bug through this route. Fix: at both
-sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushing unconditionally
-— the same `Number.isFinite` pattern used in `arrow-utils.ts`.
+zero denominator reproduces the identical Y-axis-explosion bug through this route, on either
+column: `timestampToMs()` (`arrow-utils.ts:22-24`) returns a numeric `time` input verbatim, so
+e.g. `1.0/0.0 as time` produces a non-finite `time` with no guard, and `TimeSeriesChart`
+(`XYChart.tsx:1264`) maps `time` straight to `x` with no filtering — exposing the X-axis
+auto-ranging to the same corruption class as the Y-axis. This mirrors `arrow-utils.ts`, which
+already treats X and Y symmetrically (`!Number.isFinite(xNum) || !Number.isFinite(yNum)` at
+lines 441/613). Fix: at both sites, skip the row when
+`!Number.isFinite(time) || !Number.isFinite(Number(row.value))` instead of pushing
+unconditionally — the same paired X/Y `Number.isFinite` pattern used in `arrow-utils.ts`.
 
 **Third extraction path: process-metrics page.** `ProcessMetricsPage.tsx`'s "Unified extraction
 effect" (`ProcessMetricsPage.tsx:256`) has the same unguarded pattern:
-`points.push({ time, value: Number(row.value) })`, with no null/NaN/finiteness guard at all. This
-effect is fed by `activeSql`, which is set from arbitrary user-typed SQL via a `QueryEditor`'s
-`onRun={handleRunQuery}` (`ProcessMetricsPage.tsx:296-311, 378-384, 423-438`) — the same
-"reachable via arbitrary user-typed SQL" condition as the perf-analysis path above. The resulting
-`chartData` is rendered via `<MetricsChart data={chartData} .../>` (`ProcessMetricsPage.tsx:526`),
-the same `MetricsChart` → `TimeSeriesChart` → `XYChart.tsx` pipeline (`computeStats`/`range()` at
+`const time = timestampToMs(row.time); points.push({ time, value: Number(row.value) })`, with no
+null/NaN/finiteness guard at all. This effect is fed by `activeSql`, which is set from arbitrary
+user-typed SQL via a `QueryEditor`'s `onRun={handleRunQuery}`
+(`ProcessMetricsPage.tsx:296-311, 378-384, 423-438`) — the same "reachable via arbitrary
+user-typed SQL" condition as the perf-analysis path above. The resulting `chartData` is rendered
+via `<MetricsChart data={chartData} .../>` (`ProcessMetricsPage.tsx:526`), the same `MetricsChart`
+→ `TimeSeriesChart` → `XYChart.tsx` pipeline (`computeStats`/`range()` at
 `XYChart.tsx:146, 726-731`) targeted above, and `/process_metrics` is a live, routed page
 (`router.tsx:9,40`), not dead code. A `numerator`/`denominator` custom query run on this page
-reproduces the identical Y-axis-explosion bug. Fix: at this site too, skip the row when
-`!Number.isFinite(Number(row.value))` instead of pushing unconditionally.
+reproduces the identical Y-axis-explosion bug, on either the `value` column or (via a
+`1.0/0.0 as time`-style expression) the `time` column, for the same reason given for the
+perf-analysis path above. Fix: at this site too, skip the row when
+`!Number.isFinite(time) || !Number.isFinite(Number(row.value))` instead of pushing
+unconditionally.
 
 ## Implementation Steps
 
@@ -89,13 +100,15 @@ reproduces the identical Y-axis-explosion bug. Fix: at this site too, skip the r
    `!Number.isFinite(xNum) || !Number.isFinite(yNum)` at lines 441 and 613.
 3. In `analytics-web-app/src/hooks/useMetricsData.ts`, in the row-extraction loop (line 93),
    compute `value = Number(row.value)` and skip the row (`continue`) when
-   `!Number.isFinite(value)`, instead of pushing `{ time, value: Number(row.value) }`
-   unconditionally.
+   `!Number.isFinite(time) || !Number.isFinite(value)` (`time` is already computed via
+   `timestampToMs(row.time)` on the preceding line), instead of pushing
+   `{ time, value: Number(row.value) }` unconditionally.
 4. In `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`'s
-   `loadCustomQuery` (line 188), apply the same `!Number.isFinite` guard before
-   `points.push(...)`.
+   `loadCustomQuery` (line 188), apply the same combined
+   `!Number.isFinite(time) || !Number.isFinite(value)` guard before `points.push(...)`.
 5. In `analytics-web-app/src/routes/ProcessMetricsPage.tsx`'s "Unified extraction effect"
-   (line 256), apply the same `!Number.isFinite` guard before `points.push(...)`.
+   (line 256), apply the same combined `!Number.isFinite(time) || !Number.isFinite(value)`
+   guard before `points.push(...)`.
 6. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
    `extractChartData` and `extractMultiSeriesChartData` (numeric/time path and categorical path)
    for rows containing `Infinity`/`-Infinity` in the Y column, and one covering `Infinity` in the
@@ -111,13 +124,32 @@ reproduces the identical Y-axis-explosion bug. Fix: at this site too, skip the r
      success return is `{ ok: true, xAxisMode, xColumnName, series }` where `series` is
      `ChartSeriesData[]`; assert against `result.series[i].data` (a `ChartPoint[]`, i.e. `{ x, y }`
      pairs) — not `result.data`, which is `extractChartData`'s shape, not this function's.
+7. Add automated test coverage for the three guard sites from Steps 3-5:
+   - Add a new `renderHook`-based test file, `analytics-web-app/src/hooks/__tests__/useMetricsData.test.ts`,
+     following the mocking pattern in `useStreamQuery.test.ts` (`useStreamQuery.test.ts:1-27`,
+     mocking `@/lib/arrow-stream`'s `streamQuery` and driving completion via `execute`/`act`).
+     Feed a mock table with a row containing a non-finite `value`, a row containing a non-finite
+     `time`, and a normal finite row; assert only the finite row survives in the returned
+     `chartData`.
+   - For `PerformanceMetricsChart.tsx`'s `loadCustomQuery`, extend the existing
+     `analytics-web-app/src/routes/__tests__/PerformanceAnalysisPage.test.tsx`, which already
+     mocks `@/lib/arrow-stream`'s `executeStreamQuery` and drives custom queries through the SQL
+     editor's `onRun`, with a case whose mocked response includes a non-finite `value`/`time`
+     row and asserts it is dropped (e.g. via the mocked `MetricsChart`'s `data` prop or point
+     count).
+   - For `ProcessMetricsPage.tsx`'s unified extraction effect, no test file or comparable mocking
+     seam currently exists for this route (unlike `PerformanceAnalysisPage.test.tsx`), and adding
+     one is out of scope for this plan; this site remains covered only by the manual repro in the
+     Testing Strategy below.
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/arrow-utils.ts`
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`
 - `analytics-web-app/src/hooks/useMetricsData.ts`
+- `analytics-web-app/src/hooks/__tests__/useMetricsData.test.ts` (new)
 - `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`
+- `analytics-web-app/src/routes/__tests__/PerformanceAnalysisPage.test.tsx`
 - `analytics-web-app/src/routes/ProcessMetricsPage.tsx`
 
 ## Trade-offs
@@ -131,16 +163,19 @@ reproduces the identical Y-axis-explosion bug. Fix: at this site too, skip the r
 ## Testing Strategy
 
 - Extend `arrow-utils.test.ts` with the cases in Implementation Step 6.
+- Add the `useMetricsData.test.ts` and `PerformanceAnalysisPage.test.tsx` cases in Implementation
+  Step 7, covering the `useMetricsData.ts` and `PerformanceMetricsChart.tsx` guard sites with a
+  non-finite `value` row and a non-finite `time` row each.
 - Run `yarn test` (and `yarn lint` / `yarn type-check`) in `analytics-web-app/`.
 - Manual repro (optional): chart a SQL column with a `numerator / denominator` ratio where some
   rows have `denominator = 0`, confirm the Y-axis no longer explodes and remaining points render
   at a sensible scale.
-- Manual repro for the perf-analysis path (optional): in Performance Analysis, run a custom SQL
-  query (Steps 3-4's path) whose value column divides by zero for some rows; confirm the Y-axis
-  no longer explodes there either.
-- Manual repro for the process-metrics path (optional): on `/process_metrics`, run a custom SQL
-  query (Step 5's path) whose value column divides by zero for some rows; confirm the Y-axis no
-  longer explodes there either.
+- Manual repro for the perf-analysis path (optional, in addition to the automated test in Step 7):
+  in Performance Analysis, run a custom SQL query (Steps 3-4's path) whose value or time column
+  divides by zero for some rows; confirm the Y-axis no longer explodes there either.
+- Manual repro for the process-metrics path (required, since Step 5's site has no automated test —
+  see Step 7): on `/process_metrics`, run a custom SQL query (Step 5's path) whose value or time
+  column divides by zero for some rows; confirm the Y-axis no longer explodes there either.
 
 ## Open Questions
 
