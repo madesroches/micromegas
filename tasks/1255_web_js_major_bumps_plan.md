@@ -20,11 +20,16 @@ under `python3 build/analytics_web_ci.py`.
 | Issue item | Resolution |
 |---|---|
 | `react-router-dom ^6.30.4` → 7 | Done, and further: migrated to `react-router ^8.3.0` in #1351 (`f4201fd0a`). `react-router-dom` is gone from `analytics-web-app/package.json`. |
-| Migrate off deprecated `@grafana/experimental` | Done in #1354 (`82bee5cc6`) — now `@grafana/plugin-ui ^0.16.1`. Verified zero remaining references in `grafana/src`, `grafana/package.json`, `grafana/yarn.lock`. |
+| Migrate off deprecated `@grafana/experimental` | Done in #1354 (`82bee5cc6`) — now `@grafana/plugin-ui ^0.16.1`. Verified zero remaining references in `grafana/src`, `grafana/package.json`, and the root `yarn.lock` (`grafana/` has no `yarn.lock` of its own — it is a workspace of the repo-root yarn project). |
 | Grafana SDK pinned to 11.6.7 | Done in #1354 — `@grafana/data`/`runtime`/`ui`/`e2e-selectors` are all `12.4.6`. |
 
-`grafana/` is also already on `eslint ^9` + `@typescript-eslint ^8` (via `@grafana/eslint-config ^9`), so the
-ESLint 8 holdout is now `analytics-web-app/` alone.
+`grafana/` is also already on `eslint ^9` + `@typescript-eslint ^8` (via `@grafana/eslint-config ^9`).
+`welcome/` is a second ESLint 8 / eslintrc / Tailwind 3 holdout — its `package.json` declares
+`eslint ^8.57.0`, `@typescript-eslint/{eslint-plugin,parser} ^7.0.0`, `eslint-plugin-react-hooks ^4.6.0`,
+`eslint-plugin-react-refresh ^0.4.5`, and `tailwindcss ^3.3.0`, with a legacy `welcome/.eslintrc.json` and
+no `eslint.config.*` — a near-clone of the exact toolchain this plan retires. It is explicitly out of
+scope: issue #1255 scopes only `analytics-web-app` and `grafana`, so `welcome/` is left untouched here
+(see Trade-offs).
 
 ### Remaining, in `analytics-web-app/package.json`
 
@@ -60,8 +65,9 @@ ESLint 8 holdout is now `analytics-web-app/` alone.
 **`grafana/`'s `react ^18.0.0`** must stay on 18. `@grafana/ui@12.4.6` declares
 `peerDependencies: { react: "^18.0.0", react-dom: "^18.0.0" }`, and a Grafana panel/datasource plugin
 shares the host Grafana app's React runtime rather than bundling its own — so React 19 in the plugin
-would both violate the peer range and risk two-React-copies breakage at runtime. `yarn why react` in
-`grafana/` resolves `react@npm:18.3.1 (via npm:^18.0.0)`. This is not a bump to defer-and-revisit; it is
+would both violate the peer range and risk two-React-copies breakage at runtime. `yarn why react`, run at
+the repo root (`grafana/` has no `yarn.lock`/`.yarnrc.yml` of its own — it is a workspace of the root
+yarn project), resolves `react@npm:18.3.1 (via npm:^18.0.0)`. This is not a bump to defer-and-revisit; it is
 gated on Grafana itself shipping a React 19 SDK, so the acceptance criterion should be recorded as
 "documented reason to hold" (which #1255 explicitly allows) rather than left open.
 
@@ -218,10 +224,23 @@ devDep churn for this commit: add `@eslint/js`, `typescript-eslint`, `globals`; 
 `eslint-plugin-react-hooks` to `^7.1.1`, `eslint-plugin-react-refresh` to `^0.5`;
 **remove** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser` (superseded by the unified
 `typescript-eslint` package) and `@eslint/eslintrc` (dead — see Current State). Delete `.eslintrc.json`.
-Removing the split `@typescript-eslint/*` packages also orphans the `@typescript-eslint/utils@7.18.0`
-`packageExtensions` entry in `analytics-web-app/.yarnrc.yml` and its root mirror `/.yarnrc.yml` (it exists
-solely to patch that v7-only package's peer range — `typescript-eslint@8.66.0`'s own `utils` declares its
-own `typescript` peer, which is why the pin is version-exact); remove both entries in this commit.
+Removing the split `@typescript-eslint/*` packages orphans the `@typescript-eslint/utils@7.18.0`
+`packageExtensions` entry in `analytics-web-app/.yarnrc.yml` (it exists solely to patch that v7-only
+package's peer range — `typescript-eslint@8.66.0`'s own `utils` declares its own `typescript` peer, which
+is why the pin is version-exact). The root mirror in `/.yarnrc.yml` is a separate, already-dead entry in
+the root yarn project regardless of this commit: `analytics-web-app/` is a standalone yarn project (root
+`package.json`'s `workspaces` list only `grafana` and `typescript/*`), and the root `yarn.lock` never
+resolved `@typescript-eslint/utils@7.18.0` in the first place (only `8.52.0`/`8.65.0` appear there). Remove
+both entries in this commit — the web app's because this commit orphans it, the root's because it was
+already inert — and verify the root removal is a no-op (see step 2 below).
+
+This commit also orphans the `js-yaml` `resolutions` pin (`"js-yaml": "^4.3.0"` in
+`analytics-web-app/package.json`), the same way Commit 3 orphans `baseline-browser-mapping`: in
+`analytics-web-app/yarn.lock`, `js-yaml` is reachable only through `eslint@^8.57.0` (which declares
+`js-yaml: ^4.1.0`) and `@eslint/eslintrc@{^2.1.4,^3.3.1}` — all three leave the tree in this commit — and
+`eslint@10.8.0`'s own dependency list has no `js-yaml`. The other pins were checked and stay live under
+ESLint 10: `ajv ^6.14.0`, `minimatch ^10.2.x`, and `flatted` (via `file-entry-cache@8` →
+`flat-cache@4`) all remain reachable, so only `js-yaml` needs pruning here.
 
 ### date-fns 2 → 4
 
@@ -412,7 +431,9 @@ branch bisects cleanly.
 
 1. `analytics-web-app/package.json`: `"date-fns": "^2.30.0"` → `"^4.4.0"`.
 2. `yarn install` in `analytics-web-app/`. Confirm `yarn.lock` now holds a single `date-fns@npm:4.x`
-   entry (was two: `^2.30.0` → `2.30.0` and `^4.1.0` → `4.1.0`) — `grep -n '^"date-fns' yarn.lock`.
+   entry (was two: `^2.30.0` → `2.30.0` and `^4.1.0` → `4.1.0`) — `grep -n '^"date-fns@' yarn.lock`
+   (the `@` after `date-fns` excludes the unrelated `date-fns-jalali` entry that a bare `^"date-fns` grep
+   also matches).
 3. `yarn type-check` — catches any stricter-typing fallout at
    `src/components/ui/DateTimePicker.tsx:3`. No edit expected.
 4. Full `python3 build/analytics_web_ci.py`, then commit.
@@ -431,9 +452,15 @@ branch bisects cleanly.
 1. `analytics-web-app/package.json` devDeps: bump `eslint` → `^10.8.0`,
    `eslint-plugin-react-refresh` → `^0.5.3`, `eslint-plugin-react-hooks` → `^7.1.1`; add
    `@eslint/js ^10.0.1`, `typescript-eslint ^8.66.0`, `globals ^17.9.0`; remove
-   `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@eslint/eslintrc`.
+   `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@eslint/eslintrc`. Also remove the
+   now-orphaned `"js-yaml": "^4.3.0"` entry from `resolutions` (see Design) — mirroring how Commit 3 prunes
+   `baseline-browser-mapping`; `ajv`, `minimatch`, and `flatted` stay live under ESLint 10 and keep their
+   `resolutions` pins.
 2. Remove the now-orphaned `@typescript-eslint/utils@7.18.0` `packageExtensions` entry from
-   `analytics-web-app/.yarnrc.yml` and its root mirror `/.yarnrc.yml` (see Design).
+   `analytics-web-app/.yarnrc.yml` and the already-dead mirrored entry in the root `/.yarnrc.yml` (see
+   Design). Run `yarn install` at the repo root afterward and confirm the root `yarn.lock` is unchanged —
+   this verifies the root entry was inert, since no CI path filter covers `.yarnrc.yml` (see Testing
+   Strategy).
 3. `yarn install`.
 4. Create `analytics-web-app/eslint.config.js` per the Design shape (the
    `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
@@ -448,14 +475,19 @@ branch bisects cleanly.
    `immutability`, `purity`) — turn them off in `eslint.config.js` per the Design's decision, adopting
    them as a separate follow-up rather than hand-fixing the 106 findings; **(c)** the 12 stale
    `eslint-disable` directives flagged by flat config's `reportUnusedDisableDirectives: 'warn'` default
-   (see Design) — remove them; **(d)** four new rule-warnings introduced by the bumped plugins, left
-   as-is since they are warnings and `yarn lint` has no `--max-warnings` gate: two
-   `react-refresh/only-export-components` (from `eslint-plugin-react-refresh` 0.4.26 → 0.5.3) at
-   `src/components/ErrorBoundary.tsx:74` and `src/lib/screen-type-utils.tsx:14`, and two
+   (see Design) — remove them; **(d)** four new rule-warnings introduced by the bumped plugins: two
    `@typescript-eslint/no-unused-vars` (from `@typescript-eslint` 7 → 8) at
-   `src/lib/__tests__/auth.test.tsx:422` and `:492`. Note the bucket (b) decision in the commit message.
-   Measured total after this step: **20 warnings**, up from the 4-warning baseline (all
-   `react-refresh/only-export-components` in `src/components/FolderTree.tsx`).
+   `src/lib/__tests__/auth.test.tsx:422` and `:492` — fix by prefixing the unused identifiers with `_`,
+   which the config's own `varsIgnorePattern: '^_'` (see the flat config shape in Design) already exempts;
+   and two `react-refresh/only-export-components` (from `eslint-plugin-react-refresh` 0.4.26 → 0.5.3) at
+   `src/components/ErrorBoundary.tsx:74` and `src/lib/screen-type-utils.tsx:14`, left as-is, consistent
+   with the 4 pre-existing warnings of the same rule already accepted in the baseline (`yarn lint` has no
+   `--max-warnings` gate). Note the bucket (b) decision in the commit message. Raw total measured
+   immediately after the config swap (before fixes): **20 warnings** (4 pre-existing
+   `react-refresh/only-export-components` in `src/components/FolderTree.tsx` + the 12 stale-disable-directive
+   warnings from bucket (c) + these 4). Accepted steady-state warning count once buckets (a)-(d) are
+   applied: **6** — the 4 pre-existing `react-refresh/only-export-components` warnings plus the 2 new ones
+   left in bucket (d).
 6. Confirm the 253 `.ts`/`.tsx` files are all still linted, plus the two newly-in-scope non-TS files (see
    Testing Strategy) — 255 files total at this point, not 253.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
@@ -484,8 +516,10 @@ branch bisects cleanly.
    the `postcss` devDep and the `postcss` `resolutions` pin (both are security-pin machinery for
    transitive users, independent of Tailwind).
 4. `analytics-web-app/package.json`: `"tailwindcss": "^3.3.0"` → `"^4.3.3"`,
-   `"tailwind-merge": "^2.0.0"` → `"^3.6.0"`. Leave `@tailwindcss/typography ^0.5.19` alone — the
-   existing caret range already admits the v4-compatible `0.5.20`.
+   `"tailwind-merge": "^2.0.0"` → `"^3.6.0"`. Leave `@tailwindcss/typography ^0.5.19` alone — `0.5.19`
+   (already locked in `yarn.lock` and unchanged by a plain `yarn install`) declares a v4-compatible peer
+   range (`>=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1`), which accepts `tailwindcss@4.3.3`,
+   so it needs no change.
 5. `yarn install`, then `yarn build`, and diff the emitted CSS bundle size/shape for anything alarming.
 6. Manual visual pass against a running app (`python3 local_test_env/ai_scripts/start_services.py
    --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, that
@@ -498,8 +532,11 @@ branch bisects cleanly.
 
 ### Final — changelog
 
-Add three bullets under `## Unreleased` → `**Web App:**` in `CHANGELOG.md`, matching the existing
-dependency-bump entry style, referencing `(#1255)`. The Tailwind bullet must call out the raised browser
+Add three bullets under `## Unreleased` → `**Build:**` in `CHANGELOG.md` (create the subsection — it does
+not yet exist under `## Unreleased`), matching the existing dependency-bump entry style used elsewhere in
+the changelog (e.g. the `react-router-dom` → `react-router` major, the Jest→Vitest migration, the
+`postcss`/`tar`/`brace-expansion` bumps — all filed under `**Build:**`, not `**Web App:**`, which is
+reserved for user-facing features and fixes), referencing `(#1255)`. The Tailwind bullet must call out the raised browser
 floor (Safari 16.4+ / Chrome 111+ / Firefox 128+) and the `hover:` variant now requiring true hover
 support (`@media (hover: hover)`) as user-visible, and the `tailwind-merge` v3 bump as part of the same
 change. Also record the documented hold on `grafana/`'s React 18 with its reason (`@grafana/ui@12.4.6`
@@ -564,10 +601,17 @@ Not modified: anything under `grafana/` (see the documented hold).
   which still lists the split packages.
 - **Dropping `@eslint/eslintrc` rather than adopting `FlatCompat`.** Nothing imports it, and a
   hand-written flat config for three extends + two rules is short and clearer than a compat shim.
-- **`.github/dependabot.yml` and the `resolutions` block are left alone.** Both are noted in #1255 but
-  neither is a version bump; automating dependency updates is a policy change with its own blast radius
-  (PR volume, CI cost), and pruning `resolutions` requires re-checking 11 advisories. Each deserves its
-  own issue rather than riding along here.
+- **`.github/dependabot.yml` and the rest of the `resolutions` block are left alone.** Both are noted in
+  #1255 but neither is a version bump; automating dependency updates is a policy change with its own blast
+  radius (PR volume, CI cost). Commit 2 prunes the `js-yaml` entry (orphaned by the ESLint bump, see
+  Design) and Commit 3 prunes `baseline-browser-mapping` (orphaned by dropping `autoprefixer`), but the
+  remaining entries (`ajv`, `minimatch`, `flatted`, `postcss`, `brace-expansion`, and others) stay live and
+  are out of scope — a full audit would require re-checking their advisories, which deserves its own issue
+  rather than riding along here.
+- **`welcome/` is left on ESLint 8 / eslintrc / Tailwind 3.** It is out of scope per #1255's own scope
+  statement (`analytics-web-app` and `grafana` only), but it is a near-identical toolchain to the one
+  retired here, so it will need the same migration eventually. Worth its own issue rather than riding
+  along here.
 
 ## Documentation
 
@@ -583,8 +627,8 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   `yarn install` → `yarn type-check` → `yarn lint` → `yarn test` (vitest) → `yarn build`. This is
   byte-for-byte what `.github/workflows/analytics-web-app.yml` invokes, so a local green means a green
   PR check.
-- **Commit 1 specific**: assert the lockfile dedupe (`grep -n '^"date-fns' analytics-web-app/yarn.lock`
-  should show one entry, not two).
+- **Commit 1 specific**: assert the lockfile dedupe (`grep -n '^"date-fns@' analytics-web-app/yarn.lock`
+  should show one entry, not two; the `@` excludes the unrelated `date-fns-jalali` entry).
 - **Commit 2 specific — lint coverage must not silently shrink.** Flat config lints `**/*.js`/`.cjs`/`.mjs`
   by default *plus* whatever extensions `files` adds, so a mis-scoped config can pass `yarn lint` by
   checking almost nothing — but it also means the raw file *total* is the wrong thing to diff, since flat
@@ -600,10 +644,13 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   `hover:`/`group-hover:` sites, and the DateTimePicker calendar (now that the six `--color-*` references
   are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
   rendering as before.
-- **Grafana plugin**: untouched by this change, but `grafana/`'s own CI
-  (`.github/workflows/grafana-plugin.yml`) runs on a path filter that this branch does not trip, so no
-  action needed. The issue's acceptance criterion "`yarn lint`/`type-check`/`build`/`test` pass for both
-  packages" is satisfied for `grafana/` by its unchanged, already-passing state.
+- **Grafana plugin**: untouched by this change's `analytics-web-app/` edits, but `grafana/`'s own CI
+  (`.github/workflows/grafana-plugin.yml`) runs on a path filter (`grafana/**`, `typescript/**`,
+  `package.json`, `yarn.lock`, the workflow file) that this branch does not trip. The root `/.yarnrc.yml`
+  edit in Commit 2 is not covered by that filter either, so its verification (root `yarn.lock` unchanged)
+  must be run locally, not relied on to surface in CI. The issue's acceptance criterion
+  "`yarn lint`/`type-check`/`build`/`test` pass for both packages" is satisfied for `grafana/` by its
+  unchanged, already-passing state.
 
 ## Risks
 
