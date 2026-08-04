@@ -1027,12 +1027,13 @@ describe('extractMultiSeriesChartData', () => {
       const result = extractMultiSeriesChartData([{ table: table as never }])
       expect(result.ok).toBe(true)
       if (result.ok) {
-        // Label-to-index map is built from ALL x values (A,B,C,D) before the
-        // Infinity/-Infinity rows are dropped, so 'D' keeps its alphabetical
-        // index (3), not a re-compacted index.
+        // Categories whose only rows have non-finite Y (B, C) are excluded
+        // from the label set entirely, so the remaining labels (A, D) are
+        // compacted to indices 0 and 1 — matching extractChartData.
+        expect(result.xLabels).toEqual(['A', 'D'])
         expect(result.series[0].data).toEqual([
           { x: 0, y: 10 },
-          { x: 3, y: 40 },
+          { x: 1, y: 40 },
         ])
       }
     })
