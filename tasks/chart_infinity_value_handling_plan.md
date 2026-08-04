@@ -25,13 +25,23 @@ the row if `xVal == null || yVal == null`, convert to `Number(...)`, then skip t
 `isNaN(...)`. Since `isNaN(Infinity) === false`, a non-finite value passes this guard and is
 pushed into the series as a normal `ChartPoint`.
 
-The six guard sites (`isNaN` checks over an X and/or Y numeric value derived from a row):
+The five guard sites (`isNaN` checks over an X and/or Y numeric value derived from a row):
 
-- `arrow-utils.ts:424` — `extractMultiSeriesChartData`, categorical path, Y only
+- `arrow-utils.ts:424` — `extractMultiSeriesChartData`, categorical first pass, Y only (see note
+  below — its output is discarded when `xAxisMode === 'categorical'`)
 - `arrow-utils.ts:441` — `extractMultiSeriesChartData`, time/numeric path, X and Y
 - `arrow-utils.ts:501` — `extractMultiSeriesChartData`, categorical label-remap pass, Y only
 - `arrow-utils.ts:567` — `extractChartData`, categorical path, Y only
 - `arrow-utils.ts:613` — `extractChartData`, time/numeric path, X and Y
+
+Note on line 424: in the categorical first pass (lines 414-426), the `data` array built under this
+guard is pushed into `series[i]` at line 457, but whenever `xAxisMode === 'categorical'` the
+second pass (lines 489-516, independently guarded at line 501) unconditionally rebuilds
+`seriesData` and overwrites it via `series[i] = { ...series[i], data: seriesData }` (line 517) —
+there is no branch that skips this overwrite. So the value computed under the line 424 guard never
+reaches `computeStats`/the Y-axis for categorical charts; line 501 is the guard that actually
+governs the categorical Y-axis bug. Fixing line 424 is still harmless and kept for consistency
+(see Implementation Step 1), but it is a no-op for this bug's behavior.
 
 Downstream, `analytics-web-app/src/components/XYChart.tsx:146` (`computeStats`) computes
 `min`/`max`/`avg`/`p99` over each series' Y values with a plain sort/reduce — no finiteness check —
@@ -108,7 +118,8 @@ recording (and the row as a whole) when `time` itself is non-finite.
 ## Implementation Steps
 
 1. In `analytics-web-app/src/lib/arrow-utils.ts`, replace `isNaN(yNum)` with
-   `!Number.isFinite(yNum)` at lines 424, 501, and 567.
+   `!Number.isFinite(yNum)` at lines 424, 501, and 567 (the edit at line 424 is a behavioral no-op —
+   see the note in Current State).
 2. In the same file, replace `isNaN(xNum) || isNaN(yNum)` with
    `!Number.isFinite(xNum) || !Number.isFinite(yNum)` at lines 441 and 613.
 3. In `analytics-web-app/src/hooks/useMetricsData.ts`'s row-extraction loop (line 93),
