@@ -152,10 +152,11 @@ above); none of this is inferred from the rule's prose docs alone.
 ```
 
 The component already has a working impure-free path for exactly this fallback:
-`parseTimeRange('now-1h', 'now')` (used one `useMemo` up, for `apiTimeRange`) produces the identical
-`{ label: 'Last 1 hour', from: <1h ago>, to: <now> }` shape by resolving `Date.now()` inside
-`src/lib/time-range.ts` instead of in the component body — the rule only inspects the render function it's
-checking, not functions it calls into, so delegating is a real fix, not a relocation of the same problem.
+`parseTimeRange('now-1h', 'now')` is already called in this same `useMemo`'s success (`try`) branch — it
+produces the `{ label: 'Last 1 hour', from: <1h ago>, to: <now> }` shape (plus a harmless extra
+`isRelative` field) by resolving `Date.now()` inside `src/lib/time-range.ts` instead of in the component
+body — the rule only inspects the render function it's checking, not functions it calls into, so delegating
+is a real fix, not a relocation of the same problem.
 Fix: `return parseTimeRange('now-1h', 'now')`.
 
 ### Pattern 2 — component created during render
@@ -379,7 +380,7 @@ actual network wait already happened inside `query`'s own state machine), which 
 for a query that executes exactly once per page visit: `execute()` unconditionally resets `isComplete` to
 `false` and clears the accumulated batches on every call (`useStreamQuery.ts:52-62`), so a `useMemo` keyed
 on `[query.isComplete, query.error]` recomputes to `null`/empty the instant a re-execute starts, blanking
-the UI mid-fetch where today's state-based version keeps the last result on screen (`useMetricsData.ts:56-57`
+the UI mid-fetch where today's state-based version keeps the last result on screen (`useMetricsData.ts:54-55`
 even has a comment to this effect: "Don't clear data immediately - keep showing existing data until new
 data arrives"). None of the 7 sites qualifies as "executes exactly once": `ProcessPage.tsx`'s
 `processQuery`/`statsQuery`/`propertiesQuery` (`:157,178,198`) look like mount-once reads guarded by
@@ -445,6 +446,27 @@ if (cell.name !== prevCellName) {
 }
 ```
 
+This is behavior-preserving only where the value's own `useState` initializer already derives from the
+same triggering value (as `editedName` does from `cell.name` above), or where the mount-time run is a
+no-op — because the prev-tracker starts equal to the current value, the comparison is false on the very
+first render and the body never runs at mount. `CellEditor.tsx:52`, `NotebookRenderer.tsx:165`,
+`HorizontalGroupCell.tsx:296`, `CustomRange.tsx:36`, and `MetricsRenderer.tsx:82,89` already initialize
+from the same prop, `ImageCell.tsx:43`, `XYChart.tsx:594`, `LogCell.tsx:207`, `PerfettoExportCell.tsx:53`,
+and `pagination.tsx:50` are mount no-ops, and `useDataSourceState.ts:21` and `Sidebar.tsx:126` only see
+their triggering value change after mount (`useDefaultDataSource` starts at `{name:''}`, and `activeScreen`
+is derived from the async `screens` state), so a dropped mount-time run has nothing to do yet — the plain
+rewrite applies as-is to all of these. `Sidebar.tsx:113` and `:137` are neither: `expandedPaths`
+(`useState<Set<string>>(new Set())`, `:68`) and `searchQuery` (`useState('')`, `:69`) both currently run
+their effect body at mount to expand the folder
+tree / populate the search box from `?folder=`/`?q=`, and their triggering values — `selectedFolder` (read
+off the URL, `:73`) and `searchParams` (`:59`) — are synchronously available on that same first render, so
+the plain rewrite would silently drop that mount-time run: a direct link, shared URL, or back/forward
+navigation to `/screens?folder=a/b` would render a collapsed tree, and `/screens?q=foo` an empty search box
+over a filtered result list. Fix for these two: move the initial derivation into a lazy `useState`
+initializer instead — `useState(() => isScreensPage ? searchParams.get('q') ?? '' : '')` for `searchQuery`,
+and seed `expandedPaths` from `selectedFolder`'s ancestors — or use a `null` prev-sentinel like
+`useNotebookVariables.ts:112` uses today, so the mount-time derivation still runs.
+
 `RecentRanges.tsx:10` is a variant — a mount-only read of `localStorage` via `getRecentTimeRanges()`, no
 reactive dependency at all — for which a lazy `useState` initializer is simpler than the render-time
 comparison and equally clean under the rule: `const [recentRanges] = useState(() =>
@@ -479,7 +501,7 @@ treatment instead, keeping the ref-mediated notification inside the effect.
 Patterns 4 and 5 above account for the two largest, mechanically-fixable clusters:
 `useMapOrbitController.ts` (5), `PerspectiveCameraController.tsx`/`OrthographicCameraController.tsx` (2, via
 Pattern 4), and `useNotebookVariables.ts` (11, via Pattern 5) — 18 of the 60. One more site needs a
-small fix rather than an API addition: `PerspectiveCameraController.tsx:164-166`'s reset-view effect
+small fix rather than an API addition: `PerspectiveCameraController.tsx:169-171`'s reset-view effect
 directly assigns `sphericalRef.current.radius`/`.phi`/`.theta` — a ref *returned by*
 `useMapOrbitController`, not owned locally. THREE.Spherical has its own setter method; replacing the three
 property assignments with `sphericalRef.current.set(radius, phi, theta)` is a method call rather than a
@@ -521,7 +543,8 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
 ### Commit 2 — `react-hooks/static-components`
 
 1. `src/routes/ProcessesPage.tsx` — hoist `SortHeader` per Pattern 2a; update the 6 call sites.
-2. `src/lib/screen-renderers/cells/HgChildPane.tsx` — `meta.renderer` per Pattern 2b.
+2. `src/lib/screen-renderers/cells/HgChildPane.tsx` — `meta.renderer` per Pattern 2b; drop the now-unused
+   `getCellRenderer` import.
 3. `src/routes/ScreenPage.tsx` — `const Renderer: ComponentType<ScreenRendererProps> | undefined =
    SCREEN_RENDERERS[screenType]` per Pattern 2b (import `SCREEN_RENDERERS` from `screen-renderers/init`, not
    `index`, so the renderer-registration side effects stay in the module graph; import `ComponentType` /
@@ -537,7 +560,7 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
    should need no test changes.
 2. `src/lib/screen-renderers/cells/FlameGraphCell.tsx` — `keyTickRef` per Pattern 3b. Run
    `FlameGraphCell.test.tsx`/`FlameGraphLayout.test.ts`.
-3. `src/components/map/modes/PerspectiveCameraController.tsx:164-166` — replace the three direct property
+3. `src/components/map/modes/PerspectiveCameraController.tsx:169-171` — replace the three direct property
    assignments (`sphericalRef.current.radius/.phi/.theta = …`) with `sphericalRef.current.set(radius, phi,
    theta)`, per the `refs` section above.
 4. Remove `'react-hooks/immutability': 'off',`.
@@ -559,13 +582,16 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
    `ProcessLogPage.tsx`'s `rows`+`hasLoaded`, `useMetricsData.ts`'s `chartData`/`rawPropertiesData`/
    `propertyParseErrors`, and `ProcessMetricsPage.tsx:242-274`'s same three states. `ProcessMetricsPage.tsx:227`
    is its own one-site category — not (b)-shaped — but gets the same wrap (see Design).
-3. Sub-pattern (c) — remaining files: "adjust state when a prop changes" rewrite (`Sidebar.tsx`'s other 3
-   sites, `MetricsRenderer.tsx`, `ImageCell.tsx:43` only, `CellEditor.tsx`, `XYChart.tsx`, `CustomRange.tsx`,
+3. Sub-pattern (c) — remaining files: "adjust state when a prop changes" rewrite (`Sidebar.tsx:126`,
+   `MetricsRenderer.tsx`, `ImageCell.tsx:43` only, `CellEditor.tsx`, `XYChart.tsx`, `CustomRange.tsx`,
    `useDataSourceState.ts`, `NotebookRenderer.tsx`, `HorizontalGroupCell.tsx`, `LogCell.tsx`,
-   `PerfettoExportCell.tsx`, `pagination.tsx`); lazy-init for `RecentRanges.tsx`; inline-function-wrap
-   (returning the wrapper's invocation, with an explanatory comment) for `useFadeOnIdle.ts`,
-   `ImageCell.tsx:55` (the blob-URL effect, which keeps its revoke cleanup), and `TableCell.tsx:48` (keeps the
-   ref-mediated `onSelectionChange` notification inside the effect — see Design).
+   `PerfettoExportCell.tsx`, `pagination.tsx`); `Sidebar.tsx:113` and `:137` get the lazy-initializer/
+   `null`-sentinel treatment instead, since the plain rewrite would drop their mount-time run (see Design);
+   lazy-init for `RecentRanges.tsx` (drop the now-unused `useEffect` import and `setRecentRanges` binding);
+   inline-function-wrap (returning the wrapper's invocation, with an explanatory comment) for
+   `useFadeOnIdle.ts`, `ImageCell.tsx:55` (the blob-URL effect, which keeps its revoke cleanup), and
+   `TableCell.tsx:48` (keeps the ref-mediated `onSelectionChange` notification inside the effect — see
+   Design).
 4. Remove `'react-hooks/set-state-in-effect': 'off',`.
 5. Manual smoke-test the sub-pattern (c) surfaces per Testing Strategy (no automated coverage exists for
    most of them); add `rerender`-based tests for the pure-logic hooks (`usePagination`, `useFadeOnIdle`,
@@ -576,7 +602,11 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
 
 1. Apply Pattern 4 to `useMapOrbitController.ts`, `PerspectiveCameraController.tsx`,
    `OrthographicCameraController.tsx`.
-2. Per-commit gate (Testing Strategy) — the rule stays `'off'` in `eslint.config.js` since most `refs`
+2. Run `MapViewer.test.tsx`, `orthographic-mode.test.ts`, and `map-camera-math.test.ts` as this commit's own
+   regression net for the render-to-effect timing change (they already run inside `yarn test`, part of the
+   gate below, but are called out here since Commit 5 is otherwise the one commit with no dedicated
+   behavioral check — see Testing Strategy).
+3. Per-commit gate (Testing Strategy) — the rule stays `'off'` in `eslint.config.js` since most `refs`
    findings are still unresolved, but the all-five-rule total must still have dropped by these 7 sites;
    full CI; commit.
 
@@ -649,8 +679,9 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
 ## Trade-offs
 
 - **Wrapping a loader call in an inline IIFE (sub-pattern (a)) vs. inlining the whole loader body into the
-  effect.** Five of the six loaders (`Sidebar.tsx`'s `loadFolders`, `DataSourcesPage.tsx`'s,
-  `MapsPage.tsx`'s, `ScreensPage.tsx`'s, and `ExportScreensPage.tsx`'s `loadData`) are reused outside their
+  effect.** Five of the six loaders (`Sidebar.tsx`'s `loadFolders`, `DataSourcesPage.tsx`'s `loadData`,
+  `MapsPage.tsx`'s `loadCatalog`, `ScreensPage.tsx`'s `loadData`, and `ExportScreensPage.tsx`'s `loadData`)
+  are reused outside their
   mount effect (a change listener, a manual refresh button, a retry button, etc.), so they can't be inlined
   without duplicating logic at the other call sites — the IIFE wrapper is the minimal change that satisfies
   the rule without touching the loader's own definition or its other callers. The remaining one
@@ -720,9 +751,9 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
   passing baseline, then after the refactor. `useNotebookVariables.test.tsx` has no existing coverage of
   the recompute-on-change branch Pattern 5 replaces (see Commit 6), so this baseline run alone isn't a
   sufficient safety net for that refactor — the new `rerender`-based tests added in Commit 6 are.
-- Commit 4's sub-pattern (c) touches 19 effect sites across 16 files, and of those, only `CustomRange.tsx`,
+- Commit 4's sub-pattern (c) touches 19 effect sites across 15 files, and of those, only `CustomRange.tsx`,
   `HorizontalGroupCell.tsx`, `NotebookRenderer.tsx`, and `PerfettoExportCell.tsx` have any existing
-  `__tests__` file — the other 12 files (`Sidebar.tsx`, `CellEditor.tsx`, `XYChart.tsx`,
+  `__tests__` file — the other 11 files (`Sidebar.tsx`, `CellEditor.tsx`, `XYChart.tsx`,
   `MetricsRenderer.tsx`, `ImageCell.tsx`, `LogCell.tsx`, `TableCell.tsx`, `pagination.tsx`,
   `useFadeOnIdle.ts`, `useDataSourceState.ts`, `RecentRanges.tsx`, plus the sub-pattern (b)/(a) files
   `ProcessPage.tsx`, `LogRenderer.tsx`, `useMetricsData.ts`, `ProcessMetricsPage.tsx`, `ProcessLogPage.tsx`)
@@ -738,4 +769,7 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
   `start_analytics_web.py`) after Commit 7: map viewer orbit/pan/zoom/WASD-fly in both perspective and
   orthographic camera modes (exercises `useMapOrbitController`'s Pattern 4 rewrite and
   `PerspectiveCameraController`'s reset-view fix), and a notebook screen with a variable cell whose
-  default/value tracking was touched by Pattern 5.
+  default/value tracking was touched by Pattern 5. Unlike Commit 4's manual smoke checklist, which runs
+  inside Commit 4's own gate, this pass is deferred to after Commit 7 — Commit 5's render-to-effect timing
+  change (Pattern 4) is instead covered as it lands by `MapViewer.test.tsx`, `orthographic-mode.test.ts`,
+  and `map-camera-math.test.ts`, which already run inside that commit's `yarn test`.
