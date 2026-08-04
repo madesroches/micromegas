@@ -44,10 +44,15 @@ unconditionally, and view types add variadic buffers that the compression path h
    `analytics-web-app/src/lib/arrow-stream.ts:238` feeds those bytes into
    `RecordBatchReader.from(ipcByteStream())`, relying on arrow-js to carry dictionary state across
    batches. LZ4 is decoded via the codec registered in `arrow-compression.ts:10`.
-2. **Client-side cells — whole buffer.** `lib/screen-renderers/useCellExecution.ts:214,234,252,271`
-   calls `tableFromIPC(ipcBytes)` on output from the in-browser `micromegas-datafusion-wasm` crate
-   (DataFusion 54.1, `rust/datafusion-wasm/Cargo.toml:20`), which runs the same string functions and
-   therefore produces the same view types. This path is reachable with no server involved.
+2. **Client-side cells — whole buffer.** `lib/screen-renderers/useCellExecution.ts` calls
+   `tableFromIPC(ipcBytes)` at four sites over two different byte sources: `:214,252` decode
+   uncompressed output from the in-browser `micromegas-datafusion-wasm` crate (DataFusion 54.1,
+   `rust/datafusion-wasm/Cargo.toml:20`, uncompressed because `rust/datafusion-wasm/src/lib.rs:183`
+   uses `StreamWriter::try_new`), while `:234,271` decode the result of `fetchQueryIPC(...)`, which
+   collects the same framed `/query-stream` server response as path 1 and is therefore
+   LZ4_FRAME-compressed exactly like `stream_query.rs:296-297`. Both call shapes run the same string
+   functions and therefore produce the same view types; the wasm half is reachable with no server
+   involved, the `fetchQueryIPC` half is not.
 
 ### Type predicates that don't know about view types
 
@@ -149,27 +154,37 @@ not produced by the functions in this issue; no attempt to handle them.
    and a `BinaryView` column, and include **both** a short inline value (≤12 bytes) and a long
    out-of-line value (>12 bytes, which forces a variadic data buffer) plus a null — that trio is what
    distinguishes a real decode from a lucky one. Emit through
-   `new RecordBatchStreamWriter(table, { compressionType: CompressionType.LZ4_FRAME })` with an
-   `encode: lz4js.compress` codec registered on `compressionRegistry` (arrow-js computes the
-   variadic-buffer length prefixes itself; `lz4js.compress` is already declared in
-   `src/types/lz4js.d.ts`), so the fixture matches what `stream_query.rs:296-297` actually produces;
-   keep an uncompressed variant alongside it for the plain-IPC case.
+   `RecordBatchStreamWriter.writeAll(table, { compressionType: CompressionType.LZ4_FRAME }).toUint8Array(true)`
+   — the constructor only takes an options object, not the table; `writeAll` is the static entry point
+   that builds and finishes the writer, and is verified working end-to-end through the existing
+   `splitIpcMessages` framing. Register a single codec on `compressionRegistry` covering both
+   directions, `{ encode: lz4js.compress, decode: lz4js.decompress }`: `compressionRegistry.set()`
+   replaces the whole entry rather than merging, so an encode-only registration would clobber the
+   `decode` that `arrow-compression.ts:10` registers in any test importing both, leaving the fixture
+   undecodable. arrow-js computes the variadic-buffer length prefixes itself; `lz4js.compress` and
+   `lz4js.decompress` are already declared in `src/types/lz4js.d.ts`. This matches what
+   `stream_query.rs:296-297` actually produces; keep an uncompressed variant alongside it for the
+   plain-IPC case.
 4. **Streaming-path test.** New `src/lib/__tests__/arrow-stream-view-types.test.ts` (or a
    `describe` block in `arrow-stream-dictionary.test.ts`, which already has the mock-fetch/
    `createMockStream` harness): drive `streamQuery` over both the compressed and uncompressed step-3
    fixtures split across chunk boundaries, assert the schema frame arrives with `Utf8View`/
-   `BinaryView` fields and that the batch values round-trip through the real
-   `arrow-compression.ts` LZ4 codec. This is the direct regression test for the reported error over
-   the exact framing and compression the server uses.
+   `BinaryView` fields and that the batch values round-trip through the LZ4 codec registered by the
+   step-3 fixture (which wraps the same `lz4js.decompress` `arrow-compression.ts:10` uses for decode —
+   note the fixture's `compressionRegistry.set()` call replaces that production registration for the
+   duration of the test, since `set()` overwrites rather than merges). This is the direct regression
+   test for the reported error over the exact framing and compression the server uses.
 5. **Whole-buffer-path test.** In `src/lib/__tests__/arrow-ipc-fixtures.test.ts` (or alongside it),
-   add a case that calls the real `tableFromIPC` directly on the step-3 view-typed IPC bytes and
-   asserts the decode succeeds and values round-trip. This must live where `apache-arrow` is not
-   mocked: `useCellExecution.test.ts:35-65` has a blanket `vi.mock('apache-arrow', …)` whose
+   add two cases that call the real `tableFromIPC` directly on the step-3 view-typed IPC bytes — one
+   over the uncompressed fixture, one over the LZ4_FRAME-compressed fixture — and assert the decode
+   succeeds and values round-trip in both. This must live where `apache-arrow` is not mocked:
+   `useCellExecution.test.ts:35-65` has a blanket `vi.mock('apache-arrow', …)` whose
    `tableFromIPC: () => new MockTable([{}])` ignores its input entirely, so a case added there would
-   assert nothing about view decoding. The whole-buffer path (`useCellExecution.ts:214,234,252,271`
-   calling `tableFromIPC` on `datafusion-wasm` output) is what this test represents — it is not
-   covered by step 4 and cannot be fixed server-side — but the assertion has to run against the real
-   library to mean anything.
+   assert nothing about view decoding. Together the two cases cover both whole-buffer call shapes in
+   `useCellExecution.ts` — uncompressed `datafusion-wasm` output (`:214,252`) and LZ4-compressed
+   server output collected via `fetchQueryIPC` (`:234,271`) — neither of which is covered by step 4's
+   streaming-reader test, and neither of which can be fixed server-side; the assertion has to run
+   against the real library to mean anything.
 6. **Predicate tests.** `src/lib/__tests__/arrow-utils.test.ts`: `isStringType(new Utf8View())` and
    `isBinaryType(new BinaryView())` true; the chart-validity check at `:282` accepts a `Utf8View` X
    column; the color-kind checks at `:235,237`/`:301` accept a `Utf8View`/`BinaryView` color-by
@@ -186,7 +201,7 @@ not produced by the functions in this issue; no attempt to handle them.
 - `analytics-web-app/yarn.lock` — lockfile (done, uncommitted)
 - `analytics-web-app/src/lib/arrow-utils.ts` — view-aware `isStringType` / `isBinaryType`
 - `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` — view-type fixture (compressed + uncompressed)
-- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.test.ts` — whole-buffer `tableFromIPC` case (real library, wasm-path regression)
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.test.ts` — whole-buffer `tableFromIPC` cases, uncompressed (wasm-path) and compressed (server-path via `fetchQueryIPC`), real library
 - `analytics-web-app/src/lib/__tests__/arrow-stream-view-types.test.ts` — new (streaming path)
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` — predicate + classification cases
 - `analytics-web-app/src/lib/screen-renderers/__tests__/table-utils.test.tsx` — `formatCell` case
