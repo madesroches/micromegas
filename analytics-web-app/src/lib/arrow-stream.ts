@@ -65,7 +65,6 @@ class BufferedReader {
   async readLine(): Promise<string | null> {
     let line = '';
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (this.chunks.length > 0) {
         const chunk = this.chunks[0];
@@ -240,7 +239,6 @@ export async function* streamQuery(
 
     // Parse frames and push bytes to the queue
     const parseFrames = async () => {
-      // eslint-disable-next-line no-constant-condition
       while (true) {
         const line = await bufferedReader.readLine();
         if (line === null) break;
@@ -349,7 +347,7 @@ export async function fetchQueryIPC(
         throw new Error(frame.message);
       } catch (e) {
         if (e instanceof SyntaxError) {
-          throw new Error(`HTTP 403: ${text}`);
+          throw new Error(`HTTP 403: ${text}`, { cause: e });
         }
         throw e;
       }
@@ -369,7 +367,6 @@ export async function fetchQueryIPC(
     let totalSize = 0;
     let totalRows = 0;
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const line = await bufferedReader.readLine();
       if (line === null) break;

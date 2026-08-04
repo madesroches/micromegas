@@ -68,7 +68,7 @@ function SortHeader({
       <div className="flex items-center gap-1">
         {children}
         {isActive && (
-          <span className="text-accent-link flex-shrink-0">
+          <span className="text-accent-link shrink-0">
             {showAsc ? (
               <ChevronUp className="w-3 h-3" />
             ) : showDesc ? (

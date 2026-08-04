@@ -417,7 +417,7 @@ export function OverrideCell({
   }, [warningKey, columnName, reporter])
 
   return (
-    <div className="prose prose-invert prose-sm max-w-none prose-headings:text-theme-text-primary prose-headings:my-0 prose-p:text-theme-text-secondary prose-p:my-0 prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-li:text-theme-text-secondary">
+    <div className="prose prose-invert prose-sm max-w-none prose-headings:text-theme-text-primary prose-headings:my-0 prose-p:text-theme-text-secondary prose-p:my-0 prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded-sm prose-code:before:content-none prose-code:after:content-none prose-li:text-theme-text-secondary">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -482,7 +482,7 @@ export function SortHeader({
     <div className="flex items-center gap-1">
       <span className="truncate">{children}</span>
       {isActive && (
-        <span className="text-accent-link flex-shrink-0">
+        <span className="text-accent-link shrink-0">
           {showAsc ? (
             <ChevronUp className={iconSize} />
           ) : showDesc ? (
@@ -525,14 +525,14 @@ export function SortHeader({
         <ContextMenu.Content className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50">
           <ContextMenu.Item
             onSelect={() => (onSortAsc ?? onSort)(columnName)}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
           >
             <ArrowUpNarrowWide className="w-4 h-4 text-theme-text-secondary" />
             Sort Ascending
           </ContextMenu.Item>
           <ContextMenu.Item
             onSelect={() => (onSortDesc ?? onSort)(columnName)}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-none"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-border/50 cursor-pointer outline-hidden"
           >
             <ArrowDownNarrowWide className="w-4 h-4 text-theme-text-secondary" />
             Sort Descending
@@ -540,7 +540,7 @@ export function SortHeader({
           <ContextMenu.Separator className="h-px bg-theme-border my-1" />
           <ContextMenu.Item
             onSelect={() => onHide(columnName)}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-none"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-hidden"
           >
             <EyeOff className="w-4 h-4" />
             Hide Column
@@ -821,9 +821,9 @@ export function HiddenColumnsBar({ hiddenColumns, onRestore, onRestoreAll, compa
 
   return (
     <div
-      className={`flex items-center ${gap} ${padding} bg-accent-link/[0.08] ${compact ? '' : 'border-b border-theme-border'} flex-wrap`}
+      className={`flex items-center ${gap} ${padding} bg-accent-link/8 ${compact ? '' : 'border-b border-theme-border'} flex-wrap`}
     >
-      <EyeOff className={`${iconSz} text-theme-text-muted flex-shrink-0`} />
+      <EyeOff className={`${iconSz} text-theme-text-muted shrink-0`} />
       <span className={`${textSize} text-theme-text-muted`}>Hidden:</span>
       {hiddenColumns.map((col) => (
         <button
@@ -1008,7 +1008,7 @@ export function RowContextMenu({ rowName, onHide, children }: RowContextMenuProp
         <ContextMenu.Content className="min-w-[180px] bg-app-panel border border-theme-border rounded-md shadow-lg py-1 z-50">
           <ContextMenu.Item
             onSelect={() => onHide(rowName)}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-none"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-theme-text-secondary hover:bg-theme-border/50 cursor-pointer outline-hidden"
           >
             <EyeOff className="w-4 h-4" />
             Hide Row

@@ -82,7 +82,7 @@ export function FolderPickerModal({
           <h2 className="text-lg font-medium text-theme-text-primary">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -119,7 +119,7 @@ export function FolderPickerModal({
             onChange={(e) => setNewPath(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleMoveToNew()}
             placeholder="Or type a new folder path, e.g. team/reports"
-            className="mt-3 w-full px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link"
+            className="mt-3 w-full px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-hidden focus:border-accent-link"
           />
           {normalizedNewPath && normalizedNewPath !== newPath && (
             <p className="text-xs text-theme-text-muted mt-1">

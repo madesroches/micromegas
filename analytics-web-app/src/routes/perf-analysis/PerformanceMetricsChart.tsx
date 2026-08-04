@@ -222,7 +222,7 @@ export function PerformanceMetricsChart({
     if (discoveryDone && selectedMeasure && processId && !isCustomQuery) {
       metricsDataExecuteRef.current()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Use primitive deps to avoid object comparison issues
+  // Use primitive deps to avoid object comparison issues
   }, [discoveryDone, selectedMeasure, processId, isCustomQuery, binInterval, apiTimeRange.begin, apiTimeRange.end])
 
   // Lift gate-relevant view state to the page.

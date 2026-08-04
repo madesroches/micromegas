@@ -52,7 +52,7 @@ export function QueryEditor({
         <div className="p-2">
           <button
             onClick={() => setIsCollapsed(false)}
-            className="w-8 h-8 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
+            className="w-8 h-8 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded-sm transition-colors"
             title="Expand SQL Panel"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -69,7 +69,7 @@ export function QueryEditor({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsCollapsed(true)}
-            className="w-6 h-6 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
+            className="w-6 h-6 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded-sm transition-colors"
             title="Collapse panel"
           >
             <ChevronRight className="w-4 h-4" />
@@ -79,14 +79,14 @@ export function QueryEditor({
         <div className="flex items-center gap-2">
           <button
             onClick={handleReset}
-            className="px-2.5 py-1 text-xs text-theme-text-secondary border border-theme-border rounded hover:bg-theme-border hover:text-theme-text-primary transition-colors"
+            className="px-2.5 py-1 text-xs text-theme-text-secondary border border-theme-border rounded-sm hover:bg-theme-border hover:text-theme-text-primary transition-colors"
           >
             Reset
           </button>
           <button
             onClick={handleRun}
             disabled={isLoading}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-accent-success text-white rounded hover:opacity-90 disabled:bg-theme-border disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-accent-success text-white rounded-sm hover:opacity-90 disabled:bg-theme-border disabled:cursor-not-allowed transition-colors"
           >
             <Play className="w-3 h-3" />
             Run
@@ -127,7 +127,7 @@ export function QueryEditor({
             <div className="text-xs text-theme-text-muted space-y-1">
               {variables.map((v) => (
                 <div key={v.name}>
-                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded-sm text-accent-variable">
                     ${v.name}
                   </code>{' '}
                   - {v.description}
@@ -146,7 +146,7 @@ export function QueryEditor({
             <div className="text-xs text-theme-text-muted space-y-1">
               {Object.entries(currentValues).map(([key, value]) => (
                 <div key={key}>
-                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded-sm text-accent-variable">
                     ${key}
                   </code>{' '}
                   = <span className="text-theme-text-secondary">{value}</span>

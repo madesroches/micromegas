@@ -7,7 +7,7 @@ export function ParseErrorWarning({ errors, className = 'mb-4' }: ParseErrorWarn
   if (errors.length === 0) return null
 
   return (
-    <div className={`px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs ${className}`}>
+    <div className={`px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-sm text-amber-400 text-xs ${className}`}>
       <span className="font-medium">Warning:</span> {errors.length} row(s) had invalid JSON properties and were skipped.
       <details className="mt-1">
         <summary className="cursor-pointer hover:text-amber-300">Show details</summary>

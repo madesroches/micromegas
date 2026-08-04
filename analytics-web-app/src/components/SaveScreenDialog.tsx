@@ -146,7 +146,7 @@ export function SaveScreenDialog({
           <h2 className="text-lg font-medium text-theme-text-primary">Save Screen</h2>
           <button
             onClick={onClose}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded transition-colors"
+            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -163,7 +163,7 @@ export function SaveScreenDialog({
               onKeyDown={handleKeyDown}
               placeholder="e.g., My Error Logs"
               autoFocus
-              className="mt-1 w-full px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link"
+              className="mt-1 w-full px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-hidden focus:border-accent-link"
             />
           </label>
 

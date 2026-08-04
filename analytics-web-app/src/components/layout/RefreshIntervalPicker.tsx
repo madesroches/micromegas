@@ -70,7 +70,7 @@ export function RefreshIntervalPicker({
               <DropdownMenu.Item
                 key={preset.ms}
                 onSelect={() => onIntervalChange(preset.ms)}
-                className="flex items-center justify-between px-3 py-1.5 text-sm text-theme-text-primary hover:bg-theme-border cursor-pointer outline-none"
+                className="flex items-center justify-between px-3 py-1.5 text-sm text-theme-text-primary hover:bg-theme-border cursor-pointer outline-hidden"
               >
                 {preset.label}
                 {preset.ms === intervalMs && <Check className="w-3.5 h-3.5 text-accent-link" />}

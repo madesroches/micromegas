@@ -1132,13 +1132,13 @@ export function XYChart({
               return (
                 <button
                   key={i}
-                  className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-xs cursor-pointer transition-all ${
+                  className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm text-xs cursor-pointer transition-all ${
                     isVisible ? '' : 'opacity-35'
                   } hover:bg-white/5`}
                   onClick={(e) => handleLegendClick(i, e.ctrlKey || e.metaKey)}
                   title="Click to isolate, Ctrl+Click to toggle"
                 >
-                  <div className="w-2.5 h-[3px] rounded-sm" style={{ background: color }} />
+                  <div className="w-2.5 h-[3px] rounded-xs" style={{ background: color }} />
                   <span className={isVisible ? 'text-theme-text-secondary' : 'text-theme-text-muted'}>
                     {s.label}
                   </span>
@@ -1159,7 +1159,7 @@ export function XYChart({
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
           {!showMultiSeriesHeader && displayTitle && (
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 rounded" style={{ background: singleSeriesColor }} />
+              <div className="w-3 h-0.5 rounded-sm" style={{ background: singleSeriesColor }} />
               <span>{displayTitle}</span>
             </div>
           )}
@@ -1182,7 +1182,7 @@ export function XYChart({
               </div>
             </>
           )}
-          <div className="flex border border-theme-border rounded overflow-hidden" title="Chart display style">
+          <div className="flex border border-theme-border rounded-sm overflow-hidden" title="Chart display style">
             <button
               onClick={() => setChartType('line')}
               className={`px-2 py-0.5 text-[11px] transition-colors ${
@@ -1204,7 +1204,7 @@ export function XYChart({
               Bar
             </button>
           </div>
-          <div className="flex border border-theme-border rounded overflow-hidden" title="P99: hides outliers &#10;Max: shows all data">
+          <div className="flex border border-theme-border rounded-sm overflow-hidden" title="P99: hides outliers &#10;Max: shows all data">
             <button
               onClick={() => setScaleMode('p99')}
               className={`px-2 py-0.5 text-[11px] transition-colors ${

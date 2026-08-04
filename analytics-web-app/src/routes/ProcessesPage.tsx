@@ -302,7 +302,7 @@ function ProcessesPageContent() {
               placeholder="Search by exe, computer, username..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link transition-colors"
+              className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-hidden focus:border-accent-link transition-colors"
             />
           </div>
 

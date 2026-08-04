@@ -40,7 +40,7 @@ export function FolderBreadcrumb({ path, onNavigate, onDropScreen }: FolderBread
       : {}
 
   const crumbClass = (segmentPath: string, isCurrent: boolean) =>
-    `px-1.5 py-0.5 rounded ${isCurrent ? 'text-theme-text-primary font-semibold' : 'cursor-pointer text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'} ${
+    `px-1.5 py-0.5 rounded-sm ${isCurrent ? 'text-theme-text-primary font-semibold' : 'cursor-pointer text-theme-text-secondary hover:bg-app-card hover:text-theme-text-primary'} ${
       dropTarget === segmentPath ? 'ring-1 ring-inset ring-accent-link bg-accent-link/20' : ''
     }`
 

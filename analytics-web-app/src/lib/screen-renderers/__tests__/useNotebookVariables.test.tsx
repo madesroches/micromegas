@@ -34,18 +34,14 @@ vi.mock('react-router', async (importOriginal) => {
   return {
     ...actual,
     useSearchParams: (): [URLSearchParams, SetSearchParamsFn] => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
       const [raw, setRaw] = useState(mockInitialSearch.current)
-      // eslint-disable-next-line react-hooks/rules-of-hooks
       const params = useMemo(() => new URLSearchParams(raw), [raw])
 
       // Replicate stale-closure behavior of real React Router:
       // functional updater receives the *current render's* params (not latest).
-      // eslint-disable-next-line react-hooks/rules-of-hooks
       const staleRef = useRef(params)
       staleRef.current = params
 
-      // eslint-disable-next-line react-hooks/rules-of-hooks
       const setSearchParams: SetSearchParamsFn = useCallback(
         (nextInit) => {
           if (typeof nextInit === 'function') {

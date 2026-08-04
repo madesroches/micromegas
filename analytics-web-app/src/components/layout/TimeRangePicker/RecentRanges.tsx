@@ -25,7 +25,7 @@ export function RecentRanges({ onSelect }: RecentRangesProps) {
           <button
             key={entry.timestamp}
             onClick={() => onSelect(entry.from, entry.to)}
-            className="w-full text-left px-2 py-1.5 text-sm text-theme-text-primary rounded hover:bg-theme-border transition-colors"
+            className="w-full text-left px-2 py-1.5 text-sm text-theme-text-primary rounded-sm hover:bg-theme-border transition-colors"
           >
             {entry.label}
           </button>

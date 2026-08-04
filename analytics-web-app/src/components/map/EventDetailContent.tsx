@@ -79,7 +79,7 @@ export function EventDetailContent({
 
   return (
     <div
-      className={`prose prose-invert prose-sm max-w-none ${compact ? 'px-3 py-2' : 'pl-4 pr-10 py-3'} prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3`}
+      className={`prose prose-invert prose-sm max-w-none ${compact ? 'px-3 py-2' : 'pl-4 pr-10 py-3'} prose-headings:text-theme-text-primary prose-headings:mt-0 prose-p:text-theme-text-secondary prose-a:text-accent-link prose-strong:text-theme-text-primary prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card prose-li:text-theme-text-secondary prose-hr:border-theme-border prose-hr:my-3`}
     >
       <TemplateWarningBanner warnings={warnings} />
       <Markdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>

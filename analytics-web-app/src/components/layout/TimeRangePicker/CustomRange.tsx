@@ -90,7 +90,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
               value={fromInput}
               onChange={(e) => { setFromInput(e.target.value); setError(null) }}
               placeholder="now-1h or ISO date"
-              className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:ring-2 focus:ring-accent-link/50 ${
+              className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-hidden focus:ring-2 focus:ring-accent-link/50 ${
                 fromInput && !isValidTimeExpression(fromInput)
                   ? 'border-status-error'
                   : 'border-theme-border'
@@ -123,7 +123,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
               value={toInput}
               onChange={(e) => { setToInput(e.target.value); setError(null) }}
               placeholder="now or ISO date"
-              className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:ring-2 focus:ring-accent-link/50 ${
+              className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-hidden focus:ring-2 focus:ring-accent-link/50 ${
                 toInput && !isValidTimeExpression(toInput)
                   ? 'border-status-error'
                   : 'border-theme-border'
@@ -152,7 +152,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
       <button
         type="button"
         onClick={handleApply}
-        className="w-full py-2 px-4 bg-accent-link text-white rounded-md text-sm font-medium hover:bg-accent-link/90 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-link/50"
+        className="w-full py-2 px-4 bg-accent-link text-white rounded-md text-sm font-medium hover:bg-accent-link/90 transition-colors focus:outline-hidden focus:ring-2 focus:ring-accent-link/50"
       >
         Apply time range
       </button>

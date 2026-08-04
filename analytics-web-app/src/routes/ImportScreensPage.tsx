@@ -286,7 +286,7 @@ function ImportScreensPageContent() {
               <th className="text-left p-2.5 px-4 w-10">
                 <input
                   type="checkbox"
-                  className="accent-[var(--color-accent-link)] cursor-pointer"
+                  className="accent-accent-link cursor-pointer"
                   checked={allSelected}
                   onChange={() => (allSelected ? deselectAllEntries() : selectAllEntries())}
                   aria-label="Select all screens"
@@ -315,7 +315,7 @@ function ImportScreensPageContent() {
                 <td className="p-2.5 px-4">
                   <input
                     type="checkbox"
-                    className="accent-[var(--color-accent-link)] cursor-pointer"
+                    className="accent-accent-link cursor-pointer"
                     checked={entry.selected}
                     onChange={() => toggleEntry(i)}
                     aria-label={`Select ${entry.screen.name}`}
@@ -325,7 +325,7 @@ function ImportScreensPageContent() {
                   <span className="text-accent-link font-medium">{entry.screen.name}</span>
                 </td>
                 <td className="p-2.5 px-4">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-app-card rounded text-xs text-theme-text-muted">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-app-card rounded-sm text-xs text-theme-text-muted">
                     {renderIcon(
                       screenTypeMap.get(entry.screen.screen_type)?.icon ?? 'file-text',
                       'w-3.5 h-3.5'
@@ -335,11 +335,11 @@ function ImportScreensPageContent() {
                 </td>
                 <td className="p-2.5 px-4">
                   {entry.isConflict ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-yellow-500/15 text-yellow-500">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-semibold bg-yellow-500/15 text-yellow-500">
                       Exists
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-green-500/15 text-green-500">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-semibold bg-green-500/15 text-green-500">
                       New
                     </span>
                   )}
@@ -347,7 +347,7 @@ function ImportScreensPageContent() {
                 <td className="p-2.5 px-4">
                   {entry.isConflict ? (
                     <select
-                      className="bg-app-panel border border-theme-border rounded px-2 py-1 text-xs text-theme-text-primary outline-none"
+                      className="bg-app-panel border border-theme-border rounded-sm px-2 py-1 text-xs text-theme-text-primary outline-hidden"
                       value={entry.conflictAction}
                       onChange={(e) => setConflictAction(i, e.target.value as ImportConflictAction)}
                       aria-label={`Conflict action for ${entry.screen.name}`}

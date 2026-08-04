@@ -220,7 +220,7 @@ export function FolderTree({
             setRenamingPath(null)
           }
         }}
-        className="flex-1 min-w-0 px-1.5 py-0.5 text-sm bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
+        className="flex-1 min-w-0 px-1.5 py-0.5 text-sm bg-app-bg border border-accent-link rounded-sm text-theme-text-primary outline-hidden"
       />
     </>
   )
@@ -240,7 +240,7 @@ export function FolderTree({
           }
         }}
         placeholder="Folder name"
-        className="w-full px-2 py-1 text-xs bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
+        className="w-full px-2 py-1 text-xs bg-app-bg border border-accent-link rounded-sm text-theme-text-primary outline-hidden"
       />
       {normalizedNewFolderName && normalizedNewFolderName !== newFolderName.toLowerCase() && (
         <p className="text-[11px] text-theme-text-muted mt-0.5">
@@ -343,7 +343,7 @@ export function FolderTree({
               startCreating(node.path)
             }}
             title="New subfolder"
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-opacity"
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-opacity"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -354,7 +354,7 @@ export function FolderTree({
                 setMenuFor(menuFor === node.path ? null : node.path)
               }}
               title="Folder actions"
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-opacity"
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-opacity"
             >
               <MoreVertical className="w-3.5 h-3.5" />
             </button>

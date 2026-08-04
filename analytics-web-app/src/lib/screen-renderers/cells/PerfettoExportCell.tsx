@@ -215,20 +215,20 @@ export function PerfettoExportCell({
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => setTraceError(null)}
-                className="px-2 py-1 text-xs bg-app-panel border border-theme-border rounded text-theme-text-primary hover:bg-app-bg"
+                className="px-2 py-1 text-xs bg-app-panel border border-theme-border rounded-sm text-theme-text-primary hover:bg-app-bg"
               >
                 Dismiss
               </button>
               <button
                 onClick={handleOpenInPerfetto}
-                className="px-2 py-1 text-xs bg-accent-link text-white rounded hover:bg-accent-link/90"
+                className="px-2 py-1 text-xs bg-accent-link text-white rounded-sm hover:bg-accent-link/90"
               >
                 Retry
               </button>
               {cachedTraceBuffer && (
                 <button
                   onClick={downloadCachedBuffer}
-                  className="px-2 py-1 text-xs bg-app-panel border border-theme-border rounded text-theme-text-primary hover:bg-app-bg flex items-center gap-1"
+                  className="px-2 py-1 text-xs bg-app-panel border border-theme-border rounded-sm text-theme-text-primary hover:bg-app-bg flex items-center gap-1"
                 >
                   <Download className="w-3 h-3" />
                   Download Instead
@@ -299,7 +299,7 @@ function PerfettoExportCellEditor({ config, onChange, variables }: CellEditorPro
           type="text"
           value={perfConfig.processIdVar || '$process_id'}
           onChange={(e) => onChange({ ...perfConfig, processIdVar: e.target.value })}
-          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
           placeholder="$process_id"
         />
         <p className="text-xs text-theme-text-muted mt-1">
@@ -326,7 +326,7 @@ function PerfettoExportCellEditor({ config, onChange, variables }: CellEditorPro
           onChange={(e) =>
             onChange({ ...perfConfig, spanType: e.target.value as 'thread' | 'async' | 'both' })
           }
-          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
         >
           <option value="both">Both (Thread + Async)</option>
           <option value="thread">Thread Spans Only</option>

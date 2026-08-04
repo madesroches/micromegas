@@ -437,7 +437,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     <div
       ref={containerRef}
       tabIndex={0}
-      className="relative w-full h-full select-none outline-none overflow-hidden"
+      className="relative w-full h-full select-none outline-hidden overflow-hidden"
       style={{ cursor: 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -455,7 +455,7 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
       />
       <div
         ref={tooltipRef}
-        className="absolute z-10 px-2 py-1 text-xs rounded shadow-lg pointer-events-none"
+        className="absolute z-10 px-2 py-1 text-xs rounded-sm shadow-lg pointer-events-none"
         style={{
           display: 'none',
           backgroundColor: 'rgba(15, 15, 30, 0.95)',
@@ -592,7 +592,7 @@ export function FlameGraphCell({
   return (
     <div className="flex-1 min-h-0 h-full flex flex-col">
       {initialTimeRangeError && (
-        <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs">
+        <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-sm text-red-400 text-xs">
           {initialTimeRangeError}
         </div>
       )}
@@ -661,7 +661,7 @@ function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, c
               <label className="text-xs text-theme-text-secondary w-20 shrink-0">Initial From</label>
               <input
                 type="text"
-                className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-none focus:border-accent-link"
+                className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-hidden focus:border-accent-link"
                 placeholder="$from, now-1h, or variable"
                 value={(fgConfig.options?.initialFrom as string) ?? ''}
                 onChange={(e) => handleOptionChange('initialFrom', e.target.value)}
@@ -671,7 +671,7 @@ function FlameGraphCellEditor({ config, onChange, variables, timeRange, onRun, c
               <label className="text-xs text-theme-text-secondary w-20 shrink-0">Initial To</label>
               <input
                 type="text"
-                className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-none focus:border-accent-link"
+                className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-hidden focus:border-accent-link"
                 placeholder="$to, now, or variable"
                 value={(fgConfig.options?.initialTo as string) ?? ''}
                 onChange={(e) => handleOptionChange('initialTo', e.target.value)}

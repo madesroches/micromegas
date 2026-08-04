@@ -62,7 +62,7 @@ function useMapCatalog(): MapCatalogEntry[] {
 function MapDropdownLoading() {
   return (
     <select
-      className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-muted"
+      className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-muted"
       value=""
       disabled
     >
@@ -95,7 +95,7 @@ function MapDropdown({
     !!normalizedSelected && mapCatalog.some((entry) => entry.file === normalizedSelected)
   return (
     <select
-      className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+      className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary focus:outline-hidden focus:border-accent-link"
       value={normalizedSelected ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
@@ -437,11 +437,11 @@ export function MapCell({
                 {mapFilename}
               </div>
             )}
-            <div className="text-xs text-theme-text-muted mb-3 max-w-md break-words">
+            <div className="text-xs text-theme-text-muted mb-3 max-w-md wrap-break-word">
               {error.message}
             </div>
             <button
-              className="px-3 py-1 text-xs bg-app-card border border-theme-border rounded hover:border-accent-link"
+              className="px-3 py-1 text-xs bg-app-card border border-theme-border rounded-sm hover:border-accent-link"
               onClick={() => {
                 // Clear drei's cached failed promise — otherwise a retry on
                 // the same URL re-throws the same error without refetching.
@@ -517,7 +517,6 @@ export function MapCell({
  * scalars stored as raw numbers/RGBA-u32 still load — they're rendered in
  * their canonical string form (`"10"` or `"#bf360cff"`) on first edit.
  */
-// eslint-disable-next-line react-refresh/only-export-components
 export function ChannelBindingControl({
   label,
   kind,
@@ -655,7 +654,7 @@ export function ChannelBindingControl({
               e.currentTarget.blur()
             }
           }}
-          className="flex-1 min-w-[10rem] bg-app-card border border-theme-border rounded px-2 py-1 text-sm font-mono text-theme-text-primary focus:outline-none focus:border-accent-link"
+          className="flex-1 min-w-40 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm font-mono text-theme-text-primary focus:outline-hidden focus:border-accent-link"
         />
       )}
 
@@ -674,7 +673,7 @@ export function ChannelBindingControl({
           }}
           aria-label={`${label} color picker`}
           title="Pick a color (replaces the text value)"
-          className="w-7 h-7 rounded cursor-pointer border border-theme-border bg-transparent shrink-0"
+          className="w-7 h-7 rounded-sm cursor-pointer border border-theme-border bg-transparent shrink-0"
         />
       )}
 
@@ -682,7 +681,7 @@ export function ChannelBindingControl({
         <select
           value={isColumn ? (binding as { column: string }).column : ''}
           onChange={(e) => onChange({ column: e.target.value })}
-          className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+          className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary focus:outline-hidden focus:border-accent-link"
         >
           {columns.length === 0 && (
             <option value="">No columns available — run the query</option>
@@ -862,7 +861,7 @@ export function MapCellEditor({
           <select
             value={cameraKind}
             onChange={(e) => updateOption('cameraKind', e.target.value)}
-            className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+            className="bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary focus:outline-hidden focus:border-accent-link"
           >
             {MAP_MODE_KINDS.map((kind) => (
               <option key={kind} value={kind}>{MAP_MODE_LABELS[kind]}</option>
@@ -882,7 +881,7 @@ export function MapCellEditor({
           <select
             value={shape}
             onChange={(e) => updateShape(e.target.value as Shape)}
-            className="bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:border-accent-link"
+            className="bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary focus:outline-hidden focus:border-accent-link"
           >
             <option value="sphere">Sphere</option>
             <option value="box">Box</option>

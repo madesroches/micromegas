@@ -188,7 +188,7 @@ function DataSourcesPageContent() {
                     </label>
                     <input
                       type="text"
-                      className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-none focus:border-accent-link disabled:opacity-50"
+                      className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link disabled:opacity-50"
                       placeholder="e.g. production"
                       value={form.name}
                       onChange={(e) => setForm((f) => (f ? { ...f, name: e.target.value } : null))}
@@ -201,7 +201,7 @@ function DataSourcesPageContent() {
                     </label>
                     <input
                       type="text"
-                      className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-none focus:border-accent-link"
+                      className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
                       placeholder="grpc+tls://flight-sql.example.com:50051"
                       value={form.url}
                       onChange={(e) => setForm((f) => (f ? { ...f, url: e.target.value } : null))}
@@ -210,7 +210,7 @@ function DataSourcesPageContent() {
                   <label className={`flex items-center gap-2 text-sm text-theme-text-secondary ${form.mode === 'edit' && form.isDefault ? 'opacity-50' : 'cursor-pointer'}`}>
                     <input
                       type="checkbox"
-                      className="accent-[var(--color-accent-link)]"
+                      className="accent-accent-link"
                       checked={form.isDefault}
                       disabled={form.mode === 'edit' && form.isDefault}
                       onChange={(e) =>
@@ -303,7 +303,7 @@ function DataSourcesPageContent() {
                       </td>
                       <td className="p-2.5 px-4">
                         {ds.is_default ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-500/15 text-yellow-500 rounded text-xs font-medium">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-500/15 text-yellow-500 rounded-sm text-xs font-medium">
                             <Star className="w-3 h-3" />
                             Default
                           </span>
@@ -320,7 +320,7 @@ function DataSourcesPageContent() {
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => openEdit(ds.name)}
-                            className="p-1.5 rounded text-theme-text-muted hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+                            className="p-1.5 rounded-sm text-theme-text-muted hover:text-accent-link hover:bg-accent-link/10 transition-colors"
                             title="Edit"
                           >
                             <Pencil className="w-4 h-4" />
@@ -328,7 +328,7 @@ function DataSourcesPageContent() {
                           {!ds.is_default && (
                             <button
                               onClick={() => setDeleteTarget(ds.name)}
-                              className="p-1.5 rounded text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                              className="p-1.5 rounded-sm text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
                               title="Delete"
                             >
                               <Trash2 className="w-4 h-4" />

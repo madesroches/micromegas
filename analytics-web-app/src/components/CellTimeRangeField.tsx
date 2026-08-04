@@ -29,7 +29,7 @@ export function CellTimeRangeField({ value, onChange }: CellTimeRangeFieldProps)
           <label className="text-xs text-theme-text-secondary w-10 shrink-0">From</label>
           <input
             type="text"
-            className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-none focus:border-accent-link"
+            className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-hidden focus:border-accent-link"
             placeholder="$from, now-1h, or macro (empty = screen range)"
             value={from}
             onChange={(e) => emit(e.target.value, to)}
@@ -39,7 +39,7 @@ export function CellTimeRangeField({ value, onChange }: CellTimeRangeFieldProps)
           <label className="text-xs text-theme-text-secondary w-10 shrink-0">To</label>
           <input
             type="text"
-            className="flex-1 bg-app-card border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-none focus:border-accent-link"
+            className="flex-1 bg-app-card border border-theme-border rounded-sm px-2 py-1 text-sm text-theme-text-primary placeholder:text-theme-text-muted focus:outline-hidden focus:border-accent-link"
             placeholder="$to, now, or macro"
             value={to}
             onChange={(e) => emit(from, e.target.value)}

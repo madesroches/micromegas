@@ -154,7 +154,7 @@ function DatasourceDefaultValue({ value, onChange }: { value: string; onChange: 
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+        className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
       >
         {sources.map((s) => (
           <option key={s.name} value={s.name}>
@@ -171,7 +171,6 @@ function DatasourceDefaultValue({ value, onChange }: { value: string; onChange: 
 // cell header; the body is only uncollapsed to show CellContainer error state)
 // =============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function VariableCell(_props: CellRendererProps) {
   return null
 }
@@ -200,7 +199,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
           value={displayValue}
           onChange={(e) => handleComboboxChange(e.target.value)}
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
         >
           <VariableOptions variableOptions={props.variableOptions} />
         </select>
@@ -212,7 +211,7 @@ export function VariableTitleBarContent(props: CellRendererProps) {
           value={localValue ?? stringValue}
           onChange={(e) => handleTextChange(e.target.value)}
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded text-theme-text-primary text-xs focus:outline-none focus:border-accent-link"
+          className="w-full max-w-[300px] px-2 py-1 bg-app-card border border-theme-border rounded-sm text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
           placeholder="Enter value..."
         />
       )}
@@ -264,7 +263,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
             }
             onChange({ ...varConfig, ...updates })
           }}
-          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
         >
           <option value="combobox">Dropdown (from SQL)</option>
           <option value="text">Text Input</option>
@@ -317,7 +316,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               type="text"
               value={varConfig.expression || ''}
               onChange={(e) => onChange({ ...varConfig, expression: e.target.value })}
-              className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link"
+              className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-hidden focus:border-accent-link"
               placeholder="snap_interval($duration_ms / $innerWidth)"
             />
           </div>
@@ -370,7 +369,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
               const parsed = newValue ? parseDefaultValue(newValue) : undefined
               onChange({ ...varConfig, defaultValue: parsed })
             }}
-            className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+            className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link"
             placeholder="Default value (or JSON for multi-column)"
           />
         </div>

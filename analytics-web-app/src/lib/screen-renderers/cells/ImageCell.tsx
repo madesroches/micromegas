@@ -148,7 +148,7 @@ export function ImageCell({ data, status }: CellRendererProps) {
       </div>
 
       <div
-        className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 flex-shrink-0 border-t border-theme-border/40"
+        className="grid grid-cols-[1fr_auto_1fr] items-center py-0.5 px-1 shrink-0 border-t border-theme-border/40"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -204,7 +204,7 @@ function NavBtn({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="w-[18px] h-[18px] inline-flex items-center justify-center rounded-sm text-theme-text-muted transition-colors hover:text-theme-text-primary hover:bg-theme-border/40 disabled:opacity-25 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-muted"
+      className="w-[18px] h-[18px] inline-flex items-center justify-center rounded-xs text-theme-text-muted transition-colors hover:text-theme-text-primary hover:bg-theme-border/40 disabled:opacity-25 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-theme-text-muted"
     >
       {children}
     </button>

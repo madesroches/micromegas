@@ -231,7 +231,7 @@ function ScreensPageContent() {
             e.stopPropagation()
             setOpenMenuFor(openMenuFor === screen.name ? null : screen.name)
           }}
-          className="p-1.5 rounded text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border opacity-0 group-hover:opacity-100 transition-opacity"
+          className="p-1.5 rounded-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border opacity-0 group-hover:opacity-100 transition-opacity"
           title="Screen actions"
         >
           <MoreVertical className="w-4 h-4" />
@@ -371,7 +371,7 @@ function ScreensPageContent() {
                       }
                     }}
                     placeholder="Folder name"
-                    className="w-full px-2 py-1 text-sm bg-app-bg border border-accent-link rounded text-theme-text-primary outline-none"
+                    className="w-full px-2 py-1 text-sm bg-app-bg border border-accent-link rounded-sm text-theme-text-primary outline-hidden"
                   />
                   {normalizedNewFolderName && normalizedNewFolderName !== newFolderName.toLowerCase() && (
                     <p className="text-[11px] text-theme-text-muted mt-0.5">

@@ -306,7 +306,7 @@ function ProcessMetricsContent() {
         dataSource,
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshCounter forces re-execution; executeRef is stable
+  // refreshCounter forces re-execution; executeRef is stable
   }, [discoveryDone, selectedMeasure, processId, dataSource, binInterval,
       apiTimeRange.begin, apiTimeRange.end, activeSql, refreshCounter])
 
@@ -480,7 +480,7 @@ function ProcessMetricsContent() {
             value={selectedMeasure || ''}
             onChange={(e) => updateMeasure(e.target.value)}
             disabled={noMeasuresAvailable || (discoveryQuery.isStreaming && measures.length === 0)}
-            className="min-w-[250px] px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link disabled:opacity-50 disabled:cursor-not-allowed"
+            className="min-w-[250px] px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-hidden focus:border-accent-link disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {measures.length > 0 ? (
               measures.map((m) => (

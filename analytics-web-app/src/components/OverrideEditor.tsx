@@ -92,7 +92,7 @@ export function OverrideEditor({
           )}
           <span className="text-sm font-semibold text-theme-text-primary">Overrides</span>
           {!isExpanded && overrides.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs bg-accent-link/20 text-accent-link rounded">
+            <span className="px-1.5 py-0.5 text-xs bg-accent-link/20 text-accent-link rounded-sm">
               {overrides.length}
             </span>
           )}
@@ -122,7 +122,7 @@ export function OverrideEditor({
                 <select
                   value={override.column}
                   onChange={(e) => handleColumnChange(index, e.target.value)}
-                  className={`w-full px-2 py-1.5 text-sm bg-app-bg border rounded text-theme-text-primary mb-2 ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
+                  className={`w-full px-2 py-1.5 text-sm bg-app-bg border rounded-sm text-theme-text-primary mb-2 ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
                 >
                   {/* Include orphaned column so it's visible and selectable */}
                   {isOrphaned && (
@@ -138,7 +138,7 @@ export function OverrideEditor({
                 </select>
                 {isOrphaned && (
                   <div className="mb-2 flex items-start gap-1.5 text-xs text-amber-500">
-                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>Column not in query results. Add it to the SELECT or choose a different column.</span>
                   </div>
                 )}
@@ -146,19 +146,19 @@ export function OverrideEditor({
                 <textarea
                   value={override.format}
                   onChange={(e) => handleFormatChange(index, e.target.value)}
-                  className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary font-mono resize-y min-h-[3.5rem]"
+                  className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded-sm text-theme-text-primary font-mono resize-y min-h-14"
                   rows={2}
                   placeholder="[View](/path?id=$row.column_name)"
                 />
                 {validationWarnings[index]?.unknownMacros.length > 0 && (
                   <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
-                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>
                       Unknown macro{validationWarnings[index].unknownMacros.length > 1 ? 's' : ''}:{' '}
                       {validationWarnings[index].unknownMacros.map((macro, i) => (
                         <span key={macro}>
                           {i > 0 && ', '}
-                          <code className="px-1 py-0.5 bg-amber-500/10 rounded">{macro}</code>
+                          <code className="px-1 py-0.5 bg-amber-500/10 rounded-sm">{macro}</code>
                         </span>
                       ))}
                     </span>
@@ -166,13 +166,13 @@ export function OverrideEditor({
                 )}
                 {validationWarnings[index]?.missingColumns.length > 0 && (
                   <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
-                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>
                       Unknown column{validationWarnings[index].missingColumns.length > 1 ? 's' : ''}:{' '}
                       {validationWarnings[index].missingColumns.map((col, i) => (
                         <span key={col}>
                           {i > 0 && ', '}
-                          <code className="px-1 py-0.5 bg-amber-500/10 rounded">{col}</code>
+                          <code className="px-1 py-0.5 bg-amber-500/10 rounded-sm">{col}</code>
                         </span>
                       ))}
                     </span>
@@ -196,11 +196,11 @@ export function OverrideEditor({
           {/* Help text */}
           <div className="text-xs text-theme-text-muted space-y-1 pt-2 border-t border-theme-border">
             <div>
-              Format: <code className="px-1 py-0.5 bg-theme-border rounded">[label](url)</code>
+              Format: <code className="px-1 py-0.5 bg-theme-border rounded-sm">[label](url)</code>
             </div>
             <div>
-              Row data: <code className="px-1 py-0.5 bg-theme-border rounded">$row.name</code> or{' '}
-              <code className="px-1 py-0.5 bg-theme-border rounded">$row["column-name"]</code>
+              Row data: <code className="px-1 py-0.5 bg-theme-border rounded-sm">$row.name</code> or{' '}
+              <code className="px-1 py-0.5 bg-theme-border rounded-sm">$row["column-name"]</code>
             </div>
             {cellSelectionNames.length > 0 && (
               <div>
@@ -208,7 +208,7 @@ export function OverrideEditor({
                 {cellSelectionNames.map((name, i) => (
                   <span key={name}>
                     {i > 0 && ', '}
-                    <code className="px-1 py-0.5 bg-theme-border rounded">${name}.selected.column</code>
+                    <code className="px-1 py-0.5 bg-theme-border rounded-sm">${name}.selected.column</code>
                   </span>
                 ))}
               </div>

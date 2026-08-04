@@ -246,7 +246,7 @@ export function PropertyTimeline({
                 <div key={property.propertyName} className="flex items-center h-9 group">
                   {/* Property label with remove button */}
                   <div
-                    className="flex-shrink-0 flex items-center justify-between pr-2"
+                    className="shrink-0 flex items-center justify-between pr-2"
                     style={{ width: leftOffset }}
                   >
                     <span className="text-xs text-theme-text-secondary truncate" title={property.propertyName}>
@@ -263,7 +263,7 @@ export function PropertyTimeline({
 
                   {/* Timeline bar area */}
                   <div
-                    className={`h-7 relative bg-app-bg rounded flex items-center gap-0.5 px-1 ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
+                    className={`h-7 relative bg-app-bg rounded-sm flex items-center gap-0.5 px-1 ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
                     style={{ width: plotWidth ?? '100%' }}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
@@ -295,7 +295,7 @@ export function PropertyTimeline({
                       return (
                         <div
                           key={`${segment.begin}-${segment.value}`}
-                          className="absolute top-1 bottom-1 bg-brand-blue rounded-sm flex items-center justify-center text-[10px] font-medium text-white overflow-hidden transition-opacity hover:opacity-85 hover:ring-2 hover:ring-brand-gold"
+                          className="absolute top-1 bottom-1 bg-brand-blue rounded-xs flex items-center justify-center text-[10px] font-medium text-white overflow-hidden transition-opacity hover:opacity-85 hover:ring-2 hover:ring-brand-gold"
                           style={{
                             left: `${startPercent}%`,
                             width: `${Math.max(widthPercent, 1)}%`,

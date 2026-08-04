@@ -334,7 +334,7 @@ function ChildEditorView({
           type="text"
           value={editedName}
           onChange={(e) => handleNameChange(e.target.value)}
-          className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+          className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-hidden ${
             nameError
               ? 'border-accent-error focus:border-accent-error'
               : 'border-theme-border focus:border-accent-link'
@@ -493,7 +493,7 @@ export function HorizontalGroupCellEditor({
                   key={child.name}
                   className="flex items-center gap-1.5 px-2 py-1.5 bg-app-card rounded-md group"
                 >
-                  <span className="inline-flex items-center justify-center text-[10px] px-1 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium shrink-0 [&_svg]:w-3 [&_svg]:h-3">
+                  <span className="inline-flex items-center justify-center text-[10px] px-1 py-0.5 rounded-sm bg-app-panel text-theme-text-secondary uppercase font-medium shrink-0 [&_svg]:w-3 [&_svg]:h-3">
                     {meta.icon}
                   </span>
                   <button
