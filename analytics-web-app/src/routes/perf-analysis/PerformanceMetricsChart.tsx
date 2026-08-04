@@ -222,6 +222,7 @@ export function PerformanceMetricsChart({
     if (discoveryDone && selectedMeasure && processId && !isCustomQuery) {
       metricsDataExecuteRef.current()
     }
+  // Use primitive deps to avoid object comparison issues
   }, [discoveryDone, selectedMeasure, processId, isCustomQuery, binInterval, apiTimeRange.begin, apiTimeRange.end])
 
   // Lift gate-relevant view state to the page.

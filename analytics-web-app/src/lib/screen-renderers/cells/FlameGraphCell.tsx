@@ -424,10 +424,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
 
     return () => {
       container.removeEventListener('keydown', onKeyDown)
-      container.removeEventListener('blur-sm', clearAllKeys)
+      container.removeEventListener('blur', clearAllKeys)
       container.removeEventListener('wheel', handleWheel)
       window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur-sm', clearAllKeys)
+      window.removeEventListener('blur', clearAllKeys)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       clearAllKeys()
     }

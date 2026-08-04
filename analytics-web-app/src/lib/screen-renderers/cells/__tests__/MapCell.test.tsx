@@ -497,7 +497,7 @@ describe('ChannelBindingControl', () => {
     expect(input.value).toBe('425')
   })
 
-  it('commits the draft on blur-sm', () => {
+  it('commits the draft on blur', () => {
     const onChange = vi.fn()
     render(
       <ChannelBindingControl
@@ -551,7 +551,7 @@ describe('ChannelBindingControl', () => {
     expect(input.value).toBe('10')
   })
 
-  it('does not fire onChange on blur-sm when the draft equals the prop', () => {
+  it('does not fire onChange on blur when the draft equals the prop', () => {
     const onChange = vi.fn()
     render(
       <ChannelBindingControl

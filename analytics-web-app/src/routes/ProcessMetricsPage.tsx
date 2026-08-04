@@ -306,6 +306,7 @@ function ProcessMetricsContent() {
         dataSource,
       })
     }
+  // refreshCounter forces re-execution; executeRef is stable
   }, [discoveryDone, selectedMeasure, processId, dataSource, binInterval,
       apiTimeRange.begin, apiTimeRange.end, activeSql, refreshCounter])
 
