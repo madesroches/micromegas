@@ -133,47 +133,48 @@ pub enum RetireMatch {
     /// everything except the two `BlockOrder::EventTime` JIT views.
     Containment,
     /// The union of the overlap and containment predicates, plus a third arm for a degenerate new
-    /// range: `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
-    /// (begin_insert_time >= $3 AND end_insert_time <= $4 AND NOT (begin_insert_time =
-    /// end_insert_time AND begin_insert_time = $3)) OR ($3 = $4 AND ((begin_insert_time <= $3 AND
-    /// end_insert_time > $3) OR (begin_insert_time = $3 AND end_insert_time = $3)))`.
+    /// range, with same-run siblings protected separately (by identity, not by range shape --
+    /// see below): `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
+    /// (begin_insert_time >= $3 AND end_insert_time <= $4) OR ($3 = $4 AND begin_insert_time <=
+    /// $3 AND end_insert_time > $3)`.
     ///
     /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
     /// grouping can move an *earlier* cut point between `jit_update` runs (see
     /// `jit_partitions::group_blocks_into_partitions`'s docs), so a later run's narrower spec can
     /// leave behind a stale, wider partition that merely *overlaps* the new range instead of being
     /// contained by it -- `Containment` alone would never retire it, and the subsequent insert
-    /// would trip the `lakehouse_partitions_no_overlap` exclusion constraint. The containment half
-    /// of the union is not redundant with the overlap half: `tstzrange(t, t)` is Postgres's empty
-    /// range, so `&&` is always false whenever *either* side's range is degenerate
-    /// (`begin_insert_time == end_insert_time`), so a degenerate existing partition being retired
-    /// by a non-degenerate new range needs the containment half to be matched at all.
+    /// would trip the `lakehouse_partitions_no_overlap` exclusion constraint. The containment arm
+    /// is not redundant with the overlap arm: `tstzrange(t, t)` is Postgres's empty range, so `&&`
+    /// is always false whenever *either* side's range is degenerate (`begin_insert_time ==
+    /// end_insert_time`), so a degenerate existing partition being retired by a non-degenerate new
+    /// range needs the containment arm to be matched at all. The third arm handles a *degenerate
+    /// new range* (`$3 == $4`), which the first two arms both miss: `&&` is vacuously false (an
+    /// empty `tstzrange` never overlaps anything), and the containment arm degenerates to
+    /// `begin_insert_time = end_insert_time = $3`, which only catches an exact degenerate
+    /// duplicate, not a wider existing partition that merely contains the point `$3` (e.g.
+    /// `begin_insert_time < $3 < end_insert_time`) -- the third arm's `begin_insert_time <= $3 AND
+    /// end_insert_time > $3` (the existing row's own range under half-open `[)` semantics) covers
+    /// that case.
     ///
-    /// The containment half's `AND NOT (begin_insert_time = end_insert_time AND begin_insert_time
-    /// = $3)` clause excludes one specific, legitimate case: `jit_update` writes a regrouping run's
-    /// partitions left to right, and the cut rule allows a degenerate partition (`tstzrange` is
-    /// `[)`, so an equal boundary is legal) to end at exactly `t` where the very next partition in
-    /// the *same* run begins at `t`. Without the exclusion, writing that next partition would
-    /// match and delete its own just-written, up-to-date, immediately-preceding sibling on every
-    /// run -- the clause leaves that in place while still matching the genuine cross-run case (a
-    /// stale degenerate partition from a previous run's different cut points, generally sitting
-    /// strictly inside `[$3, $4]` rather than exactly at `$3`).
-    ///
-    /// The third arm handles a *degenerate new range* (`$3 == $4`), which the first two arms both
-    /// miss: `&&` is vacuously false (an empty `tstzrange` never overlaps anything), and the
-    /// containment half degenerates to `begin_insert_time = end_insert_time = $3` -- exactly the
-    /// shape the left-boundary exclusion clause removes -- so together they match zero rows for
-    /// *every* degenerate new range, letting a genuinely stale overlapping partition (e.g. a wider
-    /// partition from a prior run, or an exactly-coincident degenerate one) survive. The third arm
-    /// restores this using the existing row's own range under half-open (`[)`) semantics:
-    /// `begin_insert_time <= $3 AND end_insert_time > $3` matches a stale partition whose range
-    /// truly contains the point `$3` (including one that merely starts there), and `begin_insert_time
-    /// = end_insert_time = $3` matches an exact degenerate duplicate. Neither clause matches a
-    /// same-run sibling ending exactly at `$3` (`begin_insert_time < $3 AND end_insert_time = $3`):
-    /// the first requires `end_insert_time > $3` and the second requires `begin_insert_time = $3`,
-    /// so that sibling -- which never truly overlaps point `$3` under `[)` semantics -- is left in
-    /// place without needing an explicit exclusion, the same way the left-boundary exclusion
-    /// protects the non-degenerate arm.
+    /// **Same-run siblings are excluded by identity, not by range shape.** An earlier version of
+    /// this predicate tried to carve same-run siblings out of the containment/third-arm matches
+    /// using ad hoc range-shape clauses (a left-boundary exclusion on the containment arm, an
+    /// exact-degenerate-match sub-clause on the third arm); that approach could not distinguish a
+    /// same-run sibling from a genuinely stale cross-run partition sharing the same shape (a
+    /// degenerate successor immediately after a degenerate stale predecessor, or several
+    /// consecutive same-run partitions all sharing an identical degenerate range -- see
+    /// `tasks/1429_jit_event_time_block_ordering_plan.md`'s review history for both failure
+    /// modes), so it either wrongly retired a same-run sibling or wrongly spared a stale
+    /// cross-run partition depending on the exact shapes involved. Instead, `retire_partitions`
+    /// takes an explicit `same_run_ranges` list -- the insert ranges the current `jit_update` run
+    /// has itself already written (or found already up to date) earlier in its own loop -- and
+    /// every arm above is additionally guarded by `AND NOT` a row matching one of those exact
+    /// `(begin_insert_time, end_insert_time)` pairs. This is provenance-based, not shape-based: a
+    /// row is protected because *this run* is the one that put it there, regardless of whether its
+    /// range is degenerate, and regardless of whether another row shares the identical range. A
+    /// stale row from a *previous* run is never in `same_run_ranges` (a fresh, empty list every
+    /// `jit_update` call), so it is still retired even if its range happens to coincide with
+    /// something the current run also writes.
     ///
     /// Tolerated gap: under `Overlap`, retiring a stale wider partition and inserting the new,
     /// narrower one are two separate statements in the same transaction, so a range that the old
@@ -195,6 +196,13 @@ pub enum RetireMatch {
 /// `Overlap` additionally matches (and retires) an existing partition that merely overlaps the new
 /// range without containing it, which `BlockOrder::EventTime` JIT views need because their cut
 /// points can move between runs.
+///
+/// `same_run_ranges` lists the exact `(begin_insert_time, end_insert_time)` pairs the calling
+/// `jit_update` run has already written (or found already up to date) earlier in its own loop; a
+/// row matching one of these pairs is never retired, regardless of which arm of `retire_match`
+/// would otherwise match it (see `RetireMatch::Overlap`'s docs for why this is identity-, not
+/// shape-, based). Only meaningful for `RetireMatch::Overlap` -- pass `&[]` for `Containment`.
+#[expect(clippy::too_many_arguments)]
 pub async fn retire_partitions(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     view_set_name: &str,
@@ -202,6 +210,7 @@ pub async fn retire_partitions(
     begin_insert_time: DateTime<Utc>,
     end_insert_time: DateTime<Utc>,
     retire_match: RetireMatch,
+    same_run_ranges: &[TimeRange],
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // For RetireMatch::Containment: this is not an overlap test, we need to assume that we are
@@ -209,6 +218,8 @@ pub async fn retire_partitions(
     // case where a partition can have only one block and begin_insert == end_insert -- handled by
     // the exact-match branch below. RetireMatch::Overlap (thread_spans/net_spans only) additionally
     // matches a stale, wider partition that only overlaps the new range; see RetireMatch's docs.
+    let same_run_begins: Vec<DateTime<Utc>> = same_run_ranges.iter().map(|r| r.begin).collect();
+    let same_run_ends: Vec<DateTime<Utc>> = same_run_ranges.iter().map(|r| r.end).collect();
 
     //todo: use DELETE+RETURNING
     let old_partitions = match retire_match {
@@ -256,9 +267,9 @@ pub async fn retire_partitions(
             .with_context(|| "listing old partitions (range)")?
         }
         RetireMatch::Overlap => {
-            // Union of the overlap and containment predicates, plus a degenerate-new-range arm;
-            // see RetireMatch::Overlap's docs for why the containment half (and its left-boundary
-            // exclusion) and the third arm are both required.
+            // Union of the overlap, containment, and degenerate-new-range predicates, with rows
+            // matching a same-run range excluded regardless of which arm matched them; see
+            // RetireMatch::Overlap's docs for why all three arms and the exclusion are required.
             instrument_named!(
                 sqlx::query(
                     "SELECT file_path, file_size
@@ -267,12 +278,12 @@ pub async fn retire_partitions(
              AND view_instance_id = $2
              AND (
                  (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
-                 OR (begin_insert_time >= $3 AND end_insert_time <= $4
-                     AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
-                 OR ($3 = $4 AND (
-                     (begin_insert_time <= $3 AND end_insert_time > $3)
-                     OR (begin_insert_time = $3 AND end_insert_time = $3)
-                 ))
+                 OR (begin_insert_time >= $3 AND end_insert_time <= $4)
+                 OR ($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM unnest($5::timestamptz[], $6::timestamptz[]) AS same_run(b, e)
+                 WHERE same_run.b = begin_insert_time AND same_run.e = end_insert_time
              )
              ;",
                 )
@@ -280,6 +291,8 @@ pub async fn retire_partitions(
                 .bind(view_instance_id)
                 .bind(begin_insert_time)
                 .bind(end_insert_time)
+                .bind(&same_run_begins)
+                .bind(&same_run_ends)
                 .fetch_all(&mut **transaction),
                 "sql_select_old_partitions"
             )
@@ -360,8 +373,8 @@ pub async fn retire_partitions(
             .with_context(|| "deleting out of date partitions (range)")?
         }
         RetireMatch::Overlap => {
-            // Same union predicate as the SELECT above, so exactly the rows just listed (and
-            // scheduled for cleanup) are deleted.
+            // Same union predicate (and same-run exclusion) as the SELECT above, so exactly the
+            // rows just listed (and scheduled for cleanup) are deleted.
             instrument_named!(
                 sqlx::query(
                     "DELETE from lakehouse_partitions
@@ -369,12 +382,12 @@ pub async fn retire_partitions(
              AND view_instance_id = $2
              AND (
                  (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
-                 OR (begin_insert_time >= $3 AND end_insert_time <= $4
-                     AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
-                 OR ($3 = $4 AND (
-                     (begin_insert_time <= $3 AND end_insert_time > $3)
-                     OR (begin_insert_time = $3 AND end_insert_time = $3)
-                 ))
+                 OR (begin_insert_time >= $3 AND end_insert_time <= $4)
+                 OR ($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM unnest($5::timestamptz[], $6::timestamptz[]) AS same_run(b, e)
+                 WHERE same_run.b = begin_insert_time AND same_run.e = end_insert_time
              )
              ;",
                 )
@@ -382,6 +395,8 @@ pub async fn retire_partitions(
                 .bind(view_instance_id)
                 .bind(begin_insert_time)
                 .bind(end_insert_time)
+                .bind(&same_run_begins)
+                .bind(&same_run_ends)
                 .execute(&mut **transaction),
                 "sql_delete_old_partitions"
             )
@@ -438,9 +453,11 @@ async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
     retire_match: RetireMatch,
+    same_run_ranges: &[TimeRange],
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let result = insert_partition_transaction(lake, partition, retire_match, logger).await;
+    let result =
+        insert_partition_transaction(lake, partition, retire_match, same_run_ranges, logger).await;
     if result.is_err()
         && let Some(file_path) = &partition.file_path
     {
@@ -458,6 +475,7 @@ async fn insert_partition_transaction(
     lake: &DataLakeConnection,
     partition: &Partition,
     retire_match: RetireMatch,
+    same_run_ranges: &[TimeRange],
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // Generate deterministic lock key for this partition
@@ -528,6 +546,7 @@ async fn insert_partition_transaction(
         partition.begin_insert_time(),
         partition.end_insert_time(),
         retire_match,
+        same_run_ranges,
         logger.clone(),
     )
     .await
@@ -797,6 +816,13 @@ async fn finalize_partition_write(
 /// `retire_match` is forwarded to `retire_partitions` (see `RetireMatch`'s docs): pass
 /// `RetireMatch::Containment` unless this call is one of the two `BlockOrder::EventTime` JIT
 /// views (`thread_spans_view.rs` / `net_spans_view.rs`), which must pass `RetireMatch::Overlap`.
+///
+/// `same_run_ranges` is forwarded to `retire_partitions` as-is (see its docs and
+/// `RetireMatch::Overlap`'s); pass an empty `Vec` unless `retire_match` is `RetireMatch::Overlap`,
+/// in which case it must list every insert range the calling `jit_update` run has already written
+/// (or found already up to date) earlier in its own loop. Taken by value (not `&[TimeRange]`):
+/// this whole call is normally wrapped in `spawn_with_context`, whose `Future` bound requires
+/// `'static`, which a slice borrowed from the caller's loop-local accumulator cannot satisfy.
 #[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
@@ -806,6 +832,7 @@ pub async fn write_partition_from_rows(
     source_data_hash: Vec<u8>,
     sort_order: Option<Vec<String>>,
     retire_match: RetireMatch,
+    same_run_ranges: Vec<TimeRange>,
     mut rb_stream: Receiver<Result<PartitionRowSet, anyhow::Error>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -903,6 +930,7 @@ pub async fn write_partition_from_rows(
             sort_order,
         },
         retire_match,
+        &same_run_ranges,
         logger,
     )
     .await

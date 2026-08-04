@@ -39,7 +39,8 @@ async fn retire_partitions_impl(
     logger: Arc<dyn Logger>,
 ) -> anyhow::Result<()> {
     let mut tr = lake.db_pool.begin().await?;
-    // The public admin UDF: unchanged behavior, so RetireMatch::Containment (today's query).
+    // The public admin UDF: unchanged behavior, so RetireMatch::Containment (today's query) and no
+    // same-run exclusion (that mechanism only applies to RetireMatch::Overlap).
     retire_partitions(
         &mut tr,
         view_set_name,
@@ -47,6 +48,7 @@ async fn retire_partitions_impl(
         begin_insert_time,
         end_insert_time,
         RetireMatch::Containment,
+        &[],
         logger,
     )
     .await?;

@@ -653,11 +653,32 @@ pub async fn generate_process_jit_partitions(
 
 /// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
 /// Checks if a JIT partition is up to date.
+///
+/// `block_order` selects which query/comparison applies (see `BlockOrder`'s docs):
+/// - `BlockOrder::EventTime` (`thread_spans`/`net_spans` only) uses exact insert-range-and-count
+///   equality. Their cut points can move between `jit_update` runs (see
+///   `group_blocks_into_partitions`'s docs and `tasks/1429_jit_event_time_block_ordering_plan.md`
+///   §6), so a later run's spec can have a smaller, different insert range than an
+///   already-written partition that still overlaps it; calling that stale, wider partition "up to
+///   date" (as the overlap/`>=` test below would) would leave it in place forever. Exact equality
+///   correctly calls it "not up to date" instead, so it falls through to `retire_partitions`'s
+///   `RetireMatch::Overlap` arm (see `write_partition.rs`).
+/// - `BlockOrder::InsertTime` (every other JIT view) uses the original overlap/`>=`-count test:
+///   `begin_insert_time <= max_insert_time AND end_insert_time >= min_insert_time`, "up to date"
+///   iff a matching partition's object count is at least the spec's. Their cut points are stable
+///   across runs, so a stale spec (e.g. from a concurrent `jit_update` that lost a race -- see
+///   `RetireMatch::Overlap`'s "Concurrent writers" docs) legitimately already-covered by a wider,
+///   already-committed partition must be treated as a no-op here: `RetireMatch::Containment`
+///   (what these views use) cannot retire a partition that merely overlaps without being
+///   contained, so if exact equality called that stale spec "not up to date", the subsequent
+///   insert would trip the `lakehouse_partitions_no_overlap` exclusion constraint. Using exact
+///   equality here unconditionally was issue 2 of the 1429 branch's third review round.
 #[span_fn]
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
     spec: &SourceDataBlocksInMemory,
+    block_order: BlockOrder,
 ) -> Result<bool> {
     let (min_insert_time, max_insert_time) =
         get_part_insert_time_range(spec).with_context(|| "get_event_time_range")?;
@@ -669,47 +690,56 @@ pub async fn is_jit_partition_up_to_date(
         *view_meta.view_instance_id,
     );
 
-    // Exact insert-range equality, not the overlap+`>=`-count test this replaced.
-    //
-    // The original #488 concern still applies and is not reintroduced here: use an inclusive
-    // comparison (`=`) rather than something that would reject an identical range. Exact equality
-    // *is* that inclusive comparison -- a spec whose range is byte-identical to a stored
-    // partition's still matches, so #488's "partitions unnecessarily recreated on every query"
-    // failure mode does not return. What equality additionally rejects, that overlap plus `>=`
-    // used to accept, is a *different* range that merely overlaps: under `BlockOrder::EventTime` a
-    // block arriving between two `jit_update` runs can legally shift an earlier cut point (see
-    // `group_blocks_into_partitions`'s docs and
-    // `tasks/1429_jit_event_time_block_ordering_plan.md` §6), so a later run's spec can have a
-    // smaller, different insert range than an already-written partition that still overlaps it.
-    // The old overlap/`>=` test would call that stale, wider partition "up to date"; exact
-    // range-and-count equality does not, so the stale partition falls through to "not up to date"
-    // here and is then replaced by `retire_partitions`'s `RetireMatch::Overlap` arm (see
-    // `write_partition.rs`). Under `BlockOrder::InsertTime` cut points are stable across runs, so
-    // the exact range and count already coincide with what the overlap/`>=` test would have
-    // matched -- this is a no-op there, not a config-gated special case. This also collapses the
-    // previous `min_insert_time == max_insert_time` degenerate-range branch: both branches produced
-    // this same single-row-exact-match query once the range check is `=` instead of `<=`/`>=`, so
-    // there is only one query left.
     // See: https://github.com/madesroches/micromegas/issues/488
-    let rows = instrument_named!(
-        sqlx::query(
-            "SELECT file_schema_hash, source_data_hash
+    let rows = match block_order {
+        BlockOrder::EventTime => {
+            // Exact insert-range equality (see this function's docs for why).
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_schema_hash, source_data_hash
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND begin_insert_time = $3
              AND end_insert_time = $4
              ;",
-        )
-        .bind(&*view_meta.view_set_name)
-        .bind(&*view_meta.view_instance_id)
-        .bind(min_insert_time)
-        .bind(max_insert_time)
-        .fetch_all(pool),
-        "sql_select_matching_partitions"
-    )
-    .await
-    .with_context(|| "fetching matching partitions")?;
+                )
+                .bind(&*view_meta.view_set_name)
+                .bind(&*view_meta.view_instance_id)
+                .bind(min_insert_time)
+                .bind(max_insert_time)
+                .fetch_all(pool),
+                "sql_select_matching_partitions"
+            )
+            .await
+            .with_context(|| "fetching matching partitions")?
+        }
+        BlockOrder::InsertTime => {
+            // Overlap test, using inclusive inequalities (<=, >=) to prevent race conditions: with
+            // exclusive inequalities (<, >), identical time ranges never match, causing partitions
+            // to be unnecessarily recreated on every query (see this function's docs and
+            // https://github.com/madesroches/micromegas/issues/488).
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_schema_hash, source_data_hash
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time <= $3
+             AND end_insert_time >= $4
+             ;",
+                )
+                .bind(&*view_meta.view_set_name)
+                .bind(&*view_meta.view_instance_id)
+                .bind(max_insert_time)
+                .bind(min_insert_time)
+                .fetch_all(pool),
+                "sql_select_matching_partitions"
+            )
+            .await
+            .with_context(|| "fetching matching partitions")?
+        }
+    };
     if rows.len() != 1 {
         debug!("{desc}: found {} partitions (expected 1)", rows.len());
         for (i, row) in rows.iter().enumerate() {
@@ -735,10 +765,17 @@ pub async fn is_jit_partition_up_to_date(
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
     let existing_count = hash_to_object_count(&part_source_data)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
-    if existing_count != required_count {
+    let up_to_date = match block_order {
+        // Exact count equality: see this function's docs.
+        BlockOrder::EventTime => existing_count == required_count,
+        // `>=`, not exact equality: a stale spec covered by an already-wider partition is a no-op
+        // here, not a rewrite (see this function's docs).
+        BlockOrder::InsertTime => existing_count >= required_count,
+    };
+    if !up_to_date {
         info!(
-            "{desc}: existing partition object count differs (existing={existing_count}, \
-             required={required_count}): creating a new partition"
+            "{desc}: existing partition object count does not satisfy block_order={block_order:?} \
+             (existing={existing_count}, required={required_count}): creating a new partition"
         );
         return Ok(false);
     }

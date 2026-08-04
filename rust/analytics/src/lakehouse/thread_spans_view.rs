@@ -157,6 +157,7 @@ async fn write_partition(
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
+    same_run_ranges: &[TimeRange],
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
@@ -179,6 +180,7 @@ async fn write_partition(
         spec.block_ids_hash.clone(),
         None,
         RetireMatch::Overlap,
+        same_run_ranges.to_vec(),
         rx,
         null_response_writer,
     ));
@@ -272,6 +274,14 @@ async fn write_partition(
 }
 /// Rebuilds the partition if it's missing or out of date.
 ///
+/// `same_run_ranges` accumulates the insert ranges of every partition this same `jit_update` run
+/// (or, in the tests below, the simulated run driving this function directly) has already handled
+/// -- written, or found already up to date -- earlier in its loop: this call both reads it (to
+/// pass along to `retire_partitions` via `RetireMatch::Overlap`, protecting those earlier
+/// partitions from this write) and appends `spec`'s own range to it before returning, so the next
+/// call in the loop sees it too. See `RetireMatch::Overlap`'s docs for why this is identity-, not
+/// range-shape-, based.
+///
 /// `pub` (not module-private) so `rust/analytics/tests/` -- which compiles as an external
 /// integration crate and can only reach `pub` items -- can write a single JIT partition directly:
 /// `thread_spans_cross_run_regrouping_replaces_stale_partition`,
@@ -287,13 +297,31 @@ pub async fn update_partition(
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
+    same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
+    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    if is_jit_partition_up_to_date(
+        &lake.db_pool,
+        view_meta.clone(),
+        spec,
+        BlockOrder::EventTime,
+    )
+    .await?
+    {
+        same_run_ranges.push(insert_range);
         return Ok(());
     }
-    write_partition(lake, view_meta, schema, convert_ticks, spec)
-        .await
-        .with_context(|| "write_partition")?;
+    write_partition(
+        lake,
+        view_meta,
+        schema,
+        convert_ticks,
+        spec,
+        same_run_ranges.as_slice(),
+    )
+    .await
+    .with_context(|| "write_partition")?;
+    same_run_ranges.push(insert_range);
 
     Ok(())
 }
@@ -377,6 +405,10 @@ impl View for ThreadSpansView {
         )
         .await
         .with_context(|| "generate_stream_jit_partitions")?;
+        // Accumulates this run's own already-handled insert ranges across the loop, so a later
+        // partition's retire step never retires an earlier one from this same run -- see
+        // `update_partition`'s and `RetireMatch::Overlap`'s docs.
+        let mut same_run_ranges: Vec<TimeRange> = Vec::new();
         for part in &partitions {
             update_partition(
                 lakehouse.lake().clone(),
@@ -388,6 +420,7 @@ impl View for ThreadSpansView {
                 self.get_file_schema(),
                 &convert_ticks,
                 part,
+                &mut same_run_ranges,
             )
             .await
             .with_context(|| "update_partition")?;

@@ -342,6 +342,7 @@ async fn retire_existing_partitions(
         begin,
         now,
         RetireMatch::Containment,
+        &[],
         logger,
     )
     .await?;

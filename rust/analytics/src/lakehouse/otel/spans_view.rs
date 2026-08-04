@@ -17,8 +17,8 @@ use crate::lakehouse::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
-        write_partition_from_blocks,
+        BlockOrder, JitPartitionConfig, generate_process_jit_partitions,
+        is_jit_partition_up_to_date, write_partition_from_blocks,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -154,8 +154,13 @@ impl View for OtelSpansView {
         let block_processors = Arc::new(block_processors);
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
-                .await?
+            if !is_jit_partition_up_to_date(
+                &lakehouse.lake().db_pool,
+                view_meta.clone(),
+                &part,
+                BlockOrder::InsertTime,
+            )
+            .await?
             {
                 write_partition_from_blocks(
                     lakehouse.lake().clone(),

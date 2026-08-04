@@ -155,6 +155,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.get_source_data_hash(),
             self.sort_order.clone(),
             RetireMatch::Containment,
+            Vec::new(),
             rx,
             logger.clone(),
         ));

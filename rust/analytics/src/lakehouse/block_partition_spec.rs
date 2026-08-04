@@ -91,6 +91,7 @@ impl PartitionSpec for BlockPartitionSpec {
             self.source_data.get_source_data_hash(),
             None,
             RetireMatch::Containment,
+            Vec::new(),
             rx,
             logger.clone(),
         ));

@@ -122,6 +122,7 @@ async fn write_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
     process_id: Arc<String>,
+    same_run_ranges: &[TimeRange],
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
@@ -143,6 +144,7 @@ async fn write_partition(
         spec.block_ids_hash.clone(),
         None,
         RetireMatch::Overlap,
+        same_run_ranges.to_vec(),
         rx,
         null_response_writer,
     ));
@@ -259,6 +261,10 @@ async fn write_partition(
 }
 
 /// Rebuilds the partition if it's missing or out of date.
+///
+/// `same_run_ranges` accumulates the insert ranges this `jit_update` run has already handled --
+/// written, or found already up to date -- earlier in its loop; see `ThreadSpansView`'s
+/// `update_partition` and `RetireMatch::Overlap`'s docs for why.
 #[span_fn]
 async fn update_partition(
     lake: Arc<DataLakeConnection>,
@@ -267,13 +273,32 @@ async fn update_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
     process_id: Arc<String>,
+    same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
+    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    if is_jit_partition_up_to_date(
+        &lake.db_pool,
+        view_meta.clone(),
+        spec,
+        BlockOrder::EventTime,
+    )
+    .await?
+    {
+        same_run_ranges.push(insert_range);
         return Ok(());
     }
-    write_partition(lake, view_meta, schema, convert_ticks, spec, process_id)
-        .await
-        .with_context(|| "write_partition")?;
+    write_partition(
+        lake,
+        view_meta,
+        schema,
+        convert_ticks,
+        spec,
+        process_id,
+        same_run_ranges.as_slice(),
+    )
+    .await
+    .with_context(|| "write_partition")?;
+    same_run_ranges.push(insert_range);
     Ok(())
 }
 
@@ -352,6 +377,10 @@ impl View for NetSpansView {
         .with_context(|| "generate_process_jit_partitions")?;
 
         let process_id_str = Arc::new(self.process_id.to_string());
+        // Accumulates this run's own already-handled insert ranges across the loop, so a later
+        // partition's retire step never retires an earlier one from this same run -- see
+        // `update_partition`'s and `RetireMatch::Overlap`'s docs.
+        let mut same_run_ranges: Vec<TimeRange> = Vec::new();
         for part in &all_partitions {
             update_partition(
                 lakehouse.lake().clone(),
@@ -364,6 +393,7 @@ impl View for NetSpansView {
                 &convert_ticks,
                 part,
                 process_id_str.clone(),
+                &mut same_run_ranges,
             )
             .await
             .with_context(|| "update_partition")?;

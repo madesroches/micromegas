@@ -393,6 +393,7 @@ pub async fn create_merged_partition(
         source_hash.to_le_bytes().to_vec(),
         merged_sort_order,
         RetireMatch::Containment,
+        Vec::new(),
         rx,
         logger.clone(),
     ));
