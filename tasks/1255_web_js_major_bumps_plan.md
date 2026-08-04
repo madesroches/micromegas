@@ -171,8 +171,8 @@ export default tseslint.config(
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      // React Compiler rules that fire on this codebase (106 findings, see below) — turned off,
-      // adopted as a separate follow-up rather than hand-fixed here.
+      // React Compiler rules that fire on this codebase (106 findings across 48 files, see below) —
+      // turned off here; adoption is tracked in a dedicated follow-up issue (see Trade-offs).
       'react-hooks/refs': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/static-components': 'off',
@@ -216,7 +216,7 @@ proportion to a dependency bump. Mitigation, decided in-plan: turn off the 5 rul
 (`refs`, `set-state-in-effect`, `static-components`, `immutability`, `purity`) in `eslint.config.js`,
 keeping `rules-of-hooks`/`exhaustive-deps` at their v7 severities. This is narrower and more honest than
 blanket-demoting the whole `react-hooks` plugin to `warn`, and it means the React Compiler rules are
-adopted as a separate follow-up, not silently dropped. `^6` is not a fallback option regardless — its
+adopted via a dedicated follow-up issue (see Trade-offs), not silently dropped. `^6` is not a fallback option regardless — its
 peer range caps at `eslint@^9.0.0` and does not satisfy `eslint@^10`.
 
 Because flat config lints only JS by default, `files: ['**/*.{ts,tsx}']` is required for the TS rules to
@@ -238,6 +238,19 @@ root extensions removed fails to satisfy that package's peer requirements (`YN00
 explain peer-requirements` reports `@typescript-eslint/utils@npm:7.18.0 doesn't provide typescript to
 @typescript-eslint/typescript-estree@npm:7.18.0`). So only `analytics-web-app/.yarnrc.yml`'s own copy of
 the entry is orphaned by this commit and gets removed; the root file is left alone entirely.
+
+The root `/.yarnrc.yml` is itself inherited by `analytics-web-app`: `yarn config get packageExtensions`
+run there returns the root file's four entries (including this one), and `yarn config get logFilters`
+run there returns the root's `[{code: YN0068, level: discard}]`. So the local mirror is already redundant
+for repo-local `yarn install` runs — its only real consumer is the Docker frontend build, which copies
+just `analytics-web-app/{package.json,yarn.lock,.yarnrc.yml}` (`docker/analytics-web.Dockerfile:50`,
+`docker/monolith.Dockerfile:51`, `docker/all-in-one.Dockerfile:51`) and therefore has no root file to
+inherit from. Removing the local entry is thus a cleanup with no functional effect on repo-local
+installs; verification is (a) `yarn install` in `analytics-web-app` succeeds — already covered by the CI
+gate — and optionally (b) a Docker frontend build. A check for an absent `YN0068` warning is **not** used
+as a signal: because the root `logFilters` entry is inherited, `YN0068` is unconditionally discarded in
+`analytics-web-app` regardless of whether the removed entry was needed, so its absence would pass
+vacuously.
 
 This commit also orphans the `js-yaml` `resolutions` pin (`"js-yaml": "^4.3.0"` in
 `analytics-web-app/package.json`), the same way Commit 3 orphans `baseline-browser-mapping`: in
@@ -273,9 +286,17 @@ transcription risk and no functional gain in this PR. Recorded as a follow-up in
 
 **Use `@tailwindcss/vite` rather than `@tailwindcss/postcss`.** The app is a Vite 8 project
 (`analytics-web-app/vite.config.ts`), the Vite plugin is the path Tailwind recommends for Vite, and it
-lets `postcss.config.mjs` be deleted outright — v4 does its own `@import` inlining and vendor
-prefixing, so `autoprefixer` is no longer needed. Vitest does not process CSS by default
-(no `css: true` in the `test` block), so tests are unaffected by the pipeline swap.
+lets `postcss.config.mjs` be deleted outright. Note this is narrower than "v4 handles prefixing" —
+`@tailwindcss/vite` only prefixes the stylesheet that imports Tailwind (`src/styles/globals.css`); it
+does not run over component-imported CSS such as `src/components/ui/DateTimePicker.css` or
+`react-day-picker/style.css`, both imported directly from `DateTimePicker.tsx`. Checked against the
+installed `postcss` + `autoprefixer`: the only prefixes emitted anywhere in the app today are
+`-moz-appearance: none` and `max-width: -moz-fit-content`, both in `react-day-picker/style.css`
+(`DateTimePicker.css` and `globals.css` are unchanged by `autoprefixer`) — and both are moot given v4's
+new Firefox 128+ floor (they matter only below Firefox 94 and 80 respectively), so dropping
+`autoprefixer` costs nothing here even though it stops covering those component stylesheets too. Vitest
+does not process CSS by default (no `css: true` in the `test` block), so tests are unaffected by the
+pipeline swap.
 
 `globals.css` becomes:
 
@@ -293,9 +314,11 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
 
 - **Default border color `gray-200` → `currentColor`**: **already neutralized.**
   `analytics-web-app/src/styles/globals.css:85-87` contains `* { @apply border-border }`, which sets
-  `border-color` on every element to `hsl(var(--border))`. So the 196 bare-`border` class occurrences in
-  `src` are unaffected, and the compat shim from the upgrade guide is **not** needed. This is the single
-  biggest de-risking finding for this bump.
+  `border-color` on every element to `hsl(var(--border))`. So the 201 bare-`border` class occurrences in
+  `src` (`grep -rPo '(?<![-\w:])border(?![-\w])'`, which counts only the unprefixed, unsuffixed utility —
+  it excludes both hyphenated forms like `border-2` and variant-prefixed forms like `hover:border`) are
+  unaffected, and the compat shim from the upgrade guide is **not** needed. This is the single biggest
+  de-risking finding for this bump.
 - **Default sans-serif font stack changes.** Not in the v4 upgrade guide's "Preflight changes" list, but
   verified by compiling `tailwind.config.ts` under both versions: `tailwindcss@3.4.19` emits
   `html { font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", … }`;
@@ -321,8 +344,9 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
 - **`hover:` now gated behind `@media (hover: hover)`.** v3 emits `.hover\:underline:hover { … }`
   unconditionally; v4 wraps it in `@media (hover: hover) { … }`, so hover-only styles stop applying on
   touch/pen-primary devices where `hover: hover` doesn't match. Verified by compiling `hover:underline`
-  under `tailwindcss@4.3.3` via `@config`. `analytics-web-app/src` has 284 `hover:` and 9 `group-hover:`
-  occurrences (293 total) — the largest count of any screened default change here. Accept v4's behavior:
+  under `tailwindcss@4.3.3` via `@config`. `analytics-web-app/src` has 286 `hover:`
+  (`grep -rPo '(?<!group-)hover:'`) and 9 `group-hover:` occurrences (295 total) — the largest count of
+  any screened default change here. Accept v4's behavior:
   it is the intended modern default and this is a desktop-oriented analytics app; `@custom-variant hover
   (&:hover)` in `globals.css` is the one-line override if touch regressions show up. Cover these sites in
   Commit 3 step 6's visual pass and call this out as user-visible in the changelog bullet.
@@ -343,9 +367,13 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
   sites, topped by `bg-theme-border/50` (19), `bg-accent-link/5` (9), `bg-accent-error/10` (9),
   `ring-accent-link/50` (7), `bg-accent-link/20` (6), `border-accent-error/30` (5), `bg-app-card/50` (4),
   `divide-theme-border/50` (3), and others. This is the same "previously-dead rule coming to life" pattern
-  as the `DateTimePicker.css` case below, but two orders of magnitude larger and app-wide. Cover these
-  sites in Commit 3 step 6's visual pass, dropping the modifier at any site where the opaque color turns
-  out to be the intended look.
+  as the `DateTimePicker.css` case below, but two orders of magnitude larger and app-wide. Because v3
+  drops these utilities entirely, today's shipped look at every one of these sites is no
+  background/ring/border at all — so a value-preserving option exists alongside the two visual ones.
+  Triage each site in Commit 3 step 6's visual pass into one of three outcomes: keep the opacity modifier
+  (translucent is the intended look), drop the modifier (the opaque color is the intended look), or
+  remove the class entirely (no background/ring/border was intended — this is the option that reproduces
+  today's rendering exactly).
 - **`space-*`/`divide-*` selector rewrite.** v3 emits `.space-y-2 > :not([hidden]) ~ :not([hidden]) {
   margin-top: … }`; v4 emits `:where(.space-y-2 > :not(:last-child)) { margin-block-end: … }` (verified by
   compiling `space-y-2 divide-y` under both versions). Three behavioral deltas: `[hidden]` children now
@@ -355,8 +383,9 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
   in Commit 3 step 6's visual pass.
 - **Buttons lose default `cursor: pointer`.** Installed `tailwindcss@3.4.19`'s
   `src/css/preflight.css:343-346` sets `button, [role="button"] { cursor: pointer }`; that rule does not
-  exist in `tailwindcss@4.3.3`'s preflight. The app has 117 `<button>` tags plus 6 `role="button"`
-  elements against only 58 `cursor-pointer` occurrences repo-wide (and some of those are on non-buttons),
+  exist in `tailwindcss@4.3.3`'s preflight. The app has 132 `<button` occurrences total, 118 of them
+  outside `__tests__` (the ones that ship), plus 6 `role="button"` elements against only 58
+  `cursor-pointer` occurrences repo-wide (and some of those are on non-buttons),
   so most buttons would silently lose their pointer cursor. Add the v4 upgrade guide's compat rule to
   `globals.css`'s `@layer base`: `button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer
   }`.
@@ -492,9 +521,14 @@ CI gate does not apply to it.
 2. Remove the now-orphaned `@typescript-eslint/utils@7.18.0` `packageExtensions` entry from
    `analytics-web-app/.yarnrc.yml` only (see Design). Leave the root `/.yarnrc.yml` untouched — its copy
    of the entry is still live for `welcome/`.
-3. `yarn install`. `packageExtensions` changes leave no trace in `yarn.lock`, so confirm no `YN0068 "No
-   matching package"` warning is emitted for the remaining `packageExtensions` entries instead of diffing
-   the lockfile.
+3. `yarn install` in `analytics-web-app` — this is the verification. `packageExtensions` changes leave no
+   trace in `yarn.lock`, and the removed entry is redundant for repo-local installs since it is already
+   inherited from the root `.yarnrc.yml` (see Design), so a passing install is the right signal here, not
+   a lockfile diff. Optionally also build the Docker frontend image, since that build path copies only
+   `analytics-web-app/{package.json,yarn.lock,.yarnrc.yml}` and has no root file to inherit from. Do
+   **not** check for an absent `YN0068` warning as a verification step: the root `.yarnrc.yml`'s
+   `logFilters: [{code: YN0068, level: discard}]` is inherited by `analytics-web-app`, so `YN0068` is
+   unconditionally suppressed there and its absence proves nothing.
 4. Create `analytics-web-app/eslint.config.js` per the Design shape (the
    `...reactHooks.configs.recommended.rules` spread is confirmed against `grafana/node_modules`, not an
    install-time unknown — see Design); `git rm analytics-web-app/.eslintrc.json`.
@@ -573,24 +607,29 @@ CI gate does not apply to it.
    3000. Check: whether the base sans-serif font changed app-wide (see the font-stack default-value
    change in Design — reconcile in step 2 above if so), the `ring-1`/`ring-2`-without-a-color sites, that
    buttons/`role="button"` elements still show a pointer cursor, that input/textarea placeholders still
-   render in the expected muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites
-   (dropping the modifier where the opaque color was the intended look), the 66 `space-*`/`divide-*`
-   layouts affected by the selector rewrite, and the 293 `hover:`/`group-hover:` sites now gated behind
-   `@media (hover: hover)`.
+   render in the expected muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites (per
+   site: keep the modifier, drop it for an opaque look, or remove the class entirely to match today's
+   no-op rendering — see Design), the 66 `space-*`/`divide-*` layouts affected by the selector rewrite,
+   and the 295 `hover:`/`group-hover:` sites now gated behind `@media (hover: hover)`.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Commit 4 (Final) — changelog
 
 A fourth commit, docs-only, on the same branch — the per-commit CI gate above does not apply to it.
-Add three bullets under `## Unreleased` → `**Build:**` in `CHANGELOG.md` (create the subsection — it does
+Add four bullets under `## Unreleased` → `**Build:**` in `CHANGELOG.md` (create the subsection — it does
 not yet exist under `## Unreleased`), matching the existing dependency-bump entry style used elsewhere in
 the changelog (e.g. the `react-router-dom` → `react-router` major, the Jest→Vitest migration, the
 `postcss`/`tar`/`brace-expansion` bumps — all filed under `**Build:**`, not `**Web App:**`, which is
-reserved for user-facing features and fixes), referencing `(#1255)`. The Tailwind bullet must call out the raised browser
-floor (Safari 16.4+ / Chrome 111+ / Firefox 128+) and the `hover:` variant now requiring true hover
-support (`@media (hover: hover)`) as user-visible, and the `tailwind-merge` v3 bump as part of the same
-change. Also record the documented hold on `grafana/`'s React 18 with its reason (`@grafana/ui@12.4.6`
-peers `react: ^18.0.0`).
+reserved for user-facing features and fixes), referencing `(#1255)`: one each for the `date-fns` bump,
+the `eslint` 8 → 10 + flat-config migration, and the `tailwindcss` 3 → 4 bump (including the
+`tailwind-merge` v3 bump as part of the same change), plus a fourth bullet recording the documented hold
+on `grafana/`'s React 18 with its reason (`@grafana/ui@12.4.6` peers `react: ^18.0.0`). The Tailwind
+bullet must call out as user-visible: the raised browser floor (Safari 16.4+ / Chrome 111+ / Firefox
+128+), the `hover:` variant now requiring true hover support (`@media (hover: hover)`), the ~106
+previously-inert `/opacity`-modified bare-`var(--…)` color sites that now render (translucent or opaque,
+per the Commit 3 step 6 triage) instead of not at all, and the `space-*`/`divide-*` selector rewrite
+(margin moves from the following element's top to the preceding element's bottom; `[hidden]` children now
+contribute spacing).
 
 ## Files to Modify
 
@@ -675,13 +714,23 @@ Not modified: anything under `grafana/` (see the documented hold).
   which still lists the split packages.
 - **Dropping `@eslint/eslintrc` rather than adopting `FlatCompat`.** Nothing imports it, and a
   hand-written flat config for three extends + two rules is short and clearer than a compat shim.
+- **Turning off the 5 React-Compiler `react-hooks` v7 rules is deferred, not dropped.** `refs` (60),
+  `set-state-in-effect` (33), `static-components` (8), `immutability` (4), and `purity` (1) — 106 findings
+  across 48 files — are turned off in `eslint.config.js` rather than hand-fixed inline (see Design). This
+  is the plan's largest deferral, so it gets the same treatment as the other three: a follow-up issue will
+  be filed to adopt the React-Compiler rule family, scoped to that 106-finding/5-rule breakdown, rather
+  than leaving it as an untracked, indefinitely-off rule set.
 - **`.github/dependabot.yml` and the rest of the `resolutions` block are left alone.** Both are noted in
   #1255 but neither is a version bump; automating dependency updates is a policy change with its own blast
   radius (PR volume, CI cost). Commit 2 prunes the `js-yaml` entry (orphaned by the ESLint bump, see
   Design) and Commit 3 prunes `baseline-browser-mapping` (orphaned by dropping `autoprefixer`), but the
   remaining entries (`ajv`, `minimatch`, `flatted`, `postcss`, `brace-expansion`, and others) stay live and
-  are out of scope — a full audit would require re-checking their advisories, which deserves its own issue
-  rather than riding along here.
+  are out of scope — with one exception already known and pre-existing: `rollup` (`^4.59.0`) is dead
+  today (`grep -c rollup analytics-web-app/yarn.lock` is 0, since Vite 8 uses Rolldown instead), a fact
+  already recorded as pre-existing and out of scope in `tasks/completed/vitest_migration_plan.md:188`, so
+  it is left alone here as a known-inert legacy pin rather than implicitly claimed live. A full audit of
+  the rest would require re-checking their advisories, which deserves its own issue rather than riding
+  along here.
 - **`welcome/` is left on ESLint 8 / eslintrc / Tailwind 3.** It is out of scope per #1255's own scope
   statement (`analytics-web-app` and `grafana` only), but it is a near-identical toolchain to the one
   retired here, so it will need the same migration eventually. Worth its own issue rather than riding
@@ -716,7 +765,7 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   `--monolith` + `yarn dev`, which don't work together, per step 6's note), covering its full checklist
   (not restated here to avoid the two copies drifting): the base sans-serif font, the colorless
   `ring-1`/`ring-2` sites, the button/`role="button"` cursors, the input/textarea
-  placeholders, the ~106 now-live `/opacity`-modified sites, the 66 `space-*`/`divide-*` layouts, the 293
+  placeholders, the ~106 now-live `/opacity`-modified sites, the 66 `space-*`/`divide-*` layouts, the 295
   `hover:`/`group-hover:` sites, and the DateTimePicker calendar plus the checkbox accent colors on the
   Export/Import/DataSources screens (now that the thirteen `--color-*` references are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
   rendering as before.
@@ -734,7 +783,7 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   `static-components`, `immutability`, `purity` — see Design). The plan turns those 5 off in
   `eslint.config.js` and keeps `rules-of-hooks`/`exhaustive-deps` at their v7 severities, staying on
   `^7.1.1` (`^6` is not a fallback option, its peer range caps at `eslint@^9.0.0`), deferring the
-  React-Compiler rules to a separate follow-up rather than hand-fixing them here.
+  React-Compiler rules to a dedicated follow-up issue (see Trade-offs) rather than hand-fixing them here.
 - **The Tailwind codemod's output needs real review**, not just a passing build — the renames are
   visual, and `yarn build` succeeding proves nothing about whether a `rounded` became the right
   `rounded-sm`. The manual pass in step 6 is load-bearing, not ceremonial.
