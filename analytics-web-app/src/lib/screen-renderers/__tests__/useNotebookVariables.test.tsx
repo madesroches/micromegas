@@ -286,4 +286,90 @@ describe('useNotebookVariables', () => {
       })
     })
   })
+
+  // These are rerender-based: the recompute-on-cell-change branch only runs
+  // when `cells`/`savedDefaultsByName` differ from the previous render, so a
+  // test that never calls `rerender` can't exercise it at all.
+  describe('cell-list sync (recompute-on-change branch)', () => {
+    it('adding a variable cell seeds it with its default value', () => {
+      const cellA = makeVariableCell('a', 'datasource', 'default_a')
+
+      const { result, rerender } = renderHook(
+        ({ cells, savedCells }: { cells: CellConfig[]; savedCells: CellConfig[] }) =>
+          useNotebookVariables(cells, savedCells),
+        { wrapper: Wrapper, initialProps: { cells: [cellA], savedCells: [cellA] } },
+      )
+
+      expect(result.current.variableValues).toEqual({ a: 'default_a' })
+
+      const cellB = makeVariableCell('b', 'text', 'default_b')
+      rerender({ cells: [cellA, cellB], savedCells: [cellA, cellB] })
+
+      expect(result.current.variableValues).toEqual({ a: 'default_a', b: 'default_b' })
+    })
+
+    it('removing a variable cell prunes its value from variableValues', () => {
+      const cellA = makeVariableCell('a', 'datasource', 'default_a')
+      const cellB = makeVariableCell('b', 'text', 'default_b')
+
+      const { result, rerender } = renderHook(
+        ({ cells, savedCells }: { cells: CellConfig[]; savedCells: CellConfig[] }) =>
+          useNotebookVariables(cells, savedCells),
+        { wrapper: Wrapper, initialProps: { cells: [cellA, cellB], savedCells: [cellA, cellB] } },
+      )
+
+      expect(result.current.variableValues).toEqual({ a: 'default_a', b: 'default_b' })
+
+      rerender({ cells: [cellA], savedCells: [cellA] })
+
+      expect(result.current.variableValues).toEqual({ a: 'default_a' })
+    })
+
+    it('preserves a user-set value when an unrelated cell is added', () => {
+      const cellA = makeVariableCell('a', 'datasource', 'default_a')
+      const cellB = makeVariableCell('b', 'text', 'default_b')
+
+      const { result, rerender } = renderHook(
+        ({ cells, savedCells }: { cells: CellConfig[]; savedCells: CellConfig[] }) =>
+          useNotebookVariables(cells, savedCells),
+        { wrapper: Wrapper, initialProps: { cells: [cellA, cellB], savedCells: [cellA, cellB] } },
+      )
+
+      act(() => {
+        result.current.setVariableValue('a', 'user_set')
+      })
+      expect(result.current.variableValues.a).toBe('user_set')
+
+      const cellC = makeVariableCell('c', 'expression', 'default_c')
+      rerender({ cells: [cellA, cellB, cellC], savedCells: [cellA, cellB, cellC] })
+
+      expect(result.current.variableValues).toEqual({
+        a: 'user_set',
+        b: 'default_b',
+        c: 'default_c',
+      })
+    })
+
+    it('seeds a newly-added variable from the saved default rather than its own defaultValue', () => {
+      const cellA = makeVariableCell('a', 'datasource', 'default_a')
+
+      const { result, rerender } = renderHook(
+        ({ cells, savedCells }: { cells: CellConfig[]; savedCells: CellConfig[] }) =>
+          useNotebookVariables(cells, savedCells),
+        { wrapper: Wrapper, initialProps: { cells: [cellA], savedCells: [cellA] } },
+      )
+
+      expect(result.current.variableValues).toEqual({ a: 'default_a' })
+
+      // New cell B appears with its own defaultValue, but the saved config
+      // (savedCells) already carries a different saved default for B — the
+      // recompute's baseline (savedDefault ?? cell.defaultValue) must prefer
+      // the saved default.
+      const cellBOwnDefault = makeVariableCell('b', 'text', 'own_default')
+      const cellBSavedDefault = makeVariableCell('b', 'text', 'saved_default')
+      rerender({ cells: [cellA, cellBOwnDefault], savedCells: [cellA, cellBSavedDefault] })
+
+      expect(result.current.variableValues.b).toBe('saved_default')
+    })
+  })
 })

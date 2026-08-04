@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import {
@@ -103,14 +103,26 @@ export function useNotebookVariables(
     computeVariableValues(cells, savedDefaultsByName, searchParams)
   )
 
-  // Ref for synchronous access during sequential cell execution
+  // Ref for synchronous access during sequential cell execution. Resynced
+  // from variableValues state after every render (see the useLayoutEffect
+  // below) — the render-time recompute below reads/writes `variableValues`
+  // state directly, not this ref.
   const variableValuesRef = useRef<Record<string, VariableValue>>(variableValues)
+
+  useLayoutEffect(() => {
+    variableValuesRef.current = variableValues
+  })
 
   // Sync cell list changes into state: when cells are added/removed in the
   // editor, ensure new variables get their defaults and removed ones are pruned.
   // Also handles baseline shifts after save (savedDefaultsByName changes).
-  const prevCellKeysRef = useRef<string | null>(null)
-  const prevSavedDefaultsRef = useRef(savedDefaultsByName)
+  //
+  // Tracks the previous cellKeys/savedDefaultsByName in state and branches
+  // directly in the render body — React's documented "adjust state when a
+  // value changes" pattern — rather than a ref + effect. Both prevCellKeys
+  // and prevSavedDefaults initialize to the current render's values, so this
+  // never runs on the very first render (computeVariableValues already
+  // seeded variableValues correctly at mount).
   const cellKeys = useMemo(() => {
     const allCells = flattenCellsForExecution(cells)
     return allCells
@@ -118,9 +130,13 @@ export function useNotebookVariables(
       .map((c) => `${c.name}:${(c as VariableCellConfig).defaultValue ?? ''}`)
       .join('|')
   }, [cells])
+  const [prevCellKeys, setPrevCellKeys] = useState(cellKeys)
+  const [prevSavedDefaults, setPrevSavedDefaults] = useState(savedDefaultsByName)
 
-  if (prevCellKeysRef.current !== null &&
-      (prevCellKeysRef.current !== cellKeys || prevSavedDefaultsRef.current !== savedDefaultsByName)) {
+  if (cellKeys !== prevCellKeys || savedDefaultsByName !== prevSavedDefaults) {
+    setPrevCellKeys(cellKeys)
+    setPrevSavedDefaults(savedDefaultsByName)
+
     // Recompute: add new variables with defaults, prune removed ones,
     // but preserve user-set values for existing variables.
     const allCells = flattenCellsForExecution(cells)
@@ -131,7 +147,7 @@ export function useNotebookVariables(
     for (const cell of allCells) {
       if (cell.type === 'variable') {
         const varCell = cell as VariableCellConfig
-        const existing = variableValuesRef.current[cell.name]
+        const existing = variableValues[cell.name]
         if (existing !== undefined) {
           next[cell.name] = existing
         } else {
@@ -146,16 +162,13 @@ export function useNotebookVariables(
       }
     }
     // Prune variables that no longer have cells
-    for (const name of Object.keys(variableValuesRef.current)) {
+    for (const name of Object.keys(variableValues)) {
       if (!knownNames.has(name)) {
         delete next[name]
       }
     }
-    variableValuesRef.current = next
     setVariableValues(next)
   }
-  prevCellKeysRef.current = cellKeys
-  prevSavedDefaultsRef.current = savedDefaultsByName
 
   // Sync local state → URL for bookmarkability (complete snapshot on each change).
   // Writes all variable params at once, avoiding stale-closure issues with
