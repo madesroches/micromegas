@@ -262,7 +262,10 @@ or incomplete — reports one `query_peak_memory_bytes` sample.
 - in-flight `RecordBatch`es and parquet decode buffers (DataFusion documents this as deliberate);
 - the L1 byte cache and micromegas' `MetadataCache` (separately accounted);
 - `AsyncArrowWriter` row-group buffers in `write_partition_from_rows`
-  (`write_partition.rs:676`), which is what JIT materialization inside a query uses;
+  (`write_partition.rs:676`), which is what JIT materialization inside a query uses. This omission is
+  bounded rather than open-ended: row groups are capped at 128K rows
+  (`set_max_row_group_row_count`, `write_partition.rs:674`), so the unaccounted buffer scales with
+  row width, not with the size of the data being written;
 - the non-streaming `query()` path's full `df.collect()` buffer (`query.rs:277`) — no production
   caller anyway.
 
@@ -278,6 +281,20 @@ disk ever happens (it doesn't, here — see Out of Scope).
 session contexts built during execution (Perfetto trace queries, `fetch_block_metadata`, JIT
 materialization) — that inheritance is the whole point of scoping at `LakehouseContext` rather than
 per-session.
+
+### Complement to the existing bounded-memory guardrails
+
+The order-preserving k-way merge work (#1340, #1402) exists so that these queries scale without
+memory scaling with the data: `merge.rs` treats a `SortPreservingMergeExec` as the expected
+streaming operator and warns when a `SortExec` survives instead, because that means the plan buffers
+in memory rather than streaming (`merge.rs:129`, `:219-228`). Those checks are *plan-shape*
+assertions made at build time on the maintenance path.
+
+`peak_memory_bytes` is the runtime complement: it measures what a query actually reserved, on the
+FlightSQL path, where no such plan-shape check runs. A query whose peak grows with the time range it
+scans is buffering something that should be streaming — the same regression `merge.rs` warns about,
+observed after the fact rather than predicted from the plan. This makes the metric a regression
+signal for the streaming work, not just a capacity-planning number.
 
 Anything built from an unscoped `LakehouseContext` (maintenance merges, `export_log_view.rs`,
 process-level view-factory setup) lands on the shared pool only. The wrapper is purely additive:
