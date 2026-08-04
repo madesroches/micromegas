@@ -5,10 +5,14 @@
 ## Overview
 
 A single non-finite value (`Infinity`/`-Infinity`) in a chart's X or Y column — e.g. from a SQL
-ratio that divides by zero for some rows — currently survives the data-extraction stage in
-`arrow-utils.ts` and poisons the whole chart's auto-scaled Y-axis, collapsing every other
-point/bar to a sliver near zero. This plan tightens the existing null/NaN filtering in
-`arrow-utils.ts` to also drop non-finite values, matching how `null` rows are already skipped.
+ratio that divides by zero for some rows — currently survives the data-extraction stage and
+poisons the whole chart's auto-scaled Y-axis, collapsing every other point/bar to a sliver near
+zero. This plan tightens the existing null/NaN filtering in `arrow-utils.ts` to also drop
+non-finite values, matching how `null` rows are already skipped. It also covers a second,
+independent extraction path — the perf-analysis metrics chart's own row extraction in
+`useMetricsData.ts` and `PerformanceMetricsChart.tsx` — which feeds the same downstream
+`XYChart.tsx` internals but currently has no null/NaN/finiteness guard at all, and is reachable
+today via arbitrary user-typed SQL (the custom-query editor).
 
 ## Current State
 
@@ -47,23 +51,56 @@ No changes are needed to `ChartPoint`, `computeStats`, or the Y-scale range calc
 `XYChart.tsx`: once non-finite values can no longer enter a series' data array, `computeStats`
 never sees an `Infinity` to propagate.
 
+**Second extraction path: perf-analysis metrics chart.** `PerformanceMetricsChart.tsx` renders
+via `MetricsChart` → `TimeSeriesChart` (a thin alias, `XYChart.tsx:1253`) → the same
+`computeStats` (`XYChart.tsx:146`) and `range()` (`XYChart.tsx:726-731`) identified above, but its
+chart points are built independently of `arrow-utils.ts` and have no guard whatsoever:
+
+- `useMetricsData.ts:93` (the unified measures-query effect) and
+  `PerformanceMetricsChart.tsx:188` (`loadCustomQuery`, the custom-SQL path driven by the SQL
+  editor) both do `points.push({ time, value: Number(row.value) })` unconditionally — weaker than
+  even the pre-existing null/`isNaN` guard being patched above.
+
+Since `loadCustomQuery` runs arbitrary user-typed SQL, a `numerator / denominator` query with a
+zero denominator reproduces the identical Y-axis-explosion bug through this route. Fix: at both
+sites, skip the row when `!Number.isFinite(Number(row.value))` instead of pushing unconditionally
+— the same `Number.isFinite` pattern used in `arrow-utils.ts`.
+
 ## Implementation Steps
 
 1. In `analytics-web-app/src/lib/arrow-utils.ts`, replace `isNaN(yNum)` with
    `!Number.isFinite(yNum)` at lines 424, 501, and 567.
 2. In the same file, replace `isNaN(xNum) || isNaN(yNum)` with
    `!Number.isFinite(xNum) || !Number.isFinite(yNum)` at lines 441 and 613.
-3. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
+3. In `analytics-web-app/src/hooks/useMetricsData.ts`, in the row-extraction loop (line 93),
+   compute `value = Number(row.value)` and skip the row (`continue`) when
+   `!Number.isFinite(value)`, instead of pushing `{ time, value: Number(row.value) }`
+   unconditionally.
+4. In `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`'s
+   `loadCustomQuery` (line 188), apply the same `!Number.isFinite` guard before
+   `points.push(...)`.
+5. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
    `extractChartData` and `extractMultiSeriesChartData` (numeric/time path and categorical path)
    for rows containing `Infinity`/`-Infinity` in the Y column, and one covering `Infinity` in the
    X column of the numeric path — asserting the row is dropped and the remaining finite points
-   are unaffected. Follow the existing "should skip rows with null X/Y values" tests
-   (`arrow-utils.test.ts:533`, `:552`) as the pattern for table construction and assertions.
+   are unaffected.
+   - For `extractChartData`, follow the existing "should skip rows with null X/Y values" tests
+     (`arrow-utils.test.ts:533`, `:552`) as the pattern for table construction and assertions.
+   - For `extractMultiSeriesChartData`, there is **no existing test coverage or `describe` block**
+     for this function in the file — it must be written from scratch, not adapted from a
+     precedent. Its input is an array `{ table: Table; unit?: string; label?: string }[]`; build
+     each `table` with the same `createMockTable(fields, rows)` helper used for `extractChartData`
+     above, e.g. `extractMultiSeriesChartData([{ table: createMockTable(fields, rows) }])`. Its
+     success return is `{ ok: true, xAxisMode, xColumnName, series }` where `series` is
+     `ChartSeriesData[]`; assert against `result.series[i].data` (a `ChartPoint[]`, i.e. `{ x, y }`
+     pairs) — not `result.data`, which is `extractChartData`'s shape, not this function's.
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/arrow-utils.ts`
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`
+- `analytics-web-app/src/hooks/useMetricsData.ts`
+- `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`
 
 ## Trade-offs
 
@@ -75,11 +112,14 @@ never sees an `Infinity` to propagate.
 
 ## Testing Strategy
 
-- Extend `arrow-utils.test.ts` with the cases in Implementation Step 3.
+- Extend `arrow-utils.test.ts` with the cases in Implementation Step 5.
 - Run `yarn test` (and `yarn lint` / `yarn type-check`) in `analytics-web-app/`.
 - Manual repro (optional): chart a SQL column with a `numerator / denominator` ratio where some
   rows have `denominator = 0`, confirm the Y-axis no longer explodes and remaining points render
   at a sensible scale.
+- Manual repro for the perf-analysis path (optional): in Performance Analysis, run a custom SQL
+  query (Steps 3-4's path) whose value column divides by zero for some rows; confirm the Y-axis
+  no longer explodes there either.
 
 ## Open Questions
 
