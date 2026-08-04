@@ -26,9 +26,8 @@ Ordered as five phases, one per rule, matching the issue's own suggested order (
 first) and its acceptance criteria. Four of the five phases are a single commit each; `refs` — by far the
 largest, spanning a mechanical ref-write pattern, one behavioral refactor, and an open-ended 42-site
 triage — splits into three commits of its own (Pattern 4 moves, the `useNotebookVariables` refactor, then
-the long tail plus the rule flip), for seven commits total (eight counting the optional changelog commit).
-Each commit is gated green on `python3 build/analytics_web_ci.py`, so the branch bisects cleanly and each
-commit's diff stays reviewable.
+the long tail plus the rule flip), for seven commits total. Each commit is gated green on
+`python3 build/analytics_web_ci.py`, so the branch bisects cleanly and each commit's diff stays reviewable.
 
 ## Current State
 
@@ -371,8 +370,8 @@ The remaining one — `ImportScreensPage.tsx`'s `loadExistingScreens` (`:87`) �
 mount effect itself (`:98`), so it takes React's plain documented fix instead: move the loader's body
 directly into the effect, no IIFE, no `useCallback`.
 
-**(b) Fully-derived state duplicated via effect — 8 sites, 5 files, all re-executing, so all keep `useState`
-+ the wrapped-effect treatment (no `useMemo` conversions).** All eight are a `useEffect` gated on
+**(b) Fully-derived state duplicated via effect — 7 sites, 5 files, all re-executing, so all keep `useState`
++ the wrapped-effect treatment (no `useMemo` conversions).** All seven are a `useEffect` gated on
 `query.isComplete && !query.error` that reads `query.getTable()` — a pure, idempotent read of
 already-resolved data — and writes it into `useState`. There is no asynchrony left at this point (the
 actual network wait already happened inside `query`'s own state machine), which looks at first like exactly
@@ -382,7 +381,7 @@ for a query that executes exactly once per page visit: `execute()` unconditional
 on `[query.isComplete, query.error]` recomputes to `null`/empty the instant a re-execute starts, blanking
 the UI mid-fetch where today's state-based version keeps the last result on screen (`useMetricsData.ts:56-57`
 even has a comment to this effect: "Don't clear data immediately - keep showing existing data until new
-data arrives"). None of the 8 sites qualifies as "executes exactly once": `ProcessPage.tsx`'s
+data arrives"). None of the 7 sites qualifies as "executes exactly once": `ProcessPage.tsx`'s
 `processQuery`/`statsQuery`/`propertiesQuery` (`:157,178,198`) look like mount-once reads guarded by
 `hasLoadedRef.current` (`:247-253`), but that latch only guards the *mount* effect at `:249-254` —
 `PageLayout`'s `onRefresh={loadData}` (`:324`) calls `loadData` (`:222-246`), which calls `execute` on all
@@ -395,7 +394,7 @@ is listed as `:106`), and `ProcessMetricsPage.tsx:242-274`'s identical three-sta
 on filter/time-range/refresh changes for the same reason, and additionally are multi-state (a single memo
 returning an object wouldn't help — the object itself would still get recomputed to empty mid-fetch).
 
-For all 8 sites across these 5 files, the existing effect body already only assigns when `isComplete &&
+For all 7 sites across these 5 files, the existing effect body already only assigns when `isComplete &&
 !error` holds and never clears on re-execute start, which is exactly what preserves the previous value
 today — so the fix is *not* a `useMemo` conversion but the same wrapped-effect treatment as sub-pattern (a):
 wrap the unchanged body in a function declared and invoked inside the effect (`const run = () => { /*
@@ -414,23 +413,26 @@ re-execute effects and the initial spinner) and must stay `true` forever once se
 error-following-success even though today's latch stays `true`, since `useStreamQuery.ts:81-88` sets
 `isComplete: true` *together with* `error`).
 
-`ProcessMetricsPage.tsx:227` looks superficially like this shape but isn't — its effect performs a
-router write (`updateConfig(..., { replace: true })`) and a conditional auto-selection
-(`setSelectedMeasure(autoMeasure)`) alongside `setMeasures(measureList)` and `setDiscoveryDone(true)`,
-none of which is a pure derived-value assignment. It gets the same inline-function wrap as the
-re-executing group above (the rule doesn't care what the wrapped body does, only that the `setState` calls
-sit inside a function declared and invoked inside the effect).
+**`ProcessMetricsPage.tsx:227` — its own one-site category, not (b).** It looks superficially like the (b)
+shape but isn't — its effect performs a router write (`updateConfig(..., { replace: true })`) and a
+conditional auto-selection (`setSelectedMeasure(autoMeasure)`) alongside `setMeasures(measureList)` and
+`setDiscoveryDone(true)`, none of which is a pure derived-value assignment. It gets the same inline-function
+wrap as the re-executing group above (the rule doesn't care what the wrapped body does, only that the
+`setState` calls sit inside a function declared and invoked inside the effect).
 
-**(c) Local editable/UI state reset when a prop or dependency changes — 17 sites.** The remainder:
+That gives 6 (a) + 7 (b) + 1 (`ProcessMetricsPage.tsx:227`) + 19 (c) = 33, matching the reproduced
+`set-state-in-effect` total.
+
+**(c) Local editable/UI state reset when a prop or dependency changes — 19 sites.** The remainder:
 `Sidebar.tsx:113,126,137`, `MetricsRenderer.tsx:82,89`, `ImageCell.tsx:43`, `CellEditor.tsx:52`,
 `XYChart.tsx:594`, `CustomRange.tsx:36`, `useDataSourceState.ts:21`, `NotebookRenderer.tsx:165`,
-`HorizontalGroupCell.tsx:296`, `LogCell.tsx:207`, `PerfettoExportCell.tsx:53`, `TableCell.tsx:48`,
-`pagination.tsx:50`, plus `useFadeOnIdle.ts:17` and `RecentRanges.tsx:10` (see below). These all mirror or
-reset local state in response to a prop/dependency change (e.g. `CellEditor.tsx:52` resets the edited-name
-input when `cell.name` changes; `pagination.tsx:50` clamps the current page when `totalRows`/`pageSize`
-changes). Fix: React's documented "adjust state when a prop changes" pattern — track the previous value of
-the triggering prop in state, and branch on the comparison directly in the render body (verified clean,
-same mechanism as Pattern 5 above):
+`HorizontalGroupCell.tsx:296`, `LogCell.tsx:207`, `PerfettoExportCell.tsx:53`, `pagination.tsx:50`, plus
+`useFadeOnIdle.ts:17`, `RecentRanges.tsx:10`, `ImageCell.tsx:55`, and `TableCell.tsx:48` (the last three get
+a different fix — see below). Most of these mirror or reset local state in response to a prop/dependency
+change (e.g. `CellEditor.tsx:52` resets the edited-name input when `cell.name` changes; `pagination.tsx:50`
+clamps the current page when `totalRows`/`pageSize` changes). Fix: React's documented "adjust state when a
+prop changes" pattern — track the previous value of the triggering prop in state, and branch on the
+comparison directly in the render body (verified clean, same mechanism as Pattern 5 above):
 
 ```tsx
 const [editedName, setEditedName] = useState(cell.name)
@@ -462,6 +464,15 @@ with an object-URL lifecycle that a render-time prop comparison can't replace, s
 run on the next dependency change. Wrap the existing body in `const run = () => { … }; return run()` so
 the revoke cleanup and early returns keep propagating, with the same explanatory comment as the other
 wrapped sites.
+
+`TableCell.tsx:48` also gets the inline-function wrap rather than the render-time rewrite, for the same
+reason as `ImageCell.tsx:55`: its effect (`:47-50`) doesn't just reset local state
+(`setSelectedRowIndex(null)`), it also notifies the parent through `onSelectionChangeRef.current?.(null)` —
+a side effect beyond a pure state mirror. Hoisting that call into the render body would invoke the parent's
+`onSelectionChange` callback during this component's render (and was verified to add 3 new
+`react-hooks/refs` findings at the new call site, since reading a ref's `.current` during render is itself
+flagged), so it takes the `const run = () => { setSelectedRowIndex(null); onSelectionChangeRef.current?.(null) }; run()`
+treatment instead, keeping the ref-mediated notification inside the effect.
 
 ### `refs` — fix what Patterns 4 and 5 cover, disable-with-reason for the rest
 
@@ -542,20 +553,24 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
    the one single-caller loader (`ImportScreensPage.tsx`). Also wrap `auth.tsx:87-89`'s `checkAuth()` mount
    effect the same way — the 34th `set-state-in-effect` site introduced by Commit 3's Pattern 3a rewrite
    (see Design).
-2. Sub-pattern (b) — all 8 sites re-execute (per Design) and keep their `useState`, getting the
+2. Sub-pattern (b) — all 7 named sites re-execute (per Design) and keep their `useState`, getting the
    sub-pattern-(a)-style wrapped-effect treatment instead of a `useMemo` conversion: `ProcessPage.tsx`'s
    `process`/`statistics`/`properties`+`propertiesError`, `LogRenderer.tsx`'s `resultTable`+`hasLoaded`,
    `ProcessLogPage.tsx`'s `rows`+`hasLoaded`, `useMetricsData.ts`'s `chartData`/`rawPropertiesData`/
-   `propertyParseErrors`, and `ProcessMetricsPage.tsx:242-274`'s same three states; `ProcessMetricsPage.tsx:227`
-   is not (b)-shaped either and gets the same wrap (see Design).
+   `propertyParseErrors`, and `ProcessMetricsPage.tsx:242-274`'s same three states. `ProcessMetricsPage.tsx:227`
+   is its own one-site category — not (b)-shaped — but gets the same wrap (see Design).
 3. Sub-pattern (c) — remaining files: "adjust state when a prop changes" rewrite (`Sidebar.tsx`'s other 3
    sites, `MetricsRenderer.tsx`, `ImageCell.tsx:43` only, `CellEditor.tsx`, `XYChart.tsx`, `CustomRange.tsx`,
    `useDataSourceState.ts`, `NotebookRenderer.tsx`, `HorizontalGroupCell.tsx`, `LogCell.tsx`,
-   `PerfettoExportCell.tsx`, `TableCell.tsx`, `pagination.tsx`); lazy-init for `RecentRanges.tsx`;
-   inline-function-wrap (returning the wrapper's invocation, with an explanatory comment) for
-   `useFadeOnIdle.ts` and `ImageCell.tsx:55` (the blob-URL effect, which keeps its revoke cleanup).
+   `PerfettoExportCell.tsx`, `pagination.tsx`); lazy-init for `RecentRanges.tsx`; inline-function-wrap
+   (returning the wrapper's invocation, with an explanatory comment) for `useFadeOnIdle.ts`,
+   `ImageCell.tsx:55` (the blob-URL effect, which keeps its revoke cleanup), and `TableCell.tsx:48` (keeps the
+   ref-mediated `onSelectionChange` notification inside the effect — see Design).
 4. Remove `'react-hooks/set-state-in-effect': 'off',`.
-5. Per-commit gate (Testing Strategy); full CI; commit.
+5. Manual smoke-test the sub-pattern (c) surfaces per Testing Strategy (no automated coverage exists for
+   most of them); add `rerender`-based tests for the pure-logic hooks (`usePagination`, `useFadeOnIdle`,
+   `useDataSourceState`).
+6. Per-commit gate (Testing Strategy); full CI; commit.
 
 ### Commit 5 — `react-hooks/refs`, part 1: Pattern 4 mechanical moves
 
@@ -583,18 +598,16 @@ block); the other two `refs` commits leave `eslint.config.js` untouched since th
    what's mechanically a Pattern 4/5 shape, add a justified `eslint-disable-next-line react-hooks/refs`
    comment at every site that isn't.
 2. Remove `'react-hooks/refs': 'off',` and the now-fully-empty five-line comment block above it.
-3. Per-commit gate (Testing Strategy), plus this rule's own final acceptance check: zero *unjustified*
+3. Amend the existing `**Build:**` bullet at `CHANGELOG.md:27` (under `## Unreleased`) rather than appending
+   a second one — that bullet currently says the five React Compiler rules "are disabled for now; adopting
+   them is deferred and not yet tracked by an issue", which this commit makes false the moment it lands (the
+   deferral note would ship in the next release notes describing a branch that no longer defers). Drop that
+   clause and replace it with a note that the five rules are now enabled at `error` with zero (or
+   justified-disable) findings, referencing `(#1423)`.
+4. Per-commit gate (Testing Strategy), plus this rule's own final acceptance check: zero *unjustified*
    findings (every remaining `react-hooks/refs` disable has a reason comment); full CI; manual smoke pass
    on the map viewer (orbit/fly camera controls, both perspective and orthographic modes) and a notebook
    screen with variables, per Testing Strategy; commit.
-
-### Commit 8 (optional, docs-only) — changelog
-
-Amend the existing `**Build:**` bullet at `CHANGELOG.md:27` (under `## Unreleased`) rather than appending a
-second one — that bullet currently says the five React Compiler rules "are disabled for now; adopting them
-is deferred and not yet tracked by an issue"; drop that clause and replace it with a note that the five
-rules are now enabled at `error` with zero (or justified-disable) findings, referencing `(#1423)`. The
-per-commit CI gate above does not apply to this commit.
 
 ## Files to Modify
 
@@ -630,9 +643,8 @@ per-commit CI gate above does not apply to this commit.
 `useNotebookAutoRun.ts`, `warning-reporter.tsx`, `ProcessLogPage.tsx`, `ProcessMetricsPage.tsx`,
 `ProcessesPage.tsx`, `PerformanceMetricsChart.tsx`, `useChangeEffect.ts`, `useRefreshInterval.ts`,
 `useScreenConfig.ts`, `ProcessListRenderer.tsx`, `TableRenderer.tsx`, `cells/HgChildPane.tsx`,
-`cells/TableCell.tsx`, `MeasureDiscovery.tsx`, `ThreadCoveragePanel.tsx`), `eslint.config.js`
-
-**Commit 8**: `CHANGELOG.md`
+`cells/TableCell.tsx`, `MeasureDiscovery.tsx`, `ThreadCoveragePanel.tsx`), `eslint.config.js`,
+`CHANGELOG.md`
 
 ## Trade-offs
 
@@ -665,8 +677,9 @@ per-commit CI gate above does not apply to this commit.
   `ScreensPage.tsx`, `ExportScreensPage.tsx`, and `auth.tsx`'s `checkAuth` mount effect) — legitimate mount
   fetches whose loader can't be inlined without duplicating logic at another call site;
   `ProcessMetricsPage.tsx:227` — a router write plus conditional auto-selection, not a derivable value;
-  `useFadeOnIdle.ts:17` and `ImageCell.tsx:55` — genuine effects with timer/object-URL cleanup that a
-  render-time rewrite can't replace; and the sub-pattern (b) re-executing sites (`ProcessPage.tsx`'s
+  `useFadeOnIdle.ts:17`, `ImageCell.tsx:55`, and `TableCell.tsx:48` — genuine effects with timer/object-URL/
+  parent-notification side effects that a render-time rewrite can't replace; and the sub-pattern (b)
+  re-executing sites (`ProcessPage.tsx`'s
   `process`/`statistics`/`properties`+`propertiesError`, `LogRenderer.tsx`'s `resultTable`/`hasLoaded`,
   `ProcessLogPage.tsx`'s `rows`/`hasLoaded`, `useMetricsData.ts`'s and `ProcessMetricsPage.tsx:268`'s
   three-state extractions) — effects that must keep their previous result across a re-execute (`ProcessPage`'s
@@ -707,6 +720,20 @@ per-commit CI gate above does not apply to this commit.
   passing baseline, then after the refactor. `useNotebookVariables.test.tsx` has no existing coverage of
   the recompute-on-change branch Pattern 5 replaces (see Commit 6), so this baseline run alone isn't a
   sufficient safety net for that refactor — the new `rerender`-based tests added in Commit 6 are.
+- Commit 4's sub-pattern (c) touches 19 effect sites across 16 files, and of those, only `CustomRange.tsx`,
+  `HorizontalGroupCell.tsx`, `NotebookRenderer.tsx`, and `PerfettoExportCell.tsx` have any existing
+  `__tests__` file — the other 12 files (`Sidebar.tsx`, `CellEditor.tsx`, `XYChart.tsx`,
+  `MetricsRenderer.tsx`, `ImageCell.tsx`, `LogCell.tsx`, `TableCell.tsx`, `pagination.tsx`,
+  `useFadeOnIdle.ts`, `useDataSourceState.ts`, `RecentRanges.tsx`, plus the sub-pattern (b)/(a) files
+  `ProcessPage.tsx`, `LogRenderer.tsx`, `useMetricsData.ts`, `ProcessMetricsPage.tsx`, `ProcessLogPage.tsx`)
+  have none, and `yarn type-check`/`yarn lint`/`yarn build` can't detect a behavior change from moving state
+  adjustment from post-commit to pre-commit. Commit 4 therefore adds its own verification, mirroring what
+  Commit 6 does for `useNotebookVariables`: `rerender`-based tests for the pure-logic hooks
+  (`usePagination`, `useFadeOnIdle`, `useDataSourceState`), plus a manual smoke checklist — run as part of
+  Commit 4's own gate, not deferred to the post-Commit-7 pass — over the sidebar tree/search sync, the
+  cell-name editor's reset-on-`cell.name`-change, the pagination clamp, image-cell navigation, log-cell
+  copy-state reset, table-cell row-selection clear, and metrics/chart config sync
+  (`MetricsRenderer.tsx`/`XYChart.tsx`).
 - Manual smoke pass (dev workflow per `analytics-web-app/README.md`: split-mode services +
   `start_analytics_web.py`) after Commit 7: map viewer orbit/pan/zoom/WASD-fly in both perspective and
   orthographic camera modes (exercises `useMapOrbitController`'s Pattern 4 rewrite and
