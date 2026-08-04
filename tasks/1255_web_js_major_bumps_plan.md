@@ -4,18 +4,20 @@
 
 ## Overview
 
-Issue #1255 lists five outdated JS dependency majors across `analytics-web-app/` and `grafana/`, plus a
-migration off the deprecated `@grafana/experimental`. Two of the six items have since been resolved by
-unrelated work, and one should be deliberately held. This plan closes the remaining three — `date-fns`
+Issue #1255 lists seven bump items across `analytics-web-app/` and `grafana/` (4 in `analytics-web-app`,
+3 in `grafana/`), including a migration off the deprecated `@grafana/experimental`. Three of the seven
+items have since been resolved by unrelated work, one should be deliberately held, and this plan closes
+the remaining three — `date-fns`
 2 → 4, `eslint` 8 → 10 (which forces the flat-config migration), and `tailwindcss` 3 → 4 — all confined
 to `analytics-web-app/`, and records the documented reason for holding the fourth.
 
-The three bumps are independent of each other and land as three atomic commits, each independently green
-under `python3 build/analytics_web_ci.py`.
+The three bumps are independent of each other and land as three atomic implementation commits, each
+independently green under `python3 build/analytics_web_ci.py`, plus a fourth, docs-only changelog commit
+that the CI gate does not apply to.
 
 ## Current State
 
-### Already resolved since the issue was filed
+### Already resolved since the issue was filed (3 of 7; 1 held, 3 remaining below)
 
 | Issue item | Resolution |
 |---|---|
@@ -39,9 +41,9 @@ scope: issue #1255 scopes only `analytics-web-app` and `grafana`, so `welcome/` 
   (`@typescript-eslint/no-unused-vars` and `react-refresh/only-export-components`, both `warn`) and
   `ignorePatterns: ["dist", "coverage", "src/lib/datafusion-wasm"]`.
   Companion devDeps: `@typescript-eslint/{eslint-plugin,parser} ^7.0.0`, `eslint-plugin-react-hooks ^4.6.0`
-  (resolves `4.6.2`), `eslint-plugin-react-refresh ^0.4.5`, and `@eslint/eslintrc ^3.3.1` — which a
-  repo-wide grep shows is **referenced by nothing** (ESLint 8 bundles its own `@eslint/eslintrc@2.1.4`
-  internally), i.e. a dead devDep.
+  (resolves `4.6.2`), `eslint-plugin-react-refresh ^0.4.5`, and `@eslint/eslintrc ^3.3.1` (resolves
+  `3.3.5`) — which a repo-wide grep shows is **referenced by nothing** (ESLint 8 bundles its own
+  `@eslint/eslintrc@2.1.4` internally), i.e. a dead devDep.
 - **`date-fns ^2.30.0`** (resolves `2.30.0`). Exactly one import site:
   `analytics-web-app/src/components/ui/DateTimePicker.tsx:3` —
   `import { format, setHours, setMinutes, startOfDay, endOfDay } from 'date-fns'`.
@@ -148,8 +150,9 @@ to keep them — rejected since they are genuinely stale and removing them is ch
 
 New `analytics-web-app/eslint.config.js`, replacing `.eslintrc.json` one-for-one in *shape* (same three
 extends collapsed into flat form, same two rule overrides) — not in exact findings: the bumped
-`eslint:recommended` set and plugin majors add a measured 20 warnings where the baseline had 4 (see
-Commit 2 step 5 triage), none of which fail `yarn lint`.
+`eslint:recommended` set and plugin majors add a measured 2 errors and 20 warnings where the baseline had
+0 errors / 4 warnings (see Commit 2 step 5 triage); the two errors must be fixed (bucket (a)), the
+warnings do not fail `yarn lint`.
 
 ```js
 import js from '@eslint/js'
@@ -290,9 +293,24 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
 
 - **Default border color `gray-200` → `currentColor`**: **already neutralized.**
   `analytics-web-app/src/styles/globals.css:85-87` contains `* { @apply border-border }`, which sets
-  `border-color` on every element to `hsl(var(--border))`. So the 391 bare-`border` class occurrences in
+  `border-color` on every element to `hsl(var(--border))`. So the 196 bare-`border` class occurrences in
   `src` are unaffected, and the compat shim from the upgrade guide is **not** needed. This is the single
   biggest de-risking finding for this bump.
+- **Default sans-serif font stack changes.** Not in the v4 upgrade guide's "Preflight changes" list, but
+  verified by compiling `tailwind.config.ts` under both versions: `tailwindcss@3.4.19` emits
+  `html { font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", … }`;
+  `tailwindcss@4.3.3` emits `--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+  "Helvetica Neue", "Noto Sans", Arial, sans-serif, …` and `html, :host { font-family:
+  var(--default-font-family, …) }`. `tailwind.config.ts` sets no `fontFamily`, so nothing pins the old
+  stack — every unstyled text node in the app switches font stacks (most visibly on Linux, where
+  `system-ui`/`ui-sans-serif` resolve to the desktop UI font but v4 falls through to Roboto/Noto Sans).
+  Same class of silent, value-changing default as `rounded-sm` → `rounded-xs` below. Made
+  value-preserving as part of Commit 3's reconciliation step (step 2): add
+  `fontFamily.sans: ['ui-sans-serif', 'system-ui', 'sans-serif', '"Apple Color Emoji"', '"Segoe UI
+  Emoji"', '"Segoe UI Symbol"', '"Noto Color Emoji"']` to `tailwind.config.ts` alongside the
+  `borderRadius.xs` entry. Cover in Commit 3 step 6's visual pass; if the font-stack change is instead
+  accepted rather than preserved, it belongs in the changelog's user-visible list alongside the
+  `hover:` and browser-floor changes.
 - **Default ring width `3px` → `1px`**: bare `ring` occurrences in `src` = **0**. Every usage is an
   explicit width (`ring-2` ×12, `ring-1` ×4, `ring-inset` ×4) or a color (`ring-accent-link/50` ×7,
   `ring-accent-link` ×4, `ring-ring` ×2, `ring-brand-gold` ×2, `ring-destructive`, `ring-red-400`) or an
@@ -413,10 +431,13 @@ the raw names (`--accent-link`, `--card-bg`, `--text-primary`, `--text-muted`, `
 `--text-secondary`), so these six references resolve to nothing today and those react-day-picker styles
 are silently inert.
 
+`DateTimePicker.css` has eight references across those six distinct names (`--color-theme-text-primary`
+and `--color-theme-border` each appear twice, at lines 3, 4, 8, 12, 21, 25, 30, 35).
+
 A repo-wide grep for `--color-` in `analytics-web-app/src` finds five more occurrences of the same dead
 pattern, all `className="accent-[var(--color-accent-link)]"`: `src/routes/ExportScreensPage.tsx:182,209`,
 `src/routes/ImportScreensPage.tsx:289,318`, and `src/routes/DataSourcesPage.tsx:213`. Same cause, same
-fix — eleven dead `--color-*` references total across four files.
+fix — thirteen dead `--color-*` references total across four files.
 
 They stay inert under v4 too — verified, not speculative: compiling the repo's actual
 `tailwind.config.ts` + `globals.css` (`@import "tailwindcss"` + `@config "../../tailwind.config.ts"`)
@@ -425,7 +446,7 @@ under `tailwindcss@4.3.3` produces no definition for any of the six `--color-*` 
 `--color-red-500`, `--color-gray-400`, `--color-blue-500` — 25 such properties are emitted, just none of
 these six). On the `@config` path v4 inlines legacy-JS-config colors directly instead (e.g.
 `.bg-accent-link\/20 { background-color: var(--accent-link) }`). So this is an unconditional edit, not a
-browser check: repoint all eleven references at the raw names `globals.css` actually defines —
+browser check: repoint all thirteen references at the raw names `globals.css` actually defines —
 `--accent-link` for the five route-file sites and for `DateTimePicker.css`'s own `--color-accent-link`
 reference, plus `--card-bg`, `--text-primary`, `--text-muted`, `--border-color`, `--text-secondary` for
 `DateTimePicker.css`'s other five — as part of Commit 3. (The eventual `@theme` migration — the deferred
@@ -433,9 +454,11 @@ follow-up in Trade-offs — is what would make the `--color-*` names valid inste
 
 ## Implementation Steps
 
-Three commits on one branch. Run `python3 build/analytics_web_ci.py` (type-check → lint → test → build,
-exactly what `.github/workflows/analytics-web-app.yml` runs) to green **before each commit**, so the
-branch bisects cleanly.
+Three implementation commits plus a changelog commit, on one branch. Run
+`python3 build/analytics_web_ci.py` (type-check → lint → test → build, exactly what
+`.github/workflows/analytics-web-app.yml` runs) to green **before each of the three implementation
+commits**, so the branch bisects cleanly. The changelog commit (see "Final" below) is docs-only and the
+CI gate does not apply to it.
 
 ### Commit 1 — `date-fns` 2 → 4
 
@@ -517,7 +540,10 @@ branch bisects cleanly.
    - Confirm it applied all seven renames from the Design table, in the correct shifted order, and that
      `tailwind.config.ts` gained the `borderRadius.xs` entry (or the 6 `rounded-sm` sites were left
      alone) so `rounded-xs` stays value-preserving.
-   - Repoint the eleven dead `--color-*` references at the raw names `globals.css` defines — six in
+   - Add `fontFamily.sans: ['ui-sans-serif', 'system-ui', 'sans-serif', '"Apple Color Emoji"', '"Segoe UI
+     Emoji"', '"Segoe UI Symbol"', '"Noto Color Emoji"']` to `tailwind.config.ts` so the base font stack
+     stays value-preserving (see Design's font-stack default-value change).
+   - Repoint the thirteen dead `--color-*` references at the raw names `globals.css` defines — eight in
      `src/components/ui/DateTimePicker.css`, plus the `accent-[var(--color-accent-link)]` sites at
      `src/routes/ExportScreensPage.tsx:182,209`, `src/routes/ImportScreensPage.tsx:289,318`, and
      `src/routes/DataSourcesPage.tsx:213` (see Design). The codemod does not touch these; this is a
@@ -538,8 +564,14 @@ branch bisects cleanly.
    range (`>=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1`), which accepts `tailwindcss@4.3.3`,
    so it needs no change.
 5. `yarn install`, then `yarn build`, and diff the emitted CSS bundle size/shape for anything alarming.
-6. Manual visual pass against a running app (`python3 local_test_env/ai_scripts/start_services.py
-   --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, that
+6. Manual visual pass against a running app, using the documented dev path
+   (`analytics-web-app/README.md:36`): `python3 local_test_env/ai_scripts/start_services.py` (split
+   mode, not `--monolith` — the monolith's web role binds `MICROMEGAS_PORT` (default 3000), the same
+   port Vite's dev server defaults to, and `yarn dev`'s proxy target/base-path env vars are only set by
+   the script below), then `python3 analytics-web-app/start_analytics_web.py`, which sets
+   `MICROMEGAS_BASE_PATH` (default `/mmlocal`), starts `analytics-web-srv` on 8000, and runs Vite on
+   3000. Check: whether the base sans-serif font changed app-wide (see the font-stack default-value
+   change in Design — reconcile in step 2 above if so), the `ring-1`/`ring-2`-without-a-color sites, that
    buttons/`role="button"` elements still show a pointer cursor, that input/textarea placeholders still
    render in the expected muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites
    (dropping the modifier where the opaque color was the intended look), the 66 `space-*`/`divide-*`
@@ -547,8 +579,9 @@ branch bisects cleanly.
    `@media (hover: hover)`.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
 
-### Final — changelog
+### Commit 4 (Final) — changelog
 
+A fourth commit, docs-only, on the same branch — the per-commit CI gate above does not apply to it.
 Add three bullets under `## Unreleased` → `**Build:**` in `CHANGELOG.md` (create the subsection — it does
 not yet exist under `## Unreleased`), matching the existing dependency-bump entry style used elsewhere in
 the changelog (e.g. the `react-router-dom` → `react-router` major, the Jest→Vitest migration, the
@@ -573,7 +606,23 @@ peers `react: ^18.0.0`).
   see Design)
 - `analytics-web-app/eslint.config.js` — **new**
 - `analytics-web-app/.eslintrc.json` — **deleted**
-- `analytics-web-app/src/**` — only if new-rule findings need fixes
+- `analytics-web-app/src/lib/arrow-stream.ts` — 1 fix (`preserve-caught-error`) + 3 stale
+  `no-constant-condition` disable-directive removals
+- `analytics-web-app/src/lib/time-range.ts` — 1 fix (`no-useless-assignment`)
+- `analytics-web-app/src/lib/__tests__/auth.test.tsx` — 2 fixes (`@typescript-eslint/no-unused-vars` at
+  `:422`, `:492`)
+- `analytics-web-app/src/lib/screen-renderers/__tests__/useNotebookVariables.test.tsx` — 4 stale
+  `react-hooks/rules-of-hooks` disable-directive removals
+- `analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx` — 1 stale
+  `react-refresh/only-export-components` disable-directive removal
+- `analytics-web-app/src/lib/screen-renderers/cells/VariableCell.tsx` — 1 stale
+  `@typescript-eslint/no-unused-vars` disable-directive removal
+- `analytics-web-app/src/routes/ProcessMetricsPage.tsx` — 1 stale `react-hooks/exhaustive-deps`
+  disable-directive removal
+- `analytics-web-app/src/routes/ScreenPage.tsx` — 1 stale `react-hooks/exhaustive-deps`
+  disable-directive removal
+- `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx` — 1 stale
+  `react-hooks/exhaustive-deps` disable-directive removal
 
 **Commit 3**
 - `analytics-web-app/package.json` — `tailwindcss`, `tailwind-merge`, `@tailwindcss/vite`; drop
@@ -584,8 +633,9 @@ peers `react: ^18.0.0`).
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
 - `analytics-web-app/postcss.config.mjs` — **deleted**
 - `analytics-web-app/src/**/*.tsx` — ~240 utility-class renames
-- `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the six `--color-*` references to
-  the raw variable names `globals.css` defines (verified dead under `@config`, not conditional)
+- `analytics-web-app/src/components/ui/DateTimePicker.css` — repoint the eight `--color-*` references
+  (six distinct names) to the raw variable names `globals.css` defines (verified dead under `@config`,
+  not conditional)
 - `analytics-web-app/src/routes/ExportScreensPage.tsx` — repoint the two
   `accent-[var(--color-accent-link)]` sites to `accent-[var(--accent-link)]`
 - `analytics-web-app/src/routes/ImportScreensPage.tsx` — repoint the two
@@ -593,7 +643,8 @@ peers `react: ^18.0.0`).
 - `analytics-web-app/src/routes/DataSourcesPage.tsx` — repoint the one
   `accent-[var(--color-accent-link)]` site to `accent-[var(--accent-link)]`
 - `analytics-web-app/tailwind.config.ts` — add `borderRadius.xs` entry so `rounded-sm` → `rounded-xs`
-  stays value-preserving (kept, still loaded via `@config`)
+  stays value-preserving, and a `fontFamily.sans` entry so the base font stack stays value-preserving
+  (kept, still loaded via `@config`)
 
 **Final**
 - `CHANGELOG.md`
@@ -660,12 +711,14 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   pre-migration baseline captured in Commit 2 step 0: all 253 `.ts`/`.tsx` files (131 `.tsx`, 122 `.ts`)
   must still be present. The raw total is expected to be **255** in Commit 2 (253 + `eslint.config.js` +
   `postcss.config.mjs`) and **254** after Commit 3 removes `postcss.config.mjs` — not equal to 253.
-- **Commit 3 specific**: `yarn build` must succeed and emit CSS; then the manual visual pass in
-  Implementation step 6, covering its full checklist (not restated here to avoid the two copies drifting):
-  the colorless `ring-1`/`ring-2` sites, the button/`role="button"` cursors, the input/textarea
+- **Commit 3 specific**: `yarn build` must succeed and emit CSS; then the manual visual pass, run against
+  the split-mode services + `start_analytics_web.py` dev path (see Implementation step 6 — not
+  `--monolith` + `yarn dev`, which don't work together, per step 6's note), covering its full checklist
+  (not restated here to avoid the two copies drifting): the base sans-serif font, the colorless
+  `ring-1`/`ring-2` sites, the button/`role="button"` cursors, the input/textarea
   placeholders, the ~106 now-live `/opacity`-modified sites, the 66 `space-*`/`divide-*` layouts, the 293
   `hover:`/`group-hover:` sites, and the DateTimePicker calendar plus the checkbox accent colors on the
-  Export/Import/DataSources screens (now that the eleven `--color-*` references are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
+  Export/Import/DataSources screens (now that the thirteen `--color-*` references are repointed). Spot-check a few high-traffic screens for the renamed `rounded`/`outline-none` utilities
   rendering as before.
 - **Grafana plugin**: untouched by this change's `analytics-web-app/` edits, but `grafana/`'s own CI
   (`.github/workflows/grafana-plugin.yml`) runs on a path filter (`grafana/**`, `typescript/**`,
