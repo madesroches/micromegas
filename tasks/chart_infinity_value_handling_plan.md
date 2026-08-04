@@ -71,9 +71,17 @@ e.g. `1.0/0.0 as time` produces a non-finite `time` with no guard, and `TimeSeri
 (`XYChart.tsx:1264`) maps `time` straight to `x` with no filtering — exposing the X-axis
 auto-ranging to the same corruption class as the Y-axis. This mirrors `arrow-utils.ts`, which
 already treats X and Y symmetrically (`!Number.isFinite(xNum) || !Number.isFinite(yNum)` at
-lines 441/613). Fix: at both sites, skip the row when
-`!Number.isFinite(time) || !Number.isFinite(Number(row.value))` instead of pushing
-unconditionally — the same paired X/Y `Number.isFinite` pattern used in `arrow-utils.ts`.
+lines 441/613).
+
+Both sites also record per-row `properties` into a separate structure (`propsMap` in
+`useMetricsData.ts:98`, `propsRows` in `PerformanceMetricsChart.tsx:190`) that feeds the
+property-timeline feature (`MetricsChart.tsx`, `useMetricsData.ts`'s `getPropertyTimeline`)
+entirely independently of `value` — a guard that drops the whole row whenever `value` is
+non-finite would silently discard a valid property-timeline entry for a row whose `time` and
+`properties` are otherwise fine. Fix: at both sites, only skip `points.push(...)` when `value` is
+non-finite; only skip the property recording (and the row as a whole) when `time` itself is
+non-finite, since there is no valid X position to plot or key properties on — `value`'s
+finiteness has no bearing on whether properties get recorded.
 
 **Third extraction path: process-metrics page.** `ProcessMetricsPage.tsx`'s "Unified extraction
 effect" (`ProcessMetricsPage.tsx:256`) has the same unguarded pattern:
@@ -88,9 +96,11 @@ via `<MetricsChart data={chartData} .../>` (`ProcessMetricsPage.tsx:526`), the s
 (`router.tsx:9,40`), not dead code. A `numerator`/`denominator` custom query run on this page
 reproduces the identical Y-axis-explosion bug, on either the `value` column or (via a
 `1.0/0.0 as time`-style expression) the `time` column, for the same reason given for the
-perf-analysis path above. Fix: at this site too, skip the row when
-`!Number.isFinite(time) || !Number.isFinite(Number(row.value))` instead of pushing
-unconditionally.
+perf-analysis path above. This site also records `row.properties` into `propsMap`
+(`ProcessMetricsPage.tsx:260`) independently of `value`, feeding the same property-timeline
+feature — so the same surgical guard applies. Fix: at this site too, only skip
+`points.push(...)` when `value` is non-finite; only skip the property recording (and the row as
+a whole) when `time` itself is non-finite.
 
 ## Implementation Steps
 
@@ -98,17 +108,24 @@ unconditionally.
    `!Number.isFinite(yNum)` at lines 424, 501, and 567.
 2. In the same file, replace `isNaN(xNum) || isNaN(yNum)` with
    `!Number.isFinite(xNum) || !Number.isFinite(yNum)` at lines 441 and 613.
-3. In `analytics-web-app/src/hooks/useMetricsData.ts`, in the row-extraction loop (line 93),
-   compute `value = Number(row.value)` and skip the row (`continue`) when
-   `!Number.isFinite(time) || !Number.isFinite(value)` (`time` is already computed via
-   `timestampToMs(row.time)` on the preceding line), instead of pushing
-   `{ time, value: Number(row.value) }` unconditionally.
+3. In `analytics-web-app/src/hooks/useMetricsData.ts`'s row-extraction loop (line 93),
+   restructure the single unconditional push into two independent checks rather than one
+   row-dropping `continue`: right after `time` is computed via `timestampToMs(row.time)`, `continue`
+   the loop when `!Number.isFinite(time)` (no valid X position to plot, or to key
+   `propsMap` on); otherwise compute `value = Number(row.value)` and only call
+   `points.push({ time, value })` when `Number.isFinite(value)`, leaving the `propsMap.set(time, ...)`
+   read from `row.properties` unconditional on `value`'s finiteness so a row with a bad `value`
+   but a good `time`/`properties` still contributes to the property timeline.
 4. In `analytics-web-app/src/routes/perf-analysis/PerformanceMetricsChart.tsx`'s
-   `loadCustomQuery` (line 188), apply the same combined
-   `!Number.isFinite(time) || !Number.isFinite(value)` guard before `points.push(...)`.
+   `loadCustomQuery` (line 188), apply the same two-part restructuring: `continue` when `time` is
+   non-finite; otherwise push `{ time, value }` to `points` only when `value` is finite, while the
+   `propsRows.push(...)` (guarded by `hasPropertiesColumn`) still runs regardless of `value`'s
+   finiteness.
 5. In `analytics-web-app/src/routes/ProcessMetricsPage.tsx`'s "Unified extraction effect"
-   (line 256), apply the same combined `!Number.isFinite(time) || !Number.isFinite(value)`
-   guard before `points.push(...)`.
+   (line 256), apply the same two-part restructuring: `continue` when `time` is non-finite;
+   otherwise push `{ time, value }` to `points` only when `value` is finite, while the
+   `propsMap.set(...)` read from `row.properties` (guarded by `hasProps`) still runs regardless of
+   `value`'s finiteness.
 6. Add test cases to `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` covering both
    `extractChartData` and `extractMultiSeriesChartData` (numeric/time path and categorical path)
    for rows containing `Infinity`/`-Infinity` in the Y column, and one covering `Infinity` in the
@@ -133,10 +150,15 @@ unconditionally.
      `chartData`.
    - For `PerformanceMetricsChart.tsx`'s `loadCustomQuery`, extend the existing
      `analytics-web-app/src/routes/__tests__/PerformanceAnalysisPage.test.tsx`, which already
-     mocks `@/lib/arrow-stream`'s `executeStreamQuery` and drives custom queries through the SQL
-     editor's `onRun`, with a case whose mocked response includes a non-finite `value`/`time`
-     row and asserts it is dropped (e.g. via the mocked `MetricsChart`'s `data` prop or point
-     count).
+     mocks `@/lib/arrow-stream`'s `executeStreamQuery`. That file's `QueryEditor` mock
+     (line 79) is currently a prop-discarding stub, `() => <div data-testid="query-editor" />`,
+     that captures no props at all — including `onRun` — so nothing in the file today actually
+     drives a custom query. As a prerequisite sub-step, extend that mock to capture and expose
+     `onRun` (mirroring the `PageLayout` mock's `onRefresh`/`onTimeRangeChange` pattern at
+     lines 42-68 — e.g. a clickable `data-testid="trigger-run-query"` button that invokes
+     `onRun` with a test SQL string), then add a case whose mocked `executeStreamQuery` response
+     (for that SQL) includes a non-finite `value`/`time` row and asserts it is dropped (e.g. via
+     the mocked `MetricsChart`'s `data` prop or point count).
    - For `ProcessMetricsPage.tsx`'s unified extraction effect, no test file or comparable mocking
      seam currently exists for this route (unlike `PerformanceAnalysisPage.test.tsx`), and adding
      one is out of scope for this plan; this site remains covered only by the manual repro in the
