@@ -20,6 +20,9 @@ use micromegas_analytics::lakehouse::jit_partitions::{
 };
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::partition_source_data::{
+    PartitionSourceBlock, SourceDataBlocksInMemory,
+};
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::query;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
@@ -631,6 +634,681 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     assert!(
         partitions_seen >= 1,
         "expected at least one thread_spans partition"
+    );
+
+    Ok(())
+}
+
+/// Builds a hand-picked `SourceDataBlocksInMemory` spec from a slice of already-fetched blocks,
+/// bypassing `group_blocks_into_partitions`'s automatic cutting so the tests below can construct
+/// exact partition boundaries (in particular, degenerate ranges and shared insert-time boundaries)
+/// that would otherwise require reverse-engineering the cut algorithm's size/safety interplay.
+/// `block_ids_hash` follows the same encoding `emit_partition` uses (`nb_objects.to_le_bytes()`).
+fn slice_spec(blocks: &[Arc<PartitionSourceBlock>]) -> SourceDataBlocksInMemory {
+    let nb_objects: i64 = blocks.iter().map(|b| b.block.nb_objects as i64).sum();
+    SourceDataBlocksInMemory {
+        blocks: blocks.to_vec(),
+        block_ids_hash: nb_objects.to_le_bytes().to_vec(),
+    }
+}
+
+/// Degenerate-range retirement (Design §6, `write_partition.rs`'s `RetireMatch::Overlap`
+/// third arm): a *new* partition whose insert range is degenerate (`begin_insert_time ==
+/// end_insert_time`) must still retire a stale, wider partition from a prior run that overlaps it
+/// -- the bug the third arm fixes (without it, the union predicate matches zero rows for every
+/// degenerate new range, since `tstzrange(t, t)` is Postgres's empty range and the containment
+/// half's left-boundary exclusion also happens to remove the exact-match case). Writes a wide
+/// "run 1" partition covering all 3 blocks, then a degenerate "run 2" partition consisting of just
+/// the middle block (whose insert_time sits strictly inside run 1's range) and asserts the wide
+/// partition is gone, leaving only the new degenerate one.
+#[ignore]
+#[tokio::test]
+async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
+    ensure_telemetry_guard();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, None, HashMap::new());
+    let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    ingestion
+        .insert_process(process_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let stream_info = make_stream_info(&stream);
+    let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
+    ingestion
+        .insert_stream(stream_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
+
+    // Push 3 blocks (2 objects each).
+    for name in ["span_0", "span_1", "span_2"] {
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+    }
+
+    // Deterministic event order (matching object_offset order: 0, 2, 4) and insert-time order
+    // (0s, 1s, 2s) -- no inversions, so blocks[1] (the middle one) legitimately sits strictly
+    // inside the [0s, 2s] range once all 3 are grouped into one partition.
+    let t0 = Utc::now() - TimeDelta::minutes(20);
+    for (object_offset, begin_ticks, end_ticks, insert_secs) in [
+        (0i64, 0i64, 1000i64, 0i64),
+        (2, 1000, 2000, 1),
+        (4, 2000, 3000, 2),
+    ] {
+        sqlx::query(
+            "UPDATE blocks SET begin_ticks = $1, end_ticks = $2, insert_time = $3 \
+             WHERE stream_id = $4 AND object_offset = $5",
+        )
+        .bind(begin_ticks)
+        .bind(end_ticks)
+        .bind(t0 + TimeDelta::seconds(insert_secs))
+        .bind(stream_id)
+        .bind(object_offset)
+        .execute(&lake.db_pool)
+        .await
+        .with_context(|| format!("overriding block at object_offset {object_offset}"))?;
+    }
+
+    let lake = Arc::new(lake);
+    let runtime = Arc::new(make_runtime_env()?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
+    let materialize_range =
+        TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
+    let blocks_view = Arc::new(BlocksView::new()?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        blocks_view.clone(),
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let blocks_only_factory = Arc::new(ViewFactory::new(vec![blocks_view.clone()]));
+    let processes_view = Arc::new(
+        make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
+    );
+    regenerate_global_view(
+        lakehouse.clone(),
+        processes_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let streams_view =
+        Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        streams_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+
+    let full_range = TimeRange::new(t0 - TimeDelta::seconds(10), t0 + TimeDelta::seconds(10));
+
+    let stream_meta = Arc::new(
+        find_stream_from_view(lakehouse.clone(), view_factory.clone(), &stream_id, None).await?,
+    );
+    let (process_meta, last_block_end_ticks, last_block_end_time) =
+        find_process_with_latest_timing(lakehouse.clone(), view_factory.clone(), &process_id, None)
+            .await?;
+    let process_meta = Arc::new(process_meta);
+    let convert_ticks = make_time_converter_from_latest_timing(
+        &process_meta,
+        last_block_end_ticks,
+        last_block_end_time,
+    )?;
+
+    let thread_spans_view = ThreadSpansView::new(&stream_id.to_string(), view_factory.clone())?;
+    let view_meta = ViewMetadata {
+        view_set_name: thread_spans_view.get_view_set_name(),
+        view_instance_id: thread_spans_view.get_view_instance_id(),
+        file_schema_hash: thread_spans_view.get_file_schema_hash(),
+    };
+    let schema = thread_spans_view.get_file_schema();
+
+    // Large max_nb_objects: no splitting, all 3 blocks land in one event-ordered spec.
+    let config = JitPartitionConfig {
+        max_nb_objects: 1000,
+        max_insert_time_slice: TimeDelta::hours(1),
+        block_order: BlockOrder::EventTime,
+    };
+    let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        full_range,
+    )
+    .await?;
+    let specs = generate_stream_jit_partitions_segment(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &segment_partitions,
+        &full_range,
+        stream_meta.clone(),
+        process_meta.clone(),
+    )
+    .await?;
+    assert_eq!(
+        specs.len(),
+        1,
+        "expected all 3 blocks in a single spec with a large max_nb_objects"
+    );
+    let all_blocks = &specs[0].blocks;
+    assert_eq!(all_blocks.len(), 3, "expected all 3 blocks in the spec");
+
+    // "Run 1": write a stale, wide partition covering all 3 blocks (insert range [t0, t0+2s]).
+    let wide_spec = slice_spec(all_blocks);
+    update_partition(
+        lake.clone(),
+        view_meta.clone(),
+        schema.clone(),
+        &convert_ticks,
+        &wide_spec,
+    )
+    .await
+    .with_context(|| "writing run 1 wide partition")?;
+
+    // "Run 2": regrouping now writes just the middle block on its own -- a degenerate partition
+    // (begin_insert_time == end_insert_time == t0+1s) whose point sits strictly inside run 1's
+    // range. This is exactly the bug's scenario: without the third arm, this write would retire
+    // nothing and the stale wide partition would survive alongside the new one.
+    let degenerate_spec = slice_spec(&all_blocks[1..2]);
+    update_partition(
+        lake.clone(),
+        view_meta.clone(),
+        schema.clone(),
+        &convert_ticks,
+        &degenerate_spec,
+    )
+    .await
+    .with_context(|| "writing run 2 degenerate partition")?;
+
+    let mut tr = lake.db_pool.begin().await?;
+    let rows = sqlx::query(
+        "SELECT begin_insert_time, end_insert_time FROM lakehouse_partitions \
+         WHERE view_set_name = 'thread_spans' AND view_instance_id = $1 \
+         ORDER BY begin_insert_time;",
+    )
+    .bind(stream_id.to_string())
+    .fetch_all(&mut *tr)
+    .await?;
+    tr.commit().await?;
+    assert_eq!(
+        rows.len(),
+        1,
+        "the degenerate new range must retire the stale wide partition, leaving only the new \
+         degenerate one (found {} partitions)",
+        rows.len()
+    );
+    let b: DateTime<Utc> = rows[0].try_get("begin_insert_time")?;
+    let e: DateTime<Utc> = rows[0].try_get("end_insert_time")?;
+    assert_eq!(
+        b, e,
+        "the surviving partition should be the new degenerate one"
+    );
+
+    Ok(())
+}
+
+/// Same-run left-boundary exclusion (Design §6, "The containment half's left-boundary
+/// exclusion"): a legal cut can land a degenerate partition (here, a single block) immediately
+/// before a following partition, written in the *same* run, that begins at that exact same
+/// insert-time point. Writing the second partition must not retire its own just-written,
+/// immediately-preceding sibling. Asserts both partitions survive.
+#[ignore]
+#[tokio::test]
+async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
+    ensure_telemetry_guard();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, None, HashMap::new());
+    let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    ingestion
+        .insert_process(process_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let stream_info = make_stream_info(&stream);
+    let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
+    ingestion
+        .insert_stream(stream_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
+
+    // Push 3 blocks (2 objects each).
+    for name in ["span_0", "span_1", "span_2"] {
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+    }
+
+    // Blocks 0 and 1 share the exact same insert_time `t`; block 2 is later. Event order matches
+    // object_offset order (0, 2, 4), so grouping all 3 into one spec and slicing block 0 alone
+    // from blocks 1+2 reproduces the shape the cut rule can legally produce: a degenerate
+    // partition ending at `t`, immediately followed by a partition that begins at that same `t`.
+    let t0 = Utc::now() - TimeDelta::minutes(20);
+    for (object_offset, begin_ticks, end_ticks, insert_secs) in [
+        (0i64, 0i64, 1000i64, 0i64),
+        (2, 1000, 2000, 0i64),
+        (4, 2000, 3000, 1i64),
+    ] {
+        sqlx::query(
+            "UPDATE blocks SET begin_ticks = $1, end_ticks = $2, insert_time = $3 \
+             WHERE stream_id = $4 AND object_offset = $5",
+        )
+        .bind(begin_ticks)
+        .bind(end_ticks)
+        .bind(t0 + TimeDelta::seconds(insert_secs))
+        .bind(stream_id)
+        .bind(object_offset)
+        .execute(&lake.db_pool)
+        .await
+        .with_context(|| format!("overriding block at object_offset {object_offset}"))?;
+    }
+
+    let lake = Arc::new(lake);
+    let runtime = Arc::new(make_runtime_env()?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
+    let materialize_range =
+        TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
+    let blocks_view = Arc::new(BlocksView::new()?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        blocks_view.clone(),
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let blocks_only_factory = Arc::new(ViewFactory::new(vec![blocks_view.clone()]));
+    let processes_view = Arc::new(
+        make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
+    );
+    regenerate_global_view(
+        lakehouse.clone(),
+        processes_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let streams_view =
+        Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        streams_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+
+    let full_range = TimeRange::new(t0 - TimeDelta::seconds(10), t0 + TimeDelta::seconds(10));
+
+    let stream_meta = Arc::new(
+        find_stream_from_view(lakehouse.clone(), view_factory.clone(), &stream_id, None).await?,
+    );
+    let (process_meta, last_block_end_ticks, last_block_end_time) =
+        find_process_with_latest_timing(lakehouse.clone(), view_factory.clone(), &process_id, None)
+            .await?;
+    let process_meta = Arc::new(process_meta);
+    let convert_ticks = make_time_converter_from_latest_timing(
+        &process_meta,
+        last_block_end_ticks,
+        last_block_end_time,
+    )?;
+
+    let thread_spans_view = ThreadSpansView::new(&stream_id.to_string(), view_factory.clone())?;
+    let view_meta = ViewMetadata {
+        view_set_name: thread_spans_view.get_view_set_name(),
+        view_instance_id: thread_spans_view.get_view_instance_id(),
+        file_schema_hash: thread_spans_view.get_file_schema_hash(),
+    };
+    let schema = thread_spans_view.get_file_schema();
+
+    let config = JitPartitionConfig {
+        max_nb_objects: 1000,
+        max_insert_time_slice: TimeDelta::hours(1),
+        block_order: BlockOrder::EventTime,
+    };
+    let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        full_range,
+    )
+    .await?;
+    let specs = generate_stream_jit_partitions_segment(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &segment_partitions,
+        &full_range,
+        stream_meta.clone(),
+        process_meta.clone(),
+    )
+    .await?;
+    assert_eq!(
+        specs.len(),
+        1,
+        "expected all 3 blocks in a single spec with a large max_nb_objects"
+    );
+    let all_blocks = &specs[0].blocks;
+    assert_eq!(all_blocks.len(), 3, "expected all 3 blocks in the spec");
+
+    // Partition A: block 0 alone -- degenerate, insert range [t, t].
+    let partition_a = slice_spec(&all_blocks[0..1]);
+    // Partition B: blocks 1+2 -- begins at that same `t` (block 1's insert_time), ends later.
+    let partition_b = slice_spec(&all_blocks[1..3]);
+
+    update_partition(
+        lake.clone(),
+        view_meta.clone(),
+        schema.clone(),
+        &convert_ticks,
+        &partition_a,
+    )
+    .await
+    .with_context(|| "writing degenerate partition A")?;
+    update_partition(
+        lake.clone(),
+        view_meta.clone(),
+        schema.clone(),
+        &convert_ticks,
+        &partition_b,
+    )
+    .await
+    .with_context(|| "writing partition B")?;
+
+    let mut tr = lake.db_pool.begin().await?;
+    let rows = sqlx::query(
+        "SELECT begin_insert_time, end_insert_time FROM lakehouse_partitions \
+         WHERE view_set_name = 'thread_spans' AND view_instance_id = $1 \
+         ORDER BY begin_insert_time;",
+    )
+    .bind(stream_id.to_string())
+    .fetch_all(&mut *tr)
+    .await?;
+    tr.commit().await?;
+    assert_eq!(
+        rows.len(),
+        2,
+        "partition B's write must not retire its own just-written, degenerate, \
+         immediately-preceding sibling (found {} partitions)",
+        rows.len()
+    );
+    let b0: DateTime<Utc> = rows[0].try_get("begin_insert_time")?;
+    let e0: DateTime<Utc> = rows[0].try_get("end_insert_time")?;
+    let b1: DateTime<Utc> = rows[1].try_get("begin_insert_time")?;
+    assert_eq!(b0, e0, "partition A should still be degenerate");
+    assert_eq!(
+        e0, b1,
+        "partition B should begin exactly where degenerate partition A ends"
+    );
+
+    Ok(())
+}
+
+/// Interrupted-run reconvergence (Design §6, "Why the `Overlap` waiver is tolerable"): a
+/// `jit_update` loop that errors out or is cancelled after writing only some of a multi-partition
+/// regrouping spec must not leave a permanent gap. Writes only the first of a 2-partition spec
+/// (simulating the interrupted loop), then recomputes the same grouping from the unchanged blocks
+/// and writes every partition in it (simulating the next, successful `jit_update`): the first
+/// partition is recognized as already up to date and skipped, the second is a fresh insert, and
+/// the result covers the full insert range with no gap and no overlap.
+#[ignore]
+#[tokio::test]
+async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
+    ensure_telemetry_guard();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, None, HashMap::new());
+    let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    ingestion
+        .insert_process(process_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let stream_info = make_stream_info(&stream);
+    let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
+    ingestion
+        .insert_stream(stream_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
+
+    // Push 4 blocks (2 objects each).
+    for name in ["span_0", "span_1", "span_2", "span_3"] {
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+    }
+
+    // Deterministic event order and insert order (0s, 1s, 2s, 3s) -- no inversions. Truncated to
+    // microsecond precision (Postgres's timestamptz columns only store microseconds), since the
+    // final assertions below compare a stored, read-back boundary against `t0` for exact
+    // equality.
+    let t0 = (Utc::now() - TimeDelta::minutes(20)).duration_trunc(TimeDelta::microseconds(1))?;
+    for (object_offset, begin_ticks, end_ticks, insert_secs) in [
+        (0i64, 0i64, 1000i64, 0i64),
+        (2, 1000, 2000, 1),
+        (4, 2000, 3000, 2),
+        (6, 3000, 4000, 3),
+    ] {
+        sqlx::query(
+            "UPDATE blocks SET begin_ticks = $1, end_ticks = $2, insert_time = $3 \
+             WHERE stream_id = $4 AND object_offset = $5",
+        )
+        .bind(begin_ticks)
+        .bind(end_ticks)
+        .bind(t0 + TimeDelta::seconds(insert_secs))
+        .bind(stream_id)
+        .bind(object_offset)
+        .execute(&lake.db_pool)
+        .await
+        .with_context(|| format!("overriding block at object_offset {object_offset}"))?;
+    }
+
+    let lake = Arc::new(lake);
+    let runtime = Arc::new(make_runtime_env()?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
+    let materialize_range =
+        TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
+    let blocks_view = Arc::new(BlocksView::new()?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        blocks_view.clone(),
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let blocks_only_factory = Arc::new(ViewFactory::new(vec![blocks_view.clone()]));
+    let processes_view = Arc::new(
+        make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
+    );
+    regenerate_global_view(
+        lakehouse.clone(),
+        processes_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let streams_view =
+        Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        streams_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+
+    let full_range = TimeRange::new(t0 - TimeDelta::seconds(10), t0 + TimeDelta::seconds(10));
+
+    let stream_meta = Arc::new(
+        find_stream_from_view(lakehouse.clone(), view_factory.clone(), &stream_id, None).await?,
+    );
+    let (process_meta, last_block_end_ticks, last_block_end_time) =
+        find_process_with_latest_timing(lakehouse.clone(), view_factory.clone(), &process_id, None)
+            .await?;
+    let process_meta = Arc::new(process_meta);
+    let convert_ticks = make_time_converter_from_latest_timing(
+        &process_meta,
+        last_block_end_ticks,
+        last_block_end_time,
+    )?;
+
+    let thread_spans_view = ThreadSpansView::new(&stream_id.to_string(), view_factory.clone())?;
+    let view_meta = ViewMetadata {
+        view_set_name: thread_spans_view.get_view_set_name(),
+        view_instance_id: thread_spans_view.get_view_instance_id(),
+        file_schema_hash: thread_spans_view.get_file_schema_hash(),
+    };
+    let schema = thread_spans_view.get_file_schema();
+
+    // 2 objects/block, so max_nb_objects=4 forces exactly 2 blocks/partition.
+    let config = JitPartitionConfig {
+        max_nb_objects: 4,
+        max_insert_time_slice: TimeDelta::hours(1),
+        block_order: BlockOrder::EventTime,
+    };
+    let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        full_range,
+    )
+    .await?;
+    let specs = generate_stream_jit_partitions_segment(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &segment_partitions,
+        &full_range,
+        stream_meta.clone(),
+        process_meta.clone(),
+    )
+    .await?;
+    assert_eq!(
+        specs.len(),
+        2,
+        "expected 2 partitions from blocks 0-3 with max_nb_objects=4"
+    );
+
+    // Simulate an interrupted jit_update loop: only the first partition gets written.
+    update_partition(
+        lake.clone(),
+        view_meta.clone(),
+        schema.clone(),
+        &convert_ticks,
+        &specs[0],
+    )
+    .await
+    .with_context(|| "writing only the first partition (simulating an interrupted run)")?;
+
+    // A full jit_update: blocks are unchanged, so grouping is deterministic and recomputes the
+    // same 2-partition spec. The first partition is recognized as already up to date (skipped);
+    // the second is a fresh insert.
+    let segment_partitions_2 = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        full_range,
+    )
+    .await?;
+    let reconverge_specs = generate_stream_jit_partitions_segment(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &segment_partitions_2,
+        &full_range,
+        stream_meta,
+        process_meta,
+    )
+    .await?;
+    assert_eq!(
+        reconverge_specs.len(),
+        2,
+        "grouping is deterministic: the follow-up run must recompute the same 2 partitions"
+    );
+    for spec in &reconverge_specs {
+        update_partition(
+            lake.clone(),
+            view_meta.clone(),
+            schema.clone(),
+            &convert_ticks,
+            spec,
+        )
+        .await
+        .with_context(|| "writing follow-up run partition")?;
+    }
+
+    let mut tr = lake.db_pool.begin().await?;
+    let rows = sqlx::query(
+        "SELECT begin_insert_time, end_insert_time FROM lakehouse_partitions \
+         WHERE view_set_name = 'thread_spans' AND view_instance_id = $1 \
+         ORDER BY begin_insert_time;",
+    )
+    .bind(stream_id.to_string())
+    .fetch_all(&mut *tr)
+    .await?;
+    tr.commit().await?;
+    assert_eq!(
+        rows.len(),
+        2,
+        "expected exactly 2 partitions after reconvergence (found {})",
+        rows.len()
+    );
+    let b0: DateTime<Utc> = rows[0].try_get("begin_insert_time")?;
+    let e0: DateTime<Utc> = rows[0].try_get("end_insert_time")?;
+    let b1: DateTime<Utc> = rows[1].try_get("begin_insert_time")?;
+    let e1: DateTime<Utc> = rows[1].try_get("end_insert_time")?;
+    assert!(
+        b1 >= e0,
+        "insert-time ranges must not overlap: [{b0}, {e0}] then [{b1}, {e1}]"
+    );
+    // No missing tail range: the union of both partitions' insert ranges covers every pushed
+    // block (insert times 0s..3s from t0), i.e. the follow-up run's second partition genuinely
+    // covers blocks 2-3 rather than the interrupted run's first partition being silently left as
+    // the only surviving data.
+    assert_eq!(
+        b0, t0,
+        "the first partition (from the interrupted run) must still start at the earliest block's insert time"
+    );
+    assert_eq!(
+        e1,
+        t0 + TimeDelta::seconds(3),
+        "the follow-up run's completion must reach the latest block's insert time, leaving no \
+         missing tail range: [{b0}, {e0}] then [{b1}, {e1}]"
     );
 
     Ok(())

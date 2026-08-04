@@ -273,8 +273,13 @@ async fn write_partition(
 /// Rebuilds the partition if it's missing or out of date.
 ///
 /// `pub` (not module-private) so `rust/analytics/tests/` -- which compiles as an external
-/// integration crate and can only reach `pub` items -- can write a single JIT partition directly
-/// for the cross-run-regrouping and degenerate-range integration test sub-cases.
+/// integration crate and can only reach `pub` items -- can write a single JIT partition directly:
+/// `thread_spans_cross_run_regrouping_replaces_stale_partition`,
+/// `thread_spans_degenerate_range_retires_stale_partition`,
+/// `thread_spans_same_run_left_boundary_survives`, and
+/// `thread_spans_interrupted_run_reconverges` (`thread_spans_ordering_db_test.rs`) all drive it
+/// directly to control exact partition boundaries that `jit_update`'s own loop wouldn't otherwise
+/// expose.
 #[span_fn]
 pub async fn update_partition(
     lake: Arc<DataLakeConnection>,

@@ -132,10 +132,11 @@ pub enum RetireMatch {
     /// `BlockOrder::InsertTime` and for every non-JIT (batch/merge) partition write. Used by
     /// everything except the two `BlockOrder::EventTime` JIT views.
     Containment,
-    /// The union of the overlap and containment predicates:
-    /// `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
+    /// The union of the overlap and containment predicates, plus a third arm for a degenerate new
+    /// range: `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
     /// (begin_insert_time >= $3 AND end_insert_time <= $4 AND NOT (begin_insert_time =
-    /// end_insert_time AND begin_insert_time = $3))`.
+    /// end_insert_time AND begin_insert_time = $3)) OR ($3 = $4 AND ((begin_insert_time <= $3 AND
+    /// end_insert_time > $3) OR (begin_insert_time = $3 AND end_insert_time = $3)))`.
     ///
     /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
     /// grouping can move an *earlier* cut point between `jit_update` runs (see
@@ -157,6 +158,22 @@ pub enum RetireMatch {
     /// run -- the clause leaves that in place while still matching the genuine cross-run case (a
     /// stale degenerate partition from a previous run's different cut points, generally sitting
     /// strictly inside `[$3, $4]` rather than exactly at `$3`).
+    ///
+    /// The third arm handles a *degenerate new range* (`$3 == $4`), which the first two arms both
+    /// miss: `&&` is vacuously false (an empty `tstzrange` never overlaps anything), and the
+    /// containment half degenerates to `begin_insert_time = end_insert_time = $3` -- exactly the
+    /// shape the left-boundary exclusion clause removes -- so together they match zero rows for
+    /// *every* degenerate new range, letting a genuinely stale overlapping partition (e.g. a wider
+    /// partition from a prior run, or an exactly-coincident degenerate one) survive. The third arm
+    /// restores this using the existing row's own range under half-open (`[)`) semantics:
+    /// `begin_insert_time <= $3 AND end_insert_time > $3` matches a stale partition whose range
+    /// truly contains the point `$3` (including one that merely starts there), and `begin_insert_time
+    /// = end_insert_time = $3` matches an exact degenerate duplicate. Neither clause matches a
+    /// same-run sibling ending exactly at `$3` (`begin_insert_time < $3 AND end_insert_time = $3`):
+    /// the first requires `end_insert_time > $3` and the second requires `begin_insert_time = $3`,
+    /// so that sibling -- which never truly overlaps point `$3` under `[)` semantics -- is left in
+    /// place without needing an explicit exclusion, the same way the left-boundary exclusion
+    /// protects the non-degenerate arm.
     ///
     /// Tolerated gap: under `Overlap`, retiring a stale wider partition and inserting the new,
     /// narrower one are two separate statements in the same transaction, so a range that the old
@@ -239,8 +256,9 @@ pub async fn retire_partitions(
             .with_context(|| "listing old partitions (range)")?
         }
         RetireMatch::Overlap => {
-            // Union of the overlap and containment predicates; see RetireMatch::Overlap's docs
-            // for why the containment half (and its left-boundary exclusion) is required.
+            // Union of the overlap and containment predicates, plus a degenerate-new-range arm;
+            // see RetireMatch::Overlap's docs for why the containment half (and its left-boundary
+            // exclusion) and the third arm are both required.
             instrument_named!(
                 sqlx::query(
                     "SELECT file_path, file_size
@@ -251,6 +269,10 @@ pub async fn retire_partitions(
                  (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
                  OR (begin_insert_time >= $3 AND end_insert_time <= $4
                      AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
+                 OR ($3 = $4 AND (
+                     (begin_insert_time <= $3 AND end_insert_time > $3)
+                     OR (begin_insert_time = $3 AND end_insert_time = $3)
+                 ))
              )
              ;",
                 )
@@ -349,6 +371,10 @@ pub async fn retire_partitions(
                  (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
                  OR (begin_insert_time >= $3 AND end_insert_time <= $4
                      AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3))
+                 OR ($3 = $4 AND (
+                     (begin_insert_time <= $3 AND end_insert_time > $3)
+                     OR (begin_insert_time = $3 AND end_insert_time = $3)
+                 ))
              )
              ;",
                 )
