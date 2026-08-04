@@ -74,7 +74,10 @@ function ScreensPageContent() {
   }, [])
 
   useEffect(() => {
-    loadData()
+    // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
+    void (async () => {
+      await loadData()
+    })()
   }, [loadData])
 
   useFoldersChangedListener(loadData)

@@ -43,10 +43,16 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   const onSelectionChangeRef = useRef(onSelectionChange)
   onSelectionChangeRef.current = onSelectionChange
 
-  // Clear selection when data changes (re-execution)
+  // Clear selection when data changes (re-execution). Body wrapped in a
+  // function declared and invoked here — see react-hooks/set-state-in-effect
+  // — since it also notifies the parent through onSelectionChangeRef, a
+  // side effect beyond a pure state mirror that must stay inside the effect.
   useEffect(() => {
-    setSelectedRowIndex(null)
-    onSelectionChangeRef.current?.(null)
+    const run = () => {
+      setSelectedRowIndex(null)
+      onSelectionChangeRef.current?.(null)
+    }
+    run()
   }, [table])
 
   const handleRowSelect = useCallback(

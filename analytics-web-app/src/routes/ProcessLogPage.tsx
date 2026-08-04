@@ -249,34 +249,40 @@ function ProcessLogContent() {
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
-  // Extract rows when query completes
+  // Extract rows when query completes. Body is wrapped in a function
+  // declared and invoked inside the effect — see react-hooks/set-state-in-effect
+  // — since rows/hasLoaded must keep their last value across a re-execute,
+  // so this can't be a useMemo derivation of the query state.
   useEffect(() => {
-    if (streamQuery.isComplete && !streamQuery.error) {
-      const table = streamQuery.getTable()
-      if (table) {
-        const resultRows: LogRow[] = []
-        for (let i = 0; i < table.numRows; i++) {
-          const row = table.get(i)
-          if (row) {
-            const levelValue = row.level
-            const levelStr = typeof levelValue === 'number'
-              ? (LEVEL_NAMES[levelValue] || 'UNKNOWN')
-              : String(levelValue ?? '')
-            resultRows.push({
-              time: row.time,
-              level: levelStr,
-              target: String(row.target ?? ''),
-              msg: String(row.msg ?? ''),
-            })
+    const run = () => {
+      if (streamQuery.isComplete && !streamQuery.error) {
+        const table = streamQuery.getTable()
+        if (table) {
+          const resultRows: LogRow[] = []
+          for (let i = 0; i < table.numRows; i++) {
+            const row = table.get(i)
+            if (row) {
+              const levelValue = row.level
+              const levelStr = typeof levelValue === 'number'
+                ? (LEVEL_NAMES[levelValue] || 'UNKNOWN')
+                : String(levelValue ?? '')
+              resultRows.push({
+                time: row.time,
+                level: levelStr,
+                target: String(row.target ?? ''),
+                msg: String(row.msg ?? ''),
+              })
+            }
           }
+          setRows(resultRows)
+        } else {
+          // Query completed with no data - clear rows
+          setRows([])
         }
-        setRows(resultRows)
-      } else {
-        // Query completed with no data - clear rows
-        setRows([])
+        setHasLoaded(true)
       }
-      setHasLoaded(true)
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [streamQuery.isComplete, streamQuery.error])
 

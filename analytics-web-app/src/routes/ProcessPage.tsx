@@ -147,68 +147,82 @@ function ProcessPageContent() {
   const statsQuery = useStreamQuery()
   const propertiesQuery = useStreamQuery()
 
-  // Extract data from query results when complete
+  // Extract data from query results when complete. Body is wrapped in a
+  // function declared and invoked inside the effect — see
+  // react-hooks/set-state-in-effect — since `process`/`statistics`/
+  // `properties` must keep their last value across a re-execute (the
+  // refresh button bypasses hasLoadedRef and calls execute() directly), so
+  // this can't be a useMemo derivation of the query state.
   useEffect(() => {
-    if (processQuery.isComplete && !processQuery.error) {
-      const table = processQuery.getTable()
-      if (table && table.numRows > 0) {
-        const row = table.get(0)
-        if (row) {
-          setProcess({
-            exe: String(row.exe ?? ''),
-            start_time: timestampToDate(row.start_time),
-            last_update_time: timestampToDate(row.last_update_time),
-            computer: String(row.computer ?? ''),
-            username: String(row.username ?? ''),
-            cpu_brand: String(row.cpu_brand ?? ''),
-            distro: String(row.distro ?? ''),
-          })
+    const run = () => {
+      if (processQuery.isComplete && !processQuery.error) {
+        const table = processQuery.getTable()
+        if (table && table.numRows > 0) {
+          const row = table.get(0)
+          if (row) {
+            setProcess({
+              exe: String(row.exe ?? ''),
+              start_time: timestampToDate(row.start_time),
+              last_update_time: timestampToDate(row.last_update_time),
+              computer: String(row.computer ?? ''),
+              username: String(row.username ?? ''),
+              cpu_brand: String(row.cpu_brand ?? ''),
+              distro: String(row.distro ?? ''),
+            })
+          }
         }
       }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [processQuery.isComplete, processQuery.error])
 
   useEffect(() => {
-    if (statsQuery.isComplete && !statsQuery.error) {
-      const table = statsQuery.getTable()
-      if (table && table.numRows > 0) {
-        const row = table.get(0)
-        if (row) {
-          setStatistics({
-            log_entries: Number(row.log_entries ?? 0),
-            measures: Number(row.measures ?? 0),
-            trace_events: Number(row.trace_events ?? 0),
-            thread_count: Number(row.thread_count ?? 0),
-          })
+    const run = () => {
+      if (statsQuery.isComplete && !statsQuery.error) {
+        const table = statsQuery.getTable()
+        if (table && table.numRows > 0) {
+          const row = table.get(0)
+          if (row) {
+            setStatistics({
+              log_entries: Number(row.log_entries ?? 0),
+              measures: Number(row.measures ?? 0),
+              trace_events: Number(row.trace_events ?? 0),
+              thread_count: Number(row.thread_count ?? 0),
+            })
+          }
         }
       }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [statsQuery.isComplete, statsQuery.error])
 
   useEffect(() => {
-    if (propertiesQuery.isComplete && !propertiesQuery.error) {
-      const table = propertiesQuery.getTable()
-      if (table && table.numRows > 0) {
-        const row = table.get(0)
-        if (row && row.properties) {
-          try {
-            const parsed = JSON.parse(String(row.properties))
-            setProperties(parsed)
-            setPropertiesError(null)
-          } catch {
-            setPropertiesError('Failed to parse properties')
+    const run = () => {
+      if (propertiesQuery.isComplete && !propertiesQuery.error) {
+        const table = propertiesQuery.getTable()
+        if (table && table.numRows > 0) {
+          const row = table.get(0)
+          if (row && row.properties) {
+            try {
+              const parsed = JSON.parse(String(row.properties))
+              setProperties(parsed)
+              setPropertiesError(null)
+            } catch {
+              setPropertiesError('Failed to parse properties')
+            }
+          } else {
+            setProperties({})
           }
         } else {
           setProperties({})
         }
-      } else {
-        setProperties({})
+      } else if (propertiesQuery.error) {
+        setPropertiesError(propertiesQuery.error.message)
       }
-    } else if (propertiesQuery.error) {
-      setPropertiesError(propertiesQuery.error.message)
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [propertiesQuery.isComplete, propertiesQuery.error])
 

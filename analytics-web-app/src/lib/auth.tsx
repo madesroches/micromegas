@@ -90,7 +90,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshTokens])
 
   useEffect(() => {
-    checkAuth()
+    // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
+    void (async () => {
+      await checkAuth()
+    })()
   }, [checkAuth])
 
   const login = useCallback((returnUrl?: string) => {

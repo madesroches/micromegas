@@ -589,11 +589,14 @@ export function XYChart({
     []
   )
 
-  // Reset series visibility when series count changes
-  useEffect(() => {
+  // Reset series visibility when series count changes. seriesVisibility and
+  // isolatedSeries both initialize to null, so a dropped mount-time run is a no-op.
+  const [prevEffectiveSeriesCount, setPrevEffectiveSeriesCount] = useState(effectiveSeriesCount)
+  if (effectiveSeriesCount !== prevEffectiveSeriesCount) {
+    setPrevEffectiveSeriesCount(effectiveSeriesCount)
     setSeriesVisibility(null)
     setIsolatedSeries(null)
-  }, [effectiveSeriesCount])
+  }
 
   // Create/update chart
   useEffect(() => {

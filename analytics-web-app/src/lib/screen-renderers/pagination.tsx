@@ -6,7 +6,7 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   ChevronsLeft,
   ChevronLeft,
@@ -45,13 +45,18 @@ export function usePagination(
 
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
 
-  // Clamp page when totalRows or pageSize changes
-  useEffect(() => {
-    setCurrentPage((prev) => {
-      const maxPage = Math.max(0, Math.ceil(totalRows / pageSize) - 1)
-      return prev > maxPage ? maxPage : prev
-    })
-  }, [totalRows, pageSize])
+  // Clamp page when totalRows or pageSize changes. currentPage starts at 0,
+  // which is always <= maxPage, so a dropped mount-time run is a no-op.
+  const [prevTotalRows, setPrevTotalRows] = useState(totalRows)
+  const [prevPageSize, setPrevPageSize] = useState(pageSize)
+  if (totalRows !== prevTotalRows || pageSize !== prevPageSize) {
+    setPrevTotalRows(totalRows)
+    setPrevPageSize(pageSize)
+    const maxPage = Math.max(0, Math.ceil(totalRows / pageSize) - 1)
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage)
+    }
+  }
 
   const startRow = currentPage * pageSize
   const endRow = Math.min(startRow + pageSize, totalRows)

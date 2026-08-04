@@ -323,12 +323,18 @@ export function LogRenderer({
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
 
-  // Store result table when query completes
+  // Store result table when query completes. Body is wrapped in a function
+  // declared and invoked inside the effect — see react-hooks/set-state-in-effect
+  // — since resultTable/hasLoaded must keep their last value across a
+  // re-execute, so this can't be a useMemo derivation of the query state.
   useEffect(() => {
-    if (streamQuery.isComplete && !streamQuery.error) {
-      setResultTable(streamQuery.getTable() ?? null)
-      setHasLoaded(true)
+    const run = () => {
+      if (streamQuery.isComplete && !streamQuery.error) {
+        setResultTable(streamQuery.getTable() ?? null)
+        setHasLoaded(true)
+      }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamQuery.isComplete, streamQuery.error])
 

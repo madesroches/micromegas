@@ -161,10 +161,14 @@ function HgEditorPanel({
   const [editedName, setEditedName] = useState(config.name)
   const [nameError, setNameError] = useState<string | null>(null)
 
-  useEffect(() => {
+  // editedName's own useState initializer already derives from config.name,
+  // so a dropped mount-time run here is a no-op.
+  const [prevConfigName, setPrevConfigName] = useState(config.name)
+  if (config.name !== prevConfigName) {
+    setPrevConfigName(config.name)
     setEditedName(config.name)
     setNameError(null)
-  }, [config.name])
+  }
 
   const handleNameChange = useCallback(
     (value: string) => {

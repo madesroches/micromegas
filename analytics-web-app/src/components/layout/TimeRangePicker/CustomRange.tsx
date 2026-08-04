@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { Calendar } from 'lucide-react'
 import {
   isValidTimeExpression,
@@ -32,10 +32,16 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
     }
   }, [toInput])
 
-  useEffect(() => {
+  // fromInput/toInput's own useState initializers already derive from
+  // from/to, so a dropped mount-time run here is a no-op.
+  const [prevFrom, setPrevFrom] = useState(from)
+  const [prevTo, setPrevTo] = useState(to)
+  if (from !== prevFrom || to !== prevTo) {
+    setPrevFrom(from)
+    setPrevTo(to)
     setFromInput(from)
     setToInput(to)
-  }, [from, to])
+  }
 
   const handleFromDateSelect = (date: Date | undefined) => {
     if (date) {

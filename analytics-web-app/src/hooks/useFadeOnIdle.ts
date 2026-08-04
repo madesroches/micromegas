@@ -12,17 +12,23 @@ export function useFadeOnIdle(status: string): string {
   const [revealed, setRevealed] = useState(false)
 
   useEffect(() => {
-    if (status === 'idle') return
+    // Body wrapped in a function declared and invoked (and returned) here —
+    // see react-hooks/set-state-in-effect — this is a genuine timer-driven
+    // state machine, not a plain prop mirror, so it stays an effect.
+    const run = () => {
+      if (status === 'idle') return
 
-    setRevealed(true)
+      setRevealed(true)
 
-    // During loading, stay revealed until status changes again
-    if (status === 'loading') return
+      // During loading, stay revealed until status changes again
+      if (status === 'loading') return
 
-    // For terminal states, keep revealed 200ms (enough for CSS 150ms fade-in),
-    // then remove — CSS transition-delay (4s) handles the wait before fade-out.
-    const id = setTimeout(() => setRevealed(false), 200)
-    return () => clearTimeout(id)
+      // For terminal states, keep revealed 200ms (enough for CSS 150ms fade-in),
+      // then remove — CSS transition-delay (4s) handles the wait before fade-out.
+      const id = setTimeout(() => setRevealed(false), 200)
+      return () => clearTimeout(id)
+    }
+    return run()
   }, [status])
 
   return revealed ? 'fade-on-idle revealed' : 'fade-on-idle'

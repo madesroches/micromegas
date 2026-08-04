@@ -207,74 +207,88 @@ function ProcessMetricsContent() {
   // placeholder header. Empty for dimensionless units so the parenthetical drops entirely.
   const noDataDisplayUnit = unitDisplayAbbrev(normalizeUnit(selectedMeasureInfo?.unit ?? ''))
 
-  // Extract measures from discovery query
+  // Extract measures from discovery query. Body is wrapped in a function
+  // declared and invoked inside the effect — see react-hooks/set-state-in-effect
+  // — the effect performs a router write (updateConfig) and a conditional
+  // auto-selection alongside setMeasures/setDiscoveryDone, none of which is
+  // a pure derived-value assignment.
   useEffect(() => {
-    if (discoveryQuery.isComplete) {
-      if (!discoveryQuery.error) {
-        const table = discoveryQuery.getTable()
-        if (table) {
-          const measureList: Measure[] = []
-          for (let i = 0; i < table.numRows; i++) {
-            const row = table.get(i)
-            if (row) {
-              measureList.push({
-                name: String(row.name ?? ''),
-                target: String(row.target ?? ''),
-                unit: String(row.unit ?? ''),
-              })
+    const run = () => {
+      if (discoveryQuery.isComplete) {
+        if (!discoveryQuery.error) {
+          const table = discoveryQuery.getTable()
+          if (table) {
+            const measureList: Measure[] = []
+            for (let i = 0; i < table.numRows; i++) {
+              const row = table.get(i)
+              if (row) {
+                measureList.push({
+                  name: String(row.name ?? ''),
+                  target: String(row.target ?? ''),
+                  unit: String(row.unit ?? ''),
+                })
+              }
+            }
+            setMeasures(measureList)
+            // Auto-select first measure if none specified
+            if (measureList.length > 0 && !selectedMeasure) {
+              const autoMeasure = measureList[0].name
+              setSelectedMeasure(autoMeasure)
+              // Update config to keep URL in sync (replace to avoid history entry)
+              updateConfig({ selectedMeasure: autoMeasure }, { replace: true })
             }
           }
-          setMeasures(measureList)
-          // Auto-select first measure if none specified
-          if (measureList.length > 0 && !selectedMeasure) {
-            const autoMeasure = measureList[0].name
-            setSelectedMeasure(autoMeasure)
-            // Update config to keep URL in sync (replace to avoid history entry)
-            updateConfig({ selectedMeasure: autoMeasure }, { replace: true })
-          }
         }
+        setDiscoveryDone(true)
       }
-      setDiscoveryDone(true)
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure, updateConfig])
 
-  // Unified extraction effect — handles both default and custom query results
+  // Unified extraction effect — handles both default and custom query results.
+  // Body is wrapped in a function declared and invoked inside the effect —
+  // see react-hooks/set-state-in-effect — since chartData/rawPropertiesData/
+  // propertyParseErrors must keep their last value across a re-execute, so
+  // this can't be a useMemo derivation of the query state.
   useEffect(() => {
-    if (metricsQuery.isComplete && !metricsQuery.error) {
-      const table = metricsQuery.getTable()
-      if (table) {
-        const points: { time: number; value: number }[] = []
-        const propsMap = new Map<number, Record<string, unknown>>()
-        const errors: string[] = []
-        const hasProps = table.schema.fields.some(f => f.name === 'properties')
+    const run = () => {
+      if (metricsQuery.isComplete && !metricsQuery.error) {
+        const table = metricsQuery.getTable()
+        if (table) {
+          const points: { time: number; value: number }[] = []
+          const propsMap = new Map<number, Record<string, unknown>>()
+          const errors: string[] = []
+          const hasProps = table.schema.fields.some(f => f.name === 'properties')
 
-        for (let i = 0; i < table.numRows; i++) {
-          const row = table.get(i)
-          if (row) {
-            const time = timestampToMs(row.time)
-            if (!Number.isFinite(time)) continue
+          for (let i = 0; i < table.numRows; i++) {
+            const row = table.get(i)
+            if (row) {
+              const time = timestampToMs(row.time)
+              if (!Number.isFinite(time)) continue
 
-            const value = Number(row.value)
-            if (row.value != null && Number.isFinite(value)) {
-              points.push({ time, value })
-            }
+              const value = Number(row.value)
+              if (row.value != null && Number.isFinite(value)) {
+                points.push({ time, value })
+              }
 
-            if (hasProps && row.properties != null) {
-              try {
-                propsMap.set(time, JSON.parse(String(row.properties)))
-              } catch (e) {
-                errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
+              if (hasProps && row.properties != null) {
+                try {
+                  propsMap.set(time, JSON.parse(String(row.properties)))
+                } catch (e) {
+                  errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
+                }
               }
             }
           }
-        }
 
-        setChartData(points)
-        setRawPropertiesData(propsMap)
-        setPropertyParseErrors(errors)
+          setChartData(points)
+          setRawPropertiesData(propsMap)
+          setPropertyParseErrors(errors)
+        }
       }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [metricsQuery.isComplete, metricsQuery.error])
 

@@ -204,7 +204,13 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const [copiedRowIdx, setCopiedRowIdx] = useState<number | null>(null)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => { setCopiedRowIdx(null) }, [pagination.currentPage])
+  // copiedRowIdx's own useState initializer is already null, so a dropped
+  // mount-time run here is a no-op.
+  const [prevCurrentPage, setPrevCurrentPage] = useState(pagination.currentPage)
+  if (pagination.currentPage !== prevCurrentPage) {
+    setPrevCurrentPage(pagination.currentPage)
+    setCopiedRowIdx(null)
+  }
 
   useEffect(() => {
     return () => {

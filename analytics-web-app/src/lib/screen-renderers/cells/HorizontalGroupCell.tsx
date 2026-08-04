@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -292,10 +292,14 @@ function ChildEditorView({
   const [editedName, setEditedName] = useState(child.name)
   const [nameError, setNameError] = useState<string | null>(null)
 
-  useEffect(() => {
+  // editedName's own useState initializer already derives from child.name,
+  // so a dropped mount-time run here is a no-op.
+  const [prevChildName, setPrevChildName] = useState(child.name)
+  if (child.name !== prevChildName) {
+    setPrevChildName(child.name)
     setEditedName(child.name)
     setNameError(null)
-  }, [child.name])
+  }
 
   const handleNameChange = useCallback(
     (value: string) => {

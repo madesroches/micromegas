@@ -76,19 +76,27 @@ export function MetricsRenderer({
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(query.isLoading) }, [query.isLoading, onExecutingChange])
 
-  // Sync scale mode from config when loaded
-  useEffect(() => {
+  // Sync scale mode from config when loaded. scaleMode's own useState
+  // initializer already derives from this same config value, so a dropped
+  // mount-time run here is a no-op.
+  const [prevScaleModeOption, setPrevScaleModeOption] = useState(metricsConfig.metrics_options?.scale_mode)
+  if (metricsConfig.metrics_options?.scale_mode !== prevScaleModeOption) {
+    setPrevScaleModeOption(metricsConfig.metrics_options?.scale_mode)
     if (metricsConfig.metrics_options?.scale_mode) {
       setScaleMode(metricsConfig.metrics_options.scale_mode)
     }
-  }, [metricsConfig.metrics_options?.scale_mode])
+  }
 
-  // Sync chart type from config when loaded
-  useEffect(() => {
+  // Sync chart type from config when loaded. chartType's own useState
+  // initializer already derives from this same config value, so a dropped
+  // mount-time run here is a no-op.
+  const [prevChartTypeOption, setPrevChartTypeOption] = useState(metricsConfig.metrics_options?.chart_type)
+  if (metricsConfig.metrics_options?.chart_type !== prevChartTypeOption) {
+    setPrevChartTypeOption(metricsConfig.metrics_options?.chart_type)
     if (metricsConfig.metrics_options?.chart_type) {
       setChartType(metricsConfig.metrics_options.chart_type)
     }
-  }, [metricsConfig.metrics_options?.chart_type])
+  }
 
   // Sync time range changes to config
   useTimeRangeSync({

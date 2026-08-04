@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import type { Table } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
@@ -47,11 +47,15 @@ export function CellEditor({
   const [editedName, setEditedName] = useState(cell.name)
   const [nameError, setNameError] = useState<string | null>(null)
 
-  // Reset local state when cell changes
-  useEffect(() => {
+  // Reset local state when cell changes. editedName's own useState
+  // initializer already derives from cell.name, so a dropped mount-time run
+  // here is a no-op.
+  const [prevCellName, setPrevCellName] = useState(cell.name)
+  if (cell.name !== prevCellName) {
+    setPrevCellName(cell.name)
     setEditedName(cell.name)
     setNameError(null)
-  }, [cell.name])
+  }
 
   // Save name changes with validation
   const handleNameChange = useCallback(

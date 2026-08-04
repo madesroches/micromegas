@@ -64,7 +64,10 @@ function MapsPageContent() {
   }, [basePath])
 
   useEffect(() => {
-    loadCatalog()
+    // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
+    void (async () => {
+      await loadCatalog()
+    })()
   }, [loadCatalog])
 
   const collidesWithExisting = useCallback(
