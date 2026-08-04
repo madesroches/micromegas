@@ -234,9 +234,32 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
   will change hue. Enumerate those sites during implementation and add an explicit ring color where the
   rendered color mattered. Low count, visual-only.
 - **Browser support floor rises to Safari 16.4+ / Chrome 111+ / Firefox 128+.** `package.json` has no
-  `browserslist` field and there is no `.browserslistrc` (the `browserslist ^4.28.1` devDep is a
-  transitive-pin artifact, not a target declaration), so nothing to edit — but this is a user-visible
-  change and belongs in the changelog entry.
+  `browserslist` field and there is no `.browserslistrc` — the `browserslist ^4.28.1` and
+  `baseline-browser-mapping` devDeps (plus the `baseline-browser-mapping` `resolutions` pin) exist solely
+  as transitive dependencies of `autoprefixer` (confirmed via `yarn why`), not as a target declaration.
+  Once Commit 3 drops `autoprefixer` (see below), both become orphaned and are removed alongside it — see
+  Commit 3 step 3. Nothing else to edit here, but the browser-floor change is user-visible and belongs in
+  the changelog entry.
+- **Opacity modifiers on bare-`var(--…)` theme colors are dead in v3, live in v4.** v3 cannot apply an
+  alpha channel to a bare `var(--x)` color reference and silently drops the utility entirely — only the
+  `hsl(var(--…))`-based color families (e.g. `bg-background/50`) survive an opacity modifier today. v4
+  compiles every `/opacity` modifier to `color-mix(in oklab, var(--x) N%, transparent)` regardless of
+  which color form is behind it, so these currently-dead classes come to life. Verified by compiling a
+  reduced copy of `tailwind.config.ts` under both `tailwindcss@3.4.19` and `tailwindcss@4.3.3` via
+  `@config`. A grep over `src` for the bare-`var()` color families with an opacity modifier finds ~106
+  sites, topped by `bg-theme-border/50` (19), `bg-accent-link/5` (9), `bg-accent-error/10` (9),
+  `ring-accent-link/50` (7), `bg-accent-link/20` (6), `border-accent-error/30` (5), `bg-app-card/50` (4),
+  `divide-theme-border/50` (3), and others. This is the same "previously-dead rule coming to life" pattern
+  as the `DateTimePicker.css` case below, but two orders of magnitude larger and app-wide. Cover these
+  sites in Commit 3 step 6's visual pass, dropping the modifier at any site where the opaque color turns
+  out to be the intended look.
+- **`space-*`/`divide-*` selector rewrite.** v3 emits `.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: … }`; v4 emits `:where(.space-y-2 > :not(:last-child)) { margin-block-end: … }` (verified by
+  compiling `space-y-2 divide-y` under both versions). Three behavioral deltas: `[hidden]` children now
+  contribute spacing, the margin moves from the following element's top to the preceding element's
+  bottom, and the `:where()` wrapper drops specificity to 0 so any child-level margin utility now wins.
+  A grep over `src` finds 60 `space-[xy]-*` and 6 `divide-*` occurrences (66 total). Cover these layouts
+  in Commit 3 step 6's visual pass.
 - **Buttons lose default `cursor: pointer`.** Installed `tailwindcss@3.4.19`'s
   `src/css/preflight.css:343-346` sets `button, [role="button"] { cursor: pointer }`; that rule does not
   exist in `tailwindcss@4.3.3`'s preflight. The app has 117 `<button>` tags plus 6 `role="button"`
@@ -245,11 +268,13 @@ apply because `globals.css` *is* the entry stylesheet that imports Tailwind.
   `globals.css`'s `@layer base`: `button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer
   }`.
 - **Input placeholder color changes.** Installed `tailwindcss@3.4.19`'s `src/css/preflight.css:333-337`
-  sets `input::placeholder, textarea::placeholder { color: theme('colors.gray.400') }`; that rule is also
-  absent from v4's preflight, so placeholders fall back to the browser default. 43 `placeholder=`
-  attributes exist in `src` against only 7 explicit `placeholder-*` color classes. Add an explicit
-  `input::placeholder, textarea::placeholder` color rule to `globals.css`'s `@layer base` to preserve the
-  current look.
+  sets `input::placeholder, textarea::placeholder { color: theme('colors.gray.400') }` (`#9ca3af`). v4's
+  `preflight.css` (lines 287-301) does not fall back to the browser default — it sets `::placeholder {
+  opacity: 1 }` and, under an `@supports` guard, `::placeholder { color: color-mix(in oklab, currentcolor
+  50%, transparent) }`, i.e. a 50%-transparent current text color. So this is a different placeholder
+  color, not an absent one. 43 `placeholder=` attributes exist in `src` against only 7 explicit
+  `placeholder-*` color classes. Add an explicit `input::placeholder, textarea::placeholder` color rule to
+  `globals.css`'s `@layer base` to preserve the current look.
 
 #### Utility renames required
 
@@ -330,9 +355,13 @@ branch bisects cleanly.
 
 0. **Before touching `package.json`**, with ESLint 8 still installed, capture the pre-migration baseline
    against the still-live `.eslintrc.json`: `yarn eslint . -f json | jq 'length'` (or the file list). On
-   the current tree this is **253 files (131 `.tsx`, 122 `.ts`)** — record this number for the step 5
-   comparison, since ESLint 10 removes eslintrc support entirely and no eslintrc-based run is possible
-   once step 2 installs it.
+   the current tree this is **253 files (131 `.tsx`, 122 `.ts`)**, and **zero** `.js`/`.mjs` files — record
+   the `.ts`/`.tsx` split for the step 5 comparison, since ESLint 10 removes eslintrc support entirely and
+   no eslintrc-based run is possible once step 2 installs it. Flat config lints `**/*.js`/`.cjs`/`.mjs` by
+   default in addition to whatever `files` names, so the post-migration total is **not** expected to stay
+   at 253 — it additionally picks up the new `eslint.config.js` and, until Commit 3 deletes it,
+   `postcss.config.mjs` (255 files here; 254 once Commit 3 removes `postcss.config.mjs`). Comparing raw
+   totals would flag a correct migration as a regression; see Testing Strategy.
 1. `analytics-web-app/package.json` devDeps: bump `eslint` → `^10.8.0`,
    `eslint-plugin-react-refresh` → `^0.5.3`, `eslint-plugin-react-hooks` → `^7.1.1`; add
    `@eslint/js ^10.0.1`, `typescript-eslint ^8.66.0`, `globals ^17.9.0`; remove
@@ -345,7 +374,8 @@ branch bisects cleanly.
    (`no-unassigned-vars`, `no-useless-assignment`, `preserve-caught-error`) — fix these; **(b)** new
    `react-hooks` v7 rules — apply the Design's mitigation ladder (fix / demote to `warn` / turn off the
    React-Compiler rule family). Whichever is chosen, note it in the commit message.
-5. Confirm lint coverage did not shrink (see Testing Strategy).
+5. Confirm the 253 `.ts`/`.tsx` files are all still linted, plus the two newly-in-scope non-TS files (see
+   Testing Strategy) — 255 files total at this point, not 253.
 6. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Commit 3 — `tailwindcss` 3 → 4 (+ `tailwind-merge` 3)
@@ -361,9 +391,12 @@ branch bisects cleanly.
      alone) so `rounded-xs` stays value-preserving.
 3. Switch the build pipeline to the Vite plugin: add `@tailwindcss/vite ^4.3.3` to devDeps, add
    `tailwindcss()` to the `plugins` array in `analytics-web-app/vite.config.ts`, delete
-   `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep. Keep the `postcss`
-   devDep and the `postcss` `resolutions` pin (both are security-pin machinery for transitive users,
-   independent of Tailwind).
+   `analytics-web-app/postcss.config.mjs`, and remove the `autoprefixer` devDep. `autoprefixer` is the only
+   dependent of `browserslist` and `baseline-browser-mapping` (`yarn why` confirms both resolve through it
+   alone; `tasks/completed/vitest_migration_plan.md` records this same pair being kept specifically "for
+   `autoprefixer`"), so remove the `browserslist` and `baseline-browser-mapping` devDeps and the
+   `baseline-browser-mapping` entry in `resolutions` too. Keep the `postcss` devDep and the `postcss`
+   `resolutions` pin (both are security-pin machinery for transitive users, independent of Tailwind).
 4. `analytics-web-app/package.json`: `"tailwindcss": "^3.3.0"` → `"^4.3.3"`,
    `"tailwind-merge": "^2.0.0"` → `"^3.6.0"`. Leave `@tailwindcss/typography ^0.5.19` alone — the
    existing caret range already admits the v4-compatible `0.5.20`.
@@ -371,8 +404,10 @@ branch bisects cleanly.
 6. Manual visual pass against a running app (`python3 local_test_env/ai_scripts/start_services.py
    --monolith`, then `yarn dev`): specifically the `ring-1`/`ring-2`-without-a-color sites, the
    `DateTimePicker` calendar for the `--color-*` variable question above, that buttons/`role="button"`
-   elements still show a pointer cursor, and that input/textarea placeholders still render in the
-   expected muted color.
+   elements still show a pointer cursor, that input/textarea placeholders still render in the expected
+   muted color, the ~106 now-live `/opacity`-modified `var(--…)` color sites (dropping the modifier where
+   the opaque color was the intended look), and the 66 `space-*`/`divide-*` layouts affected by the
+   selector rewrite.
 7. Full `python3 build/analytics_web_ci.py`, then commit.
 
 ### Final — changelog
@@ -397,7 +432,9 @@ part of the same change. Also record the documented hold on `grafana/`'s React 1
 - `analytics-web-app/src/**` — only if new-rule findings need fixes
 
 **Commit 3**
-- `analytics-web-app/package.json` — `tailwindcss`, `tailwind-merge`, `@tailwindcss/vite`; drop `autoprefixer`
+- `analytics-web-app/package.json` — `tailwindcss`, `tailwind-merge`, `@tailwindcss/vite`; drop
+  `autoprefixer`, `browserslist`, `baseline-browser-mapping`, and the `baseline-browser-mapping`
+  `resolutions` entry
 - `analytics-web-app/yarn.lock`
 - `analytics-web-app/src/styles/globals.css` — `@import` + `@config`
 - `analytics-web-app/vite.config.ts` — add `tailwindcss()` plugin
@@ -414,12 +451,12 @@ Not modified: anything under `grafana/` (see the documented hold).
 
 ## Trade-offs
 
-- **One PR with three atomic commits, vs. the issue's "do as separate PRs".** The issue asked for
-  separate PRs because each bump is independently breaking. Three commits on one branch, each
-  independently CI-green, preserves the property that actually matters — bisectability and a clean
+- **One PR with three atomic commits, vs. the issue's "do as separate PRs" — settled: one PR.** The
+  issue asked for separate PRs because each bump is independently breaking. Three commits on one branch,
+  each independently CI-green, preserves the property that actually matters — bisectability and a clean
   revert per bump — while keeping one review thread for what is one coherent maintenance task in one
-  package. If review prefers the original split, the branch can be cut at the commit boundaries with no
-  rework. Flagging this because it is a deliberate deviation from the issue text.
+  package. This is a deliberate deviation from the issue text; it was raised with the repo owner, who
+  confirmed one PR. Not open for re-litigation during review.
 - **`@config` now, `@theme` later.** Keeping `tailwind.config.ts` is the low-risk path and is fully
   supported in v4. The cost is staying on a compatibility shim and keeping the theme split across a TS
   file and CSS variables. Porting ~60 color entries to `@theme` is a mechanical but transcription-risky
@@ -457,11 +494,14 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
   PR check.
 - **Commit 1 specific**: assert the lockfile dedupe (`grep -n '^"date-fns' analytics-web-app/yarn.lock`
   should show one entry, not two).
-- **Commit 2 specific — lint coverage must not silently shrink.** Flat config lints only JS unless
-  `files` says otherwise, so a mis-scoped config can pass `yarn lint` by checking almost nothing.
-  Compare `yarn eslint . --debug 2>&1 | grep -c 'Linting'` (or the file list from
-  `yarn eslint . -f json`) against the pre-migration baseline captured in Commit 2 step 0, before
-  `eslint` was bumped: **253 files (131 `.tsx`, 122 `.ts`)**. The counts should match.
+- **Commit 2 specific — lint coverage must not silently shrink.** Flat config lints `**/*.js`/`.cjs`/`.mjs`
+  by default *plus* whatever extensions `files` adds, so a mis-scoped config can pass `yarn lint` by
+  checking almost nothing — but it also means the raw file *total* is the wrong thing to diff, since flat
+  config newly picks up `eslint.config.js` itself and (until Commit 3 deletes it) `postcss.config.mjs`.
+  Compare the **`.ts`/`.tsx` subset** of the file list from `yarn eslint . -f json` against the
+  pre-migration baseline captured in Commit 2 step 0: all 253 `.ts`/`.tsx` files (131 `.tsx`, 122 `.ts`)
+  must still be present. The raw total is expected to be **255** in Commit 2 (253 + `eslint.config.js` +
+  `postcss.config.mjs`) and **254** after Commit 3 removes `postcss.config.mjs` — not equal to 253.
 - **Commit 3 specific**: `yarn build` must succeed and emit CSS; then a manual pass in `yarn dev`
   covering the areas the default-value analysis flagged — the colorless `ring-1`/`ring-2` sites, and the
   `DateTimePicker` calendar (the `--color-*` question). Spot-check a few high-traffic screens for the
@@ -487,8 +527,9 @@ which is unchanged; neither names the config file, the ESLint version, or Tailwi
 
 ## Open Questions
 
-None blocking. Two decisions are deliberately made in-plan and recorded here so review can override
-cheaply: **ESLint 10 rather than 9** (Trade-offs), and **`@config` rather than porting the theme to
-`@theme`** (Trade-offs). The `react-hooks` v7 noise level is unknown until `yarn install` + `yarn lint`
-runs, which is why it is written as a mitigation ladder rather than a question — implementation resolves
-it from the actual output.
+None. Two decisions are deliberately made in-plan and recorded so review can override cheaply:
+**ESLint 10 rather than 9** (Trade-offs), and **`@config` rather than porting the theme to `@theme`**
+(Trade-offs). A third — **one PR rather than the issue's "separate PRs"** — was raised with the repo
+owner and confirmed as one PR (Trade-offs); it is settled, not open. The `react-hooks` v7 noise level is
+unknown until `yarn install` + `yarn lint` runs, which is why it is written as a mitigation ladder rather
+than a question — implementation resolves it from the actual output.
