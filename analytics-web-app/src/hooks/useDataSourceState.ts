@@ -1,4 +1,4 @@
-import { useState, useEffect, type Dispatch, type SetStateAction } from 'react'
+import { useState, type Dispatch, type SetStateAction } from 'react'
 import { useDefaultDataSource } from './useDefaultDataSource'
 
 interface DataSourceState {
@@ -16,11 +16,17 @@ export function useDataSourceState(): DataSourceState {
   const { name: defaultDataSource, error } = useDefaultDataSource()
   const [dataSource, setDataSource] = useState('')
 
-  useEffect(() => {
+  // useDefaultDataSource starts at '' until it resolves, and dataSource
+  // starts at '' too, so a dropped mount-time run has nothing to do yet.
+  const [prevDefaultDataSource, setPrevDefaultDataSource] = useState(defaultDataSource)
+  const [prevDataSource, setPrevDataSource] = useState(dataSource)
+  if (defaultDataSource !== prevDefaultDataSource || dataSource !== prevDataSource) {
+    setPrevDefaultDataSource(defaultDataSource)
+    setPrevDataSource(dataSource)
     if (!dataSource && defaultDataSource) {
       setDataSource(defaultDataSource)
     }
-  }, [defaultDataSource, dataSource])
+  }
 
   return { dataSource, setDataSource, error }
 }

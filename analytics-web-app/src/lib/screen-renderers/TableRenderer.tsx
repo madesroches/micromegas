@@ -9,6 +9,7 @@ import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
 import { getTimeRangeForApi } from '@/lib/time-range'
@@ -79,8 +80,7 @@ export function TableRenderer({
 
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(tableConfig.sql)
-  const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  const executeRef = useLatestRef(streamQuery.execute)
 
   // Build ORDER BY value from sort state
   const orderByValue = buildOrderByClause(sortColumn, sortDirection)
@@ -109,7 +109,7 @@ export function TableRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [rawTimeRange, orderByValue, effectiveDataSource]
+    [rawTimeRange, orderByValue, effectiveDataSource, executeRef]
   )
 
   // Initial query execution (wait for dataSource to resolve)

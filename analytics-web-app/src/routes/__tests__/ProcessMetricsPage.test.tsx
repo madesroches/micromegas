@@ -8,6 +8,7 @@
  */
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useSearchParams } from 'react-router'
+import { useEffect, useState } from 'react'
 import type { Mock } from 'vitest'
 import { tableFromArrays } from 'apache-arrow'
 import ProcessMetricsPage from '../ProcessMetricsPage'
@@ -23,8 +24,18 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
 
+// useDefaultDataSource always starts at '' and resolves asynchronously via
+// its own effect (see useDataSourceState's render-time-diff logic, which
+// relies on that contract to adopt the default once it resolves); mirror
+// that here instead of returning a resolved value on the very first render.
 vi.mock('@/hooks/useDefaultDataSource', () => ({
-  useDefaultDataSource: () => ({ name: 'ds', error: null }),
+  useDefaultDataSource: () => {
+    const [state, setState] = useState({ name: '', error: null })
+    useEffect(() => {
+      setState({ name: 'ds', error: null })
+    }, [])
+    return state
+  },
 }))
 
 // PageLayout pulls in header/sidebar; stub it to a pass-through.

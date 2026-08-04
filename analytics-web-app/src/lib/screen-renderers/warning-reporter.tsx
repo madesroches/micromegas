@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useCallback, useRef, useState } from 'react'
+import { createContext, useCallback, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 
 export type ReportWarning = (columnKey: string, warning: string) => void
@@ -48,9 +48,9 @@ export function useColumnWarnings(overridesSource: unknown): {
   // format to another bad format. The inline reset triggers an immediate
   // re-render with an empty Map; on that fresh render the children re-evaluate
   // their templates and post any new warnings.
-  const prevHashRef = useRef(overridesHash)
-  if (overridesHash !== prevHashRef.current) {
-    prevHashRef.current = overridesHash
+  const [prevHash, setPrevHash] = useState(overridesHash)
+  if (overridesHash !== prevHash) {
+    setPrevHash(overridesHash)
     setColumnWarnings(new Map())
   }
 

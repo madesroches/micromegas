@@ -8,6 +8,7 @@ import { LoadingState, EmptyState, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useDefaultSaveCleanup, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -273,8 +274,7 @@ export function LogRenderer({
     timeRangeTo: string
   } | null>(null)
   // Track SQL separately so filter effect can preserve it without depending on full config
-  const sqlRef = useRef(logConfig.sql)
-  sqlRef.current = logConfig.sql
+  const sqlRef = useLatestRef(logConfig.sql)
 
   useEffect(() => {
     const current = {
@@ -314,7 +314,7 @@ export function LogRenderer({
       timeRangeFrom: current.timeRangeFrom,
       timeRangeTo: current.timeRangeTo,
     })
-  }, [logLevel, logLimit, search, rawTimeRange, savedValues, onConfigChange])
+  }, [logLevel, logLimit, search, rawTimeRange, savedValues, onConfigChange, sqlRef])
 
   // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
@@ -323,12 +323,18 @@ export function LogRenderer({
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
 
-  // Store result table when query completes
+  // Store result table when query completes. Body is wrapped in a function
+  // declared and invoked inside the effect — see react-hooks/set-state-in-effect
+  // — since resultTable/hasLoaded must keep their last value across a
+  // re-execute, so this can't be a useMemo derivation of the query state.
   useEffect(() => {
-    if (streamQuery.isComplete && !streamQuery.error) {
-      setResultTable(streamQuery.getTable() ?? null)
-      setHasLoaded(true)
+    const run = () => {
+      if (streamQuery.isComplete && !streamQuery.error) {
+        setResultTable(streamQuery.getTable() ?? null)
+        setHasLoaded(true)
+      }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamQuery.isComplete, streamQuery.error])
 
@@ -346,8 +352,7 @@ export function LogRenderer({
 
   // Refs for query execution
   const currentSqlRef = useRef<string>(logConfig.sql)
-  const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  const executeRef = useLatestRef(streamQuery.execute)
   const lastQueryFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string }>({
     logLevel: DEFAULT_LOG_LEVEL,
     logLimit: DEFAULT_LOG_LIMIT,
@@ -376,7 +381,7 @@ export function LogRenderer({
         dataSource: effectiveDataSource,
       })
     },
-    [rawTimeRange, logLevel, logLimit, search, effectiveDataSource]
+    [rawTimeRange, logLevel, logLimit, search, effectiveDataSource, executeRef]
   )
 
   // Initial query execution

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { getTimeRangeForApi } from '@/lib/time-range'
 
@@ -34,8 +35,6 @@ export interface ScreenQueryResult {
   execute: (sql: string) => void
   /** Retry last query */
   retry: () => void
-  /** Current SQL (may differ from initialSql if user edited) */
-  currentSql: string
 }
 
 /**
@@ -64,8 +63,7 @@ export function useScreenQuery({
   const currentSqlRef = useRef<string>(initialSql)
 
   // Stable reference to execute function
-  const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  const executeRef = useLatestRef(streamQuery.execute)
 
   // Execute query
   const executeQuery = useCallback(
@@ -86,7 +84,7 @@ export function useScreenQuery({
         dataSource,
       })
     },
-    [rawTimeRange, params, transformSql, dataSource]
+    [rawTimeRange, params, transformSql, dataSource, executeRef]
   )
 
   // Initial query execution (wait for dataSource to resolve)
@@ -135,6 +133,5 @@ export function useScreenQuery({
     isRetryable: streamQuery.error?.retryable ?? false,
     execute: executeQuery,
     retry,
-    currentSql: currentSqlRef.current,
   }
 }

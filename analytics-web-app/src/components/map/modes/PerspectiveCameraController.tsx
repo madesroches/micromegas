@@ -16,6 +16,7 @@ import {
   zUpOffsetToSphericalInput,
 } from '../map-camera-math'
 import { useMapOrbitController } from '../hooks/useMapOrbitController'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { MapModeRenderProps } from './types'
 
 // WASD speed derives from the current orbit radius so flying feels the same
@@ -41,8 +42,9 @@ export function PerspectiveCameraController({
 
   // mapScene is fixed for the controller's mount lifetime (MapViewer keys the
   // mode on mapUrl), but the hook and handlers read it through a ref.
-  const mapSceneRef = useRef<THREE.Object3D>(mapScene)
-  mapSceneRef.current = mapScene
+  // useLatestRef (not useEffect): refs are attached during commit —
+  // before any effect fires — matching useMapOrbitController's ordering.
+  const mapSceneRef = useLatestRef<THREE.Object3D>(mapScene)
 
   const { targetRef, sphericalRef } = useMapOrbitController<THREE.PerspectiveCamera>({
     cameraRef,
@@ -166,9 +168,11 @@ export function PerspectiveCameraController({
     if (resetViewTrigger !== prevResetViewTriggerRef.current && initialViewRef.current && camera) {
       prevResetViewTriggerRef.current = resetViewTrigger
       targetRef.current.copy(initialViewRef.current.target)
-      sphericalRef.current.radius = initialViewRef.current.spherical.radius
-      sphericalRef.current.phi = initialViewRef.current.spherical.phi
-      sphericalRef.current.theta = initialViewRef.current.spherical.theta
+      sphericalRef.current.set(
+        initialViewRef.current.spherical.radius,
+        initialViewRef.current.spherical.phi,
+        initialViewRef.current.spherical.theta
+      )
       zoomFactorRef.current = 1.0
       // Restore fitRadius alongside the spherical state. The GLB seed set
       // fitRadius equal to the initial spherical.radius; without restoring

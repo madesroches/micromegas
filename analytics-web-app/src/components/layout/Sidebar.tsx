@@ -102,13 +102,21 @@ export function Sidebar() {
   }, [])
 
   useEffect(() => {
-    loadFolders()
+    // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
+    void (async () => {
+      await loadFolders()
+    })()
   }, [loadFolders])
 
   useFoldersChangedListener(loadFolders)
 
-  // Keep the tree expanded down to whatever folder the URL points at.
-  useEffect(() => {
+  // Keep the tree expanded down to whatever folder the URL points at. Uses an
+  // `undefined` sentinel (distinct from every real `selectedFolder` value) so
+  // the derivation still runs on the very first render, since selectedFolder
+  // is synchronously available from the URL at mount.
+  const [prevSelectedFolder, setPrevSelectedFolder] = useState<string | null | undefined>(undefined)
+  if (selectedFolder !== prevSelectedFolder) {
+    setPrevSelectedFolder(selectedFolder)
     if (selectedFolder) {
       setExpandedPaths((prev) => {
         const next = new Set(prev)
@@ -117,10 +125,14 @@ export function Sidebar() {
         return next
       })
     }
-  }, [selectedFolder])
+  }
 
   // Also reveal the folder containing whatever screen is currently open.
-  useEffect(() => {
+  // activeScreen is undefined until the async `screens` load resolves, so a
+  // dropped mount-time run is a no-op here.
+  const [prevActiveScreen, setPrevActiveScreen] = useState(activeScreen)
+  if (activeScreen !== prevActiveScreen) {
+    setPrevActiveScreen(activeScreen)
     const folderPath = activeScreen?.folder_path
     if (folderPath) {
       setExpandedPaths((prev) => {
@@ -130,12 +142,17 @@ export function Sidebar() {
         return next
       })
     }
-  }, [activeScreen])
+  }
 
   // Keep the search box in sync with the URL (direct links, back/forward).
-  useEffect(() => {
-    setSearchQuery(isScreensPage ? searchParams.get('q') ?? '' : '')
-  }, [isScreensPage, searchParams])
+  // Same `undefined`-sentinel treatment as selectedFolder above, since
+  // searchParams is synchronously available at mount.
+  const desiredSearchQuery = isScreensPage ? searchParams.get('q') ?? '' : ''
+  const [prevDesiredSearchQuery, setPrevDesiredSearchQuery] = useState<string | undefined>(undefined)
+  if (desiredSearchQuery !== prevDesiredSearchQuery) {
+    setPrevDesiredSearchQuery(desiredSearchQuery)
+    setSearchQuery(desiredSearchQuery)
+  }
 
   const toggleExpand = useCallback((path: string) => {
     setExpandedPaths((prev) => {

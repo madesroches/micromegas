@@ -48,11 +48,16 @@ export function PerfettoExportCell({
     return () => abortRef.current?.abort()
   }, [])
 
-  // Clear cache when inputs change (processId, spanType, timeRange, or dataSource)
-  useEffect(() => {
+  // Clear cache when inputs change (processId, spanType, timeRange, or
+  // dataSource). cachedTraceBuffer/cachedTraceTimeRange both initialize to
+  // null, so a dropped mount-time run here is a no-op.
+  const cacheInputsKey = `${processId}|${spanType}|${timeRange.begin}|${timeRange.end}|${dataSource}`
+  const [prevCacheInputsKey, setPrevCacheInputsKey] = useState(cacheInputsKey)
+  if (cacheInputsKey !== prevCacheInputsKey) {
+    setPrevCacheInputsKey(cacheInputsKey)
     setCachedTraceBuffer(null)
     setCachedTraceTimeRange(null)
-  }, [processId, spanType, timeRange.begin, timeRange.end, dataSource])
+  }
 
   // Cache validation
   const canUseCachedBuffer = useCallback(() => {

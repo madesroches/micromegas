@@ -12,6 +12,7 @@ import { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Overlay, OverlayConstants, Shape } from './overlay'
 import { patchInstanceColorRGBA } from './shader-patches'
+import { useLatestRef } from '@/hooks/useLatestRef'
 
 interface InstancedMarkersProps {
   overlay: Overlay
@@ -57,14 +58,18 @@ export function MapInstancedMarkers({
   // Clear hover synchronously when the overlay changes. Without this, a
   // stale hoveredRowIndex from the previous table would index a different
   // point in the new one, briefly highlighting the wrong marker until the
-  // next pointer event corrected it. Also cancel any pending hover-flush frame:
-  // a rAF queued by a pointer-move just before the swap would otherwise fire
-  // against the new table, re-surfacing a stale/empty tooltip for one frame.
-  // Mirrors the selection-clear pattern in MapCell.
+  // next pointer event corrected it. Mirrors the selection-clear pattern in
+  // MapCell.
   const [overlayForHover, setOverlayForHover] = useState(overlay)
   if (overlayForHover !== overlay) {
     setOverlayForHover(overlay)
     setHoveredRowIndex(null)
+    // MapCell wraps the overlay-recomputing config update in startTransition,
+    // so this render can be interrupted before it commits — the browser may
+    // paint (and run a queued rAF) in that window. Cancelling here, in the
+    // render phase, closes that gap; a layout effect would only cancel at
+    // commit, which is too late if a hover-flush frame fires in between.
+    // eslint-disable-next-line react-hooks/refs -- cancelHoverFlush touches refs but must run during this render to close the startTransition interruption window; see comment above
     cancelHoverFlush()
   }
 
@@ -102,8 +107,7 @@ export function MapInstancedMarkers({
   // most one tooltip reposition lands per paint regardless of move frequency.
   // `onHover` lives in a ref so the pointer handlers stay stable (the prop is
   // an inline arrow from MapCell that would otherwise re-create them).
-  const onHoverRef = useRef(onHover)
-  onHoverRef.current = onHover
+  const onHoverRef = useLatestRef(onHover)
 
   // Destructure into primitives so the effect dep arrays compare by value,
   // not by `constants` object identity. Without this split, a fresh
@@ -355,7 +359,7 @@ export function MapInstancedMarkers({
       // Surface the tooltip on enter even before the first move.
       onHoverRef.current?.(rowIdx, e.clientX, e.clientY)
     },
-    [overlay]
+    [overlay, onHoverRef]
   )
 
   // rAF-throttled: stash the latest instance id + cursor position, then flush
@@ -378,7 +382,7 @@ export function MapInstancedMarkers({
         onHoverRef.current?.(pending.rowIndex, pending.x, pending.y)
       })
     },
-    [overlay]
+    [overlay, onHoverRef]
   )
 
   const handlePointerOut = useCallback(() => {
@@ -386,7 +390,7 @@ export function MapInstancedMarkers({
     document.body.style.cursor = 'auto'
     cancelHoverFlush()
     onHoverRef.current?.(null, 0, 0)
-  }, [cancelHoverFlush])
+  }, [cancelHoverFlush, onHoverRef])
 
   if (overlay.table.numRows === 0) return null
 

@@ -84,19 +84,17 @@ function ImportScreensPageContent() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
-  const loadExistingScreens = useCallback(async () => {
-    try {
-      const [screensData, typesData] = await Promise.all([listScreens(), getScreenTypes()])
-      setExistingScreens(screensData)
-      setScreenTypes(typesData)
-    } catch (err) {
-      setError(err instanceof ScreenApiError ? err.message : 'Failed to load existing screens')
-    }
-  }, [])
-
   useEffect(() => {
-    loadExistingScreens()
-  }, [loadExistingScreens])
+    void (async () => {
+      try {
+        const [screensData, typesData] = await Promise.all([listScreens(), getScreenTypes()])
+        setExistingScreens(screensData)
+        setScreenTypes(typesData)
+      } catch (err) {
+        setError(err instanceof ScreenApiError ? err.message : 'Failed to load existing screens')
+      }
+    })()
+  }, [])
 
   const screenTypeMap = useMemo(() => {
     const map = new Map<ScreenTypeName, ScreenTypeInfo>()

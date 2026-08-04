@@ -77,42 +77,50 @@ export function useMetricsData({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- query.cancel is stable
   }, [query.cancel])
 
-  // Extract data when query completes
+  // Extract data when query completes. Body is wrapped in a function
+  // declared and invoked inside the effect — see react-hooks/set-state-in-effect
+  // — since chartData/rawPropertiesData/propertyParseErrors must keep their
+  // last value across a re-execute (see the "don't clear data immediately"
+  // comment in execute() above), so this can't be a useMemo derivation of
+  // the query state.
   useEffect(() => {
-    if (query.isComplete && !query.error) {
-      const table = query.getTable()
-      if (table) {
-        const points: { time: number; value: number }[] = []
-        const propsMap = new Map<number, Record<string, unknown>>()
-        const errors: string[] = []
+    const run = () => {
+      if (query.isComplete && !query.error) {
+        const table = query.getTable()
+        if (table) {
+          const points: { time: number; value: number }[] = []
+          const propsMap = new Map<number, Record<string, unknown>>()
+          const errors: string[] = []
 
-        for (let i = 0; i < table.numRows; i++) {
-          const row = table.get(i)
-          if (row) {
-            const time = timestampToMs(row.time)
-            if (!Number.isFinite(time)) continue
+          for (let i = 0; i < table.numRows; i++) {
+            const row = table.get(i)
+            if (row) {
+              const time = timestampToMs(row.time)
+              if (!Number.isFinite(time)) continue
 
-            const value = Number(row.value)
-            if (row.value != null && Number.isFinite(value)) {
-              points.push({ time, value })
-            }
+              const value = Number(row.value)
+              if (row.value != null && Number.isFinite(value)) {
+                points.push({ time, value })
+              }
 
-            const propsStr = row.properties
-            if (propsStr != null) {
-              try {
-                propsMap.set(time, JSON.parse(String(propsStr)))
-              } catch (e) {
-                errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
+              const propsStr = row.properties
+              if (propsStr != null) {
+                try {
+                  propsMap.set(time, JSON.parse(String(propsStr)))
+                } catch (e) {
+                  errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
+                }
               }
             }
           }
-        }
 
-        setChartData(points)
-        setRawPropertiesData(propsMap)
-        setPropertyParseErrors(errors)
+          setChartData(points)
+          setRawPropertiesData(propsMap)
+          setPropertyParseErrors(errors)
+        }
       }
     }
+    run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [query.isComplete, query.error])
 

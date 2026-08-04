@@ -66,7 +66,7 @@ function PerformanceAnalysisContent() {
     try {
       return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
     } catch {
-      return { label: 'Last 1 hour', from: new Date(Date.now() - 3600000), to: new Date() }
+      return parseTimeRange('now-1h', 'now')
     }
   }, [config.timeRangeFrom, config.timeRangeTo])
 

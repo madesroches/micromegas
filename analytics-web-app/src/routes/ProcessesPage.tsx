@@ -1,4 +1,4 @@
-import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { Suspense, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -61,6 +61,44 @@ const buildUrl = (cfg: ProcessesConfig): string => {
   }
   const qs = params.toString()
   return qs ? `?${qs}` : ''
+}
+
+function SortHeader({
+  field,
+  sortField,
+  sortDirection,
+  onSort,
+  children,
+  className = '',
+}: {
+  field: SortField
+  sortField: SortField
+  sortDirection: SortDirection
+  onSort: (field: SortField) => void
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <th
+      onClick={() => onSort(field)}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        sortField === field
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+      } ${className}`}
+    >
+      <div className="flex items-center gap-1">
+        {children}
+        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
+          {sortField === field && sortDirection === 'asc' ? (
+            <ChevronUp className="w-3 h-3" />
+          ) : (
+            <ChevronDown className="w-3 h-3" />
+          )}
+        </span>
+      </div>
+    </th>
+  )
 }
 
 // Expand search string into SQL ILIKE clauses for multi-word search.
@@ -127,11 +165,13 @@ function ProcessesPageContent() {
   const queryError = streamQuery.error?.message ?? null
 
   const currentSqlRef = useRef(currentSql)
-  currentSqlRef.current = currentSql
 
   // Use ref to get latest execute function without causing re-renders
   const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
+  useLayoutEffect(() => {
+    currentSqlRef.current = currentSql
+    executeRef.current = streamQuery.execute
+  })
 
   const loadData = useCallback(
     (sql: string) => {
@@ -222,36 +262,6 @@ function ProcessesPageContent() {
     [apiTimeRange, config.search, sortField, sortDirection]
   )
 
-  const SortHeader = ({
-    field,
-    children,
-    className = '',
-  }: {
-    field: SortField
-    children: React.ReactNode
-    className?: string
-  }) => (
-    <th
-      onClick={() => handleSort(field)}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-        sortField === field
-          ? 'text-theme-text-primary bg-app-card'
-          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-      } ${className}`}
-    >
-      <div className="flex items-center gap-1">
-        {children}
-        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
-          {sortField === field && sortDirection === 'asc' ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : (
-            <ChevronDown className="w-3 h-3" />
-          )}
-        </span>
-      </div>
-    </th>
-  )
-
   const dataSourceContent = (
     <DataSourceField value={dataSource} onChange={setDataSource} />
   )
@@ -336,21 +346,49 @@ function ProcessesPageContent() {
               <table className="w-full">
                 <thead className="sticky top-0">
                   <tr className="bg-app-card border-b border-theme-border">
-                    <SortHeader field="exe">Process</SortHeader>
+                    <SortHeader field="exe" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
+                      Process
+                    </SortHeader>
                     <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
                       Process ID
                     </th>
-                    <SortHeader field="start_time">Start Time</SortHeader>
-                    <SortHeader field="last_update_time" className="hidden lg:table-cell">
+                    <SortHeader field="start_time" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
+                      Start Time
+                    </SortHeader>
+                    <SortHeader
+                      field="last_update_time"
+                      sortField={sortField}
+                      sortDirection={sortDirection}
+                      onSort={handleSort}
+                      className="hidden lg:table-cell"
+                    >
                       Last Update
                     </SortHeader>
-                    <SortHeader field="runtime" className="hidden lg:table-cell">
+                    <SortHeader
+                      field="runtime"
+                      sortField={sortField}
+                      sortDirection={sortDirection}
+                      onSort={handleSort}
+                      className="hidden lg:table-cell"
+                    >
                       Runtime
                     </SortHeader>
-                    <SortHeader field="username" className="hidden md:table-cell">
+                    <SortHeader
+                      field="username"
+                      sortField={sortField}
+                      sortDirection={sortDirection}
+                      onSort={handleSort}
+                      className="hidden md:table-cell"
+                    >
                       Username
                     </SortHeader>
-                    <SortHeader field="computer" className="hidden md:table-cell">
+                    <SortHeader
+                      field="computer"
+                      sortField={sortField}
+                      sortDirection={sortDirection}
+                      onSort={handleSort}
+                      className="hidden md:table-cell"
+                    >
                       Computer
                     </SortHeader>
                   </tr>

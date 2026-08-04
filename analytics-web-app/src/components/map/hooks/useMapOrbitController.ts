@@ -13,7 +13,7 @@
  * GLB-seed, reset-view, and zoom-invariant state stay in each per-mode
  * controller, which reads/writes the orbit refs returned here.
  */
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useLayoutEffect } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { RefObject } from 'react'
@@ -78,15 +78,22 @@ export function useMapOrbitController<
   // [domElement, camera] rather than rebinding every render as callback
   // identities change. The useFrame body reads the latest from the same refs.
   const onWheelRef = useRef(onWheel)
-  onWheelRef.current = onWheel
   const getPanSpeedRef = useRef(getPanSpeed)
-  getPanSpeedRef.current = getPanSpeed
   const getFlyMoveSpeedPerFrameRef = useRef(getFlyMoveSpeedPerFrame)
-  getFlyMoveSpeedPerFrameRef.current = getFlyMoveSpeedPerFrame
   const onRightDragReAnchorRef = useRef(onRightDragReAnchor)
-  onRightDragReAnchorRef.current = onRightDragReAnchor
   const onFlyZoomRef = useRef(onFlyZoom)
-  onFlyZoomRef.current = onFlyZoom
+
+  // useLayoutEffect (not useEffect): refs are attached during commit —
+  // before any effect fires — so this must run before the DOM-binding
+  // effect below reads cameraRef.current, matching layout effects' ordering
+  // ahead of passive effects.
+  useLayoutEffect(() => {
+    onWheelRef.current = onWheel
+    getPanSpeedRef.current = getPanSpeed
+    getFlyMoveSpeedPerFrameRef.current = getFlyMoveSpeedPerFrame
+    onRightDragReAnchorRef.current = onRightDragReAnchor
+    onFlyZoomRef.current = onFlyZoom
+  })
 
   useEffect(() => {
     // Read the camera inside the effect: refs are attached during commit

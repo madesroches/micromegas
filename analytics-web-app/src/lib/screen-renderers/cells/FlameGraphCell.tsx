@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -162,6 +162,10 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
   const keysRef = useRef(new Set<string>())
   const keyAnimRef = useRef(0)
 
+  // keyTickRef holds the latest keyTick so the RAF loop below can call
+  // through it instead of keyTick referencing itself directly.
+  const keyTickRef = useRef<() => void>(() => {})
+
   const keyTick = useCallback(() => {
     const s = stateRef.current
     const keys = keysRef.current
@@ -186,8 +190,12 @@ function FlameGraphView({ index, onTimeRangeSelect, initialTimeRange }: FlameGra
     }
 
     requestRender()
-    keyAnimRef.current = requestAnimationFrame(keyTick)
+    keyAnimRef.current = requestAnimationFrame(() => keyTickRef.current())
   }, [index, requestRender])
+
+  useLayoutEffect(() => {
+    keyTickRef.current = keyTick
+  })
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {

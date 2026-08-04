@@ -39,9 +39,13 @@ export function ImageCell({ data, status }: CellRendererProps) {
 
   const [currentIndex, setCurrentIndex] = useState(0)
 
-  useEffect(() => {
+  // Reset the index when the data table changes. currentIndex's own useState
+  // initializer is already 0, so a dropped mount-time run here is a no-op.
+  const [prevTable, setPrevTable] = useState(table)
+  if (table !== prevTable) {
+    setPrevTable(table)
     setCurrentIndex(0)
-  }, [table])
+  }
 
   const schemaError = useMemo(() => {
     if (!table || numRows === 0) return null
@@ -52,33 +56,40 @@ export function ImageCell({ data, status }: CellRendererProps) {
   const [rowError, setRowError] = useState<string | null>(null)
 
   useEffect(() => {
-    setBlobUrl(null)
-    setRowError(null)
+    // Body wrapped in a function declared and invoked (and returned) here —
+    // see react-hooks/set-state-in-effect — since this effect owns an
+    // object-URL lifecycle (revoke on next change/unmount) that a
+    // render-time comparison can't replace.
+    const run = () => {
+      setBlobUrl(null)
+      setRowError(null)
 
-    if (!table || numRows === 0 || schemaError) return
+      if (!table || numRows === 0 || schemaError) return
 
-    const row = table.get(currentIndex)
-    if (!row) return
+      const row = table.get(currentIndex)
+      if (!row) return
 
-    const fmt = String(row['format'] ?? '')
-    if (!fmt) {
-      setRowError('format is null or empty — cannot determine image MIME type')
-      return
+      const fmt = String(row['format'] ?? '')
+      if (!fmt) {
+        setRowError('format is null or empty — cannot determine image MIME type')
+        return
+      }
+
+      const bytes = row['data']
+      if (!bytes) {
+        setRowError('data is null')
+        return
+      }
+
+      const blob = new Blob([new Uint8Array(bytes as Uint8Array)], { type: fmt })
+      const url = URL.createObjectURL(blob)
+      setBlobUrl(url)
+
+      return () => {
+        URL.revokeObjectURL(url)
+      }
     }
-
-    const bytes = row['data']
-    if (!bytes) {
-      setRowError('data is null')
-      return
-    }
-
-    const blob = new Blob([new Uint8Array(bytes as Uint8Array)], { type: fmt })
-    const url = URL.createObjectURL(blob)
-    setBlobUrl(url)
-
-    return () => {
-      URL.revokeObjectURL(url)
-    }
+    return run()
   }, [table, currentIndex, numRows, schemaError])
 
   const navigate = useCallback(

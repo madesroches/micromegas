@@ -6,7 +6,7 @@
  * run/menu controls, and the nested cell renderer). Both are presentational —
  * the parent owns drag-and-drop orchestration and child state.
  */
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useLayoutEffect } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { CellRendererProps } from '../cell-registry'
-import { getCellTypeMetadata, getCellRenderer } from '../cell-registry'
+import { getCellTypeMetadata } from '../cell-registry'
 import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
 import type { CellConfig, CellState } from '../notebook-types'
 import { buildStatusText } from '../notebook-cell-view'
@@ -68,7 +68,9 @@ export function HgChildPane({
   dragHandleProps, isDragging, setNodeRef, style, showDivider, onChildRef,
 }: HgChildPaneProps) {
   const setNodeRefStable = useRef(setNodeRef)
-  setNodeRefStable.current = setNodeRef
+  useLayoutEffect(() => {
+    setNodeRefStable.current = setNodeRef
+  })
 
   const combinedRef = useCallback((el: HTMLElement | null) => {
     setNodeRefStable.current(el)
@@ -77,7 +79,7 @@ export function HgChildPane({
   const fadeClass = useFadeOnIdle(state.status)
 
   const meta = getCellTypeMetadata(child.type)
-  const CellRenderer = getCellRenderer(child.type)
+  const CellRenderer = meta.renderer
   const TitleBarRenderer = meta.titleBarRenderer
   const canRun = !!meta.execute
 

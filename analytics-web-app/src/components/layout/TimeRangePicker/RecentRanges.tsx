@@ -1,14 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Clock } from 'lucide-react'
 import { getRecentTimeRanges, type TimeRangeHistoryEntry } from '@/lib/time-range-history'
 import type { RecentRangesProps } from './types'
 
 export function RecentRanges({ onSelect }: RecentRangesProps) {
-  const [recentRanges, setRecentRanges] = useState<TimeRangeHistoryEntry[]>([])
-
-  useEffect(() => {
-    setRecentRanges(getRecentTimeRanges())
-  }, [])
+  const [recentRanges] = useState<TimeRangeHistoryEntry[]>(() => getRecentTimeRanges())
 
   if (recentRanges.length === 0) {
     return null

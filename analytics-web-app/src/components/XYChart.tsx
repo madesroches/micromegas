@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import {
@@ -8,6 +8,7 @@ import {
 } from '@/lib/time-units'
 import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
@@ -184,9 +185,11 @@ export function XYChart({
 
   // Use refs for callbacks to avoid chart recreation when callbacks change
   const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
-  onTimeRangeSelectRef.current = onTimeRangeSelect
   const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
-  onAxisBoundsChangeRef.current = onAxisBoundsChange
+  useLayoutEffect(() => {
+    onTimeRangeSelectRef.current = onTimeRangeSelect
+    onAxisBoundsChangeRef.current = onAxisBoundsChange
+  })
 
   // Reference line plugin state (updated without recreating chart)
   const refLineStateRef = useRef<{
@@ -292,8 +295,7 @@ export function XYChart({
   const displayUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
-  const onWidthChangeRef = useRef(onWidthChange)
-  onWidthChangeRef.current = onWidthChange
+  const onWidthChangeRef = useLatestRef(onWidthChange)
 
   // Track last reported width to avoid duplicate callbacks
   const lastReportedWidthRef = useRef<number | null>(null)
@@ -329,7 +331,7 @@ export function XYChart({
     }
 
     return () => resizeObserver.disconnect()
-  }, [measureContainer])
+  }, [measureContainer, onWidthChangeRef])
 
   // Handle window resize
   useEffect(() => {
@@ -343,7 +345,7 @@ export function XYChart({
 
     window.addEventListener('resize', handleWindowResize)
     return () => window.removeEventListener('resize', handleWindowResize)
-  }, [measureContainer])
+  }, [measureContainer, onWidthChangeRef])
 
   // Keep ref-line state in sync without recreating the chart
   useEffect(() => {
@@ -589,11 +591,14 @@ export function XYChart({
     []
   )
 
-  // Reset series visibility when series count changes
-  useEffect(() => {
+  // Reset series visibility when series count changes. seriesVisibility and
+  // isolatedSeries both initialize to null, so a dropped mount-time run is a no-op.
+  const [prevEffectiveSeriesCount, setPrevEffectiveSeriesCount] = useState(effectiveSeriesCount)
+  if (effectiveSeriesCount !== prevEffectiveSeriesCount) {
+    setPrevEffectiveSeriesCount(effectiveSeriesCount)
     setSeriesVisibility(null)
     setIsolatedSeries(null)
-  }, [effectiveSeriesCount])
+  }
 
   // Create/update chart
   useEffect(() => {

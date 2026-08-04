@@ -21,6 +21,7 @@ import {
   zUpOffsetToSphericalInput,
 } from '../map-camera-math'
 import { useMapOrbitController } from '../hooks/useMapOrbitController'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { MapModeRenderProps } from './types'
 
 // Half the visible world-height per second of fly travel at full hold — the
@@ -105,8 +106,9 @@ export function OrthographicCameraController({
 
   // mapScene is fixed for the controller's mount lifetime (MapViewer keys the
   // mode on mapUrl), but the hook and handlers read it through a ref.
-  const mapSceneRef = useRef<THREE.Object3D>(mapScene)
-  mapSceneRef.current = mapScene
+  // useLatestRef (not useEffect): refs are attached during commit —
+  // before any effect fires — matching useMapOrbitController's ordering.
+  const mapSceneRef = useLatestRef<THREE.Object3D>(mapScene)
 
   const { targetRef, sphericalRef } = useMapOrbitController<THREE.OrthographicCamera>({
     cameraRef,

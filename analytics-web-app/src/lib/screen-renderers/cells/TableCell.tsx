@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { Table2 } from 'lucide-react'
 import type {
   CellTypeMetadata,
@@ -23,6 +23,7 @@ import {
 } from '../table-utils'
 import { useColumnWarnings, WarningReporterContext } from '../warning-reporter'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
+import { useLatestRef } from '@/hooks/useLatestRef'
 
 // =============================================================================
 // Renderer Component
@@ -40,14 +41,19 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
   // Stable ref for onSelectionChange to avoid infinite re-render loop:
   // the callback is an inline arrow in NotebookRenderer, so including it
   // in the useEffect deps would fire the effect on every render.
-  const onSelectionChangeRef = useRef(onSelectionChange)
-  onSelectionChangeRef.current = onSelectionChange
+  const onSelectionChangeRef = useLatestRef(onSelectionChange)
 
-  // Clear selection when data changes (re-execution)
+  // Clear selection when data changes (re-execution). Body wrapped in a
+  // function declared and invoked here — see react-hooks/set-state-in-effect
+  // — since it also notifies the parent through onSelectionChangeRef, a
+  // side effect beyond a pure state mirror that must stay inside the effect.
   useEffect(() => {
-    setSelectedRowIndex(null)
-    onSelectionChangeRef.current?.(null)
-  }, [table])
+    const run = () => {
+      setSelectedRowIndex(null)
+      onSelectionChangeRef.current?.(null)
+    }
+    run()
+  }, [table, onSelectionChangeRef])
 
   const handleRowSelect = useCallback(
     (rowIndex: number | null) => {
@@ -67,7 +73,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
         }
       }
     },
-    [table],
+    [table, onSelectionChangeRef],
   )
 
   // Column management (sort, hide/restore)

@@ -7,7 +7,7 @@
  * and lifts the gate-relevant view-state (hasLoaded, loading, chart time range,
  * parse errors) to the page so the page keeps owning the re-fetch gate (#1089).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { Clock } from 'lucide-react'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { executeStreamQuery } from '@/lib/arrow-stream'
@@ -213,16 +213,18 @@ export function PerformanceMetricsChart({
     [processId, selectedMeasure, binInterval, apiTimeRange.begin, apiTimeRange.end, dataSource, setQueryError]
   )
 
-  // Expose run/reset to the page (SQL editor + measure change).
-  customQueryRef.current = {
-    run: loadCustomQuery,
-    reset: () => setIsCustomQuery(false),
-  }
-
   // Trigger unified query when discovery is done and measure is selected.
   // Use a ref so the effect doesn't re-run when execute's identity changes.
   const metricsDataExecuteRef = useRef(metricsData.execute)
-  metricsDataExecuteRef.current = metricsData.execute
+
+  // Expose run/reset to the page (SQL editor + measure change).
+  useLayoutEffect(() => {
+    customQueryRef.current = {
+      run: loadCustomQuery,
+      reset: () => setIsCustomQuery(false),
+    }
+    metricsDataExecuteRef.current = metricsData.execute
+  })
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId && !isCustomQuery) {
       metricsDataExecuteRef.current()

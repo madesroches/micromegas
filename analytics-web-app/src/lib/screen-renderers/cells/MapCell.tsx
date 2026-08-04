@@ -19,6 +19,7 @@ import { MapViewer } from '@/components/map/MapViewer'
 import { MAP_MODE_KINDS, MAP_MODE_LABELS, type MapModeKind } from '@/components/map/modes'
 import { EventDetailPanel } from '@/components/map/EventDetailPanel'
 import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import {
   buildOverlay,
   columnTypeMap,
@@ -283,8 +284,7 @@ export function MapCell({
   // Stable ref for onSelectionChange to avoid infinite re-render loops:
   // the callback is an inline arrow in NotebookRenderer, so including it
   // in effect deps would fire on every render.
-  const onSelectionChangeRef = useRef(onSelectionChange)
-  onSelectionChangeRef.current = onSelectionChange
+  const onSelectionChangeRef = useLatestRef(onSelectionChange)
 
   // Publish the clear to upstream cells after commit — calling
   // onSelectionChange during render would trigger React's "Cannot update a
@@ -292,7 +292,7 @@ export function MapCell({
   // resolves to a parent setState through updateCellSelection.
   useEffect(() => {
     onSelectionChangeRef.current?.(null)
-  }, [overlay])
+  }, [overlay, onSelectionChangeRef])
 
   // Read visual options with defaults. `mapUrl` is stored as the bare
   // filename — the renderer composes the blob URL at render time so saved
@@ -321,7 +321,7 @@ export function MapCell({
         onSelectionChangeRef.current?.(rowValues(overlay.table, rowIndex))
       }
     },
-    [overlay]
+    [overlay, onSelectionChangeRef]
   )
 
   const selectedRow = useMemo(
@@ -567,13 +567,13 @@ export function ChannelBindingControl({
   // the parent update in `startTransition`); the deferred re-render then
   // resyncs `value` mid-typing and the browser resets the cursor position.
   //
-  // The ref-guarded sync block adopts the prop value when it changes from
-  // outside this control — mode switch, color-picker pick, saved-config
+  // The prev-value-tracked sync block adopts the prop value when it changes
+  // from outside this control — mode switch, color-picker pick, saved-config
   // reload — so external updates win over uncommitted typing.
   const [draft, setDraft] = useState(scalarString)
-  const lastSyncedScalarRef = useRef(scalarString)
-  if (lastSyncedScalarRef.current !== scalarString) {
-    lastSyncedScalarRef.current = scalarString
+  const [lastSyncedScalar, setLastSyncedScalar] = useState(scalarString)
+  if (lastSyncedScalar !== scalarString) {
+    setLastSyncedScalar(scalarString)
     setDraft(scalarString)
   }
   // Escape resets the draft and then blurs the input — but React batches the
