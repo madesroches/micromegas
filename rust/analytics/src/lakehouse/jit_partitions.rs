@@ -103,14 +103,14 @@ pub fn insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRan
 }
 
 /// Emits one partition (if it holds any objects) from `blocks[start..end]`, warning once if the
-/// window's cut was perturbed (deferred or moved back) by an insert-time inversion.
+/// window genuinely grew past `max_nb_objects` because no insert-safe cut point was available.
 fn emit_partition(
     out: &mut Vec<SourceDataBlocksInMemory>,
     blocks: &[Arc<PartitionSourceBlock>],
     start: usize,
     end: usize,
     nb_objects: i64,
-    perturbed: i64,
+    grown_past_limit: i64,
     max_nb_objects: i64,
 ) {
     // Matches today's guard: a trailing window whose blocks all report nb_objects == 0 emits
@@ -118,13 +118,14 @@ fn emit_partition(
     if nb_objects == 0 {
         return;
     }
-    if perturbed > 0 {
+    if grown_past_limit > 0 {
         let process_id = blocks[start].process.process_id;
         let stream_id = blocks[start].stream.stream_id;
         warn!(
             "group_blocks_into_partitions: process={process_id} stream={stream_id} emitted a \
              partition of {nb_objects} objects (soft limit max_nb_objects={max_nb_objects}) after \
-             {perturbed} cut(s) deferred or moved back by insert-time inversions"
+             {grown_past_limit} cut(s) deferred by insert-time inversions with no insert-safe cut \
+             point available"
         );
     }
     out.push(SourceDataBlocksInMemory {
@@ -185,7 +186,10 @@ pub fn group_blocks_into_partitions(
     // (index, nb_objects of blocks[start..index]) of the most recent safe cut point seen since
     // the current window started.
     let mut last_safe: Option<(usize, i64)> = None;
-    let mut perturbed: i64 = 0;
+    // Counts only the "no safe cut point exists" (grow-past-limit) events below; the look-back
+    // branch warns about itself directly and does not feed this counter (its emitted prefix is
+    // provably <= max_nb_objects, so it must not carry the soft-limit wording).
+    let mut grown_past_limit: i64 = 0;
 
     let mut i = 0usize;
     while i < n {
@@ -207,35 +211,43 @@ pub fn group_blocks_into_partitions(
                     start,
                     i,
                     nb_objects,
-                    perturbed,
+                    grown_past_limit,
                     config.max_nb_objects,
                 );
                 start = i;
                 nb_objects = 0;
                 prefix_max_insert = DateTime::<Utc>::MIN_UTC;
                 last_safe = None;
-                perturbed = 0;
+                grown_past_limit = 0;
                 continue;
             } else if let Some((j, j_nb_objects)) = last_safe {
-                // Look back to the most recent safe index: emit the already-safe prefix, then
-                // re-seed the window from j and replay blocks[j..i) to recompute running state
-                // before reprocessing block i (which may itself still be unsafe -- a straggler's
-                // window is not bounded by this rule, see the module docs).
-                perturbed += 1;
+                // Look back to the most recent safe index: emit the already-safe prefix (which is
+                // provably <= max_nb_objects, since `full` only trips once nb_objects already
+                // fits under the limit), then re-seed the window from j and replay blocks[j..i)
+                // to recompute running state before reprocessing block i (which may itself still
+                // be unsafe -- a straggler's window is not bounded by this rule, see the module
+                // docs).
+                let process_id = blocks[start].process.process_id;
+                let stream_id = blocks[start].stream.stream_id;
+                warn!(
+                    "group_blocks_into_partitions: process={process_id} stream={stream_id} cut \
+                     moved back from index {i} to {j} ({} block(s) looked back)",
+                    i - j
+                );
                 emit_partition(
                     &mut out,
                     &blocks,
                     start,
                     j,
                     j_nb_objects,
-                    perturbed,
+                    0,
                     config.max_nb_objects,
                 );
                 start = j;
                 nb_objects = 0;
                 prefix_max_insert = DateTime::<Utc>::MIN_UTC;
                 last_safe = None;
-                perturbed = 0;
+                grown_past_limit = 0;
                 for k in start..i {
                     nb_objects += blocks[k].block.nb_objects as i64;
                     prefix_max_insert = prefix_max_insert.max(blocks[k].block.insert_time);
@@ -247,7 +259,7 @@ pub fn group_blocks_into_partitions(
             } else {
                 // No safe cut point exists anywhere in this window: grow past the soft limit
                 // rather than emit a partition whose insert range could overlap a later one.
-                perturbed += 1;
+                grown_past_limit += 1;
             }
         }
         nb_objects += block_nb_objects;
@@ -260,7 +272,7 @@ pub fn group_blocks_into_partitions(
         start,
         n,
         nb_objects,
-        perturbed,
+        grown_past_limit,
         config.max_nb_objects,
     );
     out
@@ -664,8 +676,11 @@ pub async fn generate_process_jit_partitions(
 ///   correctly calls it "not up to date" instead, so it falls through to `retire_partitions`'s
 ///   `RetireMatch::Overlap` arm (see `write_partition.rs`).
 /// - `BlockOrder::InsertTime` (every other JIT view) uses the original overlap/`>=`-count test:
-///   `begin_insert_time <= max_insert_time AND end_insert_time >= min_insert_time`, "up to date"
-///   iff a matching partition's object count is at least the spec's. Their cut points are stable
+///   `begin_insert_time <= max_insert_time AND end_insert_time >= min_insert_time` (or, for a
+///   degenerate `min_insert_time == max_insert_time` spec, an exact-match
+///   `begin_insert_time = end_insert_time = min_insert_time`, to avoid matching multiple/wider
+///   overlapping rows), "up to date" iff a matching partition's object count is at least the
+///   spec's. Their cut points are stable
 ///   across runs, so a stale spec (e.g. from a concurrent `jit_update` that lost a race -- see
 ///   `RetireMatch::Overlap`'s "Concurrent writers" docs) legitimately already-covered by a wider,
 ///   already-committed partition must be treated as a no-op here: `RetireMatch::Containment`
@@ -708,6 +723,28 @@ pub async fn is_jit_partition_up_to_date(
                 .bind(&*view_meta.view_instance_id)
                 .bind(min_insert_time)
                 .bind(max_insert_time)
+                .fetch_all(pool),
+                "sql_select_matching_partitions"
+            )
+            .await
+            .with_context(|| "fetching matching partitions")?
+        }
+        BlockOrder::InsertTime if min_insert_time == max_insert_time => {
+            // Degenerate range: exact-match on the single insert time, to avoid matching
+            // multiple/wider overlapping rows (see this function's docs).
+            instrument_named!(
+                sqlx::query(
+                    "SELECT file_schema_hash, source_data_hash
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time = $3
+             AND end_insert_time = $3
+             ;",
+                )
+                .bind(&*view_meta.view_set_name)
+                .bind(&*view_meta.view_instance_id)
+                .bind(min_insert_time)
                 .fetch_all(pool),
                 "sql_select_matching_partitions"
             )
