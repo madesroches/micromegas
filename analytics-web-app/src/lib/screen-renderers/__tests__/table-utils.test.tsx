@@ -25,7 +25,7 @@ vi.mock('../notebook-utils', async (importOriginal) => {
 
 import { useMemo, useState } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { DataType, Timestamp, TimeUnit, Float64, Table } from 'apache-arrow'
+import { DataType, Timestamp, TimeUnit, Float64, Table, BinaryView } from 'apache-arrow'
 import { renderHook, act } from '@testing-library/react'
 import type { Mock } from 'vitest'
 import {
@@ -43,6 +43,7 @@ import {
   useRowManagement,
   ColumnOverride,
   TableBody,
+  formatCell,
 } from '../table-utils'
 import { evaluateTemplate } from '../notebook-utils'
 import type { EvaluateTemplateCtx } from '../notebook-utils'
@@ -1087,5 +1088,13 @@ describe('RowContextMenu', () => {
     fireEvent.contextMenu(screen.getByText('field_a'))
     fireEvent.click(screen.getByText('Hide Row'))
     expect(onHide).toHaveBeenCalledWith('field_a')
+  })
+})
+
+describe('formatCell', () => {
+  it('formats a BinaryView value as the ASCII preview with length, not comma-joined bytes', () => {
+    const value = new Uint8Array([97, 98, 99])
+    const result = formatCell(value, new BinaryView())
+    expect(result).toBe('abc (3)')
   })
 })

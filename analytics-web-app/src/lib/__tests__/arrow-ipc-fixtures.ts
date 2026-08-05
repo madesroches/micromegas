@@ -14,9 +14,15 @@ import {
   vectorFromArray,
   Dictionary,
   Utf8,
+  Utf8View,
+  BinaryView,
   Int32,
   Table,
+  RecordBatchStreamWriter,
+  compressionRegistry,
+  CompressionType,
 } from 'apache-arrow'
+import * as lz4js from 'lz4js'
 
 /**
  * Splits Arrow IPC stream bytes into individual messages.
@@ -97,15 +103,43 @@ function splitIpcMessages(ipcBytes: Uint8Array): Uint8Array[] {
 }
 
 /**
+ * Frames split IPC messages into the JSON protocol chunks used by our backend:
+ *   {"type":"schema","size":N}\n[schema bytes]
+ *   {"type":"batch","size":N}\n[batch bytes]
+ *   {"type":"done"}\n
+ */
+function frameMessages(raw: Uint8Array): Uint8Array[] {
+  const messages = splitIpcMessages(raw)
+
+  if (messages.length === 0) {
+    throw new Error('No IPC messages generated')
+  }
+
+  const chunks: Uint8Array[] = []
+  const encoder = new TextEncoder()
+
+  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
+  chunks.push(encoder.encode(schemaFrame))
+  chunks.push(messages[0])
+
+  for (let i = 1; i < messages.length; i++) {
+    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
+    chunks.push(encoder.encode(batchFrame))
+    chunks.push(messages[i])
+  }
+
+  chunks.push(encoder.encode('{"type":"done"}\n'))
+
+  return chunks
+}
+
+/**
  * Creates a framed IPC stream with dictionary-encoded string columns.
  * Returns chunks that can be fed to a mock ReadableStream.
  */
 export function createDictionaryFramedIpc(
   batches: Array<{ level: string[] }>
 ): Uint8Array[] {
-  const chunks: Uint8Array[] = []
-  const encoder = new TextEncoder()
-
   // Create dictionary type
   const dictType = new Dictionary(new Utf8(), new Int32())
 
@@ -123,29 +157,7 @@ export function createDictionaryFramedIpc(
 
   const ipcBytes = tableToIPC(combined, 'stream')
 
-  // Split IPC into messages
-  const messages = splitIpcMessages(ipcBytes)
-
-  if (messages.length === 0) {
-    throw new Error('No IPC messages generated')
-  }
-
-  // First message is schema
-  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
-  chunks.push(encoder.encode(schemaFrame))
-  chunks.push(messages[0])
-
-  // Remaining messages are batches (may include dictionary batches)
-  for (let i = 1; i < messages.length; i++) {
-    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
-    chunks.push(encoder.encode(batchFrame))
-    chunks.push(messages[i])
-  }
-
-  // Done frame
-  chunks.push(encoder.encode('{"type":"done"}\n'))
-
-  return chunks
+  return frameMessages(ipcBytes)
 }
 
 /**
@@ -154,9 +166,6 @@ export function createDictionaryFramedIpc(
 export function createPlainFramedIpc(
   batches: Array<{ name: string[] }>
 ): Uint8Array[] {
-  const chunks: Uint8Array[] = []
-  const encoder = new TextEncoder()
-
   // Build tables for each batch (plain Utf8, no dictionary)
   const tables: Table[] = batches.map((batch) => {
     return tableFromArrays({ name: batch.name })
@@ -169,28 +178,57 @@ export function createPlainFramedIpc(
   }
 
   const ipcBytes = tableToIPC(combined, 'stream')
-  const messages = splitIpcMessages(ipcBytes)
 
-  if (messages.length === 0) {
-    throw new Error('No IPC messages generated')
-  }
+  return frameMessages(ipcBytes)
+}
 
-  // Schema frame
-  const schemaFrame = `{"type":"schema","size":${messages[0].length}}\n`
-  chunks.push(encoder.encode(schemaFrame))
-  chunks.push(messages[0])
+/**
+ * Creates IPC bytes (and the equivalent framed stream chunks) for a table with
+ * a Utf8View column and a BinaryView column, optionally LZ4_FRAME-compressed.
+ *
+ * Each column includes a short inline value (<=12 bytes, stored directly in
+ * the view), a long out-of-line value (>12 bytes, forcing a variadic data
+ * buffer), and a null — the combination that distinguishes a real decode from
+ * a lucky one.
+ *
+ * Registers the LZ4 codec on `compressionRegistry` inside this function (not
+ * at module scope): `compressionRegistry.set()` replaces the whole registry
+ * entry rather than merging with it, and `arrow-stream.ts`'s
+ * `import './arrow-compression'` registers a decode-only codec. Registering
+ * here, on every call, guarantees this fixture's `{ encode, decode }` pair is
+ * the one in effect when the writer needs to encode, regardless of what else
+ * has been imported.
+ */
+export function createViewTypeIpc({ compressed }: { compressed: boolean }): {
+  raw: Uint8Array
+  chunks: Uint8Array[]
+} {
+  compressionRegistry.set(CompressionType.LZ4_FRAME, {
+    encode: (data: Uint8Array) => lz4js.compress(data),
+    decode: (data: Uint8Array) => lz4js.decompress(data),
+  })
 
-  // Batch frames
-  for (let i = 1; i < messages.length; i++) {
-    const batchFrame = `{"type":"batch","size":${messages[i].length}}\n`
-    chunks.push(encoder.encode(batchFrame))
-    chunks.push(messages[i])
-  }
+  const shortString = 'short' // <=12 bytes: stored inline in the view
+  const longString = 'this string is well over twelve bytes long' // out-of-line: variadic buffer
+  const nameVec = vectorFromArray([shortString, longString, null], new Utf8View())
 
-  // Done frame
-  chunks.push(encoder.encode('{"type":"done"}\n'))
+  const shortBinary = new Uint8Array([97, 98, 99]) // <=12 bytes: stored inline in the view
+  const longBinary = new Uint8Array(
+    'this binary value is well over twelve bytes long'.split('').map((c) => c.charCodeAt(0))
+  ) // out-of-line: variadic buffer
+  const dataVec = vectorFromArray([shortBinary, longBinary, null], new BinaryView())
 
-  return chunks
+  const table = new Table({ name: nameVec, data: dataVec })
+
+  const writer = RecordBatchStreamWriter.writeAll(
+    table,
+    compressed ? { compressionType: CompressionType.LZ4_FRAME } : {}
+  )
+  const raw = writer.toUint8Array(true)
+
+  const chunks = frameMessages(raw)
+
+  return { raw, chunks }
 }
 
 /**

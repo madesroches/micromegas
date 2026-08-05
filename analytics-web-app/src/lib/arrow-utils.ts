@@ -134,10 +134,10 @@ export function isIntegerType(dataType: DataType): boolean {
 }
 
 /**
- * Check if an Arrow DataType is a string type
+ * Check if an Arrow DataType is a string type (Utf8, LargeUtf8, or Utf8View)
  */
 export function isStringType(dataType: DataType): boolean {
-  return DataType.isUtf8(dataType) || DataType.isLargeUtf8(dataType)
+  return DataType.isUtf8(dataType) || DataType.isLargeUtf8(dataType) || DataType.isUtf8View(dataType)
 }
 
 /**
@@ -154,14 +154,16 @@ export function unwrapDictionary(dataType: DataType): DataType {
 }
 
 /**
- * Check if an Arrow DataType is a binary type (handles dictionary-encoded binary).
+ * Check if an Arrow DataType is a binary type — Binary, LargeBinary,
+ * FixedSizeBinary, or BinaryView (handles dictionary-encoded binary).
  */
 export function isBinaryType(dataType: DataType): boolean {
   const inner = unwrapDictionary(dataType)
   return (
     DataType.isBinary(inner) ||
     DataType.isLargeBinary(inner) ||
-    DataType.isFixedSizeBinary(inner)
+    DataType.isFixedSizeBinary(inner) ||
+    DataType.isBinaryView(inner)
   )
 }
 
