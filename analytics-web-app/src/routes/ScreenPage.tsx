@@ -61,6 +61,7 @@ function ScreenPageContent() {
   const pageTitle = isNew
     ? (screenTypeInfo ? `New ${screenTypeInfo.display_name} Screen` : null)
     : screen?.name ?? null
+  usePageTitle(pageTitle)
   const [screenConfig, setScreenConfig] = useState<ScreenConfig | null>(null)
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -92,13 +93,10 @@ function ScreenPageContent() {
 
   // Execution state reported by renderer (for header spinner)
   const [isExecuting, setIsExecuting] = useState(false)
-  // Error state reported by renderer (for tab favicon/title)
+  // Error state reported by renderer (for tab favicon)
   const [hasError, setHasError] = useState(false)
 
-  // Adds a "[*]" title prefix while the screen is executing
-  usePageTitle(pageTitle, isExecuting)
-
-  // Tab favicon/title busy-error-idle indicator, page-global across all screen types
+  // Tab favicon busy-error-idle indicator, page-global across all screen types
   const tabState = computeTabState(isExecuting, hasError)
   useTabExecutionState(tabState)
 

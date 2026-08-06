@@ -1,13 +1,14 @@
-# Notebook Tab Execution State (Favicon/Title) Plan
+# Notebook Tab Execution State (Favicon) Plan
 
 ## Overview
 
 Issue [#1443](https://github.com/madesroches/micromegas/issues/1443): when a notebook cell
 (or a whole notebook load) runs for a while, the user tabs away and has no way to tell —
 from outside the tab — whether it's still running, finished, or failed. This plan makes the
-browser tab itself reflect that: swap the favicon and prefix `document.title` while a screen
-is executing, and show a distinct state if it finished with an error, restoring the normal
-tab identity once everything is idle.
+browser tab itself reflect that: swap the favicon while a screen is executing, and show a
+distinct state if it finished with an error, restoring the normal tab identity once
+everything is idle. (An earlier revision also prefixed `document.title`; dropped after
+implementation as redundant with the favicon badge — see Design §4.)
 
 The state already exists and is already global to the page — `ScreenPage.tsx` tracks
 `isExecuting` today (for the header refresh spinner). This plan reuses that plumbing instead
@@ -104,7 +105,7 @@ they're static assets like the existing icon. Kept static (no `<animate>`) for c
 favicon reliability — animated SVG favicons render inconsistently in tab icons across
 browsers.
 
-### 4. Runtime favicon/title swap
+### 4. Runtime favicon swap
 
 New hook `src/hooks/useTabExecutionState.ts`:
 
@@ -141,28 +142,18 @@ so no visible flicker) and, more importantly, on unmount — which is the only w
 gets reset when the user navigates away from the screen-route family entirely rather than to
 another screen.
 
-Title prefix: extend `usePageTitle` with an optional second argument rather than
-introducing a second title-writing hook (avoids two hooks racing to set `document.title`):
-
-```ts
-export function usePageTitle(title: string | undefined | null, busy = false): void {
-  useEffect(() => {
-    const base = title ? `${title} - ${APP_NAME}` : APP_NAME
-    document.title = busy ? `[*] ${base}` : base
-  }, [title, busy])
-}
-```
-
-All ~15 existing call sites keep working unchanged (`busy` defaults to `false`). Only
-`ScreenPage.tsx` passes `true`. Error state is not reflected in the title prefix — the
-favicon badge is the error signal, matching the issue's framing that the title prefix exists
-mainly for icon-only pinned tabs, and busy/idle is the transition that most needs a title
-cue.
+**No title prefix.** An earlier revision of this plan also added a `[*]` `document.title`
+prefix while executing, via an optional second argument on `usePageTitle`. That was dropped
+after implementation: the favicon badge alone is a sufficient out-of-tab signal, and a title
+prefix duplicates it for no real benefit outside the (narrow) icon-only pinned-tab case.
+`usePageTitle` is therefore left untouched — this plan no longer modifies it.
 
 ### 5. Wiring in `ScreenPage.tsx`
 
-The busy/error/idle precedence is extracted into a small pure function so it can be unit
-tested independently of `ScreenPage`'s rendering (see Testing Strategy):
+The busy/error/idle precedence is extracted into a small pure function, `computeTabState`,
+kept in `src/hooks/useTabExecutionState.ts` (not `ScreenPage.tsx`) so it can be unit tested
+independently of `ScreenPage`'s rendering (see Testing Strategy) without dragging in
+`ScreenPage`'s renderer-registry import chain:
 
 ```ts
 export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle' | 'busy' | 'error' {
@@ -178,16 +169,9 @@ useTabExecutionState(tabState)
 <Renderer ... onExecutingChange={setIsExecuting} onErrorChange={setHasError} />
 ```
 
-`isExecuting` is declared at `const [isExecuting, setIsExecuting] = useState(false)`, which
-today sits well after the existing `usePageTitle(pageTitle)` call. Since `usePageTitle` now
-needs `isExecuting` as its second argument, the call must move down to after that
-declaration (next to where `hasError`/`tabState`/`useTabExecutionState` are wired) rather than
-being edited in place — leaving it at its current spot would reference `isExecuting` before
-its declaration and fail to build:
-
-```ts
-usePageTitle(pageTitle, isExecuting)
-```
+`usePageTitle(pageTitle)` is untouched and stays at its original call site — dropping the
+title-prefix feature (§4) means it no longer needs `isExecuting`, so no reordering relative to
+that declaration is required.
 
 `hasError` should reset to `false` whenever a fresh execution starts, which it already does
 naturally: the moment a cell/query goes back to `loading`, the corresponding renderer's error
@@ -200,9 +184,8 @@ i.e. navigating to a different screen) already resets `screen`, `baselineConfig`
 change via the `onExecutingChange`/`onErrorChange` callbacks, which only fire once the new
 screen's `Renderer` mounts (gated behind `isLoadingScreen`, true for the whole fetch). Without
 an explicit reset, a busy/error favicon from the previous screen would persist through the
-entire "Loading screen..." window of the next one, even though the title already fell back to
-the app name. `load()` must therefore also call `setIsExecuting(false)` and `setHasError(false)`
-alongside `setScreen(null)`.
+entire "Loading screen..." window of the next one. `load()` must therefore also call
+`setIsExecuting(false)` and `setHasError(false)` alongside `setScreen(null)`.
 
 This `load()` reset only handles navigation *within* `ScreenPageContent` (same mounted
 component, screen-to-screen). It does not run, and doesn't need to, when the user navigates
@@ -216,8 +199,8 @@ each covering the case the other can't.
 
 1. **Assets**: add `public/icon-busy.svg` and `public/icon-error.svg` (copies of `icon.svg`
    plus one badge overlay element each).
-2. **Hook**: add `src/hooks/useTabExecutionState.ts` per Design §4; extend
-   `src/hooks/usePageTitle.ts` with the `busy` parameter.
+2. **Hook**: add `src/hooks/useTabExecutionState.ts` (including `computeTabState`) per
+   Design §4/§5.
 3. **Renderer prop**: add `onErrorChange?: (hasError: boolean) => void` to
    `ScreenRendererProps` in `src/lib/screen-renderers/index.ts`.
 4. **Renderers**: add the error-reporting `useEffect` to `NotebookRenderer.tsx`,
@@ -226,20 +209,16 @@ each covering the case the other can't.
 5. **ScreenPage**: add `hasError` state, compute `tabState` via `computeTabState`, call
    `useTabExecutionState`, wire `onErrorChange` to the `Renderer`, and reset
    `isExecuting`/`hasError` to `false` at the start of the `load()` effect alongside
-   `setScreen(null)`. Move the existing `usePageTitle(pageTitle)` call down to after the
-   `isExecuting` declaration and pass it as the `busy` argument (`usePageTitle(pageTitle,
-   isExecuting)`) — leaving the call at its current spot would reference `isExecuting` before
-   its declaration.
+   `setScreen(null)`. `usePageTitle(pageTitle)` is left as-is (§4).
 6. **Manual verification**: run a notebook with a slow cell (or a query against a large time
-   range), tab away, confirm favicon/title change, tab back after completion/failure and
+   range), tab away, confirm the favicon changes, tab back after completion/failure and
    confirm both states are visually distinct and revert to idle after opening a fresh screen.
 
 ## Files to Modify
 
 - `analytics-web-app/public/icon-busy.svg` (new)
 - `analytics-web-app/public/icon-error.svg` (new)
-- `analytics-web-app/src/hooks/useTabExecutionState.ts` (new)
-- `analytics-web-app/src/hooks/usePageTitle.ts`
+- `analytics-web-app/src/hooks/useTabExecutionState.ts` (new; also hosts `computeTabState`)
 - `analytics-web-app/src/lib/screen-renderers/index.ts`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx`
@@ -252,7 +231,7 @@ each covering the case the other can't.
 
 - **Page-global (`ScreenPage`) vs. notebook-only.** The issue is framed around notebooks,
   but `isExecuting` already lives one level up, generic to all screen types, and every
-  renderer already reports into it. Scoping the favicon/title change to `NotebookRenderer`
+  renderer already reports into it. Scoping the favicon change to `NotebookRenderer`
   alone would mean re-deriving "is anything running" from scratch inside one renderer while
   ignoring the identical signal already flowing through `ScreenPage` — that's the kind of
   duplication the existing code deliberately avoids. Extending it to all screen types is a
@@ -262,15 +241,12 @@ each covering the case the other can't.
   is visually nicer but animated SVG favicons are inconsistently honored across browsers
   (some only render the first frame in the tab). A static badge is the reliable choice; Jupyter's
   own busy indicator is also a static swapped icon, not an animation.
-- **Extending `usePageTitle` vs. a separate title-writing hook.** Two hooks both writing
-  `document.title` on the same page risk fighting each other depending on effect order. A
-  single hook with an extra parameter keeps `document.title` writes centralized to one call
-  site's effect, at the (small) cost of every caller having a `busy` parameter it mostly
-  ignores.
-- **Title reflects busy/idle only, not error.** The issue's own notes call the title prefix
-  "optional," useful mainly so a pinned/narrow tab (icon-only) still reads busy at a glance.
-  The favicon carries the full three-state signal; keeping the title binary avoids inventing
-  a title convention for "error" (`[!]`? `[x]`?) that has no precedent elsewhere in the app.
+- **Favicon only, no title prefix.** The issue's own notes call a title prefix "optional." A
+  `[*]` `document.title` prefix was implemented alongside the favicon in an earlier revision
+  of this plan, then dropped after review: it duplicated a signal the favicon badge already
+  carries, for the narrow added benefit of icon-only pinned tabs. Dropping it also sidesteps
+  inventing a title convention for "error" (`[!]`? `[x]`?) that has no precedent elsewhere in
+  the app, and keeps `usePageTitle` untouched.
 
 ## Testing Strategy
 
@@ -279,13 +255,10 @@ each covering the case the other can't.
   jsdom, assert `link.href` updates for `'busy'`/`'error'`/`'idle'`, that it's stable under
   repeated toggles (`idleHref` caching doesn't drift), and that unmounting the hook while in
   `'busy'`/`'error'` reverts `link.href` to `idleHref`.
-- Extend `usePageTitle` tests (or add `src/hooks/__tests__/usePageTitle.test.ts` if none
-  exist) to cover the `busy` prefix.
-- Unit test for `computeTabState` (Design §5): assert `busy` wins when both `isExecuting` and
-  `hasError` are true, plus the plain `error`/`idle` cases.
+- Unit test for `computeTabState` (Design §5), colocated with the hook above: assert `busy`
+  wins when both `isExecuting` and `hasError` are true, plus the plain `error`/`idle` cases.
 - Manual verification per Implementation Steps §6 — this is a browser-chrome effect
-  (`document.title`/favicon) that isn't meaningfully exercised by component-level render
-  tests.
+  (favicon) that isn't meaningfully exercised by component-level render tests.
 
 ## Open Questions
 
