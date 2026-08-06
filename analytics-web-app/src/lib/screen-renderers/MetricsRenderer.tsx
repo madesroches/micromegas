@@ -45,6 +45,7 @@ export function MetricsRenderer({
   onSaveRef,
   dataSource,
   onExecutingChange,
+  onErrorChange,
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
@@ -75,6 +76,9 @@ export function MetricsRenderer({
 
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(query.isLoading) }, [query.isLoading, onExecutingChange])
+
+  // Report error state to parent (for tab favicon/title)
+  useEffect(() => { onErrorChange?.(!!query.error) }, [query.error, onErrorChange])
 
   // Sync scale mode from config when loaded. scaleMode's own useState
   // initializer already derives from this same config value, so a dropped

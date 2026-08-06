@@ -2,6 +2,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type Compo
 import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
+import { useTabExecutionState } from '@/hooks/useTabExecutionState'
 import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -25,6 +26,10 @@ import {
   ScreenConfig,
   ScreenApiError,
 } from '@/lib/screens-api'
+
+export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle' | 'busy' | 'error' {
+  return isExecuting ? 'busy' : hasError ? 'error' : 'idle'
+}
 
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
@@ -60,7 +65,6 @@ function ScreenPageContent() {
   const pageTitle = isNew
     ? (screenTypeInfo ? `New ${screenTypeInfo.display_name} Screen` : null)
     : screen?.name ?? null
-  usePageTitle(pageTitle)
   const [screenConfig, setScreenConfig] = useState<ScreenConfig | null>(null)
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -92,6 +96,16 @@ function ScreenPageContent() {
 
   // Execution state reported by renderer (for header spinner)
   const [isExecuting, setIsExecuting] = useState(false)
+  // Error state reported by renderer (for tab favicon/title)
+  const [hasError, setHasError] = useState(false)
+
+  // Page title must be declared after isExecuting: it now needs isExecuting as its
+  // busy argument, so it can't stay at its original spot above that declaration.
+  usePageTitle(pageTitle, isExecuting)
+
+  // Tab favicon/title busy-error-idle indicator, page-global across all screen types
+  const tabState = computeTabState(isExecuting, hasError)
+  useTabExecutionState(tabState)
 
   // Compute raw time range values (for renderer)
   // Priority: URL (if present) → saved config → current config
@@ -139,6 +153,8 @@ function ScreenPageContent() {
       setLoadError(null)
       setBaselineConfig(null)
       setScreen(null)
+      setIsExecuting(false)
+      setHasError(false)
 
       try {
         // Fetch screen types for display info
@@ -470,6 +486,7 @@ function ScreenPageContent() {
               onSaveRef={saveRef}
               dataSource={dataSource}
               onExecutingChange={setIsExecuting}
+              onErrorChange={setHasError}
             />
           </div>
         </div>

@@ -57,6 +57,7 @@ export function TableRenderer({
   onSaveRef,
   dataSource,
   onExecutingChange,
+  onErrorChange,
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
@@ -77,6 +78,9 @@ export function TableRenderer({
 
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
+
+  // Report error state to parent (for tab favicon/title)
+  useEffect(() => { onErrorChange?.(!!queryError) }, [queryError, onErrorChange])
 
   // Track current SQL for re-execution
   const currentSqlRef = useRef<string>(tableConfig.sql)
