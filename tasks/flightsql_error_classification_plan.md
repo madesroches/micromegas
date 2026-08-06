@@ -155,7 +155,15 @@ fn truncate_plan_text(text: &str) -> String {
     if text.len() <= MAX_PLAN_CHARS {
         text.to_string()
     } else {
-        format!("{}... (truncated)", &text[..MAX_PLAN_CHARS])
+        // Byte-offset slicing (`&text[..MAX_PLAN_CHARS]`) panics if the offset lands
+        // mid-character — plan text can embed non-ASCII string literals from query
+        // predicates via `ScalarValue`'s `Display` impl. Slice on a char boundary instead.
+        let end = text
+            .char_indices()
+            .nth(MAX_PLAN_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+        format!("{}... (truncated)", &text[..end])
     }
 }
 
@@ -214,16 +222,26 @@ fn classify_flight_error(
     match err {
         FlightError::ExternalError(inner) => match inner.downcast::<DataFusionError>() {
             Ok(df_err) => client_error("error building data stream", *df_err, query_id, plan),
-            Err(inner) => Status::internal(format!(
-                "error building data stream: {inner} (query_id={query_id})"
-            )),
+            Err(inner) => {
+                error!("error building data stream: {inner} (query_id={query_id})");
+                Status::internal(format!(
+                    "error building data stream: {inner} (query_id={query_id})"
+                ))
+            }
         },
-        other => Status::internal(format!(
-            "error building data stream: {other} (query_id={query_id})"
-        )),
+        other => {
+            error!("error building data stream: {other} (query_id={query_id})");
+            Status::internal(format!(
+                "error building data stream: {other} (query_id={query_id})"
+            ))
+        }
     }
 }
 ```
+
+Every branch logs exactly once before returning — the `Ok(df_err)` branch via `client_error`'s
+own `error_or_warn_log` call, the other two branches directly — so `classify_flight_error`
+is a single, unconditional log point for this site regardless of which branch is taken.
 
 **Ownership note for wiring this in:** by the time `plan` (the local in `execute_query`) is
 moved into `execute_stream(plan, task_ctx)` at `:461`, it's gone — and `audit_state` itself
@@ -262,8 +280,12 @@ fn error_class(code: tonic::Code) -> &'static str {
 ```
 
 - In `CompletionTrackedStream::poll_next` (`:204-238`), read `err.code()` off the `Status`
-  already flowing through the stream, log `warn!` for `"user"`/`"resource"` and keep
-  `error!` for `"internal"`, and pass the class into `QueryAuditState::emit`.
+  already flowing through the stream to derive the class for `QueryAuditState::emit`, but
+  **drop `poll_next`'s own `error!("stream error occurred: ...")` log statement**. Every
+  `Status` reaching `poll_next` was already logged once by `classify_flight_error` at `:498`
+  (the sole `map_err` feeding this stream) when it built that `Status` — keeping both log
+  statements would print two lines per execution-time/per-batch error. `classify_flight_error`
+  is the single log point for this site; `poll_next` only reads the code, it doesn't log.
 - In every early-setup failure `map_err` closure (`:395-463`), the `Status` was just built by
   `client_error`, so `status.code()` gives the same answer for free.
 
@@ -337,19 +359,34 @@ client                    execute_query                  classify/emit
    sites. The three planning-phase sites (`:423`, `:440`, `:456`) pass `None` — the physical
    plan doesn't exist yet when those can fail.
 5. Add `error_class` to `QueryAuditState`/`QueryAuditRecord` (`query_audit.rs`); update
-   `CompletionTrackedStream::poll_next` to log `warn!`/`error!` by class and pass it to
-   `emit`.
+   `CompletionTrackedStream::poll_next` to derive the class from `err.code()` and pass it to
+   `emit`, and remove its own `error!("stream error occurred: ...")` log statement — per
+   Design §4, `classify_flight_error` is now the sole log point for this site, so `poll_next`
+   reads the code without logging again.
+6. `QueryAuditState::emit` gaining a non-optional `error_class` parameter means every
+   `audit_state.emit(...)` call site must be updated to pass one — there are 8 inside
+   `execute_query`'s early-failure `map_err` closures (`:396`, `:414`, `:424`, `:432`, `:436`,
+   `:441-444`, `:457`, `:463`). Today every one of these calls `emit(...)` *before* building
+   the `Status`/hand-rolled error it returns, so deriving the class "for free" from
+   `status.code()` isn't possible as-is. Reorder each closure: build the `Status` first (via
+   `status!`, `client_error`, or `classify_flight_error` as appropriate for that site), derive
+   `let error_class = error_class(status.code());`, then call
+   `audit_state.emit("error", Some(...), Some(error_class))`, then return the `Status`. For
+   the four sites that stay on the `status!` macro (`:396`, `:414`, `:432`, `:436` — the
+   `anyhow`/non-`DataFusionError` sites, always `Status::internal`), this always yields
+   `error_class = "internal"`, but the same build-then-derive-then-emit ordering keeps every
+   site consistent and compiling.
 
 **Phase 2 — UDF convention (`rust/datafusion-extensions/src/`)**
-6. Convert the arity/type-check `internal_err!` sites listed in Design §5 to `exec_err!`
+7. Convert the arity/type-check `internal_err!` sites listed in Design §5 to `exec_err!`
    across `jsonb/*.rs`, `color/*.rs`, `math/*.rs`, `properties/*.rs`,
    `binning/bin_center.rs`.
 
 **Phase 3 — tests**
-7. `rust/public/tests/query_audit_tests.rs`: add `error_class`/`query_id` to the
+8. `rust/public/tests/query_audit_tests.rs`: add `error_class`/`query_id` to the
    `full_record`/omits-optionals fixtures; add a case asserting `error_class` is omitted (or
    `None`) for `status: "ok"`.
-8. New `rust/public/tests/flight_sql_error_classification_tests.rs` (or extend an existing
+9. New `rust/public/tests/flight_sql_error_classification_tests.rs` (or extend an existing
    integration test if one already drives `FlightSqlServiceImpl` end-to-end — none currently
    does, per `find rust -iname "*flight_sql*test*"`): unit-test `classify_datafusion_error`
    and `client_error` directly against constructed `DataFusionError` values for each
@@ -362,7 +399,7 @@ client                    execute_query                  classify/emit
    Some(...)` asserts the reverse — a `"physical plan:"` section containing the fake plan's
    `DisplayAs` output (reuse `query_audit_tests.rs`'s `FakeExec` pattern), truncated at
    `MAX_PLAN_CHARS` when the input exceeds it.
-9. `python/micromegas/tests/test_perfetto_integration.py::test_perfetto_trace_chunks_error_handling`:
+10. `python/micromegas/tests/test_perfetto_integration.py::test_perfetto_trace_chunks_error_handling`:
    all three cases (invalid span type, missing arguments — both `plan_err!` — and
    non-existent process, an `Execution` error per
    `perfetto_trace_execution_plan.rs:189-208`) currently assert
