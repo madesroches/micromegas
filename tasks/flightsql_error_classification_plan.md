@@ -726,11 +726,15 @@ client                    execute_query                  classify/emit
   chosen at the source, not teach the UDF crate about gRPC codes.
 - **`Execution` defaults to `InvalidArgument`.** As the issue notes, `Execution` is a
   grab-bag that DataFusion itself also uses for some internal-ish failures. Given the
-  UDF-convention fix in Phase 2 and that `perfetto_trace_execution_plan.rs` already reserves
-  `Execution` for caller-triggered failures (bad process id, bad span type reaching
-  execution), defaulting to `InvalidArgument` is right in practice; a genuine internal bug
-  that happens to surface as `Execution` will now read as `InvalidArgument` instead of
-  `Internal`, which is the same trade-off the issue explicitly accepts.
+  UDF-convention fix in Phase 2 and that `perfetto_trace_execution_plan.rs` now reserves
+  `Execution` for the one caller-triggered failure it can produce (process id not found;
+  the `ProcessNotFoundError` case is distinguished by downcasting so every other failure
+  in `generate_streaming_perfetto_trace` — session context, object store, DB, parquet reads
+  — maps to `Internal` instead), defaulting to `InvalidArgument` is right in practice; a
+  genuine internal bug that happens to surface as `Execution` will now read as
+  `InvalidArgument` instead of `Internal`, which is the same trade-off the issue explicitly
+  accepts. (The bad-`span_types` case is a separate `Plan` error raised earlier, in
+  `perfetto_trace_table_function.rs`, not an `Execution` error from this file.)
 - **`ResourcesExhausted` → gRPC `ResourceExhausted(8)`.** This is the semantically correct
   gRPC code, but per the confirmed pyarrow mapping it surfaces client-side as
   `pyarrow.lib.ArrowInvalid` — the same `ValueError` subclass a bad query raises — so a
