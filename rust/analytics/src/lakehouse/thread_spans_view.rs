@@ -3,7 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
         BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_stream_jit_partitions,
-        is_jit_partition_up_to_date,
+        group_contiguous_block_chains, is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -186,30 +186,13 @@ async fn write_partition(
 
     let build_result: Result<PartitionRowSet> = async {
         let mut record_builder = SpanRecordBuilder::with_capacity(nb_events / 2);
-        let mut blocks_to_process = vec![];
-        let mut last_end = None;
-        for block in &spec.blocks {
-            if block.block.begin_ticks == last_end.unwrap_or(block.block.begin_ticks) {
-                last_end = Some(block.block.end_ticks);
-                blocks_to_process.push(block.block.clone());
-            } else {
-                append_call_tree(
-                    &mut record_builder,
-                    convert_ticks,
-                    &blocks_to_process,
-                    lake.blob_storage.clone(),
-                    &block.stream,
-                )
-                .await?;
-                last_end = Some(block.block.end_ticks);
-                blocks_to_process = vec![block.block.clone()];
-            }
-        }
-        if !blocks_to_process.is_empty() {
+        // One call tree per unbroken chain of blocks, so a span opened in one block and closed in
+        // the next is reconstructed whole; see `group_contiguous_block_chains`.
+        for chain in group_contiguous_block_chains(&spec.blocks) {
             append_call_tree(
                 &mut record_builder,
                 convert_ticks,
-                &blocks_to_process,
+                &chain,
                 lake.blob_storage.clone(),
                 &spec.blocks[0].stream,
             )
@@ -273,22 +256,16 @@ async fn write_partition(
 }
 /// Rebuilds the partition if it's missing or out of date.
 ///
-/// `same_run_ranges` accumulates the insert ranges of every partition this same `jit_update` run
-/// (or, in the tests below, the simulated run driving this function directly) has already handled
-/// -- written, or found already up to date -- earlier in its loop: this call both reads it (to
-/// pass along to `retire_partitions` via `RetireMatch::Overlap`, protecting those earlier
-/// partitions from this write) and appends `spec`'s own range to it before returning, so the next
-/// call in the loop sees it too. See `RetireMatch::Overlap`'s docs for why this is identity-, not
-/// range-shape-, based.
+/// `same_run_ranges` accumulates the insert ranges every partition this `jit_update` run has already
+/// handled -- written, or found already up to date -- earlier in its loop. This call reads it (to
+/// pass to `retire_partitions` via `RetireMatch::Overlap`, protecting those earlier partitions from
+/// this write) and appends `spec`'s own range before returning.
 ///
-/// `pub` (not module-private) so `rust/analytics/tests/` -- which compiles as an external
-/// integration crate and can only reach `pub` items -- can write a single JIT partition directly:
-/// `thread_spans_cross_run_regrouping_replaces_stale_partition`,
-/// `thread_spans_degenerate_range_retires_stale_partition`,
-/// `thread_spans_same_run_left_boundary_survives`, and
-/// `thread_spans_interrupted_run_reconverges` (`thread_spans_ordering_db_test.rs`) all drive it
-/// directly to control exact partition boundaries that `jit_update`'s own loop wouldn't otherwise
-/// expose.
+/// `pub` only so `thread_spans_ordering_db_test.rs` can write a single JIT partition directly, with
+/// exact boundaries `jit_update`'s loop wouldn't expose; `rust/analytics/tests/` compiles as an
+/// external crate and can only reach `pub` items. Not intended as API.
+/// (`net_spans_view::update_partition` stays private because its tests drive `retire_partitions`
+/// directly instead -- there is no Rust producer of `net` streams to push blocks through.)
 #[span_fn]
 pub async fn update_partition(
     lake: Arc<DataLakeConnection>,

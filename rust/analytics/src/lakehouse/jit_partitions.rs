@@ -16,8 +16,10 @@
 //!
 //! Note that this is an *insert-time* invariant only. It says nothing about partitions'
 //! *event-time* ranges, which for the block-derived views are computed from block
-//! `begin_ticks`/`end_ticks` and can overlap slightly at a cut point because a stream's
-//! consecutive blocks overlap on those ticks -- see the ordering-invariant notes on
+//! `begin_ticks`/`end_ticks`. Whether those can overlap slightly at a cut point depends on the
+//! producer: `micromegas_tracing`-produced streams stamp the replacement block's `begin` before
+//! closing the outgoing block, so consecutive blocks overlap; the Unreal producer stamps a single
+//! timestamp for both, so they touch exactly. See the ordering-invariant notes on
 //! `View::get_scan_output_ordering`.
 
 use super::{
@@ -48,6 +50,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
 use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
@@ -109,6 +112,46 @@ pub fn blocks_insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<
     Ok(TimeRange::new(min_insert_time, max_insert_time))
 }
 
+/// Splits an event-time-ordered block list into maximal chains whose tick coverage is unbroken, so
+/// each chain can be decoded into one cross-block tree (a call tree for `thread_spans`, a net span
+/// tree for `net_spans`).
+///
+/// A chain breaks only on a *gap* -- `begin_ticks` strictly after the running `end_ticks`, meaning
+/// blocks are missing in between and a tree built across the seam would be nonsense. An *overlap*
+/// (`begin_ticks` at or before the running end) still means unbroken coverage and keeps the chain
+/// open. That distinction matters because it is producer-dependent:
+/// `micromegas_tracing::dispatch`'s flush paths stamp the replacement block's `begin` before closing
+/// the outgoing block, so consecutive blocks always overlap by the cost of the buffer swap, whereas
+/// the Unreal producer stamps a single timestamp for both sides and its blocks touch exactly. An
+/// equality test would break the chain on every seam for the former.
+///
+/// The running end is a max, not just the previous block's `end_ticks`: a chain must not be broken
+/// by a short block fully contained in an earlier, longer one.
+pub fn group_contiguous_block_chains(
+    blocks: &[Arc<PartitionSourceBlock>],
+) -> Vec<Vec<BlockMetadata>> {
+    let mut chains: Vec<Vec<BlockMetadata>> = vec![];
+    let mut chain: Vec<BlockMetadata> = vec![];
+    let mut chain_end: Option<i64> = None;
+    for block in blocks {
+        match chain_end {
+            // A gap: close the chain and re-seed from this block.
+            Some(end) if block.block.begin_ticks > end => {
+                chains.push(std::mem::take(&mut chain));
+                chain_end = Some(block.block.end_ticks);
+            }
+            // Touching or overlapping: extend the chain.
+            Some(end) => chain_end = Some(end.max(block.block.end_ticks)),
+            None => chain_end = Some(block.block.end_ticks),
+        }
+        chain.push(block.block.clone());
+    }
+    if !chain.is_empty() {
+        chains.push(chain);
+    }
+    chains
+}
+
 /// Emits one partition (if it holds any objects) from `blocks[start..end]`, warning once if the
 /// window genuinely grew past `max_nb_objects` because no insert-safe cut point was available.
 fn emit_partition(
@@ -123,20 +166,24 @@ fn emit_partition(
     // A window whose blocks all report nb_objects == 0 emits nothing, rather than an empty
     // partition. The pre-refactor code applied this guard only to the trailing window (a mid-list
     // cut always pushed), so for a mid-list all-zero window this drops those blocks from every
-    // partition instead of emitting a rows-free one. No producer emits a zero-object block --
-    // `micromegas_tracing::dispatch`'s flush paths skip empty streams, and OTLP ingestion returns
-    // no block for a zero-record batch -- so the divergence is unreachable; dropping is also the
-    // better of the two behaviours, since such blocks carry no rows and each partition's DB range
-    // is derived per-spec from `blocks_insert_time_range`, not from full block coverage.
+    // partition instead of emitting a rows-free one. No *in-repo* producer emits a zero-object
+    // block -- `micromegas_tracing::dispatch`'s flush paths skip empty streams, the Unreal sink
+    // does the same, and OTLP ingestion returns no block for a zero-record batch -- but nothing
+    // enforces it (`nb_objects` has no CHECK constraint and the ingestion API does not validate
+    // it). Dropping is the better of the two behaviours anyway: such blocks carry no rows, and
+    // each partition's DB range is derived per-spec from `blocks_insert_time_range`, not from full
+    // block coverage.
     if nb_objects == 0 {
         return;
     }
     if grown_past_limit > 0 {
+        // process_id only: under the process-level path (`generate_process_jit_partitions_segment`)
+        // a partition can span several streams, and after the event-time sort `blocks[start]` is an
+        // arbitrary one of them.
         let process_id = blocks[start].process.process_id;
-        let stream_id = blocks[start].stream.stream_id;
         warn!(
-            "group_blocks_into_partitions: process={process_id} stream={stream_id} emitted a \
-             partition of {nb_objects} objects (soft limit max_nb_objects={max_nb_objects}) after \
+            "group_blocks_into_partitions: process={process_id} emitted a partition of \
+             {nb_objects} objects (soft limit max_nb_objects={max_nb_objects}) after \
              {grown_past_limit} cut(s) deferred by insert-time inversions with no insert-safe cut \
              point available"
         );
@@ -169,14 +216,12 @@ fn emit_partition(
 /// nothing rather than a rows-free partition (see `emit_partition`; unreachable in practice).
 ///
 /// Under `BlockOrder::EventTime`, `blocks` is stable-sorted by `(begin_ticks, end_ticks)` first
-/// (ties keep the incoming, insert-ordered position, so grouping stays deterministic); a cut
-/// point is then only taken where it is *insert-safe*: every block already in the partition being
-/// closed must have an `insert_time` no later than every remaining block's, computed via a
-/// suffix-minimum of `insert_time` over the event-time-sorted list. When the natural
-/// `max_nb_objects` cut point isn't safe, the cut looks back to the most recent safe index instead
-/// (bounding the partition preceding an insert-time straggler); when no safe index exists at all
-/// in the window (a straggler's own re-seeded window, or a continuous inversion chain), the window
-/// grows past the soft limit and a `warn!` fires once the partition is finally emitted. See
+/// (ties keep the incoming, insert-ordered position, so grouping stays deterministic); a cut point
+/// is then only taken where it is *insert-safe*: every block already in the partition being closed
+/// must have an `insert_time` no later than every remaining block's, computed via a suffix-minimum
+/// over the event-time-sorted list. When the natural `max_nb_objects` cut point isn't safe, the cut
+/// looks back to the most recent safe index; when no safe index exists in the window, the window
+/// grows past the soft limit and a `warn!` fires. See
 /// `tasks/1429_jit_event_time_block_ordering_plan.md` §3 for the full derivation.
 pub fn group_blocks_into_partitions(
     config: &JitPartitionConfig,
@@ -248,11 +293,11 @@ pub fn group_blocks_into_partitions(
                 // to recompute running state before reprocessing block i (which may itself still
                 // be unsafe -- a straggler's window is not bounded by this rule, see the module
                 // docs).
+                // process_id only -- see the note in `emit_partition`.
                 let process_id = blocks[start].process.process_id;
-                let stream_id = blocks[start].stream.stream_id;
                 warn!(
-                    "group_blocks_into_partitions: process={process_id} stream={stream_id} cut \
-                     moved back from index {i} to {j} ({} block(s) looked back)",
+                    "group_blocks_into_partitions: process={process_id} cut moved back from index \
+                     {i} to {j} ({} block(s) looked back)",
                     i - j
                 );
                 emit_partition(
@@ -687,28 +732,20 @@ pub async fn generate_process_jit_partitions(
 /// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
 /// Checks if a JIT partition is up to date.
 ///
-/// `block_order` selects which query/comparison applies (see `BlockOrder`'s docs):
-/// - `BlockOrder::EventTime` (`thread_spans`/`net_spans` only) uses exact insert-range-and-count
-///   equality. Their cut points can move between `jit_update` runs (see
-///   `group_blocks_into_partitions`'s docs and `tasks/1429_jit_event_time_block_ordering_plan.md`
-///   §6), so a later run's spec can have a smaller, different insert range than an
-///   already-written partition that still overlaps it; calling that stale, wider partition "up to
-///   date" (as the overlap/`>=` test below would) would leave it in place forever. Exact equality
-///   correctly calls it "not up to date" instead, so it falls through to `retire_partitions`'s
-///   `RetireMatch::Overlap` arm (see `write_partition.rs`).
-/// - `BlockOrder::InsertTime` (every other JIT view) uses the original overlap/`>=`-count test:
-///   `begin_insert_time <= max_insert_time AND end_insert_time >= min_insert_time` (or, for a
-///   degenerate `min_insert_time == max_insert_time` spec, an exact-match
-///   `begin_insert_time = end_insert_time = min_insert_time`, to avoid matching multiple/wider
-///   overlapping rows), "up to date" iff a matching partition's object count is at least the
-///   spec's. Their cut points are stable
-///   across runs, so a stale spec (e.g. from a concurrent `jit_update` that lost a race -- see
-///   `RetireMatch::Overlap`'s "Concurrent writers" docs) legitimately already-covered by a wider,
-///   already-committed partition must be treated as a no-op here: `RetireMatch::Containment`
-///   (what these views use) cannot retire a partition that merely overlaps without being
-///   contained, so if exact equality called that stale spec "not up to date", the subsequent
-///   insert would trip the `lakehouse_partitions_no_overlap` exclusion constraint. Using exact
-///   equality here unconditionally was issue 2 of the 1429 branch's third review round.
+/// `block_order` selects which query/comparison applies (see `BlockOrder`):
+/// - `BlockOrder::EventTime` (`thread_spans`/`net_spans` only) requires exact insert-range and
+///   exact count equality. Their cut points can move between `jit_update` runs, so a later run's
+///   spec can be narrower than an already-written partition that still overlaps it; the overlap/`>=`
+///   test below would call that stale, wider partition up to date and leave it in place forever.
+///   Exact equality reports "not up to date" instead, so the write falls through to
+///   `RetireMatch::Overlap` (see `write_partition.rs`).
+/// - `BlockOrder::InsertTime` (every other JIT view) keeps the original overlap/`>=`-count test
+///   (with an exact-match branch for a degenerate spec range, to avoid matching multiple/wider
+///   rows). Their cut points are stable across runs, so a stale spec already covered by a wider
+///   committed partition -- e.g. from a concurrent `jit_update` that lost a race -- must stay a
+///   no-op here: `RetireMatch::Containment` cannot retire a merely-overlapping partition, so
+///   calling such a spec "not up to date" would make the subsequent insert trip the
+///   `lakehouse_partitions_no_overlap` exclusion constraint.
 #[span_fn]
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,

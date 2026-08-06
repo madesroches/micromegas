@@ -3,7 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
         BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_process_jit_partitions,
-        is_jit_partition_up_to_date,
+        group_contiguous_block_chains, is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -161,32 +161,12 @@ async fn write_partition(
                 b.stream.stream_id,
             );
         }
-        let mut blocks_to_process: Vec<BlockMetadata> = vec![];
-        let mut last_end: Option<i64> = None;
-        for block in &spec.blocks {
-            let contiguous = last_end
-                .map(|e| block.block.begin_ticks == e)
-                .unwrap_or(true);
-            if !contiguous {
-                append_net_span_tree(
-                    &mut record_builder,
-                    convert_ticks,
-                    &blocks_to_process,
-                    lake.blob_storage.clone(),
-                    &stream,
-                    process_id.clone(),
-                )
-                .await?;
-                blocks_to_process = vec![];
-            }
-            blocks_to_process.push(block.block.clone());
-            last_end = Some(block.block.end_ticks);
-        }
-        if !blocks_to_process.is_empty() {
+        // One net span tree per unbroken chain of blocks; see `group_contiguous_block_chains`.
+        for chain in group_contiguous_block_chains(&spec.blocks) {
             append_net_span_tree(
                 &mut record_builder,
                 convert_ticks,
-                &blocks_to_process,
+                &chain,
                 lake.blob_storage.clone(),
                 &stream,
                 process_id.clone(),

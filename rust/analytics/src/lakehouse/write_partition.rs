@@ -132,59 +132,29 @@ pub enum RetireMatch {
     /// `BlockOrder::InsertTime` and for every non-JIT (batch/merge) partition write. Used by
     /// everything except the two `BlockOrder::EventTime` JIT views.
     Containment,
-    /// The union of the overlap and containment predicates, plus a third arm for a degenerate new
-    /// range, with same-run siblings protected separately (by identity, not by range shape --
-    /// see below): `(tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4)) OR
-    /// (begin_insert_time >= $3 AND end_insert_time <= $4) OR ($3 = $4 AND begin_insert_time <=
-    /// $3 AND end_insert_time > $3)`.
+    /// The union of three arms -- overlap, containment, and a degenerate-new-range test -- with
+    /// same-run siblings excluded by identity (see `same_run_ranges` below). All three are needed
+    /// because `tstzrange(t, t)` is Postgres's empty range and `&&` is false whenever *either*
+    /// side is degenerate: the overlap arm alone misses a degenerate existing partition
+    /// (containment arm covers it) and a degenerate *new* range (third arm covers it, matching an
+    /// existing row that merely contains the instant `$3`).
     ///
     /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
     /// grouping can move an *earlier* cut point between `jit_update` runs (see
-    /// `jit_partitions::group_blocks_into_partitions`'s docs), so a later run's narrower spec can
-    /// leave behind a stale, wider partition that merely *overlaps* the new range instead of being
+    /// `jit_partitions::group_blocks_into_partitions`), so a later run's narrower spec can leave
+    /// behind a stale, wider partition that merely *overlaps* the new range instead of being
     /// contained by it -- `Containment` alone would never retire it, and the subsequent insert
-    /// would trip the `lakehouse_partitions_no_overlap` exclusion constraint. The containment arm
-    /// is not redundant with the overlap arm: `tstzrange(t, t)` is Postgres's empty range, so `&&`
-    /// is always false whenever *either* side's range is degenerate (`begin_insert_time ==
-    /// end_insert_time`), so a degenerate existing partition being retired by a non-degenerate new
-    /// range needs the containment arm to be matched at all. The third arm handles a *degenerate
-    /// new range* (`$3 == $4`), which the first two arms both miss: `&&` is vacuously false (an
-    /// empty `tstzrange` never overlaps anything), and the containment arm degenerates to
-    /// `begin_insert_time = end_insert_time = $3`, which only catches an exact degenerate
-    /// duplicate, not a wider existing partition that merely contains the point `$3` (e.g.
-    /// `begin_insert_time < $3 < end_insert_time`) -- the third arm's `begin_insert_time <= $3 AND
-    /// end_insert_time > $3` (the existing row's own range under half-open `[)` semantics) covers
-    /// that case.
+    /// would trip the `lakehouse_partitions_no_overlap` exclusion constraint.
     ///
-    /// **Same-run siblings are excluded by identity, not by range shape.** An earlier version of
-    /// this predicate tried to carve same-run siblings out of the containment/third-arm matches
-    /// using ad hoc range-shape clauses (a left-boundary exclusion on the containment arm, an
-    /// exact-degenerate-match sub-clause on the third arm); that approach could not distinguish a
-    /// same-run sibling from a genuinely stale cross-run partition sharing the same shape (a
-    /// degenerate successor immediately after a degenerate stale predecessor, or several
-    /// consecutive same-run partitions all sharing an identical degenerate range -- see
-    /// `tasks/1429_jit_event_time_block_ordering_plan.md`'s review history for both failure
-    /// modes), so it either wrongly retired a same-run sibling or wrongly spared a stale
-    /// cross-run partition depending on the exact shapes involved. Instead, `retire_partitions`
-    /// takes an explicit `same_run_ranges` list -- the insert ranges the current `jit_update` run
-    /// has itself already written (or found already up to date) earlier in its own loop -- and
-    /// every arm above is additionally guarded by `AND NOT` a row matching one of those exact
-    /// `(begin_insert_time, end_insert_time)` pairs. This is provenance-based, not shape-based: a
-    /// row is protected because *this run* is the one that put it there, regardless of whether its
-    /// range is degenerate, and regardless of whether another row shares the identical range. A
-    /// stale row from a *previous* run is never in `same_run_ranges` (a fresh, empty list every
-    /// `jit_update` call), so it is still retired even if its range happens to coincide with
-    /// something the current run also writes.
-    ///
-    /// Tolerated gap: under `Overlap`, retiring a stale wider partition and inserting the new,
-    /// narrower one are two separate statements in the same transaction, so a range that the old
-    /// partition covered but the new one does not yet (because a sibling partition later in the
-    /// same `jit_update` loop covers it) is transiently missing from the lakehouse until that
-    /// sibling is written -- or, if the loop errors out or is cancelled, until the next successful
-    /// `jit_update`. This is judged tolerable because JIT partitions are regenerated on demand from
-    /// `blocks_view`, not the source of truth for their own data (see
-    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the full argument, including the
-    /// concurrent-writers case).
+    /// Tolerated gap: retiring the stale partition and inserting the new, narrower one are two
+    /// statements in one transaction, so a range the old partition covered but the new one does not
+    /// yet (a sibling later in the same `jit_update` loop covers it) is transiently missing until
+    /// that sibling is written -- or, if the loop fails, until the next successful `jit_update`.
+    /// Tolerable because JIT partitions are regenerated on demand from `blocks_view` and are not
+    /// the source of truth for their own data. See
+    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the full derivation of the three
+    /// arms, the rejected shape-based alternatives to `same_run_ranges`, and the concurrent-writers
+    /// argument.
     Overlap,
 }
 

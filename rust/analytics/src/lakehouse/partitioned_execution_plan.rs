@@ -49,14 +49,15 @@ fn partition_bounds(
 /// independent of the order the partition cache returned.
 ///
 /// Returns an error if any adjacent pair overlaps: the declared ordering cannot be honored, so we
-/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime`
-/// the causes, by decreasing likelihood, are: block-boundary tick overlap (a partition's event
-/// bounds come from block ticks, and a stream's consecutive blocks overlap by the cost of the
-/// buffer swap -- see the ordering-invariant notes on `View::get_scan_output_ordering`), an
-/// insert-time inversion straddling a JIT segment boundary, and TSC-frequency estimation drift
-/// across materialization epochs (for `tsc_frequency == 0` processes whose blocks were
-/// materialized under different clock estimates). The latter two are fixed by retiring the
-/// affected stream's partitions so they rebuild with a single, consistent converter. For
+/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime` the
+/// causes are: an insert-time inversion straddling a JIT segment boundary; TSC-frequency estimation
+/// drift across materialization epochs (for `tsc_frequency == 0` processes whose blocks were
+/// materialized under different clock estimates); and, for `micromegas_tracing`-produced streams
+/// only, block-boundary tick overlap (a partition's event bounds come from block ticks, and that
+/// producer's consecutive blocks overlap by the cost of the buffer swap -- the Unreal producer
+/// stamps one timestamp for both sides, so its blocks touch exactly). See the ordering-invariant
+/// notes on `View::get_scan_output_ordering`. The first two are fixed by retiring the affected
+/// stream's partitions so they rebuild with a single, consistent converter. For
 /// `OrderingBounds::InsertTime` an overlap indicates a genuine partitioning bug -- input
 /// partitions are expected to be non-overlapping in insert_time by construction.
 fn sort_and_check_non_overlapping(
@@ -79,12 +80,13 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering, by decreasing likelihood: (1) a partition's event bounds come from its blocks' begin_ticks/end_ticks, and consecutive blocks in a stream \
-                 overlap slightly on those ticks (the replacement block's begin is stamped before the outgoing block is closed), so any cut between two adjacent blocks can produce \
-                 a sub-microsecond overlap; (2) an insert-time inversion straddling a JIT segment boundary (blocks registered out of event-time order across two independently-grouped \
-                 segments -- within one segment blocks are event-ordered with insert-safe cut points, see jit_partitions::group_blocks_into_partitions); (3) for tsc_frequency == 0 \
-                 processes, TSC-frequency re-estimation drift across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on \
-                 View::get_scan_output_ordering in view.rs). For (2) and (3), retiring the affected stream's partitions so they rebuild with a single, consistent time converter fixes it.",
+                 For event-time ordering: (1) an insert-time inversion straddling a JIT segment boundary (blocks registered out of event-time order across two independently-grouped \
+                 segments -- within one segment blocks are event-ordered with insert-safe cut points, see jit_partitions::group_blocks_into_partitions); (2) for tsc_frequency == 0 \
+                 processes, TSC-frequency re-estimation drift across materialization epochs spanning a clock adjustment; (3) for streams produced by micromegas_tracing (Rust) only, \
+                 block-boundary tick overlap -- a partition's event bounds come from its blocks' begin_ticks/end_ticks and that producer stamps the replacement block's begin before \
+                 closing the outgoing block, so any cut between two adjacent blocks can produce a sub-microsecond overlap (the Unreal producer stamps one timestamp for both, so its \
+                 blocks touch exactly and this cause does not apply). See the ordering-invariant notes on View::get_scan_output_ordering in view.rs. \
+                 For (1) and (2), retiring the affected stream's partitions so they rebuild with a single, consistent time converter fixes it.",
                 prev.file_path, next.file_path
             )));
         }

@@ -47,32 +47,46 @@ first two arms both miss — `tstzrange(t, t)` is Postgres's empty range so `&&`
 and the containment arm degenerates to an exact match, missing a wider partition that merely contains
 the instant.
 
-**Steps 16-17 — the event-time non-overlap claim was overstated and has been corrected**
+**Steps 16-17 — the event-time non-overlap claim was overstated; the correction is producer-specific**
 
 The plan's premise for Phase 4 was that event-time-ordered grouping makes partitions' event-time
 ranges non-overlapping "by construction" within a segment, leaving only cross-segment inversions and
-TSC drift as residuals. That is false, and the first version of these doc edits asserted it. A
-partition's event bounds come from its blocks' `begin_ticks`/`end_ticks`, and a stream's consecutive
-blocks *overlap* on those ticks: every flush path in `micromegas_tracing::dispatch` stamps the
-replacement block's `begin` (`EventBlock::new` → `DualTime::now()`) before closing the outgoing block
-(`close()` → `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the cost of the
-buffer swap. Any cut between adjacent blocks can therefore trip
-`sort_and_check_non_overlapping`'s strict `prev_max > next_min`.
+TSC drift as residuals. That is not true in general: a partition's event bounds come from its blocks'
+`begin_ticks`/`end_ticks`, and whether consecutive blocks overlap on those ticks depends on which
+producer wrote the stream.
 
-This predates the branch (the old code derived the same bounds from the block list's endpoints) and
-is orthogonal to insert-safe cut points, which are an *insert-time* property. It is **not fixed
-here** — it is now documented as the first and most likely cause in `view.rs`'s `Concatenated`
-contract note, in the `sort_and_check_non_overlapping` error message and rustdoc, and in
-`jit_partitions.rs`'s module doc. It deserves its own issue. Design §"three failures" benefit #2
-(cross-block call-tree fragmentation) is correspondingly weaker than claimed: the `last_end`-based
-contiguity grouping tests exact `begin_ticks == last_end` equality, which this flush ordering rarely
-satisfies.
+- **`micromegas_tracing` (Rust)**: every flush path in `dispatch.rs` stamps the replacement block's
+  `begin` (`TracingBlock::new` → `DualTime::now()`) before closing the outgoing block (`close()` →
+  `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the cost of the buffer
+  swap. Any cut between adjacent blocks can trip `sort_and_check_non_overlapping`'s strict
+  `prev_max > next_min`.
+- **Unreal (C++)**: `MicromegasTracing/Private/Dispatch.cpp` (`FlushThreadStream`) and
+  `NetTraceWriter.cpp` (`FlushImpl`) take a single `DualTime Now = DualTime::Now()` and use it for
+  both the new block's `begin` and `FullBlock->Close(Now)`, so consecutive blocks *touch* exactly and
+  no overlap arises. Since `net` streams are created only by `NetTraceWriter.cpp`, this cause is
+  unreachable for `net_spans`.
+
+The overlap case predates the branch (the old code derived the same bounds from the block list's
+endpoints) and is orthogonal to insert-safe cut points, which are an *insert-time* property. It is
+**not fixed here** — it is documented, scoped to the Rust producer, in `view.rs`'s `Concatenated`
+contract note, the `sort_and_check_non_overlapping` error message and rustdoc, and
+`jit_partitions.rs`'s module doc. It deserves its own issue.
+
+An earlier revision of this section concluded that Design §"three failures" benefit #2 (cross-block
+call-tree fragmentation) was therefore weaker than claimed, because the `last_end`-based contiguity
+grouping tested exact `begin_ticks == last_end` equality. That was the wrong conclusion in two ways:
+the equality held for Unreal-produced streams all along (so the benefit was always real for the
+production producer), and for Rust-produced streams the equality test was itself the bug — it meant
+call trees *never* spanned a block boundary. Both views' contiguity tests are now `begin_ticks <=
+last_end`, since only a *gap* breaks a chain; an overlap still means unbroken coverage.
 
 **Grouping residuals now documented in `group_blocks_into_partitions`**
 
 - `emit_partition` skips a window whose blocks all report `nb_objects == 0`, where the pre-refactor
-  code pushed a rows-free partition mid-list. Unreachable (no producer emits a zero-object block),
-  but it makes `InsertTime` grouping not quite "bit-identical to a naive greedy cut".
+  code pushed a rows-free partition mid-list. Unreachable in practice (no in-repo producer emits a
+  zero-object block), though nothing enforces it — `nb_objects` has no CHECK constraint and
+  `WebIngestionService::insert_block_typed` does not validate it. It makes `InsertTime` grouping not
+  quite "bit-identical to a naive greedy cut".
 - The insert-range invariant does not cover two or more partitions sharing an *identical degenerate*
   range; `tstzrange(t, t)` is empty so the exclusion constraint stays quiet, but the `EventTime`
   up-to-date query would see >1 row and never converge. Needs >`max_nb_objects` objects at a single
