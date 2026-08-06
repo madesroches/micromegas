@@ -159,10 +159,10 @@ The gateway maps gRPC errors to HTTP status codes:
 | HTTP Status | Meaning | When |
 |-------------|---------|------|
 | 200 OK | Success | Query executed successfully |
-| 400 Bad Request | Invalid request | Empty SQL, query too large (>1MB), or invalid/unsupported SQL (syntax error, unknown column/function, etc.) |
+| 400 Bad Request | Invalid request | Empty SQL, query too large (>1MB), or invalid SQL (syntax error, unknown column/function, etc.) |
 | 401 Unauthorized | Auth failed | Invalid/missing token (from FlightSQL) |
 | 403 Forbidden | Permission denied | User not authorized (from FlightSQL) |
-| 500 Internal Error | Server error | Server-side execution failure, or a query that exceeded a resource budget (not yet mapped to its own HTTP status; a follow-up) |
+| 500 Internal Error | Server error | Server-side execution failure, a query that exceeded a resource budget, or an unimplemented feature (gRPC `Unimplemented`) (none yet mapped to their own HTTP status; a follow-up) |
 | 503 Service Unavailable | Backend down | Cannot connect to FlightSQL |
 
 **Error response format:**

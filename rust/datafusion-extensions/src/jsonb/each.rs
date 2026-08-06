@@ -150,7 +150,7 @@ fn extract_all_jsonb_bytes_from_column(column: &ArrayRef) -> Result<Vec<Vec<u8>>
                 .as_any()
                 .downcast_ref::<GenericBinaryArray<i32>>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution("failed to cast column to BinaryArray".into())
+                    DataFusionError::Internal("failed to cast column to BinaryArray".into())
                 })?;
             Ok((0..binary_array.len())
                 .filter(|&i| !binary_array.is_null(i))
@@ -162,7 +162,7 @@ fn extract_all_jsonb_bytes_from_column(column: &ArrayRef) -> Result<Vec<Vec<u8>>
                 .as_any()
                 .downcast_ref::<DictionaryArray<Int32Type>>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
+                    DataFusionError::Internal(
                         "failed to cast column to DictionaryArray<Int32, Binary>".into(),
                     )
                 })?;
@@ -171,7 +171,7 @@ fn extract_all_jsonb_bytes_from_column(column: &ArrayRef) -> Result<Vec<Vec<u8>>
                 .as_any()
                 .downcast_ref::<GenericBinaryArray<i32>>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution("dictionary values are not a binary array".into())
+                    DataFusionError::Internal("dictionary values are not a binary array".into())
                 })?;
             Ok((0..dict_array.len())
                 .filter(|&i| !dict_array.is_null(i))

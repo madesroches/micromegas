@@ -147,7 +147,7 @@ fn extract_all_jsonb_bytes_from_column(column: &ArrayRef) -> Result<Vec<Vec<u8>>
                 .as_any()
                 .downcast_ref::<DictionaryArray<Int32Type>>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
+                    DataFusionError::Internal(
                         "failed to cast column to DictionaryArray<Int32, Binary>".into(),
                     )
                 })?;

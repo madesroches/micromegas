@@ -197,28 +197,28 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
 
         let view_set_names: &StringArray =
             args[0].as_any().downcast_ref::<_>().ok_or_else(|| {
-                DataFusionError::Execution(
+                DataFusionError::Internal(
                     "error casting view_set_name argument as StringArray".into(),
                 )
             })?;
 
         let view_instance_ids: &StringArray =
             args[1].as_any().downcast_ref::<_>().ok_or_else(|| {
-                DataFusionError::Execution(
+                DataFusionError::Internal(
                     "error casting view_instance_id argument as StringArray".into(),
                 )
             })?;
 
         let begin_insert_times: &TimestampNanosecondArray =
             args[2].as_any().downcast_ref::<_>().ok_or_else(|| {
-                DataFusionError::Execution(
+                DataFusionError::Internal(
                     "error casting begin_insert_time argument as TimestampNanosecondArray".into(),
                 )
             })?;
 
         let end_insert_times: &TimestampNanosecondArray =
             args[3].as_any().downcast_ref::<_>().ok_or_else(|| {
-                DataFusionError::Execution(
+                DataFusionError::Internal(
                     "error casting end_insert_time argument as TimestampNanosecondArray".into(),
                 )
             })?;

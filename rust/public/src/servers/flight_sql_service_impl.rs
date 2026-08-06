@@ -345,6 +345,19 @@ impl QueryAuditState {
             Err(e) => warn!("failed to serialize query audit record: {e}"),
         }
     }
+
+    /// Emits an "error" audit record for an already-built client-facing
+    /// `status` (message + `error_class` derived from its code) and returns it
+    /// unchanged -- the shared tail of every setup-phase `map_err` in
+    /// `execute_query`.
+    fn fail(&self, status: Status) -> Status {
+        self.emit(
+            "error",
+            Some(status.message().to_string()),
+            Some(error_class(status.code())),
+        );
+        status
+    }
 }
 
 /// Stream wrapper that tracks when the stream is fully consumed
@@ -598,16 +611,8 @@ impl FlightSqlServiceImpl {
         // wrapper, so every session context created from it (including nested ones,
         // e.g. Perfetto trace queries and JIT materialization) attributes its memory
         // to this query alone instead of the process-shared pool.
-        let scoped_env =
-            scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone()).map_err(|e| {
-                let status = status!("error building scoped runtime", e);
-                audit_state.emit(
-                    "error",
-                    Some(format!("error building scoped runtime: {e}")),
-                    Some(error_class(status.code())),
-                );
-                status
-            })?;
+        let scoped_env = scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone())
+            .map_err(|e| audit_state.fail(status!("error building scoped runtime", e)))?;
         let lakehouse = self.lakehouse.with_runtime(scoped_env);
 
         // Session context creation phase
@@ -622,15 +627,7 @@ impl FlightSqlServiceImpl {
             is_admin(metadata),
         )
         .await
-        .map_err(|e| {
-            let status = status!("error in make_session_context", e);
-            audit_state.emit(
-                "error",
-                Some(format!("error in make_session_context: {e}")),
-                Some(error_class(status.code())),
-            );
-            status
-        })?;
+        .map_err(|e| audit_state.fail(status!("error in make_session_context", e)))?;
         let context_init_duration = now() - session_begin;
         audit_state.context_init_ms = session_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
@@ -638,46 +635,24 @@ impl FlightSqlServiceImpl {
         let planning_begin = now();
         let planning_begin_instant = Instant::now();
         let mut df = ctx.sql(sql).await.map_err(|e| {
-            let status = client_error("error building dataframe", e, &query_id, None);
-            audit_state.emit(
-                "error",
-                Some(status.message().to_string()),
-                Some(error_class(status.code())),
-            );
-            status
+            audit_state.fail(client_error("error building dataframe", e, &query_id, None))
         })?;
         let planning_duration = now() - planning_begin;
         audit_state.planning_ms = planning_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
         if let Some(limit_str) = metadata.get("limit") {
             let parsed_limit: usize = usize::from_str(limit_str.to_str().map_err(|e| {
-                let status = client_input_error!("error converting limit to str", e);
-                audit_state.emit(
-                    "error",
-                    Some(status.message().to_string()),
-                    Some(error_class(status.code())),
-                );
-                status
+                audit_state.fail(client_input_error!("error converting limit to str", e))
             })?)
-            .map_err(|e| {
-                let status = client_input_error!("error parsing limit", e);
-                audit_state.emit(
-                    "error",
-                    Some(status.message().to_string()),
-                    Some(error_class(status.code())),
-                );
-                status
-            })?;
+            .map_err(|e| audit_state.fail(client_input_error!("error parsing limit", e)))?;
             audit_state.limit = Some(parsed_limit as u64);
             df = df.limit(0, Some(parsed_limit)).map_err(|e| {
-                let status =
-                    client_error("error building dataframe with limit", e, &query_id, None);
-                audit_state.emit(
-                    "error",
-                    Some(status.message().to_string()),
-                    Some(error_class(status.code())),
-                );
-                status
+                audit_state.fail(client_error(
+                    "error building dataframe with limit",
+                    e,
+                    &query_id,
+                    None,
+                ))
             })?;
         }
 
@@ -689,13 +664,12 @@ impl FlightSqlServiceImpl {
         let schema = Arc::new(df.schema().as_arrow().clone());
         let task_ctx = Arc::new(df.task_ctx());
         let plan = df.create_physical_plan().await.map_err(|e| {
-            let status = client_error("error creating physical plan", e, &query_id, None);
-            audit_state.emit(
-                "error",
-                Some(status.message().to_string()),
-                Some(error_class(status.code())),
-            );
-            status
+            audit_state.fail(client_error(
+                "error creating physical plan",
+                e,
+                &query_id,
+                None,
+            ))
         })?;
         audit_state.plan = Some(plan.clone());
         // `plan`/`query_id` are cloned here because both are moved shortly:
@@ -708,18 +682,12 @@ impl FlightSqlServiceImpl {
         let query_id_for_stream = query_id.clone();
         let stream = execute_stream(plan, task_ctx)
             .map_err(|e| {
-                let status = client_error(
+                audit_state.fail(client_error(
                     "error executing plan",
                     e,
                     &query_id_for_stream,
                     Some(&plan_for_errors),
-                );
-                audit_state.emit(
-                    "error",
-                    Some(status.message().to_string()),
-                    Some(error_class(status.code())),
-                );
-                status
+                ))
             })?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
         let builder = if Self::should_preserve_dictionary(metadata) {

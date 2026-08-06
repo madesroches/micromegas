@@ -6,7 +6,6 @@ into a comprehensive integration test suite.
 
 import pytest
 import pyarrow
-import pyarrow._flight as flight
 import micromegas
 import sys
 import os

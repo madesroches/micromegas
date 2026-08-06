@@ -40,16 +40,9 @@ pub use super::process_spans_table_function::SpanTypes;
 /// classified as `DataFusionError::Execution` while every other failure inside
 /// `generate_streaming_perfetto_trace` (session context, object store, DB, parquet
 /// reads, ...) is a genuine internal failure.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("Process {0} not found")]
 struct ProcessNotFoundError(String);
-
-impl fmt::Display for ProcessNotFoundError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Process {} not found", self.0)
-    }
-}
-
-impl std::error::Error for ProcessNotFoundError {}
 
 /// Execution plan that generates Perfetto trace chunks
 pub struct PerfettoTraceExecutionPlan {

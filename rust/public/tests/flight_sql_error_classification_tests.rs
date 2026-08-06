@@ -45,7 +45,7 @@ struct FakePlan {
 }
 
 impl FakePlan {
-    fn new(display_text: impl Into<String>) -> Arc<dyn ExecutionPlan> {
+    fn new_arc(display_text: impl Into<String>) -> Arc<dyn ExecutionPlan> {
         let schema = Arc::new(Schema::empty());
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -263,7 +263,7 @@ fn client_error_includes_diagnostic_span_and_never_the_physical_plan() {
         Box::new(diag),
         Box::new(DataFusionError::Plan("unknown column 'foo'".to_string())),
     );
-    let plan = FakePlan::new("ProjectionExec: expr=[jsonb_format_json(x)]");
+    let plan = FakePlan::new_arc("ProjectionExec: expr=[jsonb_format_json(x)]");
     let status = client_error(
         "error building dataframe",
         err,
@@ -280,7 +280,7 @@ fn client_error_includes_diagnostic_span_and_never_the_physical_plan() {
 
 #[test]
 fn client_error_with_plan_and_no_diagnostic_never_puts_the_plan_in_the_message() {
-    let plan = FakePlan::new("ProjectionExec: expr=[jsonb_format_json(x)]");
+    let plan = FakePlan::new_arc("ProjectionExec: expr=[jsonb_format_json(x)]");
     let status = client_error(
         "error building dataframe",
         DataFusionError::Execution("division by zero".to_string()),
@@ -298,7 +298,7 @@ fn client_error_with_plan_and_no_diagnostic_never_puts_the_plan_in_the_message()
 
 #[test]
 fn build_log_line_includes_physical_plan_section_when_plan_is_some() {
-    let plan = FakePlan::new("ProjectionExec: expr=[jsonb_format_json(x)] -- marker-42");
+    let plan = FakePlan::new_arc("ProjectionExec: expr=[jsonb_format_json(x)] -- marker-42");
     let line = build_log_line(
         "error building dataframe",
         &DataFusionError::Execution("boom".to_string()),
@@ -326,7 +326,7 @@ fn build_log_line_omits_physical_plan_section_when_plan_is_none() {
 #[test]
 fn build_log_line_truncates_oversized_plan_text_at_max_plan_chars() {
     let oversized = "X".repeat(MAX_PLAN_CHARS + 500);
-    let plan = FakePlan::new(oversized);
+    let plan = FakePlan::new_arc(oversized);
     let line = build_log_line(
         "error building dataframe",
         &DataFusionError::Execution("boom".to_string()),
@@ -341,6 +341,27 @@ fn build_log_line_truncates_oversized_plan_text_at_max_plan_chars() {
     );
     // The untruncated, over-limit run of X's should not appear anywhere.
     assert!(!line.contains(&"X".repeat(MAX_PLAN_CHARS + 1)));
+}
+
+#[test]
+fn build_log_line_truncates_multibyte_plan_text_without_panicking() {
+    // `truncate_plan_text` uses `char_indices()`, not a byte-offset slice, so
+    // this must not panic even though "é" is 2 bytes wide -- a byte-offset cut
+    // at `MAX_PLAN_CHARS` bytes would land mid-character here.
+    let oversized = "é".repeat(MAX_PLAN_CHARS + 100);
+    let plan = FakePlan::new_arc(oversized);
+    let line = build_log_line(
+        "error building dataframe",
+        &DataFusionError::Execution("boom".to_string()),
+        "query-1",
+        Some(&plan),
+    );
+
+    let expected_truncated = format!("{}... (truncated)", "é".repeat(MAX_PLAN_CHARS));
+    assert!(
+        line.contains(&expected_truncated),
+        "expected the plan text truncated at exactly MAX_PLAN_CHARS chars"
+    );
 }
 
 // --- classify_flight_error --------------------------------------------------------

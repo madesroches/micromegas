@@ -140,7 +140,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
         }
 
         let file_paths: &StringArray = args[0].as_any().downcast_ref::<_>().ok_or_else(|| {
-            DataFusionError::Execution("error casting file_path argument as StringArray".into())
+            DataFusionError::Internal("error casting file_path argument as StringArray".into())
         })?;
 
         let mut builder = StringBuilder::with_capacity(file_paths.len(), 64);
