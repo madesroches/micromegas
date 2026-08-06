@@ -122,18 +122,23 @@ function PageLayoutContent({ children, onRefresh, rightPanel, ... }: PageLayoutP
 
 **Visual layout change (intentional):** `Header` stays inside `PageLayoutContent`, rendered per-page via `<Outlet/>` — lifting it out to sit above `AppShell`'s `Sidebar`+content row is the Outlet-context refactor rejected in Trade-offs below. Because of that, `AppShell`'s `<div className="h-screen ... flex">` makes `Sidebar` a full-height sibling of the whole `Header`+content column: `Sidebar` becomes a rail spanning the full viewport height, flush with the top of the window, and `Header` starts to its right (no longer spanning the full window width), instead of `Header` sitting full-width above the `Sidebar`+content row as it does today. This is an accepted trade-off of this plan, not an oversight — see Testing Strategy for a manual check confirming the new arrangement.
 
+**New hazard from that change (must be fixed, not just accepted):** `Sidebar`'s flyout (`Sidebar.tsx:328-329`, `absolute top-0 left-14 h-full w-64 ... z-40`) is positioned relative to `aside`, which is now stretched to the full viewport height instead of just the row below `Header`. That puts the flyout's `top:0`/`h-full` span at the same vertical range as `Header` — which now sits beside `Sidebar` rather than above it, and has no `position`/`z-index` of its own. Since the flyout is `position:absolute` with `z-40`, it would render visually above `Header` wherever they overlap (roughly `Header`'s leftmost ~256px: the logo, and on narrower viewports, the time-range/pivot controls). Implementation Step 2 below fixes this by anchoring the flyout below `Header` instead of at the top of the full-height rail.
+
 Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` with no `path`), the nested routes' paths are unaffected — no per-page file needs its `path` changed, and none of the `<PageLayout ...props>` call sites need to change either, since `PageLayout`'s public props are unchanged.
 
 ## Implementation Steps
 
 1. **Create `analytics-web-app/src/components/layout/AppShell.tsx`** — renders `Sidebar` once, gated on `useAuth()` status (plus an `/admin`-prefix check standing in for `requireAdmin`) so it doesn't mount during loading/unauthenticated/error/admin-denied states, and wraps `<Outlet/>` in its own `<Suspense>` so in-app route-chunk loading doesn't unmount the shell — per the snippet above.
-2. **Edit `analytics-web-app/src/components/layout/PageLayout.tsx`** — remove the `Sidebar` import and `<Sidebar />` render; remove the outer `h-screen` wrapper div in `PageLayoutContent` (replace with a flex-child-friendly wrapper, since height/background now come from `AppShell`).
-3. **Edit `analytics-web-app/src/components/layout/index.ts`** — add `export { AppShell } from './AppShell'`.
-4. **Edit `analytics-web-app/src/router.tsx`** — wrap all routes except `/login` and `*` (`NotFoundPage`) in a pathless `<Route element={<AppShell />}>` parent, per the diagram above. Import `AppShell` from `@/components/layout`. Leave the existing top-level `<Suspense fallback={<PageLoader/>}>` wrapping the whole `<Routes>` tree unchanged — it still covers `/login`, `NotFoundPage`, and first paint; `AppShell`'s own internal `<Suspense>` (step 1) is what stops it from unmounting the shell on later navigations.
-5. **Manual verification** (see Testing Strategy) — confirm the flyout stays open through the first keystroke of a sidebar search initiated from a non-`/screens` page, and that `/login` / 404 still render without a sidebar.
+2. **Edit `analytics-web-app/src/components/layout/Header.tsx` and `analytics-web-app/src/components/layout/Sidebar.tsx`** to fix the flyout/`Header` overlap described above: give `<header>` a fixed, known height (replace its content-driven `py-3` sizing with an explicit height utility, e.g. `h-14`) and change the flyout's `absolute top-0 left-14 h-full` to start below that same height instead (e.g. `top-14 h-[calc(100%-3.5rem)]`), so the flyout never spans the vertical range `Header` occupies. Keep the two values in sync (a code comment referencing the other file is enough — no need for a CSS variable).
+3. **Edit `analytics-web-app/src/components/layout/PageLayout.tsx`** — remove the `Sidebar` import and `<Sidebar />` render; remove the outer `h-screen` wrapper div in `PageLayoutContent` (replace with a flex-child-friendly wrapper, since height/background now come from `AppShell`).
+4. **Edit `analytics-web-app/src/components/layout/index.ts`** — add `export { AppShell } from './AppShell'`.
+5. **Edit `analytics-web-app/src/router.tsx`** — wrap all routes except `/login` and `*` (`NotFoundPage`) in a pathless `<Route element={<AppShell />}>` parent, per the diagram above. Import `AppShell` from `@/components/layout`. Leave the existing top-level `<Suspense fallback={<PageLoader/>}>` wrapping the whole `<Routes>` tree unchanged — it still covers `/login`, `NotFoundPage`, and first paint; `AppShell`'s own internal `<Suspense>` (step 1) is what stops it from unmounting the shell on later navigations.
+6. **Manual verification** (see Testing Strategy) — confirm the flyout stays open through the first keystroke of a sidebar search initiated from a non-`/screens` page, that `/login` / 404 still render without a sidebar, and that the open flyout never covers `Header`'s logo or controls.
 
 ## Files to Modify
 - `analytics-web-app/src/components/layout/AppShell.tsx` (new)
+- `analytics-web-app/src/components/layout/Header.tsx`
+- `analytics-web-app/src/components/layout/Sidebar.tsx`
 - `analytics-web-app/src/components/layout/PageLayout.tsx`
 - `analytics-web-app/src/components/layout/index.ts`
 - `analytics-web-app/src/router.tsx`
@@ -143,6 +148,7 @@ Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` wit
 - **Considered:** full `Outlet`-context refactor where `Header`'s per-page config (`rightPanel`, `timeRangeControl`, `processId`, refresh interval, etc.) is also lifted to a shared layout route. Rejected as out of scope — this issue is specifically about the sidebar, `Header` remounting per navigation isn't reported as broken, and lifting `Header` too would touch all ~15 route files' prop wiring for no benefit to this bug.
 - **Side effect (net positive):** since `Sidebar` now mounts once instead of on every navigation, `loadFolders()` (screens/folders fetch) and the `useFoldersChangedListener` subscription only run once per session instead of once per route change, and tree `expandedPaths` / scroll state persist across navigation — matching the "persistent sidebar" intent already stated in `ScreensPage.tsx`'s comment.
 - **Accepted:** `Sidebar` becomes a full-height rail flush with the top of the viewport instead of sitting in the row below `Header` (see the "Visual layout change" callout in Design) — a deliberate consequence of keeping `Header` per-page rather than lifting it into `AppShell`.
+- **Accepted:** fixing `Header`'s height (Implementation Step 2) means `Header` can no longer grow taller to fit content (e.g. wrapped text) without the flyout's fixed offset drifting out of sync. Given `Header`'s current content is a single row of fixed-size controls, this is not expected to happen in practice.
 
 ## Testing Strategy
 - `yarn lint` / `yarn type-check` / `yarn test` in `analytics-web-app/` — existing route tests mock `PageLayout` as a pass-through and don't exercise `router.tsx`, so they should be unaffected; run them to confirm.
@@ -153,6 +159,7 @@ Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` wit
   3. Confirm the 404 page (an unmatched path) renders without a sidebar.
   4. Navigate between a few different app pages and confirm the sidebar's expanded folder state and open/closed flyout state persist sensibly rather than resetting each time.
   5. Confirm the new (intended) layout on any page: `Sidebar` now spans the full viewport height flush with the top, and `Header` starts to the right of it rather than spanning the full window width.
+  6. On a page with visible header controls (e.g. one with a time-range picker, such as `/processes`), hover the sidebar open so the flyout appears — confirm the flyout renders below `Header` and does not cover the logo, time-range picker, or pivot button.
 
 ## Open Questions
 - None — root cause and fix are both confirmed against the current code.
