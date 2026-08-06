@@ -37,9 +37,9 @@ Add a single shared utility, `flattenProperties`, to `analytics-web-app/src/lib/
 /**
  * Expands object-valued properties into dot-separated leaf entries with
  * string values (e.g. `Dimensions: {DBInstanceIdentifier: "foo"}` becomes
- * `"Dimensions.DBInstanceIdentifier": "foo"`). Non-object values (including
- * arrays) pass through unchanged at the top level, preserving existing
- * scalar-formatting behavior in the timeline getters.
+ * `"Dimensions.DBInstanceIdentifier": "foo"`). Array values are JSON-stringified
+ * at the top level too, matching the nested behavior in `flattenObjectInto`, so
+ * consumers never end up rendering `[object Object]` via `String(value)`.
  */
 export function flattenProperties(props: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
@@ -47,7 +47,7 @@ export function flattenProperties(props: Record<string, unknown>): Record<string
     if (isPlainObject(value)) {
       flattenObjectInto(value, key, result)
     } else {
-      result[key] = value
+      result[key] = Array.isArray(value) ? JSON.stringify(value) : value
     }
   }
   return result
@@ -73,9 +73,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 Design notes:
 - Recursion handles arbitrarily nested objects (e.g. `Dimensions.Nested.Key`), not just one level.
-- Arrays are treated as opaque leaves, not expanded — the issue is scoped to object values, and there's no natural key to expand an array element under. A nested array gets `JSON.stringify`'d rather than `String()`'d, to avoid a lesser version of the same unreadable-output problem (`String([1,2])` → `"1,2"` loses structure for non-primitive elements).
+- Arrays are treated as opaque leaves, not expanded — the issue is scoped to object values, and there's no natural key to expand an array element under. An array value, whether top-level or nested, gets `JSON.stringify`'d rather than `String()`'d, to avoid a lesser version of the same unreadable-output problem (`String([1,2])` → `"1,2"` loses structure for non-primitive elements).
 - Nested `null` values are stored as `null`, not `String(null)` (`"null"`). This matches the existing top-level behavior in every getter (`value !== undefined && value !== null` guards), so a null anywhere in the object tree still produces a gap in the timeline rather than a literal `"null"` segment — a real shape from OTel ingestion, where a `KeyValue`/`KvlistValue` entry with no value maps to `JsonbValue::Null` (`rust/analytics/src/lakehouse/otel/attrs.rs`).
-- Top-level (non-nested) scalar values are left as their original type (`unknown`), unchanged — `createPropertyTimelineGetter` and its duplicates already handle scalar→string conversion for the getter's return value, and existing tests rely on that behavior with numbers (see `property-utils.test.ts:188`). Only values produced by expanding an object are pre-stringified, since those are the "set of string→string properties" this feature introduces.
+- Top-level non-array scalar values are left as their original type (`unknown`), unchanged — `createPropertyTimelineGetter` and its duplicates already handle scalar→string conversion for the getter's return value, and existing tests rely on that behavior with numbers (see `property-utils.test.ts:188`). Values produced by expanding an object, and array values at either the top level or nested, are pre-stringified instead, since those are the cases that would otherwise fall back to `String(value)`'s lossy/unreadable output (`[object Object]` for objects, comma-joined elements for arrays).
 - No changes needed in `PropertyTimeline.tsx` or `PropertyTimelineData`/`PropertySegment` types — by the time a value reaches those, it's already a plain string via the existing getter path.
 - **Accepted risk — key collisions**: `flattenProperties` does no collision detection. If a flattened dotted path (e.g. `aws.exporter.arn` from an object-valued top-level key named `aws`) happens to match an existing literal key already in the same `properties` map — such as the scalar, dotted-prefix keys ingestion injects into this map (`otel.scope.name`, `otel.trace_id`, `aws.exporter.arn`, etc. — see `rust/analytics/src/lakehouse/otel/attrs.rs` and the log/metrics block processors) — `result[fullKey] = ...` silently overwrites whichever was assigned first, with `Object.entries` iteration order deciding the outcome. This requires a raw exporter attribute to be a top-level object literally named `otel` or `aws`, which is rare in practice; it's accepted as out of scope for this fix rather than defended against with namespacing or warnings.
 
