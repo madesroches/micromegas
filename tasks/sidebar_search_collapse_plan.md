@@ -120,6 +120,8 @@ function PageLayoutContent({ children, onRefresh, rightPanel, ... }: PageLayoutP
 }
 ```
 
+**Visual layout change (intentional):** `Header` stays inside `PageLayoutContent`, rendered per-page via `<Outlet/>` — lifting it out to sit above `AppShell`'s `Sidebar`+content row is the Outlet-context refactor rejected in Trade-offs below. Because of that, `AppShell`'s `<div className="h-screen ... flex">` makes `Sidebar` a full-height sibling of the whole `Header`+content column: `Sidebar` becomes a rail spanning the full viewport height, flush with the top of the window, and `Header` starts to its right (no longer spanning the full window width), instead of `Header` sitting full-width above the `Sidebar`+content row as it does today. This is an accepted trade-off of this plan, not an oversight — see Testing Strategy for a manual check confirming the new arrangement.
+
 Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` with no `path`), the nested routes' paths are unaffected — no per-page file needs its `path` changed, and none of the `<PageLayout ...props>` call sites need to change either, since `PageLayout`'s public props are unchanged.
 
 ## Implementation Steps
@@ -140,6 +142,7 @@ Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` wit
 - **Considered:** patch `Sidebar.tsx` locally (e.g. stash `isOpen`/`expandedPaths` in a module-level variable that survives remounts). Rejected — it's a workaround for a remount that shouldn't be happening at all, doesn't fix the underlying duplicated-per-page layout, and leaves the same remount hazard for any future sidebar state (the code comment already claims persistence that doesn't actually hold).
 - **Considered:** full `Outlet`-context refactor where `Header`'s per-page config (`rightPanel`, `timeRangeControl`, `processId`, refresh interval, etc.) is also lifted to a shared layout route. Rejected as out of scope — this issue is specifically about the sidebar, `Header` remounting per navigation isn't reported as broken, and lifting `Header` too would touch all ~15 route files' prop wiring for no benefit to this bug.
 - **Side effect (net positive):** since `Sidebar` now mounts once instead of on every navigation, `loadFolders()` (screens/folders fetch) and the `useFoldersChangedListener` subscription only run once per session instead of once per route change, and tree `expandedPaths` / scroll state persist across navigation — matching the "persistent sidebar" intent already stated in `ScreensPage.tsx`'s comment.
+- **Accepted:** `Sidebar` becomes a full-height rail flush with the top of the viewport instead of sitting in the row below `Header` (see the "Visual layout change" callout in Design) — a deliberate consequence of keeping `Header` per-page rather than lifting it into `AppShell`.
 
 ## Testing Strategy
 - `yarn lint` / `yarn type-check` / `yarn test` in `analytics-web-app/` — existing route tests mock `PageLayout` as a pass-through and don't exercise `router.tsx`, so they should be unaffected; run them to confirm.
@@ -149,6 +152,7 @@ Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` wit
   2. Confirm `/login` renders without a sidebar.
   3. Confirm the 404 page (an unmatched path) renders without a sidebar.
   4. Navigate between a few different app pages and confirm the sidebar's expanded folder state and open/closed flyout state persist sensibly rather than resetting each time.
+  5. Confirm the new (intended) layout on any page: `Sidebar` now spans the full viewport height flush with the top, and `Header` starts to the right of it rather than spanning the full window width.
 
 ## Open Questions
 - None — root cause and fix are both confirmed against the current code.
