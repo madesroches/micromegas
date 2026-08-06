@@ -92,7 +92,7 @@ exception type `micromegas-query`/notebook callers will see after this change:
 | `INTERNAL(13)` (today, always) | `pyarrow._flight.FlightInternalError` (message prefixed `"Flight returned internal error, with message: "` — this literally matches the repro in the issue) |
 | `InvalidArgument(3)` | `pyarrow.lib.ArrowInvalid`, a **`ValueError` subclass** — no Flight-specific exception class exists for this code, it goes through generic Arrow status mapping. This is a good outcome: a bad query becomes a `ValueError` in Python. |
 | `Unimplemented(12)` | `pyarrow.lib.ArrowNotImplementedError`, a `NotImplementedError` subclass |
-| `ResourceExhausted(8)` | `pyarrow._flight.FlightUnavailableError` — gRPC `RESOURCE_EXHAUSTED` maps to Arrow Flight's internal `kUnavailable` transport code (`util_internal.cc:105-107`), which becomes an `IOError`-family exception carrying `FlightStatusDetail::Unavailable`. See **Open Questions** — this reads as "transient, safe to retry," which is exactly wrong for "this query needs too much memory." |
+| `ResourceExhausted(8)` | `pyarrow._flight.FlightUnavailableError` — gRPC `RESOURCE_EXHAUSTED` maps to Arrow Flight's internal `kUnavailable` transport code (`util_internal.cc:105-107`), which becomes an `IOError`-family exception carrying `FlightStatusDetail::Unavailable`. See **Trade-offs** — this reads as "transient, safe to retry," which is exactly wrong for "this query needs too much memory." |
 
 Verified with `python3 -c "import pyarrow.flight as f; ..."` (pyarrow 20.0.0) that no
 `FlightInvalidArgument`/`FlightResourceExhausted` classes exist client-side — confirming the
@@ -212,8 +212,8 @@ The full original message (with DataFusion's own backtrace if enabled) plus `des
 `query_id` still gets logged server-side at `warn!`/`error!` per the classified code — only
 the *client-facing* `Status` message drops the file:line/build-path suffix. No
 `--remap-path-prefix` build change is needed since we stop embedding `file!()`/`line!()` in
-the client message at all; it can still be added separately for the server-side log if
-desired (noted under Open Questions, not required for this plan).
+the client message at all; it could still be added separately for the server-side log later,
+but that's not required for this plan.
 
 The immediate `execute_stream(plan, task_ctx)` call failure (`:461-464`) is a plain
 `DataFusionError` — same as the other four sites — and goes straight to `client_error(...)`.
@@ -327,6 +327,31 @@ Leave `"arrays of different lengths in X()"` and `"Dictionary key index out of b
 columns of a batch must have equal length; a dictionary index must be in range for its own
 values array), not something a caller's SQL text can directly cause.
 
+### 6. Request-metadata parsing sites
+
+Of the non-`DataFusionError` `status!` sites in `execute_query`, two are unambiguously
+caller-supplied input with no plausible server-side origin: the `query_range_begin`/
+`query_range_end` header parses (`:316`, `:318`, `:322`, `:324`), which parse gRPC metadata
+values the caller set directly. Convert these four to `Status::invalid_argument` via a small
+macro paralleling `status!`:
+
+```rust
+macro_rules! client_input_error {
+    ($desc:expr, $err:expr) => {
+        Status::invalid_argument(format!("{}: {}", $desc, $err))
+    };
+}
+```
+
+The ticket-decode site (`TicketStatementQuery::decode`, `:527-528`) and the SQL-statement-handle
+UTF-8 parse it feeds (`:296-297`) stay on `status!`/`Status::internal`, unchanged. Both operate on
+a ticket this server itself produced and encoded (`get_flight_info_statement`, `:542-546`) — the
+caller is expected to round-trip it unmodified, not construct it. A decode failure here is at
+least as likely to come from a version-skew between pods during a rolling deployment (same
+server code, different build encoding/decoding the ticket) as from a caller corrupting or
+forging one — there isn't enough certainty to classify it as the caller's mistake, so it's not
+reclassified.
+
 ### Sequence (single query, error path)
 
 ```
@@ -348,19 +373,25 @@ client                    execute_query                  classify/emit
 
 **Phase 1 — core classification (`rust/public/src/servers/`)**
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
-   `classify_flight_error`, `error_class`, `error_or_warn_log` helpers near the existing
-   `status!` macro. `classify_datafusion_error` and `client_error` are `pub` so step 9's
+   `classify_flight_error`, `error_class`, `error_or_warn_log`, and `client_input_error!`
+   helpers near the existing `status!` macro. `classify_datafusion_error` and `client_error` are `pub` so step 9's
    external integration tests can call them directly. `error_or_warn_log(code, desc, &err, query_id)` maps `error_class(code)`
    to `warn!` (for `"user"`/`"resource"`) or `error!` (for `"internal"`), logging the full
    message — including `desc`, `err.find_root()` (untruncated, with file:line/backtrace
-   intact), and `query_id` — server-side only.
+   intact), and `query_id` — server-side only. `client_input_error!` is Design §6's new macro,
+   returning `Status::invalid_argument` directly (no `DataFusionError`/`error_class`/audit-log
+   involvement — these sites run before `query_id`/`audit_state` exist).
 2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
    `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
    `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
-   the new helpers. Leave every other
-   `status!` site (ticket decode, header parsing, `make_session_context`, `scoped_runtime`,
+   the new helpers. Also convert the four `query_range_begin`/`query_range_end` header-parsing
+   sites (`:316`, `:318`, `:322`, `:324`) from `status!` to `client_input_error!`, per Design §6.
+   Leave every other
+   `status!` site (ticket decode `:527-528`, the SQL-statement-handle UTF-8 parse it feeds
+   `:296-297`, `make_session_context`, `scoped_runtime`,
    schema encoding, prepared-statement handling) untouched — those aren't
-   `DataFusionError`s and stay `Status::internal`.
+   `DataFusionError`s (or, per Design §6, aren't confidently classifiable as caller mistakes)
+   and stay `Status::internal`.
 3. Mint `query_id` as the first statement of `execute_query` (before the UTF-8 parse of the
    SQL), thread it through `QueryAuditState` and into every `client_error`/
    `classify_flight_error` call at the five sites above. It is therefore available for every
@@ -512,6 +543,15 @@ client                    execute_query                  classify/emit
 - **Not implementing the `EXPLAIN`/`LIMIT 0` cheap-validation option.** The issue calls this
   out as "separate from reporting" — a client-side/API-shape feature, not a reporting fix.
   Left for a follow-up plan.
+- **Header parsing gets `InvalidArgument`; ticket decode doesn't.** Both are non-`DataFusionError`
+  `status!` sites, but they differ in how certain the caller-mistake attribution is. The
+  `query_range_begin`/`query_range_end` header values are set by the caller directly, so a
+  parse failure is unambiguously theirs. The ticket, by contrast, is an opaque token this
+  server itself issues and expects back unmodified — a decode failure is at least as
+  plausibly a version-skew bug across pods in a rolling deployment as a caller-corrupted
+  ticket. Classifying it `InvalidArgument` anyway would blame the caller in cases that
+  could be a server-side bug, so it stays `Internal` until there's a way to tell the two
+  apart with more confidence (see Design §6).
 
 ## Testing Strategy
 
@@ -535,8 +575,7 @@ client                    execute_query                  classify/emit
 
 ## Open Questions
 
-1. Should the parsing/attribution `status!` sites that aren't `DataFusionError` (ticket
-   decode failures, malformed `query_range_begin`/`query_range_end` headers) also move to
-   `Status::invalid_argument`? They're arguably caller mistakes too (malformed request, not
-   malformed SQL), but the issue's classification table is scoped to `DataFusionError`
-   specifically — flagging as a small, separate follow-up rather than folding it in here.
+None remaining. The one open question from earlier drafts — whether non-`DataFusionError`
+`status!` sites should also move to `Status::invalid_argument` — is resolved in Design §6: the
+header-parsing sites do (unambiguously caller-supplied input), the ticket-decode site doesn't
+(not confidently attributable to the caller; see the Trade-offs entry).
