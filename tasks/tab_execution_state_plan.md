@@ -161,10 +161,20 @@ export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle'
 ```ts
 const [hasError, setHasError] = useState(false)
 const tabState = computeTabState(isExecuting, hasError)
-usePageTitle(pageTitle, isExecuting)
 useTabExecutionState(tabState)
 ...
 <Renderer ... onExecutingChange={setIsExecuting} onErrorChange={setHasError} />
+```
+
+`isExecuting` is declared at `const [isExecuting, setIsExecuting] = useState(false)`, which
+today sits well after the existing `usePageTitle(pageTitle)` call. Since `usePageTitle` now
+needs `isExecuting` as its second argument, the call must move down to after that
+declaration (next to where `hasError`/`tabState`/`useTabExecutionState` are wired) rather than
+being edited in place — leaving it at its current spot would reference `isExecuting` before
+its declaration and fail to build:
+
+```ts
+usePageTitle(pageTitle, isExecuting)
 ```
 
 `hasError` should reset to `false` whenever a fresh execution starts, which it already does
@@ -194,9 +204,12 @@ alongside `setScreen(null)`.
    `TableRenderer.tsx`, `LogRenderer.tsx`, `MetricsRenderer.tsx`, `ProcessListRenderer.tsx`
    (table above).
 5. **ScreenPage**: add `hasError` state, compute `tabState` via `computeTabState`, call
-   `useTabExecutionState`, pass `busy` to `usePageTitle`, wire `onErrorChange` to the
-   `Renderer`, and reset `isExecuting`/`hasError` to `false` at the start of the `load()`
-   effect alongside `setScreen(null)`.
+   `useTabExecutionState`, wire `onErrorChange` to the `Renderer`, and reset
+   `isExecuting`/`hasError` to `false` at the start of the `load()` effect alongside
+   `setScreen(null)`. Move the existing `usePageTitle(pageTitle)` call down to after the
+   `isExecuting` declaration and pass it as the `busy` argument (`usePageTitle(pageTitle,
+   isExecuting)`) — leaving the call at its current spot would reference `isExecuting` before
+   its declaration.
 6. **Manual verification**: run a notebook with a slow cell (or a query against a large time
    range), tab away, confirm favicon/title change, tab back after completion/failure and
    confirm both states are visually distinct and revert to idle after opening a fresh screen.
