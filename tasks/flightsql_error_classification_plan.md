@@ -34,7 +34,7 @@ macro_rules! status {
 
 `execute_query` (`flight_sql_service_impl.rs:289-504`) is the path that matters most here —
 it's the one that runs arbitrary user SQL *and executes it*. (`do_action_create_prepared_statement`,
-`:867-918`, also calls `ctx.sql(&query.query)` on caller SQL and returns a `DataFusionError`
+`:867-906`, also calls `ctx.sql(&query.query)` on caller SQL and returns a `DataFusionError`
 at `:889`, but only plans it, without a `QueryAuditState`/`query_id` of its own — it's a
 separate call site, converted to `client_error` alongside the five below but with a
 locally-minted query id and no audit record; see step 2's note on that site.) `execute_query`'s
@@ -486,10 +486,13 @@ client                    execute_query                  classify/emit
    when `plan` is `Some` — the truncated physical plan text, all server-side only.
    `client_input_error!` is Design §6's new macro, returning `Status::invalid_argument`
    directly (no `DataFusionError` involved). The four range-header sites (`:316`, `:318`,
-   `:322`, `:324`) run before `query_id`/`audit_state` exist, so they have no audit-log
+   `:322`, `:324`) run before `audit_state` exists, so they have no audit-log
    involvement; the two `limit` sites (`:432`, `:436`) run after `audit_state` is constructed
    and already call `audit_state.emit("error", ...)` today — step 6 reorders those two to build
-   the `Status` first and emit with `error_class = "user"`.
+   the `Status` first and emit with `error_class = "user"`. All six `client_input_error!` sites
+   build their `Status` from `desc`/`err` alone (the macro doesn't take a `query_id` parameter),
+   so their client-facing messages omit `query_id` regardless of whether it's already been
+   minted at that point in `execute_query` (see step 3).
 2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
    `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
    `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
@@ -524,9 +527,12 @@ client                    execute_query                  classify/emit
    paths keep messages without a query id: the ticket-decode `status!` site in the calling
    `do_get_fallback` (`:527-528`), which happens before `execute_query` is even entered and
    already has a distinct log trail; the statement-handle UTF-8 parse inside `execute_query`
-   itself (`:296-297`), which Design §6 explicitly leaves on `status!`; and the attribution
+   itself (`:296-297`), which Design §6 explicitly leaves on `status!`; the attribution
    failure at `:331` (`validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?`),
-   which returns a pre-built `Status` and emits no audit record either.
+   which returns a pre-built `Status` and emits no audit record either; and the six
+   `client_input_error!` sites converted in step 2 (`:316`, `:318`, `:322`, `:324`, `:432`,
+   `:436`) — `query_id` exists by the time all six run, but the macro formats only `desc`/`err`,
+   so their client-facing messages omit it too.
 4. Wire the physical-plan fallback described in Design §2: clone `plan`/`query_id` before
    the `:461`/`:500` moves, and pass `Some(&plan_for_errors)` into the `client_error`/
    `classify_flight_error` calls at the `execute_stream` (`:461-464`) and per-batch (`:498`)
