@@ -5,7 +5,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -93,7 +93,7 @@ impl ScalarUDFImpl for PropertyGet {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 2 {
-            return internal_err!("wrong number of arguments to property_get()");
+            return exec_err!("wrong number of arguments to property_get()");
         }
 
         let names = args[1]
@@ -263,12 +263,12 @@ impl ScalarUDFImpl for PropertyGet {
                         }
                         Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
                     }
-                    _ => internal_err!(
+                    _ => exec_err!(
                         "property_get: unsupported dictionary value type, expected List or Binary"
                     ),
                 }
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "property_get: unsupported input type, expected List, Binary, Dictionary<Int32, List>, or Dictionary<Int32, Binary>"
             ),
         }

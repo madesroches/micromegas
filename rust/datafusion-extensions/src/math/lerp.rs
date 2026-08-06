@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{Array, Float64Array, Float64Builder};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -50,7 +50,7 @@ impl ScalarUDFImpl for LerpUdf {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 3 {
-            return internal_err!("wrong number of arguments to lerp()");
+            return exec_err!("wrong number of arguments to lerp()");
         }
 
         let inputs: Vec<&Float64Array> = args

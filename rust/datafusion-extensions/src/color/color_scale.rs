@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{Array, Float64Array, StringArray, UInt32Builder};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -87,7 +87,7 @@ impl ScalarUDFImpl for ColorScaleUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 3 {
-            return internal_err!("wrong number of arguments to color_scale()");
+            return exec_err!("wrong number of arguments to color_scale()");
         }
 
         // Fast path: literal colormap name. Resolve once, before lowering

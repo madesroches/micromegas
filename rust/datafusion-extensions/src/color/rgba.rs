@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{Array, Float64Array, UInt32Builder};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -57,7 +57,7 @@ impl ScalarUDFImpl for RgbaUdf {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 4 {
-            return internal_err!("wrong number of arguments to rgba()");
+            return exec_err!("wrong number of arguments to rgba()");
         }
 
         let channels: Vec<&Float64Array> = args
