@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStreamQuery } from './useStreamQuery'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { aggregateIntoSegments } from '@/lib/property-utils'
+import { aggregateIntoSegments, flattenProperties } from '@/lib/property-utils'
 import { PropertyTimelineData } from '@/types'
 
 const METRICS_SQL = `SELECT
@@ -106,7 +106,7 @@ export function useMetricsData({
               const propsStr = row.properties
               if (propsStr != null) {
                 try {
-                  propsMap.set(time, JSON.parse(String(propsStr)))
+                  propsMap.set(time, flattenProperties(JSON.parse(String(propsStr))))
                 } catch (e) {
                   errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
                 }

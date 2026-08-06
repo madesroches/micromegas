@@ -2,6 +2,7 @@ import {
   extractPropertiesFromRows,
   createPropertyTimelineGetter,
   aggregateIntoSegments,
+  flattenProperties,
 } from '../property-utils'
 
 describe('extractPropertiesFromRows', () => {
@@ -55,6 +56,56 @@ describe('extractPropertiesFromRows', () => {
     ]
     const result = extractPropertiesFromRows(rows)
     expect(result.availableKeys).toEqual(['apple', 'mango', 'zebra'])
+  })
+
+  it('flattens object-valued properties into dotted availableKeys', () => {
+    const rows = [
+      {
+        time: 1000,
+        properties: '{"Dimensions": {"DBInstanceIdentifier": "prod-db-1"}, "cpu": 50}',
+      },
+    ]
+    const result = extractPropertiesFromRows(rows)
+    expect(result.availableKeys).toEqual(['Dimensions.DBInstanceIdentifier', 'cpu'])
+    expect(result.rawData.get(1000)).toEqual({
+      'Dimensions.DBInstanceIdentifier': 'prod-db-1',
+      cpu: 50,
+    })
+  })
+})
+
+describe('flattenProperties', () => {
+  it('passes scalar values through unchanged', () => {
+    const props = { cpu: 50, status: 'running', enabled: true }
+    expect(flattenProperties(props)).toEqual({ cpu: 50, status: 'running', enabled: true })
+  })
+
+  it('expands one level of object nesting into dotted keys', () => {
+    const props = { Dimensions: { DBInstanceIdentifier: 'prod-db-1' } }
+    expect(flattenProperties(props)).toEqual({
+      'Dimensions.DBInstanceIdentifier': 'prod-db-1',
+    })
+  })
+
+  it('expands multi-level nested objects recursively', () => {
+    const props = { Dimensions: { Nested: { Key: 'value' } } }
+    expect(flattenProperties(props)).toEqual({
+      'Dimensions.Nested.Key': 'value',
+    })
+  })
+
+  it('leaves array values as opaque stringified leaves', () => {
+    const props = { Tags: ['a', 'b'], Nested: { Tags: [1, 2] } }
+    expect(flattenProperties(props)).toEqual({
+      Tags: '["a","b"]',
+      'Nested.Tags': '[1,2]',
+    })
+  })
+
+  it('keeps nested null values as null rather than the string "null"', () => {
+    const props = { Dimensions: { DBInstanceIdentifier: null } }
+    const result = flattenProperties(props)
+    expect(result['Dimensions.DBInstanceIdentifier']).toBeNull()
   })
 })
 

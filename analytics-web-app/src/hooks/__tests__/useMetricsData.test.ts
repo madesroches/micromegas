@@ -73,4 +73,39 @@ describe('useMetricsData', () => {
 
     expect(result.current.chartData).toEqual([{ time: 1000, value: 10 }])
   })
+
+  it('flattens object-valued properties before exposing availablePropertyKeys/getPropertyTimeline', async () => {
+    const table = tableFromArrays({
+      time: new Float64Array([1000]),
+      value: new Float64Array([10]),
+      properties: ['{"Dimensions": {"DBInstanceIdentifier": "prod-db-1"}}'],
+    })
+
+    mockStreamQuery.mockReturnValue(
+      createMockGenerator([
+        { type: 'schema', schema: table.schema },
+        ...table.batches.map(batch => ({ type: 'batch' as const, batch })),
+        { type: 'done' },
+      ])
+    )
+
+    const { result } = renderHook(() =>
+      useMetricsData({
+        processId: 'p1',
+        measureName: 'm1',
+        binInterval: '1 minute',
+        apiTimeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+      })
+    )
+
+    await act(async () => {
+      result.current.execute()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+
+    expect(result.current.availablePropertyKeys).toContain('Dimensions.DBInstanceIdentifier')
+    expect(result.current.getPropertyTimeline('Dimensions.DBInstanceIdentifier').segments).toEqual([
+      { value: 'prod-db-1', begin: 1000, end: new Date('2024-01-02T00:00:00Z').getTime() },
+    ])
+  })
 })

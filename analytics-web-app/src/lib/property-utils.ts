@@ -24,8 +24,9 @@ export function extractPropertiesFromRows(
     if (row.properties != null) {
       try {
         const props = JSON.parse(row.properties)
-        rawData.set(row.time, props)
-        Object.keys(props).forEach(k => keysSet.add(k))
+        const flatProps = flattenProperties(props)
+        rawData.set(row.time, flatProps)
+        Object.keys(flatProps).forEach(k => keysSet.add(k))
       } catch (e) {
         errors.push(`Invalid JSON at time ${row.time}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -37,6 +38,42 @@ export function extractPropertiesFromRows(
     rawData,
     errors,
   }
+}
+
+/**
+ * Expands object-valued properties into dot-separated leaf entries with
+ * string values (e.g. `Dimensions: {DBInstanceIdentifier: "foo"}` becomes
+ * `"Dimensions.DBInstanceIdentifier": "foo"`). Array values are JSON-stringified
+ * at the top level too, matching the nested behavior in `flattenObjectInto`, so
+ * consumers never end up rendering `[object Object]` via `String(value)`.
+ */
+export function flattenProperties(props: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(props)) {
+    if (isPlainObject(value)) {
+      flattenObjectInto(value, key, result)
+    } else {
+      result[key] = Array.isArray(value) ? JSON.stringify(value) : value
+    }
+  }
+  return result
+}
+
+function flattenObjectInto(obj: Record<string, unknown>, prefix: string, result: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(obj)) {
+    const fullKey = `${prefix}.${key}`
+    if (isPlainObject(value)) {
+      flattenObjectInto(value, fullKey, result)
+    } else if (value === null) {
+      result[fullKey] = null
+    } else {
+      result[fullKey] = Array.isArray(value) ? JSON.stringify(value) : String(value)
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /**
