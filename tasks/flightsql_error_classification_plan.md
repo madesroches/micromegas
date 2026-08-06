@@ -57,15 +57,16 @@ calls `audit_state.emit("error", Some(err.to_string()))` regardless of cause.
 Separately, `rust/datafusion-extensions/src/**` (the `jsonb_*`, `property_get`, `lerp_color`,
 `color_scale`, etc. UDFs) almost universally use `internal_err!` for what are actually
 caller mistakes — wrong argument count and unsupported input type — e.g.
-`rust/datafusion-extensions/src/jsonb/format_json.rs:51` (`internal_err!("wrong number of
-arguments...")`) and `:57-59` (`DataFusionError::Execution` for a type mismatch, which is
+`rust/datafusion-extensions/src/jsonb/format_json.rs:54` (`internal_err!("wrong number of
+arguments...")`) and `:59-61` (`DataFusionError::Execution` for a type mismatch, which is
 the exact case in the issue's repro). `DataFusionError::Internal` is defined by DataFusion
 as "this should not happen — please file a bug" (see
 `datafusion-common-54.1.0/src/error.rs:93-109`), so an `internal_err!` on a plain arity
 check is a misclassification independent of this issue, and it would defeat the new gRPC
 mapping if left alone (every `jsonb_*` call with the wrong number of args would still come
 back `Internal`). By contrast, `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs`
-already gets this right — it uses `plan_err!` for all four of its argument-parsing checks.
+already gets this right — it uses `plan_err!` at all five of its argument-checking sites (one
+per argument, plus one validating the parsed `span_types` value).
 
 ### Confirmed via DataFusion 54.1 source (`datafusion-common-54.1.0/src/error.rs`)
 
@@ -214,8 +215,11 @@ the *client-facing* `Status` message drops the file:line/build-path suffix. No
 the client message at all; it can still be added separately for the server-side log if
 desired (noted under Open Questions, not required for this plan).
 
-For the `execute_stream`/per-batch site (`:461-466`, `:498`), the value in hand is a
-`FlightError`, not a `DataFusionError` — recover it first, forwarding the same optional plan:
+The immediate `execute_stream(plan, task_ctx)` call failure (`:461-464`) is a plain
+`DataFusionError` — same as the other four sites — and goes straight to `client_error(...)`.
+Only the per-batch site (`:498`), downstream of the `FlightError::ExternalError(Box::new(e))`
+re-wrap at `:466`, deals with a `FlightError`; recover the `DataFusionError` from it first,
+forwarding the same optional plan:
 
 ```rust
 fn classify_flight_error(
@@ -259,11 +263,14 @@ or `audit_state`.
 ### 3. Query id
 
 Mint one `Uuid::new_v4()` (already a workspace dependency, used elsewhere e.g.
-`http_gateway.rs`) at the top of `execute_query`, store it as `query_id: String` on
-`QueryAuditState`, include it in every client-facing `Status` message built by
-`client_error`/`classify_flight_error`, and add it to `QueryAuditRecord` so the log line for
-a given failure can be found by grepping the id the caller was handed. Always populated
-(not `Option`), since it's assigned before any fallible step.
+`http_gateway.rs`) as `let query_id = Uuid::new_v4().to_string();`, the very first statement
+in `execute_query` — before the UTF-8 parse of the SQL (`:296`), the two range-header
+datetime parses, and attribution resolution, all of which precede `audit_state`/
+`QueryAuditState` construction (`:370-388`) where `query_id` is stored. Placed there,
+`query_id` is available before every fallible step in `execute_query`, so it's Always
+populated (not `Option`) on `QueryAuditState`, include it in every client-facing `Status`
+message built by `client_error`/`classify_flight_error`, and add it to `QueryAuditRecord` so
+the log line for a given failure can be found by grepping the id the caller was handed.
 
 ### 4. Audit record / log severity split
 
@@ -354,10 +361,12 @@ client                    execute_query                  classify/emit
    `status!` site (ticket decode, header parsing, `make_session_context`, `scoped_runtime`,
    schema encoding, prepared-statement handling) untouched — those aren't
    `DataFusionError`s and stay `Status::internal`.
-3. Mint `query_id` in `execute_query`, thread it through `QueryAuditState` and into every
-   `client_error`/`classify_flight_error` call at the five sites above (early-setup failures
-   before the query_id is available are unaffected — they already have a distinct log
-   trail).
+3. Mint `query_id` as the first statement of `execute_query` (before the UTF-8 parse of the
+   SQL), thread it through `QueryAuditState` and into every `client_error`/
+   `classify_flight_error` call at the five sites above. It is therefore available for every
+   failure inside `execute_query`; the one failure genuinely unaffected is the ticket-decode
+   `status!` site in the calling `do_get_fallback` (`:527-528`), which happens before
+   `execute_query` is even entered and already has a distinct log trail.
 4. Wire the physical-plan fallback described in Design §2: clone `plan`/`query_id` before
    the `:461`/`:500` moves, and pass `Some(&plan_for_errors)` into the `client_error`/
    `classify_flight_error` calls at the `execute_stream` (`:461-464`) and per-batch (`:498`)
@@ -383,7 +392,13 @@ client                    execute_query                  classify/emit
    the four sites that stay on the `status!` macro (`:396`, `:414`, `:432`, `:436` — the
    `anyhow`/non-`DataFusionError` sites, always `Status::internal`), this always yields
    `error_class = "internal"`, but the same build-then-derive-then-emit ordering keeps every
-   site consistent and compiling.
+   site consistent and compiling. For the four sites that switch to `client_error`/
+   `classify_flight_error` (`:424`, `:441-444`, `:457`, `:463`), `err`/`e` is moved into that
+   call (both take `DataFusionError`/`FlightError` by value, and `DataFusionError` isn't
+   `Clone`), so it isn't available afterward to build a separate message the way today's code
+   does. Pass `Some(status.message().to_string())` — the already-built client-facing
+   message — as `emit`'s error argument for these four sites instead of re-deriving a fresh
+   string from the moved value.
 
 **Phase 2 — UDF convention (`rust/datafusion-extensions/src/`)**
 7. Convert the arity/type-check `internal_err!` sites listed in Design §5 to `exec_err!`
