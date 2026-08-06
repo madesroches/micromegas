@@ -120,6 +120,14 @@ export function useTabExecutionState(state: 'idle' | 'busy' | 'error'): void {
       state === 'busy' ? idleHref.replace(/icon\.svg$/, 'icon-busy.svg') :
       state === 'error' ? idleHref.replace(/icon\.svg$/, 'icon-error.svg') :
       idleHref
+    // Unmount reset: ScreenPageContent has no persistent layout/Outlet (router.tsx lists
+    // `/screen/new` and `/screen/:name` as plain sibling <Route>s), so navigating to any
+    // other route (`/processes`, `/screens`, `/admin`, ...) fully unmounts this component
+    // without `load()`'s same-component reset (Design §5) ever running. Without this
+    // cleanup, a busy/error favicon set here would persist indefinitely on unrelated pages.
+    return () => {
+      link.href = idleHref
+    }
   }, [state])
 }
 ```
@@ -127,7 +135,11 @@ export function useTabExecutionState(state: 'idle' | 'busy' | 'error'): void {
 Reading `link.href` (not the raw `href` attribute) gives the browser-resolved absolute URL,
 so it's correct under any `MICROMEGAS_BASE_PATH` / relative-base setup without this hook
 needing to know about base paths at all. `link.dataset.idleHref` caches that resolved URL on
-the element itself so repeated toggles don't re-derive it.
+the element itself so repeated toggles don't re-derive it. The cleanup function reverts the
+favicon to idle both between re-renders (immediately superseded by the next render's effect,
+so no visible flicker) and, more importantly, on unmount — which is the only way the favicon
+gets reset when the user navigates away from the screen-route family entirely rather than to
+another screen.
 
 Title prefix: extend `usePageTitle` with an optional second argument rather than
 introducing a second title-writing hook (avoids two hooks racing to set `document.title`):
@@ -191,6 +203,14 @@ an explicit reset, a busy/error favicon from the previous screen would persist t
 entire "Loading screen..." window of the next one, even though the title already fell back to
 the app name. `load()` must therefore also call `setIsExecuting(false)` and `setHasError(false)`
 alongside `setScreen(null)`.
+
+This `load()` reset only handles navigation *within* `ScreenPageContent` (same mounted
+component, screen-to-screen). It does not run, and doesn't need to, when the user navigates
+away from the screen-route family altogether (`/processes`, `/screens`, `/admin`, ...) — since
+`router.tsx` has no persistent layout/`<Outlet>` wrapping the screen routes, that kind of
+navigation fully unmounts `ScreenPageContent` instead, which is handled by
+`useTabExecutionState`'s own unmount cleanup (Design §4). The two resets are complementary,
+each covering the case the other can't.
 
 ## Implementation Steps
 
@@ -256,8 +276,9 @@ alongside `setScreen(null)`.
 
 - New unit tests in `src/hooks/__tests__/useTabExecutionState.test.ts` (pattern after
   `useFadeOnIdle.test.ts`): mount with a `<link rel="icon" href=".../icon.svg">` present in
-  jsdom, assert `link.href` updates for `'busy'`/`'error'`/`'idle'`, and that it's stable
-  under repeated toggles (`idleHref` caching doesn't drift).
+  jsdom, assert `link.href` updates for `'busy'`/`'error'`/`'idle'`, that it's stable under
+  repeated toggles (`idleHref` caching doesn't drift), and that unmounting the hook while in
+  `'busy'`/`'error'` reverts `link.href` to `idleHref`.
 - Extend `usePageTitle` tests (or add `src/hooks/__tests__/usePageTitle.test.ts` if none
   exist) to cover the `busy` prefix.
 - Unit test for `computeTabState` (Design §5): assert `busy` wins when both `isExecuting` and
