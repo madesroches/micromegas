@@ -1,5 +1,115 @@
 # JIT Block Ordering by Event Time Plan (#1429)
 
+## Implementation Status (2026-08-06)
+
+Implemented. All six phases landed; the divergences below were found while building the tests and
+during branch review, and the code reflects them — the design sections further down are left as
+originally written except where a step explicitly says otherwise.
+
+**Naming and API shape**
+
+- Step 2's `insert_time_range` is named **`blocks_insert_time_range`**. `jit_partitions.rs` already
+  has an `insert_time_range` *parameter* on both `generate_*_jit_partitions_segment` and same-named
+  locals in both `generate_*_jit_partitions`, which shadowed the free function throughout its own
+  module.
+- Step 7's `retire_partitions` grew a second new parameter (`same_run_ranges`, below) and so needed
+  `#[expect(clippy::too_many_arguments)]`, matching the 8 existing sites in
+  `analytics/src/lakehouse/` (12 workspace-wide), one of them already on
+  `write_partition_from_rows` in the same file.
+
+**Step 6 — exact up-to-date equality is scoped to `EventTime`, not unconditional**
+
+The plan tightened `is_jit_partition_up_to_date` to exact insert-range + count equality for every
+caller. That is wrong for `BlockOrder::InsertTime` views: their cut points are stable across runs, so
+a stale spec legitimately already covered by a wider committed partition (e.g. from a concurrent
+`jit_update` that lost a race) must stay a no-op. `RetireMatch::Containment` cannot retire a merely
+overlapping partition, so calling that spec "not up to date" makes the subsequent insert trip
+`lakehouse_partitions_no_overlap`. The function therefore takes a `BlockOrder` argument: `EventTime`
+gets exact range + `==` count; `InsertTime` keeps the original overlap/`>=` test **and** its
+degenerate `min == max` exact-match branch, which the plan had assumed would collapse away.
+
+**Design §6 — same-run siblings are protected by identity, not range shape**
+
+The plan protected a same-run degenerate partition from its successor's retire with shape-based SQL
+(`AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)`, plus an
+exact-degenerate sub-clause on the third arm). That cannot distinguish a same-run sibling from a
+genuinely stale cross-run partition of the same shape — it either spared the stale one or retired the
+sibling, depending on the shapes involved. Both clauses were removed. `retire_partitions` instead
+takes an explicit **`same_run_ranges: &[TimeRange]`** — the ranges the current `jit_update` run has
+already written or found up to date — and every arm is guarded by `AND NOT EXISTS (... unnest(...))`
+against it. `thread_spans_view`/`net_spans_view` thread a fresh accumulator through their loops.
+Testing Strategy #11's "left-boundary exclusion" sub-case now asserts the identity-based behavior;
+the SQL clause it names no longer exists.
+
+`RetireMatch::Overlap` also needed a **third arm** the plan didn't anticipate:
+`($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)`. For a degenerate *new* range the
+first two arms both miss — `tstzrange(t, t)` is Postgres's empty range so `&&` is vacuously false,
+and the containment arm degenerates to an exact match, missing a wider partition that merely contains
+the instant.
+
+**Steps 16-17 — the event-time non-overlap claim was overstated and has been corrected**
+
+The plan's premise for Phase 4 was that event-time-ordered grouping makes partitions' event-time
+ranges non-overlapping "by construction" within a segment, leaving only cross-segment inversions and
+TSC drift as residuals. That is false, and the first version of these doc edits asserted it. A
+partition's event bounds come from its blocks' `begin_ticks`/`end_ticks`, and a stream's consecutive
+blocks *overlap* on those ticks: every flush path in `micromegas_tracing::dispatch` stamps the
+replacement block's `begin` (`EventBlock::new` → `DualTime::now()`) before closing the outgoing block
+(`close()` → `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the cost of the
+buffer swap. Any cut between adjacent blocks can therefore trip
+`sort_and_check_non_overlapping`'s strict `prev_max > next_min`.
+
+This predates the branch (the old code derived the same bounds from the block list's endpoints) and
+is orthogonal to insert-safe cut points, which are an *insert-time* property. It is **not fixed
+here** — it is now documented as the first and most likely cause in `view.rs`'s `Concatenated`
+contract note, in the `sort_and_check_non_overlapping` error message and rustdoc, and in
+`jit_partitions.rs`'s module doc. It deserves its own issue. Design §"three failures" benefit #2
+(cross-block call-tree fragmentation) is correspondingly weaker than claimed: the `last_end`-based
+contiguity grouping tests exact `begin_ticks == last_end` equality, which this flush ordering rarely
+satisfies.
+
+**Grouping residuals now documented in `group_blocks_into_partitions`**
+
+- `emit_partition` skips a window whose blocks all report `nb_objects == 0`, where the pre-refactor
+  code pushed a rows-free partition mid-list. Unreachable (no producer emits a zero-object block),
+  but it makes `InsertTime` grouping not quite "bit-identical to a naive greedy cut".
+- The insert-range invariant does not cover two or more partitions sharing an *identical degenerate*
+  range; `tstzrange(t, t)` is empty so the exclusion constraint stays quiet, but the `EventTime`
+  up-to-date query would see >1 row and never converge. Needs >`max_nb_objects` objects at a single
+  microsecond, so it does not occur in production.
+
+**Phase 5 — test divergences**
+
+- Steps 19-21 landed as specified: `jit_partition_grouping_tests.rs` (8 tests),
+  `jit_partition_bounds_tests.rs` (4), and 7 new cases in `thread_spans_ordering_db_test.rs`.
+- Testing Strategy #12 understated net_spans. It gets the same treatment as thread_spans
+  (`EventTime`, `Overlap`, `same_run_ranges`, `SCHEMA_VERSION` bump) but had no coverage of any of
+  it, and an end-to-end test is **not possible**: net events are produced only by the Unreal / C-API
+  side, so there is no Rust stream type to push blocks through. Added
+  **`rust/analytics/tests/net_spans_retire_overlap_db_test.rs`** instead — 5 tests driving
+  `retire_partitions` directly under `view_set_name = "net_spans"` with synthetic partition rows
+  (overlap arm, degenerate new range, same-run exclusion, identically-degenerate same-run siblings,
+  stale degenerate predecessor). The grouping half is already covered view-agnostically.
+- The pre-existing `thread_spans_ordering_across_partitions` failed on a shared dev lake (verified
+  against `origin/main` in a worktree — same failure there, so not caused by this branch, but the 7
+  new siblings make it much likelier to hit). It used `materialize_global_view`, which aborts on any
+  pre-existing overlapping bucket. Replaced with a **`reset_global_view`** helper that retires by
+  overlap first — using this branch's own `RetireMatch::Overlap`, which is what makes clearing a
+  bucket-straddling partition possible at all — then regenerates, so the test no longer depends on
+  lake state. The now-dead `materialize_global_view` helper was removed.
+- All 13 DB tests (8 thread_spans + 5 net_spans) pass against a live local lake, twice in a row.
+  They remain `#[ignore]`d and **CI does not run them** (`build/rust_ci.py` runs plain `cargo test`);
+  adding Postgres and an object store to the workflow is out of scope for this branch.
+
+**Phase 6 — rollout**
+
+- Step 23 is unnecessary. `retire_incompatible_partitions` is for scheduled views; `thread_spans` and
+  `net_spans` are JIT, so the schema-hash mismatch branch in `is_jit_partition_up_to_date` rebuilds
+  each partition automatically on first query. Expect a one-off first-query latency bump per
+  stream/process after deploy, no admin action.
+- A `CHANGELOG.md` entry was added under `Unreleased` → `**Analytics:**` (the plan never mentioned
+  one; every recent PR in this repo carries one).
+
 ## Overview
 
 `ThreadSpansView` declares `ScanOrdering::Concatenated { columns: [begin ASC] }`, which lets
