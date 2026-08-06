@@ -36,7 +36,9 @@ it's the only one that runs arbitrary user SQL. Its error sites, in order:
 2. `df.limit(0, Some(parsed_limit))` (`:440`) — planning. Returns `DataFusionError`.
 3. `df.create_physical_plan().await` (`:456`) — physical planning. Returns `DataFusionError`.
 4. `execute_stream(plan, task_ctx)` (`:461`) — its own immediate `Result`, returns
-   `DataFusionError`.
+   `DataFusionError`. Unlike the other sites, this one isn't built through the `status!`
+   macro — it's a hand-rolled `Status::internal(format!("Error executing plan: {e:?}"))`
+   (`:463-464`), so it also needs replacing directly with `client_error(...)`.
 5. `flight_data_stream` per-batch errors (`:498`) — by this point the error has been
    re-wrapped once at `:466` as `FlightError::ExternalError(Box::new(e))` where `e` was the
    `DataFusionError` yielded by the stream, so recovering the variant means matching
@@ -138,6 +140,17 @@ when there's no span to show:
 ```rust
 const MAX_PLAN_CHARS: usize = 2000;
 
+fn error_or_warn_log(code: tonic::Code, desc: &str, err: &DataFusionError, query_id: &str) {
+    let full = format!(
+        "{desc}: {} (query_id={query_id})",
+        err.find_root() // full detail, backtrace included if enabled — server-side only
+    );
+    match error_class(code) {
+        "internal" => error!("{full}"),
+        _ => warn!("{full}"),
+    }
+}
+
 fn truncate_plan_text(text: &str) -> String {
     if text.len() <= MAX_PLAN_CHARS {
         text.to_string()
@@ -232,9 +245,11 @@ a given failure can be found by grepping the id the caller was handed. Always po
 
 ### 4. Audit record / log severity split
 
-Add `error_class: &'static str` (`"user" | "resource" | "internal"`, only present when
-`status != "ok"`) to `QueryAuditRecord`, derived once from the `tonic::Code` the same way in
-both places that need it:
+Add `error_class: Option<&'static str>` (`"user" | "resource" | "internal"`, with
+`#[serde(skip_serializing_if = "Option::is_none")]` so it's omitted when `status == "ok"`,
+matching the existing `name`/`range_begin`/`error` pattern in `query_audit.rs`) to
+`QueryAuditRecord`, derived once from the `tonic::Code` the same way in both places that need
+it:
 
 ```rust
 fn error_class(code: tonic::Code) -> &'static str {
@@ -266,8 +281,13 @@ mistakes:
 - Every `"wrong number of arguments to X()"` arity check (16 sites across
   `jsonb/*.rs`, `color/*.rs`, `math/*.rs`, `properties/*.rs`, `binning/bin_center.rs`).
 - Every `"unsupported input type"` / `"unsupported dictionary value type"` type check (the
-  `format_json.rs`/`get.rs`/`array_length.rs`/`cast.rs`/`keys.rs`/`parse.rs`/`path_query.rs`
-  input-type guards, and `properties_udf.rs`/`property_get.rs` equivalents).
+  `get.rs`/`array_length.rs`/`cast.rs`/`keys.rs`/`parse.rs` input-type guards, and
+  `properties_udf.rs`/`property_get.rs` equivalents), plus five caller-triggered sites in
+  `properties_udf.rs` that fall outside the arity/type-check framing above:
+  `PropertiesToArray::return_type`'s "expects a Dictionary input type" (`:86`),
+  `PropertiesToArray::invoke_with_args`'s "expects exactly one argument" (`:93`) and "does not
+  support scalar inputs" (`:119`), and `PropertiesLength::invoke_with_args`'s "expects exactly
+  one argument" (`:161`) and "does not support scalar inputs" (`:344`).
 
 Leave `"arrays of different lengths in X()"` and `"Dictionary key index out of bounds"` as
 `internal_err!` — those indicate an invariant violation within a single Arrow batch (all
@@ -295,9 +315,15 @@ client                    execute_query                  classify/emit
 
 **Phase 1 — core classification (`rust/public/src/servers/`)**
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
-   `classify_flight_error`, `error_class` helpers near the existing `status!` macro.
-2. Replace the five `DataFusionError`-producing `status!(...)` call sites in `execute_query`
-   (`:423`, `:440`, `:456`, `:461-464`, `:498`) with the new helpers. Leave every other
+   `classify_flight_error`, `error_class`, `error_or_warn_log` helpers near the existing
+   `status!` macro. `error_or_warn_log(code, desc, &err, query_id)` maps `error_class(code)`
+   to `warn!` (for `"user"`/`"resource"`) or `error!` (for `"internal"`), logging the full
+   message — including `desc`, `err.find_root()` (untruncated, with file:line/backtrace
+   intact), and `query_id` — server-side only.
+2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
+   `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
+   `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
+   the new helpers. Leave every other
    `status!` site (ticket decode, header parsing, `make_session_context`, `scoped_runtime`,
    schema encoding, prepared-statement handling) untouched — those aren't
    `DataFusionError`s and stay `Status::internal`.
@@ -341,9 +367,11 @@ client                    execute_query                  classify/emit
    non-existent process, an `Execution` error per
    `perfetto_trace_execution_plan.rs:189-208`) currently assert
    `pytest.raises(flight.FlightInternalError)`. After Phase 1 these become
-   `InvalidArgument`, which pyarrow surfaces as `pyarrow.lib.ArrowInvalid`. Update all three
-   to `pytest.raises(pyarrow.lib.ArrowInvalid)` (the message-content assertions are
-   unaffected — same text, just no file:line/query_id noise to strip in the test).
+   `InvalidArgument`, which pyarrow surfaces as `pyarrow.lib.ArrowInvalid`. Add `import pyarrow`
+   alongside the existing `import pyarrow._flight as flight` (the latter alone doesn't bind
+   the `pyarrow` name), then update all three assertions to
+   `pytest.raises(pyarrow.lib.ArrowInvalid)` (the message-content assertions are unaffected —
+   same text, just no file:line/query_id noise to strip in the test).
 
 ## Files to Modify
 
