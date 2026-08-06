@@ -12,9 +12,11 @@ alerting rule) to tell "you wrote a bad query" from "the server broke," and give
 caller nothing actionable to fix their query with.
 
 This plan classifies `DataFusionError`s into the right gRPC status code, strips the
-non-actionable file:line/path suffix from client-facing messages, keeps that detail (plus a
-new query id) in the server log instead, and splits the query-audit log's severity and
-`status` field so user errors stop being counted as service failures.
+non-actionable file:line/path suffix from client-facing messages — that suffix is simply no
+longer generated, since it only ever came from the `status!` macro's own
+`file!()/line!()` expansion, which these sites stop using — logs the full error server-side
+alongside a new query id, and splits the query-audit log's severity and `status` field so
+user errors stop being counted as service failures.
 
 ## Current State
 
@@ -125,9 +127,8 @@ exposes its testable helpers to that external test crate:
 pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
     use datafusion::error::DataFusionError as DFE;
     match err.find_root() {
-        DFE::SQL(..) | DFE::Plan(_) | DFE::SchemaError(..) | DFE::Execution(_) => {
-            tonic::Code::InvalidArgument
-        }
+        DFE::SQL(..) | DFE::Plan(_) | DFE::SchemaError(..) | DFE::Execution(_)
+        | DFE::Configuration(_) => tonic::Code::InvalidArgument,
         DFE::ResourcesExhausted(_) => tonic::Code::ResourceExhausted,
         DFE::NotImplemented(_) => tonic::Code::Unimplemented,
         _ => tonic::Code::Internal,
@@ -138,7 +139,13 @@ pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
 `find_root` already recurses through `Collection` (returns the classification of the first
 collected error, matching `DataFusionError`'s own `error_prefix()`/`message()` convention),
 `Context`, `Diagnostic`, and `Shared`. `External` wrapping a non-`DataFusionError` falls
-through to the `_ => Internal` arm, per the mapping table in the issue.
+through to the `_ => Internal` arm, per the mapping table in the issue. `Configuration` is
+included alongside `SQL`/`Plan`/`SchemaError`/`Execution` because it's reachable from a
+caller's own `SET datafusion.…` statement. `ArrowError` deliberately stays in the `_ =>
+Internal` bucket: `DataFusionError::ArrowError`'s `source()` is the `ArrowError` itself (not a
+`DataFusionError`), so `find_root()` returns it directly with no further variant to
+distinguish "caller-triggered" (e.g. a cast failure or divide-by-zero on user data) from a
+genuine internal Arrow-kernel bug — see Trade-offs.
 
 ### 2. Message construction (drops file:line/path, adds query id, diagnostic span, or plan dump)
 
@@ -153,19 +160,57 @@ lands) never do: `Diagnostic`/`Span` is populated by DataFusion's analyzer/plann
 `ScalarUDFImpl::invoke_with_args` running mid-execution. For that case, the next best
 locator is the captured physical plan (`audit_state.plan`, already set at `:460` before
 execution starts) — not an exact attribution (nothing tags *which* node raised the error),
-but enough for the caller to see the plan shape and spot the operator/expression that lines
-up with the message (e.g. a `ProjectionExec` listing the failing `jsonb_format_json(...)`
-call). `client_error` takes the plan as an optional extra input and only falls back to it
-when there's no span to show:
+but enough for whoever is debugging the failure to see the plan shape and spot the
+operator/expression that lines up with the message (e.g. a `ProjectionExec` listing the
+failing `jsonb_format_json(...)` call). That plan text is **server-log-only** — it is never
+appended to the client-facing `Status` message. `displayable(plan).indent(true)` renders
+`FileScanConfig::fmt_as`'s `file_groups=` section, which prints each scanned file's
+`object_meta.location` (`datafusion-datasource-54.1.0/src/file_scan_config/mod.rs:666-674`,
+`src/display.rs:32-72`) — exactly the shape of the `DataSourceExec`/`ParquetSource` plans
+Micromegas view scans build (`rust/analytics/src/lakehouse/partitioned_execution_plan.rs:342-357`),
+so sending it to the caller would leak internal lakehouse object-store partition paths on
+every execution-time error, including genuine server bugs classified `Internal`. Keeping it
+server-side avoids that entirely, at the cost of the caller not seeing the plan shape
+themselves — they get the query id instead, which the server-log line also carries, so anyone
+who needs the plan can grep for it. `client_error` takes the plan as an optional extra input
+and only logs it (never returns it to the client) when there's no diagnostic span to show:
 
 ```rust
 const MAX_PLAN_CHARS: usize = 2000;
 
-fn error_or_warn_log(code: tonic::Code, desc: &str, err: &DataFusionError, query_id: &str) {
-    let full = format!(
-        "{desc}: {} (query_id={query_id})",
-        err.find_root() // full detail, backtrace included if enabled — server-side only
-    );
+// Pure and `pub` (like `classify_datafusion_error`/`client_error`) so step 9's tests can
+// assert its content — including the truncation marker — without capturing log output.
+pub fn build_log_line(
+    desc: &str,
+    err: &DataFusionError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) -> String {
+    // Log `err` itself, not `err.find_root()` — `find_root()` is for classification (it's fine
+    // to lose the outer `Context` chain when matching a gRPC code on the innermost variant),
+    // but the server log should keep that outer context. `DataFusionError`'s `Display` never
+    // contains a source location, so this is simply the error text plus its backtrace (if
+    // enabled) — file:line is no longer emitted anywhere, since it only ever came from the
+    // `status!` macro's own `file!()/line!()`, which this site stops using.
+    let mut full = format!("{desc}: {err} (query_id={query_id})");
+    if let Some(plan) = plan {
+        let plan_text = format!(
+            "{}",
+            datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+        );
+        full.push_str(&format!("\nphysical plan:\n{}", truncate_plan_text(&plan_text)));
+    }
+    full
+}
+
+fn error_or_warn_log(
+    code: tonic::Code,
+    desc: &str,
+    err: &DataFusionError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) {
+    let full = build_log_line(desc, err, query_id, plan);
     match error_class(code) {
         "internal" => error!("{full}"),
         _ => warn!("{full}"),
@@ -212,24 +257,27 @@ pub fn client_error(
             msg.push_str(&format!("\nhelp: {}", help.message));
         }
     }
-    if !has_span {
-        if let Some(plan) = plan {
-            let plan_text = format!("{}", datafusion::physical_plan::displayable(plan.as_ref()).indent(true));
-            msg.push_str(&format!("\nphysical plan:\n{}", truncate_plan_text(&plan_text)));
-        }
-    }
+    // `msg` at this point — desc, root-error text, optional span/notes/helps — is exactly
+    // what both the client and the audit record get; the physical plan never joins it (see
+    // below). Append `query_id` last so it's the fixed, greppable suffix on every message.
     msg.push_str(&format!(" (query_id={query_id})"));
-    error_or_warn_log(code, desc, &err, query_id); // full detail incl. file:line stays server-side
+    // The plan (when there's no span to show instead) goes only to the server log — never
+    // into `msg` — since `displayable(plan)` can render object-store partition paths (see
+    // the leak concern above). Passing `None` here for the span case also means a
+    // plan-time error with a diagnostic span never bothers rendering the plan at all.
+    error_or_warn_log(code, desc, &err, query_id, if has_span { None } else { plan });
     Status::new(code, msg)
 }
 ```
 
-The full original message (with DataFusion's own backtrace if enabled) plus `desc` and
-`query_id` still gets logged server-side at `warn!`/`error!` per the classified code — only
-the *client-facing* `Status` message drops the file:line/build-path suffix. No
-`--remap-path-prefix` build change is needed since we stop embedding `file!()`/`line!()` in
-the client message at all; it could still be added separately for the server-side log later,
-but that's not required for this plan.
+The full `err` (with DataFusion's own backtrace if enabled, and — unlike `find_root()` — any
+outer `Context` chain intact) plus `desc`, `query_id`, and (when there's no diagnostic span)
+the physical plan text all get logged server-side at `warn!`/`error!` per the classified code.
+The *client-facing* `Status` message never had a file:line/build-path suffix to drop in the
+first place once these sites stop going through `status!` — there's simply nothing left to
+strip. No `--remap-path-prefix` build change is needed since `file!()`/`line!()` are no longer
+embedded anywhere in this path; a source-location tag could still be added to the server-side
+log later, but that's not required for this plan.
 
 The immediate `execute_stream(plan, task_ctx)` call failure (`:461-464`) is a plain
 `DataFusionError` — same as the other four sites — and goes straight to `client_error(...)`.
@@ -312,7 +360,12 @@ fn error_class(code: tonic::Code) -> &'static str {
   `Status` reaching `poll_next` was already logged once by `classify_flight_error` at `:498`
   (the sole `map_err` feeding this stream) when it built that `Status` — keeping both log
   statements would print two lines per execution-time/per-batch error. `classify_flight_error`
-  is the single log point for this site; `poll_next` only reads the code, it doesn't log.
+  is the single log point for this site; `poll_next` only reads the code, it doesn't log. Also
+  change its existing `audit_state.emit("error", Some(err.to_string()), ...)` call to
+  `Some(err.message().to_string())` — `err` here is the `Status` itself, and `Status`'s
+  `Display` wraps the message in its own `code: ..., message: ...` framing, whereas
+  `.message()` is the same short string `client_error` built (no plan text, per Design §2),
+  matching what Step 6's other four `emit` sites pass.
 - In every early-setup failure `map_err` closure (`:395-463`), the `Status` was just built by
   `client_error`, so `status.code()` gives the same answer for free.
 
@@ -380,8 +433,8 @@ client                    execute_query                  classify/emit
   │                              │  execute_stream / stream item│
   │                              │  DataFusionError ────────────>│ find_root() + match
   │                              │                              │  -> tonic::Code
-  │                              │<───────── Status{code,msg}───│  -> client_error() strips
-  │                              │                              │     file:line, adds query_id
+  │                              │<───────── Status{code,msg}───│  -> client_error() adds
+  │                              │                              │     query_id (no plan text)
   │  Status{InvalidArgument,     │                              │
   │   "...: <msg> (query_id=…)"}│                              │  -> audit_state.emit(
   │<─────────────────────────────│                                    "error", err_class="user")
@@ -395,14 +448,19 @@ client                    execute_query                  classify/emit
    `SessionConfig` so plan-time `Diagnostic`s actually carry a `Span` (see "Confirmed via
    DataFusion 54.1 source" and Design §2).
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
-   `classify_flight_error`, `error_class`, `error_or_warn_log`, and `client_input_error!`
-   helpers near the existing `status!` macro. `classify_datafusion_error` and `client_error` are `pub` so step 9's
-   external integration tests can call them directly. `error_or_warn_log(code, desc, &err, query_id)` maps `error_class(code)`
-   to `warn!` (for `"user"`/`"resource"`) or `error!` (for `"internal"`), logging the full
-   message — including `desc`, `err.find_root()` (untruncated, with file:line/backtrace
-   intact), and `query_id` — server-side only. `client_input_error!` is Design §6's new macro,
-   returning `Status::invalid_argument` directly (no `DataFusionError`/`error_class`/audit-log
-   involvement — these sites run before `query_id`/`audit_state` exist).
+   `classify_flight_error`, `error_class`, `build_log_line`, `error_or_warn_log`, and
+   `client_input_error!` helpers near the existing `status!` macro. `classify_datafusion_error`,
+   `client_error`, and `build_log_line` are `pub` so step 9's external integration tests can
+   call them directly. `error_or_warn_log(code, desc, &err, query_id, plan)`
+   maps `error_class(code)` to `warn!` (for `"user"`/`"resource"`) or `error!` (for
+   `"internal"`), logging `desc`, `err` itself (not `err.find_root()` — this keeps any outer
+   `Context` chain, untruncated, with backtrace intact if enabled; there is no file:line to
+   keep, since it was never part of `DataFusionError`'s `Display` — it only ever came from the
+   `status!` macro's own `file!()/line!()`, which these sites stop using), `query_id`, and —
+   when `plan` is `Some` — the truncated physical plan text, all server-side only.
+   `client_input_error!` is Design §6's new macro, returning `Status::invalid_argument`
+   directly (no `DataFusionError`/`error_class`/audit-log involvement — these sites run before
+   `query_id`/`audit_state` exist).
 2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
    `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
    `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
@@ -430,7 +488,10 @@ client                    execute_query                  classify/emit
    the `:461`/`:500` moves, and pass `Some(&plan_for_errors)` into the `client_error`/
    `classify_flight_error` calls at the `execute_stream` (`:461-464`) and per-batch (`:498`)
    sites. The three planning-phase sites (`:423`, `:440`, `:456`) pass `None` — the physical
-   plan doesn't exist yet when those can fail.
+   plan doesn't exist yet when those can fail. This plan text only ever reaches the
+   server-side log (via `error_or_warn_log`, and only when there's no diagnostic span) — it
+   is never appended to the `Status` message `client_error` returns, so it never reaches the
+   caller regardless of `error_class`.
 5. Add `error_class` to `QueryAuditState`/`QueryAuditRecord` (`query_audit.rs`); update
    `CompletionTrackedStream::poll_next` to derive the class from `err.code()` and pass it to
    `emit`, and remove its own `error!("stream error occurred: ...")` log statement — per
@@ -459,7 +520,10 @@ client                    execute_query                  classify/emit
    `Clone`), so it isn't available afterward to build a separate message the way today's code
    does. Pass `Some(status.message().to_string())` — the already-built client-facing
    message — as `emit`'s error argument for these four sites instead of re-deriving a fresh
-   string from the moved value.
+   string from the moved value. This is safe to put in `QueryAuditRecord.error` precisely
+   because `client_error` never appends the physical plan to `status.message()` (Design §2) —
+   the message here is desc + root-error text + optional span/notes/helps + `query_id`, not
+   the multi-kilobyte plan dump, which stays confined to the server log.
 
 **Phase 2 — UDF convention (`rust/datafusion-extensions/src/`)**
 7. Convert the arity/type-check `internal_err!` sites listed in Design §5 to `exec_err!`
@@ -484,12 +548,20 @@ client                    execute_query                  classify/emit
    branch of the table (`SQL`, `Plan`, `SchemaError`, `Execution`, `ResourcesExhausted`,
    `NotImplemented`, `Internal`, wrapped in `Context`/`Diagnostic`/`Collection`), asserting
    both the resulting `tonic::Code` and that the message contains no `.rs:` file:line
-   pattern. Add two cases specifically for Design §2's fallback: a `Diagnostic`-carrying
+   pattern. Add a case specifically for Design §2's span handling: a `Diagnostic`-carrying
    error with `plan: Some(...)` asserts the message contains the span text and *not* a
-   `"physical plan:"` section; a plain `Execution` error (no diagnostic) with `plan:
-   Some(...)` asserts the reverse — a `"physical plan:"` section containing the fake plan's
-   `DisplayAs` output (reuse `query_audit_tests.rs`'s `FakeExec` pattern), truncated at
-   `MAX_PLAN_CHARS` when the input exceeds it. Register the new file in `rust/public/Cargo.toml`
+   `"physical plan:"` section — `client_error`'s returned `Status` message never contains a
+   `"physical plan:"` section for *any* input, since that text is server-log-only (Design §2);
+   assert this for a plain `Execution` error with `plan: Some(...)` too. Cover the plan-text
+   path itself with separate tests against `build_log_line` (the pure helper
+   `error_or_warn_log` delegates to): one asserting its output contains a `"physical plan:"`
+   section with the fake plan's `DisplayAs` output when `plan: Some(...)`, one asserting it's
+   absent when `plan: None`, and one feeding a fake plan whose `DisplayAs` emits >
+   `MAX_PLAN_CHARS` of text to assert truncation at that boundary. These tests define their
+   own fake `ExecutionPlan` with a real `DisplayAs` impl (plus a variant that emits the
+   over-limit text) rather than reusing `query_audit_tests.rs`'s `FakeExec`, whose
+   `DisplayAs::fmt_as` is `unimplemented!()` — it was never written to be displayed. Register
+   the new file in `rust/public/Cargo.toml`
    with a matching `[[test]]` block (same pattern as `query_audit_tests`):
    ```toml
    [[test]]
@@ -513,6 +585,16 @@ client                    execute_query                  classify/emit
     `## Fields` table (`query_id` always present; `error_class` present on error, matching the
     existing `error` row's "on error" convention); add a "queries grouped by `error_class`"
     example matching the doc's existing style (`jsonb_get(j, 'error_class')`).
+12. `mkdocs/docs/gateway/index.md`: the gateway (`rust/public/src/servers/http_gateway.rs:346-362`)
+    downcasts the FlightSQL client error to `tonic::Status` and maps `Code::InvalidArgument`
+    to `GatewayError::BadRequest` (HTTP 400) — since the gateway's query path
+    (`client.query(...)` → `do_get_fallback` → `execute_query`) runs through the same
+    reclassification, a bad SQL query or other `InvalidArgument`-mapped error now surfaces as
+    400 instead of 500. Update the `### Error Handling` table (`:159-166`): change the
+    "500 Internal Error" row's "When" column from "SQL syntax error, execution failure" to
+    just "server-side execution failure" and add a "400 Bad Request" row's "When" cell to
+    also cover "invalid/unsupported SQL (syntax error, unknown column/function, etc.)"
+    alongside the existing "Empty SQL, query too large (>1MB)" case.
 
 ## Files to Modify
 
@@ -536,6 +618,8 @@ client                    execute_query                  classify/emit
   assertions.
 - `mkdocs/docs/query-guide/query-audit-log.md` — add `error_class`/`query_id` rows to the
   `## Fields` table; add a "queries grouped by `error_class`" example.
+- `mkdocs/docs/gateway/index.md` — update the `### Error Handling` table: bad/unsupported SQL
+  now maps to 400, not 500.
 
 ## Trade-offs
 
@@ -561,13 +645,31 @@ client                    execute_query                  classify/emit
   for no real gain client-side today. A future typed-exception wrapper (issue item 6) that
   inspects the audit log or a structured detail payload rather than the bare gRPC code could
   revisit this.
-- **Physical-plan fallback is a locator, not an attribution.** Nothing in DataFusion tags
-  which `ExecutionPlan` node actually raised a given error, so appending
-  `displayable(plan).indent(true)` (capped at `MAX_PLAN_CHARS`, truncated with a marker) only
-  gives the caller the plan's shape to eyeball against the error message — e.g. spotting the
-  `jsonb_format_json(...)` expression text in a `ProjectionExec` line. It's strictly better
-  than nothing for the execution-time (no-`Diagnostic`) case, but it's not as precise as the
-  line/column a plan-time `Diagnostic` span gives.
+- **Physical-plan fallback is server-log-only, and a locator rather than an attribution.**
+  `displayable(plan).indent(true)` renders `FileScanConfig::fmt_as`'s `file_groups=` section,
+  which prints each scanned file's `object_meta.location` — Micromegas view scans are exactly
+  this shape (`DataSourceExec`/`ParquetSource` plans built in
+  `rust/analytics/src/lakehouse/partitioned_execution_plan.rs`), so the plan text can reveal
+  internal lakehouse object-store partition paths. `client_error` therefore never puts it in
+  the `Status` message it returns; it only reaches `error_or_warn_log` (capped at
+  `MAX_PLAN_CHARS`, truncated with a marker), so it's visible to whoever can read the server
+  log, keyed by `query_id`, never to the caller. Even server-side, it's a locator, not an
+  attribution: nothing in DataFusion tags which `ExecutionPlan` node actually raised a given
+  error, so the plan only gives the plan's shape to eyeball against the error message — e.g.
+  spotting the `jsonb_format_json(...)` expression text in a `ProjectionExec` line. It's
+  strictly better than nothing for the execution-time (no-`Diagnostic`) case, but it's not as
+  precise as the line/column a plan-time `Diagnostic` span gives, and it costs the caller the
+  plan shape they'd otherwise see directly — they get the `query_id` to hand to whoever has
+  server-log access instead.
+- **`Configuration` → `InvalidArgument`; `ArrowError` stays `Internal`.** `Configuration` is
+  reachable from a caller's own `SET datafusion.…` statement, so it joins
+  `SQL`/`Plan`/`SchemaError`/`Execution` under `InvalidArgument`. `ArrowError` is left in the
+  `_ => Internal` bucket even though some `ArrowError`s are caller-triggered (e.g. a cast
+  failure or divide-by-zero on user data): `DataFusionError::ArrowError`'s `source()` is the
+  `ArrowError` itself, not a `DataFusionError`, so `find_root()` returns it directly with no
+  further variant available to separate a caller mistake from a genuine internal Arrow-kernel
+  bug. Splitting that further would mean matching on `arrow::error::ArrowError`'s own variants,
+  which is out of scope for this pass.
 - **Not touching `scoped_runtime`/`make_session_context` errors.** These are `anyhow::Error`
   setup failures (bad config, storage unreachable), not something caller SQL can trigger;
   reclassifying them is out of scope and they correctly stay `Internal`.
@@ -582,6 +684,17 @@ client                    execute_query                  classify/emit
 - **Not implementing the `EXPLAIN`/`LIMIT 0` cheap-validation option.** The issue calls this
   out as "separate from reporting" — a client-side/API-shape feature, not a reporting fix.
   Left for a follow-up plan.
+- **HTTP gateway status codes change too, not just the gRPC path.** The gateway
+  (`http_gateway.rs:346-362`) maps FlightSQL `Code::InvalidArgument` to `GatewayError::BadRequest`
+  (HTTP 400) already; since the gateway's query path runs through `execute_query`, every error
+  reclassified from `Internal` to `InvalidArgument` by this plan now comes back as HTTP 400
+  instead of 500 for gateway/web-app callers, not just for direct FlightSQL clients. This is
+  the same "you wrote a bad query" vs. "the server broke" distinction the issue asks for,
+  applied for free at the HTTP boundary — treated here as a welcome side effect, not a
+  separate feature, but it does mean `mkdocs/docs/gateway/index.md`'s error table needs
+  updating (Phase 4, step 12) since it documents the old 500-for-everything behavior.
+  `analytics-web-app/src/lib/arrow-stream.ts:172-194` surfaces any non-401/403 status
+  generically, so the web app's behavior doesn't break, but its displayed status code changes.
 - **Header parsing gets `InvalidArgument`; ticket decode doesn't.** Both are non-`DataFusionError`
   `status!` sites, but they differ in how certain the caller-mistake attribution is. The
   `query_range_begin`/`query_range_end` and `limit` header values are set by the caller
@@ -604,12 +717,15 @@ client                    execute_query                  classify/emit
 3. Manual repro from the issue: start services (`start_services.py`), run
    `micromegas-query "SELECT jsonb_format_json(property_get(properties, 'build-version')) FROM processes LIMIT 1"`
    and confirm the error now reads as an `InvalidArgument`/`ValueError`-shaped failure with
-   no absolute build path and no `.rs:` file:line, a `physical plan:` section (this is the
-   no-`Diagnostic`, execution-time case Design §2's fallback targets), and that the
-   `flightsql_query_audit` log line for that query has `status: "error"`,
-   `error_class: "user"`, and a `query_id` that also appears in the client-facing message.
-   Also try a plan-time typo (e.g. `SELECT no_such_function(properties) FROM processes`) and
-   confirm that one instead gets a line/column span with no `physical plan:` section.
+   no absolute build path, no `.rs:` file:line, and no `physical plan:` section in what the
+   CLI prints; then `tail /tmp/analytics.log` (or the relevant service log) for that query's
+   `query_id` and confirm the server-side log line for it *does* carry a `physical plan:`
+   section (this is the no-`Diagnostic`, execution-time case Design §2's fallback targets) —
+   and that the `flightsql_query_audit` log line for that query has `status: "error"`,
+   `error_class: "user"`, and the same `query_id`, with no `physical plan:` text in its
+   `error` field. Also try a plan-time typo (e.g. `SELECT no_such_function(properties) FROM
+   processes`) and confirm that one instead gets a line/column span, with no `physical plan:`
+   section anywhere — client, server log, or audit record.
 4. Same for a query that exceeds the per-query memory budget (if a low-enough test budget
    can be configured) to confirm `ResourceExhausted`/`error_class: "resource"`.
 5. `poetry run pytest` in `python/micromegas/` (per `python/CLAUDE.md`) including the updated
