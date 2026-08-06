@@ -111,7 +111,8 @@ exception type `micromegas-query`/notebook callers will see after this change:
 | `Unimplemented(12)` | `pyarrow.lib.ArrowNotImplementedError`, a `NotImplementedError` subclass |
 | `ResourceExhausted(8)` | `pyarrow._flight.FlightUnavailableError` — gRPC `RESOURCE_EXHAUSTED` maps to Arrow Flight's internal `kUnavailable` transport code (`util_internal.cc:105-107`), which becomes an `IOError`-family exception carrying `FlightStatusDetail::Unavailable`. See **Trade-offs** — this reads as "transient, safe to retry," which is exactly wrong for "this query needs too much memory." |
 
-Verified with `python3 -c "import pyarrow.flight as f; ..."` (pyarrow 20.0.0) that no
+Verified with `python3 -c "import pyarrow.flight as f; ..."` (pyarrow 23.0.1, matching
+`python/micromegas/pyproject.toml`'s `^23.0.0` pin) that no
 `FlightInvalidArgument`/`FlightResourceExhausted` classes exist client-side — confirming the
 table above is the actual, not merely documented, behavior.
 
@@ -221,18 +222,17 @@ fn error_or_warn_log(
 }
 
 fn truncate_plan_text(text: &str) -> String {
-    if text.len() <= MAX_PLAN_CHARS {
-        text.to_string()
-    } else {
-        // Byte-offset slicing (`&text[..MAX_PLAN_CHARS]`) panics if the offset lands
-        // mid-character — plan text can embed non-ASCII string literals from query
-        // predicates via `ScalarValue`'s `Display` impl. Slice on a char boundary instead.
-        let end = text
-            .char_indices()
-            .nth(MAX_PLAN_CHARS)
-            .map(|(i, _)| i)
-            .unwrap_or(text.len());
-        format!("{}... (truncated)", &text[..end])
+    // Drive both the "is this too long" check and the cut point from the same unit (char
+    // count, via `char_indices().nth(...)`), not a mix of `text.len()` (bytes) and a char
+    // offset — mixing them lets a text whose byte length exceeds `MAX_PLAN_CHARS` but whose
+    // char count doesn't (the multibyte case) fall into the `None` arm below and get emitted
+    // in full, wrongly suffixed with "(truncated)". Byte-offset slicing
+    // (`&text[..MAX_PLAN_CHARS]`) also panics if the offset lands mid-character — plan text
+    // can embed non-ASCII string literals from query predicates via `ScalarValue`'s `Display`
+    // impl — so the cut itself must land on a char boundary too.
+    match text.char_indices().nth(MAX_PLAN_CHARS) {
+        None => text.to_string(),
+        Some((i, _)) => format!("{}... (truncated)", &text[..i]),
     }
 }
 
@@ -289,7 +289,10 @@ re-wrap at `:466`, deals with a `FlightError`; recover the `DataFusionError` fro
 forwarding the same optional plan:
 
 ```rust
-fn classify_flight_error(
+// `pub` (like `classify_datafusion_error`/`client_error`/`build_log_line`) so step 9's
+// external integration tests can exercise the per-batch `FlightError` path directly —
+// the single point of failure for the whole execution-time classification story.
+pub fn classify_flight_error(
     err: FlightError,
     query_id: &str,
     plan: Option<&Arc<dyn ExecutionPlan>>,
@@ -348,7 +351,10 @@ matching the existing `name`/`range_begin`/`error` pattern in `query_audit.rs`) 
 it:
 
 ```rust
-fn error_class(code: tonic::Code) -> &'static str {
+// `pub` (like `classify_datafusion_error`/`classify_flight_error`) so step 9's external
+// integration tests can assert the `Code` -> `"user"/"resource"/"internal"` mapping
+// directly — it's load-bearing for both the audit field and the metric gating.
+pub fn error_class(code: tonic::Code) -> &'static str {
     match code {
         tonic::Code::InvalidArgument | tonic::Code::Unimplemented => "user",
         tonic::Code::ResourceExhausted => "resource",
@@ -369,8 +375,10 @@ fn error_class(code: tonic::Code) -> &'static str {
   `Display` wraps the message in its own `code: ..., message: ...` framing, whereas
   `.message()` is the same short string `client_error` built (no plan text, per Design §2),
   matching what Step 6's other four `emit` sites pass.
-- In every early-setup failure `map_err` closure (`:395-463`), the `Status` was just built by
-  `client_error`, so `status.code()` gives the same answer for free.
+- In every early-setup failure `map_err` closure (`:395-463`), the class is derived from
+  `status.code()` once each closure is reordered (per step 6) to build its `Status` first —
+  via `status!`, `client_input_error!`, `client_error`, or `classify_flight_error`, whichever
+  applies at that site — and only then call `emit`.
 - The same derived class also gates `poll_next`'s existing failure metrics
   (`imetric!("query_duration_with_error", ...)` / `imetric!("query_failed", ...)` at
   `:213-214`): emit those two only when `error_class == "internal"`. A user/resource error is
@@ -463,9 +471,13 @@ client                    execute_query                  classify/emit
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
    `classify_flight_error`, `error_class`, `build_log_line`, `error_or_warn_log`, and
    `client_input_error!` helpers near the existing `status!` macro. `classify_datafusion_error`,
-   `client_error`, `build_log_line`, and the `MAX_PLAN_CHARS` constant are `pub` so step 9's
-   external integration tests can call/reference them directly (step 9's truncation test needs
-   `MAX_PLAN_CHARS` to size its oversized input). `error_or_warn_log(code, desc, &err, query_id, plan)`
+   `client_error`, `classify_flight_error`, `error_class`, `build_log_line`, and the
+   `MAX_PLAN_CHARS` constant are `pub` so step 9's external integration tests can call/reference
+   them directly (step 9's truncation test needs `MAX_PLAN_CHARS` to size its oversized input;
+   `classify_flight_error` and `error_class` are equally load-bearing — the former is the only
+   path that exercises the `downcast::<DataFusionError>()` recovery on the per-batch
+   `FlightError` site, the latter drives both the audit field and the metric gating).
+   `error_or_warn_log(code, desc, &err, query_id, plan)`
    maps `error_class(code)` to `warn!` (for `"user"`/`"resource"`) or `error!` (for
    `"internal"`), logging `desc`, `err` itself (not `err.find_root()` — this keeps any outer
    `Context` chain, untruncated, with backtrace intact if enabled; there is no file:line to
@@ -507,10 +519,14 @@ client                    execute_query                  classify/emit
    Design §6) aren't confidently classifiable as caller mistakes.
 3. Mint `query_id` as the first statement of `execute_query` (before the UTF-8 parse of the
    SQL), thread it through `QueryAuditState` and into every `client_error`/
-   `classify_flight_error` call at the five sites above. It is therefore available for every
-   failure inside `execute_query`; the one failure genuinely unaffected is the ticket-decode
-   `status!` site in the calling `do_get_fallback` (`:527-528`), which happens before
-   `execute_query` is even entered and already has a distinct log trail.
+   `classify_flight_error` call at the five sites above. It is therefore available to every
+   failure that goes through `client_error`/`classify_flight_error`; several other failure
+   paths keep messages without a query id: the ticket-decode `status!` site in the calling
+   `do_get_fallback` (`:527-528`), which happens before `execute_query` is even entered and
+   already has a distinct log trail; the statement-handle UTF-8 parse inside `execute_query`
+   itself (`:296-297`), which Design §6 explicitly leaves on `status!`; and the attribution
+   failure at `:331` (`validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?`),
+   which returns a pre-built `Status` and emits no audit record either.
 4. Wire the physical-plan fallback described in Design §2: clone `plan`/`query_id` before
    the `:461`/`:500` moves, and pass `Some(&plan_for_errors)` into the `client_error`/
    `classify_flight_error` calls at the `execute_stream` (`:461-464`) and per-batch (`:498`)
@@ -519,7 +535,9 @@ client                    execute_query                  classify/emit
    server-side log (via `error_or_warn_log`, and only when there's no diagnostic span) — it
    is never appended to the `Status` message `client_error` returns, so it never reaches the
    caller regardless of `error_class`.
-5. Add `error_class` to `QueryAuditState`/`QueryAuditRecord` (`query_audit.rs`); update
+5. Add `error_class` to `QueryAuditRecord` (`query_audit.rs`) and a matching `error_class`
+   parameter to `QueryAuditState::emit` (`flight_sql_service_impl.rs`); `query_id` is a new
+   field on both `QueryAuditRecord` and `QueryAuditState`. Update
    `CompletionTrackedStream::poll_next` to derive the class from `err.code()` and pass it to
    `emit`, and remove its own `error!("stream error occurred: ...")` log statement — per
    Design §4, `classify_flight_error` is now the sole log point for this site, so `poll_next`
@@ -592,8 +610,17 @@ client                    execute_query                  classify/emit
    `MAX_PLAN_CHARS` of text to assert truncation at that boundary. These tests define their
    own fake `ExecutionPlan` with a real `DisplayAs` impl (plus a variant that emits the
    over-limit text) rather than reusing `query_audit_tests.rs`'s `FakeExec`, whose
-   `DisplayAs::fmt_as` is `unimplemented!()` — it was never written to be displayed. Register
-   the new file in `rust/public/Cargo.toml`
+   `DisplayAs::fmt_as` is `unimplemented!()` — it was never written to be displayed. Also add
+   cases for `classify_flight_error` (the per-batch path's `downcast::<DataFusionError>()` is
+   otherwise untested) covering all three branches: `FlightError::ExternalError` wrapping a
+   `DataFusionError` — asserts the same `tonic::Code` as `classify_datafusion_error` would give
+   that inner error; `FlightError::ExternalError` wrapping a non-`DataFusionError` payload —
+   asserts `tonic::Code::Internal`; and a non-`ExternalError` `FlightError` variant (e.g.
+   `FlightError::ProtocolError`) — asserts `tonic::Code::Internal` too. And a direct
+   table-driven case for `error_class`'s `Code` -> `"user"/"resource"/"internal"` mapping
+   (`InvalidArgument`/`Unimplemented` -> `"user"`, `ResourceExhausted` -> `"resource"`,
+   everything else including `Internal` -> `"internal"`). Register the new file in
+   `rust/public/Cargo.toml`
    with a matching `[[test]]` block (same pattern as `query_audit_tests`):
    ```toml
    [[test]]
@@ -627,9 +654,32 @@ client                    execute_query                  classify/emit
     `ErrorCode::InvalidSql`/`Internal` frames per the Trade-offs entry above, so its behavior is
     unaffected here.) Update the `### Error Handling` table (`:159-166`): change the
     "500 Internal Error" row's "When" column from "SQL syntax error, execution failure" to
-    just "server-side execution failure" and add a "400 Bad Request" row's "When" cell to
-    also cover "invalid/unsupported SQL (syntax error, unknown column/function, etc.)"
-    alongside the existing "Empty SQL, query too large (>1MB)" case.
+    "server-side execution failure, or a query that exceeded a resource budget (gRPC
+    `ResourceExhausted`, which `http_gateway.rs:346-362` doesn't map to a distinct HTTP code
+    today — noted here as a follow-up, not fixed by this plan)" and add a "400 Bad Request"
+    row's "When" cell to also cover "invalid/unsupported SQL (syntax error, unknown
+    column/function, etc.)" alongside the existing "Empty SQL, query too large (>1MB)" case.
+13. `mkdocs/docs/query-guide/python-api.md`'s `## Error Handling` section (`:855`): today it
+    only demonstrates a bare `except Exception`. Add the per-gRPC-code exception mapping from
+    the "Confirmed via Arrow Flight C++ source" table — a bad query (`InvalidArgument`) now
+    raises `pyarrow.lib.ArrowInvalid`, a `ValueError` subclass; an unimplemented feature
+    (`Unimplemented`) raises `pyarrow.lib.ArrowNotImplementedError`, a `NotImplementedError`
+    subclass; a resource-budget failure (`ResourceExhausted`) raises
+    `pyarrow._flight.FlightUnavailableError` (see Trade-offs on why this reads as
+    "transient/retry-safe"); and a genuine server bug (`Internal`) still raises
+    `pyarrow._flight.FlightInternalError` — with a short example catching `ValueError`
+    separately from the rest to distinguish "fix my query" from "something broke server-side."
+14. `CHANGELOG.md`: add an `## Unreleased` → `**Analytics:**` entry covering the
+    `DataFusionError` reclassification (typo'd query / resource-budget query / server bug now
+    come back as distinct gRPC codes instead of always `Internal`), the gated/new
+    `query_failed_user`/`query_failed_resource` metrics and the narrowed
+    `query_failed`/`query_duration_with_error` semantics (Trade-offs), the `/gateway/query`
+    400-vs-500 change (step 12), and the python exception-type change (step 13). Flag as a
+    **minor breaking change**: `QueryAuditRecord` is published API
+    (`micromegas::servers::query_audit`, all-public fields) and gains `query_id` and
+    `error_class`, so any downstream struct literal constructing it needs updating — matching
+    how `tasks/completed/1406_per_query_peak_memory_plan.md` documented the same struct's
+    previous field additions.
 
 ## Files to Modify
 
@@ -655,6 +705,11 @@ client                    execute_query                  classify/emit
   `## Fields` table; add a "queries grouped by `error_class`" example.
 - `mkdocs/docs/gateway/index.md` — update the `### Error Handling` table: bad/unsupported SQL
   now maps to 400, not 500.
+- `mkdocs/docs/query-guide/python-api.md` — update `## Error Handling` with the new
+  per-gRPC-code exception-type mapping.
+- `CHANGELOG.md` — `## Unreleased` → `**Analytics:**` entry for the reclassification, the new
+  audit fields (minor breaking change), the gated/new metrics, the gateway 400-vs-500 change,
+  and the python exception-type change.
 
 ## Trade-offs
 
@@ -674,8 +729,8 @@ client                    execute_query                  classify/emit
   gRPC code, but per the confirmed pyarrow mapping it surfaces client-side as
   `FlightUnavailableError`, which reads as "transient, retry-safe" — the opposite of "this
   query needs a smaller scan/limit." No gRPC code maps to something better in pyarrow's
-  client (there is no Flight-specific "resource exhausted" exception). Documented under Open
-  Questions rather than worked around, since a workaround (e.g. reusing `InvalidArgument`
+  client (there is no Flight-specific "resource exhausted" exception). Documented here as an
+  accepted trade-off rather than worked around, since a workaround (e.g. reusing `InvalidArgument`
   for this case) would lose the distinct `error_class: "resource"` signal in the audit log
   for no real gain client-side today. A future typed-exception wrapper (issue item 6) that
   inspects the audit log or a structured detail payload rather than the bare gRPC code could
