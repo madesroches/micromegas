@@ -73,7 +73,7 @@ impl Stream for AsyncLogStream {
                     msgs.append_value(text);
                 }
                 Err(err_msg) => {
-                    return Poll::Ready(Some(Err(DataFusionError::Execution(err_msg))));
+                    return Poll::Ready(Some(Err(DataFusionError::Internal(err_msg))));
                 }
             }
         }
