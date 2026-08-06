@@ -109,7 +109,7 @@ exception type `micromegas-query`/notebook callers will see after this change:
 | `INTERNAL(13)` (today, always) | `pyarrow._flight.FlightInternalError` (message prefixed `"Flight returned internal error, with message: "` — this literally matches the repro in the issue) |
 | `InvalidArgument(3)` | `pyarrow.lib.ArrowInvalid`, a **`ValueError` subclass** — no Flight-specific exception class exists for this code, it goes through generic Arrow status mapping. This is a good outcome: a bad query becomes a `ValueError` in Python. |
 | `Unimplemented(12)` | `pyarrow.lib.ArrowNotImplementedError`, a `NotImplementedError` subclass |
-| `ResourceExhausted(8)` | `pyarrow._flight.FlightUnavailableError` — gRPC `RESOURCE_EXHAUSTED` maps to Arrow Flight's internal `kUnavailable` transport code (`util_internal.cc:105-107`), which becomes an `IOError`-family exception carrying `FlightStatusDetail::Unavailable`. See **Trade-offs** — this reads as "transient, safe to retry," which is exactly wrong for "this query needs too much memory." |
+| `ResourceExhausted(8)` | `pyarrow.lib.ArrowInvalid`, a **`ValueError` subclass** (message prefixed `"gRPC returned resource exhausted error, with message: "`) — no Flight-specific exception class exists for this code either, so it falls into the same generic Arrow status mapping as `InvalidArgument`. See **Trade-offs** — this is indistinguishable from a bad query by exception type alone, which is exactly wrong for "this query needs too much memory." |
 
 Verified with `python3 -c "import pyarrow.flight as f; ..."` (pyarrow 23.0.1, matching
 `python/micromegas/pyproject.toml`'s `^23.0.0` pin) that no
@@ -670,9 +670,9 @@ client                    execute_query                  classify/emit
     the "Confirmed via Arrow Flight C++ source" table — a bad query (`InvalidArgument`) now
     raises `pyarrow.lib.ArrowInvalid`, a `ValueError` subclass; an unimplemented feature
     (`Unimplemented`) raises `pyarrow.lib.ArrowNotImplementedError`, a `NotImplementedError`
-    subclass; a resource-budget failure (`ResourceExhausted`) raises
-    `pyarrow._flight.FlightUnavailableError` (see Trade-offs on why this reads as
-    "transient/retry-safe"); and a genuine server bug (`Internal`) still raises
+    subclass; a resource-budget failure (`ResourceExhausted`) also raises
+    `pyarrow.lib.ArrowInvalid` (see Trade-offs on why this is indistinguishable from a bad
+    query by exception type alone); and a genuine server bug (`Internal`) still raises
     `pyarrow._flight.FlightInternalError` — with a short example catching `ValueError`
     separately from the rest to distinguish "fix my query" from "something broke server-side."
 14. `CHANGELOG.md`: add an `## Unreleased` → `**Analytics:**` entry covering the
@@ -733,14 +733,16 @@ client                    execute_query                  classify/emit
   `Internal`, which is the same trade-off the issue explicitly accepts.
 - **`ResourcesExhausted` → gRPC `ResourceExhausted(8)`.** This is the semantically correct
   gRPC code, but per the confirmed pyarrow mapping it surfaces client-side as
-  `FlightUnavailableError`, which reads as "transient, retry-safe" — the opposite of "this
-  query needs a smaller scan/limit." No gRPC code maps to something better in pyarrow's
-  client (there is no Flight-specific "resource exhausted" exception). Documented here as an
-  accepted trade-off rather than worked around, since a workaround (e.g. reusing `InvalidArgument`
-  for this case) would lose the distinct `error_class: "resource"` signal in the audit log
-  for no real gain client-side today. A future typed-exception wrapper (issue item 6) that
-  inspects the audit log or a structured detail payload rather than the bare gRPC code could
-  revisit this.
+  `pyarrow.lib.ArrowInvalid` — the same `ValueError` subclass a bad query raises — so a
+  resource-budget failure and a typo'd query are indistinguishable by exception type alone;
+  callers must inspect the message prefix (`"gRPC returned resource exhausted error"`) or the
+  audit log's `error_class: "resource"` to tell them apart. No gRPC code maps to something
+  better-differentiated in pyarrow's client (there is no Flight-specific "resource exhausted"
+  exception). Documented here as an accepted trade-off rather than worked around, since a
+  workaround (e.g. reusing `InvalidArgument` for this case) would lose the distinct
+  `error_class: "resource"` signal in the audit log for no real gain client-side today. A
+  future typed-exception wrapper (issue item 6) that inspects the audit log or a structured
+  detail payload rather than the bare gRPC code could revisit this.
 - **Physical-plan fallback is server-log-only, and a locator rather than an attribution.**
   `displayable(plan).indent(true)` renders `FileScanConfig::fmt_as`'s `file_groups=` section,
   which prints each scanned file's `object_meta.location` — Micromegas view scans are exactly

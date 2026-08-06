@@ -122,7 +122,7 @@ impl ExecutionPlan for TaskLogExecPlan {
         }
 
         let mut spawner = self.spawner.lock().map_err(|_| {
-            DataFusionError::Execution("Error locking mutex in LogExecPlan".to_owned())
+            DataFusionError::Internal("Error locking mutex in LogExecPlan".to_owned())
         })?;
         if let Some(fun) = spawner.take() {
             drop(spawner);

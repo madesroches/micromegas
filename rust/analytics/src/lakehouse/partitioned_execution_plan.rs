@@ -78,7 +78,7 @@ fn sort_and_check_non_overlapping(
             partition_bounds(next, bounds),
         ) && prev_max > next_min
         {
-            return Err(datafusion::error::DataFusionError::Execution(format!(
+            return Err(datafusion::error::DataFusionError::Internal(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
                  For event-time ordering the usual causes are an insert-time inversion straddling a JIT segment boundary, or -- for tsc_frequency == 0 processes -- TSC-frequency \
                  re-estimation drift across materialization epochs spanning a clock adjustment. Both are fixed by retiring the affected stream's partitions so they rebuild with a \

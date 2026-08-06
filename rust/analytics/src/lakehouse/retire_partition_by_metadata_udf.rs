@@ -228,7 +228,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
         // Use a single transaction for the entire batch
         let mut transaction =
             self.lake.db_pool.begin().await.map_err(|e| {
-                DataFusionError::Execution(format!("Failed to begin transaction: {e}"))
+                DataFusionError::Internal(format!("Failed to begin transaction: {e}"))
             })?;
 
         let mut success_count = 0;
@@ -294,7 +294,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
             ));
         } else {
             transaction.commit().await.map_err(|e| {
-                DataFusionError::Execution(format!("Failed to commit transaction: {e}"))
+                DataFusionError::Internal(format!("Failed to commit transaction: {e}"))
             })?;
             info!("Successfully retired {} partitions in batch", success_count);
         }

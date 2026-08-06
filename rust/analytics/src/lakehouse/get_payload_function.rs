@@ -116,10 +116,10 @@ impl AsyncScalarUDFImpl for GetPayload {
         while let Some(res) = stream.next().await {
             result_builder.append_value(
                 res.map_err(|e| {
-                    DataFusionError::Execution(format!("error downloading payload: {e:?}"))
+                    DataFusionError::Internal(format!("error downloading payload: {e:?}"))
                 })?
                 .map_err(|e| {
-                    DataFusionError::Execution(format!("error downloading payload: {e:?}"))
+                    DataFusionError::Internal(format!("error downloading payload: {e:?}"))
                 })?,
             );
         }

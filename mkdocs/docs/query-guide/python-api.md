@@ -876,7 +876,7 @@ Flight client surfaces as a different Python exception type:
 |---|---|---|
 | Bad query (typo'd function/column, syntax error, ...) | `InvalidArgument` | `pyarrow.lib.ArrowInvalid` (a `ValueError` subclass) |
 | Unimplemented feature | `Unimplemented` | `pyarrow.lib.ArrowNotImplementedError` (a `NotImplementedError` subclass) |
-| Query exceeded a resource budget (e.g. memory) | `ResourceExhausted` | `pyarrow._flight.FlightUnavailableError` |
+| Query exceeded a resource budget (e.g. memory) | `ResourceExhausted` | `pyarrow.lib.ArrowInvalid` (a `ValueError` subclass, message prefixed `gRPC returned resource exhausted error`) |
 | Genuine server-side bug | `Internal` | `pyarrow._flight.FlightInternalError` |
 
 This lets you distinguish "fix my query" from "something broke server-side" without parsing the
@@ -887,11 +887,14 @@ try:
     df = client.query(sql, begin, end)
 except (ValueError, NotImplementedError) as e:
     # ArrowInvalid (a ValueError) or ArrowNotImplementedError (a NotImplementedError):
-    # the query itself needs fixing.
+    # the query itself needs fixing -- except that a resource-budget failure also
+    # raises ArrowInvalid. Tell the two apart by the message prefix
+    # ("gRPC returned resource exhausted error") or by error_class: "resource"
+    # in the server-side audit log.
     print(f"Bad query: {e}")
 except Exception as e:
-    # FlightInternalError / FlightUnavailableError / anything else: a server-side
-    # problem (or a resource budget), not something to fix in the SQL text.
+    # FlightInternalError / anything else: a genuine server-side problem, not
+    # something to fix in the SQL text.
     print(f"Query failed: {e}")
 ```
 
