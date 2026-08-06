@@ -331,6 +331,8 @@ Asynchronous span events for tracking async operations.
 
 #### `thread_spans` 
 Derived view for analyzing span durations and hierarchies (accessed via `view_instance('thread_spans', stream_id)`).
+A `thread_spans` view instance scan is ordered by `begin`, so an `ORDER BY begin` on it is free (no
+extra sort).
 
 | Field | Type | Description |
 |-------|------|-------------|

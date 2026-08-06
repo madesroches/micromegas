@@ -2,7 +2,8 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_stream_jit_partitions,
+        group_contiguous_block_chains, is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -13,7 +14,8 @@ use super::{
 };
 use crate::{
     call_tree::make_call_tree,
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    dfext::typed_column::typed_column_by_name,
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
     metadata::{find_process_with_latest_timing, find_stream_from_view},
     response_writer::ResponseWriter,
     span_table::{SpanRecordBuilder, get_spans_schema},
@@ -22,6 +24,8 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::array::TimestampNanosecondArray;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::{arrow::datatypes::Schema, logical_expr::expr_fn::col};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -31,7 +35,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 2;
 lazy_static::lazy_static! {
     static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
@@ -115,6 +119,34 @@ async fn append_call_tree(
     Ok(())
 }
 
+/// Verifies that `batch`'s `begin` column is non-decreasing, naming `stream_id` and the offending
+/// row/values in both the returned error and (unlike a plain `anyhow::ensure!`) an `error!` log
+/// line emitted immediately before it: nothing on `ensure_begin_non_decreasing`'s callers' error
+/// propagation path (`MaterializedView::scan` -> DataFusion planning -> the flight SQL service)
+/// logs a planning-time error at error level, so the check logs itself instead of relying on that
+/// propagation (see the plan's Design §5 for the full trace).
+///
+/// `pub`, not inlined into `write_partition`, so `rust/analytics/tests/` (an external integration
+/// crate that can only reach `pub` items) can call it directly with a hand-built batch.
+pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()> {
+    let begins: &TimestampNanosecondArray = typed_column_by_name(batch, "begin")?;
+    let mut previous: Option<i64> = None;
+    for i in 0..begins.len() {
+        let begin = begins.value(i);
+        if let Some(prev) = previous
+            && begin < prev
+        {
+            let msg = format!(
+                "thread_spans stream {stream_id}: begin regressed at row {i}: {begin} < {prev}"
+            );
+            error!("{msg}");
+            anyhow::bail!(msg);
+        }
+        previous = Some(begin);
+    }
+    Ok(())
+}
+
 /// Writes a partition from a set of blocks.
 #[span_fn]
 async fn write_partition(
@@ -123,16 +155,19 @@ async fn write_partition(
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
+    same_run_ranges: &[TimeRange],
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    // for jit partitions, we assume that the blocks were registered in order
-    // since they are built based on begin_ticks, not insert_time
-    let min_insert_time = spec.blocks[0].block.insert_time;
-    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
+    // JIT partitions here are grouped under BlockOrder::EventTime (see jit_update below), so
+    // spec.blocks is event-time ordered, not insert-time ordered -- blocks_insert_time_range computes
+    // the real min/max rather than reading list endpoints.
+    let stream_id = spec.blocks[0].stream.stream_id.to_string();
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -140,50 +175,48 @@ async fn write_partition(
         lake.clone(),
         view_meta,
         schema,
-        TimeRange::new(min_insert_time, max_insert_time),
+        insert_range,
         spec.block_ids_hash.clone(),
         None,
+        RetireMatch::Overlap,
+        same_run_ranges.to_vec(),
         rx,
         null_response_writer,
     ));
 
     let build_result: Result<PartitionRowSet> = async {
         let mut record_builder = SpanRecordBuilder::with_capacity(nb_events / 2);
-        let mut blocks_to_process = vec![];
-        let mut last_end = None;
-        for block in &spec.blocks {
-            if block.block.begin_ticks == last_end.unwrap_or(block.block.begin_ticks) {
-                last_end = Some(block.block.end_ticks);
-                blocks_to_process.push(block.block.clone());
-            } else {
-                append_call_tree(
-                    &mut record_builder,
-                    convert_ticks,
-                    &blocks_to_process,
-                    lake.blob_storage.clone(),
-                    &block.stream,
-                )
-                .await?;
-                last_end = Some(block.block.end_ticks);
-                blocks_to_process = vec![block.block.clone()];
-            }
-        }
-        if !blocks_to_process.is_empty() {
+        // One call tree per unbroken chain of blocks, so a span opened in one block and closed in
+        // the next is reconstructed whole; see `group_contiguous_block_chains`.
+        for chain in group_contiguous_block_chains(&spec.blocks) {
             append_call_tree(
                 &mut record_builder,
                 convert_ticks,
-                &blocks_to_process,
+                &chain,
                 lake.blob_storage.clone(),
                 &spec.blocks[0].stream,
             )
             .await?;
         }
-        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-        let max_time_row =
-            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
+        let min_ticks = spec
+            .blocks
+            .iter()
+            .map(|b| b.block.begin_ticks)
+            .min()
+            .with_context(|| "empty partition spec")?;
+        let max_ticks = spec
+            .blocks
+            .iter()
+            .map(|b| b.block.end_ticks)
+            .max()
+            .with_context(|| "empty partition spec")?;
+        let min_time_row = convert_ticks.delta_ticks_to_time(min_ticks);
+        let max_time_row = convert_ticks.delta_ticks_to_time(max_ticks);
         let rows = record_builder
             .finish()
             .with_context(|| "record_builder.finish()")?;
+        ensure_begin_non_decreasing(&stream_id, &rows)
+            .with_context(|| "ensure_begin_non_decreasing")?;
         info!("writing {} rows", rows.num_rows());
         Ok(PartitionRowSet {
             rows_time_range: TimeRange::new(min_time_row, max_time_row),
@@ -222,20 +255,50 @@ async fn write_partition(
     }
 }
 /// Rebuilds the partition if it's missing or out of date.
+///
+/// `same_run_ranges` accumulates the insert ranges every partition this `jit_update` run has already
+/// handled -- written, or found already up to date -- earlier in its loop. This call reads it (to
+/// pass to `retire_partitions` via `RetireMatch::Overlap`, protecting those earlier partitions from
+/// this write) and appends `spec`'s own range before returning.
+///
+/// `pub` only so `thread_spans_ordering_db_test.rs` can write a single JIT partition directly, with
+/// exact boundaries `jit_update`'s loop wouldn't expose; `rust/analytics/tests/` compiles as an
+/// external crate and can only reach `pub` items. Not intended as API.
+/// (`net_spans_view::update_partition` stays private because its tests drive `retire_partitions`
+/// directly instead -- there is no Rust producer of `net` streams to push blocks through.)
 #[span_fn]
-async fn update_partition(
+pub async fn update_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
+    same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
+    if is_jit_partition_up_to_date(
+        &lake.db_pool,
+        view_meta.clone(),
+        spec,
+        BlockOrder::EventTime,
+    )
+    .await?
+    {
+        same_run_ranges.push(insert_range);
         return Ok(());
     }
-    write_partition(lake, view_meta, schema, convert_ticks, spec)
-        .await
-        .with_context(|| "write_partition")?;
+    write_partition(
+        lake,
+        view_meta,
+        schema,
+        convert_ticks,
+        spec,
+        same_run_ranges.as_slice(),
+    )
+    .await
+    .with_context(|| "write_partition")?;
+    same_run_ranges.push(insert_range);
 
     Ok(())
 }
@@ -302,8 +365,15 @@ impl View for ThreadSpansView {
         )
         .with_context(|| "make_time_converter_from_latest_timing")?;
         let blocks_view = BlocksView::new()?;
+        // ThreadSpansView builds cross-block call trees and declares ScanOrdering::Concatenated
+        // over `begin` (see get_scan_output_ordering below), so its JIT partitions must be
+        // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs.
+        let config = JitPartitionConfig {
+            block_order: BlockOrder::EventTime,
+            ..Default::default()
+        };
         let partitions = generate_stream_jit_partitions(
-            &JitPartitionConfig::default(),
+            &config,
             lakehouse.clone(),
             &blocks_view,
             &query_range,
@@ -312,6 +382,10 @@ impl View for ThreadSpansView {
         )
         .await
         .with_context(|| "generate_stream_jit_partitions")?;
+        // Accumulates this run's own already-handled insert ranges across the loop, so a later
+        // partition's retire step never retires an earlier one from this same run -- see
+        // `update_partition`'s and `RetireMatch::Overlap`'s docs.
+        let mut same_run_ranges: Vec<TimeRange> = Vec::new();
         for part in &partitions {
             update_partition(
                 lakehouse.lake().clone(),
@@ -323,6 +397,7 @@ impl View for ThreadSpansView {
                 self.get_file_schema(),
                 &convert_ticks,
                 part,
+                &mut same_run_ranges,
             )
             .await
             .with_context(|| "update_partition")?;

@@ -1,0 +1,991 @@
+# JIT Block Ordering by Event Time Plan (#1429)
+
+## Implementation Status (2026-08-06)
+
+Implemented. All six phases landed; the divergences below were found while building the tests and
+during branch review, and the code reflects them — the design sections further down are left as
+originally written except where a step explicitly says otherwise.
+
+**Naming and API shape**
+
+- Step 2's `insert_time_range` is named **`blocks_insert_time_range`**. `jit_partitions.rs` already
+  has an `insert_time_range` *parameter* on both `generate_*_jit_partitions_segment` and same-named
+  locals in both `generate_*_jit_partitions`, which shadowed the free function throughout its own
+  module.
+- Step 7's `retire_partitions` grew a second new parameter (`same_run_ranges`, below) and so needed
+  `#[expect(clippy::too_many_arguments)]`, matching the 8 existing sites in
+  `analytics/src/lakehouse/` (12 workspace-wide), one of them already on
+  `write_partition_from_rows` in the same file.
+
+**Step 6 — exact up-to-date equality is scoped to `EventTime`, not unconditional**
+
+The plan tightened `is_jit_partition_up_to_date` to exact insert-range + count equality for every
+caller. That is wrong for `BlockOrder::InsertTime` views: their cut points are stable across runs, so
+a stale spec legitimately already covered by a wider committed partition (e.g. from a concurrent
+`jit_update` that lost a race) must stay a no-op. `RetireMatch::Containment` cannot retire a merely
+overlapping partition, so calling that spec "not up to date" makes the subsequent insert trip
+`lakehouse_partitions_no_overlap`. The function therefore takes a `BlockOrder` argument: `EventTime`
+gets exact range + `==` count; `InsertTime` keeps the original overlap/`>=` test **and** its
+degenerate `min == max` exact-match branch, which the plan had assumed would collapse away.
+
+**Design §6 — same-run siblings are protected by identity, not range shape**
+
+The plan protected a same-run degenerate partition from its successor's retire with shape-based SQL
+(`AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)`, plus an
+exact-degenerate sub-clause on the third arm). That cannot distinguish a same-run sibling from a
+genuinely stale cross-run partition of the same shape — it either spared the stale one or retired the
+sibling, depending on the shapes involved. Both clauses were removed. `retire_partitions` instead
+takes an explicit **`same_run_ranges: &[TimeRange]`** — the ranges the current `jit_update` run has
+already written or found up to date — and every arm is guarded by `AND NOT EXISTS (... unnest(...))`
+against it. `thread_spans_view`/`net_spans_view` thread a fresh accumulator through their loops.
+Testing Strategy #11's "left-boundary exclusion" sub-case now asserts the identity-based behavior;
+the SQL clause it names no longer exists.
+
+`RetireMatch::Overlap`'s predicate went through two revisions. It first grew a **third arm** the
+plan didn't anticipate (`$3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3`): for a
+degenerate *new* range the first two arms both miss — `tstzrange(t, t)` is Postgres's empty range so
+`&&` is vacuously false, and the containment arm degenerates to an exact match. Branch review then
+found the underlying problem all three arms were dancing around: a partition's
+`[begin_insert_time, end_insert_time]` is the *inclusive* min/max of its blocks' insert times, while
+`tstzrange`'s default bounds are half-open — so even the three-arm union missed *touching* ranges
+(existing `[a, t]` vs. new `[t, u]` or `[t, t]`), a shape reachable through racing or interrupted
+runs that leaves transient duplicate coverage. The three arms were replaced by a single
+inclusive-bounds intersection, `tstzrange(begin, end, '[]') && tstzrange($3, $4, '[]')`, which
+subsumes all three and closes the touching gap. Safe only because same-run sibling protection is
+identity-based (below) — touching siblings within one run are routine and must survive.
+
+**Steps 16-17 — the event-time non-overlap claim was overstated; the correction is producer-specific**
+
+The plan's premise for Phase 4 was that event-time-ordered grouping makes partitions' event-time
+ranges non-overlapping "by construction" within a segment, leaving only cross-segment inversions and
+TSC drift as residuals. That is not true in general: a partition's event bounds come from its blocks'
+`begin_ticks`/`end_ticks`, and whether consecutive blocks overlap on those ticks depends on which
+producer wrote the stream.
+
+- **`micromegas_tracing` (Rust)**: every flush path in `dispatch.rs` stamps the replacement block's
+  `begin` (`TracingBlock::new` → `DualTime::now()`) before closing the outgoing block (`close()` →
+  `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the cost of the buffer
+  swap. Any cut between adjacent blocks can trip `sort_and_check_non_overlapping`'s strict
+  `prev_max > next_min`.
+- **Unreal (C++)**: `MicromegasTracing/Private/Dispatch.cpp` (`FlushThreadStream`) and
+  `NetTraceWriter.cpp` (`FlushImpl`) take a single `DualTime Now = DualTime::Now()` and use it for
+  both the new block's `begin` and `FullBlock->Close(Now)`, so consecutive blocks *touch* exactly and
+  no overlap arises. Since `net` streams are created only by `NetTraceWriter.cpp`, this cause is
+  unreachable for `net_spans`.
+
+The overlap case predates the branch (the old code derived the same bounds from the block list's
+endpoints) and is orthogonal to insert-safe cut points, which are an *insert-time* property. It is
+**not fixed here** — it is documented, scoped to the Rust producer, in `view.rs`'s `Concatenated`
+contract note, the `sort_and_check_non_overlapping` error message and rustdoc, and
+`jit_partitions.rs`'s module doc. It deserves its own issue.
+
+An earlier revision of this section concluded that Design §"three failures" benefit #2 (cross-block
+call-tree fragmentation) was therefore weaker than claimed, because the `last_end`-based contiguity
+grouping tested exact `begin_ticks == last_end` equality. That was the wrong conclusion in two ways:
+the equality held for Unreal-produced streams all along (so the benefit was always real for the
+production producer), and for Rust-produced streams the equality test was itself the bug — it meant
+call trees *never* spanned a block boundary. Both views' contiguity tests are now `begin_ticks <=
+last_end`, since only a *gap* breaks a chain; an overlap still means unbroken coverage.
+
+**Grouping residuals now documented in `group_blocks_into_partitions`**
+
+- `emit_partition` skips a window whose blocks all report `nb_objects == 0`, where the pre-refactor
+  code pushed a rows-free partition mid-list. Unreachable in practice (no in-repo producer emits a
+  zero-object block), though nothing enforces it — `nb_objects` has no CHECK constraint and
+  `WebIngestionService::insert_block_typed` does not validate it. It makes `InsertTime` grouping not
+  quite "bit-identical to a naive greedy cut".
+- The insert-range invariant does not cover two or more partitions sharing an *identical degenerate*
+  range; `tstzrange(t, t)` is empty so the exclusion constraint stays quiet, but the `EventTime`
+  up-to-date query would see >1 row and never converge. Needs >`max_nb_objects` objects at a single
+  microsecond, so it does not occur in production.
+
+**Phase 5 — test divergences**
+
+- Steps 19-21 landed as specified: `jit_partition_grouping_tests.rs` (8 tests),
+  `jit_partition_bounds_tests.rs` (4), and 7 new cases in `thread_spans_ordering_db_test.rs`.
+- Testing Strategy #12 understated net_spans. It gets the same treatment as thread_spans
+  (`EventTime`, `Overlap`, `same_run_ranges`, `SCHEMA_VERSION` bump) but had no coverage of any of
+  it, and an end-to-end test is **not possible**: net events are produced only by the Unreal / C-API
+  side, so there is no Rust stream type to push blocks through. Added
+  **`rust/analytics/tests/net_spans_retire_overlap_db_test.rs`** instead — 5 tests driving
+  `retire_partitions` directly under `view_set_name = "net_spans"` with synthetic partition rows
+  (overlap arm, degenerate new range, same-run exclusion, identically-degenerate same-run siblings,
+  stale degenerate predecessor). The grouping half is already covered view-agnostically.
+- The pre-existing `thread_spans_ordering_across_partitions` failed on a shared dev lake (verified
+  against `origin/main` in a worktree — same failure there, so not caused by this branch, but the 7
+  new siblings make it much likelier to hit). It used `materialize_global_view`, which aborts on any
+  pre-existing overlapping bucket. Replaced with a **`reset_global_view`** helper that retires by
+  overlap first — using this branch's own `RetireMatch::Overlap`, which is what makes clearing a
+  bucket-straddling partition possible at all — then regenerates, so the test no longer depends on
+  lake state. The now-dead `materialize_global_view` helper was removed.
+- All 13 DB tests (8 thread_spans + 5 net_spans) pass against a live local lake, twice in a row.
+  They remain `#[ignore]`d and **CI does not run them** (`build/rust_ci.py` runs plain `cargo test`);
+  adding Postgres and an object store to the workflow is out of scope for this branch.
+
+**Post-review fixes (branch review, 2026-08-06)**
+
+- The grouping loop's look-back and grow-past-limit messages are `debug!`, not `warn!`: grouping
+  re-runs on every query over the view (`jit_update` runs from every scan) and the stable sort makes
+  cut decisions deterministic, so a persistent inversion would re-emit the same `warn!` on every
+  query forever — into the lake's own log ingestion.
+- The `sort_and_check_non_overlapping` runtime error message keeps only the two actionable causes
+  (segment-boundary inversion, TSC drift); the unactionable producer-tick-overlap cause lives in
+  the rustdoc only.
+- `doc/how_to_query/html/` and `doc/build-html.py` are deleted rather than regenerated: the
+  checked-in HTML was a build artifact nothing published or linked (the publish-docs workflow ships
+  mkdocs, rustdoc, and the two presentations only), superseded by the mkdocs query guide.
+- New grouping unit tests cover the paths review found untested: the zero-object window drop (both
+  orderings, mid-list and trailing), the full look-back → grow-past-limit → mid-list-recovery
+  sequence, and a single block larger than `max_nb_objects`.
+- The look-back replay's `last_safe` recomputation turned out to be provably dead code and was
+  removed: `j` is by definition the most recent safe index, and since every block before `j` has
+  `insert_time <= suffix_min[j] <= suffix_min[m]`, safety at any `m` in `(j, i]` is identical
+  before and after the re-seed — and the original pass already found that whole range unsafe.
+- `net_spans_retire_overlap_db_test.rs` gained a touching-ranges case
+  (`net_spans_touching_stale_predecessor_is_retired`) pinning the inclusive-bounds predicate.
+
+**Phase 6 — rollout**
+
+- Step 23 is unnecessary. `retire_incompatible_partitions` is for scheduled views; `thread_spans` and
+  `net_spans` are JIT, so the schema-hash mismatch branch in `is_jit_partition_up_to_date` rebuilds
+  each partition automatically on first query. Expect a one-off first-query latency bump per
+  stream/process after deploy, no admin action.
+- A `CHANGELOG.md` entry was added under `Unreleased` → `**Analytics:**` (the plan never mentioned
+  one; every recent PR in this repo carries one).
+
+## Overview
+
+`ThreadSpansView` declares `ScanOrdering::Concatenated { columns: [begin ASC] }`, which lets
+`EnforceSorting` elide the `ORDER BY begin` in the Perfetto export path (#1303). That declaration is
+violated *inside a single partition file* because JIT source blocks are enumerated in `insert_time`
+order while the writer treats the list as event-time ordered. Perfetto export fails loudly (`thread
+spans out of order`); plain `ORDER BY begin` queries silently return mis-ordered rows.
+
+This plan makes the block list genuinely event-time ordered so the existing comments become true,
+without weakening the ordering declaration or changing the scan plan shape (so #1303's memory win is
+preserved). The non-obvious part is that reordering blocks by event time breaks a second invariant
+the reorder makes easy to miss: JIT partitions' `insert_time` ranges must stay non-overlapping, or
+the `lakehouse_partitions_no_overlap` exclusion constraint rejects the write. The design therefore
+pairs event-time ordering with *insert-safe cut points*, and scopes the ordering change to the two
+views that need it. This is also the gap in the issue's proposed fix (`ORDER BY begin_ticks,
+block_id` in SQL): reordering alone converts the read-time export failure into a write-time
+exclusion-constraint failure on the ~10% of streams where an inversion straddles a cut point.
+
+A second requirement shapes the cut rule: **write-time memory is proportional to partition size**.
+`thread_spans_view::write_partition` holds an entire partition's rows in one `SpanRecordBuilder`, so
+the cut rule should keep partitions near `max_nb_objects` even when inversions make the natural cut
+point unsafe. `max_nb_objects` is a *soft* limit applied at whole-block granularity — a block is
+never split, so a single oversized block already exceeds it today — and stays soft here: the cut
+rule prefers moving a cut *earlier* (look-back) over deferring it, and warns loudly when overshoot
+happens anyway.
+
+## Current State
+
+### Where the ordering comes from
+
+`rust/analytics/src/lakehouse/jit_partitions.rs:124` (stream variant) and `:279` (process variant)
+both enumerate source blocks with `ORDER BY insert_time, block_id`, then walk the result and cut
+partitions whenever `max_nb_objects` would be exceeded. The two cut loops are near-duplicates
+(`jit_partitions.rs:140-186` and `:297-385`).
+
+`rust/analytics/src/lakehouse/thread_spans_view.rs:132-133` states the assumption outright:
+
+```rust
+// for jit partitions, we assume that the blocks were registered in order
+// since they are built based on begin_ticks, not insert_time
+```
+
+It then walks `spec.blocks` in list order, cuts them into tick-contiguous runs, and appends one call
+tree per run (`thread_spans_view.rs:154-180`). Row order in the parquet file is append order.
+`net_spans_view.rs:157-188` has the identical shape.
+
+### Why the assumption is false
+
+`telemetry-sink`'s HTTP event sink uploads blocks concurrently (semaphore-bounded `spawn_item` plus
+retry/backoff), so two consecutive blocks of one thread stream can be registered in reverse order.
+Measured on one thread stream over ~2.5 minutes: **430 blocks, 6 event-time inversions** (~1.4%).
+Inversions are local — the observed pairs are ~12 ms apart in insert time and adjacent in event time
+(`B.end_ticks == A.begin_ticks`).
+
+The *measured* inversions are local, but the mechanism does not bound them. One slow or retried
+upload gives a single block a late `insert_time` while keeping its early event position — a
+*straggler* whose inversion window is the length of its delay, not milliseconds. With
+`HttpSinkConfig`'s defaults that window is roughly bounded — traces get 2 attempts × 10 s
+`request_timeout` plus ~10 ms backoff (`http_event_sink.rs`), so ~20 s — but the config is
+caller-tunable and the Unreal sink sets no socket timeout at all, so the design treats the inversion
+window as unbounded rather than relying on sink defaults.
+
+### The three failures this causes today
+
+1. **Row-level mis-order inside one file.** `write_partition` emits A's call tree then B's, so the
+   `begin` column regresses mid-file. `perfetto_trace_execution_plan.rs:405-411`'s monotonicity guard
+   is the only surface that notices, and it aborts the export. A direct
+   `SELECT ... ORDER BY begin` gets its `Sort` elided and silently returns mis-ordered rows.
+   (`ORDER BY "begin", "end"` works around it — a two-column requirement is not satisfied by the
+   declared single-column ordering, so a real `SortExec` survives.)
+
+2. **Spurious call-tree fragmentation.** The tick-contiguity test (`block.begin_ticks == last_end`)
+   sees an inversion as a discontinuity and starts a new call tree with a new synthetic root, even
+   though the blocks are genuinely contiguous.
+
+3. **Wrong recorded event-time bounds.** `thread_spans_view.rs:181-183` and
+   `net_spans_view.rs:189-191` derive `rows_time_range` from `blocks[0].begin_ticks` /
+   `blocks[last].end_ticks`, i.e. from insert-ordered endpoints. Under an inversion those bounds are
+   *narrower* than the real row range. That is worse than cosmetic: `LivePartitionProvider::fetch`
+   selects partitions with `min_event_time <= $end AND max_event_time >= $begin`
+   (`partition_cache.rs:375-376`), so a query whose window falls in the truncated margin **skips the
+   partition entirely and silently drops rows**. It also feeds
+   `sort_and_check_non_overlapping`/`attach_ordering_statistics`, so the cross-partition non-overlap
+   check can pass on a genuine overlap.
+
+### The invariant that constrains the fix
+
+`migration.rs:502-509` installs:
+
+```sql
+ALTER TABLE lakehouse_partitions ADD CONSTRAINT lakehouse_partitions_no_overlap
+  EXCLUDE USING gist (view_set_name WITH =, view_instance_id WITH =,
+                      file_schema_hash WITH =,
+                      tstzrange(begin_insert_time, end_insert_time) WITH &&);
+```
+
+Today JIT partitions satisfy this **by construction**: the block list is insert-ordered, so cutting
+it yields partitions whose `[min_insert, max_insert]` ranges are non-decreasing and non-overlapping
+(`tstzrange` is `[)`, so a shared boundary does not conflict). Insert-time slices at the segment
+level (`generate_stream_jit_partitions:234-249`, 1-hour `max_insert_time_slice`) are half-open, so
+they cannot overlap either.
+
+Sorting the block list by `begin_ticks` destroys that guarantee. If an inversion straddles a cut
+point, partition *k*'s `max_insert` exceeds partition *k+1*'s `min_insert`, the ranges overlap, and
+`insert_partition` fails with the exclusion-constraint error at `write_partition.rs:438-454`. With
+~66 blocks/partition and a ~1.4% inversion rate the issue estimates ~10% of streams would hit this —
+i.e. the naive fix trades a read-time failure for a write-time failure on a tenth of streams. This
+plan's cut-point rule is what closes that gap.
+
+### Blast radius of a change to `jit_partitions.rs`
+
+`generate_process_jit_partitions` is shared by six views — `log_view`, `metrics_view`, `images_view`,
+`async_events_view`, `otel/spans_view`, `net_spans_view` — and `generate_stream_jit_partitions` only
+by `thread_spans_view`. The first five decode each block independently
+(`write_partition_from_blocks` → `BlockPartitionSpec::write`, which tracks per-block event-time
+ranges), declare no scan ordering, and are order-insensitive. Only `thread_spans_view` and
+`net_spans_view` build cross-block trees and derive bounds from list endpoints, so only they need
+event-time ordering — and changing grouping forces partition retirement, so touching the other five
+would cost five extra schema-hash bumps for no benefit.
+
+## Design
+
+### 1. Ordering becomes an explicit, per-view choice
+
+Add to `jit_partitions.rs`:
+
+```rust
+/// How source blocks are ordered before being cut into JIT partitions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockOrder {
+    /// Registration order (`insert_time`, `block_id`). Correct for views that decode each block
+    /// independently and declare no scan ordering.
+    InsertTime,
+    /// Event order (`begin_ticks`, `end_ticks`). Required by views that build cross-block trees or
+    /// derive event-time bounds from the list endpoints, and by any view declaring
+    /// `ScanOrdering::Concatenated` over an event-time column.
+    EventTime,
+}
+
+pub struct JitPartitionConfig {
+    pub max_nb_objects: i64,
+    pub max_insert_time_slice: TimeDelta,
+    pub block_order: BlockOrder,
+}
+```
+
+`Default` keeps `block_order: BlockOrder::InsertTime`, so the five order-insensitive views are
+untouched. `thread_spans_view` and `net_spans_view` construct
+`JitPartitionConfig { block_order: BlockOrder::EventTime, ..Default::default() }`.
+
+Ticks are process-relative (`ConvertTicks::delta_ticks_to_ns` is applied to raw `begin_ticks`), so
+`begin_ticks` is comparable across streams of one process — the process variant can sort by it too.
+
+### 2. One shared, pure grouping function
+
+Extract the duplicated cut loops into a pure, DB-free function — this is what makes the invariants
+unit-testable:
+
+```rust
+pub fn group_blocks_into_partitions(
+    config: &JitPartitionConfig,
+    blocks: Vec<Arc<PartitionSourceBlock>>,
+) -> Vec<SourceDataBlocksInMemory>
+```
+
+Both `generate_*_jit_partitions_segment` functions collect their record batches into a
+`Vec<Arc<PartitionSourceBlock>>` (they already hold every batch in memory) and delegate. The SQL
+`ORDER BY insert_time, block_id` stays as the stable base order; the sort inside the helper is a
+*stable* sort on `(begin_ticks, end_ticks)`, so ties break on `(insert_time, block_id)` and grouping
+is deterministic.
+
+### 3. Insert-safe cut points and look-back cuts
+
+A cut before block `i` is legal only if every block already in the current partition was inserted no
+later than every remaining block. Precompute suffix minima of `insert_time` — **after** the
+event-time sort; computing them over the SQL order would be wrong and the code shape makes that
+mistake easy — and use them for two things: cut at `i` when that is safe, otherwise fall back to the
+most recent safe index (look-back). `max_nb_objects` remains what it is today: a soft limit at
+whole-block granularity. Blocks are never split, and when no safe cut point exists the window grows
+past the limit and warns, exactly as a single oversized block does.
+
+```rust
+// suffix_min[i] = min(insert_time of blocks[i..]) over the event-time-sorted list;
+// suffix_min[n] = DateTime::<Utc>::MAX_UTC.
+// A cut at index j is *safe* iff prefix_max(start..j) <= suffix_min[j]: the emitted
+// partition's insert range then cannot overlap any later partition's, so the
+// lakehouse_partitions_no_overlap exclusion constraint cannot reject a later insert.
+for i in 0..n {
+    let safe_here = prefix_max_insert <= suffix_min[i];
+    if safe_here && i > start {
+        last_safe = Some(i);  // also remembers nb_objects of blocks[start..i]
+    }
+    let full = nb_objects + block_nb(i) > config.max_nb_objects && i > start;
+    if full {
+        if safe_here {
+            cut_at(i);            // partition = blocks[start..i], <= max_nb_objects
+        } else if let Some(j) = last_safe {
+            cut_at(j);            // look-back: partition = blocks[start..j], < max_nb_objects;
+                                  // blocks[j..=i] re-seed the window and the running state
+                                  // (nb_objects, prefix_max_insert, last_safe) is recomputed
+                                  // over that short tail
+        } else {
+            deferred += 1;        // no safe cut point exists anywhere in this window:
+                                  // grow past the soft limit, warn below
+        }
+    }
+    // push block i into the current window; update nb_objects, prefix_max_insert
+}
+// emit the final window, but only if it has any objects (nb_objects != 0) — matching
+// today's guard at jit_partitions.rs:179/:379, not "if the block list is non-empty": a
+// trailing window whose blocks all report nb_objects == 0 emits nothing, same as today.
+```
+
+Properties:
+
+- Under `BlockOrder::InsertTime` every index is safe (`prefix_max_insert ==
+  blocks[i-1].insert_time <= blocks[i].insert_time == suffix_min[i]`), so `full` always cuts at `i`
+  and behavior is **bit-identical to today** for the five untouched views — including the final
+  window: it is only emitted if its object count is non-zero, matching today's guard, so a trailing
+  window of all-empty blocks still produces no partition.
+- Under `BlockOrder::EventTime` with the measured local inversions, a cut occasionally moves by one
+  or two blocks in either direction; partition sizes stay at `max_nb_objects`.
+- The look-back cut bounds the **partition preceding** a straggler (see Current State): a
+  retry-delayed block makes every forward index unsafe for the length of its delay, so without the
+  look-back the whole partition since the last cut — including blocks unrelated to the straggler —
+  would stay pinned open for that delay. With the look-back, that already-safe prefix is cut and
+  emitted at `<= max_nb_objects`; the straggler itself re-seeds the next window (`blocks[j..=i]`),
+  which still *contains* the straggler and is therefore **not** bounded by this rule — it stays
+  unsafe, and can grow past `max_nb_objects`, until the stream produces a block whose `insert_time`
+  catches up past the straggler's. That re-seeded window can also start already at or past
+  `max_nb_objects`, since only the `start..j` prefix was removed from a window that was already at
+  the limit.
+- The only remaining overshoot is a continuous inversion chain with no safe index anywhere in the
+  window — the straggler case above is one instance of this. No safe cut exists there by
+  definition, and `max_nb_objects` is a soft, block-granular limit (a single oversized block exceeds
+  it today), so the window grows and the `warn!` below is the signal — same policy as today's
+  oversized-block case, now with observability. A hard ceiling (failing the write instead of
+  overshooting) was considered and rejected: it would turn a functioning-but-large partition into an
+  unusable view instance for that window; add a metric only if the warning fires with large deferral
+  counts in practice.
+- `<=` rather than `<` matches today's tolerance for equal insert timestamps: `tstzrange` is `[)`, so
+  `[a, t)` and `[t, b)` do not conflict.
+- Because `suffix_min` covers the whole remainder (not just the next partition), non-overlap is
+  transitive across all later partitions, not just adjacent ones.
+- These properties hold **within one grouping run**. Across runs, a newly-arrived block can change
+  which indices are safe and move an earlier cut point, so a JIT partition's block-set membership is
+  no longer guaranteed to only grow between runs the way it does under `BlockOrder::InsertTime`. See
+  §6 for why that requires `is_jit_partition_up_to_date` and partition retirement to be made robust
+  to cut points moving, not just to blocks being appended.
+
+Cross-segment safety is unchanged and free: segments are queried with `insert_time >= begin AND
+insert_time < end`, so blocks from different segments have disjoint insert times.
+
+When a cut is deferred or moved back, `warn!` once per emitted partition with the stream/process id,
+the deferred count, and the final object count — the observability hook for how often inversions
+perturb grouping in practice.
+
+### 4. Real min/max instead of list endpoints
+
+With the list no longer in insert order, every first/last-element read of `insert_time` becomes
+wrong. Replace with real min/max:
+
+- `jit_partitions.rs:597-600` (`get_part_insert_time_range`) — feeds `is_jit_partition_up_to_date`.
+- `jit_partitions.rs:618-622` (`write_partition_from_blocks`) — feeds `BlockPartitionSpec::insert_range`.
+- `thread_spans_view.rs:134-135`, `net_spans_view.rs:130-131` — feed `write_partition_from_rows`'s
+  `insert_range`.
+
+These are the same value under `InsertTime` ordering, so the change is a no-op for the untouched
+views. Factor it as one `pub` helper on the block slice (`insert_time_range(blocks) -> TimeRange`) so
+there is a single implementation to keep right, and so it is directly unit-testable from
+`rust/analytics/tests/` (Testing Strategy #9).
+
+Recorded **event-time** bounds get the same treatment. Under event-time ordering
+`blocks[0].begin_ticks` / `blocks[last].end_ticks` become correct by construction, but relying on
+that re-creates the fragility this plan is removing. Use min/max over the slice for `rows_time_range`
+in `thread_spans_view.rs:181-183` and `net_spans_view.rs:189-191`. (`net_spans_view` already prefers
+`record_builder.get_time_range()` and falls back to the endpoints; the fallback gets fixed too.)
+
+### 5. Materialization-time monotonicity check
+
+Move the failure from every read to one write. Add a new
+`pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()>` in
+`thread_spans_view.rs` — `pub`, not inline in the private `async fn write_partition`, so
+`rust/analytics/tests/`, which compiles as an external integration crate and can only reach `pub`
+items, can call it directly with a hand-built batch (Testing Strategy #10). After
+`record_builder.finish()` in `thread_spans_view::write_partition`, call it on the produced batch's
+`begin` column; it `anyhow::ensure!`s the column is non-decreasing, naming the stream and the
+offending row. One pass over one already-materialized column; it turns a contract breach into a
+single loud materialization error with the writer in the stack trace, instead of an export error one
+layer removed from the cause. The read-time guard in `perfetto_trace_execution_plan.rs` stays as the
+backstop for pre-existing partitions.
+
+**Log the violation at the check site, don't rely on propagation.** `anyhow::ensure!` returns `Err`,
+it does not panic, and nothing on the path up logs that error at error level. `MaterializedView::scan`
+converts it to `DataFusionError::External` (`materialized_view.rs:72`); because `scan` runs at
+planning time, it surfaces in the `create_physical_plan()` arm of
+`flight_sql_service_impl.rs:424-427`, whose `status!` macro (`:58-62`) only formats a
+`Status::internal` — the `error!("stream error occurred: …")` at `:197` fires only for errors raised
+while polling the stream. The failure would therefore reach the operator only as the `error` field of
+the `info!(target: "flightsql_query_audit", …)` audit record (`:139-145`) and as a gRPC status on the
+client. So `ensure_begin_non_decreasing` itself emits an explicit `error!` immediately before the
+`ensure!`, naming the `stream_id`, the offending row index, and the two `begin` values — keeping the
+log and the check together in the one `pub` function, so the log fires wherever the function is
+called from, not just from `write_partition`. `micromegas_tracing::prelude::*` is already imported in
+`thread_spans_view.rs:29`, so no new dependency. This keeps the diagnosis in the service log where a
+corrupted-partition investigation starts, independent of whether anyone reads the audit stream.
+
+`net_spans` gets no equivalent check. `NetSpansView` does not override `get_scan_output_ordering`,
+so it inherits `ScanOrdering::Unordered` (`view.rs:174-176`) and nothing consumes `begin_time`
+monotonicity today; `net_spans_view.rs` also already prefers `record_builder.get_time_range()` over
+list endpoints for its recorded bounds (`:192-194`). Add the same `ensure!` only alongside a future
+`Concatenated` declaration for `net_spans`, so that declaration starts from an enforced invariant.
+
+### 6. Retiring existing partitions
+
+Re-grouping changes which blocks land in which partition, so existing `thread_spans` / `net_spans`
+partitions must stop being used. Bump `SCHEMA_VERSION` in both views (`1` → `2`) even though the
+Arrow schema is unchanged. This is established precedent for JIT view schema bumps (`log_view.rs:35`
+= 6, `metrics_view.rs:39` = 7, `images_view.rs:35` = 2, `async_events_view.rs:34` = 3), and
+`list_view_sets`/`ViewMaker::get_schema_hash` are already wired for `thread_spans`/`net_spans`, so
+`retire_incompatible_partitions` works on them unchanged. The alternative — waiting for JIT expiry —
+would eventually converge on its own, but until then queries keep reading the mis-grouped partitions,
+and the silent mis-order and row-dropping bounds bug stay live on existing data; bumping now makes
+the cutover immediate and deterministic, at the cost of dead storage until the retirement sweep runs:
+
+- Queries filter partitions by `file_schema_hash`, so old partitions become invisible immediately.
+- The exclusion constraint is scoped by `file_schema_hash`, so old and new partitions coexist legally
+  during the transition (`migration.rs:496-501`).
+- `retire_partitions` in the write path does *not* filter by schema hash, so any old partition
+  contained in a newly written insert range is retired automatically as data is re-materialized.
+- The remainder is mopped up with `micromegas.admin.retire_incompatible_partitions(client,
+  'thread_spans')` (and `'net_spans'`), which drives the `retire_partition_by_metadata` UDF off a
+  `list_partitions()`/`list_view_sets()` schema-hash mismatch.
+
+**Cross-run stability.** The schema bump above handles the one-time cutover; it does not, by itself,
+handle *ongoing* re-grouping under the same (post-bump) schema hash. Today's cut points are stable
+across repeated `jit_update` runs because the block list only ever grows by append and cuts left to
+right, so `is_jit_partition_up_to_date` (`jit_partitions.rs:498-587`) can safely treat "an
+overlapping partition with `existing_count >= required_count`" as up to date. Under
+`BlockOrder::EventTime`, a block that arrives between two runs and sorts into the middle of the list
+can move an *earlier* cut point (§3's last bullet), so a later run's spec can have a smaller,
+different insert range than an already-written partition that still overlaps it. Matched by the
+current *overlap* query (`begin_insert_time <= $3 AND end_insert_time >= $4`, where `$3` is the
+spec's max and `$4` its min — an overlap test, despite sitting behind a `>=` count check that reads
+like containment) that stale, wider partition satisfies `existing_count >= required_count` and is
+wrongly declared up to date, while
+`retire_partitions` (`write_partition.rs:155-176`) — containment-based (`begin_insert_time >= $3 AND
+end_insert_time <= $4`) — never removes it because it isn't contained in the new, narrower range.
+Two changes close this:
+
+- **`is_jit_partition_up_to_date`**: match on exact insert-range equality (`begin_insert_time = $3
+  AND end_insert_time = $4`) instead of overlap, and require `existing_count == required_count`
+  instead of `>=`. Under `BlockOrder::InsertTime`, cut points are stable across runs, so the exact
+  range and count already coincide with the overlap/`>=` result — this is a no-op there, not a
+  config-gated special case. One residual stays: `block_ids_hash` encodes only the object count
+  (`partition_nb_objects.to_le_bytes()`, preserved by Phase 1 step 3), so "exact range + exact
+  count" is the strongest check the stored hash supports — a cross-run regrouping that changed
+  block *membership* while preserving both would be missed. Grouping is deterministic given the
+  segment's block list, so constructing that case requires the list itself to change in a
+  count-and-range-preserving way; this is a pre-existing weakness of the hash, unchanged here, and
+  a real content hash of block ids is the follow-up if it ever matters. This makes the function's existing degenerate-range (`min == max`)
+  branch redundant with the general query — both now produce identical SQL — so it collapses into
+  one exact-equality query. The `#488` "CRITICAL: Use inclusive inequalities (`<=`, `>=`) to prevent
+  race conditions" comment at `jit_partitions.rs:513-550` must be rewritten, not deleted: it should
+  explain why exact equality is now the correct predicate (equality still matches identical ranges,
+  so #488 is not reintroduced), rather than reading as a rule that forbids this change.
+- **`retire_partitions`**: there is no JIT registry to infer "JIT-managed" from
+  `view_set_name`/`view_instance_id` alone (`view_factory.rs`/`catalog.rs` expose no such list, and
+  instantiating a view just to classify it is not worth it), so the caller must say which matching
+  rule applies. Add a `RetireMatch { Containment, Overlap }` parameter to `retire_partitions`, threaded
+  through its write-path call chain — `write_partition_from_rows` → `insert_partition` →
+  `insert_partition_transaction` → `retire_partitions` — and as an explicit argument at
+  `retire_partitions`'s other, direct caller, `retire_partitions_table_function.rs`.
+  `thread_spans_view.rs` and `net_spans_view.rs` (the two `BlockOrder::EventTime` call sites, reached
+  via the write-path chain) pass `RetireMatch::Overlap`, whose SELECT and DELETE both use the union of
+  the overlap and containment predicates: `(tstzrange(begin_insert_time, end_insert_time) &&
+  tstzrange($3, $4)) OR (begin_insert_time >= $3 AND end_insert_time <= $4 AND NOT
+  (begin_insert_time = end_insert_time AND begin_insert_time = $3))`. The containment half is
+  not optional: `tstzrange(t, t)` is Postgres's empty range, so `&&` is always false whenever *either*
+  side's range is degenerate (`begin_insert_time == end_insert_time`) — including an *existing*
+  single-timestamp stale partition being retired by a non-degenerate new range, not only the reverse
+  case of a degenerate new range. Without the containment half, that existing partition is never
+  matched and survives alongside the new one at the same `file_schema_hash`, reintroducing exactly the
+  duplicate-row bug `migration.rs:496-501` calls out — exactly the case the comment at `:130-132`
+  calls out ("a partition can have only one block and begin_insert == end_insert"). This supersedes an
+  earlier, narrower idea of keeping only an exact-match branch for a degenerate *new* range: that
+  branch alone does not retire a degenerate *existing* partition against a non-degenerate new range,
+  so the `Overlap` arm uses the union predicate unconditionally rather than switching between two
+  branches.
+
+  **The containment half's left-boundary exclusion.** `jit_update` writes a regrouping run's
+  partitions left to right in increasing insert-time order (`thread_spans_view.rs:315-329`,
+  `net_spans_view.rs:328-343`). §3's cut rule allows a cut where `prefix_max_insert == suffix_min[j]`
+  (equality is legal — `tstzrange` is `[)`), so a degenerate partition (a single block, or all blocks
+  sharing one `insert_time`, `:130-132`) can legitimately end at exactly `t` where the very next
+  partition in the *same run* begins at `t`. Without the `AND NOT (begin_insert_time =
+  end_insert_time AND begin_insert_time = $3)` clause, writing that next partition
+  (`begin_insert_time = t, end_insert_time = b`) matches its own immediately-preceding, just-written,
+  up-to-date sibling via the plain containment test alone (`begin_insert_time >= $3` is `t >= t`,
+  `end_insert_time <= $4` is `t <= b`) and deletes it — deterministically, on every run, since
+  grouping is deterministic, permanently losing that partition's data rather than merely masking it
+  transiently. The exclusion leaves the genuine cross-run case intact: a stale degenerate partition
+  left over from a *previous* run's grouping, now absorbed into a bigger new range, generally sits at
+  some timestamp *strictly inside* `[$3, $4]` rather than exactly at `$3` (its old cut point is
+  unrelated to the new run's cut points), so it still matches the containment half and is retired as
+  intended.
+
+  Every other call site — `block_partition_spec.rs` (the five
+  `BlockOrder::InsertTime` process views, whose cut points are stable across runs, so containment
+  stays correct for them), `merge.rs`, `sql_partition_spec.rs`, `metadata_partition_spec.rs` (batch
+  views), and `retire_partitions_table_function.rs` (the public admin UDF, unchanged, no new SQL
+  argument) — passes `RetireMatch::Containment`, i.e. today's query and today's behavior, unchanged.
+  The `write_partition.rs:130-132` comment ("this is not an overlap test...") stays correct and
+  in force for the `Containment` arm; it is superseded only for the `Overlap` arm used by the two
+  JIT views changed here.
+
+  **Why the `Overlap` waiver is tolerable.** `jit_update` writes a regrouping run's partitions one at
+  a time in a loop (`thread_spans_view.rs:315-329`, `net_spans_view.rs:328-343`), each in its own
+  `insert_partition_transaction` (`write_partition.rs:367-376`). Under `Overlap`, writing regrouped
+  partition *k* can retire a stale wider partition that still covers a later insert range before
+  partition *k+1* — the one that actually covers that range — has been written, so that range is
+  transiently absent from the lakehouse for the rest of the loop, and, if the loop errors out or the
+  query is cancelled partway through, until some later `jit_update` completes. Under `Containment`
+  this cannot happen: the write instead fails loudly with the exclusion-constraint error
+  (`write_partition.rs:438-454`), so retire+insert is only ever unsafe there, not silently
+  incomplete. The gap is tolerated rather than closed because JIT partitions are regenerated on
+  demand from `blocks_view`, not the source of truth for their own data: any `jit_update` that runs to
+  completion reconverges the block-to-partition mapping, so the exposure window is bounded by "next
+  successful `jit_update`", not permanent, and a partial run leaves no data loss — only a transient
+  read-time gap that a retry closes.
+
+  **Concurrent writers.** The above covers one interrupted run; the same waiver must also cover two
+  *concurrent* `jit_update` runs for the same view instance — routine, since every query triggers
+  `MaterializedView::scan` → `jit_update` (`materialized_view.rs:70`). `insert_partition_transaction`'s
+  advisory lock is keyed on the exact `(view_set_name, view_instance_id, begin_insert_time,
+  end_insert_time)` tuple (`write_partition.rs:317-322`), so it only serializes two writers proposing
+  the *identical* range; correctness against writers of *different* ranges is otherwise left to the
+  `lakehouse_partitions_no_overlap` exclusion constraint (`write_partition.rs:335-339`). Two concurrent
+  runs that observe `blocks_view` at slightly different moments can disagree on cut points and so
+  propose different, overlapping ranges under different lock keys — neither blocks the other. Under
+  `Containment` the loser's insert trips the exclusion constraint and fails loudly, same as the
+  single-run case above. Under `Overlap` the loser's `retire_partitions` call can delete the winner's
+  already-committed partition before inserting its own, silently replacing a fresher result with a
+  staler one — no exclusion-constraint error, no log line beyond the routine `RETIRE_FOUND` entry.
+  This is covered by the same reconvergence argument as the interrupted-loop case, not a new one:
+  whichever run's partition ends up committed, `is_jit_partition_up_to_date` (tightened to exact
+  range-and-count equality in step 6) always compares it against a *fresh* grouping of the current
+  `blocks_view`, not against what either racing run computed — so a partition left behind by the loser
+  of a race is indistinguishable, to the next `jit_update`, from a partition left behind by a crashed
+  loop, and gets recomputed and rewritten the same way. The exposure window is therefore bounded
+  identically: "next successful `jit_update`", not permanent, and no data is lost — only transiently
+  masked by a partition one run stale.
+
+Add a unit test that regroups the same stream across two synthetic runs — a block inserted between
+them that legally shifts a cut point — and assert the second run's `is_jit_partition_up_to_date` /
+`retire_partitions` pairing replaces the stale partition instead of leaving both in place (Testing
+Strategy, Integration #11).
+
+### Data flow after the change
+
+```
+blocks_view (SQL: ORDER BY insert_time, block_id)
+        │
+        ▼
+group_blocks_into_partitions(config, blocks)
+        │  1. stable sort by (begin_ticks, end_ticks)     [EventTime only]
+        │  2. cut on max_nb_objects at insert-safe points only,
+        │     falling back to the last safe point (look-back);
+        │     grow past the soft limit + warn if none exists
+        ▼
+Vec<SourceDataBlocksInMemory>
+        │   every partition <= max_nb_objects when a safe cut existed
+        │   (soft limit, whole-block granularity — as today)
+        │   event-time ordered within a partition
+        │   event-time ranges ascending & non-overlapping across partitions
+        │   insert-time ranges non-overlapping across partitions
+        ▼
+thread_spans_view::write_partition
+        │  tick-contiguous runs → one call tree each, appended in event order
+        │  insert_range  = min/max insert_time over blocks
+        │  rows_time_range = min/max event time over blocks
+        │  error! + ensure! begin non-decreasing
+        ▼
+parquet file: begin ascending  →  ScanOrdering::Concatenated is honest
+```
+
+## Implementation Steps
+
+### Phase 1 — grouping mechanics (`jit_partitions.rs`)
+
+1. Add `BlockOrder` and the `block_order` field on `JitPartitionConfig`; `Default` →
+   `BlockOrder::InsertTime`.
+2. Add `pub fn insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange>` returning
+   real min/max, and use it in `get_part_insert_time_range` and `write_partition_from_blocks`. `pub`
+   (not module-private) so `rust/analytics/tests/` — which compiles as an external integration crate
+   and can only reach `pub` items — can exercise it directly (Testing Strategy #9).
+3. Extract `group_blocks_into_partitions(config, blocks)` with the stable event-time sort, the
+   suffix-min insert-safe cut rule, the look-back cut, and the deferred-cut `warn!`. Preserve
+   `block_ids_hash = partition_nb_objects.to_le_bytes()`.
+4. Rewrite `generate_stream_jit_partitions_segment` and `generate_process_jit_partitions_segment` to
+   collect blocks into a `Vec` and delegate to the helper, deleting both duplicated cut loops.
+5. Update the module/function docs to describe the two orderings and the insert-range invariant the
+   cut rule upholds.
+6. Tighten `is_jit_partition_up_to_date` from `existing_count >= required_count` over an overlap
+   range query to exact insert-range equality plus exact count equality, so a partition from an
+   earlier grouping run with different cut points is never mistaken for up to date (Design §6). This
+   collapses the function's existing `min == max` degenerate-range branch into the single
+   exact-equality query (both now produce identical SQL), so rewrite the accompanying `#488`
+   "CRITICAL: inclusive inequalities" comment (`jit_partitions.rs:513-550`) to explain why exact
+   equality is now correct, instead of leaving it read as forbidding the change.
+7. Add `RetireMatch { Containment, Overlap }` to `retire_partitions` and thread it through
+   `write_partition_from_rows` → `insert_partition` → `insert_partition_transaction` (Design §6). This
+   is a correctness dependency of steps 6 and 8-13, not documentation, so it lands in this phase
+   rather than alongside the comment cleanup in Phase 4: without it, a stale wider partition left
+   behind by a moved cut point overlaps, but does not contain, the new narrower one, so containment
+   retire fails to remove it and the write trips `lakehouse_partitions_no_overlap`
+   (`write_partition.rs:439-454`) for everything landed between this step and Phase 4. `retire_partitions`
+   is called directly (not just transitively) by `block_partition_spec.rs`, `merge.rs`,
+   `sql_partition_spec.rs`, `metadata_partition_spec.rs`, `retire_partitions_table_function.rs`, the two
+   integration-test helpers `analytics/tests/sql_view_test.rs:338` and
+   `analytics/tests/histo_view_test.rs:86`, **and** `thread_spans_view.rs:139` /
+   `net_spans_view.rs:135` (both already call `write_partition_from_rows` today, so the new parameter
+   is a required argument at every one of these call sites, not an opt-in) — this step must update all
+   of them or Phase 1 does not compile. All of them, including the two JIT views, pass
+   `RetireMatch::Containment` here: at this point in the plan the views still group by
+   `BlockOrder::InsertTime` (Phase 2/3 haven't landed yet), so `Containment` is the behavior-preserving
+   choice. Steps 9 and 15 flip `thread_spans_view.rs` and `net_spans_view.rs` to `RetireMatch::Overlap`
+   once `BlockOrder::EventTime` lands for each.
+
+### Phase 2 — thread spans (`thread_spans_view.rs`)
+
+8. Pass `block_order: BlockOrder::EventTime` in `jit_update`.
+9. Pass `RetireMatch::Overlap` at this view's `write_partition_from_rows` call site (Design §6, step 7).
+10. Replace the first/last `insert_time` reads (`:134-135`) with `insert_time_range`, and the
+    `rows_time_range` endpoints (`:181-183`) with min/max over the blocks.
+11. Add `pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Result<()>`,
+    logging an `error!` naming the `stream_id`, offending row index and the two `begin` values
+    immediately before its internal `ensure!` — the propagated `Err` is never logged at error level on
+    the way out (Design §5) — and call it after `record_builder.finish()` in `write_partition`.
+12. Rewrite the `:132-133` comment from an assumption to an enforced invariant, pointing at
+    `BlockOrder::EventTime`.
+13. Bump `SCHEMA_VERSION` to `2`.
+14. Make `update_partition` `pub` in `thread_spans_view.rs` (or add a thin `pub` wrapper taking a
+    `SourceDataBlocksInMemory`), so `rust/analytics/tests/` — which compiles as an external
+    integration crate and can only reach `pub` items — can write a single JIT partition directly for
+    the interrupted-regrouping-run and degenerate-range sub-cases (Testing Strategy, Integration #11),
+    mirroring how step 2 and step 11 already handle test reachability for `insert_time_range` and
+    `ensure_begin_non_decreasing`.
+
+### Phase 3 — net spans (`net_spans_view.rs`)
+
+15. Same as steps 8-10, 13 (`:130-131`, `:189-191`; the `get_time_range()` fallback; pass
+    `RetireMatch::Overlap`). Instead of step 12's rewrite — `net_spans_view.rs` has no equivalent
+    assumption comment to correct — add the equivalent invariant comment near `jit_update`, pointing
+    at `BlockOrder::EventTime`. No monotonicity check — `net_spans` declares no scan ordering.
+
+### Phase 4 — stale documentation
+
+16. `view.rs:158-163` — the `Concatenated` contract note: drop "documented but not enforced", state
+    that `ThreadSpansView` obtains it from `BlockOrder::EventTime` grouping, and keep the residual
+    caveats (cross-hour-segment inversions, TSC-frequency drift).
+17. `partitioned_execution_plan.rs:78-82` — the non-overlap error message names "a stream's blocks
+    were registered out of event-time order" as a likely cause; within a segment that cause is now
+    structurally excluded. Narrow the phrase to the cross-segment case (an inversion straddling a
+    segment boundary, Trade-offs) rather than dropping it outright — that residual is still exactly
+    "blocks registered out of event-time order", just no longer possible *within* one segment. The doc
+    comment at `:46-58` needs no change: it already attributes the overlap to TSC-frequency drift only
+    and never mentions block registration order.
+18. `write_partition.rs:365-366` — the same stale "we assume that the blocks were registered in
+    order" comment sits above the call to `retire_partitions`; it is unrelated to what that call does.
+    Replace it with a note pointing at `RetireMatch` (added in step 7) and the containment/overlap
+    split it encodes. This step is comment-only — the query-behavior change itself already landed in
+    step 7. Also update `retire_partitions`'s own rustdoc (`write_partition.rs:120-121`, "Retires
+    partitions from the active set. / Overlap is determined by the insert_time of the telemetry."),
+    which becomes misleading once the match rule is a parameter — document `RetireMatch {
+    Containment, Overlap }` there. Also reword the `:434-437` comment ("...so the containment-based
+    retire in this transaction did not replace it") and the `anyhow::bail!` message at `:443-448`
+    ("...cannot replace it (likely a concurrent materialization or merge)") to name the `RetireMatch`
+    arm in effect rather than assuming `Containment` — for a `thread_spans`/`net_spans` write under
+    `RetireMatch::Overlap`, "containment-based" is no longer the correct diagnosis. Also amend the
+    advisory-lock comment at `:335-339` ("correctness against overlapping writers of *different*
+    ranges is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time"):
+    that is only true for `RetireMatch::Containment` callers; for `RetireMatch::Overlap` callers, note
+    that two concurrent writers of different, overlapping ranges are instead reconciled by the next
+    `jit_update`'s exact-equality `is_jit_partition_up_to_date` check (Design §6, "Concurrent
+    writers"), not by the exclusion constraint, which the `Overlap` retire step routes around.
+
+### Phase 5 — tests
+
+19. New `rust/analytics/tests/jit_partition_grouping_tests.rs` (see Testing Strategy).
+20. New `rust/analytics/tests/jit_partition_bounds_tests.rs` for `insert_time_range` and
+    `ensure_begin_non_decreasing` (see Testing Strategy).
+21. Extend `rust/analytics/tests/thread_spans_ordering_db_test.rs` with a reversed-registration case
+    and a cross-run regrouping case (see Testing Strategy, Integration #11); drive
+    `generate_stream_jit_partitions` directly — not `ThreadSpansView::jit_update`, which hardcodes
+    `JitPartitionConfig::default()` — for the sub-case that needs a lowered `max_nb_objects`.
+
+### Phase 6 — rollout
+
+22. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
+23. After deploy, run `micromegas.admin.retire_incompatible_partitions` for `thread_spans` and
+    `net_spans`.
+
+## Files to Modify
+
+| File | Change |
+|---|---|
+| `rust/analytics/src/lakehouse/jit_partitions.rs` | `BlockOrder`, config field, `insert_time_range`, `group_blocks_into_partitions`, both segment fns delegate, `is_jit_partition_up_to_date` tightened to exact range + count match |
+| `rust/analytics/src/lakehouse/thread_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, monotonicity `error!` + `ensure!`, comment, `SCHEMA_VERSION` → 2, `update_partition` made `pub` (test reachability) |
+| `rust/analytics/src/lakehouse/net_spans_view.rs` | `EventTime` config, `RetireMatch::Overlap`, min/max bounds, comment, `SCHEMA_VERSION` → 2 |
+| `rust/analytics/src/lakehouse/view.rs` | `get_scan_output_ordering` doc: assumption → enforced |
+| `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | non-overlap error message (`:78-82`): narrow "blocks registered out of event-time order" to the cross-segment case |
+| `rust/analytics/src/lakehouse/write_partition.rs` | remove stale block-ordering comment at `:365`; add `RetireMatch { Containment, Overlap }` param to `retire_partitions`, threaded through `write_partition_from_rows`/`insert_partition`/`insert_partition_transaction`; reword the `:434-448` stale-partition comment and bail message, and the `:335-339` advisory-lock comment, to name the `RetireMatch` arm in effect |
+| `rust/analytics/src/lakehouse/block_partition_spec.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
+| `rust/analytics/src/lakehouse/merge.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
+| `rust/analytics/src/lakehouse/sql_partition_spec.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
+| `rust/analytics/src/lakehouse/metadata_partition_spec.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
+| `rust/analytics/src/lakehouse/retire_partitions_table_function.rs` | pass `RetireMatch::Containment` (behavior unchanged) |
+| `rust/analytics/tests/jit_partition_grouping_tests.rs` | new — pure grouping invariants |
+| `rust/analytics/tests/jit_partition_bounds_tests.rs` | new — `insert_time_range` and `ensure_begin_non_decreasing` unit tests |
+| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | new case: blocks registered out of event order |
+| `rust/analytics/tests/sql_view_test.rs` | update `retire_existing_partitions` helper's `retire_partitions` call (`:338`) to pass `RetireMatch::Containment` |
+| `rust/analytics/tests/histo_view_test.rs` | update `retire_existing_partitions` helper's `retire_partitions` call (`:86`) to pass `RetireMatch::Containment` |
+
+## Trade-offs
+
+- **Reorder the blocks vs. weaken the declaration.** `ScanOrdering::Unordered` reintroduces the OOM
+  #1303 fixed (one `ExternalSorter` per thread, concurrently, against a shared
+  `datafusion.runtime.memory_limit`). `PerFile` + `SortPreservingMergeExec` was already considered
+  and rejected in `tasks/completed/1297_perfetto_redundant_sort_plan.md:461-467` — it opens every
+  partition file concurrently per thread. Fixing the data keeps the scan plan and fixes the silent
+  SQL mis-order and the truncated-bounds data loss too, which a declaration change would not.
+
+- **Insert-safe cut points vs. deriving insert ranges from a tiling.** The alternative is to store
+  each partition's `[begin_insert_time, end_insert_time)` as a synthetic non-overlapping tiling
+  (`begin = max(min_insert, prev_end)`) instead of the true min/max, cutting wherever
+  `max_nb_objects` says. It keeps partition sizes exact but breaks the "a partition's insert range
+  covers its blocks' insert times" invariant that `is_jit_partition_up_to_date`,
+  `PartitionCache::filter_insert_range` and `retire_expired_partitions` all read, in exchange for
+  saving a block or two per cut. Deferring the cut keeps one invariant instead of introducing a
+  second, weaker one.
+
+- **Look-back cut vs. defer-only.** A defer-only rule (wait for a future safe index, never cutting
+  early) keeps the *entire* window — including the blocks before the straggler — growing until a
+  safe index turns up, bounded only by the segment (one hour of one stream), which is a weak memory
+  bound: `write_partition` holds a whole partition's rows in one `SpanRecordBuilder`, and an hour of
+  a hot process can be very large (the reported window holds 44.5M spans across 24 threads). The
+  look-back cut is narrower, not a full fix: it cuts and emits the already-safe prefix at the soft
+  limit as soon as it stops being extendable, at the cost of sometimes cutting that prefix *smaller*
+  than `max_nb_objects` — harmless, partitions have no minimum size. The straggler itself still
+  re-seeds the next window and is not bounded by the look-back (§3): that window can already start at
+  or past `max_nb_objects`, and it keeps growing, unbounded by the segment, for as long as the
+  straggler's delay lasts — the same weak bound defer-only has, just confined to a smaller tail
+  instead of the whole partition. With no safe point at all anywhere in that tail, the window grows
+  past the soft limit and warns; `max_nb_objects` is soft and block-granular today (a block is never
+  split, an oversized block already exceeds it) and stays that way. No hard ceiling: a hard failure
+  would turn a functioning-but-large partition into an unusable view instance for that window.
+
+- **Per-view `BlockOrder` vs. event-time ordering everywhere.** A global switch would be simpler to
+  reason about and would make partition event-time bounds structural for all JIT views. It also
+  changes grouping for `log_entries`, `measures`, `images`, `async_events` and `otel_spans` — five
+  more `SCHEMA_VERSION` bumps and five more retirement sweeps — for views that decode blocks
+  independently, track event bounds per block, and declare no ordering. The knob puts the cost where
+  the benefit is; the default keeps those five bit-identical.
+
+- **Sorting in Rust vs. changing the SQL `ORDER BY`.** The issue proposes `ORDER BY begin_ticks,
+  block_id` in SQL. Sorting inside `group_blocks_into_partitions` instead makes grouping unit-testable
+  without a live lake and keeps the ordering decision next to the cut rule that depends on it. The
+  SQL `ORDER BY insert_time, block_id` is retained as the stable tiebreak base. The issue's proposal
+  is also insufficient on its own: with no cut rule attached, event ordering converts the read-time
+  failure into the write-time exclusion-constraint failure described under "The invariant that
+  constrains the fix".
+
+- **Schema-hash bump vs. waiting for JIT expiry.** JIT partitions age out via
+  `retire_expired_partitions`, so doing nothing eventually converges — but until then queries keep
+  reading the mis-grouped partitions and the bug persists on existing data. A hash bump makes the
+  cutover immediate and deterministic, at the cost of dead storage until the retirement sweep runs.
+
+- **Cross-segment inversions (accepted residual case, not filed).** Segments are half-open
+  insert-time slices (`generate_stream_jit_partitions`, `jit_partitions.rs:122-123`, `:231-249`), so an
+  inversion straddling an hour boundary can still leave two partitions' event ranges overlapping —
+  unchanged by this plan, since it is exactly today's situation and neither of this plan's changes
+  touches cross-segment grouping. Observed inversions are ~12 ms, so this is theoretical in practice.
+  Both existing guards stay as backstops: `sort_and_check_non_overlapping`
+  (`partitioned_execution_plan.rs:60-88`) fails the query loudly rather than returning wrong rows, and
+  the perfetto monotonicity guard (`perfetto_trace_execution_plan.rs:405-411`) stays. A follow-up issue
+  could widen the cut rule across segment boundaries; none is filed yet, unlike the buffer-then-write
+  gap below (#1431).
+
+- **Whole-query-range spec list held in memory (pre-existing, not in scope).**
+  `generate_stream_jit_partitions` accumulates every segment's `SourceDataBlocksInMemory` before
+  `jit_update` writes them one at a time (`jit_partitions.rs:233-250`; the process variant likewise,
+  `:472-492`), and `SourceDataBlocksInMemory` holds `Vec<Arc<PartitionSourceBlock>>` — `BlockMetadata`
+  plus shared `Arc` metadata (`partition_source_data.rs:34-64`), no row payloads. This plan does not
+  add to that list or change its lifetime, so it is metadata-only and pre-existing either way. For
+  multi-day query ranges over many streams the eventual fix is to materialize each segment's
+  partitions before generating the next; worth a follow-up issue if it becomes a problem in practice,
+  not filed yet.
+
+- **Buffer-then-write partition materialization (out of scope, filed as #1431).** A partition must
+  contain all the blocks of its insert range, but nothing requires its *content* to fit in memory at
+  once: `write_partition_from_rows` already streams — it consumes a channel of `PartitionRowSet`s and
+  writes row groups incrementally to object storage (`write_partition.rs:636`), and the other JIT
+  views feed it one row set per block. `thread_spans_view::write_partition` is what buffers: one
+  `SpanRecordBuilder` accumulates every row and sends a single row set, and beneath it
+  `make_call_tree` builds a full `CallTree` per tick-contiguous run — commonly the whole partition —
+  before any row is appended. Write-time memory is therefore proportional to partition size
+  regardless of the cut rule; `max_nb_objects` is the de-facto memory budget. The follow-up fix has
+  two layers: (a) flush the record builder into multiple row sets every N rows between call trees;
+  (b) stream span emission from call-tree construction, emitting each top-level subtree when it
+  closes (buffer = largest open top-level span, typically one frame; a span open for the whole
+  partition degrades to full buffering). Both are only *correct* once blocks are event-time ordered —
+  flushed row sets append in emission order, so incremental flushing under today's insert-ordered
+  blocks would write mis-ordered files. This plan is therefore the prerequisite for #1431, not a
+  place to fix it.
+
+## Documentation
+
+- Rustdoc is the primary surface: `jit_partitions.rs` (the two orderings and the insert-range
+  invariant), `view.rs:150-176` (the `Concatenated` contract), `partitioned_execution_plan.rs:78-82`
+  (narrow the non-overlap error message's causes to the cross-segment case), `thread_spans_view.rs:132`
+  and `write_partition.rs:335-339`/`:365`/`:434-448` (stale comments, per step 18), and
+  `retire_partitions`'s own rustdoc (`write_partition.rs:120-121`), which documents `RetireMatch {
+  Containment, Overlap }` once the match rule becomes a parameter.
+- `tasks/completed/1297_perfetto_redundant_sort_plan.md` flagged the unenforced assumption only in
+  the cross-partition dimension; this plan supersedes that note. Cross-link from this file rather
+  than editing the completed plan.
+- Optional: a sentence in `doc/how_to_query/README.md` §`thread_spans` (line 332) stating that a
+  `thread_spans` view instance scan is ordered by `begin`, so `ORDER BY begin` is free. No existing
+  doc page describes the JIT partitioning internals, so nothing else needs updating.
+
+## Testing Strategy
+
+### Unit — `rust/analytics/tests/jit_partition_grouping_tests.rs` (no DB)
+
+Build synthetic `PartitionSourceBlock` lists (contiguous `begin_ticks`/`end_ticks`, `insert_time`
+permuted) and assert on `group_blocks_into_partitions`:
+
+1. **Reproduces the bug's shape.** Two consecutive blocks registered in reverse order, single
+   partition: output blocks are event-ordered.
+2. **Event ordering across partitions.** Enough blocks to force several cuts: concatenating the
+   partitions yields non-decreasing `begin_ticks`, and each partition's `[min begin_ticks, max
+   end_ticks]` is disjoint from and ordered against the next.
+3. **Insert ranges never overlap.** For every adjacent pair, `max_insert(P_k) <= min_insert(P_k+1)` —
+   the exclusion-constraint precondition. Include a case with an inversion placed exactly on the
+   `max_nb_objects` cut point (the ~10% case that would otherwise fail the write) and assert the cut
+   moved rather than overlapped.
+4. **Look-back cut isolates a straggler.** One block whose `insert_time` is far later than its
+   event-time neighbors (simulating a slow/retried upload), positioned so every forward index stays
+   unsafe past the `max_nb_objects` point: the cut falls back to the last safe index, so the
+   *partition emitted before* the straggler's window stays `<= max_nb_objects`. The re-seeded window
+   containing the straggler is **not** asserted to stay under `max_nb_objects` — it can already start
+   at or over the limit and keeps growing until a later block's `insert_time` catches up past the
+   straggler's — but it is asserted to have no split or duplicated blocks and non-overlapping insert
+   ranges against its neighbors.
+5. **No safe point: soft limit grows, safety holds.** A continuous inversion chain (e.g. strictly
+   decreasing `insert_time` across the window) with no safe index: grouping still emits a single
+   partition past `max_nb_objects` (soft limit, matching today's oversized-block behavior), insert
+   ranges stay non-overlapping, and the deferred count driving the `warn!` is reported.
+6. **`InsertTime` is unchanged.** Same inputs under `BlockOrder::InsertTime` produce exactly today's
+   grouping, including partition boundaries and `block_ids_hash`.
+7. **Size respected when it can be.** With no inversions, `EventTime` grouping matches `InsertTime`
+   grouping block-for-block.
+8. **Degenerate inputs.** Empty list; one block; all blocks with identical `insert_time`; identical
+   `begin_ticks` (tiebreak determinism — same input order in, same grouping out).
+
+### Unit — `rust/analytics/tests/jit_partition_bounds_tests.rs` (no DB)
+
+Both targets are `pub` (Design §1 step 2, §5), so this new integration-test file can call them
+directly.
+
+9. `insert_time_range` over a permuted list returns true min/max, and equals the endpoints for a
+   sorted list.
+10. `ensure_begin_non_decreasing` rejects a hand-built batch with a regressing `begin` and passes a
+    monotone one. Assert the returned error names the stream and the offending row, so the same
+    detail is guaranteed present in the `error!` log line.
+
+### Integration — `thread_spans_ordering_db_test.rs` (live lake)
+
+11. New case mirroring the existing harness: push N blocks to one thread stream but insert them into
+   the ingestion service **out of event order** (swap an adjacent pair). Then assert:
+   - `jit_update` succeeds (no exclusion-constraint error) — the write-side regression this plan's
+     cut rule prevents;
+   - `SELECT "begin" FROM view_instance('thread_spans', <stream>) ORDER BY begin` returns
+     non-decreasing `begin` with the `Sort` elided;
+   - `perfetto_trace_chunks(...)` completes without `thread spans out of order`;
+   - `list_partitions()` shows non-overlapping `[min_event_time, max_event_time]` and
+     `[begin_insert_time, end_insert_time]` ranges, and the union of event ranges covers every
+     ingested block (guards the truncated-bounds data loss).
+
+   `ThreadSpansView::jit_update` hardcodes `JitPartitionConfig::default()`, so there is no way to
+   shrink `max_nb_objects` through the view. For the cut-straddling case (an inversion positioned to
+   fall on a `max_nb_objects` boundary), drive `generate_stream_jit_partitions` directly with a small
+   `max_nb_objects` to assert the cut moves rather than overlaps (mirroring unit test #3, but against
+   actually-registered blocks), then separately run `jit_update` on the same blocks under the default
+   config to assert the end-to-end write and read path succeed.
+
+   Also cover the cross-run regrouping case from Design §6: run `jit_update` once, insert one more
+   block whose `insert_time` legally shifts an existing cut point, and run `jit_update` again —
+   assert the second run replaces the stale partition (no lingering wider partition, no
+   exclusion-constraint error) instead of leaving both in place.
+
+   Also cover the degenerate-range case from Design §6 (`retire_partitions`'s `Overlap` arm): drive
+   `generate_stream_jit_partitions` with a single tiny block so its insert range is a single
+   timestamp (`begin_insert_time == end_insert_time`), write it via `update_partition`, then run
+   `jit_update` again so a later run's regrouping replaces that single-block partition — assert the
+   stale partition is actually retired (not left alongside the new one), which requires the
+   containment half of the `Overlap` arm's union predicate to fire (the `&&` half alone would not
+   match, since an empty `tstzrange` never overlaps anything).
+
+   Also cover the *same-run* sub-case (Design §6, "The containment half's left-boundary exclusion"):
+   arrange blocks so a legal cut lands a degenerate partition (single block, or several blocks sharing
+   one `insert_time` `t`) immediately before a following partition that begins at that same `t`, drive
+   `generate_stream_jit_partitions` with a `max_nb_objects` small enough to force exactly that cut, and
+   run `jit_update` once. Assert both partitions are present afterward — the degenerate one is *not*
+   retired by writing its successor — which requires the containment half's left-boundary exclusion
+   (`AND NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)`) to hold; without it
+   this sub-case would fail deterministically on every run, not just once.
+
+   Also cover reconvergence after an interrupted regrouping run (Design §6, "Why the `Overlap` waiver
+   is tolerable"): drive `generate_stream_jit_partitions` to get a multi-partition spec, write only
+   the first partition via `update_partition` (simulating a `jit_update` loop that errored or was
+   cancelled before finishing), then run a full `jit_update`. Assert the follow-up run leaves no gap:
+   `list_partitions()`'s union of `[min_event_time, max_event_time]` ranges covers every block in the
+   query range, with no overlaps and no missing tail range — i.e. a subsequent successful
+   `jit_update` always restores full block coverage even after a partial prior run.
+12. Confirm the existing `net_spans_test.rs` and `span_tests.rs` still pass with the bumped schema
+    versions.
+
+### Manual verification against the live lake
+
+13. On the process/stream from the issue: `perfetto_trace_chunks` over the failing window succeeds;
+    `ORDER BY "begin"` and `ORDER BY "begin", "end"` return identical row sequences (today they
+    differ — 4 regressions in the reported ~627k-row window); `process_spans(process_id, 'thread')`
+    row count is unchanged.
+

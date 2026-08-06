@@ -306,6 +306,8 @@ GROUP BY process_id, unit;
 ### `thread_spans`
 
 Derived view for analyzing span durations and hierarchies. Access via `view_instance('thread_spans', stream_id)`.
+A `thread_spans` view instance scan is ordered by `begin`, so an `ORDER BY begin` on it is free (no
+extra sort).
 
 | Field | Type | Description |
 |-------|------|-------------|

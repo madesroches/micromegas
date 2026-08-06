@@ -19,7 +19,7 @@ use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
-use micromegas_analytics::lakehouse::write_partition::retire_partitions;
+use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
 use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::TimeRange;
@@ -341,6 +341,8 @@ async fn retire_existing_partitions(
         &log_summary_view.get_view_instance_id(),
         begin,
         now,
+        RetireMatch::Containment,
+        &[],
         logger,
     )
     .await?;

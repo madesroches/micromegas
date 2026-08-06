@@ -2,7 +2,8 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_process_jit_partitions,
+        group_contiguous_block_chains, is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -11,7 +12,7 @@ use super::{
     view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    lakehouse::write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
     metadata::{StreamMetadata, find_process_with_latest_timing},
     net_span_tree::make_net_span_tree,
     net_spans_table::{NetSpanRecordBuilder, net_spans_table_schema},
@@ -30,7 +31,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "net_spans";
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 2;
 const NET_STREAM_TAG: &str = "net";
 
 lazy_static::lazy_static! {
@@ -121,14 +122,18 @@ async fn write_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
     process_id: Arc<String>,
+    same_run_ranges: &[TimeRange],
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    let min_insert_time = spec.blocks[0].block.insert_time;
-    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
+    // NetSpansView is grouped under BlockOrder::EventTime (see jit_update below), so spec.blocks
+    // is event-time ordered, not insert-time ordered -- blocks_insert_time_range computes the real
+    // min/max rather than reading list endpoints.
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -136,9 +141,11 @@ async fn write_partition(
         lake.clone(),
         view_meta,
         schema,
-        TimeRange::new(min_insert_time, max_insert_time),
+        insert_range,
         spec.block_ids_hash.clone(),
         None,
+        RetireMatch::Overlap,
+        same_run_ranges.to_vec(),
         rx,
         null_response_writer,
     ));
@@ -154,44 +161,44 @@ async fn write_partition(
                 b.stream.stream_id,
             );
         }
-        let mut blocks_to_process: Vec<BlockMetadata> = vec![];
-        let mut last_end: Option<i64> = None;
-        for block in &spec.blocks {
-            let contiguous = last_end
-                .map(|e| block.block.begin_ticks == e)
-                .unwrap_or(true);
-            if !contiguous {
-                append_net_span_tree(
-                    &mut record_builder,
-                    convert_ticks,
-                    &blocks_to_process,
-                    lake.blob_storage.clone(),
-                    &stream,
-                    process_id.clone(),
-                )
-                .await?;
-                blocks_to_process = vec![];
-            }
-            blocks_to_process.push(block.block.clone());
-            last_end = Some(block.block.end_ticks);
-        }
-        if !blocks_to_process.is_empty() {
+        // One net span tree per unbroken chain of blocks; see `group_contiguous_block_chains`.
+        for chain in group_contiguous_block_chains(&spec.blocks) {
             append_net_span_tree(
                 &mut record_builder,
                 convert_ticks,
-                &blocks_to_process,
+                &chain,
                 lake.blob_storage.clone(),
                 &stream,
                 process_id.clone(),
             )
             .await?;
         }
-        let min_time_row = convert_ticks.delta_ticks_to_time(spec.blocks[0].block.begin_ticks);
-        let max_time_row =
-            convert_ticks.delta_ticks_to_time(spec.blocks[spec.blocks.len() - 1].block.end_ticks);
-        let rows_time_range = record_builder
-            .get_time_range()
-            .unwrap_or(TimeRange::new(min_time_row, max_time_row));
+        // Real min/max over the blocks, not list endpoints: fallback only, since
+        // record_builder.get_time_range() normally supplies the actual row bounds below.
+        // `spec.blocks` is non-empty (checked above), so min/max are always `Some` -- surface a
+        // violation of that as an error rather than silently substituting tick 0, matching
+        // thread_spans_view's equivalent computation.
+        let rows_time_range = match record_builder.get_time_range() {
+            Some(range) => range,
+            None => {
+                let min_ticks = spec
+                    .blocks
+                    .iter()
+                    .map(|b| b.block.begin_ticks)
+                    .min()
+                    .with_context(|| "empty partition spec")?;
+                let max_ticks = spec
+                    .blocks
+                    .iter()
+                    .map(|b| b.block.end_ticks)
+                    .max()
+                    .with_context(|| "empty partition spec")?;
+                TimeRange::new(
+                    convert_ticks.delta_ticks_to_time(min_ticks),
+                    convert_ticks.delta_ticks_to_time(max_ticks),
+                )
+            }
+        };
         let nb_rows = record_builder.len();
         let rows = record_builder
             .finish()
@@ -241,6 +248,10 @@ async fn write_partition(
 }
 
 /// Rebuilds the partition if it's missing or out of date.
+///
+/// `same_run_ranges` accumulates the insert ranges this `jit_update` run has already handled --
+/// written, or found already up to date -- earlier in its loop; see `ThreadSpansView`'s
+/// `update_partition` and `RetireMatch::Overlap`'s docs for why.
 #[span_fn]
 async fn update_partition(
     lake: Arc<DataLakeConnection>,
@@ -249,13 +260,33 @@ async fn update_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
     process_id: Arc<String>,
+    same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
+    if is_jit_partition_up_to_date(
+        &lake.db_pool,
+        view_meta.clone(),
+        spec,
+        BlockOrder::EventTime,
+    )
+    .await?
+    {
+        same_run_ranges.push(insert_range);
         return Ok(());
     }
-    write_partition(lake, view_meta, schema, convert_ticks, spec, process_id)
-        .await
-        .with_context(|| "write_partition")?;
+    write_partition(
+        lake,
+        view_meta,
+        schema,
+        convert_ticks,
+        spec,
+        process_id,
+        same_run_ranges.as_slice(),
+    )
+    .await
+    .with_context(|| "write_partition")?;
+    same_run_ranges.push(insert_range);
     Ok(())
 }
 
@@ -313,8 +344,17 @@ impl View for NetSpansView {
         .with_context(|| "make_time_converter_from_latest_timing")?;
 
         let blocks_view = BlocksView::new()?;
+        // NetSpansView builds cross-block net span trees, so its JIT partitions must be
+        // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs. (Unlike
+        // ThreadSpansView, NetSpansView declares no ScanOrdering::Concatenated today, so it does
+        // not also need a monotonicity check -- see thread_spans_view.rs's
+        // ensure_begin_non_decreasing.)
+        let config = JitPartitionConfig {
+            block_order: BlockOrder::EventTime,
+            ..Default::default()
+        };
         let all_partitions = generate_process_jit_partitions(
-            &JitPartitionConfig::default(),
+            &config,
             lakehouse.clone(),
             &blocks_view,
             &query_range,
@@ -325,6 +365,10 @@ impl View for NetSpansView {
         .with_context(|| "generate_process_jit_partitions")?;
 
         let process_id_str = Arc::new(self.process_id.to_string());
+        // Accumulates this run's own already-handled insert ranges across the loop, so a later
+        // partition's retire step never retires an earlier one from this same run -- see
+        // `update_partition`'s and `RetireMatch::Overlap`'s docs.
+        let mut same_run_ranges: Vec<TimeRange> = Vec::new();
         for part in &all_partitions {
             update_partition(
                 lakehouse.lake().clone(),
@@ -337,6 +381,7 @@ impl View for NetSpansView {
                 &convert_ticks,
                 part,
                 process_id_str.clone(),
+                &mut same_run_ranges,
             )
             .await
             .with_context(|| "update_partition")?;

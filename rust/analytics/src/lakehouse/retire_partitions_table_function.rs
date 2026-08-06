@@ -16,7 +16,7 @@ use crate::dfext::task_log_exec_plan::TaskLogExecPlan;
 use crate::response_writer::LogSender;
 use crate::response_writer::Logger;
 
-use super::write_partition::retire_partitions;
+use super::write_partition::{RetireMatch, retire_partitions};
 
 /// A DataFusion `TableFunctionImpl` for retiring lakehouse partitions.
 #[derive(Debug)]
@@ -39,12 +39,16 @@ async fn retire_partitions_impl(
     logger: Arc<dyn Logger>,
 ) -> anyhow::Result<()> {
     let mut tr = lake.db_pool.begin().await?;
+    // The public admin UDF: unchanged behavior, so RetireMatch::Containment (today's query) and no
+    // same-run exclusion (that mechanism only applies to RetireMatch::Overlap).
     retire_partitions(
         &mut tr,
         view_set_name,
         view_instance_id,
         begin_insert_time,
         end_insert_time,
+        RetireMatch::Containment,
+        &[],
         logger,
     )
     .await?;

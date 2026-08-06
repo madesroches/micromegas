@@ -13,7 +13,7 @@ use micromegas_analytics::{
         sql_batch_view::SqlBatchView,
         view::View,
         view_factory::{ViewFactory, default_view_factory},
-        write_partition::retire_partitions,
+        write_partition::{RetireMatch, retire_partitions},
     },
     response_writer::{Logger, ResponseWriter},
     time::TimeRange,
@@ -89,6 +89,8 @@ async fn retire_existing_partitions(
         &view.get_view_instance_id(),
         begin,
         now,
+        RetireMatch::Containment,
+        &[],
         logger,
     )
     .await?;

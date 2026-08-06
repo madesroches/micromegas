@@ -49,13 +49,17 @@ fn partition_bounds(
 /// independent of the order the partition cache returned.
 ///
 /// Returns an error if any adjacent pair overlaps: the declared ordering cannot be honored, so we
-/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime`
-/// the most likely cause is TSC-frequency estimation drift across materialization epochs (for
-/// `tsc_frequency == 0` processes whose blocks were materialized under different clock
-/// estimates); the fix is to retire the affected stream's partitions so they rebuild with a
-/// single, consistent converter. For `OrderingBounds::InsertTime` an overlap indicates a genuine
-/// partitioning bug -- input partitions are expected to be non-overlapping in insert_time by
-/// construction.
+/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime` the
+/// causes are: an insert-time inversion straddling a JIT segment boundary; TSC-frequency estimation
+/// drift across materialization epochs (for `tsc_frequency == 0` processes whose blocks were
+/// materialized under different clock estimates); and, for `micromegas_tracing`-produced streams
+/// only, block-boundary tick overlap (a partition's event bounds come from block ticks, and that
+/// producer's consecutive blocks overlap by the cost of the buffer swap -- the Unreal producer
+/// stamps one timestamp for both sides, so its blocks touch exactly). See the ordering-invariant
+/// notes on `View::get_scan_output_ordering`. The first two are fixed by retiring the affected
+/// stream's partitions so they rebuild with a single, consistent converter. For
+/// `OrderingBounds::InsertTime` an overlap indicates a genuine partitioning bug -- input
+/// partitions are expected to be non-overlapping in insert_time by construction.
 fn sort_and_check_non_overlapping(
     mut partitions: Vec<&Partition>,
     bounds: OrderingBounds,
@@ -76,9 +80,10 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering this can happen when a stream's blocks were registered out of event-time order, or -- for tsc_frequency == 0 processes -- when TSC-frequency \
-                 re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on View::get_scan_output_ordering in view.rs). \
-                 Retire the affected stream's partitions so they rebuild with a single, consistent time converter.",
+                 For event-time ordering the usual causes are an insert-time inversion straddling a JIT segment boundary, or -- for tsc_frequency == 0 processes -- TSC-frequency \
+                 re-estimation drift across materialization epochs spanning a clock adjustment. Both are fixed by retiring the affected stream's partitions so they rebuild with a \
+                 single, consistent time converter. See the rustdoc on sort_and_check_non_overlapping (partitioned_execution_plan.rs) and the ordering-invariant notes on \
+                 View::get_scan_output_ordering in view.rs for the full cause list.",
                 prev.file_path, next.file_path
             )));
         }

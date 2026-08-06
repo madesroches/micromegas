@@ -11,7 +11,7 @@ use super::{
     session_configurator::SessionConfigurator,
     view::{ScanSortColumn, View},
     view_factory::ViewFactory,
-    write_partition::{PartitionRowSet, write_partition_from_rows},
+    write_partition::{PartitionRowSet, RetireMatch, write_partition_from_rows},
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
@@ -392,6 +392,8 @@ pub async fn create_merged_partition(
         insert_range,
         source_hash.to_le_bytes().to_vec(),
         merged_sort_order,
+        RetireMatch::Containment,
+        Vec::new(),
         rx,
         logger.clone(),
     ));
