@@ -12,11 +12,6 @@ describe('usePageTitle', () => {
     expect(document.title).toBe('My Screen - Micromegas')
   })
 
-  it('defaults busy to false, leaving the title unprefixed', () => {
-    renderHook(({ title }) => usePageTitle(title), { initialProps: { title: 'My Screen' } })
-    expect(document.title).toBe('My Screen - Micromegas')
-  })
-
   it('prefixes the title with "[*] " when busy is true', () => {
     renderHook(({ title, busy }) => usePageTitle(title, busy), {
       initialProps: { title: 'My Screen', busy: true },

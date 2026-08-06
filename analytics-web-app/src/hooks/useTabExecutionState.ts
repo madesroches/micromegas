@@ -1,5 +1,9 @@
 import { useEffect } from 'react'
 
+export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle' | 'busy' | 'error' {
+  return isExecuting ? 'busy' : hasError ? 'error' : 'idle'
+}
+
 export function useTabExecutionState(state: 'idle' | 'busy' | 'error'): void {
   useEffect(() => {
     const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
@@ -14,7 +18,7 @@ export function useTabExecutionState(state: 'idle' | 'busy' | 'error'): void {
     // Unmount reset: ScreenPageContent has no persistent layout/Outlet (router.tsx lists
     // `/screen/new` and `/screen/:name` as plain sibling <Route>s), so navigating to any
     // other route (`/processes`, `/screens`, `/admin`, ...) fully unmounts this component
-    // without `load()`'s same-component reset (Design §5) ever running. Without this
+    // without `load()`'s same-component reset ever running. Without this
     // cleanup, a busy/error favicon set here would persist indefinitely on unrelated pages.
     return () => {
       link.href = idleHref

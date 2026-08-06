@@ -2,7 +2,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type Compo
 import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
-import { useTabExecutionState } from '@/hooks/useTabExecutionState'
+import { useTabExecutionState, computeTabState } from '@/hooks/useTabExecutionState'
 import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -26,10 +26,6 @@ import {
   ScreenConfig,
   ScreenApiError,
 } from '@/lib/screens-api'
-
-export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle' | 'busy' | 'error' {
-  return isExecuting ? 'busy' : hasError ? 'error' : 'idle'
-}
 
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
@@ -99,8 +95,7 @@ function ScreenPageContent() {
   // Error state reported by renderer (for tab favicon/title)
   const [hasError, setHasError] = useState(false)
 
-  // Page title must be declared after isExecuting: it now needs isExecuting as its
-  // busy argument, so it can't stay at its original spot above that declaration.
+  // Adds a "[*]" title prefix while the screen is executing
   usePageTitle(pageTitle, isExecuting)
 
   // Tab favicon/title busy-error-idle indicator, page-global across all screen types
