@@ -132,12 +132,15 @@ pub enum RetireMatch {
     /// `BlockOrder::InsertTime` and for every non-JIT (batch/merge) partition write. Used by
     /// everything except the two `BlockOrder::EventTime` JIT views.
     Containment,
-    /// The union of three arms -- overlap, containment, and a degenerate-new-range test -- with
-    /// same-run siblings excluded by identity (see `same_run_ranges` below). All three are needed
-    /// because `tstzrange(t, t)` is Postgres's empty range and `&&` is false whenever *either*
-    /// side is degenerate: the overlap arm alone misses a degenerate existing partition
-    /// (containment arm covers it) and a degenerate *new* range (third arm covers it, matching an
-    /// existing row that merely contains the instant `$3`).
+    /// An *inclusive* insert-range intersection test -- `tstzrange(begin, end, '[]') &&
+    /// tstzrange($3, $4, '[]')` -- with same-run siblings excluded by identity (see
+    /// `same_run_ranges` below). The `'[]'` bounds matter twice over: a partition's
+    /// `[begin_insert_time, end_insert_time]` is the inclusive min/max of its blocks' insert
+    /// times, so two partitions that merely *touch* at one instant can both contain a block at
+    /// that instant and must be considered intersecting; and an inclusive range is never empty,
+    /// so degenerate `[t, t]` partitions (on either side) intersect anything containing `t` --
+    /// with Postgres's default half-open ranges, `tstzrange(t, t)` is empty and `&&` is
+    /// vacuously false.
     ///
     /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
     /// grouping can move an *earlier* cut point between `jit_update` runs (see
@@ -152,9 +155,8 @@ pub enum RetireMatch {
     /// that sibling is written -- or, if the loop fails, until the next successful `jit_update`.
     /// Tolerable because JIT partitions are regenerated on demand from `blocks_view` and are not
     /// the source of truth for their own data. See
-    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the full derivation of the three
-    /// arms, the rejected shape-based alternatives to `same_run_ranges`, and the concurrent-writers
-    /// argument.
+    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the derivation, the rejected
+    /// shape-based alternatives to `same_run_ranges`, and the concurrent-writers argument.
     Overlap,
 }
 
@@ -169,7 +171,7 @@ pub enum RetireMatch {
 ///
 /// `same_run_ranges` lists the exact `(begin_insert_time, end_insert_time)` pairs the calling
 /// `jit_update` run has already written (or found already up to date) earlier in its own loop; a
-/// row matching one of these pairs is never retired, regardless of which arm of `retire_match`
+/// row matching one of these pairs is never retired, even when the `retire_match` predicate
 /// would otherwise match it (see `RetireMatch::Overlap`'s docs for why this is identity-, not
 /// shape-, based). Only meaningful for `RetireMatch::Overlap` -- pass `&[]` for `Containment`.
 #[expect(clippy::too_many_arguments)]
@@ -237,20 +239,15 @@ pub async fn retire_partitions(
             .with_context(|| "listing old partitions (range)")?
         }
         RetireMatch::Overlap => {
-            // Union of the overlap, containment, and degenerate-new-range predicates, with rows
-            // matching a same-run range excluded regardless of which arm matched them; see
-            // RetireMatch::Overlap's docs for why all three arms and the exclusion are required.
+            // Inclusive-bounds intersection, with rows matching a same-run range excluded by
+            // identity; see RetireMatch::Overlap's docs for why the bounds must be '[]'.
             instrument_named!(
                 sqlx::query(
                     "SELECT file_path, file_size
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
-             AND (
-                 (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
-                 OR (begin_insert_time >= $3 AND end_insert_time <= $4)
-                 OR ($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)
-             )
+             AND tstzrange(begin_insert_time, end_insert_time, '[]') && tstzrange($3, $4, '[]')
              AND NOT EXISTS (
                  SELECT 1 FROM unnest($5::timestamptz[], $6::timestamptz[]) AS same_run(b, e)
                  WHERE same_run.b = begin_insert_time AND same_run.e = end_insert_time
@@ -343,18 +340,14 @@ pub async fn retire_partitions(
             .with_context(|| "deleting out of date partitions (range)")?
         }
         RetireMatch::Overlap => {
-            // Same union predicate (and same-run exclusion) as the SELECT above, so exactly the
-            // rows just listed (and scheduled for cleanup) are deleted.
+            // Same predicate (and same-run exclusion) as the SELECT above, so exactly the rows
+            // just listed (and scheduled for cleanup) are deleted.
             instrument_named!(
                 sqlx::query(
                     "DELETE from lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
-             AND (
-                 (tstzrange(begin_insert_time, end_insert_time) && tstzrange($3, $4))
-                 OR (begin_insert_time >= $3 AND end_insert_time <= $4)
-                 OR ($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)
-             )
+             AND tstzrange(begin_insert_time, end_insert_time, '[]') && tstzrange($3, $4, '[]')
              AND NOT EXISTS (
                  SELECT 1 FROM unnest($5::timestamptz[], $6::timestamptz[]) AS same_run(b, e)
                  WHERE same_run.b = begin_insert_time AND same_run.e = end_insert_time
@@ -581,7 +574,7 @@ async fn insert_partition_transaction(
             // Translate an exclusion-constraint violation (raw SQLSTATE 23P01) into a legible
             // domain error: it means an existing partition overlaps this one without being
             // matched by this transaction's retire step (RetireMatch::Containment: not fully
-            // contained by the new range; RetireMatch::Overlap: not matched by the union
+            // contained by the new range; RetireMatch::Overlap: not matched by the intersection
             // predicate either, e.g. still committed by a concurrent writer racing this one --
             // see RetireMatch::Overlap's "Concurrent writers" docs) -- e.g. a concurrent
             // maintenance merge committed a wider partition.

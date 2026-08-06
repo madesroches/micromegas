@@ -80,13 +80,10 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering: (1) an insert-time inversion straddling a JIT segment boundary (blocks registered out of event-time order across two independently-grouped \
-                 segments -- within one segment blocks are event-ordered with insert-safe cut points, see jit_partitions::group_blocks_into_partitions); (2) for tsc_frequency == 0 \
-                 processes, TSC-frequency re-estimation drift across materialization epochs spanning a clock adjustment; (3) for streams produced by micromegas_tracing (Rust) only, \
-                 block-boundary tick overlap -- a partition's event bounds come from its blocks' begin_ticks/end_ticks and that producer stamps the replacement block's begin before \
-                 closing the outgoing block, so any cut between two adjacent blocks can produce a sub-microsecond overlap (the Unreal producer stamps one timestamp for both, so its \
-                 blocks touch exactly and this cause does not apply). See the ordering-invariant notes on View::get_scan_output_ordering in view.rs. \
-                 For (1) and (2), retiring the affected stream's partitions so they rebuild with a single, consistent time converter fixes it.",
+                 For event-time ordering the usual causes are an insert-time inversion straddling a JIT segment boundary, or -- for tsc_frequency == 0 processes -- TSC-frequency \
+                 re-estimation drift across materialization epochs spanning a clock adjustment. Both are fixed by retiring the affected stream's partitions so they rebuild with a \
+                 single, consistent time converter. See the rustdoc on sort_and_check_non_overlapping (partitioned_execution_plan.rs) and the ordering-invariant notes on \
+                 View::get_scan_output_ordering in view.rs for the full cause list.",
                 prev.file_path, next.file_path
             )));
         }

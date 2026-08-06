@@ -178,10 +178,6 @@ pub trait View: std::fmt::Debug + Send + Sync {
     ///     block's `begin` and the outgoing block's `Close`, so consecutive blocks *touch* exactly
     ///     and no overlap arises.
     ///
-    ///   This predates `BlockOrder::EventTime` (the same bounds were computed from the block list's
-    ///   endpoints before) and is orthogonal to insert-safe cut points, which are an insert-time
-    ///   property.
-    ///
     ///   Three residual caveats therefore remain, all backstopped by
     ///   `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs`) failing the query
     ///   loudly rather than returning wrong rows: the block-boundary tick overlap just described

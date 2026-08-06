@@ -152,7 +152,7 @@ pub fn group_contiguous_block_chains(
     chains
 }
 
-/// Emits one partition (if it holds any objects) from `blocks[start..end]`, warning once if the
+/// Emits one partition (if it holds any objects) from `blocks[start..end]`, logging once if the
 /// window genuinely grew past `max_nb_objects` because no insert-safe cut point was available.
 fn emit_partition(
     out: &mut Vec<SourceDataBlocksInMemory>,
@@ -163,16 +163,13 @@ fn emit_partition(
     grown_past_limit: i64,
     max_nb_objects: i64,
 ) {
-    // A window whose blocks all report nb_objects == 0 emits nothing, rather than an empty
-    // partition. The pre-refactor code applied this guard only to the trailing window (a mid-list
-    // cut always pushed), so for a mid-list all-zero window this drops those blocks from every
-    // partition instead of emitting a rows-free one. No *in-repo* producer emits a zero-object
-    // block -- `micromegas_tracing::dispatch`'s flush paths skip empty streams, the Unreal sink
-    // does the same, and OTLP ingestion returns no block for a zero-record batch -- but nothing
-    // enforces it (`nb_objects` has no CHECK constraint and the ingestion API does not validate
-    // it). Dropping is the better of the two behaviours anyway: such blocks carry no rows, and
-    // each partition's DB range is derived per-spec from `blocks_insert_time_range`, not from full
-    // block coverage.
+    // A window whose blocks all report nb_objects == 0 is dropped rather than emitted as a
+    // rows-free partition. No *in-repo* producer emits a zero-object block --
+    // `micromegas_tracing::dispatch`'s flush paths skip empty streams, the Unreal sink does the
+    // same, and OTLP ingestion returns no block for a zero-record batch -- but nothing enforces it
+    // (`nb_objects` has no CHECK constraint and the ingestion API does not validate it). Dropping
+    // is safe: such blocks carry no rows, and each partition's DB range is derived per-spec from
+    // `blocks_insert_time_range`, not from full block coverage.
     if nb_objects == 0 {
         return;
     }
@@ -180,8 +177,12 @@ fn emit_partition(
         // process_id only: under the process-level path (`generate_process_jit_partitions_segment`)
         // a partition can span several streams, and after the event-time sort `blocks[start]` is an
         // arbitrary one of them.
+        //
+        // debug!, not warn!: grouping re-runs on every query over the view (jit_update is called
+        // from every scan, and the stable sort makes cut decisions deterministic), so a persistent
+        // inversion would re-emit the same message on every query forever.
         let process_id = blocks[start].process.process_id;
-        warn!(
+        debug!(
             "group_blocks_into_partitions: process={process_id} emitted a partition of \
              {nb_objects} objects (soft limit max_nb_objects={max_nb_objects}) after \
              {grown_past_limit} cut(s) deferred by insert-time inversions with no insert-safe cut \
@@ -221,7 +222,7 @@ fn emit_partition(
 /// must have an `insert_time` no later than every remaining block's, computed via a suffix-minimum
 /// over the event-time-sorted list. When the natural `max_nb_objects` cut point isn't safe, the cut
 /// looks back to the most recent safe index; when no safe index exists in the window, the window
-/// grows past the soft limit and a `warn!` fires. See
+/// grows past the soft limit and a `debug!` logs it. See
 /// `tasks/1429_jit_event_time_block_ordering_plan.md` §3 for the full derivation.
 pub fn group_blocks_into_partitions(
     config: &JitPartitionConfig,
@@ -253,7 +254,7 @@ pub fn group_blocks_into_partitions(
     // the current window started.
     let mut last_safe: Option<(usize, i64)> = None;
     // Counts only the "no safe cut point exists" (grow-past-limit) events below; the look-back
-    // branch warns about itself directly and does not feed this counter (its emitted prefix is
+    // branch logs about itself directly and does not feed this counter (its emitted prefix is
     // provably <= max_nb_objects, so it must not carry the soft-limit wording).
     let mut grown_past_limit: i64 = 0;
 
@@ -293,9 +294,11 @@ pub fn group_blocks_into_partitions(
                 // to recompute running state before reprocessing block i (which may itself still
                 // be unsafe -- a straggler's window is not bounded by this rule, see the module
                 // docs).
-                // process_id only -- see the note in `emit_partition`.
+                // process_id only -- see the note in `emit_partition`. debug!, not warn!: this is
+                // the designed, insert-safe path and re-fires on every query over the view for as
+                // long as the inversion exists in the source blocks.
                 let process_id = blocks[start].process.process_id;
-                warn!(
+                debug!(
                     "group_blocks_into_partitions: process={process_id} cut moved back from index \
                      {i} to {j} ({} block(s) looked back)",
                     i - j
@@ -314,12 +317,15 @@ pub fn group_blocks_into_partitions(
                 prefix_max_insert = DateTime::<Utc>::MIN_UTC;
                 last_safe = None;
                 grown_past_limit = 0;
-                for k in start..i {
-                    nb_objects += blocks[k].block.nb_objects as i64;
-                    prefix_max_insert = prefix_max_insert.max(blocks[k].block.insert_time);
-                    if prefix_max_insert <= suffix_min[k + 1] {
-                        last_safe = Some((k + 1, nb_objects));
-                    }
+                // No last_safe recomputation while replaying: no index in (j, i] can be safe
+                // after the re-seed. j was the most recent safe index, so every block before j
+                // has insert_time <= suffix_min[j] <= suffix_min[m] for any m > j -- meaning a
+                // cut at m is safe in the re-seeded window iff it was safe in the original one,
+                // and the original pass already found all of (j, i] unsafe (otherwise last_safe
+                // would have pointed there instead of j).
+                for replayed in &blocks[start..i] {
+                    nb_objects += replayed.block.nb_objects as i64;
+                    prefix_max_insert = prefix_max_insert.max(replayed.block.insert_time);
                 }
                 continue;
             } else {

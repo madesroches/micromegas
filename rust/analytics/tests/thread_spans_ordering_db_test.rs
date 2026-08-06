@@ -682,12 +682,12 @@ fn slice_spec(blocks: &[Arc<PartitionSourceBlock>]) -> SourceDataBlocksInMemory 
     }
 }
 
-/// Degenerate-range retirement (Design §6, `write_partition.rs`'s `RetireMatch::Overlap`
-/// third arm): a *new* partition whose insert range is degenerate (`begin_insert_time ==
-/// end_insert_time`) must still retire a stale, wider partition from a prior run that overlaps it
-/// -- the bug the third arm fixes (without it, the union predicate matches zero rows for every
-/// degenerate new range, since `tstzrange(t, t)` is Postgres's empty range and the containment
-/// half's left-boundary exclusion also happens to remove the exact-match case). Writes a wide
+/// Degenerate-range retirement (Design §6, `write_partition.rs`'s `RetireMatch::Overlap`):
+/// a *new* partition whose insert range is degenerate (`begin_insert_time == end_insert_time`)
+/// must still retire a stale, wider partition from a prior run that overlaps it. The predicate's
+/// inclusive `'[]'` bounds make this work: with Postgres's default half-open bounds
+/// `tstzrange(t, t)` is empty, so a plain `&&` would match zero rows for every degenerate new
+/// range. Writes a wide
 /// "run 1" partition covering all 3 blocks, then a degenerate "run 2" partition consisting of just
 /// the middle block (whose insert_time sits strictly inside run 1's range) and asserts the wide
 /// partition is gone, leaving only the new degenerate one.
@@ -857,8 +857,8 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
 
     // "Run 2": regrouping now writes just the middle block on its own -- a degenerate partition
     // (begin_insert_time == end_insert_time == t0+1s) whose point sits strictly inside run 1's
-    // range. This is exactly the bug's scenario: without the third arm, this write would retire
-    // nothing and the stale wide partition would survive alongside the new one.
+    // range. This is exactly the bug's scenario: with half-open range bounds, this write would
+    // retire nothing and the stale wide partition would survive alongside the new one.
     let degenerate_spec = slice_spec(&all_blocks[1..2]);
     let mut run2_same_run_ranges: Vec<TimeRange> = Vec::new();
     update_partition(

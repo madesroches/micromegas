@@ -517,3 +517,210 @@ fn degenerate_inputs() {
         );
     }
 }
+
+/// Asserts the two cross-partition invariants every grouping must uphold: every input block
+/// appears in exactly one partition (except dropped zero-object blocks, which the caller accounts
+/// for via `expected_total_blocks`), and adjacent partitions' insert ranges never overlap.
+fn assert_grouping_invariants(
+    parts: &[micromegas_analytics::lakehouse::partition_source_data::SourceDataBlocksInMemory],
+    expected_total_blocks: usize,
+) {
+    let total_blocks: usize = parts.iter().map(|p| p.blocks.len()).sum();
+    assert_eq!(total_blocks, expected_total_blocks);
+    let mut seen = std::collections::HashSet::new();
+    for part in parts {
+        for block in &part.blocks {
+            assert!(seen.insert(block.block.block_id), "duplicated block");
+        }
+    }
+    for pair in parts.windows(2) {
+        let prev_max_insert = pair[0]
+            .blocks
+            .iter()
+            .map(|b| b.block.insert_time)
+            .max()
+            .unwrap();
+        let next_min_insert = pair[1]
+            .blocks
+            .iter()
+            .map(|b| b.block.insert_time)
+            .min()
+            .unwrap();
+        assert!(
+            prev_max_insert <= next_min_insert,
+            "insert ranges overlap: {prev_max_insert} > {next_min_insert}"
+        );
+    }
+}
+
+/// Test #9: an all-zero-object window is dropped rather than emitted as a rows-free partition --
+/// the one deliberate divergence from a naive greedy cut, in both orderings (`emit_partition`'s
+/// `nb_objects == 0` early return). Covers a mid-list window (cut forced by an oversized
+/// follower) and a trailing window.
+#[test]
+fn zero_object_windows_are_dropped() {
+    let process_id = uuid::Uuid::new_v4();
+    let stream_id = uuid::Uuid::new_v4();
+    let t0 = base_time();
+
+    for order in [BlockOrder::InsertTime, BlockOrder::EventTime] {
+        // Mid-list: two zero-object blocks accumulate, then a block bigger than max_nb_objects
+        // forces a cut; the closed window sums to zero and emits nothing.
+        let blocks = vec![
+            make_block(process_id, stream_id, 0, 100, t0, 0),
+            make_block(
+                process_id,
+                stream_id,
+                100,
+                200,
+                t0 + TimeDelta::seconds(1),
+                0,
+            ),
+            make_block(
+                process_id,
+                stream_id,
+                200,
+                300,
+                t0 + TimeDelta::seconds(2),
+                5,
+            ),
+        ];
+        let parts = group_blocks_into_partitions(&config(2, order), blocks);
+        assert_eq!(
+            parts.len(),
+            1,
+            "the all-zero window must be dropped ({order:?})"
+        );
+        assert_eq!(parts[0].blocks.len(), 1);
+        assert_eq!(nb_objects(&parts[0]), 5);
+
+        // Trailing: the zero-object blocks are last, so the tail window sums to zero.
+        let blocks = vec![
+            make_block(process_id, stream_id, 0, 100, t0, 5),
+            make_block(
+                process_id,
+                stream_id,
+                100,
+                200,
+                t0 + TimeDelta::seconds(1),
+                0,
+            ),
+            make_block(
+                process_id,
+                stream_id,
+                200,
+                300,
+                t0 + TimeDelta::seconds(2),
+                0,
+            ),
+        ];
+        let parts = group_blocks_into_partitions(&config(2, order), blocks);
+        assert_eq!(
+            parts.len(),
+            1,
+            "the trailing all-zero window must be dropped ({order:?})"
+        );
+        assert_eq!(nb_objects(&parts[0]), 5);
+    }
+}
+
+/// Test #10: a look-back cut followed by a grow-past-limit event followed by a normal, mid-list
+/// safe cut -- the full recovery sequence in one input, producing 3+ partitions. Exercises the
+/// re-seeded window closing at a later safe index (with `grown_past_limit > 0` at that emit) and
+/// the loop continuing to cut normally afterwards.
+#[test]
+fn look_back_then_grow_then_recover() {
+    let process_id = uuid::Uuid::new_v4();
+    let stream_id = uuid::Uuid::new_v4();
+    let t0 = base_time();
+
+    // Event order == index order. max_nb_objects = 10.
+    // i=2 trips the size limit unsafely (insert 3 > suffix-min 1) with last_safe at index 1 ->
+    // look-back emits [0..1). The re-seeded window is unsafe at i=3 with no safe index -> grows
+    // past the limit. i=4 is safe again -> mid-list cut emits [1..4) (14 objects, grown), and the
+    // tail emits [4..5).
+    let blocks = vec![
+        make_block(process_id, stream_id, 0, 100, t0, 3),
+        make_block(
+            process_id,
+            stream_id,
+            100,
+            200,
+            t0 + TimeDelta::seconds(3),
+            3,
+        ),
+        make_block(
+            process_id,
+            stream_id,
+            200,
+            300,
+            t0 + TimeDelta::seconds(1),
+            5,
+        ),
+        make_block(
+            process_id,
+            stream_id,
+            300,
+            400,
+            t0 + TimeDelta::seconds(2),
+            6,
+        ),
+        make_block(
+            process_id,
+            stream_id,
+            400,
+            500,
+            t0 + TimeDelta::seconds(10),
+            1,
+        ),
+    ];
+    let parts = group_blocks_into_partitions(&config(10, BlockOrder::EventTime), blocks);
+
+    assert_eq!(
+        parts.iter().map(nb_objects).collect::<Vec<_>>(),
+        vec![3, 14, 1],
+        "expected look-back prefix, grown middle window, then a normal tail"
+    );
+    assert!(
+        nb_objects(&parts[0]) <= 10,
+        "the look-back prefix must respect the soft limit"
+    );
+    assert_grouping_invariants(&parts, 5);
+}
+
+/// Test #11: a single block larger than `max_nb_objects` is emitted alone (a block is never
+/// split), without disturbing its neighbors, in both orderings.
+#[test]
+fn oversized_single_block_is_emitted_alone() {
+    let process_id = uuid::Uuid::new_v4();
+    let stream_id = uuid::Uuid::new_v4();
+    let t0 = base_time();
+
+    for order in [BlockOrder::InsertTime, BlockOrder::EventTime] {
+        // Alone.
+        let blocks = vec![make_block(process_id, stream_id, 0, 100, t0, 20)];
+        let parts = group_blocks_into_partitions(&config(10, order), blocks);
+        assert_eq!(parts.len(), 1, "{order:?}");
+        assert_eq!(nb_objects(&parts[0]), 20);
+
+        // Followed by a small block: the oversized block still forms its own partition.
+        let blocks = vec![
+            make_block(process_id, stream_id, 0, 100, t0, 20),
+            make_block(
+                process_id,
+                stream_id,
+                100,
+                200,
+                t0 + TimeDelta::seconds(1),
+                1,
+            ),
+        ];
+        let parts = group_blocks_into_partitions(&config(10, order), blocks);
+        assert_eq!(
+            parts.iter().map(nb_objects).collect::<Vec<_>>(),
+            vec![20, 1],
+            "{order:?}"
+        );
+        assert_grouping_invariants(&parts, 2);
+    }
+}

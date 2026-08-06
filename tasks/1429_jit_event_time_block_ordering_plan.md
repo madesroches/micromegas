@@ -41,11 +41,18 @@ against it. `thread_spans_view`/`net_spans_view` thread a fresh accumulator thro
 Testing Strategy #11's "left-boundary exclusion" sub-case now asserts the identity-based behavior;
 the SQL clause it names no longer exists.
 
-`RetireMatch::Overlap` also needed a **third arm** the plan didn't anticipate:
-`($3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3)`. For a degenerate *new* range the
-first two arms both miss — `tstzrange(t, t)` is Postgres's empty range so `&&` is vacuously false,
-and the containment arm degenerates to an exact match, missing a wider partition that merely contains
-the instant.
+`RetireMatch::Overlap`'s predicate went through two revisions. It first grew a **third arm** the
+plan didn't anticipate (`$3 = $4 AND begin_insert_time <= $3 AND end_insert_time > $3`): for a
+degenerate *new* range the first two arms both miss — `tstzrange(t, t)` is Postgres's empty range so
+`&&` is vacuously false, and the containment arm degenerates to an exact match. Branch review then
+found the underlying problem all three arms were dancing around: a partition's
+`[begin_insert_time, end_insert_time]` is the *inclusive* min/max of its blocks' insert times, while
+`tstzrange`'s default bounds are half-open — so even the three-arm union missed *touching* ranges
+(existing `[a, t]` vs. new `[t, u]` or `[t, t]`), a shape reachable through racing or interrupted
+runs that leaves transient duplicate coverage. The three arms were replaced by a single
+inclusive-bounds intersection, `tstzrange(begin, end, '[]') && tstzrange($3, $4, '[]')`, which
+subsumes all three and closes the touching gap. Safe only because same-run sibling protection is
+identity-based (below) — touching siblings within one run are routine and must survive.
 
 **Steps 16-17 — the event-time non-overlap claim was overstated; the correction is producer-specific**
 
@@ -114,6 +121,28 @@ last_end`, since only a *gap* breaks a chain; an overlap still means unbroken co
 - All 13 DB tests (8 thread_spans + 5 net_spans) pass against a live local lake, twice in a row.
   They remain `#[ignore]`d and **CI does not run them** (`build/rust_ci.py` runs plain `cargo test`);
   adding Postgres and an object store to the workflow is out of scope for this branch.
+
+**Post-review fixes (branch review, 2026-08-06)**
+
+- The grouping loop's look-back and grow-past-limit messages are `debug!`, not `warn!`: grouping
+  re-runs on every query over the view (`jit_update` runs from every scan) and the stable sort makes
+  cut decisions deterministic, so a persistent inversion would re-emit the same `warn!` on every
+  query forever — into the lake's own log ingestion.
+- The `sort_and_check_non_overlapping` runtime error message keeps only the two actionable causes
+  (segment-boundary inversion, TSC drift); the unactionable producer-tick-overlap cause lives in
+  the rustdoc only.
+- `doc/how_to_query/html/` and `doc/build-html.py` are deleted rather than regenerated: the
+  checked-in HTML was a build artifact nothing published or linked (the publish-docs workflow ships
+  mkdocs, rustdoc, and the two presentations only), superseded by the mkdocs query guide.
+- New grouping unit tests cover the paths review found untested: the zero-object window drop (both
+  orderings, mid-list and trailing), the full look-back → grow-past-limit → mid-list-recovery
+  sequence, and a single block larger than `max_nb_objects`.
+- The look-back replay's `last_safe` recomputation turned out to be provably dead code and was
+  removed: `j` is by definition the most recent safe index, and since every block before `j` has
+  `insert_time <= suffix_min[j] <= suffix_min[m]`, safety at any `m` in `(j, i]` is identical
+  before and after the re-seed — and the original pass already found that whole range unsafe.
+- `net_spans_retire_overlap_db_test.rs` gained a touching-ranges case
+  (`net_spans_touching_stale_predecessor_is_retired`) pinning the inclusive-bounds predicate.
 
 **Phase 6 — rollout**
 
