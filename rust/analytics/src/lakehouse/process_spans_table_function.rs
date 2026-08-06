@@ -260,7 +260,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                 false,
             )
             .await
-            .map_err(|e| datafusion::error::DataFusionError::Execution(
+            .map_err(|e| datafusion::error::DataFusionError::Internal(
                 format!("Failed to create session context: {e}"),
             ))?;
 

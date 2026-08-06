@@ -205,7 +205,7 @@ fn generate_perfetto_trace_stream(
             }
             Err(e) => {
                 error!("Task panicked: {:?}", e);
-                yield Err(datafusion::error::DataFusionError::Execution(
+                yield Err(datafusion::error::DataFusionError::Internal(
                     format!("Task panicked: {}", e)
                 ));
             }

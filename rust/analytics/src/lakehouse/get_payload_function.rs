@@ -84,22 +84,20 @@ impl AsyncScalarUDFImpl for GetPayload {
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| {
-                DataFusionError::Execution("downcasting process_ids in GetPayload".into())
+                DataFusionError::Internal("downcasting process_ids in GetPayload".into())
             })?
             .clone();
         let stream_ids = args[1]
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| {
-                DataFusionError::Execution("downcasting stream_ids in GetPayload".into())
+                DataFusionError::Internal("downcasting stream_ids in GetPayload".into())
             })?
             .clone();
         let block_ids = args[2]
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("downcasting block_ids in GetPayload".into())
-            })?
+            .ok_or_else(|| DataFusionError::Internal("downcasting block_ids in GetPayload".into()))?
             .clone();
         let lake = self.lake.clone();
         let mut stream = futures::stream::iter(0..process_ids.len())
