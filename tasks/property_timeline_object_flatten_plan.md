@@ -58,6 +58,8 @@ function flattenObjectInto(obj: Record<string, unknown>, prefix: string, result:
     const fullKey = `${prefix}.${key}`
     if (isPlainObject(value)) {
       flattenObjectInto(value, fullKey, result)
+    } else if (value === null) {
+      result[fullKey] = null
     } else {
       result[fullKey] = Array.isArray(value) ? JSON.stringify(value) : String(value)
     }
@@ -72,13 +74,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 Design notes:
 - Recursion handles arbitrarily nested objects (e.g. `Dimensions.Nested.Key`), not just one level.
 - Arrays are treated as opaque leaves, not expanded — the issue is scoped to object values, and there's no natural key to expand an array element under. A nested array gets `JSON.stringify`'d rather than `String()`'d, to avoid a lesser version of the same unreadable-output problem (`String([1,2])` → `"1,2"` loses structure for non-primitive elements).
+- Nested `null` values are stored as `null`, not `String(null)` (`"null"`). This matches the existing top-level behavior in every getter (`value !== undefined && value !== null` guards), so a null anywhere in the object tree still produces a gap in the timeline rather than a literal `"null"` segment — a real shape from OTel ingestion, where a `KeyValue`/`KvlistValue` entry with no value maps to `JsonbValue::Null` (`rust/analytics/src/lakehouse/otel/attrs.rs`).
 - Top-level (non-nested) scalar values are left as their original type (`unknown`), unchanged — `createPropertyTimelineGetter` and its duplicates already handle scalar→string conversion for the getter's return value, and existing tests rely on that behavior with numbers (see `property-utils.test.ts:188`). Only values produced by expanding an object are pre-stringified, since those are the "set of string→string properties" this feature introduces.
 - No changes needed in `PropertyTimeline.tsx` or `PropertyTimelineData`/`PropertySegment` types — by the time a value reaches those, it's already a plain string via the existing getter path.
 
 ### Call sites
 
-1. `property-utils.ts` `extractPropertiesFromRows` (line 26): change
-   `rawData.set(row.time, props)` to `rawData.set(row.time, flattenProperties(props))`, and keep deriving `availableKeys` from the (now flattened) stored object. This single change covers `PropertyTimelineCell.tsx` and `PerformanceMetricsChart.tsx` for free, since both go through `extractPropertiesFromRows`.
+1. `property-utils.ts` `extractPropertiesFromRows` (line 26): compute a local flattened value first — `const flatProps = flattenProperties(props)` — then use `flatProps` for both `rawData.set(row.time, flatProps)` and the `Object.keys(flatProps).forEach(k => keysSet.add(k))` call that builds `availableKeys`. Deriving `availableKeys` from the pre-flatten `props` would leave the picker listing the opaque parent key (e.g. `Dimensions`) instead of the dotted leaf keys. This single change covers `PropertyTimelineCell.tsx` and `PerformanceMetricsChart.tsx` for free, since both go through `extractPropertiesFromRows`.
 2. `useMetricsData.ts` (line 109): wrap the parsed value —
    `propsMap.set(time, flattenProperties(JSON.parse(String(propsStr))))`. Import `flattenProperties` from `@/lib/property-utils`.
 3. `ProcessMetricsPage.tsx` (line 278): same change —
@@ -92,8 +94,9 @@ No signature or type changes are needed to `createPropertyTimelineGetter`, `aggr
 2. Update `extractPropertiesFromRows` in `property-utils.ts` to flatten each row's parsed properties before storing them in `rawData`.
 3. Update `useMetricsData.ts:109` to flatten the parsed properties before `propsMap.set`.
 4. Update `ProcessMetricsPage.tsx:278` to flatten the parsed properties before `propsMap.set`.
-5. Add unit tests to `property-utils.test.ts` for `flattenProperties`: flat passthrough for scalars, one level of object expansion (the `Dimensions` case from the issue), multi-level nesting, array values left as opaque (stringified) leaves, and an `extractPropertiesFromRows` test asserting a `Dimensions` object produces `Dimensions.<key>` entries in `availableKeys` instead of `[object Object]`.
-6. Manually verify: start services, ingest or query existing CloudWatch-streamed metrics with a `Dimensions` property, open the process metrics page, select the flattened dimension key in the property picker, and confirm the timeline segment/tooltip shows the actual dimension value instead of `[object Object]`.
+5. Add unit tests to `property-utils.test.ts` for `flattenProperties`: flat passthrough for scalars, one level of object expansion (the `Dimensions` case from the issue), multi-level nesting, array values left as opaque (stringified) leaves, nested `null` staying `null` (not `"null"`), and an `extractPropertiesFromRows` test asserting a `Dimensions` object produces `Dimensions.<key>` entries in `availableKeys` instead of `[object Object]`.
+6. Add one assertion each to `useMetricsData.test.ts` and `ProcessMetricsPage.test.tsx` covering their own `flattenProperties` call sites: mock a `properties` payload containing a nested object (e.g. `Dimensions: {DBInstanceIdentifier: "foo"}`) and assert the resulting `availablePropertyKeys` contains the dotted key and/or `getPropertyTimeline` returns the leaf value rather than `[object Object]`.
+7. Manually verify: start services, ingest or query existing CloudWatch-streamed metrics with a `Dimensions` property, open the process metrics page, select the flattened dimension key in the property picker, and confirm the timeline segment/tooltip shows the actual dimension value instead of `[object Object]`.
 
 ## Files to Modify
 
@@ -101,6 +104,8 @@ No signature or type changes are needed to `createPropertyTimelineGetter`, `aggr
 - `analytics-web-app/src/hooks/useMetricsData.ts` — call `flattenProperties` after `JSON.parse`.
 - `analytics-web-app/src/routes/ProcessMetricsPage.tsx` — call `flattenProperties` after `JSON.parse`.
 - `analytics-web-app/src/lib/__tests__/property-utils.test.ts` — new tests for `flattenProperties` and updated `extractPropertiesFromRows` behavior.
+- `analytics-web-app/src/hooks/__tests__/useMetricsData.test.ts` — add a nested-object `properties` assertion covering the `flattenProperties` call site.
+- `analytics-web-app/src/routes/__tests__/ProcessMetricsPage.test.tsx` — add a nested-object `properties` assertion covering the `flattenProperties` call site.
 
 ## Trade-offs
 
@@ -111,8 +116,9 @@ No signature or type changes are needed to `createPropertyTimelineGetter`, `aggr
 ## Testing Strategy
 
 - Unit tests in `property-utils.test.ts` (see Implementation Steps #5) covering `flattenProperties` directly and its integration into `extractPropertiesFromRows`.
+- One assertion each in `useMetricsData.test.ts` and `ProcessMetricsPage.test.tsx` (see Implementation Steps #6) covering the flatten integration at those two call sites, since each hand-rolls its own parse-and-flatten logic per the "Not consolidating" trade-off below.
 - Existing tests for `createPropertyTimelineGetter` and `aggregateIntoSegments` are unaffected (no signature changes) and should continue to pass unmodified.
-- Manual verification against real or synthetic CloudWatch `Dimensions` data via the process metrics page, per Implementation Steps #6.
+- Manual verification against real or synthetic CloudWatch `Dimensions` data via the process metrics page, per Implementation Steps #7.
 
 ## Open Questions
 
