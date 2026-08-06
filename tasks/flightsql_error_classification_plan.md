@@ -362,7 +362,10 @@ client                    execute_query                  classify/emit
    `CompletionTrackedStream::poll_next` to derive the class from `err.code()` and pass it to
    `emit`, and remove its own `error!("stream error occurred: ...")` log statement — per
    Design §4, `classify_flight_error` is now the sole log point for this site, so `poll_next`
-   reads the code without logging again.
+   reads the code without logging again. Two more `emit` call sites take the new parameter
+   with a plain `None` (no error to classify): `poll_next`'s success branch
+   (`state.emit("ok", None, ...)` at `:231`) and `CompletionTrackedStream::Drop`'s
+   `state.emit("incomplete", None, ...)` at `:193`.
 6. `QueryAuditState::emit` gaining a non-optional `error_class` parameter means every
    `audit_state.emit(...)` call site must be updated to pass one — there are 8 inside
    `execute_query`'s early-failure `map_err` closures (`:396`, `:414`, `:424`, `:432`, `:436`,
@@ -410,6 +413,12 @@ client                    execute_query                  classify/emit
    `pytest.raises(pyarrow.lib.ArrowInvalid)` (the message-content assertions are unaffected —
    same text, just no file:line/query_id noise to strip in the test).
 
+**Phase 4 — docs**
+11. `mkdocs/docs/query-guide/query-audit-log.md`: add `error_class`/`query_id` rows to the
+    `## Fields` table (`query_id` always present; `error_class` present on error, matching the
+    existing `error` row's "on error" convention); add a "queries grouped by `error_class`"
+    example matching the doc's existing style (`jsonb_get(j, 'error_class')`).
+
 ## Files to Modify
 
 - `rust/public/src/servers/flight_sql_service_impl.rs` — classifier, message builder,
@@ -426,6 +435,8 @@ client                    execute_query                  classify/emit
   arity/type-check sites only.
 - `python/micromegas/tests/test_perfetto_integration.py` — updated exception type in three
   assertions.
+- `mkdocs/docs/query-guide/query-audit-log.md` — add `error_class`/`query_id` rows to the
+  `## Fields` table; add a "queries grouped by `error_class`" example.
 
 ## Trade-offs
 
@@ -448,7 +459,9 @@ client                    execute_query                  classify/emit
   client (there is no Flight-specific "resource exhausted" exception). Documented under Open
   Questions rather than worked around, since a workaround (e.g. reusing `InvalidArgument`
   for this case) would lose the distinct `error_class: "resource"` signal in the audit log
-  for no real gain client-side today.
+  for no real gain client-side today. A future typed-exception wrapper (issue item 6) that
+  inspects the audit log or a structured detail payload rather than the bare gRPC code could
+  revisit this.
 - **Physical-plan fallback is a locator, not an attribution.** Nothing in DataFusion tags
   which `ExecutionPlan` node actually raised a given error, so appending
   `displayable(plan).indent(true)` (capped at `MAX_PLAN_CHARS`, truncated with a marker) only
@@ -493,13 +506,7 @@ client                    execute_query                  classify/emit
 
 ## Open Questions
 
-1. Is gRPC `ResourceExhausted(8)` still the right choice given it surfaces to pyarrow
-   clients as `FlightUnavailableError` (an `IOError`-family, "retry later" exception)? The
-   audit log's `error_class: "resource"` is unaffected either way; this only concerns what
-   `micromegas-query`/notebook code sees. If a future Python-side typed-exception wrapper
-   (issue item 6) inspects the audit log or a structured detail payload rather than the bare
-   gRPC code, this stops mattering.
-2. Should the parsing/attribution `status!` sites that aren't `DataFusionError` (ticket
+1. Should the parsing/attribution `status!` sites that aren't `DataFusionError` (ticket
    decode failures, malformed `query_range_begin`/`query_range_end` headers) also move to
    `Status::invalid_argument`? They're arguably caller mistakes too (malformed request, not
    malformed SQL), but the issue's classification table is scoped to `DataFusionError`
