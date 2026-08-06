@@ -53,11 +53,22 @@ vi.mock('@/components/QueryEditor', () => ({
   QueryEditor: () => <div data-testid="query-editor" />,
 }))
 
-// Captures the `data` prop MetricsChart is rendered with, so the test can
-// assert on the chart points that survived extraction.
+// Captures the `data` and `availablePropertyKeys` props MetricsChart is
+// rendered with, so the test can assert on the chart points that survived
+// extraction and on the flattened property keys.
 vi.mock('@/components/MetricsChart', () => ({
-  MetricsChart: ({ data }: { data: { time: number; value: number }[] }) => (
-    <div data-testid="metrics-chart" data-points={JSON.stringify(data)} />
+  MetricsChart: ({
+    data,
+    availablePropertyKeys,
+  }: {
+    data: { time: number; value: number }[]
+    availablePropertyKeys: string[]
+  }) => (
+    <div
+      data-testid="metrics-chart"
+      data-points={JSON.stringify(data)}
+      data-available-keys={JSON.stringify(availablePropertyKeys)}
+    />
   ),
 }))
 
@@ -116,6 +127,11 @@ beforeEach(() => {
   const metricsTable = tableFromArrays({
     time: new Float64Array([1000, 2000, Infinity]),
     value: new Float64Array([10, Infinity, 30]),
+    properties: [
+      '{"Dimensions": {"DBInstanceIdentifier": "prod-db-1"}}',
+      '{}',
+      '{}',
+    ],
   })
 
   mockStreamQuery.mockImplementation(({ sql }: { sql: string }) => {
@@ -145,6 +161,17 @@ describe('ProcessMetricsPage extraction guard', () => {
         screen.getByTestId('metrics-chart').getAttribute('data-points') || '[]'
       )
       expect(points).toEqual([{ time: 1000, value: 10 }])
+    })
+  })
+
+  it('flattens object-valued properties into dotted availablePropertyKeys', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      const availableKeys = JSON.parse(
+        screen.getByTestId('metrics-chart').getAttribute('data-available-keys') || '[]'
+      )
+      expect(availableKeys).toContain('Dimensions.DBInstanceIdentifier')
     })
   })
 })

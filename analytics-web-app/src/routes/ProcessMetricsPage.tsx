@@ -17,7 +17,7 @@ import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { normalizeUnit, unitDisplayAbbrev } from '@/lib/units'
 import { timestampToMs } from '@/lib/arrow-utils'
-import { aggregateIntoSegments } from '@/lib/property-utils'
+import { aggregateIntoSegments, flattenProperties } from '@/lib/property-utils'
 import { useDataSourceState } from '@/hooks/useDataSourceState'
 import { useChangeEffect } from '@/hooks/useChangeEffect'
 import { DataSourceField } from '@/components/DataSourceSelector'
@@ -275,7 +275,7 @@ function ProcessMetricsContent() {
 
               if (hasProps && row.properties != null) {
                 try {
-                  propsMap.set(time, JSON.parse(String(row.properties)))
+                  propsMap.set(time, flattenProperties(JSON.parse(String(row.properties))))
                 } catch (e) {
                   errors.push(`Invalid JSON at time ${time}: ${e instanceof Error ? e.message : String(e)}`)
                 }
