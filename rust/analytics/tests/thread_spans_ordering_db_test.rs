@@ -11,9 +11,7 @@ use datafusion::arrow::array::TimestampNanosecondArray;
 use micromegas_analytics::dfext::typed_column::{
     get_single_row_primitive_value_by_name, typed_column_by_name,
 };
-use micromegas_analytics::lakehouse::batch_update::{
-    materialize_partition_range, regenerate_partition_range,
-};
+use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
     BlockOrder, JitPartitionConfig, generate_stream_jit_partitions_segment,
@@ -31,6 +29,7 @@ use micromegas_analytics::lakehouse::streams_view::make_streams_view;
 use micromegas_analytics::lakehouse::thread_spans_view::{ThreadSpansView, update_partition};
 use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
+use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::metadata::{find_process_with_latest_timing, find_stream_from_view};
 use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::{TimeRange, make_time_converter_from_latest_timing};
@@ -122,36 +121,6 @@ async fn push_pairs_and_insert_block(
     Ok(())
 }
 
-/// Materializes a global view over `insert_range`. `ThreadSpansView::jit_update` looks up its
-/// source blocks, stream, and process through the `blocks` / `streams` / `processes` global
-/// views, and (like `histo_view_test.rs` / `sql_view_test.rs`) these are only kept up to date by
-/// the maintenance daemon in production, so tests must materialize them explicitly.
-async fn materialize_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    // All-views partition cache: the transform query for `view` may read from other views (e.g.
-    // `processes`/`streams` read from the freshly written `blocks` partitions), so this must not
-    // be scoped to `view`'s own view_set_name (see `materialize_range` in histo_view_test.rs /
-    // sql_view_test.rs for the same pattern).
-    let partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
-            .await?,
-    );
-    materialize_partition_range(
-        partitions,
-        lakehouse,
-        view,
-        insert_range,
-        TimeDelta::hours(1),
-        logger,
-    )
-    .await?;
-    Ok(())
-}
-
 /// Force-regenerates a global view's bucket(s) covering `insert_range` (which must exactly tile
 /// `TimeDelta::hours(1)`, matching `materialize_global_view`'s own bucket size), bypassing
 /// `materialize_partition_range`'s "already covered by *an* (even if stale) overlapping
@@ -177,6 +146,42 @@ async fn regenerate_global_view(
     )
     .await?;
     Ok(())
+}
+
+/// Retires every partition of `view` that *overlaps* `insert_range`, then regenerates the range
+/// from source.
+///
+/// `regenerate_global_view` alone is not enough on a shared, persistent dev lake:
+/// `regenerate_partition_range` refuses a bucket that does not *fully contain* each existing
+/// partition it would replace, so a single partition straddling a bucket boundary -- e.g. one an
+/// older, non-hour-aligned version of a test left behind, or one written with a different
+/// partition delta -- fails the run with "regeneration bucket ... does not fully contain existing
+/// partition ...". Retiring by overlap first (`RetireMatch::Overlap`, which unlike
+/// `RetireMatch::Containment` matches a partition that merely straddles the boundary) makes the
+/// subsequent regeneration independent of whatever shape the lake happened to be in. Global
+/// metadata views are derived from Postgres tables, so discarding and rebuilding them is free of
+/// data loss.
+async fn reset_global_view(
+    lakehouse: Arc<LakehouseContext>,
+    view: Arc<dyn View>,
+    insert_range: TimeRange,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let mut tr = lakehouse.lake().db_pool.begin().await?;
+    retire_partitions(
+        &mut tr,
+        &view.get_view_set_name(),
+        &view.get_view_instance_id(),
+        insert_range.begin,
+        insert_range.end,
+        RetireMatch::Overlap,
+        &[],
+        logger.clone(),
+    )
+    .await
+    .with_context(|| "retiring overlapping partitions before regeneration")?;
+    tr.commit().await.with_context(|| "commit")?;
+    regenerate_global_view(lakehouse, view, insert_range, logger).await
 }
 
 /// Ensures the process-wide telemetry guard (ctrlc handler, global tracing subscriber) is
@@ -280,12 +285,20 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let part_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
-    let insert_range = TimeRange::new(
-        Utc::now() - TimeDelta::hours(3),
-        Utc::now() + TimeDelta::minutes(5),
-    );
+    // Hour-aligned and exactly tiling `TimeDelta::hours(1)`, as `regenerate_global_view`
+    // requires: starting from the hour containing `now - 3h`, five buckets always reach past
+    // `now`. `regenerate_global_view` (not `materialize_global_view`) forcibly rewrites from
+    // source regardless of what a previous test -- in this file or any other sharing this
+    // persistent dev lake -- already materialized for these hours. With
+    // `materialize_global_view`, its "found overlapping partition, aborting the update" freshness
+    // check silently skips the update whenever those buckets already exist, leaving this test's
+    // freshly ingested stream undiscoverable and failing the run with
+    // "find_stream_from_view: Stream not found". The sibling tests below already use
+    // `regenerate_global_view` for the same reason.
+    let insert_begin = (Utc::now() - TimeDelta::hours(3)).duration_trunc(TimeDelta::hours(1))?;
+    let insert_range = TimeRange::new(insert_begin, insert_begin + TimeDelta::hours(5));
     let blocks_view = Arc::new(BlocksView::new()?);
-    materialize_global_view(
+    reset_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
         insert_range,
@@ -296,7 +309,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let processes_view = Arc::new(
         make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
     );
-    materialize_global_view(
+    reset_global_view(
         lakehouse.clone(),
         processes_view,
         insert_range,
@@ -305,7 +318,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     .await?;
     let streams_view =
         Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
-    materialize_global_view(
+    reset_global_view(
         lakehouse.clone(),
         streams_view,
         insert_range,

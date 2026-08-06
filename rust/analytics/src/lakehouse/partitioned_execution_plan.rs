@@ -50,12 +50,15 @@ fn partition_bounds(
 ///
 /// Returns an error if any adjacent pair overlaps: the declared ordering cannot be honored, so we
 /// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime`
-/// the most likely cause is TSC-frequency estimation drift across materialization epochs (for
-/// `tsc_frequency == 0` processes whose blocks were materialized under different clock
-/// estimates); the fix is to retire the affected stream's partitions so they rebuild with a
-/// single, consistent converter. For `OrderingBounds::InsertTime` an overlap indicates a genuine
-/// partitioning bug -- input partitions are expected to be non-overlapping in insert_time by
-/// construction.
+/// the causes, by decreasing likelihood, are: block-boundary tick overlap (a partition's event
+/// bounds come from block ticks, and a stream's consecutive blocks overlap by the cost of the
+/// buffer swap -- see the ordering-invariant notes on `View::get_scan_output_ordering`), an
+/// insert-time inversion straddling a JIT segment boundary, and TSC-frequency estimation drift
+/// across materialization epochs (for `tsc_frequency == 0` processes whose blocks were
+/// materialized under different clock estimates). The latter two are fixed by retiring the
+/// affected stream's partitions so they rebuild with a single, consistent converter. For
+/// `OrderingBounds::InsertTime` an overlap indicates a genuine partitioning bug -- input
+/// partitions are expected to be non-overlapping in insert_time by construction.
 fn sort_and_check_non_overlapping(
     mut partitions: Vec<&Partition>,
     bounds: OrderingBounds,
@@ -76,10 +79,12 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Execution(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering this can happen when an insert-time inversion straddles a JIT segment boundary (blocks registered out of event-time order across two \
-                 independently-grouped segments -- within one segment this is now structurally excluded by insert-safe cut points, see jit_partitions::group_blocks_into_partitions), \
-                 or -- for tsc_frequency == 0 processes -- when TSC-frequency re-estimation drifted across materialization epochs spanning a clock adjustment (see the ordering-invariant \
-                 notes on View::get_scan_output_ordering in view.rs). Retire the affected stream's partitions so they rebuild with a single, consistent time converter.",
+                 For event-time ordering, by decreasing likelihood: (1) a partition's event bounds come from its blocks' begin_ticks/end_ticks, and consecutive blocks in a stream \
+                 overlap slightly on those ticks (the replacement block's begin is stamped before the outgoing block is closed), so any cut between two adjacent blocks can produce \
+                 a sub-microsecond overlap; (2) an insert-time inversion straddling a JIT segment boundary (blocks registered out of event-time order across two independently-grouped \
+                 segments -- within one segment blocks are event-ordered with insert-safe cut points, see jit_partitions::group_blocks_into_partitions); (3) for tsc_frequency == 0 \
+                 processes, TSC-frequency re-estimation drift across materialization epochs spanning a clock adjustment (see the ordering-invariant notes on \
+                 View::get_scan_output_ordering in view.rs). For (2) and (3), retiring the affected stream's partitions so they rebuild with a single, consistent time converter fixes it.",
                 prev.file_path, next.file_path
             )));
         }

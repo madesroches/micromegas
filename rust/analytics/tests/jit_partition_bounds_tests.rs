@@ -1,11 +1,11 @@
-//! Pure, no-DB unit tests for `insert_time_range` and `ensure_begin_non_decreasing`
+//! Pure, no-DB unit tests for `blocks_insert_time_range` and `ensure_begin_non_decreasing`
 //! (tasks/1429_jit_event_time_block_ordering_plan.md, Testing Strategy #9-10). Both targets are
 //! `pub` so this integration-test crate can call them directly.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::{RecordBatch, TimestampNanosecondArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use micromegas_analytics::lakehouse::jit_partitions::insert_time_range;
+use micromegas_analytics::lakehouse::jit_partitions::blocks_insert_time_range;
 use micromegas_analytics::lakehouse::partition_source_data::PartitionSourceBlock;
 use micromegas_analytics::lakehouse::thread_spans_view::ensure_begin_non_decreasing;
 use micromegas_analytics::metadata::{ProcessMetadata, StreamMetadata};
@@ -64,7 +64,7 @@ fn make_block(insert_time: DateTime<Utc>) -> Arc<PartitionSourceBlock> {
     })
 }
 
-/// Test #9: `insert_time_range` over a permuted list returns the true min/max, and equals the
+/// Test #9: `blocks_insert_time_range` over a permuted list returns the true min/max, and equals the
 /// endpoints for an already-sorted list.
 #[test]
 fn insert_time_range_returns_true_min_max() {
@@ -76,7 +76,7 @@ fn insert_time_range_returns_true_min_max() {
         make_block(t0 + TimeDelta::seconds(9)),
         make_block(t0 + TimeDelta::seconds(3)),
     ];
-    let range = insert_time_range(&blocks).expect("non-empty");
+    let range = blocks_insert_time_range(&blocks).expect("non-empty");
     assert_eq!(range.begin, t0 + TimeDelta::seconds(1));
     assert_eq!(range.end, t0 + TimeDelta::seconds(9));
 
@@ -86,7 +86,7 @@ fn insert_time_range_returns_true_min_max() {
         make_block(t0 + TimeDelta::seconds(1)),
         make_block(t0 + TimeDelta::seconds(2)),
     ];
-    let range = insert_time_range(&sorted_blocks).expect("non-empty");
+    let range = blocks_insert_time_range(&sorted_blocks).expect("non-empty");
     assert_eq!(range.begin, sorted_blocks[0].block.insert_time);
     assert_eq!(
         range.end,
@@ -96,7 +96,7 @@ fn insert_time_range_returns_true_min_max() {
 
 #[test]
 fn insert_time_range_rejects_empty_list() {
-    assert!(insert_time_range(&[]).is_err());
+    assert!(blocks_insert_time_range(&[]).is_err());
 }
 
 fn begin_batch(begin_values: Vec<i64>) -> RecordBatch {

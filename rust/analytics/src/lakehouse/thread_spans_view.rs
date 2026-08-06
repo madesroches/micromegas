@@ -2,7 +2,7 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        BlockOrder, JitPartitionConfig, generate_stream_jit_partitions, insert_time_range,
+        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_stream_jit_partitions,
         is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
@@ -133,16 +133,14 @@ pub fn ensure_begin_non_decreasing(stream_id: &str, batch: &RecordBatch) -> Resu
     let mut previous: Option<i64> = None;
     for i in 0..begins.len() {
         let begin = begins.value(i);
-        if let Some(prev) = previous {
-            if begin < prev {
-                error!(
-                    "thread_spans stream {stream_id}: begin regressed at row {i}: {begin} < {prev}"
-                );
-            }
-            anyhow::ensure!(
-                begin >= prev,
+        if let Some(prev) = previous
+            && begin < prev
+        {
+            let msg = format!(
                 "thread_spans stream {stream_id}: begin regressed at row {i}: {begin} < {prev}"
             );
+            error!("{msg}");
+            anyhow::bail!(msg);
         }
         previous = Some(begin);
     }
@@ -165,10 +163,11 @@ async fn write_partition(
         anyhow::bail!("empty partition spec");
     }
     // JIT partitions here are grouped under BlockOrder::EventTime (see jit_update below), so
-    // spec.blocks is event-time ordered, not insert-time ordered -- insert_time_range computes
+    // spec.blocks is event-time ordered, not insert-time ordered -- blocks_insert_time_range computes
     // the real min/max rather than reading list endpoints.
     let stream_id = spec.blocks[0].stream.stream_id.to_string();
-    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -299,7 +298,8 @@ pub async fn update_partition(
     spec: &SourceDataBlocksInMemory,
     same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
     if is_jit_partition_up_to_date(
         &lake.db_pool,
         view_meta.clone(),

@@ -11,7 +11,14 @@
 //! non-decreasing relative to, every other emitted partition's -- the precondition the
 //! `lakehouse_partitions_no_overlap` exclusion constraint enforces at insert time. See
 //! `group_blocks_into_partitions`'s own docs for how that invariant is upheld under
-//! `BlockOrder::EventTime`, where the natural size-based cut point is not always safe.
+//! `BlockOrder::EventTime`, where the natural size-based cut point is not always safe, and for
+//! the one (production-unreachable) shape it does not cover.
+//!
+//! Note that this is an *insert-time* invariant only. It says nothing about partitions'
+//! *event-time* ranges, which for the block-derived views are computed from block
+//! `begin_ticks`/`end_ticks` and can overlap slightly at a cut point because a stream's
+//! consecutive blocks overlap on those ticks -- see the ordering-invariant notes on
+//! `View::get_scan_output_ordering`.
 
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessorMap},
@@ -88,11 +95,11 @@ impl Default for JitPartitionConfig {
 /// order. Always use this instead of reading `blocks[0]`/`blocks[last]`: under
 /// `BlockOrder::EventTime` the list is sorted by event time, not insert time, so its endpoints are
 /// no longer the insert-time extremes.
-pub fn insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange> {
+pub fn blocks_insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<TimeRange> {
     let mut blocks_iter = blocks.iter();
     let first = blocks_iter
         .next()
-        .with_context(|| "insert_time_range: empty block list")?;
+        .with_context(|| "blocks_insert_time_range: empty block list")?;
     let mut min_insert_time = first.block.insert_time;
     let mut max_insert_time = first.block.insert_time;
     for block in blocks_iter {
@@ -113,8 +120,14 @@ fn emit_partition(
     grown_past_limit: i64,
     max_nb_objects: i64,
 ) {
-    // Matches today's guard: a trailing window whose blocks all report nb_objects == 0 emits
-    // nothing, not "if the block list is non-empty".
+    // A window whose blocks all report nb_objects == 0 emits nothing, rather than an empty
+    // partition. The pre-refactor code applied this guard only to the trailing window (a mid-list
+    // cut always pushed), so for a mid-list all-zero window this drops those blocks from every
+    // partition instead of emitting a rows-free one. No producer emits a zero-object block --
+    // `micromegas_tracing::dispatch`'s flush paths skip empty streams, and OTLP ingestion returns
+    // no block for a zero-record batch -- so the divergence is unreachable; dropping is also the
+    // better of the two behaviours, since such blocks carry no rows and each partition's DB range
+    // is derived per-spec from `blocks_insert_time_range`, not from full block coverage.
     if nb_objects == 0 {
         return;
     }
@@ -141,11 +154,19 @@ fn emit_partition(
 ///   split, so a single oversized block already exceeds it).
 /// - **Insert-time non-overlap** -- the `lakehouse_partitions_no_overlap` exclusion constraint
 ///   requires each partition's `[min_insert_time, max_insert_time]` to be non-overlapping with
-///   (and non-decreasing relative to) every other partition's.
+///   (and non-decreasing relative to) every other partition's. Adjacent partitions may *touch*
+///   (one's max equals the next's min): the constraint's `tstzrange` is half-open `[)`, so that
+///   is not an overlap. The one shape this does not cover is two or more partitions sharing an
+///   *identical degenerate* range (every block in both carrying the same `insert_time`), which
+///   requires more than `max_nb_objects` objects at a single microsecond and so does not occur in
+///   production; `tstzrange(t, t)` is empty, so the constraint stays quiet, but the
+///   `BlockOrder::EventTime` arm of `is_jit_partition_up_to_date` would see more than one row for
+///   that range and never report the partitions up to date.
 ///
 /// Under `BlockOrder::InsertTime` both invariants hold for free: `blocks` is already sorted by
 /// `insert_time`, so every candidate cut point is insert-safe and this function cuts at exactly
-/// `max_nb_objects`, bit-identical to a naive greedy cut.
+/// `max_nb_objects` -- identical to a naive greedy cut except that an all-zero-object window emits
+/// nothing rather than a rows-free partition (see `emit_partition`; unreachable in practice).
 ///
 /// Under `BlockOrder::EventTime`, `blocks` is stable-sorted by `(begin_ticks, end_ticks)` first
 /// (ties keep the incoming, insert-ordered position, so grouping stays deterministic); a cut
@@ -825,8 +846,8 @@ pub async fn is_jit_partition_up_to_date(
 fn get_part_insert_time_range(
     spec: &SourceDataBlocksInMemory,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    let range =
-        insert_time_range(&spec.blocks).with_context(|| "empty partition should not exist")?;
+    let range = blocks_insert_time_range(&spec.blocks)
+        .with_context(|| "empty partition should not exist")?;
     Ok((range.begin, range.end))
 }
 
@@ -845,8 +866,8 @@ pub async fn write_partition_from_blocks(
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
-    let insert_range =
-        insert_time_range(&source_data.blocks).with_context(|| "insert_time_range")?;
+    let insert_range = blocks_insert_time_range(&source_data.blocks)
+        .with_context(|| "blocks_insert_time_range")?;
     let block_spec = BlockPartitionSpec {
         view_metadata,
         schema,

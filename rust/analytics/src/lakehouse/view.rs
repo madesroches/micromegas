@@ -155,17 +155,34 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// - `Concatenated { columns, .. }`: rows within each partition file are already sorted by
     ///   `columns`, the leading column is the view's min-event-time column, and partition
     ///   event-time ranges are non-overlapping (so files concatenate in globally-sorted order).
-    ///   For `ThreadSpansView`, both halves of this are obtained from JIT partitions being
-    ///   grouped under `jit_partitions::BlockOrder::EventTime`: `group_blocks_into_partitions`
-    ///   sorts a segment's blocks by event time and only cuts at insert-safe points (see its
-    ///   docs), so within a segment blocks land in event order and partitions' event-time ranges
-    ///   come out non-overlapping by construction, rather than by an unenforced assumption about
-    ///   registration order. Two narrower residual caveats remain, both backstopped by
+    ///   For `ThreadSpansView`, the *rows-sorted-within-a-file* half is obtained from JIT
+    ///   partitions being grouped under `jit_partitions::BlockOrder::EventTime`:
+    ///   `group_blocks_into_partitions` sorts a segment's blocks by event time and only cuts at
+    ///   insert-safe points (see its docs), so within a segment blocks land in event order rather
+    ///   than relying on an unenforced assumption about registration order, and
+    ///   `thread_spans_view::ensure_begin_non_decreasing` checks the resulting batch at write
+    ///   time.
+    ///
+    ///   The *partition-ranges-don't-overlap* half is **not** established by that grouping, and
+    ///   is not fully guaranteed. A partition's declared event-time bounds are derived from its
+    ///   blocks' `begin_ticks`/`end_ticks`, not from the rows themselves, and consecutive blocks
+    ///   in a stream genuinely overlap on those ticks: every flush path in
+    ///   `micromegas_tracing::dispatch` stamps the replacement block's `begin` (`EventBlock::new`
+    ///   -> `DualTime::now()`) *before* closing the outgoing block (`close()` ->
+    ///   `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the cost of the
+    ///   buffer swap. Any cut between two adjacent blocks therefore yields a previous partition
+    ///   whose `max_event_time` slightly exceeds the next partition's `min_event_time`. Whether
+    ///   that survives the microsecond resolution of the stored bounds depends on how long the
+    ///   swap took. This predates `BlockOrder::EventTime` (the same bounds were computed from the
+    ///   block list's endpoints before) and is orthogonal to insert-safe cut points, which are an
+    ///   insert-time property.
+    ///
+    ///   Three residual caveats therefore remain, all backstopped by
     ///   `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs`) failing the query
-    ///   loudly rather than returning wrong rows: an insert-time inversion straddling a JIT
-    ///   *segment* boundary (segments are still grouped independently, see
-    ///   `generate_stream_jit_partitions`), and TSC-frequency re-estimation drift across
-    ///   materialization epochs for `tsc_frequency == 0` processes.
+    ///   loudly rather than returning wrong rows: the block-boundary tick overlap just described,
+    ///   an insert-time inversion straddling a JIT *segment* boundary (segments are still grouped
+    ///   independently, see `generate_stream_jit_partitions`), and TSC-frequency re-estimation
+    ///   drift across materialization epochs for `tsc_frequency == 0` processes.
     /// - `PerFile { columns }`: rows within each partition file are already sorted, ascending, by
     ///   `columns`, but partitions may overlap each other arbitrarily on those columns. A false
     ///   declaration here is not merely mis-ordered rows but, under order-aware aggregation, wrong

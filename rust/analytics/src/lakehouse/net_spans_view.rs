@@ -2,7 +2,7 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        BlockOrder, JitPartitionConfig, generate_process_jit_partitions, insert_time_range,
+        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_process_jit_partitions,
         is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
@@ -130,9 +130,10 @@ async fn write_partition(
         anyhow::bail!("empty partition spec");
     }
     // NetSpansView is grouped under BlockOrder::EventTime (see jit_update below), so spec.blocks
-    // is event-time ordered, not insert-time ordered -- insert_time_range computes the real
+    // is event-time ordered, not insert-time ordered -- blocks_insert_time_range computes the real
     // min/max rather than reading list endpoints.
-    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -194,24 +195,30 @@ async fn write_partition(
         }
         // Real min/max over the blocks, not list endpoints: fallback only, since
         // record_builder.get_time_range() normally supplies the actual row bounds below.
-        let rows_time_range = record_builder.get_time_range().unwrap_or_else(|| {
-            let min_ticks = spec
-                .blocks
-                .iter()
-                .map(|b| b.block.begin_ticks)
-                .min()
-                .unwrap_or_default();
-            let max_ticks = spec
-                .blocks
-                .iter()
-                .map(|b| b.block.end_ticks)
-                .max()
-                .unwrap_or_default();
-            TimeRange::new(
-                convert_ticks.delta_ticks_to_time(min_ticks),
-                convert_ticks.delta_ticks_to_time(max_ticks),
-            )
-        });
+        // `spec.blocks` is non-empty (checked above), so min/max are always `Some` -- surface a
+        // violation of that as an error rather than silently substituting tick 0, matching
+        // thread_spans_view's equivalent computation.
+        let rows_time_range = match record_builder.get_time_range() {
+            Some(range) => range,
+            None => {
+                let min_ticks = spec
+                    .blocks
+                    .iter()
+                    .map(|b| b.block.begin_ticks)
+                    .min()
+                    .with_context(|| "empty partition spec")?;
+                let max_ticks = spec
+                    .blocks
+                    .iter()
+                    .map(|b| b.block.end_ticks)
+                    .max()
+                    .with_context(|| "empty partition spec")?;
+                TimeRange::new(
+                    convert_ticks.delta_ticks_to_time(min_ticks),
+                    convert_ticks.delta_ticks_to_time(max_ticks),
+                )
+            }
+        };
         let nb_rows = record_builder.len();
         let rows = record_builder
             .finish()
@@ -275,7 +282,8 @@ async fn update_partition(
     process_id: Arc<String>,
     same_run_ranges: &mut Vec<TimeRange>,
 ) -> Result<()> {
-    let insert_range = insert_time_range(&spec.blocks).with_context(|| "insert_time_range")?;
+    let insert_range =
+        blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
     if is_jit_partition_up_to_date(
         &lake.db_pool,
         view_meta.clone(),
