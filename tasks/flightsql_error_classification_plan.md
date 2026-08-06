@@ -459,8 +459,11 @@ client                    execute_query                  classify/emit
    `status!` macro's own `file!()/line!()`, which these sites stop using), `query_id`, and —
    when `plan` is `Some` — the truncated physical plan text, all server-side only.
    `client_input_error!` is Design §6's new macro, returning `Status::invalid_argument`
-   directly (no `DataFusionError`/`error_class`/audit-log involvement — these sites run before
-   `query_id`/`audit_state` exist).
+   directly (no `DataFusionError` involved). The four range-header sites (`:316`, `:318`,
+   `:322`, `:324`) run before `query_id`/`audit_state` exist, so they have no audit-log
+   involvement; the two `limit` sites (`:432`, `:436`) run after `audit_state` is constructed
+   and already call `audit_state.emit("error", ...)` today — step 6 reorders those two to build
+   the `Status` first and emit with `error_class = "user"`.
 2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
    `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
    `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
@@ -587,10 +590,13 @@ client                    execute_query                  classify/emit
     example matching the doc's existing style (`jsonb_get(j, 'error_class')`).
 12. `mkdocs/docs/gateway/index.md`: the gateway (`rust/public/src/servers/http_gateway.rs:346-362`)
     downcasts the FlightSQL client error to `tonic::Status` and maps `Code::InvalidArgument`
-    to `GatewayError::BadRequest` (HTTP 400) — since the gateway's query path
+    to `GatewayError::BadRequest` (HTTP 400) — since the gateway's `/gateway/query` path
     (`client.query(...)` → `do_get_fallback` → `execute_query`) runs through the same
     reclassification, a bad SQL query or other `InvalidArgument`-mapped error now surfaces as
-    400 instead of 500. Update the `### Error Handling` table (`:159-166`): change the
+    400 instead of 500 for `/gateway/query` callers. (The web app is not one of them — it never
+    calls this route, only `/query-stream`, which keeps its own hardcoded
+    `ErrorCode::InvalidSql`/`Internal` frames per the Trade-offs entry above, so its behavior is
+    unaffected here.) Update the `### Error Handling` table (`:159-166`): change the
     "500 Internal Error" row's "When" column from "SQL syntax error, execution failure" to
     just "server-side execution failure" and add a "400 Bad Request" row's "When" cell to
     also cover "invalid/unsupported SQL (syntax error, unknown column/function, etc.)"
@@ -688,13 +694,18 @@ client                    execute_query                  classify/emit
   (`http_gateway.rs:346-362`) maps FlightSQL `Code::InvalidArgument` to `GatewayError::BadRequest`
   (HTTP 400) already; since the gateway's query path runs through `execute_query`, every error
   reclassified from `Internal` to `InvalidArgument` by this plan now comes back as HTTP 400
-  instead of 500 for gateway/web-app callers, not just for direct FlightSQL clients. This is
+  instead of 500 for `/gateway/query` callers, not just for direct FlightSQL clients. This is
   the same "you wrote a bad query" vs. "the server broke" distinction the issue asks for,
   applied for free at the HTTP boundary — treated here as a welcome side effect, not a
   separate feature, but it does mean `mkdocs/docs/gateway/index.md`'s error table needs
   updating (Phase 4, step 12) since it documents the old 500-for-everything behavior.
-  `analytics-web-app/src/lib/arrow-stream.ts:172-194` surfaces any non-401/403 status
-  generically, so the web app's behavior doesn't break, but its displayed status code changes.
+  The web app never calls this route — every web-app fetch goes to `${getApiBase()}/query-stream`
+  (`analytics-web-app/src/lib/arrow-stream.ts:157,324`), served by
+  `rust/analytics-web-srv/src/stream_query.rs`, whose query-start and mid-stream failures emit
+  hardcoded `ErrorCode::InvalidSql`/`ErrorCode::Internal` JSON frames inside a 200 response
+  (`stream_query.rs:262-268`, `:350-372`) rather than deriving anything from the tonic code this
+  plan changes. So web-app behavior and displayed status are unaffected by this plan — updating
+  `/query-stream` to surface the new classification is a possible follow-up, not bundled here.
 - **Header parsing gets `InvalidArgument`; ticket decode doesn't.** Both are non-`DataFusionError`
   `status!` sites, but they differ in how certain the caller-mistake attribution is. The
   `query_range_begin`/`query_range_end` and `limit` header values are set by the caller
