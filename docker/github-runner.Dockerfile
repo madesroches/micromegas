@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM ubuntu:22.04
 
-ARG RUNNER_VERSION=2.332.0
+ARG RUNNER_VERSION=2.336.0
 # Default to Azure mirror — archive.ubuntu.com has been intermittent.
 # Override with --build-arg UBUNTU_MIRROR=<host> to pick a different mirror.
 ARG UBUNTU_MIRROR=azure.archive.ubuntu.com
