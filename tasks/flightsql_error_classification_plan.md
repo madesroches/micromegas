@@ -29,8 +29,11 @@ macro_rules! status {
 }
 ```
 
-`execute_query` (`flight_sql_service_impl.rs:289-504`) is the one path that matters here —
-it's the only one that runs arbitrary user SQL. Its error sites, in order:
+`execute_query` (`flight_sql_service_impl.rs:289-504`) is the path that matters most here —
+it's the one that runs arbitrary user SQL *and executes it*. (`do_action_create_prepared_statement`,
+`:867-918`, also calls `ctx.sql(&query.query)` on caller SQL and returns a `DataFusionError`
+at `:889`, but only plans it — see step 2's note on that site.) `execute_query`'s error sites,
+in order:
 
 1. `ctx.sql(sql).await` (`:423`) — planning. Returns `DataFusionError`.
 2. `df.limit(0, Some(parsed_limit))` (`:440`) — planning. Returns `DataFusionError`.
@@ -76,7 +79,16 @@ per argument, plus one validating the parsed `span_types` value).
   `find_root()` once, match on the result.
 - `DataFusionError::diagnostic()` (`:609`) returns the outermost `Diagnostic`, which (per
   the issue) carries a `Span` with `start`/`end` `Location { line, column }` into the SQL
-  text for many plan-time errors (unknown column, ambiguous reference, type mismatch).
+  text for many plan-time errors (unknown column, ambiguous reference, type mismatch) —
+  but only once `datafusion.sql_parser.collect_spans` is enabled. It defaults to `false`
+  (`datafusion-common-54.1.0/src/config.rs:300`), and `datafusion-sql-54.1.0/src/expr/identifier.rs:68/84/107`
+  only attaches a `Span` to a planned `Column` when that option is set, which the
+  unknown-column/ambiguous-reference diagnostics read back
+  (`datafusion-common-54.1.0/src/column.rs:273-286`). `make_session_context`
+  (`rust/analytics/src/lakehouse/query.rs:216-219`) never sets it today, so Design §2 adds
+  `.set_bool("datafusion.sql_parser.collect_spans", true)` to that function's `SessionConfig`
+  (see Files to Modify) — without it, only diagnostics whose span comes straight off the
+  sqlparser AST (e.g. "Invalid function") would carry one.
 - `DataFusionError::strip_backtrace()` (`:466`) strips the `RUST_BACKTRACE` suffix DataFusion
   may append, independent of anything this plan adds.
 
@@ -130,8 +142,12 @@ through to the `_ => Internal` arm, per the mapping table in the issue.
 
 ### 2. Message construction (drops file:line/path, adds query id, diagnostic span, or plan dump)
 
-Plan-time errors (`SQL`/`Plan`/`SchemaError`) often carry a `Diagnostic` with a `Span` into
-the SQL text — a precise line/column the caller can jump to. Execution-time errors (the
+Plan-time errors (`SQL`/`Plan`/`SchemaError`) can carry a `Diagnostic` with a `Span` into
+the SQL text — a precise line/column the caller can jump to — but only once
+`datafusion.sql_parser.collect_spans` is enabled (see "Confirmed via DataFusion 54.1 source"
+above); add `.set_bool("datafusion.sql_parser.collect_spans", true)` to the `SessionConfig`
+built in `make_session_context` (`rust/analytics/src/lakehouse/query.rs:216-219`) so the
+span actually gets populated. Execution-time errors (the
 `Execution` variant covering the issue's own repro, and most UDF failures once Design §5
 lands) never do: `Diagnostic`/`Span` is populated by DataFusion's analyzer/planner, not by a
 `ScalarUDFImpl::invoke_with_args` running mid-execution. For that case, the next best
@@ -329,11 +345,13 @@ values array), not something a caller's SQL text can directly cause.
 
 ### 6. Request-metadata parsing sites
 
-Of the non-`DataFusionError` `status!` sites in `execute_query`, two are unambiguously
+Of the non-`DataFusionError` `status!` sites in `execute_query`, six are unambiguously
 caller-supplied input with no plausible server-side origin: the `query_range_begin`/
-`query_range_end` header parses (`:316`, `:318`, `:322`, `:324`), which parse gRPC metadata
-values the caller set directly. Convert these four to `Status::invalid_argument` via a small
-macro paralleling `status!`:
+`query_range_end` header parses (`:316`, `:318`, `:322`, `:324`) and the `limit` header
+parses (`:432` `to_str()`/`ToStrError`, `:436` `usize::from_str`/`ParseIntError`) — all six
+parse gRPC metadata values the caller set directly, and none is a `DataFusionError` or an
+`anyhow::Error`. Convert these six to `Status::invalid_argument` via a small macro
+paralleling `status!`:
 
 ```rust
 macro_rules! client_input_error {
@@ -372,6 +390,10 @@ client                    execute_query                  classify/emit
 ## Implementation Steps
 
 **Phase 1 — core classification (`rust/public/src/servers/`)**
+0. `rust/analytics/src/lakehouse/query.rs`: add
+   `.set_bool("datafusion.sql_parser.collect_spans", true)` to `make_session_context`'s
+   `SessionConfig` so plan-time `Diagnostic`s actually carry a `Span` (see "Confirmed via
+   DataFusion 54.1 source" and Design §2).
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
    `classify_flight_error`, `error_class`, `error_or_warn_log`, and `client_input_error!`
    helpers near the existing `status!` macro. `classify_datafusion_error` and `client_error` are `pub` so step 9's
@@ -384,14 +406,20 @@ client                    execute_query                  classify/emit
 2. Replace the five `DataFusionError`-producing error sites in `execute_query` (`:423`,
    `:440`, `:456` via the `status!` macro; `:461-464` via its own hand-rolled
    `Status::internal(...)`; `:498` via the `flight_data_stream` per-batch error path) with
-   the new helpers. Also convert the four `query_range_begin`/`query_range_end` header-parsing
-   sites (`:316`, `:318`, `:322`, `:324`) from `status!` to `client_input_error!`, per Design §6.
+   the new helpers. Also convert the six caller-input header-parsing sites — `query_range_begin`/
+   `query_range_end` (`:316`, `:318`, `:322`, `:324`) and `limit` (`:432`, `:436`) — from
+   `status!` to `client_input_error!`, per Design §6.
    Leave every other
    `status!` site (ticket decode `:527-528`, the SQL-statement-handle UTF-8 parse it feeds
    `:296-297`, `make_session_context`, `scoped_runtime`,
-   schema encoding, prepared-statement handling) untouched — those aren't
-   `DataFusionError`s (or, per Design §6, aren't confidently classifiable as caller mistakes)
-   and stay `Status::internal`.
+   schema encoding, prepared-statement handling) untouched and stay `Status::internal`. Most
+   of these aren't `DataFusionError`s (or, per Design §6, aren't confidently classifiable as
+   caller mistakes). The one exception is `do_action_create_prepared_statement`'s
+   `ctx.sql(&query.query)` call (`:889`), which *is* a `DataFusionError` from caller SQL —
+   it's left out of scope not because of its error type but because prepared-statement
+   *execution* (`do_get_prepared_statement`) is unimplemented (`api_entry_not_implemented!`),
+   so this plan's audit-log/query-id machinery has nothing to attach a classification to on
+   that path; reclassifying just that one call is a follow-up, not bundled here.
 3. Mint `query_id` as the first statement of `execute_query` (before the UTF-8 parse of the
    SQL), thread it through `QueryAuditState` and into every `client_error`/
    `classify_flight_error` call at the five sites above. It is therefore available for every
@@ -417,13 +445,15 @@ client                    execute_query                  classify/emit
    `:441-444`, `:457`, `:463`). Today every one of these calls `emit(...)` *before* building
    the `Status`/hand-rolled error it returns, so deriving the class "for free" from
    `status.code()` isn't possible as-is. Reorder each closure: build the `Status` first (via
-   `status!`, `client_error`, or `classify_flight_error` as appropriate for that site), derive
-   `let error_class = error_class(status.code());`, then call
+   `status!`, `client_input_error!`, `client_error`, or `classify_flight_error` as appropriate
+   for that site), derive `let error_class = error_class(status.code());`, then call
    `audit_state.emit("error", Some(...), Some(error_class))`, then return the `Status`. For
-   the four sites that stay on the `status!` macro (`:396`, `:414`, `:432`, `:436` — the
-   `anyhow`/non-`DataFusionError` sites, always `Status::internal`), this always yields
-   `error_class = "internal"`, but the same build-then-derive-then-emit ordering keeps every
-   site consistent and compiling. For the four sites that switch to `client_error`/
+   the two sites that stay on the `status!` macro (`:396`, `:414` — the `anyhow`,
+   non-`DataFusionError` setup-failure sites, always `Status::internal`), this always yields
+   `error_class = "internal"`. The two sites that move to `client_input_error!` per Design §6
+   (`:432`, `:436`) yield `error_class = "user"` (`Status::invalid_argument`) the same way.
+   All four cases share the same build-then-derive-then-emit ordering, keeping every site
+   consistent and compiling. For the four sites that switch to `client_error`/
    `classify_flight_error` (`:424`, `:441-444`, `:457`, `:463`), `err`/`e` is moved into that
    call (both take `DataFusionError`/`FlightError` by value, and `DataFusionError` isn't
    `Clone`), so it isn't available afterward to build a separate message the way today's code
@@ -434,7 +464,14 @@ client                    execute_query                  classify/emit
 **Phase 2 — UDF convention (`rust/datafusion-extensions/src/`)**
 7. Convert the arity/type-check `internal_err!` sites listed in Design §5 to `exec_err!`
    across `jsonb/*.rs`, `color/*.rs`, `math/*.rs`, `properties/*.rs`,
-   `binning/bin_center.rs`.
+   `binning/bin_center.rs`. Each touched file imports the macro explicitly (e.g.
+   `use datafusion::common::{Result, internal_err};` in `jsonb/format_json.rs:4`,
+   `jsonb/get.rs:5`, `color/rgba.rs:3`, `math/lerp.rs:3`, `properties/properties_udf.rs:5`,
+   `binning/bin_center.rs:3`, …) — add `exec_err` to every one of those import lists. Two
+   files have no remaining `internal_err!` use after the conversion (`jsonb/format_json.rs`,
+   whose only site is `:54`, and `jsonb/path_query.rs`, whose only site is `:27`); drop
+   `internal_err` from their imports so `cargo clippy --workspace -- -D warnings` (Testing
+   Strategy #2) doesn't fail on an unused import.
 
 **Phase 3 — tests**
 8. `rust/public/tests/query_audit_tests.rs`: add `error_class`/`query_id` to the
@@ -481,6 +518,8 @@ client                    execute_query                  classify/emit
 
 - `rust/public/src/servers/flight_sql_service_impl.rs` — classifier, message builder,
   query id, five call sites, `CompletionTrackedStream` log-severity split.
+- `rust/analytics/src/lakehouse/query.rs` — enable `datafusion.sql_parser.collect_spans` in
+  `make_session_context`'s `SessionConfig` so plan-time `Diagnostic`s carry a `Span`.
 - `rust/public/src/servers/query_audit.rs` — `error_class`/`query_id` fields on
   `QueryAuditRecord`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates for the two new fields.
@@ -545,8 +584,8 @@ client                    execute_query                  classify/emit
   Left for a follow-up plan.
 - **Header parsing gets `InvalidArgument`; ticket decode doesn't.** Both are non-`DataFusionError`
   `status!` sites, but they differ in how certain the caller-mistake attribution is. The
-  `query_range_begin`/`query_range_end` header values are set by the caller directly, so a
-  parse failure is unambiguously theirs. The ticket, by contrast, is an opaque token this
+  `query_range_begin`/`query_range_end` and `limit` header values are set by the caller
+  directly, so a parse failure is unambiguously theirs. The ticket, by contrast, is an opaque token this
   server itself issues and expects back unmodified — a decode failure is at least as
   plausibly a version-skew bug across pods in a rolling deployment as a caller-corrupted
   ticket. Classifying it `InvalidArgument` anyway would blame the caller in cases that
@@ -555,8 +594,11 @@ client                    execute_query                  classify/emit
 
 ## Testing Strategy
 
-1. `cargo test -p micromegas` (package name confirmed in `rust/public/Cargo.toml`) covering
-   the new `flight_sql_error_classification_tests.rs` unit tests and the updated
+1. `cargo test -p micromegas --features server` (package name confirmed in
+   `rust/public/Cargo.toml`; the crate's `default = []` and every `[[test]]` block —
+   including the one step 9 adds — is `required-features = ["server"]`, so plain
+   `cargo test -p micromegas` silently skips all of them) covering the new
+   `flight_sql_error_classification_tests.rs` unit tests and the updated
    `query_audit_tests.rs` fixtures.
 2. `cargo clippy --workspace -- -D warnings` and `cargo fmt` per `rust/CLAUDE.md`.
 3. Manual repro from the issue: start services (`start_services.py`), run
