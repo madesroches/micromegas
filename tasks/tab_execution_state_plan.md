@@ -77,18 +77,32 @@ isExecuting → false, hasError → false →  IDLE
 
 ### 3. Favicon assets
 
-Add two sibling SVGs next to `public/icon.svg`:
+Add two sibling SVGs next to `public/icon.svg`, each a copy of `icon.svg` (same
+`viewBox="0 0 32 32"`) with one additional badge overlay in the bottom-right corner, per the
+mockup at `tasks/tab_execution_state_mockup.html`:
 
-- `public/icon-busy.svg` — the existing icon with a small filled badge (wheat `#ffb300`,
-  matching the brand palette) added over the bottom-right, e.g. a `<circle>` overlay in the
-  same `viewBox="0 0 32 32"` coordinate space. Kept static (no `<animate>`) for cross-browser
-  favicon reliability — animated SVG favicons render inconsistently in tab icons across
-  browsers.
-- `public/icon-error.svg` — same icon, badge in `#e53935` (or the existing
-  `--accent-error` value) instead.
+- `public/icon-busy.svg` — append:
+  ```svg
+  <circle cx="23" cy="23" r="7" fill="#ffb300" stroke="#ffffff" stroke-width="1.5"/>
+  ```
+- `public/icon-error.svg` — append the same circle in a different color plus a white
+  exclamation glyph, so busy/error are distinguishable by shape, not just color:
+  ```svg
+  <circle cx="23" cy="23" r="7" fill="#d1382b" stroke="#ffffff" stroke-width="1.5"/>
+  <line x1="23" y1="19.4" x2="23" y2="23.5" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="23" cy="26.2" r="0.9" fill="#ffffff"/>
+  ```
 
-Both are copies of `icon.svg` with one additional overlay element — no new build tooling
-needed, they're static assets like the existing icon.
+`#d1382b` is a literal, hardcoded in the SVG — not a reference to the app's `--accent-error`
+CSS variable (`#f87171` in `src/styles/globals.css`). `icon-error.svg` is loaded by the
+browser as a standalone document via `<link rel="icon">`, not inlined into the app's DOM, so
+it has no access to the host page's `:root` custom properties; a live link to `--accent-error`
+isn't possible here regardless of which red is chosen.
+
+Both are copies of `icon.svg` with the overlay element(s) above — no new build tooling needed,
+they're static assets like the existing icon. Kept static (no `<animate>`) for cross-browser
+favicon reliability — animated SVG favicons render inconsistently in tab icons across
+browsers.
 
 ### 4. Runtime favicon/title swap
 
@@ -135,9 +149,18 @@ cue.
 
 ### 5. Wiring in `ScreenPage.tsx`
 
+The busy/error/idle precedence is extracted into a small pure function so it can be unit
+tested independently of `ScreenPage`'s rendering (see Testing Strategy):
+
+```ts
+export function computeTabState(isExecuting: boolean, hasError: boolean): 'idle' | 'busy' | 'error' {
+  return isExecuting ? 'busy' : hasError ? 'error' : 'idle'
+}
+```
+
 ```ts
 const [hasError, setHasError] = useState(false)
-const tabState = isExecuting ? 'busy' : hasError ? 'error' : 'idle'
+const tabState = computeTabState(isExecuting, hasError)
 usePageTitle(pageTitle, isExecuting)
 useTabExecutionState(tabState)
 ...
@@ -148,6 +171,16 @@ useTabExecutionState(tabState)
 naturally: the moment a cell/query goes back to `loading`, the corresponding renderer's error
 effect recomputes to `false` before (or as) `isExecuting` flips true, and `tabState` favors
 `busy` regardless.
+
+**Reset on navigation.** The `load()` effect (triggered on `[isNew, name, typeParam]` change,
+i.e. navigating to a different screen) already resets `screen`, `baselineConfig`, etc. via
+`setScreen(null)` — but today it does *not* reset `isExecuting`/`hasError`, since those only
+change via the `onExecutingChange`/`onErrorChange` callbacks, which only fire once the new
+screen's `Renderer` mounts (gated behind `isLoadingScreen`, true for the whole fetch). Without
+an explicit reset, a busy/error favicon from the previous screen would persist through the
+entire "Loading screen..." window of the next one, even though the title already fell back to
+the app name. `load()` must therefore also call `setIsExecuting(false)` and `setHasError(false)`
+alongside `setScreen(null)`.
 
 ## Implementation Steps
 
@@ -160,8 +193,10 @@ effect recomputes to `false` before (or as) `isExecuting` flips true, and `tabSt
 4. **Renderers**: add the error-reporting `useEffect` to `NotebookRenderer.tsx`,
    `TableRenderer.tsx`, `LogRenderer.tsx`, `MetricsRenderer.tsx`, `ProcessListRenderer.tsx`
    (table above).
-5. **ScreenPage**: add `hasError` state, compute `tabState`, call `useTabExecutionState`,
-   pass `busy` to `usePageTitle`, wire `onErrorChange` to the `Renderer`.
+5. **ScreenPage**: add `hasError` state, compute `tabState` via `computeTabState`, call
+   `useTabExecutionState`, pass `busy` to `usePageTitle`, wire `onErrorChange` to the
+   `Renderer`, and reset `isExecuting`/`hasError` to `false` at the start of the `load()`
+   effect alongside `setScreen(null)`.
 6. **Manual verification**: run a notebook with a slow cell (or a query against a large time
    range), tab away, confirm favicon/title change, tab back after completion/failure and
    confirm both states are visually distinct and revert to idle after opening a fresh screen.
@@ -212,18 +247,13 @@ effect recomputes to `false` before (or as) `isExecuting` flips true, and `tabSt
   under repeated toggles (`idleHref` caching doesn't drift).
 - Extend `usePageTitle` tests (or add `src/hooks/__tests__/usePageTitle.test.ts` if none
   exist) to cover the `busy` prefix.
+- Unit test for `computeTabState` (Design §5): assert `busy` wins when both `isExecuting` and
+  `hasError` are true, plus the plain `error`/`idle` cases.
 - Manual verification per Implementation Steps §6 — this is a browser-chrome effect
   (`document.title`/favicon) that isn't meaningfully exercised by component-level render
   tests.
 
 ## Open Questions
 
-- Exact badge artwork/placement for `icon-busy.svg` / `icon-error.svg` — the plan specifies
-  color and static-vs-animated but not final SVG coordinates; whoever implements should eyeball
-  it at 16×16/32×32 tab size since favicons are rendered small enough that fine detail
-  disappears.
-- Should `hasError` from a *previous* execution persist if the user navigates away from the
-  errored cell's view without re-running (e.g. switches screens and back)? This plan treats
-  error state as `ScreenPage`-instance-local (remounts on screen change, via the existing
-  `key={screen?.name ?? 'new'}` on `Renderer`), so it always resets on navigation — matches
-  existing `isExecuting` behavior, no special-casing needed.
+None — both prior questions here (badge artwork, and `hasError` reset-on-navigation behavior)
+are resolved in Design §3 and §5 respectively.
