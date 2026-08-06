@@ -15,8 +15,9 @@ This plan classifies `DataFusionError`s into the right gRPC status code, strips 
 non-actionable file:line/path suffix from client-facing messages — that suffix is simply no
 longer generated, since it only ever came from the `status!` macro's own
 `file!()/line!()` expansion, which these sites stop using — logs the full error server-side
-alongside a new query id, and splits the query-audit log's severity and `status` field so
-user errors stop being counted as service failures.
+alongside a new query id, and splits the query-audit log's severity and `status` field — and
+the `query_failed`/`query_duration_with_error` metrics — so user errors stop being counted as
+service failures.
 
 ## Current State
 
@@ -34,8 +35,10 @@ macro_rules! status {
 `execute_query` (`flight_sql_service_impl.rs:289-504`) is the path that matters most here —
 it's the one that runs arbitrary user SQL *and executes it*. (`do_action_create_prepared_statement`,
 `:867-918`, also calls `ctx.sql(&query.query)` on caller SQL and returns a `DataFusionError`
-at `:889`, but only plans it — see step 2's note on that site.) `execute_query`'s error sites,
-in order:
+at `:889`, but only plans it, without a `QueryAuditState`/`query_id` of its own — it's a
+separate call site, converted to `client_error` alongside the five below but with a
+locally-minted query id and no audit record; see step 2's note on that site.) `execute_query`'s
+error sites, in order:
 
 1. `ctx.sql(sql).await` (`:423`) — planning. Returns `DataFusionError`.
 2. `df.limit(0, Some(parsed_limit))` (`:440`) — planning. Returns `DataFusionError`.
@@ -176,7 +179,7 @@ who needs the plan can grep for it. `client_error` takes the plan as an optional
 and only logs it (never returns it to the client) when there's no diagnostic span to show:
 
 ```rust
-const MAX_PLAN_CHARS: usize = 2000;
+pub const MAX_PLAN_CHARS: usize = 2000;
 
 // Pure and `pub` (like `classify_datafusion_error`/`client_error`) so step 9's tests can
 // assert its content — including the truncation marker — without capturing log output.
@@ -368,6 +371,16 @@ fn error_class(code: tonic::Code) -> &'static str {
   matching what Step 6's other four `emit` sites pass.
 - In every early-setup failure `map_err` closure (`:395-463`), the `Status` was just built by
   `client_error`, so `status.code()` gives the same answer for free.
+- The same derived class also gates `poll_next`'s existing failure metrics
+  (`imetric!("query_duration_with_error", ...)` / `imetric!("query_failed", ...)` at
+  `:213-214`): emit those two only when `error_class == "internal"`. A user/resource error is
+  not a service failure, and an alerting rule keyed on `query_failed` shouldn't fire for a
+  typo'd query any more than the audit log's `status` field should read as one — that's the
+  whole point of this split. For the `"user"`/`"resource"` branches, emit
+  `imetric!("query_failed_user", "count", 1)` / `imetric!("query_failed_resource", "count",
+  1)` instead (no duration metric for these — `query_duration_with_error` remains
+  internal-only), so classified failures stay visible to metrics-only consumers without
+  counting toward the service-failure signal.
 
 `QueryAuditState::emit` (`query_audit.rs` / `flight_sql_service_impl.rs:120-161`) gains an
 `error_class: Option<&'static str>` parameter, threaded into the new `QueryAuditRecord`
@@ -450,8 +463,9 @@ client                    execute_query                  classify/emit
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
    `classify_flight_error`, `error_class`, `build_log_line`, `error_or_warn_log`, and
    `client_input_error!` helpers near the existing `status!` macro. `classify_datafusion_error`,
-   `client_error`, and `build_log_line` are `pub` so step 9's external integration tests can
-   call them directly. `error_or_warn_log(code, desc, &err, query_id, plan)`
+   `client_error`, `build_log_line`, and the `MAX_PLAN_CHARS` constant are `pub` so step 9's
+   external integration tests can call/reference them directly (step 9's truncation test needs
+   `MAX_PLAN_CHARS` to size its oversized input). `error_or_warn_log(code, desc, &err, query_id, plan)`
    maps `error_class(code)` to `warn!` (for `"user"`/`"resource"`) or `error!` (for
    `"internal"`), logging `desc`, `err` itself (not `err.find_root()` — this keeps any outer
    `Context` chain, untruncated, with backtrace intact if enabled; there is no file:line to
@@ -470,17 +484,27 @@ client                    execute_query                  classify/emit
    the new helpers. Also convert the six caller-input header-parsing sites — `query_range_begin`/
    `query_range_end` (`:316`, `:318`, `:322`, `:324`) and `limit` (`:432`, `:436`) — from
    `status!` to `client_input_error!`, per Design §6.
-   Leave every other
-   `status!` site (ticket decode `:527-528`, the SQL-statement-handle UTF-8 parse it feeds
-   `:296-297`, `make_session_context`, `scoped_runtime`,
-   schema encoding, prepared-statement handling) untouched and stay `Status::internal`. Most
-   of these aren't `DataFusionError`s (or, per Design §6, aren't confidently classifiable as
-   caller mistakes). The one exception is `do_action_create_prepared_statement`'s
-   `ctx.sql(&query.query)` call (`:889`), which *is* a `DataFusionError` from caller SQL —
-   it's left out of scope not because of its error type but because prepared-statement
-   *execution* (`do_get_prepared_statement`) is unimplemented (`api_entry_not_implemented!`),
-   so this plan's audit-log/query-id machinery has nothing to attach a classification to on
-   that path; reclassifying just that one call is a follow-up, not bundled here.
+   Also convert `do_action_create_prepared_statement`'s `ctx.sql(&query.query)` call (`:889`)
+   from `status!` to `client_error`: it *is* a `DataFusionError` from caller SQL, and
+   `prepare_statement()` — the client-side method that calls this RPC
+   (`python/micromegas/micromegas/flightsql/client.py:456`, documented at
+   `mkdocs/docs/query-guide/python-api.md:318`, exercised by
+   `python/micromegas/tests/test_prepared_statement.py:7`; `rust/public/src/client/flightsql_client.rs:106`
+   on the Rust side) — is a live, tested public API used exactly for schema
+   discovery/validation without executing: the "did I write a valid query?" case this plan
+   targets. Classification doesn't depend on `QueryAuditState`/`query_id` (only
+   `client_error`'s current signature does), so mint a throwaway
+   `Uuid::new_v4().to_string()` local to `do_action_create_prepared_statement` and pass
+   `client_error("error building dataframe", e, &local_query_id, None)` in its `map_err`
+   — no audit record exists on this RPC and none is added; the id only lets the client-facing
+   message and a server log line correlate with each other. Leave every other `status!` site
+   in this file (ticket decode `:527-528`, the SQL-statement-handle UTF-8 parse it feeds
+   `:296-297`, `make_session_context`, `scoped_runtime`, schema encoding, and the remaining
+   `do_action_create_prepared_statement` sites — its own `make_session_context` call, the
+   schema-buffer `StreamWriter`/`writer.finish()` calls — plus every other prepared-statement
+   RPC, all of which are `api_entry_not_implemented!` and never reach a `DataFusionError`)
+   untouched and stay `Status::internal`: none of these are `DataFusionError`s, or (per
+   Design §6) aren't confidently classifiable as caller mistakes.
 3. Mint `query_id` as the first statement of `execute_query` (before the UTF-8 parse of the
    SQL), thread it through `QueryAuditState` and into every `client_error`/
    `classify_flight_error` call at the five sites above. It is therefore available for every
@@ -502,7 +526,12 @@ client                    execute_query                  classify/emit
    reads the code without logging again. Two more `emit` call sites take the new parameter
    with a plain `None` (no error to classify): `poll_next`'s success branch
    (`state.emit("ok", None, ...)` at `:231`) and `CompletionTrackedStream::Drop`'s
-   `state.emit("incomplete", None, ...)` at `:193`.
+   `state.emit("incomplete", None, ...)` at `:193`. Also gate the two existing failure metrics
+   in that same block on the derived class, per Design §4: `imetric!("query_failed", ...)` and
+   `imetric!("query_duration_with_error", ...)` (`:213-214`) fire only when `error_class ==
+   "internal"`; the `"user"`/`"resource"` branches instead fire
+   `imetric!("query_failed_user", "count", 1)` / `imetric!("query_failed_resource", "count",
+   1)`.
 6. `QueryAuditState::emit` gaining a non-optional `error_class` parameter means every
    `audit_state.emit(...)` call site must be updated to pass one — there are 8 inside
    `execute_query`'s early-failure `map_err` closures (`:396`, `:414`, `:424`, `:432`, `:436`,
@@ -676,6 +705,16 @@ client                    execute_query                  classify/emit
   further variant available to separate a caller mistake from a genuine internal Arrow-kernel
   bug. Splitting that further would mean matching on `arrow::error::ArrowError`'s own variants,
   which is out of scope for this pass.
+- **`query_failed`/`query_duration_with_error` now exclude user/resource errors.** This changes
+  existing metric semantics, not just the audit log: `query_failed` and
+  `query_duration_with_error` (Design §4, step 5) fire only for `error_class == "internal"`
+  after this plan, where today they fire on every stream error unconditionally. Anyone with an
+  alerting rule keyed on `query_failed` will see its rate drop once user-triggered errors (a
+  typo'd query, a too-large scan) stop counting toward it — which is the intended effect, since
+  those aren't service failures, but it's a behavior change for existing consumers of that
+  counter, not purely additive. The new `query_failed_user`/`query_failed_resource` counters
+  preserve visibility into classified failures without folding them into the service-failure
+  signal.
 - **Not touching `scoped_runtime`/`make_session_context` errors.** These are `anyhow::Error`
   setup failures (bad config, storage unreachable), not something caller SQL can trigger;
   reclassifying them is out of scope and they correctly stay `Internal`.
