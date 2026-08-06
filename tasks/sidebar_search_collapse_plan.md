@@ -70,24 +70,39 @@ each page's <PageLayout>             </Routes>
                                         Header + main + rightPanel (no Sidebar)
 ```
 
-`AppShell` owns the height/flex chrome that `PageLayout` used to own for the sidebar row:
+`AppShell` owns the height/flex chrome that `PageLayout` used to own for the sidebar row. It must not render `Sidebar` any earlier than each page's own `AuthGuard` (`analytics-web-app/src/components/AuthGuard.tsx`) would have let that page's content through — otherwise `Sidebar`'s mount effect (`Sidebar.tsx:104-109`, which unconditionally calls `loadFolders()`) fires during loading/unauthenticated/error/admin-denied states it previously never reached. `AppShell` reads the same `useAuth()` status `AuthGuard` uses, and — since every current admin-only route lives under the `/admin` prefix (`AdminPage`, `DataSourcesPage`, `ExportScreensPage`, `ImportScreensPage`, `MapsPage`, all rendering `<AuthGuard requireAdmin>`) — approximates each page's `requireAdmin` check with a path prefix test, without needing to plumb per-route auth requirements through the router:
 
 ```tsx
 // analytics-web-app/src/components/layout/AppShell.tsx (new)
-import { Outlet } from 'react-router'
+import { Suspense } from 'react'
+import { Outlet, useLocation } from 'react-router'
+import { useAuth } from '@/lib/auth'
 import { Sidebar } from './Sidebar'
 
+function OutletFallback() {
+  return <div className="flex-1 flex items-center justify-center text-theme-text-secondary">Loading...</div>
+}
+
 export function AppShell() {
+  const { status, user } = useAuth()
+  const { pathname } = useLocation()
+  const isAdminRoute = pathname.startsWith('/admin')
+  const showSidebar = status === 'authenticated' && (!isAdminRoute || user?.is_admin)
+
   return (
     <div className="h-screen bg-app-bg flex">
-      <Sidebar />
+      {showSidebar && <Sidebar />}
       <div className="flex-1 flex flex-col min-h-0">
-        <Outlet />
+        <Suspense fallback={<OutletFallback />}>
+          <Outlet />
+        </Suspense>
       </div>
     </div>
   )
 }
 ```
+
+The nested `<Suspense>` around `<Outlet/>` is required because `AppShell` sits inside `router.tsx`'s single top-level `<Suspense fallback={<PageLoader/>}>` (`router.tsx:33-53`), which wraps every lazy-loaded page. Without a boundary of its own, the first-this-session navigation to a not-yet-loaded route (e.g. `/screens`, exactly where sidebar search navigates) would suspend past `AppShell` up to that outer boundary, unmounting `AppShell`/`Sidebar` and remounting them once the chunk loads — reproducing the same `isOpen` reset the whole plan is meant to fix. The top-level `<Suspense>` in `router.tsx` stays as-is; it's still needed for `/login`, `NotFoundPage`, and the very first paint before `AppShell` itself has mounted, but with `AppShell` catching its own `<Outlet/>` suspensions, it no longer needs to catch remounts on every subsequent in-app navigation.
 
 `PageLayout.tsx` drops `Sidebar` and the outer `h-screen` wrapper (that's now `AppShell`'s job):
 
@@ -109,10 +124,10 @@ Since `AppShell` is a pathless layout route (`<Route element={<AppShell/>}>` wit
 
 ## Implementation Steps
 
-1. **Create `analytics-web-app/src/components/layout/AppShell.tsx`** — renders `Sidebar` once plus an `<Outlet/>` for the active route, per the snippet above.
+1. **Create `analytics-web-app/src/components/layout/AppShell.tsx`** — renders `Sidebar` once, gated on `useAuth()` status (plus an `/admin`-prefix check standing in for `requireAdmin`) so it doesn't mount during loading/unauthenticated/error/admin-denied states, and wraps `<Outlet/>` in its own `<Suspense>` so in-app route-chunk loading doesn't unmount the shell — per the snippet above.
 2. **Edit `analytics-web-app/src/components/layout/PageLayout.tsx`** — remove the `Sidebar` import and `<Sidebar />` render; remove the outer `h-screen` wrapper div in `PageLayoutContent` (replace with a flex-child-friendly wrapper, since height/background now come from `AppShell`).
 3. **Edit `analytics-web-app/src/components/layout/index.ts`** — add `export { AppShell } from './AppShell'`.
-4. **Edit `analytics-web-app/src/router.tsx`** — wrap all routes except `/login` and `*` (`NotFoundPage`) in a pathless `<Route element={<AppShell />}>` parent, per the diagram above. Import `AppShell` from `@/components/layout`.
+4. **Edit `analytics-web-app/src/router.tsx`** — wrap all routes except `/login` and `*` (`NotFoundPage`) in a pathless `<Route element={<AppShell />}>` parent, per the diagram above. Import `AppShell` from `@/components/layout`. Leave the existing top-level `<Suspense fallback={<PageLoader/>}>` wrapping the whole `<Routes>` tree unchanged — it still covers `/login`, `NotFoundPage`, and first paint; `AppShell`'s own internal `<Suspense>` (step 1) is what stops it from unmounting the shell on later navigations.
 5. **Manual verification** (see Testing Strategy) — confirm the flyout stays open through the first keystroke of a sidebar search initiated from a non-`/screens` page, and that `/login` / 404 still render without a sidebar.
 
 ## Files to Modify
