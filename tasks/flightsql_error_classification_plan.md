@@ -104,8 +104,12 @@ table above is the actual, not merely documented, behavior.
 Add one function near the top of `flight_sql_service_impl.rs`, replacing the `status!`
 macro's blanket `Status::internal` for the five `DataFusionError`-producing sites:
 
+`classify_datafusion_error` is `pub` (not private) so it can be unit-tested directly from
+`rust/public/tests/flight_sql_error_classification_tests.rs`, the same way `query_audit.rs`
+exposes its testable helpers to that external test crate:
+
 ```rust
-fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
+pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
     use datafusion::error::DataFusionError as DFE;
     match err.find_root() {
         DFE::SQL(..) | DFE::Plan(_) | DFE::SchemaError(..) | DFE::Execution(_) => {
@@ -167,7 +171,7 @@ fn truncate_plan_text(text: &str) -> String {
     }
 }
 
-fn client_error(
+pub fn client_error(
     desc: &str,
     err: DataFusionError,
     query_id: &str,
@@ -338,7 +342,8 @@ client                    execute_query                  classify/emit
 **Phase 1 — core classification (`rust/public/src/servers/`)**
 1. `flight_sql_service_impl.rs`: add `classify_datafusion_error`, `client_error`,
    `classify_flight_error`, `error_class`, `error_or_warn_log` helpers near the existing
-   `status!` macro. `error_or_warn_log(code, desc, &err, query_id)` maps `error_class(code)`
+   `status!` macro. `classify_datafusion_error` and `client_error` are `pub` so step 9's
+   external integration tests can call them directly. `error_or_warn_log(code, desc, &err, query_id)` maps `error_class(code)`
    to `warn!` (for `"user"`/`"resource"`) or `error!` (for `"internal"`), logging the full
    message — including `desc`, `err.find_root()` (untruncated, with file:line/backtrace
    intact), and `query_id` — server-side only.
@@ -401,7 +406,14 @@ client                    execute_query                  classify/emit
    `"physical plan:"` section; a plain `Execution` error (no diagnostic) with `plan:
    Some(...)` asserts the reverse — a `"physical plan:"` section containing the fake plan's
    `DisplayAs` output (reuse `query_audit_tests.rs`'s `FakeExec` pattern), truncated at
-   `MAX_PLAN_CHARS` when the input exceeds it.
+   `MAX_PLAN_CHARS` when the input exceeds it. Register the new file in `rust/public/Cargo.toml`
+   with a matching `[[test]]` block (same pattern as `query_audit_tests`):
+   ```toml
+   [[test]]
+   name = "flight_sql_error_classification_tests"
+   path = "tests/flight_sql_error_classification_tests.rs"
+   required-features = ["server"]
+   ```
 10. `python/micromegas/tests/test_perfetto_integration.py::test_perfetto_trace_chunks_error_handling`:
    all three cases (invalid span type, missing arguments — both `plan_err!` — and
    non-existent process, an `Execution` error per
@@ -427,6 +439,8 @@ client                    execute_query                  classify/emit
   `QueryAuditRecord`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates for the two new fields.
 - `rust/public/tests/flight_sql_error_classification_tests.rs` — new.
+- `rust/public/Cargo.toml` — register the new test file with a `[[test]]` block
+  (`required-features = ["server"]`), matching the existing `query_audit_tests` entry.
 - `rust/datafusion-extensions/src/jsonb/{format_json,get,array_length,cast,keys,parse,path_query}.rs`,
   `rust/datafusion-extensions/src/color/{color_scale,lerp_color,rgba}.rs`,
   `rust/datafusion-extensions/src/math/{lerp,unlerp}.rs`,
