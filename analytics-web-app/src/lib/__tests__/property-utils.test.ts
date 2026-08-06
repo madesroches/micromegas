@@ -97,7 +97,7 @@ describe('flattenProperties', () => {
   it('leaves array values as opaque stringified leaves', () => {
     const props = { Tags: ['a', 'b'], Nested: { Tags: [1, 2] } }
     expect(flattenProperties(props)).toEqual({
-      Tags: ['a', 'b'],
+      Tags: '["a","b"]',
       'Nested.Tags': '[1,2]',
     })
   })

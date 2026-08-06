@@ -43,9 +43,9 @@ export function extractPropertiesFromRows(
 /**
  * Expands object-valued properties into dot-separated leaf entries with
  * string values (e.g. `Dimensions: {DBInstanceIdentifier: "foo"}` becomes
- * `"Dimensions.DBInstanceIdentifier": "foo"`). Non-object values (including
- * arrays) pass through unchanged at the top level, preserving existing
- * scalar-formatting behavior in the timeline getters.
+ * `"Dimensions.DBInstanceIdentifier": "foo"`). Array values are JSON-stringified
+ * at the top level too, matching the nested behavior in `flattenObjectInto`, so
+ * consumers never end up rendering `[object Object]` via `String(value)`.
  */
 export function flattenProperties(props: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
@@ -53,7 +53,7 @@ export function flattenProperties(props: Record<string, unknown>): Record<string
     if (isPlainObject(value)) {
       flattenObjectInto(value, key, result)
     } else {
-      result[key] = value
+      result[key] = Array.isArray(value) ? JSON.stringify(value) : value
     }
   }
   return result
