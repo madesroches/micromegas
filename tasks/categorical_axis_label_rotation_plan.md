@@ -155,6 +155,84 @@ xAxisConfig.size = (_u, values) => {
   will simply run past the axis box height in that rare case, same failure
   mode uPlot already has for any axis, rather than a chart that's all axis.
 
+### `padding`
+
+`rotate`/`size` only grow the axis's own vertical band — they reserve no
+extra room to the *right* of the plot area, which is where a -45°-rotated
+label actually overflows. uPlot anchors each rotated label at its tick and
+draws it down-and-to-the-right (`uPlot.iife.js:4614-4667`), so the last
+category's label can extend well past the plot's right edge. The only
+cushion uPlot gives that edge by default is `autoPadSide`
+(`uPlot.iife.js:3804-3816`): `yAxisOpts.size / 2` (~25px) when there's *no*
+right-side y-axis, `0` when there is one — and `XYChart.tsx:746` puts a
+y-axis on `side: 1` (right) for the multi-series, multi-unit path, so
+dual-unit categorical charts get no right-side cushion at all. A ~20-char
+rotated label's horizontal projection (~85px, see Testing Strategy) far
+exceeds either buffer.
+
+uPlot exposes this as a top-level `Options.padding` (`uPlot.d.ts:384`), a
+4-tuple `[top, right, bottom, left]` of `PaddingSide = number | null |
+(self, side, sidesWithAxes, cycleNum) => number` — not an `Axis`-level
+field, so it can't be folded into `xAxisConfig` alone. uPlot calls it once
+per convergence cycle, immediately *after* that cycle's `axesCalc` (i.e.
+after `rotate`/`size` run for every axis): `convergeSize()` calls
+`axesCalc(cycleNum)` then `paddingCalc(cycleNum)`, in that order
+(`uPlot.iife.js:3403-3404`). So a padding function can safely read
+whatever shared state `rotate()`/`size()` just finished updating that same
+cycle — the same guarantee the plan already relies on for `rotated`.
+
+Today `size()` independently *recomputes* `maxWidth` from `values` rather
+than reading something `rotate()` set — harmless there since both get the
+same `values` array. A padding function gets no `values` at all
+(`PaddingSide`'s signature is `(self, side, sidesWithAxes, cycleNum)`), so
+`maxWidth` needs to become genuine shared closure state, not just a
+same-named local in two places:
+
+```ts
+let rotated = false
+let maxWidth = 0
+
+xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
+  maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v))))
+  rotated = maxWidth + TICK_LABEL_PADDING_PX > foundSpace
+  return rotated ? ROTATE_DEG : 0
+}
+xAxisConfig.size = (_u) => {
+  if (!rotated) return BASE_SIZE
+  const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
+  const rotatedExtent = maxWidth * Math.sin(angleRad) + LABEL_LINE_HEIGHT_PX * Math.cos(angleRad)
+  return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
+}
+
+const rightPadding: uPlot.Axis.PaddingSide = () => {
+  if (!rotated) return 0
+  const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
+  const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
+  return Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
+}
+
+return { axis: xAxisConfig, rightPadding }
+```
+
+`buildXAxisConfig` now returns `{ axis, rightPadding }` instead of a bare
+`uPlot.Axis`. Both call sites in `XYChart.tsx` (multi-series `~705`,
+single-series `~998`) destructure it and set `padding: [null, rightPadding,
+null, null]` on their uPlot `Options` object — neither currently sets
+`padding` at all (confirmed via grep), so `null` on the other three sides
+keeps uPlot's default `autoPadSide` behavior everywhere except the right
+edge, and `rightPadding` itself only reserves anything once the categorical
+branch actually rotates. `MAX_ROTATED_SIZE` doubles as the horizontal cap
+too: at `ROTATE_DEG = -45`, `sin` and `cos` are equal, so the horizontal and
+vertical projections share the same magnitude and the same ceiling is
+exactly as valid here.
+
+This only reserves the *right* side, matching the app's current layout:
+the categorical axis is always the bottom `axes[0]`, and with `ROTATE_DEG`
+fixed negative its labels only ever lean right-and-down. If a future change
+ever put a rotate-affected axis on a side with no fixed axis on its far
+side (e.g. a left-anchored axis with no left y-axis), the same technique
+would apply to `padding[3]`.
+
 ### Why not vary the angle continuously
 
 The issue's "ideally" suggestion floats scaling rotation/size with label
@@ -174,22 +252,30 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
      default `size` and the flat-label return value).
    - Add `estimateLabelWidth(label: string): number` (exported for direct
      unit testing, matching the module's existing export style).
+   - Change `buildXAxisConfig`'s return type from `uPlot.Axis` to
+     `{ axis: uPlot.Axis; rightPadding: uPlot.Axis.PaddingSide }`.
    - Inside the `xAxisMode === 'categorical' && xLabels` branch, declare
-     `let rotated = false` and set `xAxisConfig.rotate` / `xAxisConfig.size`
-     as described above, replacing the top-level static `size: 65` for this
-     branch only (the `time`/`numeric` branches keep the static `size: 65`
-     from the base config object).
+     `let rotated = false` and `let maxWidth = 0` and set
+     `xAxisConfig.rotate` / `xAxisConfig.size` / `rightPadding` as described
+     in the Design section's `padding` subsection above, replacing the
+     top-level static `size: 65` for this branch only (the `time`/`numeric`
+     branches keep the static `size: 65` from the base config object and
+     return a `rightPadding` of `0`).
    - Cast `values` elements to `string` defensively (`Rotate`'s type allows
      `string | number`; our categorical `values` closure only ever produces
      strings, but `size`'s declared type is `string[]` too so no cast should
      actually be needed — confirm during implementation).
 
-2. **No changes needed in `XYChart.tsx`** — it already just spreads whatever
-   `buildXAxisConfig` returns into `axes[0]` for both chart paths.
+2. **`analytics-web-app/src/components/XYChart.tsx`** — update the single
+   call site (`XYChart.tsx:618`) to destructure `{ axis: xAxisConfig,
+   rightPadding }`, and add `padding: [null, rightPadding, null, null]` to
+   both uPlot `Options` objects (multi-series `~705`, single-series `~998`)
+   that consume `xAxisConfig`; neither sets `padding` today.
 
 ## Files to Modify
 
-- `analytics-web-app/src/components/xychart-axis.ts` — add rotation/size heuristic to the categorical branch of `buildXAxisConfig`.
+- `analytics-web-app/src/components/xychart-axis.ts` — add rotation/size/padding heuristic to the categorical branch of `buildXAxisConfig`.
+- `analytics-web-app/src/components/XYChart.tsx` — wire the new `rightPadding` return value into both uPlot `Options` objects.
 - `analytics-web-app/src/components/__tests__/xychart-axis.test.ts` — new test cases (see Testing Strategy).
 
 ## Trade-offs
@@ -240,7 +326,12 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     returns exactly `BASE_SIZE` (unchanged behavior for the flat-label case).
   - `time` and `numeric` modes keep static `size: 65` (no `rotate` set) —
     extend the existing tests for those branches to assert `axis.rotate` is
-    `undefined`.
+    `undefined` and `rightPadding` is `0`.
+  - Calling `rightPadding()` before any `rotate()` call, or after a
+    `rotate()` call that doesn't trigger rotation, returns `0`.
+  - After a `rotate()` call that triggers rotation, `rightPadding()` returns
+    a value `> 0` and `<= MAX_ROTATED_SIZE` — same call-order contract as
+    the `size()` test above (`rotate()` before `rightPadding()`).
 - **Manual/visual**: build (or reuse) a chart cell with `xAxisMode:
   'categorical'` and ~10 long category labels (e.g.
   `++product+channel+branch-CL-123456`-style ~20-char strings) at a normal
@@ -253,10 +344,22 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   uPlot blanks the axis entirely before rotation logic ever runs — a
   separate pre-existing gap (see Overview), not evidence that rotation
   "isn't needed."
+  Additionally, on that same rotated chart, confirm the **last** category's
+  label is fully visible and not clipped at the chart's right edge, in both
+  a single-y-axis chart and a dual-unit chart (two series with different
+  units, which puts a `side: 1` right y-axis on the chart per
+  `XYChart.tsx:746` — the zero-right-cushion case the `padding` fix targets).
 - Run `cd analytics-web-app && yarn lint && yarn type-check && yarn test`.
+
+## Documentation
+
+No user- or developer-facing documentation covers this chart's internals; no
+docs updates required.
 
 ## Open Questions
 
-- None — the fix is fully contained in `buildXAxisConfig` with no API or
-  data-shape changes, and the existing unit-test file already covers the
+- None — the fix stays within `xychart-axis.ts` plus a small, mechanical
+  wiring change at `buildXAxisConfig`'s single call site in `XYChart.tsx`
+  (destructure the new `{ axis, rightPadding }` return shape instead of a
+  bare `uPlot.Axis`), and the existing unit-test file already covers the
   surrounding categorical-mode behavior this extends.
