@@ -161,8 +161,20 @@ pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state i
   chain *before* its `.layer(Extension(...))` / `.layer(middleware::from_fn(observability_middleware))`
   calls and the auth-layer that follows them (§4), so it's covered by the same
   `cookie_auth_middleware` layer that already wraps every other `/api/...` route. No new
-  middleware. Routes are registered unconditionally, regardless of whether the pool is
-  configured — see §4's "always register, 503 when unconfigured" rule, same as `/api/maps/*`.
+  middleware. Routes are registered unconditionally with respect to *pool/proxy configuration*
+  (503 when unconfigured) — see §4's "always register, 503 when unconfigured" rule, same as
+  `/api/maps/*`. **This is narrowed by one exception: when `analytics-web-srv` itself is run with
+  `--disable-auth`.** In that mode `build_protected_routes` has no `auth_state` and layers a
+  hardcoded `ValidatedUser { is_admin: true, .. }` on every request instead of running
+  `cookie_auth_middleware` (`web_server.rs:292-301`), so `require_admin` unconditionally passes
+  for any unauthenticated caller reaching the port. Both `analytics_keys_router` and
+  `ingestion_keys_proxy_router` (§2) are therefore **not merged at all** when `auth_state` is
+  `None` — mirroring `ingestion.rs`'s own precedent of skipping registration entirely rather than
+  exposing a route that always "succeeds" for the wrong reason (`ingestion.rs:176-196`, "skip
+  registration entirely rather than exposing a route that always fails"). Logged with the same
+  `warn!` style as that precedent. This means `--disable-auth` on `analytics-web-srv` now also
+  disables both new key-management route groups, not just cookie auth on the rest of the API —
+  called out explicitly in Security.
 
 **Duplication, accepted.** This duplicates most of `api_keys.rs`'s ~200 lines (validation, SQL
 shapes, error enum). Sharing it across two crates would mean a generic abstraction over two
@@ -183,7 +195,7 @@ New file `rust/analytics-web-srv/src/ingestion_keys_proxy.rs`:
 /// register, 503 when unconfigured" rule.
 pub struct IngestionProxyConfig {
     pub base_url: String,              // MICROMEGAS_INGESTION_ADMIN_URL, e.g. "http://127.0.0.1:8081"
-    pub credentials: ServiceCredentials, // see below
+    pub credentials: OidcClientCredentialsDecorator, // micromegas::telemetry_sink, see below
     pub client: reqwest::Client,        // single client, built once with an explicit timeout
 }
 
@@ -199,11 +211,12 @@ async fn forward(
 ) -> Result<Response, ProxyError> {
     require_admin(&user)?;                       // checked here, before any forwarding
     let Some(cfg) = state.config else { return Err(ProxyError::NotConfigured) }; // 503
-    let token = cfg.credentials.get_token().await?;
     let mut req = cfg.client.request(method, format!("{}{}", cfg.base_url, path_suffix));
     if let Some(q) = query { req = req.query(...) }
     if let Some(b) = body { req = req.body(b) }
-    let resp = req.bearer_auth(token).send().await?;
+    let mut built = req.build()?;
+    cfg.credentials.decorate(&mut built).await?;  // sets the Bearer header, see below
+    let resp = cfg.client.execute(built).await?;
     // Forward ingestion's status + JSON body verbatim to the browser.
 }
 
@@ -231,27 +244,34 @@ does not yet depend on it).
   (§3) directly with the operator's own bearer token — it doesn't need the proxy, which exists
   only because the *browser* can't hold a bearer token (see
   [Why a proxy](#why-a-proxy-not-a-direct-browser-call)). A CLI process has no such restriction.
-- `require_admin` is `analytics-web-srv`'s own gate, checked **before** `get_token()` — an
-  unauthorized caller never triggers a service-credential fetch, let alone a call to ingestion.
+- `require_admin` is `analytics-web-srv`'s own gate, checked **before** `decorate()` is called —
+  an unauthorized caller never triggers a service-credential token fetch, let alone a call to
+  ingestion.
 
-#### Service credential (`ServiceCredentials`)
+#### Service credential (reusing `telemetry-sink`'s `OidcClientCredentialsDecorator`)
 
-New file `rust/analytics-web-srv/src/auth/service_credentials.rs`, a small, self-contained
-OAuth2 client-credentials fetcher — same shape as
-`rust/telemetry-sink/src/oidc_client_credentials_decorator.rs` (`fetch_token`/`get_token` with
-an expiry buffer, cached behind a `tokio::sync::Mutex`), reimplemented here rather than
-depending on `telemetry-sink` from a server crate (that crate's `RequestDecorator` trait and
-error types are shaped for the telemetry-sink's own retry loop, and its `get_token` is private —
-there is nothing public to call). ~60 lines; no new abstraction invented, an existing one copied
-into the crate that needs it.
+**No new file, no reimplementation.** `rust/telemetry-sink/src/lib.rs:25` declares
+`pub mod oidc_client_credentials_decorator`, and the crate is reachable as
+`micromegas::telemetry_sink::*` (`rust/public/src/lib.rs:126`, not feature-gated) — `analytics-web-srv`
+already depends on `micromegas` (the `rust/public` crate). `OidcClientCredentialsDecorator::new
+(token_endpoint, client_id, client_secret, audience, buffer_seconds)` is `pub`
+(`oidc_client_credentials_decorator.rs:81-97`) and takes exactly the values the proxy's own
+`from_env()` reads from `MICROMEGAS_INGESTION_PROXY_OIDC_*` (below); `pub trait RequestDecorator`'s
+`async fn decorate(&self, request: &mut reqwest::Request) -> Result<()>`
+(`request_decorator.rs:53`, impl at `oidc_client_credentials_decorator.rs:187-201`) sets the
+`Authorization: Bearer` header via the same cached, expiry-buffered `get_token()` — `get_token`
+itself stays private, but nothing here needs to call it directly. `IngestionProxyConfig` simply
+holds an `OidcClientCredentialsDecorator`, built once from the proxy's own env vars, and `forward`
+calls `.decorate(&mut request)` on the built `reqwest::Request` before `client.execute(request)`.
+Zero modification to `telemetry-sink` is required.
 
 ```rust
-pub struct ServiceCredentials { token_endpoint: String, client_id: String, client_secret: String,
-                                 audience: Option<String>, cached: Mutex<Option<CachedToken>> }
-impl ServiceCredentials {
-    pub fn from_env() -> Result<Option<Self>>; // None if unconfigured, see env vars below
-    pub async fn get_token(&self) -> Result<String>;
-}
+use micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
+
+// IngestionProxyConfig::from_env() builds this directly from the four env vars below —
+// no `from_env()` on the decorator itself is used, since that reads the *different*,
+// deliberately-distinct MICROMEGAS_OIDC_* self-telemetry vars (see below).
+OidcClientCredentialsDecorator::new(token_endpoint, client_id, client_secret, audience, 180)
 ```
 
 **Deliberately its own, distinctly-named credential — not a reuse of the self-telemetry
@@ -259,7 +279,10 @@ client-credentials app** (`MICROMEGAS_OIDC_CLIENT_ID`/`_SECRET`/`MICROMEGAS_OIDC
 that `OidcClientCredentialsDecorator::from_env()` reads for `with_auth_from_env()`). Reusing that
 identity would mean a credential minted for "let this process's own self-telemetry authenticate
 to ingestion" doubles as "let this process mint/revoke every ingestion key" the moment it's also
-added to ingestion's admin list — conflating two very different blast radii. New vars:
+added to ingestion's admin list — conflating two very different blast radii. The type is shared;
+the *instance* and its env vars are not — `IngestionProxyConfig::from_env()` constructs its own
+`OidcClientCredentialsDecorator::new(...)` from `MICROMEGAS_INGESTION_PROXY_OIDC_*` rather than
+calling the decorator's own `from_env()`. New vars:
 
 - `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID` / `_CLIENT_SECRET` / `_TOKEN_ENDPOINT` / `_AUDIENCE`
   (optional) — this service credential's subject must be added to ingestion's `MICROMEGAS_ADMINS`
@@ -282,10 +305,14 @@ added to ingestion's admin list — conflating two very different blast radii. N
 
 `IngestionProxyConfig::from_env()` returns `None` (not an error) when either the URL or the
 credential trio is unset, logged with a `warn!`. The proxy *routes* are still registered
-unconditionally in `build_protected_routes` (`IngestionProxyState { config: None }` layered
-instead) — same always-register, 503-when-unconfigured shape as `/api/maps/*` (see §4/§5). A
-deployment that hasn't set this up yet keeps working; the ingestion-key admin tile stays visible
-and its page surfaces the 503 through its normal error path (§5).
+unconditionally with respect to *this* configuration in `build_protected_routes`
+(`IngestionProxyState { config: None }` layered instead) — same always-register,
+503-when-unconfigured shape as `/api/maps/*` (see §4/§5). A deployment that hasn't set this up yet
+keeps working; the ingestion-key admin tile stays visible and its page surfaces the 503 through
+its normal error path (§5). **This is independent of, and narrower than, the `--disable-auth`
+exception in §4/§1**: `--disable-auth` skips registering the router entirely (no admin gate to
+rely on at all), whereas an unset `IngestionProxyConfig` still registers the router (auth is
+running normally, `require_admin` still means something) and only 503s per-request.
 
 ### 3. Import routes (new capability)
 
@@ -390,14 +417,17 @@ pub struct WebCliArgs {
   something the pool object itself needs to enforce when every role shares one connection
   string, exactly as `api-keys.md`'s existing grant-recipe section already admits for the
   ingestion side.
-- **Registration is unconditional.** `run_web_server` builds
-  `analytics_keys::AnalyticsKeysState { pool: <the pool above, or None> }` either way, logs
+- **Registration is unconditional with respect to pool/proxy configuration.** `run_web_server`
+  builds `analytics_keys::AnalyticsKeysState { pool: <the pool above, or None> }` either way, logs
   `info!`/`warn!` accordingly ("`/api/analytics-api-keys/*` will return 503" when `None`, same
-  wording style as the existing maps-store log at `web_server.rs:510`), and `build_protected_routes`
-  always `.merge()`s `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)`
-  — never an `if let Some(pool) = ...` conditional merge. This is the same always-register,
+  wording style as the existing maps-store log at `web_server.rs:510`), and, **when `auth_state`
+  is `Some` (i.e. `--disable-auth` is off)**, `build_protected_routes` always `.merge()`s
+  `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)` — never an
+  `if let Some(pool) = ...` conditional merge on the pool. This is the same always-register,
   503-when-unconfigured shape `/api/maps/*` already uses (`maps.rs:116-123`), and it's what lets
-  both new admin tiles stay visible unconditionally (§5).
+  both new admin tiles stay visible unconditionally (§5) whenever auth is actually enabled. **When
+  `auth_state` is `None`, neither router is merged at all** — see the `--disable-auth` exception
+  above and in Security.
 
 ### 5. Frontend
 
@@ -516,10 +546,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `from_cli_and_env` stays sync — reads `MICROMEGAS_SQL_CONNECTION_STRING` (`.ok()`) into the
    string field and passes `cli.analytics_keys_pool` through untouched. `run_web_server` resolves
    the pool (override if `Some`, else `PgPoolOptions::new().max_connections(2).acquire_timeout(Duration::from_secs(2)).connect_lazy(&conn_str)`
-   if the string is `Some`, else `None`), builds `AnalyticsKeysState`, and `build_protected_routes`
-   unconditionally `.merge()`s `analytics_keys_router(base_path)` and layers
-   `Extension(analytics_keys_state)` before its existing `.layer(middleware::from_fn(observability_middleware))`
-   call, `warn!` when the resolved pool is `None`.
+   if the string is `Some`, else `None`), builds `AnalyticsKeysState`, and, only when `auth_state`
+   is `Some` (i.e. `--disable-auth` is off — see §4/Security), `build_protected_routes` `.merge()`s
+   `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)` before its
+   existing `.layer(middleware::from_fn(observability_middleware))` call, `warn!` when the resolved
+   pool is `None`. When `auth_state` is `None`, the router is not merged at all.
 6. `rust/monolith/src/main.rs`: inside the existing `if roles.web { ... }` block, set
    `WebCliArgs.analytics_keys_pool = lake_pool.clone()` (`lake_pool` is already `Option<PgPool>`,
    reusing the pool already opened for the ingestion/flightsql/maintenance roles when one of
@@ -535,19 +566,21 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
-8. `rust/analytics-web-srv/src/auth/service_credentials.rs` (new): `ServiceCredentials`,
-   `from_env()` reading the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars, `get_token()` with the
-   cache/buffer shape from `oidc_client_credentials_decorator.rs`.
-9. `rust/analytics-web-srv/src/ingestion_keys_proxy.rs` (new): `IngestionProxyConfig` (holding a
-   `reqwest::Client` built with an explicit timeout) + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
+8. `rust/analytics-web-srv/src/ingestion_keys_proxy.rs` (new): `IngestionProxyConfig` (holding a
+   `reqwest::Client` built with an explicit timeout, plus a
+   `micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator`
+   built from the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars — no new credential type, see §2)
+   + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
    `IngestionProxyConfig::from_env()`, `forward`, `list`/`mint`/`revoke` wrappers,
    `ingestion_keys_proxy_router(base_path: &str)`. `rust/analytics-web-srv/Cargo.toml`:
    add `reqwest.workspace = true`.
-10. `web_server.rs`: unconditionally `.merge()` the proxy router into `build_protected_routes`'s
-    chain (before its layer calls) and layer `Extension(ingestion_proxy_state)`, where
-    `ingestion_proxy_state.config` is `None` when `IngestionProxyConfig::from_env()` returns
-    `None` (routes stay registered either way; `forward` returns 503 when `config` is `None`).
-11. Tests: a mock ingestion server using `wiremock` (already a workspace dependency —
+9. `web_server.rs`: only when `auth_state` is `Some` (§4/Security), `.merge()` the proxy router
+    into `build_protected_routes`'s chain (before its layer calls) and layer
+    `Extension(ingestion_proxy_state)`, where `ingestion_proxy_state.config` is `None` when
+    `IngestionProxyConfig::from_env()` returns `None` (routes stay registered either way with
+    respect to that config; `forward` returns 503 when `config` is `None`). When `auth_state` is
+    `None`, the router is not merged at all.
+10. Tests: a mock ingestion server using `wiremock` (already a workspace dependency —
     `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body and status/body correctly, and that `require_admin`
@@ -555,27 +588,27 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 ### Phase 4 — Frontend
 
-12. `lib/ingestion-api-keys-api.ts`, `lib/analytics-api-keys-api.ts` (new), modeled on
+11. `lib/ingestion-api-keys-api.ts`, `lib/analytics-api-keys-api.ts` (new), modeled on
     `lib/data-sources-api.ts`'s `handleResponse`/error-class shape.
-13. `routes/IngestionApiKeysPage.tsx`, `routes/AnalyticsApiKeysPage.tsx` (new), modeled on
+12. `routes/IngestionApiKeysPage.tsx`, `routes/AnalyticsApiKeysPage.tsx` (new), modeled on
     `DataSourcesPage.tsx`.
-14. `router.tsx`: two new routes. `AdminPage.tsx`: two new tiles, both always visible, no
+13. `router.tsx`: two new routes. `AdminPage.tsx`: two new tiles, both always visible, no
     availability probe (§5).
-15. `yarn lint && yarn type-check && yarn test` (per `analytics-web-app/CLAUDE.md`).
+14. `yarn lint && yarn type-check && yarn test` (per `analytics-web-app/CLAUDE.md`).
 
 ### Phase 5 — CLI import tool
 
-16. `python/micromegas/micromegas/web_client.py`: `import_analytics_api_key(name, key)`.
-17. `python/micromegas/micromegas/ingestion_client.py` (new): `import_ingestion_api_key(name, key)`
+15. `python/micromegas/micromegas/web_client.py`: `import_analytics_api_key(name, key)`.
+16. `python/micromegas/micromegas/ingestion_client.py` (new): `import_ingestion_api_key(name, key)`
     against ingestion's `/auth/api_keys/import` directly.
-18. `python/micromegas/micromegas/cli/import_keys.py` (new): argument parsing, env/file keyring
+17. `python/micromegas/micromegas/cli/import_keys.py` (new): argument parsing, env/file keyring
     source, per-key import loop with per-key error reporting, non-zero exit on any failure.
-19. `python/micromegas/pyproject.toml`: `micromegas-import-keys = "micromegas.cli.import_keys:main"`.
-20. `python/micromegas/tests/cli/test_import_keys.py` (new), modeled on `tests/cli/test_logout.py`.
+18. `python/micromegas/pyproject.toml`: `micromegas-import-keys = "micromegas.cli.import_keys:main"`.
+19. `python/micromegas/tests/cli/test_import_keys.py` (new), modeled on `tests/cli/test_logout.py`.
 
 ### Phase 6 — Documentation
 
-21. `mkdocs/docs/admin/api-keys.md`: replace "Minting an analytics key by hand" (§246) with the
+20. `mkdocs/docs/admin/api-keys.md`: replace "Minting an analytics key by hand" (§246) with the
     new HTTP routes; replace "Migration from the env keyring" (§202) with the CLI tool's usage;
     extend the "Grant recipe" table with the two new grants below. Also fix the four in-page links
     that dangle once those two sections are replaced (lines 12 and 30 link to
@@ -584,17 +617,24 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     the intro (lines 7-8, "three OIDC-authenticated, admin-gated HTTP routes on the ingestion
     [service]") and the HTTP-routes preamble (line 75, "All three routes live on the
     **ingestion** service") to reflect the added import route and the new analytics-key routes
-    living on `analytics-web-srv`. Also update `rust/public/src/servers/api_keys.rs`'s module doc
-    comment (lines 5-9), which still says analytics keys "are not mintable through this API...
-    manually issued (direct SQL by an operator with DB access)" and points at the runbook this
-    plan deletes — it needs to instead say analytics keys are minted via `analytics-web-srv`'s
-    own routes (§1), not through this ingestion-hosted API.
+    living on `analytics-web-srv`. Also rewrite lines 105-107 ("**Analytics keys are not mintable
+    through this route or any other HTTP path.** They are few, manually issued, and stay out of
+    every ingestion-service write path"), directly contradicted by the new
+    `POST {base_path}/api/analytics-api-keys` route (§1) — replace with a pointer to
+    `analytics-web-srv`'s own analytics-key routes instead of the "not mintable" claim. Also
+    update `rust/public/src/servers/api_keys.rs`'s module doc comment (lines 5-9), which still
+    says analytics keys "are not mintable through this API... manually issued (direct SQL by an
+    operator with DB access)" and points at the runbook this plan deletes — it needs to instead
+    say analytics keys are minted via `analytics-web-srv`'s own routes (§1), not through this
+    ingestion-hosted API.
+21. `mkdocs/docs/admin/web-app.md`: add the new optional env vars and the new API routes
+    (see Documentation) to the "Environment Variables" and "API Routes" sections respectively.
 
 ## Files to Modify
 
 - `rust/public/src/servers/api_keys.rs`, `rust/public/tests/api_keys_tests.rs`
 - `rust/analytics-web-srv/src/analytics_keys.rs` (new), `ingestion_keys_proxy.rs` (new),
-  `auth/service_credentials.rs` (new), `lib.rs`, `web_server.rs`, `main.rs`, `Cargo.toml`
+  `lib.rs`, `web_server.rs`, `main.rs`, `Cargo.toml`
   (`reqwest.workspace = true`, `uuid.workspace = true`, `wiremock.workspace = true` dev-dependency)
 - `rust/analytics-web-srv/tests/analytics_keys_tests.rs` (new), `ingestion_keys_proxy_tests.rs` (new),
   `web_server_config_tests.rs` (`cli_args()` helper)
@@ -606,10 +646,20 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `cli/import_keys.py` (new)
 - `python/micromegas/pyproject.toml`
 - `python/micromegas/tests/cli/test_import_keys.py` (new)
-- `mkdocs/docs/admin/api-keys.md`
+- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`
 
 ## Security
 
+- **Neither new route group is registered when `analytics-web-srv` runs with `--disable-auth`.**
+  In that mode `build_protected_routes` layers a hardcoded `ValidatedUser { is_admin: true, .. }`
+  on every request instead of running `cookie_auth_middleware` (`web_server.rs:292-301`), so
+  `require_admin` would unconditionally pass for any unauthenticated caller. Left unconditional,
+  `analytics_keys_router` would let such a caller mint real `analytics_api_keys` rows (valid on a
+  `flight-sql` that may have auth enabled independently), and `ingestion_keys_proxy_router` would
+  let one drive `forward` → `get_token()` → mint/revoke against ingestion's real admin API, using
+  the proxy's own privileged service credential. Both routers are therefore skipped entirely when
+  `auth_state` is `None`, mirroring `ingestion.rs`'s own precedent for `api_keys_router`
+  (`ingestion.rs:176-196`) rather than exposing a route an unauthenticated caller can always drive.
 - **The proxy checks `require_admin` before fetching a service-credential token or forwarding
   anything.** A non-admin `analytics-web-srv` session never causes an outbound call to ingestion,
   let alone one carrying a privileged credential.
@@ -649,10 +699,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   entry and hub tile.
 - **Duplicated handler logic between `api_keys.rs` and `analytics_keys.rs`** (§1) — accepted, see
   the note there.
-- **Reimplementing `ServiceCredentials` instead of depending on `telemetry-sink`** — the
-  alternative (making `oidc_client_credentials_decorator.rs`'s internals `pub` and generic enough
-  for a non-decorator caller) touches a crate this plan otherwise has no reason to modify, for a
-  ~60-line gain.
+- **Reusing `telemetry-sink`'s `OidcClientCredentialsDecorator` directly, rather than a new
+  proxy-local credential type** — its `new()`/`decorate()` are already `pub` and reachable via
+  `micromegas::telemetry_sink::*`, so no modification to that crate is needed; the proxy only
+  supplies its own env-sourced arguments and a distinct instance (see §2).
 - **Import is two round trips on the conflict path** — rejected the single-round-trip
   `ON CONFLICT DO UPDATE ... RETURNING (xmax = 0)` idiom as too fragile for the gain (see §3).
 
@@ -667,6 +717,16 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - `mkdocs/docs/admin/api-keys.md`: extend the existing TLS-terminating-ingress warning
   (currently scoped to ingestion's mint route) to cover the new analytics mint route and both
   import routes' inbound cleartext (see Security).
+- `mkdocs/docs/admin/web-app.md`: this is the canonical env-var/route reference for
+  `analytics-web-srv` specifically (its "Environment Variables → Required / Optional" table,
+  lines 14-57, and its enumerated "API Routes" list, lines 111-129) — add the five new optional
+  env vars this service now reads (`MICROMEGAS_SQL_CONNECTION_STRING`,
+  `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_ENDPOINT`/`_AUDIENCE`,
+  `MICROMEGAS_INGESTION_ADMIN_URL`) to "Optional" alongside `MICROMEGAS_MAPS_OBJECT_STORE_URI`'s
+  existing 503-when-absent pattern, and add the new routes
+  (`GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`,
+  `DELETE /api/analytics-api-keys/{key_id}`, `GET`/`POST /api/ingestion-api-keys`,
+  `DELETE /api/ingestion-api-keys/{key_id}`) to the "API Routes" list.
 - `CHANGELOG.md`: `build/release.py` publishes an explicit crate list that does not include
   `analytics-web-srv`, so `analytics_keys_router`/`ingestion_keys_proxy_router` are never
   published API and get no bullet on that basis. `rust/public` (the published `micromegas`
@@ -675,7 +735,15 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   ingestion import route, the analytics-key mint/list/revoke/import routes and their admin pages,
   the `micromegas-import-keys` CLI entry point, and the new env vars
   (`MICROMEGAS_SQL_CONNECTION_STRING` read by `analytics-web-srv`,
-  `MICROMEGAS_INGESTION_PROXY_OIDC_*`, `MICROMEGAS_INGESTION_ADMIN_URL`).
+  `MICROMEGAS_INGESTION_PROXY_OIDC_*`, `MICROMEGAS_INGESTION_ADMIN_URL`). This same doc step also
+  **amends** the existing `## Unreleased` → `**Auth:**` bullet for #1383 (currently: "Three new
+  OIDC-authenticated, admin-gated HTTP routes on the ingestion service — `POST`/`GET`/`DELETE
+  /auth/api_keys` ... (analytics keys are never mintable over HTTP; see
+  `mkdocs/docs/admin/api-keys.md` for the by-hand runbook)"), since this plan makes both clauses
+  false in the same release it ships into and the by-hand runbook it points at is deleted by step
+  20: drop the "analytics keys are never mintable over HTTP" parenthetical, add the fourth
+  ingestion route (`POST /auth/api_keys/import`) to the route list, and repoint the runbook
+  reference at the new analytics-key HTTP routes instead.
 
 ## Testing Strategy
 
@@ -686,14 +754,26 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   and response passthrough, plus a "rejected before forwarding" assertion for non-admins.
 - Python: `pytest` unit tests for `import_keys.py`'s per-key result classification (imported /
   already-present / errored) against a mocked `requests` session, per `test_logout.py`'s
-  lightweight-mocking style; an end-to-end run against local services
-  (`local_test_env/ai_scripts/start_services.py`) importing a small test keyring into both tables
-  and confirming the imported keys authenticate.
+  lightweight-mocking style; an end-to-end run importing a small test keyring into both tables
+  and confirming the imported keys authenticate. **Not runnable via
+  `local_test_env/ai_scripts/start_services.py` as-is**: it hardcodes `--disable-auth` for
+  ingestion (`start_services.py:174`) and flight-sql (`:192`) in split mode, and picks
+  `--disable-auth`/`--disable-ingestion-auth` based on OIDC config in monolith mode (`:290`) — in
+  every one of those paths `api_keys_router` is never merged (`ingestion.rs:176`), so
+  `POST /auth/api_keys/import` doesn't exist. This test instead requires a hand-launched ingestion
+  (or monolith) with `MICROMEGAS_OIDC_CONFIG` set and neither `--disable-auth` nor
+  `--disable-ingestion-auth` passed, plus the caller's OIDC identity present in
+  `MICROMEGAS_ADMINS`/`MICROMEGAS_INGESTION_ADMINS` — not something `start_services.py` produces
+  today; run it against a manually configured local instance instead.
 - Frontend: `yarn test` for the two new pages (list render, mint form submit + one-time-key
   banner, revoke confirm flow), `yarn type-check`, `yarn lint`.
 - Manual: run through the two new admin pages end-to-end against local services with
-  `--disable-auth` off (OIDC required for `require_admin` to mean anything), confirming a
-  non-admin OIDC session gets 403 on every new route. The ingestion-keys page additionally
-  requires ingestion auth itself to be enabled (`--disable-ingestion-auth` must be off) — with it
-  disabled, ingestion's `/auth/api_keys*` routes aren't mounted and the proxy surfaces the
-  translated 404 described in §2.
+  `--disable-auth` off (OIDC required for `require_admin` to mean anything — and, per §4/Security,
+  for the new routes to be registered at all), confirming a non-admin OIDC session gets 403 on
+  every new route. The ingestion-keys page additionally requires ingestion auth itself to be
+  enabled (`--disable-ingestion-auth` must be off) — with it disabled, ingestion's
+  `/auth/api_keys*` routes aren't mounted and the proxy surfaces the translated 404 described in
+  §2. **`start_services.py` cannot reach this configuration in either mode** (see the Python
+  bullet above for the exact flags it hardcodes) — this manual pass requires hand-launching
+  ingestion/flight-sql/`analytics-web-srv` (or the monolith) with `MICROMEGAS_OIDC_CONFIG` set and
+  both disable-auth flags off.
