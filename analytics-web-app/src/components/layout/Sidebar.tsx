@@ -281,7 +281,7 @@ export function Sidebar() {
   return (
     <aside
       ref={asideRef}
-      className="relative hidden sm:flex flex-none"
+      className="relative flex flex-none"
       onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={closeUnlessFocusInside}
       onBlurCapture={(e) => {

@@ -18,7 +18,7 @@ const ImportScreensPage = lazy(() => import('@/routes/ImportScreensPage'))
 const MapsPage = lazy(() => import('@/routes/MapsPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
-function PageLoader() {
+export function PageLoader() {
   return (
     <div className="min-h-screen bg-app-bg flex items-center justify-center">
       <div className="flex items-center gap-3">
