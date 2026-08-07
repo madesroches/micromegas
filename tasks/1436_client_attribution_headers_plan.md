@@ -414,10 +414,14 @@ specific to the two headers the gateway itself controls.
    bytes tuples) when the new params are passed, and absent when they're left at their
    `None` defaults — keeping the "no I/O" hermetic property documented in the file's own
    docstring, since `make_call_headers` itself never reads env/`sys` state. Also add a test
-   that constructs a `FlightSQLClient` with `pyarrow.flight.FlightClient` (or
-   `flight.connect`) monkeypatched to a stub, sets known `__client_agent`/`__client_entrypoint`/
-   `__session_id` values, and asserts that `query()`, `query_stream()`, and `query_arrow()`
-   each forward those cached values into the call headers they build — guarding all three call
+   that monkeypatches the environment (e.g. sets `CLAUDECODE`), monkeypatches
+   `pyarrow.flight.FlightClient` (or `flight.connect`) to a stub, then constructs a real
+   `FlightSQLClient(uri, client_entrypoint="cli-query")` and asserts that `query()`,
+   `query_stream()`, and `query_arrow()` each issue calls whose `FlightCallOptions.headers`
+   (readable in pyarrow 23.0.1) carry `x-client-entrypoint: cli-query` plus the env-derived
+   `x-client-agent`/`x-client-session` values — exercising `resolve_client_entrypoint(explicit=...)`
+   end-to-end through the real constructor (not by hand-setting the private
+   `__client_agent`/`__client_entrypoint`/`__session_id` attributes), guarding all three call
    sites (`client.py:356/415/447`), not just the CLI path `tests/cli/test_query.py` covers.
 10. New `python/micromegas/tests/cli/test_query.py`: monkeypatch `sys.argv` to a minimal valid
     invocation (e.g. `["micromegas-query", "SELECT 1", "--all"]`) and
@@ -453,7 +457,11 @@ specific to the two headers the gateway itself controls.
     the `## Fields` table (`agent`/`entrypoint` always present, default `unknown`; `session`
     present only if the caller sent `x-client-session`); note the three-way distinction
     between "unknown" (client didn't report), "none"/"script" (python client actively found
-    nothing), and a detected value.
+    nothing), and a detected value. Add a `## Notes` entry (alongside the existing
+    `bytes_scanned`/`peak_memory_bytes` caveats) recording that `agent` measures "ran inside a
+    known agent harness's environment," not "an LLM wrote this SQL": environment variables are
+    inherited by child processes, so a human running the CLI from a shell nested inside an
+    agent session is labelled with that agent too.
 17. `mkdocs/docs/query-guide/python-api.md`: update the `FlightSQLClient(uri, headers=None,
     preserve_dictionary=False, auth_provider=None)` signature (`:281`) to include
     `client_entrypoint=None`; add a short "Client Attribution" subsection documenting
@@ -499,6 +507,12 @@ specific to the two headers the gateway itself controls.
   both; separate fields are chosen because `client_type`'s `+gateway` chaining answers "what
   hops did this take," while agent/entrypoint answer "who authored the SQL" — a different
   axis that composing into one string would make `GROUP BY` on painful to split back apart.
+- **`x-client-agent` measures "ran inside a known agent harness's environment," not "an LLM
+  authored this SQL."** Environment variables are inherited by child processes, so a human
+  running the CLI from a shell nested inside an agent session (e.g. a terminal opened from
+  within Claude Code) is labelled `claude-code` even though a person, not the agent, typed the
+  query. Acceptable, but the field name and docs (`query-audit-log.md`'s Notes, per step 16)
+  must be explicit about what it actually measures — environment provenance, not authorship.
 - **Detection stays in the Python client only.** The Rust client factory
   (`flightsql_client_factory.rs`) and the Grafana Go plugin both set `x-client-type` themselves
   but are out of scope: neither runs inside an agent harness in any scenario this issue cares
