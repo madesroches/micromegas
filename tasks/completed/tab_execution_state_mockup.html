@@ -1,0 +1,397 @@
+<title>Tab Execution State — Mockup</title>
+<style>
+  :root {
+    --bg: #f6f2ec;
+    --panel: #ffffff;
+    --panel-2: #fbf7f1;
+    --border: #e6ddd0;
+    --text: #211c17;
+    --text-muted: #7d7266;
+    --rust: #bf360c;
+    --blue: #1565c0;
+    --wheat: #ffb300;
+    --error: #c8352a;
+    --code-bg: #efe8dc;
+    --shadow: 0 1px 2px rgba(40, 30, 15, 0.06), 0 8px 24px rgba(40, 30, 15, 0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0f;
+      --panel: #15141c;
+      --panel-2: #1a1922;
+      --border: #2b2938;
+      --text: #efeae2;
+      --text-muted: #97918b;
+      --error: #ef5b52;
+      --code-bg: #1f1e29;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0a0f;
+    --panel: #15141c;
+    --panel-2: #1a1922;
+    --border: #2b2938;
+    --text: #efeae2;
+    --text-muted: #97918b;
+    --error: #ef5b52;
+    --code-bg: #1f1e29;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f2ec;
+    --panel: #ffffff;
+    --panel-2: #fbf7f1;
+    --border: #e6ddd0;
+    --text: #211c17;
+    --text-muted: #7d7266;
+    --error: #c8352a;
+    --code-bg: #efe8dc;
+    --shadow: 0 1px 2px rgba(40, 30, 15, 0.06), 0 8px 24px rgba(40, 30, 15, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 4.5rem 1.5rem 5rem;
+  }
+
+  .eyebrow {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--rust);
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0.5rem 0 0.6rem;
+    text-wrap: balance;
+  }
+
+  .dek {
+    font-size: 1.02rem;
+    line-height: 1.55;
+    color: var(--text-muted);
+    max-width: 58ch;
+    margin: 0 0 3rem;
+  }
+
+  h2 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.3rem;
+  }
+
+  .section-dek {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0 0 1.4rem;
+    max-width: 56ch;
+  }
+
+  section + section {
+    margin-top: 3.2rem;
+  }
+
+  /* ---------- Browser chrome mockups ---------- */
+
+  .chrome-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .chrome-block + .chrome-block {
+    margin-top: 1.6rem;
+  }
+
+  .chrome-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .chrome-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 10px 10px 0;
+    border-radius: 10px 10px 0 0;
+    box-shadow: var(--shadow);
+  }
+
+  .chrome-bar.is-light { background: #dee1e6; }
+  .chrome-bar.is-dark { background: #202124; }
+
+  .chrome-sill {
+    height: 12px;
+    border-radius: 0 0 10px 10px;
+    margin-top: -1px;
+  }
+  .chrome-sill.is-light { background: #ffffff; }
+  .chrome-sill.is-dark { background: #35363a; }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 216px;
+    height: 34px;
+    padding: 0 9px;
+    border-radius: 8px 8px 0 0;
+    font-size: 12.5px;
+    line-height: 1;
+  }
+
+  .is-light .tab { background: #ffffff; color: #1f1f1f; }
+  .is-dark .tab { background: #35363a; color: #e8eaed; }
+
+  .tab .favicon { flex: none; width: 16px; height: 16px; }
+
+  .tab .title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tab .close {
+    flex: none;
+    font-size: 13px;
+    opacity: 0.55;
+  }
+
+  .tab-caption {
+    text-align: center;
+    width: 216px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding-top: 0.5rem;
+  }
+
+  .tab-row-captions {
+    display: flex;
+    gap: 6px;
+    padding: 0 10px;
+  }
+
+  /* ---------- Specimen grid ---------- */
+
+  .specimens {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+  }
+
+  .specimen {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.4rem 1rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.6rem;
+  }
+
+  .specimen .swatch {
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .specimen .swatch svg { width: 34px; height: 34px; }
+
+  .specimen .name {
+    font-weight: 700;
+    font-size: 0.92rem;
+  }
+
+  .specimen code {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 0.5rem 0.55rem;
+    color: var(--text);
+    word-break: break-word;
+  }
+
+  .specimen .note {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  @media (max-width: 640px) {
+    .page { padding: 3rem 1.25rem 4rem; }
+    .specimens { grid-template-columns: 1fr; }
+    .chrome-bar { overflow-x: auto; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ring-rust" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#bf360c"/>
+      <stop offset="100%" stop-color="#8d3a14"/>
+    </linearGradient>
+    <linearGradient id="ring-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1565c0"/>
+      <stop offset="100%" stop-color="#0d47a1"/>
+    </linearGradient>
+    <linearGradient id="ring-wheat" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffb300"/>
+      <stop offset="100%" stop-color="#e6a000"/>
+    </linearGradient>
+  </defs>
+
+  <symbol id="ico-idle" viewBox="0 0 32 32">
+    <g transform="translate(16, 16)">
+      <ellipse rx="13" ry="5" fill="none" stroke="url(#ring-rust)" stroke-width="2" transform="rotate(-20)" opacity="0.9"/>
+      <ellipse rx="10" ry="4" fill="none" stroke="url(#ring-blue)" stroke-width="2" transform="rotate(25)" opacity="0.9"/>
+      <ellipse rx="7.5" ry="3" fill="none" stroke="url(#ring-wheat)" stroke-width="2" transform="rotate(-8)" opacity="0.9"/>
+      <polygon points="0,-3 0.6,-1 2.2,-1 0.8,0.2 1.4,2.2 0,1.2 -1.4,2.2 -0.8,0.2 -2.2,-1 -0.6,-1" fill="#1a1a2e"/>
+    </g>
+  </symbol>
+
+  <symbol id="ico-busy" viewBox="0 0 32 32">
+    <use href="#ico-idle"/>
+    <circle cx="23" cy="23" r="7" fill="#ffb300" stroke="#ffffff" stroke-width="1.5"/>
+  </symbol>
+
+  <symbol id="ico-error" viewBox="0 0 32 32">
+    <use href="#ico-idle"/>
+    <circle cx="23" cy="23" r="7" fill="#d1382b" stroke="#ffffff" stroke-width="1.5"/>
+    <line x1="23" y1="19.4" x2="23" y2="23.5" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="23" cy="26.2" r="0.9" fill="#ffffff"/>
+  </symbol>
+</svg>
+
+<div class="page">
+  <p class="eyebrow">Issue #1443 · Mockup</p>
+  <h1>What the tab looks like</h1>
+  <p class="dek">
+    Favicon and title while a screen — notebook, table, log — is executing: idle, busy,
+    and finished-with-error. Same scenario throughout: a notebook called
+    <em>“Ingestion Errors.”</em>
+  </p>
+
+  <section>
+    <h2>In the tab strip</h2>
+    <p class="section-dek">
+      The badge has to read on whatever chrome the user's OS/browser happens to use —
+      shown here on both.
+    </p>
+
+    <div class="chrome-block">
+      <span class="chrome-label">Light system chrome</span>
+      <div class="chrome-bar is-light">
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-idle"/></svg>
+          <span class="title">Ingestion Errors - Micromegas</span>
+          <span class="close">×</span>
+        </div>
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-busy"/></svg>
+          <span class="title">[*] Ingestion Errors - Micro…</span>
+          <span class="close">×</span>
+        </div>
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-error"/></svg>
+          <span class="title">Ingestion Errors - Micromegas</span>
+          <span class="close">×</span>
+        </div>
+      </div>
+      <div class="chrome-sill is-light"></div>
+      <div class="tab-row-captions">
+        <span class="tab-caption">Idle</span>
+        <span class="tab-caption">Busy</span>
+        <span class="tab-caption">Error</span>
+      </div>
+    </div>
+
+    <div class="chrome-block">
+      <span class="chrome-label">Dark system chrome</span>
+      <div class="chrome-bar is-dark">
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-idle"/></svg>
+          <span class="title">Ingestion Errors - Micromegas</span>
+          <span class="close">×</span>
+        </div>
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-busy"/></svg>
+          <span class="title">[*] Ingestion Errors - Micro…</span>
+          <span class="close">×</span>
+        </div>
+        <div class="tab">
+          <svg class="favicon"><use href="#ico-error"/></svg>
+          <span class="title">Ingestion Errors - Micromegas</span>
+          <span class="close">×</span>
+        </div>
+      </div>
+      <div class="chrome-sill is-dark"></div>
+      <div class="tab-row-captions">
+        <span class="tab-caption">Idle</span>
+        <span class="tab-caption">Busy</span>
+        <span class="tab-caption">Error</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Favicon detail</h2>
+    <p class="section-dek">
+      Zoomed in — this is what still reads once the tab is too narrow to show any title
+      at all, and exactly what <code style="all:unset;font-family:ui-monospace,monospace;font-size:0.85em;background:var(--code-bg);padding:0.1em 0.35em;border-radius:4px;">document.title</code>
+      and the favicon <code style="all:unset;font-family:ui-monospace,monospace;font-size:0.85em;background:var(--code-bg);padding:0.1em 0.35em;border-radius:4px;">&lt;link&gt;</code> get set to.
+    </p>
+    <div class="specimens">
+      <div class="specimen">
+        <div class="swatch"><svg><use href="#ico-idle"/></svg></div>
+        <span class="name">Idle</span>
+        <code>Ingestion Errors - Micromegas</code>
+        <span class="note">Normal state — nothing running.</span>
+      </div>
+      <div class="specimen">
+        <div class="swatch"><svg><use href="#ico-busy"/></svg></div>
+        <span class="name">Busy</span>
+        <code>[*] Ingestion Errors - Micromegas</code>
+        <span class="note">At least one cell is executing.</span>
+      </div>
+      <div class="specimen">
+        <div class="swatch"><svg><use href="#ico-error"/></svg></div>
+        <span class="name">Error</span>
+        <code>Ingestion Errors - Micromegas</code>
+        <span class="note">Title is unchanged — the badge alone carries it.</span>
+      </div>
+    </div>
+  </section>
+</div>

@@ -170,6 +170,7 @@ export function LogRenderer({
   onSaveRef,
   dataSource,
   onExecutingChange,
+  onErrorChange,
 }: ScreenRendererProps) {
   const logConfig = config as unknown as LogConfig
   const savedLogConfig = savedConfig as unknown as LogConfig | null
@@ -322,6 +323,9 @@ export function LogRenderer({
 
   // Report execution state to parent
   useEffect(() => { onExecutingChange?.(streamQuery.isStreaming) }, [streamQuery.isStreaming, onExecutingChange])
+
+  // Report error state to parent (for tab favicon/title)
+  useEffect(() => { onErrorChange?.(!!queryError) }, [queryError, onErrorChange])
 
   // Store result table when query completes. Body is wrapped in a function
   // declared and invoked inside the effect — see react-hooks/set-state-in-effect

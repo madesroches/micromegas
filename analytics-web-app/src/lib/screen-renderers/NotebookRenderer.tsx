@@ -280,6 +280,7 @@ export function NotebookRenderer({
   onSaveRef,
   dataSource,
   onExecutingChange,
+  onErrorChange,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -347,6 +348,13 @@ export function NotebookRenderer({
     [cellStates]
   )
   useEffect(() => { onExecutingChange?.(isExecuting) }, [isExecuting, onExecutingChange])
+
+  // Report error state to parent (for tab favicon/title)
+  const hasError = useMemo(
+    () => Object.values(cellStates).some((s) => s.status === 'error'),
+    [cellStates]
+  )
+  useEffect(() => { onErrorChange?.(hasError) }, [hasError, onErrorChange])
 
   // Execute a cell by name (finds it in the flat execution list)
   const executeCellByName = useCallback(

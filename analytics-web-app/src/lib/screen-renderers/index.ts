@@ -40,6 +40,8 @@ export interface ScreenRendererProps {
   dataSource: string
   /** Report execution state changes (for spinner in header) */
   onExecutingChange?: (executing: boolean) => void
+  /** Report error state changes (for tab favicon/title) */
+  onErrorChange?: (hasError: boolean) => void
 }
 
 /**

@@ -2,6 +2,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type Compo
 import { useParams, useNavigate, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
+import { useTabExecutionState, computeTabState } from '@/hooks/useTabExecutionState'
 import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -92,6 +93,12 @@ function ScreenPageContent() {
 
   // Execution state reported by renderer (for header spinner)
   const [isExecuting, setIsExecuting] = useState(false)
+  // Error state reported by renderer (for tab favicon)
+  const [hasError, setHasError] = useState(false)
+
+  // Tab favicon busy-error-idle indicator, page-global across all screen types
+  const tabState = computeTabState(isExecuting, hasError)
+  useTabExecutionState(tabState)
 
   // Compute raw time range values (for renderer)
   // Priority: URL (if present) → saved config → current config
@@ -139,6 +146,8 @@ function ScreenPageContent() {
       setLoadError(null)
       setBaselineConfig(null)
       setScreen(null)
+      setIsExecuting(false)
+      setHasError(false)
 
       try {
         // Fetch screen types for display info
@@ -470,6 +479,7 @@ function ScreenPageContent() {
               onSaveRef={saveRef}
               dataSource={dataSource}
               onExecutingChange={setIsExecuting}
+              onErrorChange={setHasError}
             />
           </div>
         </div>
