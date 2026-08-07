@@ -448,6 +448,21 @@ of the padding as empty space. The rotated branch therefore subtracts
 `RIGHT_AXIS_SIZE_PX` from the capped projection when a right axis exists,
 floored at `0` via `Math.max` so a short rotated label with a right axis
 still reduces cleanly to no extra padding rather than a negative one.
+
+One further slack this formula doesn't claim: `buildXScale`
+(`xychart-axis.ts:52`) pads the categorical range to `[dataMin − 0.5, dataMax
++ 0.5]`, so the last tick already sits `foundSpace/2` inside the plot's right
+edge before `rightPadding` is added — true clearance from the last tick to
+the canvas edge is `foundSpace/2 + rightPadding + (right-axis size, if any)`.
+In the `space` subsection's own cycle-2 numbers (`foundSpace = 55.6`), that's
+~28px of unclaimed margin sitting inside the ~154px reservation. This is left
+as extra safety margin rather than subtracted out: `rightPadding` only
+receives `sidesWithAxes`, not `foundSpace`, so shaving off the half-slot
+would mean threading a third piece of shared state (`foundSpace`, written by
+`rotate()`) just to recover a conservative few dozen pixels — not worth the
+added state for a margin that only ever makes labels *more* clear of the
+edge, never less.
+
 The *cost* of reserving a capped pixel count is not the same on both axes:
 vertical `size` only shrinks `plotHgtCss`, while horizontal `rightPadding`
 shrinks `plotWidCss` (`uPlot.iife.js:3468`), which is the exact quantity
@@ -639,9 +654,11 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   AXIS_CHROME_PX`), so the label's tail is expected to be truncated at the
   axis edge — that's the documented trade-off from the `size` subsection, not
   a bug. The pass criterion at this height is: the axis band stays a minority
-  of the chart's height (doesn't dominate the cell), and any truncated label
-  ends cleanly at the axis edge rather than mid-glyph or overflowing outside
-  the axis box — not that the full 34-character string is legible.
+  of the chart's height (doesn't dominate the cell), and the label is cut off
+  at the axis/canvas edge (a partial glyph is expected — uPlot draws tick
+  labels with no clip region and no truncation/ellipsis logic, so the cut can
+  land mid-glyph) with nothing drawn outside the axis box — not that the full
+  34-character string is legible.
   Also confirm that a chart with a handful of short
   categories (e.g. usernames) still renders flat, unchanged from today. Do
   not use a much higher category count (e.g. ~30) at the same width as a
