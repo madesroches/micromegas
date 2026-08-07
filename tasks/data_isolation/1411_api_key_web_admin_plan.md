@@ -107,20 +107,29 @@ existing three — see [Import routes](#3-import-routes-new-capability).
 
 New file `rust/analytics-web-srv/src/analytics_keys.rs`, modeled directly on
 `rust/public/src/servers/api_keys.rs` but bound to `ValidatedUser`/cookie auth instead of
-`AuthContext`/bearer, and to the new pool below instead of `app_db_pool`:
+`AuthContext`/bearer, and to a dedicated `AnalyticsKeysState` (holding the new pool from §4)
+instead of a bare `Extension<PgPool>` — required because `build_protected_routes` already
+layers `Extension<PgPool>` for `app_db_pool`; axum extensions are keyed by type, so a second
+bare `Extension<PgPool>` would silently resolve to the app pool instead. `AnalyticsKeysState`
+also carries the "unconfigured" case (§4), same shape as `maps::MapsState`'s `Option<Arc<dyn
+ObjectStore>>`:
 
 ```rust
+#[derive(Clone)]
+pub struct AnalyticsKeysState { pub pool: Option<PgPool> } // None => routes 503, see §4
+
 pub enum AnalyticsKeyError { Forbidden, BadRequest(String), NotFound, Database(sqlx::Error) }
-// IntoResponse: 403 / 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs
+// IntoResponse: 403 / 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs;
+// AnalyticsKeyError also gains a `NotConfigured` variant → 503, for when `state.pool` is `None`.
 
 fn require_admin(user: &ValidatedUser) -> Result<(), AnalyticsKeyError>; // wraps auth::require_admin
 
-async fn mint_key(Extension(pool), Extension(user), Json(MintRequest{name})) -> ...;   // POST
-async fn list_keys(Extension(pool), Extension(user), Query(ListQuery{..})) -> ...;      // GET
-async fn revoke_key(Extension(pool), Extension(user), Path(key_id)) -> ...;             // DELETE
-async fn import_key(Extension(pool), Extension(user), Json(ImportRequest{name,key})) -> ...; // POST, §3
+async fn mint_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Json(MintRequest{name})) -> ...;   // POST
+async fn list_keys(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Query(ListQuery{..})) -> ...;      // GET
+async fn revoke_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Path(key_id)) -> ...;             // DELETE
+async fn import_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Json(ImportRequest{name,key})) -> ...; // POST, §3
 
-pub fn analytics_keys_router(pool: PgPool) -> Router;
+pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state is layered separately in build_protected_routes
 ```
 
 - `hash_key` / `generate_key` are imported directly from `micromegas::auth::db_api_key` — the
@@ -144,9 +153,12 @@ pub fn analytics_keys_router(pool: PgPool) -> Router;
   runs a `DbApiKeyAuthProvider`, so there is no running cache TTL to report. The revocation
   latency is still bounded by whichever `flight-sql` process's cache TTL is validating the key —
   documented in the runbook, not echoed by this response.
-- Mounted into `build_protected_routes` exactly like `data_sources`'s routes: added to the same
-  `Router::new()` chain, gated by the same `cookie_auth_middleware` layer that already wraps
-  every other `/api/...` route. No new middleware.
+- `analytics_keys_router(base_path)` is `.merge()`d into `build_protected_routes`'s `routes`
+  chain *before* its `.layer(Extension(...))` / `.layer(middleware::from_fn(observability_middleware))`
+  calls and the auth-layer that follows them (§4), so it's covered by the same
+  `cookie_auth_middleware` layer that already wraps every other `/api/...` route. No new
+  middleware. Routes are registered unconditionally, regardless of whether the pool is
+  configured — see §4's "always register, 503 when unconfigured" rule, same as `/api/maps/*`.
 
 **Duplication, accepted.** This duplicates most of `api_keys.rs`'s ~200 lines (validation, SQL
 shapes, error enum). Sharing it across two crates would mean a generic abstraction over two
@@ -160,39 +172,52 @@ matches existing precedent; revisit only if a third caller shows up.
 New file `rust/analytics-web-srv/src/ingestion_keys_proxy.rs`:
 
 ```rust
-/// Config for reaching ingestion's admin API. `None` when unconfigured — the
-/// proxy routes are then not registered (§ wiring below), same pattern #1383
-/// uses for "auth not configured => don't register api_keys_router".
+/// Config for reaching ingestion's admin API, plus the client that reaches it.
+/// Held as `Extension<IngestionProxyState>` (`state.config: Option<IngestionProxyConfig>`,
+/// `None` when unconfigured) so the proxy routes can be registered unconditionally and
+/// return 503 per-request instead of being conditionally merged — see §4/§5's "always
+/// register, 503 when unconfigured" rule.
 pub struct IngestionProxyConfig {
     pub base_url: String,              // MICROMEGAS_INGESTION_ADMIN_URL, e.g. "http://127.0.0.1:8081"
     pub credentials: ServiceCredentials, // see below
+    pub client: reqwest::Client,        // single client, built once with an explicit timeout
 }
+
+#[derive(Clone)]
+pub struct IngestionProxyState { pub config: Option<Arc<IngestionProxyConfig>> }
 
 /// One HTTP round trip per call: never cached at process level beyond the
 /// bearer token itself (below) — this is an admin-console path, not a hot one.
 async fn forward(
-    Extension(cfg): Extension<Arc<IngestionProxyConfig>>,
+    Extension(state): Extension<IngestionProxyState>,
     Extension(user): Extension<ValidatedUser>,
     method: Method, path_suffix: &str, query: Option<&str>, body: Option<Bytes>,
 ) -> Result<Response, ProxyError> {
     require_admin(&user)?;                       // checked here, before any forwarding
+    let Some(cfg) = state.config else { return Err(ProxyError::NotConfigured) }; // 503
     let token = cfg.credentials.get_token().await?;
-    let mut req = reqwest_client.request(method, format!("{}{}", cfg.base_url, path_suffix));
+    let mut req = cfg.client.request(method, format!("{}{}", cfg.base_url, path_suffix));
     if let Some(q) = query { req = req.query(...) }
     if let Some(b) = body { req = req.body(b) }
     let resp = req.bearer_auth(token).send().await?;
     // Forward ingestion's status + JSON body verbatim to the browser.
 }
 
-pub fn ingestion_keys_proxy_router(cfg: IngestionProxyConfig) -> Router {
+pub fn ingestion_keys_proxy_router(base_path: &str) -> Router {
     Router::new()
         .route(&format!("{base_path}/api/ingestion-api-keys"),
             get(list).post(mint))
         .route(&format!("{base_path}/api/ingestion-api-keys/{{key_id}}"),
             delete(revoke))
-        .layer(Extension(Arc::new(cfg)))
 }
 ```
+
+`cfg.client` is built once in `IngestionProxyConfig::from_env()` via
+`reqwest::Client::builder().timeout(Duration::from_secs(10)).build()` — an explicit, bounded
+timeout on every outbound admin-console call rather than an unbounded default. Requires adding
+`reqwest.workspace = true` to `rust/analytics-web-srv/Cargo.toml` (the workspace already
+declares `reqwest = { version = "0.12.23", ... }` at `rust/Cargo.toml:78`; `analytics-web-srv`
+does not yet depend on it).
 
 - `list`/`mint`/`revoke` are three thin wrappers around `forward`, each pinning `method` and
   `path_suffix = "/auth/api_keys"` or `"/auth/api_keys/{key_id}"`; `list` additionally forwards
@@ -242,11 +267,11 @@ added to ingestion's admin list — conflating two very different blast radii. N
   split ingestion service's address.
 
 `IngestionProxyConfig::from_env()` returns `None` (not an error) when either the URL or the
-credential trio is unset; the proxy router is then simply not merged into `build_protected_routes`,
-with a `warn!` — same non-fatal-degradation shape as `serve_ingestion`'s
-"auth not configured, skip `api_keys_router`" branch. A deployment that hasn't set this up yet
-keeps working; the ingestion-key admin page just isn't there (the frontend hides the tile — see
-§6).
+credential trio is unset, logged with a `warn!`. The proxy *routes* are still registered
+unconditionally in `build_protected_routes` (`IngestionProxyState { config: None }` layered
+instead) — same always-register, 503-when-unconfigured shape as `/api/maps/*` (see §4/§5). A
+deployment that hasn't set this up yet keeps working; the ingestion-key admin tile stays visible
+and its page surfaces the 503 through its normal error path (§5).
 
 ### 3. Import routes (new capability)
 
@@ -259,22 +284,25 @@ POST {base_path}/api/analytics-api-keys/import   (analytics-web-srv, analytics_k
 
 Request `{"name": "...", "key": "<the existing key string, verbatim>"}`. Response mirrors
 `mint_key`'s shape minus the cleartext (the caller already has it — never echo a key back):
-`{"key_id", "name", "created_at", "created_by", "imported": bool}`. `imported: true` on a fresh
-`INSERT`; `false` when the hash already exists (idempotent re-run — the CLI tool can be run
-against the same legacy keyring twice without side effects, matching the existing hand-written
-recipe's `ON CONFLICT ... DO NOTHING` idempotency).
+`{"key_id", "name", "created_at", "created_by", "revoked_at", "imported": bool}`. `imported: true`
+on a fresh `INSERT`; `false` when the hash already exists (idempotent re-run — the CLI tool can be
+run against the same legacy keyring twice without side effects, matching the existing hand-written
+recipe's `ON CONFLICT ... DO NOTHING` idempotency). `revoked_at` is always present (`null` unless
+the existing row was revoked) so a caller can distinguish "already present and usable" from
+"already present but revoked" — see the CLI's reporting below and §6.
 
 ```sql
 INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (key_hash) DO NOTHING
-RETURNING key_id, name, created_at, created_by
+RETURNING key_id, name, created_at, created_by, revoked_at
 ```
 
-`Some(row)` ⇒ `imported: true`, 201. `None` ⇒ the hash already exists; a follow-up
-`SELECT key_id, name, created_at, created_by FROM ingestion_api_keys WHERE key_hash = $1`
-reports the existing row, `imported: false`, 200. (Two round trips only on the conflict path —
-the common "first import" path is one `INSERT ... RETURNING`.) Deliberately not the
+`Some(row)` ⇒ `imported: true`, 201, `revoked_at: null`. `None` ⇒ the hash already exists; a
+follow-up `SELECT key_id, name, created_at, created_by, revoked_at FROM ingestion_api_keys WHERE
+key_hash = $1` reports the existing row (including whether it's revoked), `imported: false`, 200.
+(Two round trips only on the conflict path — the common "first import" path is one
+`INSERT ... RETURNING`.) Deliberately not the
 `ON CONFLICT DO UPDATE ... RETURNING (xmax = 0) AS inserted` trick: it collapses this to one
 round trip on every path, but its insert/update signal degrades under table freezing
 (documented Postgres caveat) — not worth the fragility on a rarely-invoked admin path.
@@ -288,30 +316,68 @@ round trip on every path, but its insert/update signal degrades under table free
 
 ### 4. New telemetry-DB pool for `analytics-web-srv`
 
-`WebServerConfig` gains an optional field:
+`WebServerConfig` gains two fields — a plain connection string (read synchronously, like
+`maps_uri`) plus a slot the monolith can fill directly, so the actual `connect`/`connect_lazy`
+call happens once, in `run_web_server` (already `async`), not inside `from_cli_and_env` (which
+stays sync — see below):
 
 ```rust
-pub analytics_keys_pool: Option<PgPool>,
+pub struct WebServerConfig {
+    ...
+    /// `MICROMEGAS_SQL_CONNECTION_STRING`, read but not connected by `from_cli_and_env`.
+    /// Ignored when `analytics_keys_pool_override` is `Some` (monolith case, below).
+    pub analytics_keys_db_string: Option<String>,
+    /// Set only by the monolith via `WebCliArgs`; carries `lake_pool` straight through so
+    /// `run_web_server` never opens a second connection to the telemetry DB.
+    pub analytics_keys_pool_override: Option<PgPool>,
+}
+
+pub struct WebCliArgs {
+    ...
+    /// Filled by the monolith with its already-open `lake_pool`; left `None` by the
+    /// standalone binary, which falls back to `MICROMEGAS_SQL_CONNECTION_STRING`.
+    pub analytics_keys_pool: Option<PgPool>,
+}
 ```
 
-- **Standalone binary** (`analytics-web-srv`): `WebServerConfig::from_cli_and_env` reads
-  `MICROMEGAS_SQL_CONNECTION_STRING` — the same var name `rust/CLAUDE.md` already documents for
-  "PostgreSQL connection" and that ingestion/flight-sql/monolith already use for the telemetry
-  DB — `.ok()`, and if present, `sqlx::PgPool::connect(&conn_str).await` with
-  `max_connections(2)` (an admin-console path, not a hot one; no need for
-  `dedicated_key_store_pool`'s validation-path tuning). Absent ⇒ `None`, and the analytics-key
-  routes aren't registered (`warn!`), same non-fatal pattern as §2's proxy config.
-- **Monolith**: `run_web_server`'s caller (`monolith/src/main.rs`) passes
-  `lake_pool.clone().filter(|_| roles.web)` — the lakehouse pool it already holds, not a second
-  TCP connection. This mirrors how ingestion's own `api_keys_router` in `ingestion.rs` already
-  gets `lake.db_pool.clone()` (the full lake pool, not `dedicated_key_store_pool`) — the
-  narrowing to "just enough to write `analytics_api_keys`" is a Postgres-grants concern for
-  deployments that separate DB roles, documented as a grant-recipe extension (§[Security](#security)),
-  not something the pool object itself needs to enforce when every role shares one connection
+- **`from_cli_and_env` stays synchronous.** It only reads `MICROMEGAS_SQL_CONNECTION_STRING`
+  (`.ok()`) into `analytics_keys_db_string` and passes `cli.analytics_keys_pool` straight through
+  to `analytics_keys_pool_override` — no `.await` added, so `analytics-web-srv/src/main.rs`,
+  `monolith/src/main.rs`, and all 13 sync `#[test]`s in `web_server_config_tests.rs` are
+  untouched.
+- **Standalone binary** (`analytics-web-srv`): leaves `WebCliArgs.analytics_keys_pool` as `None`.
+  In `run_web_server`, when `analytics_keys_pool_override` is `None` and `analytics_keys_db_string`
+  is `Some(conn_str)`, connect with
+  `PgPoolOptions::new().max_connections(2).acquire_timeout(Duration::from_secs(2)).connect_lazy(&conn_str)`
+  — `max_connections(2)` because this is an admin-console path, not the hot per-request
+  validation path `dedicated_key_store_pool` tunes for, but with that same function's bounded
+  `acquire_timeout` and lazy connect (`db_api_key.rs:126-138`) instead of an eager
+  `PgPool::connect` with sqlx's 30s default, so a briefly-unreachable telemetry DB doesn't stop
+  `analytics-web-srv` from starting. Both env var absent and connection-string present resolve
+  to a pool exactly once; the analytics-key routes stay registered either way (see "Registration
+  is unconditional" below).
+- **Monolith**: `monolith/src/main.rs`, inside its existing `if roles.web { ... }` block
+  (`main.rs:323`), fills `WebCliArgs.analytics_keys_pool = Some(lake_pool.clone())` — the
+  lakehouse pool it already holds, not a second TCP connection. (No `.filter(|_| roles.web)` is
+  needed: the construction is already inside the `roles.web` branch.) Because
+  `analytics_keys_pool_override` is `Some`, `run_web_server` never reads
+  `analytics_keys_db_string` or opens a pool for it — `MICROMEGAS_SQL_CONNECTION_STRING` being
+  set (as it always is in a monolith deployment) no longer causes a second pool to be opened and
+  discarded. This mirrors how ingestion's own `api_keys_router` in `ingestion.rs` already gets
+  `lake.db_pool.clone()` (the full lake pool, not `dedicated_key_store_pool`) — the narrowing to
+  "just enough to write `analytics_api_keys`" is a Postgres-grants concern for deployments that
+  separate DB roles, documented as a grant-recipe extension (§[Security](#security)), not
+  something the pool object itself needs to enforce when every role shares one connection
   string, exactly as `api-keys.md`'s existing grant-recipe section already admits for the
   ingestion side.
-- `analytics_keys_router(pool)` is merged into `build_protected_routes` only
-  `if let Some(pool) = config.analytics_keys_pool`.
+- **Registration is unconditional.** `run_web_server` builds
+  `analytics_keys::AnalyticsKeysState { pool: <the pool above, or None> }` either way, logs
+  `info!`/`warn!` accordingly ("`/api/analytics-api-keys/*` will return 503" when `None`, same
+  wording style as the existing maps-store log at `web_server.rs:510`), and `build_protected_routes`
+  always `.merge()`s `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)`
+  — never an `if let Some(pool) = ...` conditional merge. This is the same always-register,
+  503-when-unconfigured shape `/api/maps/*` already uses (`maps.rs:116-123`), and it's what lets
+  both new admin tiles stay visible unconditionally (§5).
 
 ### 5. Frontend
 
@@ -330,10 +396,19 @@ Two new pages, one per key table — kept separate rather than tabs on one page,
   button inviting an operator to paste a legacy key into a browser form is the wrong shape for a
   bulk one-shot migration and reintroduces the "key transits a browser" exposure #1383 already
   avoided for mint.
-- `AdminPage.tsx`: two new `AppLink` tiles ("Ingestion API Keys", "Analytics API Keys"). The
-  ingestion tile is hidden when `GET /api/ingestion-api-keys` 404s at the router level (proxy not
-  configured) — checked the same way `DataSourcesPage` already probes for FlightSQL availability
-  (best-effort `HEAD`/`GET` on mount, hide on failure), not via a new capability-flag endpoint.
+- `AdminPage.tsx`: two new `AppLink` tiles ("Ingestion API Keys", "Analytics API Keys"), both
+  **always shown**, no availability probe. `AdminPage.tsx` today is a static grid with no
+  fetching at all, and the routes behind both tiles are registered unconditionally (§4) — same
+  precedent as the always-visible `/admin/maps` tile. A 404-based probe wouldn't work here
+  regardless: `build_frontend`'s SPA fallback (`web_server.rs:374-383`) serves `index.html` with
+  `200` for any unmatched `/api/...` path (`routing_tests.rs:283-311`), so an unregistered route
+  never actually 404s.
+- Both `IngestionApiKeysPage.tsx` and `AnalyticsApiKeysPage.tsx` render whatever their list-fetch
+  returns through the existing `ErrorBanner` path (`DataSourcesPage.tsx`'s pattern). When the
+  backing pool/proxy config is absent, the route responds `503` with a `{code, message}` body
+  (§4/§2) and the page shows that message ("analytics key store not configured" /
+  "ingestion proxy not configured") exactly like `MapsPage` does today for an unconfigured maps
+  store — no separate "not configured" UI state to build.
 - `router.tsx`: two new `<Route>` entries under `/admin/ingestion-keys` and `/admin/analytics-keys`.
 
 ### 6. CLI import tool (python)
@@ -350,19 +425,39 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 ```
 
 - `--table {ingestion,analytics}` (required) — selects the import route and, for `analytics`,
-  goes through the *analytics-web-srv* base URL (`--url`, same "where's the server" flag
-  `micromegas-screens init` already takes); for `ingestion`, `--url` points at the ingestion
-  service directly (**not** through the `analytics-web-srv` proxy — see §2's note that the CLI
-  needs no proxy, it holds its own bearer token).
+  goes through the *analytics-web-srv* base URL (`--url`, mandatory on every invocation); for
+  `ingestion`, `--url` points at the ingestion service directly (**not** through the
+  `analytics-web-srv` proxy — see §2's note that the CLI needs no proxy, it holds its own bearer
+  token). `--profile` (optional) follows `query.py`'s precedent (`cli/query.py:100`,
+  `connection.connect(profile=...)`) for supplying OIDC issuer/client/token-file from
+  `~/.micromegas/config.json`; a profile carries no HTTP base URL, so `--url` stays mandatory
+  regardless. (`micromegas-screens` has no `--profile` or `--url` flag to model this on — `init`
+  takes a positional `server_url`, and auth env vars are read directly in `make_client`.)
 - `--source env --var NAME` (default `MICROMEGAS_API_KEYS` / the table-appropriate prefixed
-  name) parses the same JSON keyring shape `parse_key_ring` already reads
-  (`{"name": "key string"}` map) from the named env var; `--source file --path ...` as an
-  alternative for a keyring saved to disk.
-- For each `(name, key)` pair: `POST {import route}` with `{"name", "key"}`. Prints one line per
-  key — `imported` / `already present (key_id=...)` / the error message on a 4xx — and continues
-  past individual failures rather than aborting the batch (an operator migrating dozens of keys
-  should see every result, not stop at the first name collision). Exit code is non-zero if any
-  key failed to import.
+  name) parses the legacy keyring's real shape — a JSON **array** of `{"name": ..., "key": ...}`
+  objects, exactly what `parse_key_ring` reads (`rust/auth/src/api_key.rs:56-64`,
+  `KeyRingEntry { name, key }`; example shape at `rust/auth/src/multi.rs:28`:
+  `[{"name": "test", "key": "secret"}]`) — from the named env var; `--source file --path ...` as
+  an alternative for a keyring saved to disk.
+- `--only NAME [NAME ...]` / `--exclude NAME [NAME ...]` (mutually exclusive, optional) select
+  which entries in the keyring get imported on this run — required because not every entry
+  should go anywhere: a key meant to stay `object-cache-srv`-client-only must never be imported
+  at all, and a key that's valid on *both* ingestion and flight-sql today must be split into two
+  distinct key strings (one per table) before either import, per
+  `mkdocs/docs/admin/api-keys.md`'s migration runbook (§202). Without `--only`/`--exclude`, running
+  the tool once per table against the same unmodified keyring would reproduce the shared-key
+  situation the migration exists to eliminate.
+- **Refuses to import the same key string into both tables.** Before posting, the tool records
+  each imported key's hash locally per run and errors out (non-zero exit, no partial import of
+  that key) if a key string it's about to import into one table was already imported into the
+  other table by an earlier invocation logged in the same local state file (`--state-file`,
+  default alongside the source), rather than silently letting a shared key end up in both.
+- For each selected `(name, key)` pair: `POST {import route}` with `{"name", "key"}`. Prints one
+  line per key — `imported` / `already present (key_id=...)` / `already present (revoked)`
+  (from the response's `revoked_at`, §3 — distinct from a usable duplicate) / the error message
+  on a 4xx — and continues past individual failures rather than aborting the batch (an operator
+  migrating dozens of keys should see every result, not stop at the first name collision). Exit
+  code is non-zero if any key failed to import or came back `already present (revoked)`.
 - New `WebClient` methods (`web_client.py`) for the analytics-web-srv side:
   `import_analytics_api_key(name, key)`, `list_analytics_api_keys(...)`,
   `revoke_analytics_api_key(key_id)`, `mint_analytics_api_key(name)` — same request/response
@@ -385,28 +480,43 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 ### Phase 2 — Analytics key API (`analytics-web-srv`)
 
-4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeyError`, `require_admin`
-   wrapper, `mint_key`/`list_keys`/`revoke_key`/`import_key`, `analytics_keys_router(pool)`.
+4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeysState { pool: Option<PgPool> }`,
+   `AnalyticsKeyError` (incl. `NotConfigured` → 503), `require_admin` wrapper,
+   `mint_key`/`list_keys`/`revoke_key`/`import_key`, `analytics_keys_router(base_path: &str)`.
    Export from `rust/analytics-web-srv/src/lib.rs`.
-5. `rust/analytics-web-srv/src/web_server.rs`: `WebServerConfig.analytics_keys_pool: Option<PgPool>`;
-   `from_cli_and_env` reads `MICROMEGAS_SQL_CONNECTION_STRING` (`.ok()`) and connects with
-   `max_connections(2)`; `build_protected_routes` takes the pool and merges
-   `analytics_keys_router` when `Some`, `warn!` when `None`.
-6. `rust/monolith/src/main.rs`: pass `lake_pool.clone()` into `WebServerConfig` when `roles.web`
-   (reusing the pool already opened for the ingestion/flightsql roles, not a second connection).
+5. `rust/analytics-web-srv/src/web_server.rs`: `WebServerConfig.analytics_keys_db_string: Option<String>`
+   + `analytics_keys_pool_override: Option<PgPool>`; `WebCliArgs.analytics_keys_pool: Option<PgPool>`.
+   `from_cli_and_env` stays sync — reads `MICROMEGAS_SQL_CONNECTION_STRING` (`.ok()`) into the
+   string field and passes `cli.analytics_keys_pool` through untouched. `run_web_server` resolves
+   the pool (override if `Some`, else `PgPoolOptions::new().max_connections(2).acquire_timeout(Duration::from_secs(2)).connect_lazy(&conn_str)`
+   if the string is `Some`, else `None`), builds `AnalyticsKeysState`, and `build_protected_routes`
+   unconditionally `.merge()`s `analytics_keys_router(base_path)` and layers
+   `Extension(analytics_keys_state)` before its existing `.layer(middleware::from_fn(observability_middleware))`
+   call, `warn!` when the resolved pool is `None`.
+6. `rust/monolith/src/main.rs`: inside the existing `if roles.web { ... }` block, set
+   `WebCliArgs.analytics_keys_pool = Some(lake_pool.clone())` (reusing the pool already opened for
+   the ingestion/flightsql roles — `analytics_keys_pool_override` being `Some` means
+   `run_web_server` never reads `MICROMEGAS_SQL_CONNECTION_STRING` for this, so no second
+   connection is opened and discarded).
 7. New tests: `rust/analytics-web-srv/tests/analytics_keys_tests.rs`, modeled on
-   `data_source_tests.rs` (`ValidatedUser` extension, lazy pool for route-shape tests; `#[ignore]`d
-   live-DB tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips).
+   `folders_tests.rs` (`sqlx::PgPool::connect_lazy` for route-shape/guard tests that never touch
+   the DB) and `screens_tests.rs` (`ValidatedUser` extension injection); `#[ignore]`d live-DB
+   tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips.
 
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
 8. `rust/analytics-web-srv/src/auth/service_credentials.rs` (new): `ServiceCredentials`,
    `from_env()` reading the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars, `get_token()` with the
    cache/buffer shape from `oidc_client_credentials_decorator.rs`.
-9. `rust/analytics-web-srv/src/ingestion_keys_proxy.rs` (new): `IngestionProxyConfig::from_env()`,
-   `forward`, `list`/`mint`/`revoke` wrappers, `ingestion_keys_proxy_router(cfg)`.
-10. `web_server.rs`: merge the proxy router into `build_protected_routes` when
-    `IngestionProxyConfig::from_env()` returns `Some`.
+9. `rust/analytics-web-srv/src/ingestion_keys_proxy.rs` (new): `IngestionProxyConfig` (holding a
+   `reqwest::Client` built with an explicit timeout) + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
+   `IngestionProxyConfig::from_env()`, `forward`, `list`/`mint`/`revoke` wrappers,
+   `ingestion_keys_proxy_router(base_path: &str)`. `rust/analytics-web-srv/Cargo.toml`:
+   add `reqwest.workspace = true`.
+10. `web_server.rs`: unconditionally `.merge()` the proxy router into `build_protected_routes`'s
+    chain (before its layer calls) and layer `Extension(ingestion_proxy_state)`, where
+    `ingestion_proxy_state.config` is `None` when `IngestionProxyConfig::from_env()` returns
+    `None` (routes stay registered either way; `forward` returns 503 when `config` is `None`).
 11. Tests: a mock ingestion server (`axum` router bound to a loopback port, or `wiremock` if
     already a dev-dependency anywhere in the workspace — check before adding a new one) verifying
     the proxy forwards method/path/query/body and status/body correctly, and that `require_admin`
@@ -418,8 +528,8 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     `lib/data-sources-api.ts`'s `handleResponse`/error-class shape.
 13. `routes/IngestionApiKeysPage.tsx`, `routes/AnalyticsApiKeysPage.tsx` (new), modeled on
     `DataSourcesPage.tsx`.
-14. `router.tsx`: two new routes. `AdminPage.tsx`: two new tiles (ingestion tile
-    availability-checked per §5).
+14. `router.tsx`: two new routes. `AdminPage.tsx`: two new tiles, both always visible, no
+    availability probe (§5).
 15. `yarn lint && yarn type-check && yarn test` (per `analytics-web-app/CLAUDE.md`).
 
 ### Phase 5 — CLI import tool
@@ -443,7 +553,8 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 - `rust/public/src/servers/api_keys.rs`, `rust/public/tests/api_keys_tests.rs`
 - `rust/analytics-web-srv/src/analytics_keys.rs` (new), `ingestion_keys_proxy.rs` (new),
-  `auth/service_credentials.rs` (new), `lib.rs`, `web_server.rs`
+  `auth/service_credentials.rs` (new), `lib.rs`, `web_server.rs`, `Cargo.toml`
+  (`reqwest.workspace = true`)
 - `rust/analytics-web-srv/tests/analytics_keys_tests.rs` (new), `ingestion_keys_proxy_tests.rs` (new)
 - `rust/monolith/src/main.rs`
 - `analytics-web-app/src/lib/ingestion-api-keys-api.ts` (new), `analytics-api-keys-api.ts` (new)
@@ -525,14 +636,3 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - Manual: run through the two new admin pages end-to-end against local services with
   `--disable-auth` off (OIDC required for `require_admin` to mean anything), confirming a
   non-admin OIDC session gets 403 on every new route.
-
-## Open Questions
-
-- Should the ingestion-key admin page be reachable at all when the proxy isn't configured, or
-  should the tile disappear entirely (current plan) vs. show a "not configured, see docs" state?
-  Leaning toward the current plan (hide) for a cleaner default, but worth confirming before
-  building the frontend probe logic.
-- Is `max_connections(2)` enough headroom for the new analytics-web-srv → telemetry-DB pool, or
-  should it match `dedicated_key_store_pool`'s `max_connections(4)` for consistency even though
-  the traffic shape is different (admin console, not per-request validation)? Low-stakes, easy to
-  tune later; flagging so it isn't picked silently.
