@@ -153,8 +153,10 @@ def resolve_client_agent():
 def resolve_client_entrypoint(explicit=None):
     """How this client was invoked. `explicit` (set by our own CLI main()s,
     but also reachable by any library caller via the public
-    `FlightSQLClient(client_entrypoint=...)`/`connect(client_entrypoint=...)`
-    parameters) always wins, but -- unlike the env-var override below -- an
+    `FlightSQLClient(client_entrypoint=...)`/`oidc_connection.connect(client_entrypoint=...)`/
+    `cli/connection.connect(client_entrypoint=...)` parameters -- the top-level
+    `micromegas.connect()` does not take this parameter) always wins, but -- unlike the
+    env-var override below -- an
     invalid `explicit` value raises `ValueError` instead of silently falling
     through: a caller-supplied argument deserves a catchable error at the
     call site, not a masked native gRPC-metadata crash later on the first
@@ -270,9 +272,10 @@ caller involvement.
   plain `FlightSQLClient(cfg.uri, client_entrypoint=client_entrypoint)` call.
 - `cli/query.py::main()` calls `connection.connect(profile=args.profile,
   client_entrypoint="cli-query")` (`:142`).
-- Top-level `micromegas/__init__.py::connect()` is unchanged — it's the documented
-  library/notebook entry point, so it must leave `client_entrypoint=None` and let
-  auto-detection (jupyter/repl/script) do its job.
+- Top-level `micromegas/__init__.py::connect()` is unchanged — this plan keeps that public
+  library/notebook entry point's signature as-is; callers get the auto-detected
+  `script`/`jupyter`/`repl` value, and anyone who wants an explicit label can construct
+  `FlightSQLClient(uri, client_entrypoint=...)` directly instead.
 - `cli/screens.py` and `cli/logout.py` are unchanged — neither issues a FlightSQL query (see
   Current State), so there is no `cli-screens` value to send yet.
 
@@ -570,8 +573,9 @@ specific to the two headers the gateway itself controls.
   process rather than raising a catchable exception — that's a client-side safety check, not
   a server-side trust boundary, so the risk described above is unchanged. The same validation
   also guards the public `client_entrypoint` argument on `FlightSQLClient.__init__`/
-  `connect(...)` (a more likely source of an unsafe value than the env vars, since it's a
-  documented API parameter): `resolve_client_entrypoint` runs it through `_sanitize_override`
+  `oidc_connection.connect(...)`/`cli/connection.connect(...)` (a more likely source of an
+  unsafe value than the env vars, since it's a documented API parameter):
+  `resolve_client_entrypoint` runs it through `_sanitize_override`
   too, but raises `ValueError` on rejection instead of silently falling back, since an explicit
   caller argument warrants a catchable error rather than a masked mislabeling.
 
