@@ -615,7 +615,7 @@ export function XYChart({
     }
 
     // Build X axis configuration based on mode
-    const xAxisConfig = buildXAxisConfig(xAxisMode, xLabels)
+    const { axis: xAxisConfig, rightPadding } = buildXAxisConfig(xAxisMode, xLabels)
 
     const refLinePlugin = createReferenceLinePlugin()
 
@@ -837,6 +837,7 @@ export function XYChart({
         height: dimensions.height,
         plugins: [createMultiSeriesTooltipPlugin(seriesInfoForTooltip, xAxisMode, xLabels), refLinePlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
+        padding: [null, rightPadding, null, null],
         scales,
         axes,
         series: uPlotSeries,
@@ -983,6 +984,7 @@ export function XYChart({
         height: dimensions.height,
         plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels), refLinePlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
+        padding: [null, rightPadding, null, null],
         scales: {
           x: buildXScale(xAxisMode),
           y: {

@@ -1,19 +1,35 @@
 import type uPlot from 'uplot'
-import { buildXAxisConfig, buildXScale, formatYAxisTick } from '../xychart-axis'
+import {
+  buildXAxisConfig,
+  buildXScale,
+  formatYAxisTick,
+  estimateLabelWidth,
+  AVG_CHAR_WIDTH_PX,
+  ROTATE_DEG,
+  BASE_SIZE,
+  BASE_MIN_SPACE_PX,
+  ROTATED_MIN_SPACE_PX,
+  MAX_ROTATED_SIZE,
+  ROTATED_SIZE_FRACTION,
+  DEFAULT_RIGHT_CUSHION_PX,
+  RIGHT_AXIS_SIZE_PX,
+} from '../xychart-axis'
 
 // The `values` formatter ignores its uPlot argument; pass a stub.
 const u = undefined as unknown as uPlot
 
 describe('buildXAxisConfig', () => {
   it('time mode leaves values/incrs unset (uPlot uses its time defaults)', () => {
-    const axis = buildXAxisConfig('time')
+    const { axis, rightPadding } = buildXAxisConfig('time')
     expect(axis.values).toBeUndefined()
     expect(axis.incrs).toBeUndefined()
     expect(axis.size).toBe(65)
+    expect(axis.rotate).toBeUndefined()
+    expect(rightPadding).toBeNull()
   })
 
   it('categorical mode maps tick indices to labels and blanks out-of-range', () => {
-    const axis = buildXAxisConfig('categorical', ['a', 'b', 'c'])
+    const { axis } = buildXAxisConfig('categorical', ['a', 'b', 'c'])
     expect(axis.incrs).toEqual([1])
     const fn = axis.values as (u: uPlot, vals: number[]) => string[]
     expect(fn(u, [0, 1, 2, 3])).toEqual(['a', 'b', 'c', ''])
@@ -22,17 +38,102 @@ describe('buildXAxisConfig', () => {
   })
 
   it('categorical without labels falls through to the default (no values)', () => {
-    const axis = buildXAxisConfig('categorical')
+    const { axis } = buildXAxisConfig('categorical')
     expect(axis.values).toBeUndefined()
   })
 
   it('numeric mode abbreviates with magnitude-dependent precision', () => {
-    const axis = buildXAxisConfig('numeric')
+    const { axis, rightPadding } = buildXAxisConfig('numeric')
     const fn = axis.values as (u: uPlot, vals: number[]) => string[]
     expect(fn(u, [0])).toEqual(['0'])
     expect(fn(u, [12345])).toEqual([(12345).toLocaleString()])
     expect(fn(u, [3.14159])).toEqual(['3.1'])
     expect(fn(u, [0.0123])).toEqual([(0.0123).toPrecision(2)])
+    expect(axis.rotate).toBeUndefined()
+    expect(axis.space).toBe(60)
+    expect(rightPadding).toBeNull()
+  })
+
+  describe('adaptive rotation (categorical mode)', () => {
+    it('estimateLabelWidth returns label.length * AVG_CHAR_WIDTH_PX', () => {
+      expect(estimateLabelWidth('abcd')).toBe(4 * AVG_CHAR_WIDTH_PX)
+      expect(estimateLabelWidth('')).toBe(0)
+    })
+
+    it('rotate() returns 0 for short labels with ample foundSpace', () => {
+      const { axis } = buildXAxisConfig('categorical', ['a', 'b'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      expect(rotate(u, ['a', 'b'], 0, 60)).toBe(0)
+    })
+
+    it('rotate() returns ROTATE_DEG for a long label with narrow foundSpace', () => {
+      const { axis } = buildXAxisConfig('categorical', ['long-label'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      const longLabel = 'a-very-long-category-label-string'
+      expect(rotate(u, [longLabel], 0, 20)).toBe(ROTATE_DEG)
+    })
+
+    it('size() after a rotating rotate() call is > BASE_SIZE and capped by height', () => {
+      const { axis } = buildXAxisConfig('categorical', ['x'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      const size = axis.size as (self: uPlot) => number
+      const longLabel = 'a-very-long-category-label-string'
+      rotate(u, [longLabel], 0, 20)
+      const stubSelf = { height: 250 } as uPlot
+      const result = size(stubSelf)
+      expect(result).toBeGreaterThan(BASE_SIZE)
+      expect(result).toBeLessThanOrEqual(Math.min(MAX_ROTATED_SIZE, Math.round(250 * ROTATED_SIZE_FRACTION)))
+    })
+
+    it('size() after a non-rotating rotate() call returns exactly BASE_SIZE', () => {
+      const { axis } = buildXAxisConfig('categorical', ['a', 'b'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      const size = axis.size as (self: uPlot) => number
+      rotate(u, ['a', 'b'], 0, 60)
+      expect(size({ height: 250 } as uPlot)).toBe(BASE_SIZE)
+    })
+
+    it('size() called with no arguments at all (uPlot init call shape) returns BASE_SIZE without throwing', () => {
+      const { axis } = buildXAxisConfig('categorical', ['a', 'b'])
+      const size = axis.size as (self?: uPlot) => number
+      expect(() => size()).not.toThrow()
+      expect(size()).toBe(BASE_SIZE)
+    })
+
+    it('space() reflects the previous rotate() decision: 60 before/non-rotating, 20 after rotating', () => {
+      const { axis } = buildXAxisConfig('categorical', ['a', 'b'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      const space = axis.space as () => number
+      expect(space()).toBe(BASE_MIN_SPACE_PX)
+      rotate(u, ['a', 'b'], 0, 60)
+      expect(space()).toBe(BASE_MIN_SPACE_PX)
+      const longLabel = 'a-very-long-category-label-string'
+      rotate(u, [longLabel], 0, 20)
+      expect(space()).toBe(ROTATED_MIN_SPACE_PX)
+    })
+
+    it('rightPadding() before any rotate() call reproduces autoPadSide', () => {
+      const { rightPadding } = buildXAxisConfig('categorical', ['a', 'b'])
+      const fn = rightPadding as (self: uPlot, side: number, sidesWithAxes: [boolean, boolean, boolean, boolean], cycleNum: number) => number
+      const stubSelf = { width: 800 } as uPlot
+      expect(fn(stubSelf, 1, [false, false, true, true], 0)).toBe(DEFAULT_RIGHT_CUSHION_PX)
+      expect(fn(stubSelf, 1, [false, true, true, true], 0)).toBe(0)
+    })
+
+    it('rightPadding() after a rotating rotate() call reserves capped width, reduced when a right axis exists', () => {
+      const { axis, rightPadding } = buildXAxisConfig('categorical', ['a', 'b'])
+      const rotate = axis.rotate as (u: uPlot, values: (string | number)[], axisIdx: number, foundSpace: number) => number
+      const fn = rightPadding as (self: uPlot, side: number, sidesWithAxes: [boolean, boolean, boolean, boolean], cycleNum: number) => number
+      const longLabel = 'a-very-long-category-label-string'
+      rotate(u, [longLabel], 0, 20)
+      const stubSelf = { width: 800 } as uPlot
+      const cap = Math.min(MAX_ROTATED_SIZE, Math.round(800 * ROTATED_SIZE_FRACTION))
+      const noRightAxis = fn(stubSelf, 1, [false, false, true, true], 0)
+      expect(noRightAxis).toBeGreaterThan(DEFAULT_RIGHT_CUSHION_PX)
+      expect(noRightAxis).toBeLessThanOrEqual(cap)
+      const withRightAxis = fn(stubSelf, 1, [false, true, true, true], 0)
+      expect(withRightAxis).toBe(Math.max(0, noRightAxis - RIGHT_AXIS_SIZE_PX))
+    })
   })
 })
 
