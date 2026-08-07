@@ -15,9 +15,10 @@ This plan adds three new headers, resolved once per client instance in
 
 - `x-client-agent` — who is driving the client (`claude-code`, `none`, or an explicit
   override), detected from ambient environment variables.
-- `x-client-entrypoint` — how the client was invoked. Auto-detected values (`cli-query`,
-  `script`, `jupyter`, `repl`) come from a closed vocabulary; the explicit-argument and
-  `MICROMEGAS_CLIENT_ENTRYPOINT` override paths accept any gRPC-safe free-form string.
+- `x-client-entrypoint` — how the client was invoked. Auto-detected values (`script`,
+  `jupyter`, `repl`) come from a closed vocabulary; `cli-query` is not auto-detected — it's the
+  explicit label our own CLI passes. The explicit-argument and `MICROMEGAS_CLIENT_ENTRYPOINT`
+  override paths accept any gRPC-safe free-form string.
 - `x-client-session` — an opaque id that correlates every query from one client instance, so
   per-task/per-session metrics (queries per task, retries after error, bytes scanned per
   session) become possible for a long-lived script or notebook process that issues several
@@ -27,9 +28,11 @@ This plan adds three new headers, resolved once per client instance in
   `CLAUDE_CODE_SESSION_ID`); otherwise each invocation gets its own fresh session id — see
   Trade-offs below.
 
-The server reads all three, logs them alongside the existing `client=` field, and adds them
-to `QueryAuditRecord`. Both are analytics-only signals — never used for auth, quota, or rate
-limiting — and trivially spoofable/omittable, same as the existing `x-client-type`.
+The server reads all three, logs `agent`/`entrypoint` alongside the existing `client=` field
+(session is deliberately omitted from that free-text log line — see Design), and adds all
+three to `QueryAuditRecord`. All three are analytics-only signals — never used for auth,
+quota, or rate limiting — and trivially spoofable/omittable, same as the existing
+`x-client-type`.
 
 ## Current State
 
@@ -163,8 +166,9 @@ def resolve_client_entrypoint(explicit=None):
     query. Otherwise: a sanitized env override, then `-c`/jupyter/repl
     detection, then "script". `explicit`/the env override are free-form
     (validated only for gRPC-safety, not against a vocabulary) -- the closed
-    vocabulary ({cli-query, script, jupyter, repl}) applies only to the
-    auto-detection branch below, which must never return raw
+    vocabulary ({script, jupyter, repl}) applies only to the
+    auto-detection branch below (cli-query is not auto-detected -- it's the
+    explicit label our own CLI passes), which must never return raw
     sys.argv[0]/__main__.__file__."""
     if explicit:
         sanitized = _sanitize_override(explicit)
@@ -279,9 +283,9 @@ caller involvement.
 - `cli/screens.py` and `cli/logout.py` are unchanged — neither issues a FlightSQL query (see
   Current State), so there is no `cli-screens` value to send yet.
 
-### Server: read, log, and audit the two new fields
+### Server: read, log, and audit the three new fields
 
-`flight_sql_service_impl.rs::execute_query` (`:552-591`) reads two more headers alongside
+`flight_sql_service_impl.rs::execute_query` (`:552-591`) reads three more headers alongside
 `client_type`, each defaulting to `"unknown"` when absent (same convention as `client_type`
 today — a real, distinguishable value from the Python client's own `"none"`/`"script"`
 fallbacks, which mean "the client actively resolved this and found nothing," not "the client
@@ -487,13 +491,23 @@ specific to the two headers the gateway itself controls.
     `client_entrypoint=None`; add a short "Client Attribution" subsection documenting
     `x-client-agent`/`x-client-entrypoint`/`x-client-session`, the `MICROMEGAS_CLIENT_AGENT`/
     `MICROMEGAS_CLIENT_ENTRYPOINT` overrides, and that these are analytics-only (never used for
-    auth/quota).
+    auth/quota). Also add `MICROMEGAS_CLIENT_AGENT` and `MICROMEGAS_CLIENT_ENTRYPOINT` as rows
+    to the existing "**Environment Variables:**" table (`:653-661`) alongside
+    `MICROMEGAS_ANALYTICS_URI`/`MICROMEGAS_OIDC_*`/`MICROMEGAS_PROFILE`, since the CLI reads
+    them too — cross-referencing the new subsection rather than duplicating its full
+    description.
 18. `mkdocs/docs/gateway/configuration.md`: add the three new headers to the "Default headers"
-    bullet list (`:29`).
+    bullet list (`:29`). Note that this default only applies when `MICROMEGAS_GATEWAY_HEADERS`
+    is unset — `HeaderForwardingConfig::from_env()` (`http_gateway.rs:65-72`) replaces the
+    allowlist entirely rather than merging with it, so a deployment with a custom
+    `MICROMEGAS_GATEWAY_HEADERS` JSON must add `X-Client-Agent`, `X-Client-Entrypoint`, and
+    `X-Client-Session` to that JSON explicitly or it will keep dropping them after upgrading.
 19. `CHANGELOG.md`: `## Unreleased` → `**Python:**` (client changes) and `**Analytics:**`
     (server/audit changes) entries. Flag `QueryAuditRecord` as a **minor breaking change**
     again (gains `agent`, `entrypoint`, `session`), matching how the two prior additions to
-    this struct were documented (#1435, #1406).
+    this struct were documented (#1435, #1406). Note in the **Analytics:** entry that a
+    deployment with a custom `MICROMEGAS_GATEWAY_HEADERS` allowlist must add the three new
+    header names explicitly to keep forwarding them through the gateway.
 
 ## Files to Modify
 
