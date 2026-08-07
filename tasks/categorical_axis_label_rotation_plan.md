@@ -164,9 +164,12 @@ draws it down-and-to-the-right (`uPlot.iife.js:4614-4667`), so the last
 category's label can extend well past the plot's right edge. The only
 cushion uPlot gives that edge by default is `autoPadSide`
 (`uPlot.iife.js:3804-3816`): `yAxisOpts.size / 2` (~25px) when there's *no*
-right-side y-axis, `0` when there is one — and `XYChart.tsx:746` puts a
-y-axis on `side: 1` (right) for the multi-series, multi-unit path, so
-dual-unit categorical charts get no right-side cushion at all. A ~20-char
+right-side y-axis, `0` when there is one — and `XYChart.tsx:~264-271`
+(`unitScaleInfo`) assigns the *first* unit's y-axis `side: 1` (right)
+whenever there are 2+ visible series, regardless of how many distinct units
+those series share, so any multi-series categorical chart (2+ series,
+regardless of unit count) gets no right-side cushion at all — only the true
+single-series path (no explicit `side`, defaulting to left) is cushioned. A ~20-char
 rotated label's horizontal projection (~85px, see Testing Strategy) far
 exceeds either buffer.
 
@@ -204,7 +207,7 @@ xAxisConfig.size = (_u) => {
   return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
 }
 
-const rightPadding: uPlot.Axis.PaddingSide = () => {
+const rightPadding: uPlot.PaddingSide = () => {
   if (!rotated) return 0
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
@@ -253,7 +256,7 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
    - Add `estimateLabelWidth(label: string): number` (exported for direct
      unit testing, matching the module's existing export style).
    - Change `buildXAxisConfig`'s return type from `uPlot.Axis` to
-     `{ axis: uPlot.Axis; rightPadding: uPlot.Axis.PaddingSide }`.
+     `{ axis: uPlot.Axis; rightPadding: uPlot.PaddingSide }`.
    - Inside the `xAxisMode === 'categorical' && xLabels` branch, declare
      `let rotated = false` and `let maxWidth = 0` and set
      `xAxisConfig.rotate` / `xAxisConfig.size` / `rightPadding` as described
@@ -311,8 +314,16 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 
 ## Testing Strategy
 
-- **Unit tests** in `xychart-axis.test.ts`, alongside the existing
-  `buildXAxisConfig` describe block:
+- **Unit tests** in `xychart-axis.test.ts`:
+  - Update all 4 existing cases in the `buildXAxisConfig` describe block
+    (`time mode leaves values/incrs unset`, `categorical mode maps tick
+    indices to labels`, `categorical without labels falls through`,
+    `numeric mode abbreviates`) to destructure `const { axis } =
+    buildXAxisConfig(...)` instead of `const axis = buildXAxisConfig(...)` —
+    every one of them reads `axis.values`/`axis.incrs`/`axis.size` directly
+    off the return value today, and all break once the return shape changes
+    to `{ axis, rightPadding }`. This is a mechanical rewrite of the whole
+    describe block, not just the two branches below gaining new assertions.
   - `estimateLabelWidth` returns `label.length * AVG_CHAR_WIDTH_PX`.
   - Calling `rotate(u, ['a', 'b'], 0, 60)` with short labels and ample
     `foundSpace` returns `0`.
@@ -346,9 +357,13 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   "isn't needed."
   Additionally, on that same rotated chart, confirm the **last** category's
   label is fully visible and not clipped at the chart's right edge, in both
-  a single-y-axis chart and a dual-unit chart (two series with different
-  units, which puts a `side: 1` right y-axis on the chart per
-  `XYChart.tsx:746` — the zero-right-cushion case the `padding` fix targets).
+  a true single-series chart (no explicit `side`, the only cushioned case)
+  and a multi-series chart with 2+ visible series (which puts a `side: 1`
+  right y-axis on the chart per `XYChart.tsx:~268`'s `unitScaleInfo` —
+  the zero-right-cushion case the `padding` fix targets — regardless of
+  whether those series share one unit or several; a multi-series/
+  single-shared-unit chart is *not* a safe stand-in for the single-series
+  control, since it still gets `side: 1` and zero cushion).
 - Run `cd analytics-web-app && yarn lint && yarn type-check && yarn test`.
 
 ## Documentation
@@ -361,5 +376,8 @@ docs updates required.
 - None — the fix stays within `xychart-axis.ts` plus a small, mechanical
   wiring change at `buildXAxisConfig`'s single call site in `XYChart.tsx`
   (destructure the new `{ axis, rightPadding }` return shape instead of a
-  bare `uPlot.Axis`), and the existing unit-test file already covers the
-  surrounding categorical-mode behavior this extends.
+  bare `uPlot.Axis`). The existing unit-test file covers the surrounding
+  categorical-mode behavior this extends, but all 4 of its existing
+  `buildXAxisConfig` cases must be updated to destructure `{ axis }` from
+  the new return shape (see Testing Strategy) — a mechanical but total
+  rewrite of that describe block, not a small extension.
