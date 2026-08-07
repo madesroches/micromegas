@@ -51,7 +51,10 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
     .slice(0, 2) || 'U'
 
   return (
-    <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-app-header border-b border-theme-border">
+    // Fixed h-16 (64px) instead of padding-driven height: AppShell's fixed
+    // Sidebar wrapper is offset with `top-16` to sit just below this header
+    // (see AppShell.tsx), so the two must be kept in sync.
+    <header className="flex items-center justify-between px-3 sm:px-6 h-16 bg-app-header border-b border-theme-border">
       <div className="flex items-center gap-3 sm:gap-6">
         <AppLink href="/" className="hover:opacity-80 transition-opacity">
           <MicromegasLogo size="sm" />

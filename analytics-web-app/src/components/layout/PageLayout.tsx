@@ -1,6 +1,5 @@
 import { Suspense } from 'react'
 import { Header } from './Header'
-import { Sidebar } from './Sidebar'
 
 /**
  * Time range props for controlled time range picker.
@@ -35,8 +34,7 @@ function PageLayoutContent({ children, onRefresh, rightPanel, timeRangeControl, 
   return (
     <div className="h-screen bg-app-bg text-theme-text-primary flex flex-col">
       <Header onRefresh={onRefresh} timeRangeControl={timeRangeControl} processId={processId} refreshIntervalMs={refreshIntervalMs} onRefreshIntervalChange={onRefreshIntervalChange} isExecuting={isExecuting} />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar />
+      <div className="flex flex-1 min-h-0 sm:pl-14">
         <main className="flex-1 overflow-auto flex flex-col">{children}</main>
         {rightPanel}
       </div>

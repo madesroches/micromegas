@@ -7,6 +7,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { renderIcon } from '@/lib/screen-type-utils'
+import { notifyFoldersChanged } from '@/lib/folders-sync'
 import {
   listScreens,
   getScreenTypes,
@@ -212,6 +213,13 @@ function ImportScreensPageContent() {
 
     setResults(importResults)
     setIsImporting(false)
+
+    // Notify the persistent sidebar's folder/screen tree once for the whole
+    // import, not per-imported-screen — only if at least one screen actually
+    // landed (skipped/errored entries don't change the tree).
+    if (importResults.some((r) => r.status !== 'skipped' && r.status !== 'error')) {
+      notifyFoldersChanged()
+    }
   }
 
   const renderStep1 = () => (

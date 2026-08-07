@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router'
+import { AppShell } from '@/components/layout'
 
 // Lazy load route components for code splitting
 const LoginPage = lazy(() => import('@/routes/LoginPage'))
@@ -32,21 +33,23 @@ export function AppRouter() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>
-        <Route path="/" element={<Navigate to="/processes" replace />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/processes" element={<ProcessesPage />} />
-        <Route path="/process" element={<ProcessPage />} />
-        <Route path="/process_log" element={<ProcessLogPage />} />
-        <Route path="/process_metrics" element={<ProcessMetricsPage />} />
-        <Route path="/performance_analysis" element={<PerformanceAnalysisPage />} />
-        <Route path="/screens" element={<ScreensPage />} />
-        <Route path="/screen/new" element={<ScreenPage />} />
-        <Route path="/screen/:name" element={<ScreenPage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin/data-sources" element={<DataSourcesPage />} />
-        <Route path="/admin/export-screens" element={<ExportScreensPage />} />
-        <Route path="/admin/import-screens" element={<ImportScreensPage />} />
-        <Route path="/admin/maps" element={<MapsPage />} />
+        <Route element={<AppShell />}>
+          <Route path="/" element={<Navigate to="/processes" replace />} />
+          <Route path="/processes" element={<ProcessesPage />} />
+          <Route path="/process" element={<ProcessPage />} />
+          <Route path="/process_log" element={<ProcessLogPage />} />
+          <Route path="/process_metrics" element={<ProcessMetricsPage />} />
+          <Route path="/performance_analysis" element={<PerformanceAnalysisPage />} />
+          <Route path="/screens" element={<ScreensPage />} />
+          <Route path="/screen/new" element={<ScreenPage />} />
+          <Route path="/screen/:name" element={<ScreenPage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin/data-sources" element={<DataSourcesPage />} />
+          <Route path="/admin/export-screens" element={<ExportScreensPage />} />
+          <Route path="/admin/import-screens" element={<ImportScreensPage />} />
+          <Route path="/admin/maps" element={<MapsPage />} />
+        </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>
