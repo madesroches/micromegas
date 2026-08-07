@@ -1,7 +1,7 @@
 use crate::binary_column_accessor::create_binary_accessor;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -51,7 +51,7 @@ impl ScalarUDFImpl for JsonbFormatJson {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_format_json");
+            return exec_err!("wrong number of arguments to jsonb_format_json");
         }
 
         // Use BinaryColumnAccessor to handle both Binary and Dictionary<Int32, Binary>

@@ -2,7 +2,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, DictionaryArray, GenericBinaryArray, Int32Array, ListBuilder, StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -88,7 +88,7 @@ impl ScalarUDFImpl for JsonbObjectKeys {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_object_keys()");
+            return exec_err!("wrong number of arguments to jsonb_object_keys()");
         }
 
         match args[0].data_type() {
@@ -141,7 +141,7 @@ impl ScalarUDFImpl for JsonbObjectKeys {
                 })?;
                 Ok(ColumnarValue::Array(result))
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "jsonb_object_keys: unsupported input type, expected Binary or Dictionary<Int32, Binary>"
             ),
         }

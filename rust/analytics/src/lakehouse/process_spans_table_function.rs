@@ -260,7 +260,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                 false,
             )
             .await
-            .map_err(|e| datafusion::error::DataFusionError::Execution(
+            .map_err(|e| datafusion::error::DataFusionError::Internal(
                 format!("Failed to create session context: {e}"),
             ))?;
 
@@ -268,7 +268,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
             if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
                 let threads = get_process_thread_list(&process_id, &ctx)
                     .await
-                    .map_err(|e| datafusion::error::DataFusionError::Execution(
+                    .map_err(|e| datafusion::error::DataFusionError::Internal(
                         format!("Failed to get thread list: {e}"),
                     ))?;
 
@@ -302,7 +302,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                         .buffered(max_concurrent)
                         .try_collect()
                         .await
-                        .map_err(|e| datafusion::error::DataFusionError::Execution(
+                        .map_err(|e| datafusion::error::DataFusionError::Internal(
                             format!("Failed to query thread spans: {e}"),
                         ))?;
 
@@ -339,11 +339,11 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                 );
 
                 let df = ctx.sql(&async_sql).await
-                    .map_err(|e| datafusion::error::DataFusionError::Execution(
+                    .map_err(|e| datafusion::error::DataFusionError::Internal(
                         format!("Failed to query async spans: {e}"),
                     ))?;
                 let mut async_stream = df.execute_stream().await
-                    .map_err(|e| datafusion::error::DataFusionError::Execution(
+                    .map_err(|e| datafusion::error::DataFusionError::Internal(
                         format!("Failed to execute async spans stream: {e}"),
                     ))?;
 

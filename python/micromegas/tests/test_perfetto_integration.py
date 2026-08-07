@@ -5,7 +5,7 @@ into a comprehensive integration test suite.
 """
 
 import pytest
-import pyarrow._flight as flight
+import pyarrow
 import micromegas
 import sys
 import os
@@ -117,7 +117,7 @@ def test_perfetto_trace_chunks_error_handling():
     print("\n=== Testing Error Handling ===")
 
     # Test invalid span type
-    with pytest.raises(flight.FlightInternalError) as exc_info:
+    with pytest.raises(pyarrow.lib.ArrowInvalid) as exc_info:
         sql = """
         SELECT chunk_id, chunk_data
         FROM perfetto_trace_chunks(
@@ -133,7 +133,7 @@ def test_perfetto_trace_chunks_error_handling():
     print("✅ Invalid span type properly rejected")
 
     # Test missing arguments
-    with pytest.raises(flight.FlightInternalError) as exc_info:
+    with pytest.raises(pyarrow.lib.ArrowInvalid) as exc_info:
         sql = """
         SELECT chunk_id, chunk_data
         FROM perfetto_trace_chunks('process-id', 'both')
@@ -145,7 +145,7 @@ def test_perfetto_trace_chunks_error_handling():
     print("✅ Missing arguments properly rejected")
 
     # Test non-existent process (should fail gracefully)
-    with pytest.raises(flight.FlightInternalError) as exc_info:
+    with pytest.raises(pyarrow.lib.ArrowInvalid) as exc_info:
         sql = """
         SELECT chunk_id, chunk_data
         FROM perfetto_trace_chunks(

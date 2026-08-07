@@ -186,6 +186,7 @@ fn aggregate_scan_metrics_sums_spill_metrics_across_the_tree() {
 
 fn full_record(sql: &str) -> QueryAuditRecord {
     QueryAuditRecord {
+        query_id: "11111111-1111-1111-1111-111111111111".to_string(),
         client: "python".to_string(),
         user: "alice".to_string(),
         email: "alice@example.com".to_string(),
@@ -203,6 +204,7 @@ fn full_record(sql: &str) -> QueryAuditRecord {
         total_ms: 42.0,
         status: "ok",
         error: None,
+        error_class: None,
         output_rows: Some(123),
         bytes_scanned: 4096,
         peak_memory_bytes: 8192,
@@ -217,6 +219,7 @@ fn query_audit_record_serializes_required_fields() {
     let json = serde_json::to_string(&record).expect("serialization should succeed");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
+    assert_eq!(value["query_id"], "11111111-1111-1111-1111-111111111111");
     assert_eq!(value["client"], "python");
     assert_eq!(value["user"], "alice");
     assert_eq!(value["email"], "alice@example.com");
@@ -242,6 +245,7 @@ fn query_audit_record_serializes_required_fields() {
 #[test]
 fn query_audit_record_omits_absent_optionals() {
     let record = QueryAuditRecord {
+        query_id: "22222222-2222-2222-2222-222222222222".to_string(),
         client: "grpc".to_string(),
         user: "unknown".to_string(),
         email: "unknown".to_string(),
@@ -259,6 +263,7 @@ fn query_audit_record_omits_absent_optionals() {
         total_ms: 1.0,
         status: "error",
         error: Some("boom".to_string()),
+        error_class: Some("internal"),
         output_rows: None,
         bytes_scanned: 0,
         peak_memory_bytes: 0,
@@ -281,10 +286,29 @@ fn query_audit_record_omits_absent_optionals() {
     assert_eq!(value["service_account_name"], "svc-ci");
     assert_eq!(value["status"], "error");
     assert_eq!(value["error"], "boom");
+    assert_eq!(value["error_class"], "internal");
+    assert_eq!(value["query_id"], "22222222-2222-2222-2222-222222222222");
     assert_eq!(value["bytes_scanned"], 0);
     assert_eq!(value["peak_memory_bytes"], 0);
     assert_eq!(value["spilled_bytes"], 0);
     assert_eq!(value["spill_count"], 0);
+}
+
+#[test]
+fn query_audit_record_omits_error_class_when_status_is_ok() {
+    // `error_class` is `None` whenever the query didn't fail -- matching the
+    // existing `error` field's own "on error" convention.
+    let record = full_record("SELECT 1");
+    assert_eq!(record.status, "ok");
+    assert_eq!(record.error_class, None);
+
+    let json = serde_json::to_string(&record).expect("serialization should succeed");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let object = value
+        .as_object()
+        .expect("record serializes as a JSON object");
+
+    assert!(!object.contains_key("error_class"));
 }
 
 #[test]

@@ -35,6 +35,15 @@ use std::{
 
 pub use super::process_spans_table_function::SpanTypes;
 
+/// Marker error for a process that could not be found. This is a caller error (the
+/// requested process id doesn't exist), not a server-side failure, so it must stay
+/// classified as `DataFusionError::Execution` while every other failure inside
+/// `generate_streaming_perfetto_trace` (session context, object store, DB, parquet
+/// reads, ...) is a genuine internal failure.
+#[derive(Debug, thiserror::Error)]
+#[error("Process {0} not found")]
+struct ProcessNotFoundError(String);
+
 /// Execution plan that generates Perfetto trace chunks
 pub struct PerfettoTraceExecutionPlan {
     schema: SchemaRef,
@@ -185,8 +194,11 @@ fn generate_perfetto_trace_stream(
             match chunk_result {
                 Ok(batch) => yield Ok(batch),
                 Err(e) => {
+                    // ChunkSender only ever pushes `Ok(batch)` into this channel, so
+                    // reaching this branch means the channel itself misbehaved - an
+                    // internal failure, never a caller mistake.
                     error!("Error in chunk generation: {:?}", e);
-                    yield Err(datafusion::error::DataFusionError::Execution(
+                    yield Err(datafusion::error::DataFusionError::Internal(
                         format!("Chunk generation failed: {}", e)
                     ));
                     return;
@@ -198,14 +210,24 @@ fn generate_perfetto_trace_stream(
         match generation_task.await {
             Ok(Ok(())) => {}, // Success
             Ok(Err(e)) => {
-                error!("Trace generation failed: {:?}", e);
-                yield Err(datafusion::error::DataFusionError::Execution(
-                    format!("Trace generation failed: {}", e)
-                ));
+                if e.downcast_ref::<ProcessNotFoundError>().is_some() {
+                    // Caller asked for a process id that doesn't exist.
+                    warn!("Trace generation failed: {:?}", e);
+                    yield Err(datafusion::error::DataFusionError::Execution(
+                        format!("Trace generation failed: {}", e)
+                    ));
+                } else {
+                    // Everything else (session context, object store, DB, parquet
+                    // reads, ...) is a genuine server-side failure.
+                    error!("Trace generation failed: {:?}", e);
+                    yield Err(datafusion::error::DataFusionError::Internal(
+                        format!("Trace generation failed: {}", e)
+                    ));
+                }
             }
             Err(e) => {
                 error!("Task panicked: {:?}", e);
-                yield Err(datafusion::error::DataFusionError::Execution(
+                yield Err(datafusion::error::DataFusionError::Internal(
                     format!("Task panicked: {}", e)
                 ));
             }
@@ -295,7 +317,7 @@ async fn get_process_exe(
     let batches = df.collect().await?;
 
     if batches.is_empty() || batches[0].num_rows() == 0 {
-        anyhow::bail!("Process {} not found", process_id);
+        return Err(ProcessNotFoundError(process_id.to_owned()).into());
     }
 
     let exes = string_column_by_name(&batches[0], "exe")?;

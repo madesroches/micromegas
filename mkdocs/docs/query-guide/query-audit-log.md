@@ -96,10 +96,34 @@ ORDER BY peak_memory_bytes DESC
 LIMIT 20;
 ```
 
+### Failed queries grouped by `error_class`
+
+`error_class` distinguishes "the caller's SQL/input was bad" (`"user"`), "the query exceeded a
+resource budget" (`"resource"`), and "a genuine server-side failure" (`"internal"`) -- useful for
+telling how much of your error rate is actually actionable by the caller versus a real service
+problem.
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '1 hour'
+)
+SELECT
+  jsonb_as_string(jsonb_get(j, 'error_class')) AS error_class,
+  count(*) AS failures
+FROM q
+WHERE jsonb_as_string(jsonb_get(j, 'status')) = 'error'
+GROUP BY error_class
+ORDER BY failures DESC;
+```
+
 ## Fields
 
 | Field | Type | Present | Description |
 |-------|------|---------|--------------|
+| `query_id` | string (UUID) | always | Unique id minted at the start of the request; also embedded in the client-facing error message and the server-side log line for the same failure, so the three can be correlated by grepping this id |
 | `client` | string | always | Client type from the `x-client-type` metadata header (e.g. `python`, `grafana`), `unknown` if absent |
 | `user` | string | always | Resolved user id |
 | `email` | string | always | Resolved user email |
@@ -117,6 +141,7 @@ LIMIT 20;
 | `total_ms` | float | always | End-to-end duration, including draining the response stream to the client |
 | `status` | string | always | `"ok"`, `"error"`, or `"incomplete"` (stream abandoned mid-drain, e.g. client disconnect or cancellation) |
 | `error` | string | on error | Error message, when `status` is `"error"` |
+| `error_class` | string | on error | `"user"` (bad SQL/input), `"resource"` (query exceeded a resource budget), or `"internal"` (a genuine server-side failure), derived from the gRPC status code the query failed with |
 | `output_rows` | integer | if available | Rows produced by the query's physical plan root |
 | `bytes_scanned` | integer | always | Bytes read from the lakehouse's parquet reader (object-store bytes requested, which may be served from the in-process L1 cache rather than fetched from origin) |
 | `peak_memory_bytes` | integer | always | Peak tracked DataFusion reservation for this query alone |

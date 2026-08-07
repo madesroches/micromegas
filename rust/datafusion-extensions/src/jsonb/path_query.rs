@@ -1,7 +1,7 @@
 use crate::binary_column_accessor::create_binary_accessor;
 use datafusion::arrow::array::{Array, BinaryDictionaryBuilder, StringArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -24,7 +24,7 @@ fn eval_jsonb_path_query(
 ) -> Result<ColumnarValue> {
     let args = ColumnarValue::values_to_arrays(&args.args)?;
     if args.len() != 2 {
-        return internal_err!("wrong number of arguments to {func_name}");
+        return exec_err!("wrong number of arguments to {func_name}");
     }
 
     let accessor = create_binary_accessor(&args[0]).map_err(|e| {

@@ -217,6 +217,11 @@ pub async fn make_session_context(
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
     let config = SessionConfig::default()
         .set_bool("datafusion.execution.parquet.enable_page_index", false)
+        // Populate `Diagnostic`/`Span` on plan-time errors (unknown column, ambiguous
+        // reference, type mismatch, ...) so a caller-facing message can point at a
+        // line/column in their SQL text instead of just naming the problem. Off by
+        // default in DataFusion; see the FlightSQL error-classification plan.
+        .set_bool("datafusion.sql_parser.collect_spans", true)
         .with_information_schema(true);
     let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
     if let Some(range) = &query_range {

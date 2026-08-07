@@ -148,7 +148,7 @@ impl PartitionMerger for BatchPartitionMerger {
             Arc::new(src_table),
         )?;
         let df_template = ctx.sql(&self.merge_batch_query).await.map_err(|e| {
-            DataFusionError::Execution(format!("building template for merge query: {e:?}"))
+            DataFusionError::Internal(format!("building template for merge query: {e:?}"))
         })?;
 
         let mut builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 10);

@@ -2,7 +2,7 @@ use datafusion::arrow::array::{
     Array, DictionaryArray, Float64Array, GenericBinaryArray, Int64Array, StringDictionaryBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -61,7 +61,7 @@ impl ScalarUDFImpl for JsonbAsString {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_as_string()");
+            return exec_err!("wrong number of arguments to jsonb_as_string()");
         }
 
         match args[0].data_type() {
@@ -128,7 +128,7 @@ impl ScalarUDFImpl for JsonbAsString {
                 }
                 Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "jsonb_as_string: unsupported input type, expected Binary or Dictionary<Int32, Binary>"
             ),
         }
@@ -187,7 +187,7 @@ impl ScalarUDFImpl for JsonbAsF64 {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_as_f64()");
+            return exec_err!("wrong number of arguments to jsonb_as_f64()");
         }
 
         match args[0].data_type() {
@@ -254,7 +254,7 @@ impl ScalarUDFImpl for JsonbAsF64 {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "jsonb_as_f64: unsupported input type, expected Binary or Dictionary<Int32, Binary>"
             ),
         }
@@ -313,7 +313,7 @@ impl ScalarUDFImpl for JsonbAsI64 {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_as_i64()");
+            return exec_err!("wrong number of arguments to jsonb_as_i64()");
         }
 
         match args[0].data_type() {
@@ -380,7 +380,7 @@ impl ScalarUDFImpl for JsonbAsI64 {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "jsonb_as_i64: unsupported input type, expected Binary or Dictionary<Int32, Binary>"
             ),
         }

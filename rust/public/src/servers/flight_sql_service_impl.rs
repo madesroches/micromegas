@@ -30,6 +30,7 @@ use arrow_flight::{
 use core::str;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::error::DataFusionError;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
@@ -53,6 +54,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
+use uuid::Uuid;
 
 type FlightDataStream =
     Pin<Box<dyn Stream<Item = Result<arrow_flight::FlightData, Status>> + Send>>;
@@ -75,6 +77,182 @@ macro_rules! api_entry_not_implemented {
     }};
 }
 
+/// Design §6: for gRPC-metadata parses that are unambiguously caller-supplied
+/// input (range-header/limit-header values the caller set directly) with no
+/// `DataFusionError` involved -- `Status::invalid_argument` directly, no
+/// file:line/path suffix (nothing here ever went through `status!`'s own
+/// `file!()/line!()`).
+macro_rules! client_input_error {
+    ($desc:expr, $err:expr) => {
+        Status::invalid_argument(format!("{}: {}", $desc, $err))
+    };
+}
+
+/// Classifies the root cause of a `DataFusionError` into the gRPC status code
+/// that best distinguishes "the caller's SQL/input was bad" from "the server
+/// broke" -- see the FlightSQL error-classification plan (issue #1435) for the
+/// full rationale, including why `Execution`/`Configuration` land under
+/// `InvalidArgument` and why `ArrowError` stays `Internal`.
+pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
+    use datafusion::error::DataFusionError as DFE;
+    match err.find_root() {
+        DFE::SQL(..)
+        | DFE::Plan(_)
+        | DFE::SchemaError(..)
+        | DFE::Execution(_)
+        | DFE::Configuration(_) => tonic::Code::InvalidArgument,
+        DFE::ResourcesExhausted(_) => tonic::Code::ResourceExhausted,
+        DFE::NotImplemented(_) => tonic::Code::Unimplemented,
+        _ => tonic::Code::Internal,
+    }
+}
+
+/// Maps a gRPC status code to the `QueryAuditRecord.error_class` bucket used
+/// both by the audit log and to gate the `query_failed`/
+/// `query_duration_with_error` metrics (see Design §4).
+pub fn error_class(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::InvalidArgument | tonic::Code::Unimplemented => "user",
+        tonic::Code::ResourceExhausted => "resource",
+        _ => "internal",
+    }
+}
+
+/// Cap on the physical-plan text appended to the server-side log line (Design
+/// §2). The plan can render arbitrarily long `file_groups=` sections for wide
+/// scans, and this text is server-log-only, never returned to the client.
+pub const MAX_PLAN_CHARS: usize = 2000;
+
+/// Truncate `text` at a char boundary once it exceeds `MAX_PLAN_CHARS`, tagging
+/// the cut with a trailing marker. Driven by `char_indices()` (not byte
+/// length) so a multibyte plan text (e.g. a non-ASCII string literal from a
+/// query predicate, rendered via `ScalarValue`'s `Display` impl) can't panic
+/// on a byte-offset slice landing mid-character.
+fn truncate_plan_text(text: &str) -> String {
+    match text.char_indices().nth(MAX_PLAN_CHARS) {
+        None => text.to_string(),
+        Some((i, _)) => format!("{}... (truncated)", &text[..i]),
+    }
+}
+
+/// Builds the full server-side log line for a classified `DataFusionError`:
+/// `desc`, the error's own `Display` (its outer `Context` chain intact, with
+/// backtrace if enabled -- unlike `find_root()`, which is for classification
+/// only), the `query_id`, and -- when there's no diagnostic span to show the
+/// caller instead (Design §2) -- the truncated physical plan text. `pub` so
+/// step 9's tests can assert its content, including the truncation marker,
+/// without capturing log output.
+pub fn build_log_line(
+    desc: &str,
+    err: &DataFusionError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) -> String {
+    let mut full = format!("{desc}: {err} (query_id={query_id})");
+    if let Some(plan) = plan {
+        let plan_text = format!(
+            "{}",
+            datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+        );
+        full.push_str(&format!(
+            "\nphysical plan:\n{}",
+            truncate_plan_text(&plan_text)
+        ));
+    }
+    full
+}
+
+/// Logs `build_log_line`'s output at `error!` for `error_class == "internal"`,
+/// `warn!` otherwise -- the single log point for every `DataFusionError`
+/// reaching `client_error`/`classify_flight_error`.
+fn error_or_warn_log(
+    code: tonic::Code,
+    desc: &str,
+    err: &DataFusionError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) {
+    let full = build_log_line(desc, err, query_id, plan);
+    match error_class(code) {
+        "internal" => error!("{full}"),
+        _ => warn!("{full}"),
+    }
+}
+
+/// Classifies `err`, builds the client-facing `Status` -- `desc` + root-error
+/// text (backtrace stripped) + an optional diagnostic span/notes/helps +
+/// `query_id` -- and logs the full error server-side (Design §2). The physical
+/// plan, when present and there's no diagnostic span to show instead, only
+/// ever reaches the server log, never the returned `Status`: `displayable`
+/// can render object-store partition paths from Micromegas view scans, which
+/// would leak internal lakehouse details to every caller hitting an
+/// execution-time error.
+pub fn client_error(
+    desc: &str,
+    err: DataFusionError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) -> Status {
+    let code = classify_datafusion_error(&err);
+    let mut msg = format!("{desc}: {}", err.find_root().strip_backtrace());
+    let mut has_span = false;
+    if let Some(diag) = err.diagnostic() {
+        if let Some(span) = diag.span {
+            has_span = true;
+            msg.push_str(&format!(
+                " (at line {}, column {})",
+                span.start.line, span.start.column
+            ));
+        }
+        for note in &diag.notes {
+            msg.push_str(&format!("\nnote: {}", note.message));
+        }
+        for help in &diag.helps {
+            msg.push_str(&format!("\nhelp: {}", help.message));
+        }
+    }
+    msg.push_str(&format!(" (query_id={query_id})"));
+    error_or_warn_log(
+        code,
+        desc,
+        &err,
+        query_id,
+        if has_span { None } else { plan },
+    );
+    Status::new(code, msg)
+}
+
+/// Recovers the `DataFusionError` from the per-batch `FlightError` re-wrap
+/// (`FlightError::ExternalError(Box::new(e))`, applied once the raw
+/// `DataFusionError` stream is wrapped for Arrow Flight) and classifies it via
+/// `client_error`. Every branch logs exactly once before returning, so this is
+/// a single, unconditional log point for the per-batch stream-error site
+/// regardless of which branch is taken. `pub` so step 9's external
+/// integration tests can exercise this recovery path directly.
+pub fn classify_flight_error(
+    err: FlightError,
+    query_id: &str,
+    plan: Option<&Arc<dyn ExecutionPlan>>,
+) -> Status {
+    match err {
+        FlightError::ExternalError(inner) => match inner.downcast::<DataFusionError>() {
+            Ok(df_err) => client_error("error building data stream", *df_err, query_id, plan),
+            Err(inner) => {
+                error!("error building data stream: {inner} (query_id={query_id})");
+                Status::internal(format!(
+                    "error building data stream: {inner} (query_id={query_id})"
+                ))
+            }
+        },
+        other => {
+            error!("error building data stream: {other} (query_id={query_id})");
+            Status::internal(format!(
+                "error building data stream: {other} (query_id={query_id})"
+            ))
+        }
+    }
+}
+
 /// Attribution, per-stage timing, and (once created) the physical plan for
 /// one query. Built as soon as attribution is resolved, updated as each
 /// setup stage completes, and emitted exactly once as a [`QueryAuditRecord`]
@@ -82,6 +260,12 @@ macro_rules! api_entry_not_implemented {
 /// failure, at stream completion/error, or (if the stream is dropped mid-drain)
 /// from `CompletionTrackedStream`'s `Drop` impl.
 struct QueryAuditState {
+    /// Minted as the very first statement of `execute_query`, before any
+    /// fallible step -- included in every client-facing `Status` built by
+    /// `client_error`/`classify_flight_error` and in this query's audit
+    /// record, so a failure's server-log line and its audit record can be
+    /// correlated by grepping this id.
+    query_id: String,
     client: String,
     user: String,
     email: String,
@@ -117,7 +301,7 @@ impl QueryAuditState {
     /// further updates/completion on the success path, and so `Drop` can
     /// call it on an abandoned/cancelled stream without needing to
     /// reconstruct anything.
-    fn emit(&self, status: &'static str, error: Option<String>) {
+    fn emit(&self, status: &'static str, error: Option<String>, error_class: Option<&'static str>) {
         let scan = match &self.plan {
             Some(plan) => aggregate_scan_metrics(plan.as_ref()),
             None => ScanMetrics {
@@ -131,6 +315,7 @@ impl QueryAuditState {
         imetric!("query_peak_memory_bytes", "bytes", peak_memory_bytes);
         let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
         let record = QueryAuditRecord {
+            query_id: self.query_id.clone(),
             client: self.client.clone(),
             user: self.user.clone(),
             email: self.email.clone(),
@@ -148,6 +333,7 @@ impl QueryAuditState {
             total_ms,
             status,
             error,
+            error_class,
             output_rows: scan.output_rows,
             bytes_scanned: scan.bytes_scanned,
             peak_memory_bytes,
@@ -158,6 +344,19 @@ impl QueryAuditState {
             Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
             Err(e) => warn!("failed to serialize query audit record: {e}"),
         }
+    }
+
+    /// Emits an "error" audit record for an already-built client-facing
+    /// `status` (message + `error_class` derived from its code) and returns it
+    /// unchanged -- the shared tail of every setup-phase `map_err` in
+    /// `execute_query`.
+    fn fail(&self, status: Status) -> Status {
+        self.emit(
+            "error",
+            Some(status.message().to_string()),
+            Some(error_class(status.code())),
+        );
+        status
     }
 }
 
@@ -190,7 +389,7 @@ impl<S> Drop for CompletionTrackedStream<S> {
     /// audit state.
     fn drop(&mut self) {
         if let Some(state) = self.audit.take() {
-            state.emit("incomplete", None);
+            state.emit("incomplete", None, None);
         }
     }
 }
@@ -204,18 +403,30 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
             Poll::Ready(Some(result)) => {
-                // Check if this is an error result and log it
-                if let Err(ref err) = result {
-                    let sql = self.audit.as_ref().map(|state| state.sql.as_str());
-                    error!("stream error occurred: {err:?} sql={sql:?}");
-                    if !self.completed {
-                        let total_duration = now() - self.start_time;
-                        imetric!("query_duration_with_error", "ticks", total_duration as u64);
-                        imetric!("query_failed", "count", 1);
-                        self.completed = true;
-                        if let Some(state) = self.audit.take() {
-                            state.emit("error", Some(err.to_string()));
+                // Every `Status` reaching this stream was already logged once by
+                // `classify_flight_error` (the sole `map_err` feeding it) when it
+                // built that `Status` -- this arm only reads the code to derive
+                // the audit/metric class, it never logs again (Design §4).
+                if let Err(ref err) = result
+                    && !self.completed
+                {
+                    let class = error_class(err.code());
+                    let total_duration = now() - self.start_time;
+                    match class {
+                        "internal" => {
+                            imetric!("query_duration_with_error", "ticks", total_duration as u64);
+                            imetric!("query_failed", "count", 1);
                         }
+                        "resource" => {
+                            imetric!("query_failed_resource", "count", 1);
+                        }
+                        _ => {
+                            imetric!("query_failed_user", "count", 1);
+                        }
+                    }
+                    self.completed = true;
+                    if let Some(state) = self.audit.take() {
+                        state.emit("error", Some(err.message().to_string()), Some(class));
                     }
                 }
                 Poll::Ready(Some(result))
@@ -228,7 +439,7 @@ where
                     imetric!("query_completed_successfully", "count", 1);
                     self.completed = true;
                     if let Some(state) = self.audit.take() {
-                        state.emit("ok", None);
+                        state.emit("ok", None, None);
                     }
                 }
                 Poll::Ready(None)
@@ -291,6 +502,10 @@ impl FlightSqlServiceImpl {
         ticket_stmt: TicketStatementQuery,
         metadata: &MetadataMap,
     ) -> Result<Response<FlightDataStream>, Status> {
+        // Minted first, before any fallible step, so it's Always available --
+        // for every client-facing `Status` built by `client_error`/
+        // `classify_flight_error` and for this query's audit record (Design §3).
+        let query_id = Uuid::new_v4().to_string();
         let begin_request = now();
         let request_start = Instant::now();
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
@@ -309,19 +524,23 @@ impl FlightSqlServiceImpl {
             end = None;
         }
         let query_range = if begin.is_some() && end.is_some() {
-            let begin_datetime = chrono::DateTime::parse_from_rfc3339(
-                begin
-                    .unwrap()
-                    .to_str()
-                    .map_err(|e| status!("Unable to convert query_range_begin to string", e))?,
-            )
-            .map_err(|e| status!("Unable to parse query_range_begin as a rfc3339 datetime", e))?;
-            let end_datetime = chrono::DateTime::parse_from_rfc3339(
-                end.unwrap()
-                    .to_str()
-                    .map_err(|e| status!("Unable to convert query_range_end to string", e))?,
-            )
-            .map_err(|e| status!("Unable to parse query_range_end as a rfc3339 datetime", e))?;
+            let begin_datetime =
+                chrono::DateTime::parse_from_rfc3339(begin.unwrap().to_str().map_err(|e| {
+                    client_input_error!("Unable to convert query_range_begin to string", e)
+                })?)
+                .map_err(|e| {
+                    client_input_error!(
+                        "Unable to parse query_range_begin as a rfc3339 datetime",
+                        e
+                    )
+                })?;
+            let end_datetime =
+                chrono::DateTime::parse_from_rfc3339(end.unwrap().to_str().map_err(|e| {
+                    client_input_error!("Unable to convert query_range_end to string", e)
+                })?)
+                .map_err(|e| {
+                    client_input_error!("Unable to parse query_range_end as a rfc3339 datetime", e)
+                })?;
             Some(TimeRange::new(begin_datetime.into(), end_datetime.into()))
         } else {
             None
@@ -368,6 +587,7 @@ impl FlightSqlServiceImpl {
         // (durations/limit/plan filled in as they become known) instead of
         // only after the physical plan exists.
         let mut audit_state = QueryAuditState {
+            query_id: query_id.clone(),
             client: client_type.to_string(),
             user: attr.user_id.clone(),
             email: attr.user_email.clone(),
@@ -391,11 +611,8 @@ impl FlightSqlServiceImpl {
         // wrapper, so every session context created from it (including nested ones,
         // e.g. Perfetto trace queries and JIT materialization) attributes its memory
         // to this query alone instead of the process-shared pool.
-        let scoped_env =
-            scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone()).map_err(|e| {
-                audit_state.emit("error", Some(format!("error building scoped runtime: {e}")));
-                status!("error building scoped runtime", e)
-            })?;
+        let scoped_env = scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone())
+            .map_err(|e| audit_state.fail(status!("error building scoped runtime", e)))?;
         let lakehouse = self.lakehouse.with_runtime(scoped_env);
 
         // Session context creation phase
@@ -410,10 +627,7 @@ impl FlightSqlServiceImpl {
             is_admin(metadata),
         )
         .await
-        .map_err(|e| {
-            audit_state.emit("error", Some(format!("error in make_session_context: {e}")));
-            status!("error in make_session_context", e)
-        })?;
+        .map_err(|e| audit_state.fail(status!("error in make_session_context", e)))?;
         let context_init_duration = now() - session_begin;
         audit_state.context_init_ms = session_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
@@ -421,28 +635,24 @@ impl FlightSqlServiceImpl {
         let planning_begin = now();
         let planning_begin_instant = Instant::now();
         let mut df = ctx.sql(sql).await.map_err(|e| {
-            audit_state.emit("error", Some(format!("error building dataframe: {e}")));
-            status!("error building dataframe", e)
+            audit_state.fail(client_error("error building dataframe", e, &query_id, None))
         })?;
         let planning_duration = now() - planning_begin;
         audit_state.planning_ms = planning_begin_instant.elapsed().as_secs_f64() * 1000.0;
 
         if let Some(limit_str) = metadata.get("limit") {
             let parsed_limit: usize = usize::from_str(limit_str.to_str().map_err(|e| {
-                audit_state.emit("error", Some(format!("error converting limit to str: {e}")));
-                status!("error converting limit to str", e)
+                audit_state.fail(client_input_error!("error converting limit to str", e))
             })?)
-            .map_err(|e| {
-                audit_state.emit("error", Some(format!("error parsing limit: {e}")));
-                status!("error parsing limit", e)
-            })?;
+            .map_err(|e| audit_state.fail(client_input_error!("error parsing limit", e)))?;
             audit_state.limit = Some(parsed_limit as u64);
             df = df.limit(0, Some(parsed_limit)).map_err(|e| {
-                audit_state.emit(
-                    "error",
-                    Some(format!("error building dataframe with limit: {e}")),
-                );
-                status!("error building dataframe with limit", e)
+                audit_state.fail(client_error(
+                    "error building dataframe with limit",
+                    e,
+                    &query_id,
+                    None,
+                ))
             })?;
         }
 
@@ -454,14 +664,30 @@ impl FlightSqlServiceImpl {
         let schema = Arc::new(df.schema().as_arrow().clone());
         let task_ctx = Arc::new(df.task_ctx());
         let plan = df.create_physical_plan().await.map_err(|e| {
-            audit_state.emit("error", Some(format!("error creating physical plan: {e}")));
-            status!("error creating physical plan", e)
+            audit_state.fail(client_error(
+                "error creating physical plan",
+                e,
+                &query_id,
+                None,
+            ))
         })?;
         audit_state.plan = Some(plan.clone());
+        // `plan`/`query_id` are cloned here because both are moved shortly:
+        // `plan` into `execute_stream` below, `audit_state` (which owns
+        // `query_id`'s sibling on the struct) into `CompletionTrackedStream::new`
+        // further down. The per-batch closure below outlives this function call
+        // (it's polled from the returned stream), so it needs its own owned
+        // clones rather than borrowing `plan`/`query_id` directly (Design §2).
+        let plan_for_errors = plan.clone();
+        let query_id_for_stream = query_id.clone();
         let stream = execute_stream(plan, task_ctx)
             .map_err(|e| {
-                audit_state.emit("error", Some(format!("Error executing plan: {e:?}")));
-                Status::internal(format!("Error executing plan: {e:?}"))
+                audit_state.fail(client_error(
+                    "error executing plan",
+                    e,
+                    &query_id_for_stream,
+                    Some(&plan_for_errors),
+                ))
             })?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
         let builder = if Self::should_preserve_dictionary(metadata) {
@@ -493,9 +719,13 @@ impl FlightSqlServiceImpl {
         );
         imetric!("query_setup_duration", "ticks", total_setup_duration as u64);
 
-        // Create instrumented stream that tracks completion
-        let instrumented_stream =
-            flight_data_stream.map_err(|e| status!("error building data stream", e));
+        // Create instrumented stream that tracks completion. This closure owns
+        // `plan_for_errors`/`query_id_for_stream` (moved in) since it's polled
+        // from the returned stream, long after this function returns -- see the
+        // comment above `plan_for_errors`'s definition.
+        let instrumented_stream = flight_data_stream.map_err(move |e| {
+            classify_flight_error(e, &query_id_for_stream, Some(&plan_for_errors))
+        });
         let completion_tracked_stream =
             CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request, audit_state);
         Ok(Response::new(
@@ -883,10 +1113,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
 
+        // No `QueryAuditState`/audit record exists on this RPC (it only plans the
+        // query, never executes it) -- this id exists solely so the client-facing
+        // message and a server log line can be correlated with each other.
+        let local_query_id = Uuid::new_v4().to_string();
         let df = ctx
             .sql(&query.query)
             .await
-            .map_err(|e| status!("error building dataframe", e))?;
+            .map_err(|e| client_error("error building dataframe", e, &local_query_id, None))?;
         let schema = df.schema().as_arrow();
         let mut schema_buffer = Vec::new();
         let mut writer = StreamWriter::try_new(&mut schema_buffer, schema)

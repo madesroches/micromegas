@@ -202,21 +202,21 @@ impl Accumulator for HistogramAccumulator {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .ok_or_else(|| {
-                        DataFusionError::Execution("values[0] should be a Float64Array".into())
+                        DataFusionError::Internal("values[0] should be a Float64Array".into())
                     })?
                     .value(0);
                 let batch_end = values[1]
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .ok_or_else(|| {
-                        DataFusionError::Execution("values[1] should be a Float64Array".into())
+                        DataFusionError::Internal("values[1] should be a Float64Array".into())
                     })?
                     .value(0);
                 let batch_nb_bins = values[2]
                     .as_any()
                     .downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
-                        DataFusionError::Execution("values[2] should be an Int64Array".into())
+                        DataFusionError::Internal("values[2] should be an Int64Array".into())
                     })?
                     .value(0);
                 if let Some(configured_start) = self.start {
@@ -236,7 +236,7 @@ impl Accumulator for HistogramAccumulator {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .ok_or_else(|| {
-                        DataFusionError::Execution("values[3] should be a Float64Array".into())
+                        DataFusionError::Internal("values[3] should be a Float64Array".into())
                     })?;
                 self.update_batch_scalars(scalars)
             }

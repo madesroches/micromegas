@@ -48,7 +48,7 @@ impl HistogramArray {
             .column(0)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(starts.value(index))
     }
 
@@ -58,7 +58,7 @@ impl HistogramArray {
             .column(1)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(ends.value(index))
     }
 
@@ -68,7 +68,7 @@ impl HistogramArray {
             .column(2)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(mins.value(index))
     }
 
@@ -78,7 +78,7 @@ impl HistogramArray {
             .column(3)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(maxs.value(index))
     }
 
@@ -88,7 +88,7 @@ impl HistogramArray {
             .column(4)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(sums.value(index))
     }
 
@@ -98,7 +98,7 @@ impl HistogramArray {
             .column(5)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?;
         Ok(sums_sq.value(index))
     }
 
@@ -108,7 +108,7 @@ impl HistogramArray {
             .column(6)
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to UInt64Array".into()))?;
         Ok(counts.value(index))
     }
 
@@ -118,12 +118,12 @@ impl HistogramArray {
             .column(7)
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to ListArray".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to ListArray".into()))?;
         let bins = bins_list.value(index);
         let bins = bins
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to UInt64Array".into()))?;
         Ok(bins.clone())
     }
 }
@@ -135,7 +135,7 @@ impl TryFrom<&ArrayRef> for HistogramArray {
         let struct_array = value
             .as_any()
             .downcast_ref::<StructArray>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to StructArray".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to StructArray".into()))?;
         let inner = Arc::new(struct_array.clone());
         Ok(Self { inner })
     }
@@ -148,7 +148,7 @@ impl TryFrom<&dyn Array> for HistogramArray {
         let struct_array = value
             .as_any()
             .downcast_ref::<StructArray>()
-            .ok_or_else(|| DataFusionError::Execution("downcasting to StructArray".into()))?;
+            .ok_or_else(|| DataFusionError::Internal("downcasting to StructArray".into()))?;
         let inner = Arc::new(struct_array.clone());
         Ok(Self { inner })
     }

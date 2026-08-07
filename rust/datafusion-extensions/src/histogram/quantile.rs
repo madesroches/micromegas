@@ -58,7 +58,7 @@ fn quantile_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, Da
             ColumnarValue::Array(array) => array
                 .as_any()
                 .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
+                .ok_or_else(|| DataFusionError::Internal("downcasting to Float64Array".into()))?
                 .value(index_histo),
             ColumnarValue::Scalar(scalar_value) => {
                 if let ScalarValue::Float64(Some(ratio)) = scalar_value {

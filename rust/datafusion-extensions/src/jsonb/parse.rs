@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{Array, BinaryDictionaryBuilder, DictionaryArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -65,7 +65,7 @@ impl ScalarUDFImpl for JsonbParse {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
-            return internal_err!("wrong number of arguments to jsonb_parse()");
+            return exec_err!("wrong number of arguments to jsonb_parse()");
         }
 
         match args[0].data_type() {
@@ -133,7 +133,7 @@ impl ScalarUDFImpl for JsonbParse {
                 }
                 Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
             }
-            _ => internal_err!(
+            _ => exec_err!(
                 "jsonb_parse: unsupported input type, expected Utf8 or Dictionary<Int32, Utf8>"
             ),
         }

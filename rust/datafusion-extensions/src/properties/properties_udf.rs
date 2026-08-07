@@ -2,7 +2,7 @@ use datafusion::arrow::array::{
     Array, AsArray, DictionaryArray, GenericBinaryArray, GenericListArray, Int32Array, StructArray,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, exec_err, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -83,14 +83,14 @@ impl ScalarUDFImpl for PropertiesToArray {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             DataType::Dictionary(_, value_type) => Ok(value_type.as_ref().clone()),
-            _ => internal_err!("properties_to_array expects a Dictionary input type"),
+            _ => exec_err!("properties_to_array expects a Dictionary input type"),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         if args.len() != 1 {
-            return internal_err!("properties_to_array expects exactly one argument");
+            return exec_err!("properties_to_array expects exactly one argument");
         }
 
         match &args[0] {
@@ -116,7 +116,7 @@ impl ScalarUDFImpl for PropertiesToArray {
                 Ok(ColumnarValue::Array(reconstructed))
             }
             ColumnarValue::Scalar(_) => {
-                internal_err!("properties_to_array does not support scalar inputs")
+                exec_err!("properties_to_array does not support scalar inputs")
             }
         }
     }
@@ -158,7 +158,7 @@ impl ScalarUDFImpl for PropertiesLength {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         if args.len() != 1 {
-            return internal_err!("properties_length expects exactly one argument");
+            return exec_err!("properties_length expects exactly one argument");
         }
 
         match &args[0] {
@@ -330,18 +330,18 @@ impl ScalarUDFImpl for PropertiesLength {
                                 let length_array = Int32Array::from(lengths);
                                 Ok(ColumnarValue::Array(Arc::new(length_array)))
                             }
-                            _ => internal_err!(
+                            _ => exec_err!(
                                 "properties_length: unsupported dictionary value type, expected List or Binary"
                             ),
                         }
                     }
-                    _ => internal_err!(
+                    _ => exec_err!(
                         "properties_length: unsupported input type, expected List, Binary, Dictionary<Int32, List>, or Dictionary<Int32, Binary>"
                     ),
                 }
             }
             ColumnarValue::Scalar(_) => {
-                internal_err!("properties_length does not support scalar inputs")
+                exec_err!("properties_length does not support scalar inputs")
             }
         }
     }

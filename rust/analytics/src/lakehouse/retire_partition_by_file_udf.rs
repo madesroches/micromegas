@@ -140,7 +140,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
         }
 
         let file_paths: &StringArray = args[0].as_any().downcast_ref::<_>().ok_or_else(|| {
-            DataFusionError::Execution("error casting file_path argument as StringArray".into())
+            DataFusionError::Internal("error casting file_path argument as StringArray".into())
         })?;
 
         let mut builder = StringBuilder::with_capacity(file_paths.len(), 64);
@@ -148,7 +148,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
         // Use a single transaction for the entire batch
         let mut transaction =
             self.lake.db_pool.begin().await.map_err(|e| {
-                DataFusionError::Execution(format!("Failed to begin transaction: {e}"))
+                DataFusionError::Internal(format!("Failed to begin transaction: {e}"))
             })?;
 
         let mut success_count = 0;
@@ -188,7 +188,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
             info!("Rolled back transaction due to errors in batch retirement");
         } else {
             transaction.commit().await.map_err(|e| {
-                DataFusionError::Execution(format!("Failed to commit transaction: {e}"))
+                DataFusionError::Internal(format!("Failed to commit transaction: {e}"))
             })?;
             info!("Successfully retired {} partitions in batch", success_count);
         }

@@ -38,6 +38,7 @@ opentelemetry-proto.workspace = true
 parquet.workspace = true
 prost.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
 thrift.workspace = true
 tokio.workspace = true
 url.workspace = true

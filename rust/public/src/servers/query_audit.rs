@@ -78,6 +78,10 @@ pub fn aggregate_scan_metrics(plan: &dyn ExecutionPlan) -> ScanMetrics {
 /// abandoned mid-drain (client disconnect/cancel).
 #[derive(serde::Serialize)]
 pub struct QueryAuditRecord {
+    /// Minted as the first statement of `execute_query`, before any fallible
+    /// step -- always present, so a failure's server-log line (which also
+    /// carries it) and this record can be correlated by grepping the id.
+    pub query_id: String,
     pub client: String,
     pub user: String,
     pub email: String,
@@ -101,6 +105,11 @@ pub struct QueryAuditRecord {
     pub status: &'static str, // "ok" | "error" | "incomplete"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// "user" | "resource" | "internal", derived from the gRPC status code
+    /// (see `flight_sql_service_impl::error_class`). Omitted when `status ==
+    /// "ok"`, matching the `error` field's own "on error" convention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_class: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_rows: Option<u64>,
     pub bytes_scanned: u64,

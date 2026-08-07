@@ -29,7 +29,7 @@ impl TableScanRewrite {
                 .source
                 .downcast_ref::<DefaultTableSource>()
                 .ok_or_else(|| {
-                    DataFusionError::Execution(String::from(
+                    DataFusionError::Internal(String::from(
                         "error casting table source as DefaultTableSource",
                     ))
                 })?;
@@ -46,7 +46,7 @@ impl TableScanRewrite {
                 .make_time_filter(self.query_range.begin, self.query_range.end)
                 .map_err(|e| DataFusionError::External(e.into()))?;
             let pred = conjunction(filters).ok_or_else(|| {
-                DataFusionError::Execution(String::from("error making a conjunction"))
+                DataFusionError::Internal(String::from("error making a conjunction"))
             })?;
             let filter = Filter::try_new(pred, Arc::new(plan.clone()))?;
             Ok(Transformed::yes(LogicalPlan::Filter(filter)))
