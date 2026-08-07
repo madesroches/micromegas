@@ -134,6 +134,10 @@ pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state i
 
 - `hash_key` / `generate_key` are imported directly from `micromegas::auth::db_api_key` — the
   only two pieces of the crypto logic, and already `pub`, so nothing here reimplements them.
+- Handlers bind `Path(key_id): Path<Uuid>` and call `Uuid::new_v4()`, exactly as
+  `api_keys.rs` does. `analytics-web-srv` has no `uuid` dependency today, so
+  `rust/analytics-web-srv/Cargo.toml` needs `uuid.workspace = true` added (the workspace already
+  declares `uuid` at `rust/Cargo.toml:102`).
 - SQL is identical in shape to `api_keys.rs`'s, with `analytics_api_keys` hardcoded (never a
   parameter) and `revoked_by`/`created_by` sourced from `user.email.clone().unwrap_or(user.subject.clone())`.
 - **Routes live under `/api/analytics-api-keys`, not `/auth/api_keys`.** `analytics-web-srv`
@@ -265,6 +269,16 @@ added to ingestion's admin list — conflating two very different blast radii. N
 - `MICROMEGAS_INGESTION_ADMIN_URL` (optional) — ingestion's base URL, e.g.
   `http://127.0.0.1:8081` for the monolith (matching its `listen_endpoint_http` default) or the
   split ingestion service's address.
+- **Precondition: ingestion auth must be enabled on the target ingestion service.**
+  `ingestion.rs`'s `api_keys_router` is only merged `if let Some(provider) = &auth_provider`
+  (`ingestion.rs:176`) — with `--disable-auth` / `--disable-ingestion-auth` (the `local_test_env`
+  default), ingestion's `/auth/api_keys*` routes don't exist at all, so a forwarded request gets
+  a bare 404 from ingestion, not a "not configured" signal. `forward` treats this distinctly from
+  a *missing proxy config* (`state.config == None`, which is a 503 raised before any outbound
+  call is made — see below): it maps ingestion's raw 404 to a clearer `ProxyError` ("ingestion
+  returned 404 for {path} — is ingestion auth enabled on that service?") rather than passing the
+  bare 404 through verbatim, since a bare 404 forwarded to the browser is indistinguishable from
+  "wrong key_id".
 
 `IngestionProxyConfig::from_env()` returns `None` (not an error) when either the URL or the
 credential trio is unset, logged with a `warn!`. The proxy *routes* are still registered
@@ -342,9 +356,12 @@ pub struct WebCliArgs {
 
 - **`from_cli_and_env` stays synchronous.** It only reads `MICROMEGAS_SQL_CONNECTION_STRING`
   (`.ok()`) into `analytics_keys_db_string` and passes `cli.analytics_keys_pool` straight through
-  to `analytics_keys_pool_override` — no `.await` added, so `analytics-web-srv/src/main.rs`,
-  `monolith/src/main.rs`, and all 13 sync `#[test]`s in `web_server_config_tests.rs` are
-  untouched.
+  to `analytics_keys_pool_override` — no `.await` added. The new `WebCliArgs` field is still a new
+  field on an exhaustively-constructed struct, so all three of its struct-literal construction
+  sites need a one-line addition: `analytics-web-srv/src/main.rs` (`analytics_keys_pool: None`),
+  `monolith/src/main.rs` (below), and the `cli_args()` helper in the 9 sync `#[test]`s in
+  `web_server_config_tests.rs` (`analytics_keys_pool: None`). None of the 9 tests' assertions
+  change.
 - **Standalone binary** (`analytics-web-srv`): leaves `WebCliArgs.analytics_keys_pool` as `None`.
   In `run_web_server`, when `analytics_keys_pool_override` is `None` and `analytics_keys_db_string`
   is `Some(conn_str)`, connect with
@@ -357,13 +374,16 @@ pub struct WebCliArgs {
   to a pool exactly once; the analytics-key routes stay registered either way (see "Registration
   is unconditional" below).
 - **Monolith**: `monolith/src/main.rs`, inside its existing `if roles.web { ... }` block
-  (`main.rs:323`), fills `WebCliArgs.analytics_keys_pool = Some(lake_pool.clone())` — the
-  lakehouse pool it already holds, not a second TCP connection. (No `.filter(|_| roles.web)` is
-  needed: the construction is already inside the `roles.web` branch.) Because
-  `analytics_keys_pool_override` is `Some`, `run_web_server` never reads
-  `analytics_keys_db_string` or opens a pool for it — `MICROMEGAS_SQL_CONNECTION_STRING` being
-  set (as it always is in a monolith deployment) no longer causes a second pool to be opened and
-  discarded. This mirrors how ingestion's own `api_keys_router` in `ingestion.rs` already gets
+  (`main.rs:323`), fills `WebCliArgs.analytics_keys_pool = lake_pool.clone()` — `lake_pool` is
+  already `Option<PgPool>` (`lakehouse.as_ref().map(|lh| lh.lake().db_pool.clone())`,
+  `main.rs:196`), so this passes it through directly rather than wrapping it in another `Some`.
+  `Roles::needs_lakehouse()` (`self.ingestion || self.flightsql || self.maintenance`) excludes
+  `web`, so a `--roles web`-only monolith has `lakehouse = None` and thus `lake_pool = None`: in
+  that case `analytics_keys_pool_override` is `None` and `run_web_server` falls back to
+  `analytics_keys_db_string` (`MICROMEGAS_SQL_CONNECTION_STRING`) exactly like the standalone
+  binary. When any lakehouse-needing role is also active, `lake_pool` is `Some` and
+  `run_web_server` never reads `analytics_keys_db_string` or opens a second pool for it. This
+  mirrors how ingestion's own `api_keys_router` in `ingestion.rs` already gets
   `lake.db_pool.clone()` (the full lake pool, not `dedicated_key_store_pool`) — the narrowing to
   "just enough to write `analytics_api_keys`" is a Postgres-grants concern for deployments that
   separate DB roles, documented as a grant-recipe extension (§[Security](#security)), not
@@ -447,25 +467,27 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `mkdocs/docs/admin/api-keys.md`'s migration runbook (§202). Without `--only`/`--exclude`, running
   the tool once per table against the same unmodified keyring would reproduce the shared-key
   situation the migration exists to eliminate.
-- **Refuses to import the same key string into both tables.** Before posting, the tool records
-  each imported key's hash locally per run and errors out (non-zero exit, no partial import of
-  that key) if a key string it's about to import into one table was already imported into the
-  other table by an earlier invocation logged in the same local state file (`--state-file`,
-  default alongside the source), rather than silently letting a shared key end up in both.
+- **No cross-table duplicate guard in the tool itself.** A local state file keyed by a default
+  path "alongside the source" is undefined for `--source env` (both example invocations above use
+  it), and even a well-defined state file would only catch duplicates recorded by *this* file —
+  it misses a key shared with another workstation, or imported before the file existed. Keeping a
+  shared key out of both tables is instead the documented job of `--only`/`--exclude` (above) plus
+  `api-keys.md`'s pre-split step: an operator splits a dual-purpose key into two distinct strings
+  first, then imports each half with `--only`/`--exclude` selecting disjoint entries per table run.
 - For each selected `(name, key)` pair: `POST {import route}` with `{"name", "key"}`. Prints one
   line per key — `imported` / `already present (key_id=...)` / `already present (revoked)`
   (from the response's `revoked_at`, §3 — distinct from a usable duplicate) / the error message
   on a 4xx — and continues past individual failures rather than aborting the batch (an operator
   migrating dozens of keys should see every result, not stop at the first name collision). Exit
   code is non-zero if any key failed to import or came back `already present (revoked)`.
-- New `WebClient` methods (`web_client.py`) for the analytics-web-srv side:
-  `import_analytics_api_key(name, key)`, `list_analytics_api_keys(...)`,
-  `revoke_analytics_api_key(key_id)`, `mint_analytics_api_key(name)` — same request/response
-  shape as the existing `list_screens`/`create_screen` methods. A parallel, small
+- New `WebClient` method (`web_client.py`) for the analytics-web-srv side:
+  `import_analytics_api_key(name, key)` — same request/response shape as the existing
+  `list_screens`/`create_screen` methods. Mint/list/revoke stay browser-only (§5) and get no
+  Python client method — the tool's only per-key action is the import call. A parallel, small
   `IngestionClient` (new `python/micromegas/micromegas/ingestion_client.py`, since ingestion's
   API is a different service with a different base path (`/auth/api_keys`, not `/api/...`) and a
-  different `WebClient` would be a misnomer) with the same four operations against ingestion
-  directly.
+  different `WebClient` would be a misnomer) carries the single matching
+  `import_ingestion_api_key(name, key)` operation against ingestion directly.
 
 ## Implementation Steps
 
@@ -483,9 +505,14 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeysState { pool: Option<PgPool> }`,
    `AnalyticsKeyError` (incl. `NotConfigured` → 503), `require_admin` wrapper,
    `mint_key`/`list_keys`/`revoke_key`/`import_key`, `analytics_keys_router(base_path: &str)`.
-   Export from `rust/analytics-web-srv/src/lib.rs`.
+   Export from `rust/analytics-web-srv/src/lib.rs`. `rust/analytics-web-srv/Cargo.toml`: add
+   `uuid.workspace = true` (needed for `Path<Uuid>` / `Uuid::new_v4()`, not currently a dependency
+   of this crate).
 5. `rust/analytics-web-srv/src/web_server.rs`: `WebServerConfig.analytics_keys_db_string: Option<String>`
    + `analytics_keys_pool_override: Option<PgPool>`; `WebCliArgs.analytics_keys_pool: Option<PgPool>`.
+   `rust/analytics-web-srv/src/main.rs` and the `cli_args()` helper in
+   `rust/analytics-web-srv/tests/web_server_config_tests.rs` each add `analytics_keys_pool: None`
+   to their `WebCliArgs` struct literal (the field is otherwise exhaustively constructed).
    `from_cli_and_env` stays sync — reads `MICROMEGAS_SQL_CONNECTION_STRING` (`.ok()`) into the
    string field and passes `cli.analytics_keys_pool` through untouched. `run_web_server` resolves
    the pool (override if `Some`, else `PgPoolOptions::new().max_connections(2).acquire_timeout(Duration::from_secs(2)).connect_lazy(&conn_str)`
@@ -494,10 +521,13 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `Extension(analytics_keys_state)` before its existing `.layer(middleware::from_fn(observability_middleware))`
    call, `warn!` when the resolved pool is `None`.
 6. `rust/monolith/src/main.rs`: inside the existing `if roles.web { ... }` block, set
-   `WebCliArgs.analytics_keys_pool = Some(lake_pool.clone())` (reusing the pool already opened for
-   the ingestion/flightsql roles — `analytics_keys_pool_override` being `Some` means
-   `run_web_server` never reads `MICROMEGAS_SQL_CONNECTION_STRING` for this, so no second
-   connection is opened and discarded).
+   `WebCliArgs.analytics_keys_pool = lake_pool.clone()` (`lake_pool` is already `Option<PgPool>`,
+   reusing the pool already opened for the ingestion/flightsql/maintenance roles when one of
+   those is active — `analytics_keys_pool_override` being `Some` means `run_web_server` never
+   reads `MICROMEGAS_SQL_CONNECTION_STRING` for this, so no second connection is opened and
+   discarded). A `--roles web`-only monolith has no lakehouse (`needs_lakehouse()` excludes
+   `web`), so `lake_pool` is `None` there and `run_web_server` falls back to
+   `MICROMEGAS_SQL_CONNECTION_STRING` like the standalone binary.
 7. New tests: `rust/analytics-web-srv/tests/analytics_keys_tests.rs`, modeled on
    `folders_tests.rs` (`sqlx::PgPool::connect_lazy` for route-shape/guard tests that never touch
    the DB) and `screens_tests.rs` (`ValidatedUser` extension injection); `#[ignore]`d live-DB
@@ -517,8 +547,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     chain (before its layer calls) and layer `Extension(ingestion_proxy_state)`, where
     `ingestion_proxy_state.config` is `None` when `IngestionProxyConfig::from_env()` returns
     `None` (routes stay registered either way; `forward` returns 503 when `config` is `None`).
-11. Tests: a mock ingestion server (`axum` router bound to a loopback port, or `wiremock` if
-    already a dev-dependency anywhere in the workspace — check before adding a new one) verifying
+11. Tests: a mock ingestion server using `wiremock` (already a workspace dependency —
+    `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
+    add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body and status/body correctly, and that `require_admin`
     rejects before any outbound call (assert via a counter/mock never being hit).
 
@@ -534,10 +565,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 ### Phase 5 — CLI import tool
 
-16. `python/micromegas/micromegas/web_client.py`: `import_analytics_api_key`,
-    `list_analytics_api_keys`, `mint_analytics_api_key`, `revoke_analytics_api_key`.
-17. `python/micromegas/micromegas/ingestion_client.py` (new): same four operations against
-    ingestion's `/auth/api_keys*` directly.
+16. `python/micromegas/micromegas/web_client.py`: `import_analytics_api_key(name, key)`.
+17. `python/micromegas/micromegas/ingestion_client.py` (new): `import_ingestion_api_key(name, key)`
+    against ingestion's `/auth/api_keys/import` directly.
 18. `python/micromegas/micromegas/cli/import_keys.py` (new): argument parsing, env/file keyring
     source, per-key import loop with per-key error reporting, non-zero exit on any failure.
 19. `python/micromegas/pyproject.toml`: `micromegas-import-keys = "micromegas.cli.import_keys:main"`.
@@ -547,15 +577,27 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 21. `mkdocs/docs/admin/api-keys.md`: replace "Minting an analytics key by hand" (§246) with the
     new HTTP routes; replace "Migration from the env keyring" (§202) with the CLI tool's usage;
-    extend the "Grant recipe" table with the two new grants below.
+    extend the "Grant recipe" table with the two new grants below. Also fix the four in-page links
+    that dangle once those two sections are replaced (lines 12 and 30 link to
+    `#migration-from-the-env-keyring`; lines 107 and 229 link to
+    `#minting-an-analytics-key-by-hand`) by retargeting them at the new section headings; update
+    the intro (lines 7-8, "three OIDC-authenticated, admin-gated HTTP routes on the ingestion
+    [service]") and the HTTP-routes preamble (line 75, "All three routes live on the
+    **ingestion** service") to reflect the added import route and the new analytics-key routes
+    living on `analytics-web-srv`. Also update `rust/public/src/servers/api_keys.rs`'s module doc
+    comment (lines 5-9), which still says analytics keys "are not mintable through this API...
+    manually issued (direct SQL by an operator with DB access)" and points at the runbook this
+    plan deletes — it needs to instead say analytics keys are minted via `analytics-web-srv`'s
+    own routes (§1), not through this ingestion-hosted API.
 
 ## Files to Modify
 
 - `rust/public/src/servers/api_keys.rs`, `rust/public/tests/api_keys_tests.rs`
 - `rust/analytics-web-srv/src/analytics_keys.rs` (new), `ingestion_keys_proxy.rs` (new),
-  `auth/service_credentials.rs` (new), `lib.rs`, `web_server.rs`, `Cargo.toml`
-  (`reqwest.workspace = true`)
-- `rust/analytics-web-srv/tests/analytics_keys_tests.rs` (new), `ingestion_keys_proxy_tests.rs` (new)
+  `auth/service_credentials.rs` (new), `lib.rs`, `web_server.rs`, `main.rs`, `Cargo.toml`
+  (`reqwest.workspace = true`, `uuid.workspace = true`, `wiremock.workspace = true` dev-dependency)
+- `rust/analytics-web-srv/tests/analytics_keys_tests.rs` (new), `ingestion_keys_proxy_tests.rs` (new),
+  `web_server_config_tests.rs` (`cli_args()` helper)
 - `rust/monolith/src/main.rs`
 - `analytics-web-app/src/lib/ingestion-api-keys-api.ts` (new), `analytics-api-keys-api.ts` (new)
 - `analytics-web-app/src/routes/IngestionApiKeysPage.tsx` (new), `AnalyticsApiKeysPage.tsx` (new),
@@ -590,6 +632,13 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - **Import never logs the key**, matching mint (§3).
 - **No new secret-scanning surface**: imported keys keep whatever shape they already had; the
   route hashes and discards the cleartext identically to mint.
+- **Inherits #1383's TLS-terminating-ingress prerequisite.** `POST {base_path}/api/analytics-api-keys`
+  returns a one-time cleartext key over whatever transport the request arrives on, exactly like
+  ingestion's `mint_key` (`mkdocs/docs/admin/api-keys.md:14-21`); `analytics-web-srv` binds plain
+  HTTP with no TLS acceptor of its own (`web_server.rs:553,568`), same as ingestion. The import
+  routes on both services are the mirror case: they carry a legacy key's cleartext *inbound* in
+  the request body. None of this is new to this plan — deploy behind a TLS-terminating
+  reverse proxy, as `api-keys.md` already documents for ingestion's mint route.
 
 ## Trade-offs
 
@@ -615,9 +664,18 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `MICROMEGAS_INGESTION_PROXY_OIDC_*` / `MICROMEGAS_INGESTION_ADMIN_URL`) and their optionality.
 - `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool for
   analytics-key management.
-- `CHANGELOG.md`: new CLI entry point `micromegas-import-keys`; new public
-  `analytics_keys_router`/`ingestion_keys_proxy_router` if `analytics-web-srv` is ever published
-  (check `Cargo.toml`'s `publish` flag before deciding whether this needs a bullet at all).
+- `mkdocs/docs/admin/api-keys.md`: extend the existing TLS-terminating-ingress warning
+  (currently scoped to ingestion's mint route) to cover the new analytics mint route and both
+  import routes' inbound cleartext (see Security).
+- `CHANGELOG.md`: `build/release.py` publishes an explicit crate list that does not include
+  `analytics-web-srv`, so `analytics_keys_router`/`ingestion_keys_proxy_router` are never
+  published API and get no bullet on that basis. `rust/public` (the published `micromegas`
+  crate) does gain `POST /auth/api_keys/import` in `micromegas::servers::api_keys`, so the
+  Unreleased section (which already carries #1383's key-store entries) gets new bullets for: the
+  ingestion import route, the analytics-key mint/list/revoke/import routes and their admin pages,
+  the `micromegas-import-keys` CLI entry point, and the new env vars
+  (`MICROMEGAS_SQL_CONNECTION_STRING` read by `analytics-web-srv`,
+  `MICROMEGAS_INGESTION_PROXY_OIDC_*`, `MICROMEGAS_INGESTION_ADMIN_URL`).
 
 ## Testing Strategy
 
@@ -635,4 +693,7 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   banner, revoke confirm flow), `yarn type-check`, `yarn lint`.
 - Manual: run through the two new admin pages end-to-end against local services with
   `--disable-auth` off (OIDC required for `require_admin` to mean anything), confirming a
-  non-admin OIDC session gets 403 on every new route.
+  non-admin OIDC session gets 403 on every new route. The ingestion-keys page additionally
+  requires ingestion auth itself to be enabled (`--disable-ingestion-auth` must be off) — with it
+  disabled, ingestion's `/auth/api_keys*` routes aren't mounted and the proxy surfaces the
+  translated 404 described in §2.
