@@ -126,27 +126,32 @@ pub struct AnalyticsKeysState {
     pub auth_disabled: bool,    // true when `--disable-auth` is on, set once at startup, see §4/Security
 }
 
-pub enum AnalyticsKeyError { Forbidden, BadRequest(String), NotFound, Database(sqlx::Error) }
-// IntoResponse: 403 / 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs;
+pub enum AnalyticsKeyError { BadRequest(String), NotFound, Database(sqlx::Error) }
+// IntoResponse: 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs;
 // AnalyticsKeyError also gains `NotConfigured` (503, `state.pool == None`) and `AuthDisabled`
 // (503, `state.auth_disabled == true`, checked first in every handler — see §4/Security) variants.
+// No `Forbidden` variant here: the admin gate is the `AdminUser` extractor (below), whose
+// rejection renders as `AdminRequired`'s own 403 body, not `AnalyticsKeyError`'s.
 
-fn require_admin(user: &ValidatedUser) -> Result<(), AnalyticsKeyError>; // wraps auth::require_admin
-
-async fn mint_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Json(MintRequest{name})) -> ...;   // POST
-async fn list_keys(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Query(ListQuery{..})) -> ...;      // GET
-async fn revoke_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Path(key_id)) -> ...;             // DELETE
-async fn import_key(Extension(state): Extension<AnalyticsKeysState>, Extension(user), Json(ImportRequest{name,key})) -> ...; // POST, §3
+async fn mint_key(Extension(state): Extension<AnalyticsKeysState>, AdminUser(user): AdminUser, Json(MintRequest{name})) -> ...;   // POST
+async fn list_keys(Extension(state): Extension<AnalyticsKeysState>, AdminUser(user): AdminUser, Query(ListQuery{..})) -> ...;      // GET
+async fn revoke_key(Extension(state): Extension<AnalyticsKeysState>, AdminUser(user): AdminUser, Path(key_id)) -> ...;             // DELETE
+async fn import_key(Extension(state): Extension<AnalyticsKeysState>, AdminUser(user): AdminUser, Json(ImportRequest{name,key})) -> ...; // POST, §3
 
 pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state is layered separately in build_protected_routes
 ```
 
-- `mint_key`/`import_key` could likewise take `AdminUser(user): AdminUser` in place of
-  `Extension(user): Extension<ValidatedUser>` + an in-handler `require_admin` call (§2's
-  `forward` does this for the same reason). Their bodies are a bounded `Json<...>`, not a raw
-  upload, so the buffering concern `AdminUser`'s doc comment calls out is smaller here — but the
-  extractor still rejects a non-admin one step earlier, with no downside, so it's the better
-  default for every handler in this file, not just the two with a request body.
+- Every handler takes `AdminUser(user): AdminUser` (`auth/handlers.rs:553-568`), not
+  `Extension(user): Extension<ValidatedUser>` plus an in-handler `require_admin` call — the same
+  resolution §2's `forward` uses, and for the same reason. `AdminUser` is `FromRequestParts`, so
+  its rejection runs before any body extractor and renders as `AdminRequired`'s own 403 body
+  (`{code: "FORBIDDEN", ...}`), not `AnalyticsKeyError`'s — so there is no `require_admin` wrapper
+  and no `AnalyticsKeyError::Forbidden` variant in this file; keeping either alongside the
+  extractor would leave it dead, since the extractor's rejection fires first on every request.
+  `mint_key`/`import_key`'s bodies are a bounded `Json<...>`, not a raw upload, so the buffering
+  concern `AdminUser`'s doc comment calls out is smaller here than in §2 — but the extractor still
+  rejects a non-admin one step earlier, with no downside, so it's applied uniformly to every
+  handler in this file, not just the two with a request body.
 - `hash_key` / `generate_key` are imported directly from `micromegas::auth::db_api_key` — the
   only two pieces of the crypto logic, and already `pub`, so nothing here reimplements them.
 - Handlers bind `Path(key_id): Path<Uuid>` and call `Uuid::new_v4()`, exactly as
@@ -216,7 +221,7 @@ New file `rust/analytics-web-srv/src/ingestion_keys_proxy.rs`:
 /// register, 503 when unconfigured" rule.
 pub struct IngestionProxyConfig {
     pub base_url: String,              // MICROMEGAS_INGESTION_ADMIN_URL, e.g. "http://127.0.0.1:8081"
-    pub credentials: OidcClientCredentialsDecorator, // micromegas::telemetry_sink, see below
+    pub credentials: Arc<dyn RequestDecorator>, // trait object, not the concrete decorator — see below
     pub client: reqwest::Client,        // single client, built once with an explicit timeout
 }
 
@@ -229,21 +234,23 @@ pub struct IngestionProxyState {
 /// One HTTP round trip per call: never cached at process level beyond the
 /// bearer token itself (below) — this is an admin-console path, not a hot one.
 ///
-/// Takes `AdminUser` (`auth/handlers.rs:553`), not `Extension<ValidatedUser>` +
-/// an in-handler `require_admin` call: `AdminUser` is `FromRequestParts`, so its
-/// rejection runs *before* the `Bytes` body extractor, exactly the ordering its
-/// own doc comment exists for (`auth/handlers.rs:545-552`, already used this way
-/// by `maps.rs:260-262,376` for its `Bytes`-body handlers) — a non-admin's body
-/// is never buffered. This still composes with the `auth_disabled` 503: that
-/// check stays first in the body, ahead of any forwarding, and under
-/// `--disable-auth` the layered `ValidatedUser { is_admin: true, .. }` (§4/§1)
-/// satisfies `AdminUser`'s extractor and reaches the handler regardless, so the
-/// fixed 503 below still fires on every call — the extractor only ever narrows
-/// who reaches the handler, it never bypasses the `auth_disabled` check inside
-/// it.
+/// Not an axum handler — it's a plain helper the `list`/`mint`/`revoke` wrappers below call
+/// with already-extracted values, so it performs no extraction itself and takes no `user`
+/// parameter (the wrappers only need `AdminUser` to gate access; forwarding never depends on
+/// *who* the admin is). Each wrapper declares `Extension<IngestionProxyState>`, then
+/// `AdminUser` (`auth/handlers.rs:553`), then its body extractor (`Bytes` for `mint`, `Path` for
+/// `revoke`) in that order — `AdminUser` is `FromRequestParts`, so its rejection runs *before*
+/// the `Bytes` body extractor only because the wrapper signature orders it first, exactly the
+/// ordering its own doc comment exists for (`auth/handlers.rs:545-552`, already used this way by
+/// `maps.rs:260-262,376` for its `Bytes`-body handlers) — a non-admin's body is never buffered.
+/// This still composes with the `auth_disabled` 503: that check stays first in `forward`'s body,
+/// ahead of any forwarding, and under `--disable-auth` the layered
+/// `ValidatedUser { is_admin: true, .. }` (§4/§1) satisfies `AdminUser`'s extractor and reaches
+/// the wrapper (and thus `forward`) regardless, so the fixed 503 below still fires on every call
+/// — the extractor only ever narrows who reaches the handler, it never bypasses the
+/// `auth_disabled` check inside it.
 async fn forward(
-    Extension(state): Extension<IngestionProxyState>,
-    AdminUser(user): AdminUser,
+    state: IngestionProxyState,
     method: Method, path_suffix: &str, query: Option<&str>, body: Option<Bytes>,
 ) -> Result<Response, ProxyError> {
     if state.auth_disabled { return Err(ProxyError::AuthDisabled) } // 503, checked first, see §4/Security
@@ -260,6 +267,20 @@ async fn forward(
     let resp = cfg.client.execute(built).await?;
     // Forward ingestion's status + JSON body verbatim to the browser.
 }
+
+// list/mint/revoke each extract `Extension<IngestionProxyState>` and `AdminUser` (in that
+// order, ahead of any body extractor) themselves, then call `forward` with the already-extracted
+// state/method/path/query/body — e.g.:
+async fn mint(
+    Extension(state): Extension<IngestionProxyState>,
+    AdminUser(_user): AdminUser,
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    forward(state, Method::POST, "/auth/api_keys", None, Some(body)).await
+}
+// `list` (GET, forwards the incoming query string, no body) and `revoke` (DELETE
+// `/auth/api_keys/{key_id}`, `Path<Uuid>` extracted ahead of the call, no body) follow the same
+// shape.
 
 pub fn ingestion_keys_proxy_router(base_path: &str) -> Router {
     Router::new()
@@ -301,18 +322,33 @@ already depends on `micromegas` (the `rust/public` crate). `OidcClientCredential
 `async fn decorate(&self, request: &mut reqwest::Request) -> Result<()>`
 (`request_decorator.rs:53`, impl at `oidc_client_credentials_decorator.rs:187-201`) sets the
 `Authorization: Bearer` header via the same cached, expiry-buffered `get_token()` — `get_token`
-itself stays private, but nothing here needs to call it directly. `IngestionProxyConfig` simply
-holds an `OidcClientCredentialsDecorator`, built once from the proxy's own env vars, and `forward`
-calls `.decorate(&mut request)` on the built `reqwest::Request` before `client.execute(request)`.
-Zero modification to `telemetry-sink` is required.
+itself stays private, but nothing here needs to call it directly. Zero modification to
+`telemetry-sink` is required.
+
+**`IngestionProxyConfig.credentials` is typed `Arc<dyn RequestDecorator>`, not the concrete
+`OidcClientCredentialsDecorator`.** Every field on the concrete decorator (`token_endpoint`,
+`client_id`, `client_secret`, `cached_token`, …) is private and `new()` is its only constructor
+— there is no way for a test to pre-seed a cached token, so a test using the concrete type would
+always perform a real OIDC client-credentials token fetch. `RequestDecorator` and
+`TrivialRequestDecorator` (a no-op impl) are both `pub` in
+`micromegas::telemetry_sink::request_decorator`, so the trait object is the injection seam:
+production builds `Arc::new(OidcClientCredentialsDecorator::new(...))` in
+`IngestionProxyConfig::from_env()`; tests build `Arc::new(TrivialRequestDecorator {})` directly,
+skipping the token fetch entirely and needing no second wiremock stub for it. `forward` is
+unchanged either way — it only ever calls the trait method, `.decorate(&mut request)`, on the
+built `reqwest::Request` before `client.execute(request)`.
 
 ```rust
 use micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
+use std::sync::Arc;
 
 // IngestionProxyConfig::from_env() builds this directly from the four env vars below —
 // no `from_env()` on the decorator itself is used, since that reads the *different*,
-// deliberately-distinct MICROMEGAS_OIDC_* self-telemetry vars (see below).
-OidcClientCredentialsDecorator::new(token_endpoint, client_id, client_secret, audience, 180)
+// deliberately-distinct MICROMEGAS_OIDC_* self-telemetry vars (see below) — and wraps it in
+// the trait object the config field expects:
+let credentials: Arc<dyn RequestDecorator> = Arc::new(
+    OidcClientCredentialsDecorator::new(token_endpoint, client_id, client_secret, audience, 180)
+);
 ```
 
 **Deliberately its own, distinctly-named credential — not a reuse of the self-telemetry
@@ -598,8 +634,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 ### Phase 2 — Analytics key API (`analytics-web-srv`)
 
 4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeysState { pool: Option<PgPool> }`,
-   `AnalyticsKeyError` (incl. `NotConfigured` → 503), `require_admin` wrapper,
-   `mint_key`/`list_keys`/`revoke_key`/`import_key`, `analytics_keys_router(base_path: &str)`.
+   `AnalyticsKeyError` (incl. `NotConfigured` → 503, no `Forbidden` variant — see §1), every handler
+   gated by the `AdminUser` extractor (`auth/handlers.rs:553-568`), not an in-handler
+   `require_admin` call — `mint_key`/`list_keys`/`revoke_key`/`import_key`,
+   `analytics_keys_router(base_path: &str)`.
    Export from `rust/analytics-web-srv/src/lib.rs`. `rust/analytics-web-srv/Cargo.toml`: add
    `uuid.workspace = true` (needed for `Path<Uuid>` / `Uuid::new_v4()`, not currently a dependency
    of this crate).
@@ -631,8 +669,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    the DB) and `screens_tests.rs` (`ValidatedUser` extension injection); `#[ignore]`d live-DB
    tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips. Also: with
    `AnalyticsKeysState.auth_disabled: true` and an admin `ValidatedUser` injected (per
-   `screens_tests.rs:49-50`), every route returns 503 — asserting the `auth_disabled` check
-   pre-empts `require_admin` and the pool check even when both would otherwise pass. Also: with
+   `screens_tests.rs:49-50`) — under real `--disable-auth`, `build_protected_routes` layers exactly
+   this synthetic admin `ValidatedUser`, so it satisfies the `AdminUser` extractor and reaches the
+   handler regardless — every route still returns 503, asserting that the in-handler
+   `auth_disabled` check fires even past a passing admin extractor and ahead of the pool check.
+   Also: with
    `AnalyticsKeysState { pool: None, auth_disabled: false }` and an admin `ValidatedUser`
    injected, every route returns the `NotConfigured` 503 — this needs no live DB either (the
    handler returns before ever touching `state.pool`), so it uses the same `connect_lazy`
@@ -641,12 +682,17 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
 8. `rust/analytics-web-srv/src/ingestion_keys_proxy.rs` (new): `IngestionProxyConfig` (holding a
-   `reqwest::Client` built with an explicit timeout, plus a
+   `reqwest::Client` built with an explicit timeout, plus `credentials: Arc<dyn RequestDecorator>`
+   — production's `from_env()` wraps an
    `micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator`
-   built from the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars — no new credential type, see §2)
-   + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
-   `IngestionProxyConfig::from_env()`, `forward`, `list`/`mint`/`revoke` wrappers,
-   `ingestion_keys_proxy_router(base_path: &str)`. `rust/analytics-web-srv/Cargo.toml`:
+   built from the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars in `Arc::new(...)`; no new
+   credential type, see §2) + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
+   `IngestionProxyConfig::from_env()`, `forward` (a plain helper, not a handler — takes an
+   already-resolved `IngestionProxyState` plus method/path/query/body), `list`/`mint`/`revoke`
+   wrappers (each declaring `Extension<IngestionProxyState>` then `AdminUser` then any body
+   extractor, in that order, and calling `forward` — see §2),
+   `ingestion_keys_proxy_router(base_path: &str)`. Export from
+   `rust/analytics-web-srv/src/lib.rs`. `rust/analytics-web-srv/Cargo.toml`:
    add `reqwest.workspace = true`.
 9. `web_server.rs`: unconditionally — regardless of `auth_state` — `.merge()` the proxy router
     into `build_protected_routes`'s chain (before its layer calls) and layer
@@ -660,7 +706,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body/`Content-Type` and status/body correctly (assert the
-    mock receives `Content-Type: application/json` on the mint request), and that a non-admin's
+    mock receives `Content-Type: application/json` on the mint request). These tests build
+    `IngestionProxyConfig.credentials` from `Arc::new(TrivialRequestDecorator {})`
+    (`micromegas::telemetry_sink::request_decorator`, both `pub`) instead of a real
+    `OidcClientCredentialsDecorator`, so no token endpoint needs stubbing and `forward`'s
+    `.decorate()` call is a no-op — see §2's "Service credential" section. And that a non-admin's
     `AdminUser` rejection happens before any outbound call (assert via a counter/mock never being
     hit). Also: with `IngestionProxyState { config: None, auth_disabled: false }` and an admin
     `ValidatedUser` injected, every route returns the `NotConfigured` 503 and the wiremock server
@@ -711,16 +761,43 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     says analytics keys "are not mintable through this API... manually issued (direct SQL by an
     operator with DB access)" and points at the runbook this plan deletes — it needs to instead
     say analytics keys are minted via `analytics-web-srv`'s own routes (§1), not through this
-    ingestion-hosted API.
-21. `mkdocs/docs/admin/web-app.md`: add the new optional env vars and the new API routes
+    ingestion-hosted API. The section replacing "Minting an analytics key by hand" gets a stable
+    new heading, "Minting an analytics key over HTTP" (anchor `#minting-an-analytics-key-over-http`),
+    so the other docs retargeted in step 21 below have a fixed target to link to.
+21. Five more places outside `api-keys.md` still assert the now-false "analytics keys are never
+    mintable over HTTP / issued by hand" claim and need the same correction — a repo-wide grep for
+    "issued by hand"/"mints nothing over HTTP"/"never mintable" finds them:
+    - `mkdocs/docs/admin/monolith.md:103-105` ("FlightSQL validates `analytics_api_keys` the same
+      way but mints nothing over HTTP: analytics keys are issued by hand...") — rewrite to say
+      minting/listing/revoking analytics keys happens through `analytics-web-srv`'s own HTTP
+      routes (§1), linking `api-keys.md`. Also update this same file's env-var table
+      (`monolith.md:42`, `MICROMEGAS_SQL_CONNECTION_STRING` currently marked "Yes (lake roles)")
+      to note it's also read by a `--roles web`-only monolith as the fallback source for the
+      analytics-key pool (§4) when no lakehouse-needing role is active. Also fold in the former
+      step 22's note here, in the same edit to the same file: the web role now optionally shares
+      the lake pool for analytics-key management instead of opening this second connection (§4).
+    - `mkdocs/docs/admin/flight-sql.md:57-59` ("mints nothing over HTTP — it has no
+      key-management routes. Analytics keys are issued by hand...") — same rewrite, pointing at
+      `analytics-web-srv`'s routes instead of the by-hand runbook.
+    - `mkdocs/docs/admin/authentication.md:112-115` ("...the analytics-key runbook (analytics
+      keys are never mintable over HTTP; they're issued by hand)") — same rewrite.
+    - `mkdocs/docs/grafana/authentication.md:21-31` (prose at 21-24, "including the analytics-key
+      mint-by-hand runbook (flight-sql mints nothing over HTTP)", plus the numbered step at
+      29-31, "**Mint a key by hand**... see the runbook in
+      [API Keys](../admin/api-keys.md#minting-an-analytics-key-by-hand)") — same rewrite, and
+      retarget the dangling anchor at `api-keys.md#minting-an-analytics-key-over-http` (the new
+      heading from step 20), since step 20 deletes `#minting-an-analytics-key-by-hand`.
+    - `rust/auth/src/db_api_key.rs:32-33` (`ApiKeyTable::Analytics` doc comment: "read
+      credentials, issued only by hand (see the admin runbook); never mintable through the HTTP
+      API") — rewrite to say analytics keys are minted/listed/revoked through
+      `analytics-web-srv`'s own HTTP routes, not through this crate's ingestion-hosted API.
+22. `mkdocs/docs/admin/web-app.md`: add the new optional env vars and the new API routes
     (see Documentation) to the "Environment Variables" and "API Routes" sections respectively.
     Note next to `MICROMEGAS_INGESTION_PROXY_OIDC_*`/`MICROMEGAS_INGESTION_ADMIN_URL` that
     configuring the proxy makes `analytics-web-srv`'s own admin list a de-facto
     ingestion-key-admin list (see Security), so operators who deliberately keep
     `MICROMEGAS_INGESTION_ADMINS` distinct from `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`
     must keep them aligned or leave the proxy unconfigured.
-22. `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool
-    for analytics-key management (see [Documentation](#documentation)).
 23. `CHANGELOG.md`: add `## Unreleased` bullets for the ingestion import route, the analytics-key
     mint/list/revoke/import routes and their admin pages, the `micromegas-import-keys` CLI entry
     point, and the new env vars; and **amend** the existing `## Unreleased` → `**Auth:**` bullet
@@ -732,6 +809,7 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 ## Files to Modify
 
 - `rust/public/src/servers/api_keys.rs`, `rust/public/tests/api_keys_tests.rs`
+- `rust/auth/src/db_api_key.rs` (`ApiKeyTable::Analytics` doc comment, see Phase 6 step 21)
 - `rust/analytics-web-srv/src/analytics_keys.rs` (new), `ingestion_keys_proxy.rs` (new),
   `lib.rs`, `web_server.rs`, `main.rs`, `Cargo.toml`
   (`reqwest.workspace = true`, `uuid.workspace = true`, `wiremock.workspace = true` dev-dependency)
@@ -745,7 +823,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `cli/import_keys.py` (new)
 - `python/micromegas/pyproject.toml`
 - `python/micromegas/tests/cli/test_import_keys.py` (new)
-- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`
+- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`,
+  `mkdocs/docs/admin/flight-sql.md`, `mkdocs/docs/admin/authentication.md`,
+  `mkdocs/docs/grafana/authentication.md` (see Phase 6 step 21 for the last four)
 - `CHANGELOG.md`
 
 ## Security
@@ -833,7 +913,15 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   groups (`MICROMEGAS_SQL_CONNECTION_STRING` read by `analytics-web-srv`,
   `MICROMEGAS_INGESTION_PROXY_OIDC_*` / `MICROMEGAS_INGESTION_ADMIN_URL`) and their optionality.
 - `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool for
-  analytics-key management.
+  analytics-key management; rewrite its "analytics keys are issued by hand" sentence (§103-105);
+  update its `MICROMEGAS_SQL_CONNECTION_STRING` env-var row to cover a `--roles web`-only monolith
+  (see Phase 6 step 21).
+- `mkdocs/docs/admin/flight-sql.md`, `mkdocs/docs/admin/authentication.md`,
+  `mkdocs/docs/grafana/authentication.md`, `rust/auth/src/db_api_key.rs`: same "issued by hand /
+  never mintable over HTTP" claim, each rewritten to point at `analytics-web-srv`'s own
+  analytics-key routes; `grafana/authentication.md`'s dangling
+  `#minting-an-analytics-key-by-hand` link is retargeted at `api-keys.md`'s new
+  `#minting-an-analytics-key-over-http` heading (see Phase 6 step 21).
 - `mkdocs/docs/admin/api-keys.md`: extend the existing TLS-terminating-ingress warning
   (currently scoped to ingestion's mint route) to cover the new analytics mint route and both
   import routes' inbound cleartext (see Security).
@@ -872,15 +960,20 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - Rust: route-shape tests with a lazy pool (no live DB) for every new handler's validation/gating
   branches, per `firehose_tests.rs`'s precedent; `#[ignore]`d live-DB tests for the actual SQL,
   per `folders_tests.rs`'s precedent, run manually against a local Postgres. Named gating branches
-  covered: 403 non-admin, 400 empty `key`/`name`, `imported: false` idempotency, the fixed 503
-  when `auth_disabled` is set (asserted ahead of `require_admin`/pool checks — steps 7 and 10),
+  covered: 403 non-admin (the `AdminUser` extractor's rejection, not an in-handler `require_admin`
+  call — see §1/§2), 400 empty `key`/`name`, `imported: false` idempotency, the fixed 503
+  when `auth_disabled` is set (asserted even past a passing admin `AdminUser`/`ValidatedUser` and
+  ahead of the pool/config check — steps 7 and 10),
   and the `NotConfigured` 503 for `AnalyticsKeysState { pool: None, .. }` /
   `IngestionProxyState { config: None, .. }` (neither ever touches the pool/makes an outbound
   call, so both are covered by the same no-live-DB harness — steps 7 and 10).
 - Proxy: a loopback mock ingestion router asserting exact forwarding of method/path/query/body/
-  `Content-Type` and response passthrough, plus a "rejected before forwarding" assertion for
-  non-admins, for `auth_disabled`, and for `config: None` (mock never hit in any of the three
-  cases).
+  `Content-Type` and response passthrough — these tests build `IngestionProxyConfig.credentials`
+  from `Arc::new(TrivialRequestDecorator {})` rather than a real `OidcClientCredentialsDecorator`
+  (see §2/step 10), so no second stub for the OIDC token fetch is needed — plus a "rejected before
+  forwarding" assertion for non-admins, for `auth_disabled`, and for `config: None` (mock never hit
+  in any of the three cases; these three need no credential injection since `forward` never reaches
+  `.decorate()`).
 - Python: `pytest` unit tests for `import_keys.py`'s per-key result classification (imported /
   already-present / errored) against a mocked `requests` session, per `test_logout.py`'s
   lightweight-mocking style; an end-to-end run importing a small test keyring into both tables
