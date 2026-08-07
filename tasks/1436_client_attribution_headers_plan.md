@@ -150,12 +150,24 @@ def resolve_client_agent():
 
 
 def resolve_client_entrypoint(explicit=None):
-    """How this client was invoked. `explicit` (set by our own CLI main()s)
-    always wins; otherwise a sanitized env override, then `-c`/jupyter/repl
+    """How this client was invoked. `explicit` (set by our own CLI main()s,
+    but also reachable by any library caller via the public
+    `FlightSQLClient(client_entrypoint=...)`/`connect(client_entrypoint=...)`
+    parameters) always wins, but -- unlike the env-var override below -- an
+    invalid `explicit` value raises `ValueError` instead of silently falling
+    through: a caller-supplied argument deserves a catchable error at the
+    call site, not a masked native gRPC-metadata crash later on the first
+    query. Otherwise: a sanitized env override, then `-c`/jupyter/repl
     detection, then "script". Closed vocabulary only -- never raw
     sys.argv[0]/__main__.__file__."""
     if explicit:
-        return explicit
+        sanitized = _sanitize_override(explicit)
+        if sanitized is None:
+            raise ValueError(
+                f"invalid client_entrypoint {explicit!r}: must be printable "
+                f"ASCII, <= {_MAX_OVERRIDE_LEN} chars"
+            )
+        return sanitized
     override = _sanitize_override(os.environ.get("MICROMEGAS_CLIENT_ENTRYPOINT"))
     if override:
         return override
@@ -386,7 +398,9 @@ specific to the two headers the gateway itself controls.
    `MICROMEGAS_CLIENT_ENTRYPOINT` override is rejected and falls back to the detected value
    (not sent as-is) — the trailing-newline case guards against `^...$`-style regexes, where `$`
    matches before a trailing newline and would wrongly accept it; an over-length override is
-   rejected the same way; `explicit="cli-query"` wins over every other entrypoint signal;
+   rejected the same way; `explicit="cli-query"` wins over every other entrypoint signal; an
+   invalid `explicit` value (non-ASCII, embedded/trailing newline, or over-length) raises
+   `ValueError` instead of falling back to detection, unlike the env-var override path;
    `MICROMEGAS_CLIENT_ENTRYPOINT` override; `sys.argv[0] == "-c"` → `"script"` (not `"repl"`);
    `"ipykernel"` in `sys.modules` → `"jupyter"`; `sys.flags.interactive` (or no
    `__main__.__file__`) → `"repl"`; with no harness session var set, `new_session_id()` returns
@@ -523,7 +537,12 @@ specific to the two headers the gateway itself controls.
   `MICROMEGAS_CLIENT_ENTRYPOINT` (printable ASCII, bounded length) before they reach gRPC
   metadata, since an unvalidated non-ASCII or newline-containing value there crashes the
   process rather than raising a catchable exception — that's a client-side safety check, not
-  a server-side trust boundary, so the risk described above is unchanged.
+  a server-side trust boundary, so the risk described above is unchanged. The same validation
+  also guards the public `client_entrypoint` argument on `FlightSQLClient.__init__`/
+  `connect(...)` (a more likely source of an unsafe value than the env vars, since it's a
+  documented API parameter): `resolve_client_entrypoint` runs it through `_sanitize_override`
+  too, but raises `ValueError` on rejection instead of silently falling back, since an explicit
+  caller argument warrants a catchable error rather than a masked mislabeling.
 
 ## Documentation
 
@@ -550,8 +569,13 @@ specific to the two headers the gateway itself controls.
    relevant service log) for that request's `execute_query` line, confirming
    `agent=claude-code entrypoint=cli-query` appears; then query `flightsql_query_audit` (per
    `query-audit-log.md`'s pattern) and confirm the JSON record has `"agent":"claude-code"`,
-   `"entrypoint":"cli-query"`, and a `"session"` UUID. Run it a second time and confirm the
-   `"session"` UUID differs from the first run (per-invocation, not per-task, per the
-   Trade-offs note above). Repeat without `CLAUDECODE` set to confirm `agent=none`. Run the
-   same query through a plain Python script (not the CLI) to confirm `entrypoint=script`, and
-   through a Jupyter kernel to confirm `entrypoint=jupyter`.
+   `"entrypoint":"cli-query"`, and a `"session"` value. If `CLAUDE_CODE_SESSION_ID` is set in
+   the shell (as it will be when this test is run from inside a Claude Code session, alongside
+   `CLAUDECODE`), confirm `"session"` equals `$CLAUDE_CODE_SESSION_ID` and run the command a
+   second time to confirm `"session"` is identical across both runs — stable per harness
+   session, per the Trade-offs note above, not a fresh UUID. Separately, in a shell with both
+   `CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` unset, run the same command twice and confirm
+   `"session"` is a valid UUID that differs between the two runs (fresh per invocation, since no
+   known agent-harness session var is present) and that `agent=none`. Run the same query through
+   a plain Python script (not the CLI) to confirm `entrypoint=script`, and through a Jupyter
+   kernel to confirm `entrypoint=jupyter`.
