@@ -116,11 +116,15 @@ ObjectStore>>`:
 
 ```rust
 #[derive(Clone)]
-pub struct AnalyticsKeysState { pub pool: Option<PgPool> } // None => routes 503, see §4
+pub struct AnalyticsKeysState {
+    pub pool: Option<PgPool>,   // None => routes 503, see §4
+    pub auth_disabled: bool,    // true when `--disable-auth` is on, set once at startup, see §4/Security
+}
 
 pub enum AnalyticsKeyError { Forbidden, BadRequest(String), NotFound, Database(sqlx::Error) }
 // IntoResponse: 403 / 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs;
-// AnalyticsKeyError also gains a `NotConfigured` variant → 503, for when `state.pool` is `None`.
+// AnalyticsKeyError also gains `NotConfigured` (503, `state.pool == None`) and `AuthDisabled`
+// (503, `state.auth_disabled == true`, checked first in every handler — see §4/Security) variants.
 
 fn require_admin(user: &ValidatedUser) -> Result<(), AnalyticsKeyError>; // wraps auth::require_admin
 
@@ -166,15 +170,21 @@ pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state i
   `/api/maps/*`. **This is narrowed by one exception: when `analytics-web-srv` itself is run with
   `--disable-auth`.** In that mode `build_protected_routes` has no `auth_state` and layers a
   hardcoded `ValidatedUser { is_admin: true, .. }` on every request instead of running
-  `cookie_auth_middleware` (`web_server.rs:292-301`), so `require_admin` unconditionally passes
+  `cookie_auth_middleware` (`web_server.rs:292-301`), so `require_admin` would unconditionally pass
   for any unauthenticated caller reaching the port. Both `analytics_keys_router` and
-  `ingestion_keys_proxy_router` (§2) are therefore **not merged at all** when `auth_state` is
-  `None` — mirroring `ingestion.rs`'s own precedent of skipping registration entirely rather than
-  exposing a route that always "succeeds" for the wrong reason (`ingestion.rs:176-196`, "skip
-  registration entirely rather than exposing a route that always fails"). Logged with the same
-  `warn!` style as that precedent. This means `--disable-auth` on `analytics-web-srv` now also
-  disables both new key-management route groups, not just cookie auth on the rest of the API —
-  called out explicitly in Security.
+  `ingestion_keys_proxy_router` (§2) are therefore **still merged — never skipped —** with
+  `auth_disabled: true` set on their state; every handler checks `state.auth_disabled` *first*,
+  ahead of `require_admin` and any pool/config check, and returns a fixed 503 ("key management is
+  unavailable when auth is disabled") when it's set, so an unauthenticated caller never reaches
+  real mint/revoke/forward logic — preserving the security property `ingestion.rs`'s precedent
+  (`ingestion.rs:176-196`, skipping registration of `api_keys_router` entirely) protects, without
+  leaving the routes unregistered: an unregistered `/api/...` path instead falls through to
+  `build_frontend`'s SPA fallback (`web_server.rs:374-383`), a `200 text/html` `index.html`
+  response that would make the always-visible tiles' pages (§5) surface a JSON-parse error instead
+  of a meaningful one. Logged with a `warn!` once at startup, same style as `ingestion.rs`'s
+  precedent. `--disable-auth` on `analytics-web-srv` therefore still functionally disables both new
+  key-management route groups, not just cookie auth on the rest of the API — called out explicitly
+  in Security.
 
 **Duplication, accepted.** This duplicates most of `api_keys.rs`'s ~200 lines (validation, SQL
 shapes, error enum). Sharing it across two crates would mean a generic abstraction over two
@@ -200,7 +210,10 @@ pub struct IngestionProxyConfig {
 }
 
 #[derive(Clone)]
-pub struct IngestionProxyState { pub config: Option<Arc<IngestionProxyConfig>> }
+pub struct IngestionProxyState {
+    pub config: Option<Arc<IngestionProxyConfig>>,
+    pub auth_disabled: bool, // true when `--disable-auth` is on, set once at startup, see §4/Security
+}
 
 /// One HTTP round trip per call: never cached at process level beyond the
 /// bearer token itself (below) — this is an admin-console path, not a hot one.
@@ -209,11 +222,16 @@ async fn forward(
     Extension(user): Extension<ValidatedUser>,
     method: Method, path_suffix: &str, query: Option<&str>, body: Option<Bytes>,
 ) -> Result<Response, ProxyError> {
+    if state.auth_disabled { return Err(ProxyError::AuthDisabled) } // 503, checked first, see §4/Security
     require_admin(&user)?;                       // checked here, before any forwarding
     let Some(cfg) = state.config else { return Err(ProxyError::NotConfigured) }; // 503
     let mut req = cfg.client.request(method, format!("{}{}", cfg.base_url, path_suffix));
     if let Some(q) = query { req = req.query(...) }
-    if let Some(b) = body { req = req.body(b) }
+    if let Some(b) = body {
+        // Required: mint_key's `Json<MintRequest>` extractor 415s (`MissingJsonContentType`)
+        // on a request with no Content-Type at all. Every body this proxy relays is JSON.
+        req = req.body(b).header(CONTENT_TYPE, "application/json");
+    }
     let mut built = req.build()?;
     cfg.credentials.decorate(&mut built).await?;  // sets the Bearer header, see below
     let resp = cfg.client.execute(built).await?;
@@ -295,13 +313,17 @@ calling the decorator's own `from_env()`. New vars:
 - **Precondition: ingestion auth must be enabled on the target ingestion service.**
   `ingestion.rs`'s `api_keys_router` is only merged `if let Some(provider) = &auth_provider`
   (`ingestion.rs:176`) — with `--disable-auth` / `--disable-ingestion-auth` (the `local_test_env`
-  default), ingestion's `/auth/api_keys*` routes don't exist at all, so a forwarded request gets
-  a bare 404 from ingestion, not a "not configured" signal. `forward` treats this distinctly from
-  a *missing proxy config* (`state.config == None`, which is a 503 raised before any outbound
-  call is made — see below): it maps ingestion's raw 404 to a clearer `ProxyError` ("ingestion
-  returned 404 for {path} — is ingestion auth enabled on that service?") rather than passing the
-  bare 404 through verbatim, since a bare 404 forwarded to the browser is indistinguishable from
-  "wrong key_id".
+  default), ingestion's `/auth/api_keys*` routes don't exist at all, so a forwarded request gets a
+  bare, bodyless 404 from the axum router itself, not a "not configured" signal. This is distinct
+  from `revoke_key`'s own legitimate 404 (`ApiKeyError::NotFound`, a JSON `{"message": "key not
+  found"}` body for an unknown `key_id`, `rust/public/src/servers/api_keys.rs:62,280`) — a normal,
+  expected proxied outcome that must pass through verbatim per the "status + body verbatim" rule
+  above. `forward` distinguishes the two by checking whether ingestion's 404 body parses as JSON
+  with a `message` field: if it does, forward it unchanged; only a 404 with an empty/non-JSON body
+  (no matching axum route, never `ApiKeyError`'s response shape) is mapped to a clearer
+  `ProxyError` ("ingestion returned 404 for {path} — is ingestion auth enabled on that service?").
+  This also stays distinct from a *missing proxy config* (`state.config == None`, which is a 503
+  raised before any outbound call is made — see below).
 
 `IngestionProxyConfig::from_env()` returns `None` (not an error) when either the URL or the
 credential trio is unset, logged with a `warn!`. The proxy *routes* are still registered
@@ -310,9 +332,11 @@ unconditionally with respect to *this* configuration in `build_protected_routes`
 503-when-unconfigured shape as `/api/maps/*` (see §4/§5). A deployment that hasn't set this up yet
 keeps working; the ingestion-key admin tile stays visible and its page surfaces the 503 through
 its normal error path (§5). **This is independent of, and narrower than, the `--disable-auth`
-exception in §4/§1**: `--disable-auth` skips registering the router entirely (no admin gate to
-rely on at all), whereas an unset `IngestionProxyConfig` still registers the router (auth is
-running normally, `require_admin` still means something) and only 503s per-request.
+exception in §4/§1**: under `--disable-auth`, `forward` returns the fixed `AuthDisabled` 503 on
+every call, checked before `require_admin` and before the `config` check (no admin gate to rely on
+at all), whereas under normal auth an unset `IngestionProxyConfig` still runs `require_admin` first
+(auth is running normally, `require_admin` still means something) and only 503s for the
+missing-config reason once that passes.
 
 ### 3. Import routes (new capability)
 
@@ -417,17 +441,20 @@ pub struct WebCliArgs {
   something the pool object itself needs to enforce when every role shares one connection
   string, exactly as `api-keys.md`'s existing grant-recipe section already admits for the
   ingestion side.
-- **Registration is unconditional with respect to pool/proxy configuration.** `run_web_server`
-  builds `analytics_keys::AnalyticsKeysState { pool: <the pool above, or None> }` either way, logs
-  `info!`/`warn!` accordingly ("`/api/analytics-api-keys/*` will return 503" when `None`, same
-  wording style as the existing maps-store log at `web_server.rs:510`), and, **when `auth_state`
-  is `Some` (i.e. `--disable-auth` is off)**, `build_protected_routes` always `.merge()`s
+- **Registration is unconditional, both with respect to pool/proxy configuration and with respect
+  to `--disable-auth`.** `run_web_server` builds `analytics_keys::AnalyticsKeysState { pool: <the
+  pool above, or None>, auth_disabled: auth_state.is_none() }` either way, logs `info!`/`warn!`
+  accordingly ("`/api/analytics-api-keys/*` will return 503" when the pool is `None`, same wording
+  style as the existing maps-store log at `web_server.rs:510`; a distinct `warn!` when
+  `auth_disabled` is set), and `build_protected_routes` always `.merge()`s
   `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)` — never an
-  `if let Some(pool) = ...` conditional merge on the pool. This is the same always-register,
-  503-when-unconfigured shape `/api/maps/*` already uses (`maps.rs:116-123`), and it's what lets
-  both new admin tiles stay visible unconditionally (§5) whenever auth is actually enabled. **When
-  `auth_state` is `None`, neither router is merged at all** — see the `--disable-auth` exception
-  above and in Security.
+  `if let Some(pool) = ...` conditional merge on the pool, and never conditioned on `auth_state`
+  either. This is the same always-register, 503-when-unconfigured shape `/api/maps/*` already uses
+  (`maps.rs:116-123`), and it's what lets both new admin tiles stay visible unconditionally (§5)
+  *and* always get a meaningful JSON error rather than falling through to the SPA fallback. **When
+  `auth_state` is `None` (`--disable-auth`), the router is still merged**, but every handler checks
+  `state.auth_disabled` first and returns the fixed 503 for every call before any pool/`require_admin`
+  check — see the `--disable-auth` exception above and in Security.
 
 ### 5. Frontend
 
@@ -448,11 +475,15 @@ Two new pages, one per key table — kept separate rather than tabs on one page,
   avoided for mint.
 - `AdminPage.tsx`: two new `AppLink` tiles ("Ingestion API Keys", "Analytics API Keys"), both
   **always shown**, no availability probe. `AdminPage.tsx` today is a static grid with no
-  fetching at all, and the routes behind both tiles are registered unconditionally (§4) — same
-  precedent as the always-visible `/admin/maps` tile. A 404-based probe wouldn't work here
-  regardless: `build_frontend`'s SPA fallback (`web_server.rs:374-383`) serves `index.html` with
-  `200` for any unmatched `/api/...` path (`routing_tests.rs:283-311`), so an unregistered route
-  never actually 404s.
+  fetching at all, and the routes behind both tiles are registered unconditionally, including
+  under `--disable-auth` (§4) — same precedent as the always-visible `/admin/maps` tile. A
+  404-based probe wouldn't work here regardless: `build_frontend`'s SPA fallback
+  (`web_server.rs:374-383`) serves `index.html` with `200` for any unmatched `/api/...` path
+  (`routing_tests.rs:283-311`), so an unregistered route never actually 404s — this is precisely
+  why both routers stay registered even under `--disable-auth` rather than being omitted (§4/§1):
+  omitting them would route these always-visible tiles' `fetch()` calls into that same `200
+  text/html` fallback, whose `response.json()` throws a confusing parse error instead of surfacing
+  a real message.
 - Both `IngestionApiKeysPage.tsx` and `AnalyticsApiKeysPage.tsx` render whatever their list-fetch
   returns through the existing `ErrorBanner` path (`DataSourcesPage.tsx`'s pattern). When the
   backing pool/proxy config is absent, the route responds `503` with a `{code, message}` body
@@ -546,11 +577,13 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `from_cli_and_env` stays sync — reads `MICROMEGAS_SQL_CONNECTION_STRING` (`.ok()`) into the
    string field and passes `cli.analytics_keys_pool` through untouched. `run_web_server` resolves
    the pool (override if `Some`, else `PgPoolOptions::new().max_connections(2).acquire_timeout(Duration::from_secs(2)).connect_lazy(&conn_str)`
-   if the string is `Some`, else `None`), builds `AnalyticsKeysState`, and, only when `auth_state`
-   is `Some` (i.e. `--disable-auth` is off — see §4/Security), `build_protected_routes` `.merge()`s
-   `analytics_keys_router(base_path)` and layers `Extension(analytics_keys_state)` before its
-   existing `.layer(middleware::from_fn(observability_middleware))` call, `warn!` when the resolved
-   pool is `None`. When `auth_state` is `None`, the router is not merged at all.
+   if the string is `Some`, else `None`), builds `AnalyticsKeysState { pool, auth_disabled:
+   auth_state.is_none() }`, and unconditionally — regardless of `auth_state` —
+   `build_protected_routes` `.merge()`s `analytics_keys_router(base_path)` and layers
+   `Extension(analytics_keys_state)` before its existing
+   `.layer(middleware::from_fn(observability_middleware))` call, `warn!` when the resolved pool is
+   `None`. Handlers check `state.auth_disabled` first and return a fixed 503 for every call when
+   it's set (i.e. `--disable-auth` is on — see §4/Security), before any pool/`require_admin` check.
 6. `rust/monolith/src/main.rs`: inside the existing `if roles.web { ... }` block, set
    `WebCliArgs.analytics_keys_pool = lake_pool.clone()` (`lake_pool` is already `Option<PgPool>`,
    reusing the pool already opened for the ingestion/flightsql/maintenance roles when one of
@@ -574,16 +607,19 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `IngestionProxyConfig::from_env()`, `forward`, `list`/`mint`/`revoke` wrappers,
    `ingestion_keys_proxy_router(base_path: &str)`. `rust/analytics-web-srv/Cargo.toml`:
    add `reqwest.workspace = true`.
-9. `web_server.rs`: only when `auth_state` is `Some` (§4/Security), `.merge()` the proxy router
+9. `web_server.rs`: unconditionally — regardless of `auth_state` — `.merge()` the proxy router
     into `build_protected_routes`'s chain (before its layer calls) and layer
     `Extension(ingestion_proxy_state)`, where `ingestion_proxy_state.config` is `None` when
     `IngestionProxyConfig::from_env()` returns `None` (routes stay registered either way with
-    respect to that config; `forward` returns 503 when `config` is `None`). When `auth_state` is
-    `None`, the router is not merged at all.
+    respect to that config; `forward` returns 503 when `config` is `None`) and
+    `ingestion_proxy_state.auth_disabled = auth_state.is_none()`. `forward` checks
+    `state.auth_disabled` first and returns the fixed `AuthDisabled` 503 for every call when it's
+    set (§4/§1/Security), ahead of `require_admin` and the `config` check.
 10. Tests: a mock ingestion server using `wiremock` (already a workspace dependency —
     `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
-    the proxy forwards method/path/query/body and status/body correctly, and that `require_admin`
+    the proxy forwards method/path/query/body/`Content-Type` and status/body correctly (assert the
+    mock receives `Content-Type: application/json` on the mint request), and that `require_admin`
     rejects before any outbound call (assert via a counter/mock never being hit).
 
 ### Phase 4 — Frontend
@@ -629,6 +665,15 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     ingestion-hosted API.
 21. `mkdocs/docs/admin/web-app.md`: add the new optional env vars and the new API routes
     (see Documentation) to the "Environment Variables" and "API Routes" sections respectively.
+22. `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool
+    for analytics-key management (see [Documentation](#documentation)).
+23. `CHANGELOG.md`: add `## Unreleased` bullets for the ingestion import route, the analytics-key
+    mint/list/revoke/import routes and their admin pages, the `micromegas-import-keys` CLI entry
+    point, and the new env vars; and **amend** the existing `## Unreleased` → `**Auth:**` bullet
+    for #1383 (`CHANGELOG.md:13`) — drop the "analytics keys are never mintable over HTTP"
+    parenthetical, add `POST /auth/api_keys/import` to its route list, and repoint the runbook
+    reference at the new analytics-key HTTP routes instead of the by-hand runbook step 20 deletes
+    (see [Documentation](#documentation)).
 
 ## Files to Modify
 
@@ -646,20 +691,27 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `cli/import_keys.py` (new)
 - `python/micromegas/pyproject.toml`
 - `python/micromegas/tests/cli/test_import_keys.py` (new)
-- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`
+- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`
+- `CHANGELOG.md`
 
 ## Security
 
-- **Neither new route group is registered when `analytics-web-srv` runs with `--disable-auth`.**
-  In that mode `build_protected_routes` layers a hardcoded `ValidatedUser { is_admin: true, .. }`
-  on every request instead of running `cookie_auth_middleware` (`web_server.rs:292-301`), so
-  `require_admin` would unconditionally pass for any unauthenticated caller. Left unconditional,
+- **Both new route groups return a fixed 503 for every request when `analytics-web-srv` runs with
+  `--disable-auth`, rather than being omitted from registration.** In that mode
+  `build_protected_routes` layers a hardcoded `ValidatedUser { is_admin: true, .. }` on every
+  request instead of running `cookie_auth_middleware` (`web_server.rs:292-301`), so `require_admin`
+  would unconditionally pass for any unauthenticated caller. Left to their normal logic,
   `analytics_keys_router` would let such a caller mint real `analytics_api_keys` rows (valid on a
   `flight-sql` that may have auth enabled independently), and `ingestion_keys_proxy_router` would
   let one drive `forward` → `get_token()` → mint/revoke against ingestion's real admin API, using
-  the proxy's own privileged service credential. Both routers are therefore skipped entirely when
-  `auth_state` is `None`, mirroring `ingestion.rs`'s own precedent for `api_keys_router`
-  (`ingestion.rs:176-196`) rather than exposing a route an unauthenticated caller can always drive.
+  the proxy's own privileged service credential. Both routers are therefore still merged — unlike
+  `ingestion.rs`'s own precedent of skipping registration for `api_keys_router`
+  (`ingestion.rs:176-196`) — but every handler checks `state.auth_disabled` first and returns 503
+  unconditionally, before `require_admin`, before touching `state.pool`/`state.config`, and before
+  any outbound call: an unauthenticated caller can never reach the mint/revoke/forward logic at
+  all. Registering the routers rather than omitting them also keeps the admin pages' error
+  surfacing meaningful (§5) instead of falling through to the SPA fallback's `200 text/html`
+  (`web_server.rs:374-383`).
 - **The proxy checks `require_admin` before fetching a service-credential token or forwarding
   anything.** A non-admin `analytics-web-srv` session never causes an outbound call to ingestion,
   let alone one carrying a privileged credential.
@@ -750,8 +802,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - Rust: route-shape tests with a lazy pool (no live DB) for every new handler's validation/gating
   branches, per `firehose_tests.rs`'s precedent; `#[ignore]`d live-DB tests for the actual SQL,
   per `folders_tests.rs`'s precedent, run manually against a local Postgres.
-- Proxy: a loopback mock ingestion router asserting exact forwarding of method/path/query/body
-  and response passthrough, plus a "rejected before forwarding" assertion for non-admins.
+- Proxy: a loopback mock ingestion router asserting exact forwarding of method/path/query/body/
+  `Content-Type` and response passthrough, plus a "rejected before forwarding" assertion for
+  non-admins.
 - Python: `pytest` unit tests for `import_keys.py`'s per-key result classification (imported /
   already-present / errored) against a mocked `requests` session, per `test_logout.py`'s
   lightweight-mocking style; an end-to-end run importing a small test keyring into both tables
@@ -768,9 +821,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - Frontend: `yarn test` for the two new pages (list render, mint form submit + one-time-key
   banner, revoke confirm flow), `yarn type-check`, `yarn lint`.
 - Manual: run through the two new admin pages end-to-end against local services with
-  `--disable-auth` off (OIDC required for `require_admin` to mean anything — and, per §4/Security,
-  for the new routes to be registered at all), confirming a non-admin OIDC session gets 403 on
-  every new route. The ingestion-keys page additionally requires ingestion auth itself to be
+  `--disable-auth` off (OIDC required for `require_admin` to mean anything — with it on, per
+  §4/Security, both route groups return a fixed 503 instead), confirming a non-admin OIDC session
+  gets 403 on every new route. The ingestion-keys page additionally requires ingestion auth itself to be
   enabled (`--disable-ingestion-auth` must be off) — with it disabled, ingestion's
   `/auth/api_keys*` routes aren't mounted and the proxy surfaces the translated 404 described in
   §2. **`start_services.py` cannot reach this configuration in either mode** (see the Python
