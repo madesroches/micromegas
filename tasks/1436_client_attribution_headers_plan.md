@@ -412,7 +412,15 @@ specific to the two headers the gateway itself controls.
   injecting a shared id (needs a `MICROMEGAS_CLIENT_SESSION` override, not proposed by the
   issue) or the CLI persisting a session id across invocations (needs on-disk state, out of
   scope). Left as a known limitation; an override could be added later without breaking
-  anything, since it's purely additive.
+  anything, since it's purely additive. **Confirmed by direct testing:** a Claude Code
+  subagent does not get a distinct `CLAUDE_CODE_SESSION_ID` from its parent — spawning a
+  subagent and inspecting its environment shows the identical session id — and
+  `CLAUDE_CODE_CHILD_SESSION=1` is set for *any* subprocess the CLI's tool layer spawns
+  (including the top-level session's own shell commands), not only subagent-issued ones. So
+  neither variable is a reliable signal for parent/subagent correlation, and since this plan
+  reads neither of them, there's nothing to key off even if `x-client-session` correlation
+  were desired here; a subagent constructing its own `FlightSQLClient` simply gets its own
+  fresh session id, same as any other new client instance.
 - **No server-side validation/allowlist on `agent`/`entrypoint` values.** Same as
   `x-client-type` today: the header is caller-controlled and analytics-only, so a malicious or
   buggy client can send anything. Not a new risk this plan introduces.
@@ -444,12 +452,3 @@ specific to the two headers the gateway itself controls.
    Trade-offs note above). Repeat without `CLAUDECODE` set to confirm `agent=none`. Run the
    same query through a plain Python script (not the CLI) to confirm `entrypoint=script`, and
    through a Jupyter kernel to confirm `entrypoint=jupyter`.
-
-## Open Questions
-
-- **Subagent grouping.** The issue notes `CLAUDE_CODE_CHILD_SESSION` marks a subagent but it's
-  unverified whether a subagent's session id differs from its parent's. Not addressed here —
-  `x-client-session` is a fresh UUID per `FlightSQLClient` instance regardless, so a subagent
-  that constructs its own client already gets its own session; whether that's the desired
-  parent/child grouping for analysis is a question for whoever consumes the audit log, not a
-  client-side plumbing decision.
