@@ -141,6 +141,12 @@ async fn import_key(Extension(state): Extension<AnalyticsKeysState>, Extension(u
 pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state is layered separately in build_protected_routes
 ```
 
+- `mint_key`/`import_key` could likewise take `AdminUser(user): AdminUser` in place of
+  `Extension(user): Extension<ValidatedUser>` + an in-handler `require_admin` call (§2's
+  `forward` does this for the same reason). Their bodies are a bounded `Json<...>`, not a raw
+  upload, so the buffering concern `AdminUser`'s doc comment calls out is smaller here — but the
+  extractor still rejects a non-admin one step earlier, with no downside, so it's the better
+  default for every handler in this file, not just the two with a request body.
 - `hash_key` / `generate_key` are imported directly from `micromegas::auth::db_api_key` — the
   only two pieces of the crypto logic, and already `pub`, so nothing here reimplements them.
 - Handlers bind `Path(key_id): Path<Uuid>` and call `Uuid::new_v4()`, exactly as
@@ -222,13 +228,25 @@ pub struct IngestionProxyState {
 
 /// One HTTP round trip per call: never cached at process level beyond the
 /// bearer token itself (below) — this is an admin-console path, not a hot one.
+///
+/// Takes `AdminUser` (`auth/handlers.rs:553`), not `Extension<ValidatedUser>` +
+/// an in-handler `require_admin` call: `AdminUser` is `FromRequestParts`, so its
+/// rejection runs *before* the `Bytes` body extractor, exactly the ordering its
+/// own doc comment exists for (`auth/handlers.rs:545-552`, already used this way
+/// by `maps.rs:260-262,376` for its `Bytes`-body handlers) — a non-admin's body
+/// is never buffered. This still composes with the `auth_disabled` 503: that
+/// check stays first in the body, ahead of any forwarding, and under
+/// `--disable-auth` the layered `ValidatedUser { is_admin: true, .. }` (§4/§1)
+/// satisfies `AdminUser`'s extractor and reaches the handler regardless, so the
+/// fixed 503 below still fires on every call — the extractor only ever narrows
+/// who reaches the handler, it never bypasses the `auth_disabled` check inside
+/// it.
 async fn forward(
     Extension(state): Extension<IngestionProxyState>,
-    Extension(user): Extension<ValidatedUser>,
+    AdminUser(user): AdminUser,
     method: Method, path_suffix: &str, query: Option<&str>, body: Option<Bytes>,
 ) -> Result<Response, ProxyError> {
     if state.auth_disabled { return Err(ProxyError::AuthDisabled) } // 503, checked first, see §4/Security
-    require_admin(&user)?;                       // checked here, before any forwarding
     let Some(cfg) = state.config else { return Err(ProxyError::NotConfigured) }; // 503
     let mut req = cfg.client.request(method, format!("{}{}", cfg.base_url, path_suffix));
     if let Some(q) = query { req = req.query(...) }
@@ -267,9 +285,9 @@ does not yet depend on it).
   (§3) directly with the operator's own bearer token — it doesn't need the proxy, which exists
   only because the *browser* can't hold a bearer token (see
   [Why a proxy](#why-a-proxy-not-a-direct-browser-call)). A CLI process has no such restriction.
-- `require_admin` is `analytics-web-srv`'s own gate, checked **before** `decorate()` is called —
-  an unauthorized caller never triggers a service-credential token fetch, let alone a call to
-  ingestion.
+- The `AdminUser` extractor is `analytics-web-srv`'s own gate, and it runs **before**
+  `decorate()` is ever called (indeed before `forward`'s body runs at all) — an unauthorized
+  caller never triggers a service-credential token fetch, let alone a call to ingestion.
 
 #### Service credential (reusing `telemetry-sink`'s `OidcClientCredentialsDecorator`)
 
@@ -485,8 +503,8 @@ Two new pages, one per key table — kept separate rather than tabs on one page,
   fetching at all, and the routes behind both tiles are registered unconditionally, including
   under `--disable-auth` (§4) — same precedent as the always-visible `/admin/maps` tile. A
   404-based probe wouldn't work here regardless: `build_frontend`'s SPA fallback
-  (`web_server.rs:374-383`) serves `index.html` with `200` for any unmatched `/api/...` path
-  (`routing_tests.rs:283-311`), so an unregistered route never actually 404s — this is precisely
+  (`web_server.rs:374-383`) serves `index.html` with `200` for any unmatched `/api/...` path,
+  so an unregistered route never actually 404s — this is precisely
   why both routers stay registered even under `--disable-auth` rather than being omitted (§4/§1):
   omitting them would route these always-visible tiles' `fetch()` calls into that same `200
   text/html` fallback, whose `response.json()` throws a confusing parse error instead of surfacing
@@ -516,11 +534,20 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   goes through the *analytics-web-srv* base URL (`--url`, mandatory on every invocation); for
   `ingestion`, `--url` points at the ingestion service directly (**not** through the
   `analytics-web-srv` proxy — see §2's note that the CLI needs no proxy, it holds its own bearer
-  token). `--profile` (optional) follows `query.py`'s precedent (`cli/query.py:100`,
-  `connection.connect(profile=...)`) for supplying OIDC issuer/client/token-file from
-  `~/.micromegas/config.json`; a profile carries no HTTP base URL, so `--url` stays mandatory
-  regardless. (`micromegas-screens` has no `--profile` or `--url` flag to model this on — `init`
-  takes a positional `server_url`, and auth env vars are read directly in `make_client`.)
+  token). `--profile` (optional) follows `query.py`'s precedent (`cli/query.py:100`) for supplying
+  OIDC issuer/client/token-file from `~/.micromegas/config.json` — but not via
+  `connection.connect(profile=...)` (`cli/connection.py:4`), which resolves to a FlightSQL client
+  or bare `oidc_connection.connect(...)` result, neither an auth provider this tool can pull a
+  bearer token from. Instead call `config.resolve_connection(profile=...)`
+  (`cli/config.py:131`) directly to get the `ConnectionConfig` (`oidc_issuer`/`oidc_client_id`/
+  `oidc_client_secret`/`oidc_audience`/`oidc_scope`/`token_file`), then feed it to
+  `oidc_connection.load_or_login(issuer, client_id, client_secret, token_file, audience, scope)`
+  (which does accept `token_file`, so per-profile token caching still works) or, for
+  non-interactive use, `OidcClientCredentialsProvider.from_env()` — either yields a provider
+  whose token `WebClient`/`IngestionClient` can attach as a bearer header. A profile carries no
+  HTTP base URL, so `--url` stays mandatory regardless. (`micromegas-screens` has no `--profile`
+  or `--url` flag to model this on — `init` takes a positional `server_url`, and auth env vars
+  are read directly in `make_client`.)
 - `--source env --var NAME` (default `MICROMEGAS_API_KEYS` / the table-appropriate prefixed
   name) parses the legacy keyring's real shape — a JSON **array** of `{"name": ..., "key": ...}`
   objects, exactly what `parse_key_ring` reads (`rust/auth/src/api_key.rs:56-64`,
@@ -605,7 +632,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips. Also: with
    `AnalyticsKeysState.auth_disabled: true` and an admin `ValidatedUser` injected (per
    `screens_tests.rs:49-50`), every route returns 503 — asserting the `auth_disabled` check
-   pre-empts `require_admin` and the pool check even when both would otherwise pass.
+   pre-empts `require_admin` and the pool check even when both would otherwise pass. Also: with
+   `AnalyticsKeysState { pool: None, auth_disabled: false }` and an admin `ValidatedUser`
+   injected, every route returns the `NotConfigured` 503 — this needs no live DB either (the
+   handler returns before ever touching `state.pool`), so it uses the same `connect_lazy`
+   harness as every other route-shape test here, per `folders_tests.rs:21`'s precedent.
 
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
@@ -629,8 +660,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body/`Content-Type` and status/body correctly (assert the
-    mock receives `Content-Type: application/json` on the mint request), and that `require_admin`
-    rejects before any outbound call (assert via a counter/mock never being hit). Also: with
+    mock receives `Content-Type: application/json` on the mint request), and that a non-admin's
+    `AdminUser` rejection happens before any outbound call (assert via a counter/mock never being
+    hit). Also: with `IngestionProxyState { config: None, auth_disabled: false }` and an admin
+    `ValidatedUser` injected, every route returns the `NotConfigured` 503 and the wiremock server
+    is never hit (no live ingestion, no live DB — this is a pure route-shape assertion). Also: with
     `IngestionProxyState.auth_disabled: true` and an admin `ValidatedUser` injected, every route
     returns 503 and the wiremock server is never hit — asserting the `auth_disabled` check
     pre-empts both `require_admin` and the outbound call.
@@ -732,9 +766,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   all. Registering the routers rather than omitting them also keeps the admin pages' error
   surfacing meaningful (§5) instead of falling through to the SPA fallback's `200 text/html`
   (`web_server.rs:374-383`).
-- **The proxy checks `require_admin` before fetching a service-credential token or forwarding
-  anything.** A non-admin `analytics-web-srv` session never causes an outbound call to ingestion,
-  let alone one carrying a privileged credential.
+- **The proxy's `forward` takes the `AdminUser` extractor (§2), not an in-handler `require_admin`
+  call, so the admin check runs before fetching a service-credential token, before forwarding
+  anything, and before the request body is even buffered.** A non-admin `analytics-web-srv`
+  session never causes an outbound call to ingestion, let alone one carrying a privileged
+  credential.
 - **The proxy's service credential is distinct from the self-telemetry one**, so a compromise of
   either doesn't automatically grant the other's privilege (see §2). Its subject must be added to
   ingestion's admin allowlist deliberately, not incidentally.
@@ -836,11 +872,15 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - Rust: route-shape tests with a lazy pool (no live DB) for every new handler's validation/gating
   branches, per `firehose_tests.rs`'s precedent; `#[ignore]`d live-DB tests for the actual SQL,
   per `folders_tests.rs`'s precedent, run manually against a local Postgres. Named gating branches
-  covered: 403 non-admin, 400 empty `key`/`name`, `imported: false` idempotency, and the fixed 503
-  when `auth_disabled` is set (asserted ahead of `require_admin`/pool checks — steps 7 and 10).
+  covered: 403 non-admin, 400 empty `key`/`name`, `imported: false` idempotency, the fixed 503
+  when `auth_disabled` is set (asserted ahead of `require_admin`/pool checks — steps 7 and 10),
+  and the `NotConfigured` 503 for `AnalyticsKeysState { pool: None, .. }` /
+  `IngestionProxyState { config: None, .. }` (neither ever touches the pool/makes an outbound
+  call, so both are covered by the same no-live-DB harness — steps 7 and 10).
 - Proxy: a loopback mock ingestion router asserting exact forwarding of method/path/query/body/
   `Content-Type` and response passthrough, plus a "rejected before forwarding" assertion for
-  non-admins and for `auth_disabled` (mock never hit in either case).
+  non-admins, for `auth_disabled`, and for `config: None` (mock never hit in any of the three
+  cases).
 - Python: `pytest` unit tests for `import_keys.py`'s per-key result classification (imported /
   already-present / errored) against a mocked `requests` session, per `test_logout.py`'s
   lightweight-mocking style; an end-to-end run importing a small test keyring into both tables
