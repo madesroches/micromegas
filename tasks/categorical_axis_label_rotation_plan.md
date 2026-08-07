@@ -191,15 +191,18 @@ same `values` array. A padding function gets no `values` at all
 (`PaddingSide`'s signature is `(self, side, sidesWithAxes, cycleNum)`), so
 `maxWidth` needs to become genuine shared closure state, not just a
 same-named local in two places. `rightPadding` itself must be declared (as
-`let rightPadding: uPlot.PaddingSide = 0`) alongside `const xAxisConfig` at
+`let rightPadding: uPlot.PaddingSide = null`) alongside `const xAxisConfig` at
 the top of the function, before the if/else-if chain — otherwise it's out of
 scope at the function's single trailing return, and the `time`/`numeric`
-branches have nothing to give them their `0` default. The categorical branch
-then *reassigns* it; it doesn't redeclare it:
+branches have nothing to give them their `null` default, which degrades to
+uPlot's own `autoPadSide` behavior on the right edge (a literal `0` would
+instead override that cushion away, since uPlot's `ifNull(p, autoPadSide)`
+only falls back to `autoPadSide` when the option is `null`). The categorical
+branch then *reassigns* it; it doesn't redeclare it:
 
 ```ts
 // at the top of the function, alongside `const xAxisConfig`:
-let rightPadding: uPlot.PaddingSide = 0
+let rightPadding: uPlot.PaddingSide = null
 
 // inside the `xAxisMode === 'categorical' && xLabels` branch:
 let rotated = false
@@ -233,9 +236,11 @@ return { axis: xAxisConfig, rightPadding }
 single-series `~998`) destructure it and set `padding: [null, rightPadding,
 null, null]` on their uPlot `Options` object — neither currently sets
 `padding` at all (confirmed via grep), so `null` on the other three sides
-keeps uPlot's default `autoPadSide` behavior everywhere except the right
-edge, and `rightPadding` itself only reserves anything once the categorical
-branch actually rotates. `MAX_ROTATED_SIZE` doubles as the horizontal cap
+keeps uPlot's default `autoPadSide` behavior there, and `rightPadding`
+defaults to `null` too, preserving that same cushion on the right edge for
+`time`/`numeric` mode and any non-rotated categorical chart — it only
+overrides the right edge with a computed value once the categorical branch
+actually rotates. `MAX_ROTATED_SIZE` doubles as the horizontal cap
 too: at `ROTATE_DEG = -45`, `sin` and `cos` are equal, so the horizontal and
 vertical projections share the same magnitude and the same ceiling is
 exactly as valid here.
@@ -268,18 +273,20 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
      unit testing, matching the module's existing export style).
    - Change `buildXAxisConfig`'s return type from `uPlot.Axis` to
      `{ axis: uPlot.Axis; rightPadding: uPlot.PaddingSide }`.
-   - Declare `let rightPadding: uPlot.PaddingSide = 0` alongside `const
+   - Declare `let rightPadding: uPlot.PaddingSide = null` alongside `const
      xAxisConfig = {...}` at the top of the function, before the
      if/else-if chain — this is what gives the `time`/`numeric` branches
-     their `0` default at the function's single trailing `return { axis:
-     xAxisConfig, rightPadding }`.
+     their `null` default (degrading to uPlot's own `autoPadSide` cushion on
+     the right edge, unlike a literal `0`, which would override it away) at
+     the function's single trailing `return { axis: xAxisConfig,
+     rightPadding }`.
    - Inside the `xAxisMode === 'categorical' && xLabels` branch, declare
      `let rotated = false` and `let maxWidth = 0`, set `xAxisConfig.rotate` /
      `xAxisConfig.size`, and *reassign* (not redeclare) `rightPadding = () =>
      {...}` as described in the Design section's `padding` subsection above,
      replacing the top-level static `size: 65` for this branch only (the
      `time`/`numeric` branches keep the static `size: 65` from the base
-     config object and leave `rightPadding` at its hoisted `0` default).
+     config object and leave `rightPadding` at its hoisted `null` default).
    - Cast `values` elements to `string` defensively (`Rotate`'s type allows
      `string | number`; our categorical `values` closure only ever produces
      strings, but `size`'s declared type is `string[]` too so no cast should
@@ -353,7 +360,7 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     returns exactly `BASE_SIZE` (unchanged behavior for the flat-label case).
   - `time` and `numeric` modes keep static `size: 65` (no `rotate` set) —
     extend the existing tests for those branches to assert `axis.rotate` is
-    `undefined` and `rightPadding` is `0`.
+    `undefined` and `rightPadding` is `null`.
   - Calling `rightPadding()` before any `rotate()` call, or after a
     `rotate()` call that doesn't trigger rotation, returns `0`.
   - After a `rotate()` call that triggers rotation, `rightPadding()` returns
