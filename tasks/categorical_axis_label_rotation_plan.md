@@ -107,10 +107,12 @@ Four things matter for the design:
 
 `convergeSize()` runs at most `CYCLE_LIMIT = 3` cycles (`uPlot.iife.js:3393`,
 `3406`); past that it stops with whatever the last cycle produced, converged
-or not. The design below settles in 2 cycles (cycle 1 flips `rotated` and
-grows both `size` and `rightPadding`; cycle 2 recomputes identical values and
-converges), comfortably inside that limit — with or without a right y-axis.
-It's true that the one-time `_padding` init at `uPlot.iife.js:3819` runs with
+or not. The design below settles in 2 cycles typically (cycle 1 flips
+`rotated` and grows both `size` and `rightPadding`; cycle 2 recomputes
+identical values and converges), or 3 in the narrow band where the
+`_padding[1]` cushion correction (see below) and the rotation flip land in
+different cycles — either way still within that limit, with or without a
+right y-axis. It's true that the one-time `_padding` init at `uPlot.iife.js:3819` runs with
 `sidesWithAxes` still all-`false` (`axes.forEach(initAxis)`, which populates
 it, doesn't run until `:6094`), so `_padding[1]` starts at `0` regardless of
 the real layout (see the `padding` subsection) — but that init call happens
@@ -239,11 +241,14 @@ from the quantity that has to clear the `space` floor. Worked example, 10
 categories with ~34-char labels in an 800px plot with one left-side y-axis
 (`size: 90`, no right axis):
 
-- cycle 1: `plotWidCss = 800 − 90 − 25 = 685` (90 for the y-axis, 25 for the
-  no-right-axis `DEFAULT_RIGHT_CUSHION_PX` cushion — see `padding` below) →
-  `foundSpace = 68.5 ≥ 60` → axis renders → labels are too wide for that
-  space → `rotate()` fires → `rightPadding` jumps to `≈154` (the capped
-  horizontal projection for a ~34-char label, see `padding` below).
+- cycle 1: `plotWidCss = 800 − 90 − 0 = 710` (90 for the y-axis; the
+  one-time `_padding` init runs before `sidesWithAxes` is populated, so
+  `_padding[1]` — and with it the no-right-axis `DEFAULT_RIGHT_CUSHION_PX`
+  cushion — hasn't landed yet, see Current State) → `foundSpace = 71 ≥ 60` →
+  axis renders → labels are too wide for that space → `rotate()` fires →
+  `rightPadding` jumps to `≈154` (the capped horizontal projection for a
+  ~34-char label, see `padding` below); this cycle's `paddingCalc(1)` also
+  applies the 25px cushion for the first time, feeding into cycle 2.
 - cycle 2: `plotWidCss = 800 − 90 − 154 = 556` → `foundSpace = 55.6 < 60` →
   `findIncr` returns `[0, 0]` → `axesCalc` hits its `_space == 0` early
   return and `drawAxesGrid` `continue`s → **the entire x-axis blanks**.
@@ -392,9 +397,10 @@ return { axis: xAxisConfig, rightPadding }
 ```
 
 `buildXAxisConfig` now returns `{ axis, rightPadding }` instead of a bare
-`uPlot.Axis`. Both call sites in `XYChart.tsx` (multi-series `~705`,
-single-series `~998`) destructure it and set `padding: [null, rightPadding,
-null, null]` on their uPlot `Options` object — neither currently sets
+`uPlot.Axis`. The single call site (`XYChart.tsx:618`) destructures `{ axis,
+rightPadding }`; `padding: [null, rightPadding, null, null]` is added to both
+`uPlot.Options` objects that consume `xAxisConfig` (`XYChart.tsx:835`
+multi-series, `XYChart.tsx:981` single-series) — neither currently sets
 `padding` at all (confirmed via grep), so `null` on the other three sides
 keeps uPlot's default `autoPadSide` behavior there, and in `time`/`numeric`
 mode `rightPadding` stays at its hoisted `null` and keeps that cushion on the
@@ -501,7 +507,9 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 ## Implementation Steps
 
 1. **`analytics-web-app/src/components/xychart-axis.ts`**
-   - Add module-level constants: `ROTATE_DEG`, `AVG_CHAR_WIDTH_PX`,
+   - Add module-level constants, each as `export const` (so the test file
+     can assert against them directly rather than duplicating literal
+     values, matching `estimateLabelWidth`'s export style below): `ROTATE_DEG`, `AVG_CHAR_WIDTH_PX`,
      `TICK_LABEL_PADDING_PX`, `LABEL_LINE_HEIGHT_PX`, `AXIS_CHROME_PX`,
      `MAX_ROTATED_SIZE`, `ROTATED_SIZE_FRACTION` (0.4, the fraction of
      `self.height`/`self.width` the rotated cap is relative to — see the
@@ -526,7 +534,9 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
    - Inside the `xAxisMode === 'categorical' && xLabels` branch, declare
      `let rotated = false` and `let maxWidth = 0`, set `xAxisConfig.rotate` /
      `xAxisConfig.size` / `xAxisConfig.space`, and *reassign* (not redeclare)
-     `rightPadding = (_u, _side, sidesWithAxes) => {...}` as described in the
+     `rightPadding = (self, _side, sidesWithAxes) => {...}` (reads
+     `self.width` for the width-relative cap, mirroring the adjacent
+     `xAxisConfig.size` bullet's use of `self.height`) as described in the
      Design section's `space` and `padding` subsections above, replacing the
      top-level static `size: 65` **and** this branch's static `space = 60`
      for this branch only (the `time`/`numeric` branches keep the static
@@ -547,8 +557,8 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 2. **`analytics-web-app/src/components/XYChart.tsx`** — update the single
    call site (`XYChart.tsx:618`) to destructure `{ axis: xAxisConfig,
    rightPadding }`, and add `padding: [null, rightPadding, null, null]` to
-   both uPlot `Options` objects (multi-series `~705`, single-series `~998`)
-   that consume `xAxisConfig`; neither sets `padding` today.
+   both uPlot `Options` objects (multi-series `XYChart.tsx:835`, single-series
+   `XYChart.tsx:981`) that consume `xAxisConfig`; neither sets `padding` today.
 
 ## Files to Modify
 
@@ -669,7 +679,7 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   **The ~10-category case above is already the discriminating one; no
   separate count is needed.** At an ~800px panel, 10 long categories give
   ~68.5px per tick before the padding fix (`(800 − 90 y-axis − 25 cushion) /
-  10`) and roughly ~53px after it (accounting for the larger rotated
+  10`) and roughly ~55.5px after it (accounting for the larger rotated
   padding) — straddling the 60px floor, so it's the case that blanks the
   axis if `space` is left static. Confirm the axis renders, not just that
   labels are tilted. Do not treat 12–14 categories at ~800px as a more
@@ -706,11 +716,3 @@ docs updates required.
   `buildXAxisConfig` cases must be updated to destructure `{ axis }` from
   the new return shape (see Testing Strategy) — a mechanical but total
   rewrite of that describe block, not a small extension.
-- Deliberately left open (not blocking): the pre-existing high-category-count
-  blanking described in the Overview is still present after this change. The
-  rotation-aware `space` floor only prevents *this* fix from creating new
-  instances of it; a chart whose labels never get a chance to rotate still
-  blanks. Closing that properly means deciding the floor from the label set
-  known at build time (`xLabels` is in the closure) rather than from
-  `rotated`, which changes behavior for charts that don't rotate — its own
-  issue, its own regression surface.
