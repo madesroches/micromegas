@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_PLAN_CHARS"],"fn":["build_log_line","classify_datafusion_error","classify_flight_error","client_error","error_class"],"struct":["FlightSqlServiceImpl"]};

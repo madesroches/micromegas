@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["attrs","logs_block_processor","metrics_block_processor","spans_block_processor","spans_table","spans_view"]};

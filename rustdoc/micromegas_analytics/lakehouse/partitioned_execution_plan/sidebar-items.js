@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["OrderingBounds","ScanOrdering"],"fn":["assert_ordering_satisfied","assert_single_partition","make_lex_ordering","make_partitioned_execution_plan"]};
