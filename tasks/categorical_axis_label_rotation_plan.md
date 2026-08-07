@@ -340,7 +340,12 @@ rightPadding = (_u, _side, sidesWithAxes) => {
   if (!rotated) return sidesWithAxes[1] ? 0 : DEFAULT_RIGHT_CUSHION_PX
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
-  return Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
+  const capped = Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
+  // A right y-axis (XYChart.tsx's `size: 90`) already reserves clearance that
+  // rotated labels can safely cross into (axis-label drawing is unclipped,
+  // and rotated x labels sit ~15px below the plot bottom), so subtract that
+  // band instead of reserving the full projection on top of it.
+  return Math.max(0, capped - (sidesWithAxes[1] ? RIGHT_AXIS_SIZE_PX : 0))
 }
 
 // after the if/else-if chain, the function's single existing trailing return:
@@ -382,12 +387,21 @@ uPlot's own (`0` with a right axis, `round(yAxisOpts.size / 2)` = 25 without).
   default, this drifts silently (a 25-vs-whatever px cushion, not a
   correctness break).
 
-No `Math.max` with the cushion is needed in the rotated branch: the rotated
-projection is ~95px for a 20-char label and grows from there, always well
-above 25. `MAX_ROTATED_SIZE` doubles as the horizontal cap too: at
-`ROTATE_DEG = -45`, `sin` and `cos` are equal, so the horizontal and vertical
-projections share the same magnitude and the same ceiling is exactly as valid
-here.
+A `Math.max` with the cushion is still not needed for the no-right-axis case:
+the rotated projection is ~95px for a 20-char label and grows from there,
+always well above 25. But when a right y-axis is present
+(`sidesWithAxes[1]`), `calcAxesRects` places it at `plotLft + plotWid` and
+grows outward, so it already reserves `RIGHT_AXIS_SIZE_PX` (90, mirroring
+`XYChart.tsx`'s `size: 90`, the same way `DEFAULT_RIGHT_CUSHION_PX` mirrors
+uPlot's 25) of clearance that rotated labels can safely cross — reserving the
+full projection on top of that band would double-count it and blank out most
+of the padding as empty space. The rotated branch therefore subtracts
+`RIGHT_AXIS_SIZE_PX` from the capped projection when a right axis exists,
+floored at `0` via `Math.max` so a short rotated label with a right axis
+still reduces cleanly to no extra padding rather than a negative one.
+`MAX_ROTATED_SIZE` doubles as the horizontal cap too: at `ROTATE_DEG = -45`,
+`sin` and `cos` are equal, so the horizontal and vertical projections share
+the same magnitude and the same ceiling is exactly as valid here.
 
 This only reserves the *right* side, matching the app's current layout:
 the categorical axis is always the bottom `axes[0]`, and with `ROTATE_DEG`
@@ -412,7 +426,8 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
    - Add module-level constants: `ROTATE_DEG`, `AVG_CHAR_WIDTH_PX`,
      `TICK_LABEL_PADDING_PX`, `LABEL_LINE_HEIGHT_PX`, `AXIS_CHROME_PX`,
      `MAX_ROTATED_SIZE`, `DEFAULT_RIGHT_CUSHION_PX` (25, mirroring uPlot's
-     `round(yAxisOpts.size / 2)`), `ROTATED_MIN_SPACE_PX` (20), and keep `65`
+     `round(yAxisOpts.size / 2)`), `RIGHT_AXIS_SIZE_PX` (90, mirroring
+     `XYChart.tsx`'s right-axis `size: 90`), `ROTATED_MIN_SPACE_PX` (20), and keep `65`
      as `BASE_SIZE` (used both as the default `size` and the flat-label
      return value) and `60` as `BASE_MIN_SPACE_PX` (today's static
      `space`, still used by the `numeric` branch as a plain number).
@@ -526,10 +541,13 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     call (no right axis) returns `DEFAULT_RIGHT_CUSHION_PX` (25), and with
     `sidesWithAxes[1] === true` returns `0` — i.e. it reproduces uPlot's
     `autoPadSide` rather than collapsing the cushion to `0`.
-  - After a `rotate()` call that triggers rotation, `rightPadding()` returns
-    a value `> DEFAULT_RIGHT_CUSHION_PX` and `<= MAX_ROTATED_SIZE`,
-    independent of `sidesWithAxes` — same call-order contract as the `size()`
-    test above (`rotate()` before `rightPadding()`).
+  - After a `rotate()` call that triggers rotation, `rightPadding()` with
+    `sidesWithAxes[1] === false` returns a value `> DEFAULT_RIGHT_CUSHION_PX`
+    and `<= MAX_ROTATED_SIZE`; with `sidesWithAxes[1] === true` it returns
+    that same capped value minus `RIGHT_AXIS_SIZE_PX`, floored at `0` — the
+    right-axis case is reduced by the y-axis's own reserved width rather than
+    stacking both. Same call-order contract as the `size()` test above
+    (`rotate()` before `rightPadding()`).
 - **Manual/visual**: build (or reuse) a chart cell with `xAxisMode:
   'categorical'` and ~10 long category labels (e.g.
   `++product+channel+branch-CL-123456`-style ~34-char strings) at a normal
@@ -542,14 +560,18 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   uPlot blanks the axis entirely before rotation logic ever runs — a
   separate pre-existing gap (see Overview), not evidence that rotation
   "isn't needed."
-  **Also test 12–14 long categories at ~800px specifically.** ~10 is *not*
-  sufficient coverage: at 10 categories the post-padding per-tick space is
-  ~70px and clears the 60px floor either way, so it passes with or without
-  the rotation-aware `space` fix. 12 categories is the first count that
-  lands between the pre-padding (66.7px) and post-padding (58.75px) sides of
-  that floor, and is therefore the case that blanks the axis if `space` is
-  left static — see the `space` subsection. Confirm the axis renders, not
-  just that labels are tilted.
+  **The ~10-category case above is already the discriminating one; no
+  separate count is needed.** At an ~800px panel, 10 long categories give
+  ~68.5px per tick before the padding fix (`(800 − 90 y-axis − 25 cushion) /
+  10`) and roughly ~53px after it (accounting for the larger rotated
+  padding) — straddling the 60px floor, so it's the case that blanks the
+  axis if `space` is left static. Confirm the axis renders, not just that
+  labels are tilted. Do not treat 12–14 categories at ~800px as a more
+  discriminating test: `(800 − 90 − 25) / 12 ≈ 57px` is already under the
+  60px floor before any rotation code runs (worse still with a second
+  y-axis, e.g. `(800 − 90·2 − 25) / 12 ≈ 51px`), so that count blanks for
+  pre-existing reasons (see Overview), not because of anything this fix
+  changes.
   Additionally, on that same rotated chart, confirm the **last** category's
   label is fully visible and not clipped at the chart's right edge, in both
   a true single-series chart (no explicit `side`, the only cushioned case)
