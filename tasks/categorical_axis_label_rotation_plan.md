@@ -109,13 +109,18 @@ Four things matter for the design:
 `3406`); past that it stops with whatever the last cycle produced, converged
 or not. The design below settles in 2 cycles (cycle 1 flips `rotated` and
 grows both `size` and `rightPadding`; cycle 2 recomputes identical values and
-converges), comfortably inside that limit — except when a right y-axis is
-present: the one-time `_padding` init at `uPlot.iife.js:3819` runs with
+converges), comfortably inside that limit — with or without a right y-axis.
+It's true that the one-time `_padding` init at `uPlot.iife.js:3819` runs with
 `sidesWithAxes` still all-`false` (`axes.forEach(initAxis)`, which populates
-it, doesn't run until `:6094`), so cycle 1's `rightPadding` starts from the
-no-right-axis cushion and only self-corrects once `paddingCalc(1)` sees the
-real `sidesWithAxes`. That case takes 3 cycles — exactly at the limit, not
-under it (see the `padding` subsection).
+it, doesn't run until `:6094`), so `_padding[1]` starts at `0` regardless of
+the real layout (see the `padding` subsection) — but that init call happens
+before `_setSize`/`calcSize` ever run. `convergeSize()` itself only starts
+once `_init()` calls `_setSize(opts.width, opts.height)` (`:6089`), which
+calls `calcSize` (`:3372`) → `calcPlotRect` (`:3422`), assigning
+`sidesWithAxes[0..3]` (`:3462-3465`) from the real axis layout *before*
+`commit()` → `convergeSize()` runs cycle 1. So `paddingCalc(1)`, the first
+real cycle, already sees the correct `sidesWithAxes` — there's no stale value
+left over from the init call for it to correct.
 
 ## Design
 
@@ -180,30 +185,46 @@ xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
 ### `size`
 
 ```ts
-xAxisConfig.size = () => {
+xAxisConfig.size = (self) => {
   if (!rotated) return BASE_SIZE // 65, unchanged from today
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const rotatedExtent = maxWidth * Math.sin(angleRad) + LABEL_LINE_HEIGHT_PX * Math.cos(angleRad)
-  return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
+  const cap = Math.min(MAX_ROTATED_SIZE, Math.round(self.height * ROTATED_SIZE_FRACTION))
+  return Math.min(cap, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
 }
 ```
 
-`size()` deliberately takes **no** parameters and reads the shared `maxWidth`
-rather than recomputing it from `values`: uPlot's init call passes
-`values === null` (`uPlot.iife.js:3785`, see point 3 above), so a
-`values.map(...)` here would only be safe by accident — it happens to sit
-behind the `!rotated` early return on that one call. Reading shared state
-removes the hazard entirely and is what the `padding` subsection below needs
-anyway.
+`size()` now reads `self` in addition to the shared `maxWidth` (still not
+recomputed from `values`: uPlot's init call passes `values === null`,
+`uPlot.iife.js:3785`, see point 3 above, so a `values.map(...)` here would
+only be safe by accident). Reading `self.height` is safe at that same init
+call even though `self.height` isn't set yet at that point (`calcSize` hasn't
+run) — the `!rotated` early return fires first, since `rotated` only ever
+becomes `true` from inside `rotate()`, which uPlot only calls during a real
+convergence cycle, by which point `calcSize` has already assigned
+`self.height`. So the `self.height` read is never reached before it's valid.
 
 - `LABEL_LINE_HEIGHT_PX` (e.g. `14`): approximate single-line text height for
   the 11px axis font.
 - `AXIS_CHROME_PX` (e.g. `20`): tick length + label gap, matching the existing
   visual spacing (`ticks`/`gap` are otherwise untouched).
-- `MAX_ROTATED_SIZE` (e.g. `160`): hard ceiling so one pathologically long
-  label can't consume most of the chart's vertical space — the label itself
-  will simply run past the axis box height in that rare case, same failure
-  mode uPlot already has for any axis, rather than a chart that's all axis.
+- `MAX_ROTATED_SIZE` (e.g. `160`) and `ROTATED_SIZE_FRACTION` (e.g. `0.4`):
+  the effective ceiling is `min(MAX_ROTATED_SIZE, round(self.height *
+  ROTATED_SIZE_FRACTION))` — relative to the chart's actual height, not just
+  an absolute pixel count. An absolute-only cap doesn't do what it's meant
+  to at the app's real minimum chart size: `XYChart.tsx:308` floors canvas
+  height at `Math.round(Math.max(250, rect.height - 32))` and
+  `ChartCell.tsx:608` defaults `defaultHeight: 250`, so a bare 160px ceiling
+  is 64% of a default-sized chart's height — the opposite of "can't consume
+  most of the chart's vertical space." At `ROTATED_SIZE_FRACTION = 0.4` the
+  axis never exceeds 40% of `self.height` regardless of canvas size, and
+  `MAX_ROTATED_SIZE` only becomes the binding ceiling on taller charts
+  (`self.height` above `MAX_ROTATED_SIZE / ROTATED_SIZE_FRACTION = 400`). One
+  consequence: at the app's default ~250px chart height (cap 100px), a label
+  whose uncapped `rotatedExtent + AXIS_CHROME_PX` exceeds that is truncated
+  at the axis edge — expected for long labels at typical chart heights, not
+  only a rare pathological case (see Testing Strategy for the concrete
+  ~34-char example).
 
 ### `space`
 
@@ -340,15 +361,16 @@ xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
   rotated = maxWidth + TICK_LABEL_PADDING_PX > foundSpace
   return rotated ? ROTATE_DEG : 0
 }
-xAxisConfig.size = () => {
+xAxisConfig.size = (self) => {
   if (!rotated) return BASE_SIZE
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const rotatedExtent = maxWidth * Math.sin(angleRad) + LABEL_LINE_HEIGHT_PX * Math.cos(angleRad)
-  return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
+  const cap = Math.min(MAX_ROTATED_SIZE, Math.round(self.height * ROTATED_SIZE_FRACTION))
+  return Math.min(cap, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
 }
 xAxisConfig.space = () => (rotated ? ROTATED_MIN_SPACE_PX : BASE_MIN_SPACE_PX)
 
-rightPadding = (_u, _side, sidesWithAxes) => {
+rightPadding = (self, _side, sidesWithAxes) => {
   // Not rotated: reproduce uPlot's own autoPadSide result for the right edge,
   // since a function's numeric return can never fall back to it (see below).
   // Mirrors autoPadSide's side-1 branch exactly (uPlot.iife.js:3812-3813),
@@ -356,7 +378,8 @@ rightPadding = (_u, _side, sidesWithAxes) => {
   if (!rotated) return (sidesWithAxes[0] || sidesWithAxes[2]) && !sidesWithAxes[1] ? DEFAULT_RIGHT_CUSHION_PX : 0
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
-  const capped = Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
+  const cap = Math.min(MAX_ROTATED_SIZE, Math.round(self.width * ROTATED_SIZE_FRACTION))
+  const capped = Math.min(cap, Math.ceil(horizontalExtent))
   // A right y-axis (XYChart.tsx's `size: 90`) already reserves clearance that
   // rotated labels can safely cross into (axis-label drawing is unclipped,
   // and rotated x labels sit ~15px below the plot bottom), so subtract that
@@ -425,21 +448,23 @@ of the padding as empty space. The rotated branch therefore subtracts
 `RIGHT_AXIS_SIZE_PX` from the capped projection when a right axis exists,
 floored at `0` via `Math.max` so a short rotated label with a right axis
 still reduces cleanly to no extra padding rather than a negative one.
-`MAX_ROTATED_SIZE` doubles as the horizontal cap too: at `ROTATE_DEG = -45`,
-`sin` and `cos` are equal, so the *magnitude* of the capped projection is the
-same in both directions. The *cost* of reserving it is not: vertical `size`
-only shrinks `plotHgtCss`, while horizontal `rightPadding` shrinks
-`plotWidCss` (`uPlot.iife.js:3468`), which is the exact quantity
+The *cost* of reserving a capped pixel count is not the same on both axes:
+vertical `size` only shrinks `plotHgtCss`, while horizontal `rightPadding`
+shrinks `plotWidCss` (`uPlot.iife.js:3468`), which is the exact quantity
 `getIncrSpace` (`:4501`) divides to get `foundSpace` — so a capped
 `rightPadding` feeds back into the same rotate/blank decision the `space`
-subsection covers, and on a narrow chart cell 160px is a much bigger bite out
-of the available width than out of the available height. Reusing
-`MAX_ROTATED_SIZE` here is a deliberate choice to avoid a second, narrower
-constant: the rotation-aware floor (`ROTATED_MIN_SPACE_PX = 20`) already
-absorbs most of that feedback, and the residual risk — a capped-but-still-large
-`rightPadding` pushing a *rotated* chart's `foundSpace` under 20px on an
-unusually narrow panel — is accepted as an edge case rather than solved with
-a width-relative clamp.
+subsection covers, and a fixed absolute cap would be a much bigger bite out
+of the available width than out of the available height on a narrow chart
+cell. So `rightPadding`'s cap is width-relative, using the same
+`ROTATED_SIZE_FRACTION` as `size()` but applied to `self.width`:
+`min(MAX_ROTATED_SIZE, round(self.width * ROTATED_SIZE_FRACTION))`. At
+`XYChart.tsx:307`'s 400px width floor that's `160px` — 40% of the canvas by
+design, matching the same fraction `size()` uses for height. That reframes
+what used to be flagged as an "unusually narrow panel" risk: 400px is the
+app's enforced *minimum* chart width, not a rare case, so the fraction is
+chosen to be a bound the design accepts at that floor, not an edge case to
+caveat around. The rotation-aware floor (`ROTATED_MIN_SPACE_PX = 20`) still
+absorbs the residual feedback into `foundSpace`.
 
 This only reserves the *right* side, matching the app's current layout:
 the categorical axis is always the bottom `axes[0]`, and with `ROTATE_DEG`
@@ -463,9 +488,12 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 1. **`analytics-web-app/src/components/xychart-axis.ts`**
    - Add module-level constants: `ROTATE_DEG`, `AVG_CHAR_WIDTH_PX`,
      `TICK_LABEL_PADDING_PX`, `LABEL_LINE_HEIGHT_PX`, `AXIS_CHROME_PX`,
-     `MAX_ROTATED_SIZE`, `DEFAULT_RIGHT_CUSHION_PX` (25, mirroring uPlot's
-     `round(yAxisOpts.size / 2)`), `RIGHT_AXIS_SIZE_PX` (90, mirroring
-     `XYChart.tsx`'s right-axis `size: 90`), `ROTATED_MIN_SPACE_PX` (20), and keep `65`
+     `MAX_ROTATED_SIZE`, `ROTATED_SIZE_FRACTION` (0.4, the fraction of
+     `self.height`/`self.width` the rotated cap is relative to — see the
+     Design section's `size` and `padding` subsections), `DEFAULT_RIGHT_CUSHION_PX`
+     (25, mirroring uPlot's `round(yAxisOpts.size / 2)`), `RIGHT_AXIS_SIZE_PX`
+     (90, mirroring `XYChart.tsx`'s right-axis `size: 90`),
+     `ROTATED_MIN_SPACE_PX` (20), and keep `65`
      as `BASE_SIZE` (used both as the default `size` and the flat-label
      return value) and `60` as `BASE_MIN_SPACE_PX` (today's static
      `space`, still used by the `numeric` branch as a plain number).
@@ -490,8 +518,11 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
      `size: 65` from the base config object, `numeric` keeps its static
      `space = 60`, and both leave `rightPadding` at its hoisted `null`
      default).
-   - `xAxisConfig.size` takes no parameters — do **not** read `values` in it.
-     uPlot's init call passes `values === null` (`uPlot.iife.js:3785`).
+   - `xAxisConfig.size` takes only `self` (for `self.height`, used by the
+     height-relative cap) — do **not** read `values` in it. uPlot's init
+     call passes `values === null` (`uPlot.iife.js:3785`); `self.height` is
+     likewise unset at that same call, but the `!rotated` early return means
+     neither is ever read there (see the `size` subsection).
    - `xAxisConfig.space` is assigned a function; `Axis.Space`
      (`uPlot.d.ts:985`) accepts one, so this type-checks without a cast.
    - Cast `values` elements to `string` defensively in `rotate` (`Rotate`'s
@@ -559,14 +590,19 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   - Calling `rotate(u, [longLabel], 0, 20)` with a long label and a narrow
     `foundSpace` returns `ROTATE_DEG` (`-45`).
   - After a `rotate()` call that triggers rotation, the subsequent `size()`
-    call returns a value `> BASE_SIZE` and `<= MAX_ROTATED_SIZE` — this also
-    documents/enforces the call-order contract (`rotate()` before `size()`)
-    that uPlot itself guarantees.
+    call (passed a stub `self` with a `.height`, e.g. `{ height: 250 } as
+    uPlot`) returns a value `> BASE_SIZE` and `<= Math.min(MAX_ROTATED_SIZE,
+    Math.round(250 * ROTATED_SIZE_FRACTION))` — this also documents/enforces
+    both the call-order contract (`rotate()` before `size()`) that uPlot
+    itself guarantees and that the cap is height-relative, not just the flat
+    `MAX_ROTATED_SIZE`.
   - After a `rotate()` call that does *not* trigger rotation, `size()`
     returns exactly `BASE_SIZE` (unchanged behavior for the flat-label case).
   - `size()` called with no arguments at all (uPlot's init call shape,
-    `values === null`) returns `BASE_SIZE` and does not throw — guards the
-    regression of reintroducing a `values.map(...)` in `size`.
+    `values === null` and, before any `rotate()` call, `self` undefined too)
+    returns `BASE_SIZE` and does not throw — guards both the regression of
+    reintroducing a `values.map(...)` in `size` and of reading `self.height`
+    before the `!rotated` guard.
   - `time` and `numeric` modes keep static `size: 65` (no `rotate` set) —
     extend the existing tests for those branches to assert `axis.rotate` is
     `undefined` and `rightPadding` is `null`. `numeric` also keeps a numeric
@@ -579,19 +615,34 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     call (no right axis) returns `DEFAULT_RIGHT_CUSHION_PX` (25), and with
     `sidesWithAxes[1] === true` returns `0` — i.e. it reproduces uPlot's
     `autoPadSide` rather than collapsing the cushion to `0`.
-  - After a `rotate()` call that triggers rotation, `rightPadding()` with
+  - After a `rotate()` call that triggers rotation, `rightPadding()` (passed
+    a stub `self` with a `.width`, e.g. `{ width: 800 } as uPlot`) with
     `sidesWithAxes[1] === false` returns a value `> DEFAULT_RIGHT_CUSHION_PX`
-    and `<= MAX_ROTATED_SIZE`; with `sidesWithAxes[1] === true` it returns
-    that same capped value minus `RIGHT_AXIS_SIZE_PX`, floored at `0` — the
-    right-axis case is reduced by the y-axis's own reserved width rather than
-    stacking both. Same call-order contract as the `size()` test above
-    (`rotate()` before `rightPadding()`).
+    and `<= Math.min(MAX_ROTATED_SIZE, Math.round(800 * ROTATED_SIZE_FRACTION))`;
+    with `sidesWithAxes[1] === true` it returns that same capped value minus
+    `RIGHT_AXIS_SIZE_PX`, floored at `0` — the right-axis case is reduced by
+    the y-axis's own reserved width rather than stacking both, and the cap
+    itself is width-relative, not just the flat `MAX_ROTATED_SIZE`. Same
+    call-order contract as the `size()` test above (`rotate()` before
+    `rightPadding()`).
 - **Manual/visual**: build (or reuse) a chart cell with `xAxisMode:
   'categorical'` and ~10 long category labels (e.g.
   `++product+channel+branch-CL-123456`-style ~34-char strings) at a normal
   panel width (~800px) — enough categories to stay well above uPlot's
   `space: 60` per-tick floor, so `rotate()`/`size()` actually run; confirm
-  labels rotate and are legible, and that a chart with a handful of short
+  labels rotate. At the app's default chart-cell height (`ChartCell.tsx`'s
+  `defaultHeight: 250`, floored via `XYChart.tsx:308`'s `Math.round(Math.max(250,
+  rect.height - 32))`), the height-relative cap (`min(MAX_ROTATED_SIZE,
+  round(self.height * ROTATED_SIZE_FRACTION))` = `100px` at `height = 250`) is
+  well under this label's ~175px uncapped rotated extent (`ceil(34 ×
+  AVG_CHAR_WIDTH_PX × sin45° + LABEL_LINE_HEIGHT_PX × cos45°) +
+  AXIS_CHROME_PX`), so the label's tail is expected to be truncated at the
+  axis edge — that's the documented trade-off from the `size` subsection, not
+  a bug. The pass criterion at this height is: the axis band stays a minority
+  of the chart's height (doesn't dominate the cell), and any truncated label
+  ends cleanly at the axis edge rather than mid-glyph or overflowing outside
+  the axis box — not that the full 34-character string is legible.
+  Also confirm that a chart with a handful of short
   categories (e.g. usernames) still renders flat, unchanged from today. Do
   not use a much higher category count (e.g. ~30) at the same width as a
   rotation test: that pushes per-tick space below the `space: 60` floor and
