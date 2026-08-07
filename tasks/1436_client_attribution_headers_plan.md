@@ -53,7 +53,7 @@ limiting — and trivially spoofable/omittable, same as the existing `x-client-t
 - `micromegas/cli/screens.py` does **not** call FlightSQL at all — it talks to
   `analytics-web-srv`'s REST API via `micromegas/web_client.py`'s `WebClient` (verified: no
   `FlightSQL`/`.query(` references in `screens.py`). So the issue-comment's proposed
-  `cli-screens` entrypoint value has no live call site today — see Open Questions.
+  `cli-screens` entrypoint value has no live call site today.
   `micromegas/cli/logout.py` never queries either (it only deletes token files), so it needs
   no changes.
 - Server side, `rust/public/src/servers/flight_sql_service_impl.rs::execute_query`:
@@ -302,10 +302,17 @@ specific to the two headers the gateway itself controls.
    both the `oidc_connection.connect(...)` and `FlightSQLClient(cfg.uri, ...)` branches.
 6. `cli/query.py::main()` (`:142`): pass `client_entrypoint="cli-query"`.
 7. `python/micromegas/tests/cli/test_connection.py::test_profile_argument_resolves_to_that_profiles_uri`:
-   its `FakeFlightSQLClient.__init__(self, uri)` (`:24-26`) only accepts a positional `uri` —
-   `connection.connect()` will now always pass `client_entrypoint=` as a keyword, so update the
-   fake's signature to `def __init__(self, uri, client_entrypoint=None):` (capturing it isn't
-   necessary for that test's assertion, just accepting it so the call doesn't raise).
+   update `FakeFlightSQLClient.__init__(self, uri)` (`:24-26`) to
+   `def __init__(self, uri, client_entrypoint=None): captured_entrypoints.append(client_entrypoint)`
+   (alongside the existing `captured_uris` capture), call
+   `connection.connect(profile="dev", client_entrypoint="cli-query")`, and assert
+   `captured_entrypoints == ["cli-query"]` — covering the plain (non-OIDC) branch
+   (`cli/connection.py:26`). Add a second test covering the OIDC branch
+   (`cli/connection.py:14-22`): configure a profile with `oidc_issuer`/`oidc_client_id` set,
+   `monkeypatch.setattr(oidc_connection, "connect", fake_oidc_connect)` where
+   `fake_oidc_connect(**kwargs)` records `kwargs` and returns a stub client, then assert
+   `connection.connect(profile=<oidc-profile>, client_entrypoint="cli-query")` results in
+   `kwargs["client_entrypoint"] == "cli-query"` — without driving a real login flow.
 
 **Phase 2 — Python tests**
 8. New `python/micromegas/tests/test_client_attribution.py`: hermetic unit tests for
@@ -320,44 +327,50 @@ specific to the two headers the gateway itself controls.
    bytes tuples) when the new params are passed, and absent when they're left at their
    `None` defaults — keeping the "no I/O" hermetic property documented in the file's own
    docstring, since `make_call_headers` itself never reads env/`sys` state.
+10. New `python/micromegas/tests/cli/test_query.py`: monkeypatch `sys.argv` to a minimal valid
+    invocation (e.g. `["micromegas-query", "SELECT 1", "--all"]`) and
+    `connection.connect` (as imported in `cli/query.py`) to a fake that records its kwargs and
+    returns a stub client whose `.query()` returns an empty `DataFrame`; call `query.main()` and
+    assert the captured kwargs include `client_entrypoint="cli-query"` — guarding against
+    `query.py:142` dropping that argument.
 
 **Phase 3 — Rust server**
-10. `flight_sql_service_impl.rs`: read `x-client-agent`/`x-client-entrypoint` (default
+11. `flight_sql_service_impl.rs`: read `x-client-agent`/`x-client-entrypoint` (default
     `"unknown"`) and `x-client-session` (`Option<String>`) alongside `client_type` (`:552`);
     add `agent={client_agent} entrypoint={client_entrypoint}` to both `info!` format strings
     (`:561-573`); add `agent`, `entrypoint`, `session` fields to `QueryAuditState`
     (`:262-292`), populated at construction (`:589-608`); thread them into `QueryAuditState::emit`'s
     `QueryAuditRecord` construction (`:317-342`).
-11. `query_audit.rs`: add `pub agent: String`, `pub entrypoint: String`,
+12. `query_audit.rs`: add `pub agent: String`, `pub entrypoint: String`,
     `#[serde(skip_serializing_if = "Option::is_none")] pub session: Option<String>` to
     `QueryAuditRecord` (`:80-119`), placed after `client`.
-12. `http_gateway.rs::HeaderForwardingConfig::default()` (`:44-53`): add `"X-Client-Agent"`,
+13. `http_gateway.rs::HeaderForwardingConfig::default()` (`:44-53`): add `"X-Client-Agent"`,
     `"X-Client-Entrypoint"`, `"X-Client-Session"` to `allowed_headers`.
 
 **Phase 4 — Rust tests**
-13. `rust/public/tests/query_audit_tests.rs`: add `agent`/`entrypoint`/`session` to the
+14. `rust/public/tests/query_audit_tests.rs`: add `agent`/`entrypoint`/`session` to the
     full-record fixture and the omits-optionals fixture (asserting `session` is omitted when
     `None`, and that `agent`/`entrypoint` are always present, matching the `client`/`name`
     split already established there).
-14. `rust/public/tests/http_gateway_tests.rs`: extend `test_default_config` to assert
+15. `rust/public/tests/http_gateway_tests.rs`: extend `test_default_config` to assert
     `should_forward("X-Client-Agent")`, `should_forward("X-Client-Entrypoint")`,
     `should_forward("X-Client-Session")` are all `true`.
 
 **Phase 5 — docs**
-15. `mkdocs/docs/query-guide/query-audit-log.md`: add `agent`/`entrypoint`/`session` rows to
+16. `mkdocs/docs/query-guide/query-audit-log.md`: add `agent`/`entrypoint`/`session` rows to
     the `## Fields` table (`agent`/`entrypoint` always present, default `unknown`; `session`
     present only if the caller sent `x-client-session`); note the three-way distinction
     between "unknown" (client didn't report), "none"/"script" (python client actively found
     nothing), and a detected value.
-16. `mkdocs/docs/query-guide/python-api.md`: update the `FlightSQLClient(uri, headers=None,
+17. `mkdocs/docs/query-guide/python-api.md`: update the `FlightSQLClient(uri, headers=None,
     preserve_dictionary=False, auth_provider=None)` signature (`:281`) to include
     `client_entrypoint=None`; add a short "Client Attribution" subsection documenting
     `x-client-agent`/`x-client-entrypoint`/`x-client-session`, the `MICROMEGAS_CLIENT_AGENT`/
     `MICROMEGAS_CLIENT_ENTRYPOINT` overrides, and that these are analytics-only (never used for
     auth/quota).
-17. `mkdocs/docs/gateway/configuration.md`: add the three new headers to the "Default headers"
+18. `mkdocs/docs/gateway/configuration.md`: add the three new headers to the "Default headers"
     bullet list (`:29`).
-18. `CHANGELOG.md`: `## Unreleased` → `**Python:**` (client changes) and `**Analytics:**`
+19. `CHANGELOG.md`: `## Unreleased` → `**Python:**` (client changes) and `**Analytics:**`
     (server/audit changes) entries. Flag `QueryAuditRecord` as a **minor breaking change**
     again (gains `agent`, `entrypoint`, `session`), matching how the two prior additions to
     this struct were documented (#1435, #1406).
@@ -370,7 +383,10 @@ specific to the two headers the gateway itself controls.
 - `python/micromegas/micromegas/oidc_connection.py` — `connect()`.
 - `python/micromegas/micromegas/cli/connection.py` — `connect()`.
 - `python/micromegas/micromegas/cli/query.py` — `main()`.
-- `python/micromegas/tests/cli/test_connection.py` — fake client signature fix.
+- `python/micromegas/tests/cli/test_connection.py` — fake client captures/asserts
+  `client_entrypoint` on both branches.
+- `python/micromegas/tests/cli/test_query.py` — new; asserts `main()` passes
+  `client_entrypoint="cli-query"`.
 - `python/micromegas/tests/test_client_attribution.py` — new.
 - `python/micromegas/tests/test_flightsql_headers.py` — new-headers cases.
 - `rust/public/src/servers/flight_sql_service_impl.rs` — header reads, log lines,
@@ -399,7 +415,7 @@ specific to the two headers the gateway itself controls.
 - **`cli-screens` is not implemented.** The issue comment proposes it, but `screens.py` never
   calls FlightSQL — it manages screen configs over `analytics-web-srv`'s REST API. Adding an
   unreachable enum value would be dead code; it's deferred until (if) `screens.py` gains a
-  FlightSQL-querying code path. See Open Questions.
+  FlightSQL-querying code path.
 - **No env override for `x-client-session`, and CLI multi-query tasks are not
   session-correlated.** Unlike agent/entrypoint, the issue doesn't propose an override. A
   fresh UUID per `FlightSQLClient` instance matches "one client instantiation = one task" for
@@ -436,8 +452,8 @@ specific to the two headers the gateway itself controls.
 ## Testing Strategy
 
 1. `poetry run pytest` in `python/micromegas/` (per `python/CLAUDE.md`), covering the new
-   `test_client_attribution.py` and the updated `test_flightsql_headers.py`/
-   `tests/cli/test_connection.py`.
+   `test_client_attribution.py` and `tests/cli/test_query.py`, and the updated
+   `test_flightsql_headers.py`/`tests/cli/test_connection.py`.
 2. `poetry run black <changed files>` before commit (per `python/CLAUDE.md`).
 3. `cargo test -p micromegas --features server` covering the updated
    `query_audit_tests.rs`/`http_gateway_tests.rs`.
