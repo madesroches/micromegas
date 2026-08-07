@@ -6,11 +6,18 @@
 
 Chart cells in categorical X-axis mode render tick labels horizontally at a
 fixed 65px axis height. When labels are long strings (e.g. version/build
-identifiers) and/or there are many categories, labels overlap and become
-unreadable. This adds adaptive rotation to `buildXAxisConfig`: labels tilt to
--45° and the axis grows to fit them, but only when the available per-tick
-space is too narrow to fit the labels horizontally — short labels or few
-categories keep rendering flat, as today.
+identifiers), labels overlap and become unreadable even while per-tick space
+stays at or above uPlot's configured `space: 60` floor (`xAxisConfig.space =
+60`, see Current State) — that's the regime this plan targets. This adds
+adaptive rotation to `buildXAxisConfig`: labels tilt to -45° and the axis
+grows to fit them, but only when the available per-tick space is too narrow
+to fit the labels horizontally — short labels keep rendering flat, as today.
+
+Pushing category *count* high enough instead drops per-tick space below that
+60px floor, at which point uPlot's own layout (`axesCalc` /
+`getIncrSpace`/`findIncr`) returns early and blanks the axis entirely —
+before `rotate()` or `size()` ever run. That's a pre-existing gap independent
+of rotation (arguably its own issue) and out of scope here.
 
 ## Current State
 
@@ -49,7 +56,7 @@ multi-series and single-series uPlot option objects built in `XYChart.tsx`
 
 ### How uPlot resolves axis rotation and size
 
-uPlot's `Axis.Rotate` and `Axis.Size` types (`node_modules/uplot/dist/uPlot.d.ts:1054,1111`)
+uPlot's `Axis.Rotate` and `Axis.Size` types (`node_modules/uplot/dist/uPlot.d.ts:1069,1111`)
 each accept either a static number or a function:
 
 ```ts
@@ -84,6 +91,12 @@ small piece of mutable state (`rotated: boolean`) that `rotate()` sets and
 before `size()` for the same axis in the same cycle (see trace above), and a
 fresh `xAxisConfig` object (and thus fresh closure) is built per `XYChart`
 render via `buildXAxisConfig()`, so no state leaks across chart instances.
+
+This logic only runs when uPlot actually calls `rotate()`/`size()` for the
+axis at all, which requires per-tick space to clear uPlot's own `space: 60`
+floor (see Current State and Overview) — high category counts that push
+per-tick space below that floor blank the axis before this code ever
+executes, regardless of label length.
 
 ### Overlap heuristic
 
@@ -224,17 +237,22 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     documents/enforces the call-order contract (`rotate()` before `size()`)
     that uPlot itself guarantees.
   - After a `rotate()` call that does *not* trigger rotation, `size()`
-    returns exactly `BASE_SIZE` (unchanged behavior, covers the existing
-    `axis.size` test at `xychart-axis.test.ts:12` still passing).
+    returns exactly `BASE_SIZE` (unchanged behavior for the flat-label case).
   - `time` and `numeric` modes keep static `size: 65` (no `rotate` set) —
     extend the existing tests for those branches to assert `axis.rotate` is
     `undefined`.
 - **Manual/visual**: build (or reuse) a chart cell with `xAxisMode:
-  'categorical'` and ~30 long category labels (e.g.
-  `++product+channel+branch-CL-123456`-style strings) at a normal panel
-  width; confirm labels rotate and are legible, and that a chart with a
-  handful of short categories (e.g. usernames) still renders flat, unchanged
-  from today.
+  'categorical'` and ~10 long category labels (e.g.
+  `++product+channel+branch-CL-123456`-style ~20-char strings) at a normal
+  panel width (~800px) — enough categories to stay well above uPlot's
+  `space: 60` per-tick floor, so `rotate()`/`size()` actually run; confirm
+  labels rotate and are legible, and that a chart with a handful of short
+  categories (e.g. usernames) still renders flat, unchanged from today. Do
+  not use a much higher category count (e.g. ~30) at the same width as a
+  rotation test: that pushes per-tick space below the `space: 60` floor and
+  uPlot blanks the axis entirely before rotation logic ever runs — a
+  separate pre-existing gap (see Overview), not evidence that rotation
+  "isn't needed."
 - Run `cd analytics-web-app && yarn lint && yarn type-check && yarn test`.
 
 ## Open Questions
