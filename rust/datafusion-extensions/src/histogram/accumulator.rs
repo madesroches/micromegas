@@ -8,6 +8,7 @@ use datafusion::{
         },
         datatypes::{DataType, Field, Float64Type, UInt64Type},
     },
+    common::utils::proxy::VecAllocExt,
     error::DataFusionError,
     logical_expr::Accumulator,
     scalar::ScalarValue,
@@ -308,7 +309,7 @@ impl Accumulator for HistogramAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + size_of_val(&self.bins)
+        size_of_val(self) + self.bins.allocated_size()
     }
 
     fn state(&mut self) -> datafusion::error::Result<Vec<datafusion::scalar::ScalarValue>> {
