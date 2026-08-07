@@ -109,7 +109,13 @@ Four things matter for the design:
 `3406`); past that it stops with whatever the last cycle produced, converged
 or not. The design below settles in 2 cycles (cycle 1 flips `rotated` and
 grows both `size` and `rightPadding`; cycle 2 recomputes identical values and
-converges), comfortably inside that limit.
+converges), comfortably inside that limit — except when a right y-axis is
+present: the one-time `_padding` init at `uPlot.iife.js:3819` runs with
+`sidesWithAxes` still all-`false` (`axes.forEach(initAxis)`, which populates
+it, doesn't run until `:6094`), so cycle 1's `rightPadding` starts from the
+no-right-axis cushion and only self-corrects once `paddingCalc(1)` sees the
+real `sidesWithAxes`. That case takes 3 cycles — exactly at the limit, not
+under it (see the `padding` subsection).
 
 ## Design
 
@@ -206,15 +212,23 @@ the `padding` fix below regresses charts that render correctly today.
 
 `calcPlotRect` applies right padding as `plotWidCss -= _padding[1] +
 _padding[3]` (`uPlot.iife.js:3468`), and `axesCalc` derives the x-axis's
-`foundSpace` from that same `plotWidCss`. So reserving ~95px on the right
-directly subtracts from the quantity that has to clear the `space` floor.
-Worked example, 12 categories in an 800px plot:
+`foundSpace` from that same `plotWidCss`. So reserving a large chunk of the
+plot's width on the right (~154px in the example below) directly subtracts
+from the quantity that has to clear the `space` floor. Worked example, 10
+categories with ~34-char labels in an 800px plot with one left-side y-axis
+(`size: 90`, no right axis):
 
-- cycle 1: `foundSpace = 800/12 = 66.7 ≥ 60` → axis renders → `rotate()`
-  fires → `rightPadding ≈ 95`.
-- cycle 2: `plotWidCss = 705` → `foundSpace = 58.75 < 60` → `findIncr`
-  returns `[0, 0]` → `axesCalc` hits its `_space == 0` early return and
-  `drawAxesGrid` `continue`s → **the entire x-axis blanks**.
+- cycle 1: `plotWidCss = 800 − 90 − 25 = 685` (90 for the y-axis, 25 for the
+  no-right-axis `DEFAULT_RIGHT_CUSHION_PX` cushion — see `padding` below) →
+  `foundSpace = 68.5 ≥ 60` → axis renders → labels are too wide for that
+  space → `rotate()` fires → `rightPadding` jumps to `≈154` (the capped
+  horizontal projection for a ~34-char label, see `padding` below).
+- cycle 2: `plotWidCss = 800 − 90 − 154 = 556` → `foundSpace = 55.6 < 60` →
+  `findIncr` returns `[0, 0]` → `axesCalc` hits its `_space == 0` early
+  return and `drawAxesGrid` `continue`s → **the entire x-axis blanks**.
+
+(This matches the Testing Strategy's own arithmetic for the same
+configuration — see the ~10-category manual test below.)
 
 That is the fix converting a chart with overlapping-but-readable labels into
 a chart with no x-axis at all — a regression, not the pre-existing gap. Fix:
@@ -337,7 +351,9 @@ xAxisConfig.space = () => (rotated ? ROTATED_MIN_SPACE_PX : BASE_MIN_SPACE_PX)
 rightPadding = (_u, _side, sidesWithAxes) => {
   // Not rotated: reproduce uPlot's own autoPadSide result for the right edge,
   // since a function's numeric return can never fall back to it (see below).
-  if (!rotated) return sidesWithAxes[1] ? 0 : DEFAULT_RIGHT_CUSHION_PX
+  // Mirrors autoPadSide's side-1 branch exactly (uPlot.iife.js:3812-3813),
+  // including its (hasTopAxis || hasBtmAxis) guard — not just hasRgtAxis.
+  if (!rotated) return (sidesWithAxes[0] || sidesWithAxes[2]) && !sidesWithAxes[1] ? DEFAULT_RIGHT_CUSHION_PX : 0
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
   const capped = Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
@@ -362,8 +378,9 @@ mode `rightPadding` stays at its hoisted `null` and keeps that cushion on the
 right edge too.
 
 The categorical branch is different, and this is the subtlety the
-non-rotated `sidesWithAxes[1] ? 0 : DEFAULT_RIGHT_CUSHION_PX` line above
-exists for. uPlot normalizes the option once, at init:
+non-rotated `(sidesWithAxes[0] || sidesWithAxes[2]) && !sidesWithAxes[1] ?
+DEFAULT_RIGHT_CUSHION_PX : 0` line above exists for. uPlot normalizes the
+option once, at init:
 
 ```js
 const padding = (opts.padding || [...]).map(p => fnOrSelf(ifNull(p, autoPadSide)))   // 3818
@@ -377,9 +394,18 @@ per-call fallback, and `PaddingSide`'s function form is typed
 every non-rotated categorical chart — precisely the cushion that keeps the
 last *horizontal* label from being chopped, i.e. a regression in the exact
 case this plan is supposed to leave untouched. Reproducing `autoPadSide`'s
-result is cheap because uPlot passes `sidesWithAxes` straight into the
-callback: `sidesWithAxes[1]` is `hasRgtAxis`, and the branch it selects is
-uPlot's own (`0` with a right axis, `round(yAxisOpts.size / 2)` = 25 without).
+result takes reading three slots, not one: `sidesWithAxes[1]` is
+`hasRgtAxis`, but `autoPadSide`'s own side-1 branch (`uPlot.iife.js:3812-3813`)
+is also gated on `hasTopAxis || hasBtmAxis` (`sidesWithAxes[0] ||
+sidesWithAxes[2]`) — with no axis on the top or bottom, the right edge gets
+no cushion either, regardless of `hasRgtAxis`. In this app the categorical
+axis is always the bottom axis, so `sidesWithAxes[2]` is `true` on every real
+convergence cycle and the guard is moot in practice — except at the one-time
+`_padding` init call (`uPlot.iife.js:3819`), which runs *before*
+`axes.forEach(initAxis)` (`:6094`) has populated `sidesWithAxes`, so it always
+sees `[false, false, false, false]` there and returns `0` regardless of the
+real axis layout. `paddingCalc(1)`'s first real call corrects it on the next
+cycle (see Current State).
 
 - `DEFAULT_RIGHT_CUSHION_PX = 25`: mirrors `round(yAxisOpts.size / 2)` with
   uPlot's default `yAxisOpts.size = 50`. It is a mirror of a library
@@ -400,8 +426,20 @@ of the padding as empty space. The rotated branch therefore subtracts
 floored at `0` via `Math.max` so a short rotated label with a right axis
 still reduces cleanly to no extra padding rather than a negative one.
 `MAX_ROTATED_SIZE` doubles as the horizontal cap too: at `ROTATE_DEG = -45`,
-`sin` and `cos` are equal, so the horizontal and vertical projections share
-the same magnitude and the same ceiling is exactly as valid here.
+`sin` and `cos` are equal, so the *magnitude* of the capped projection is the
+same in both directions. The *cost* of reserving it is not: vertical `size`
+only shrinks `plotHgtCss`, while horizontal `rightPadding` shrinks
+`plotWidCss` (`uPlot.iife.js:3468`), which is the exact quantity
+`getIncrSpace` (`:4501`) divides to get `foundSpace` — so a capped
+`rightPadding` feeds back into the same rotate/blank decision the `space`
+subsection covers, and on a narrow chart cell 160px is a much bigger bite out
+of the available width than out of the available height. Reusing
+`MAX_ROTATED_SIZE` here is a deliberate choice to avoid a second, narrower
+constant: the rotation-aware floor (`ROTATED_MIN_SPACE_PX = 20`) already
+absorbs most of that feedback, and the residual risk — a capped-but-still-large
+`rightPadding` pushing a *rotated* chart's `foundSpace` under 20px on an
+unusually narrow panel — is accepted as an edge case rather than solved with
+a width-relative clamp.
 
 This only reserves the *right* side, matching the app's current layout:
 the categorical axis is always the bottom `axes[0]`, and with `ROTATE_DEG`
@@ -569,7 +607,9 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   labels are tilted. Do not treat 12–14 categories at ~800px as a more
   discriminating test: `(800 − 90 − 25) / 12 ≈ 57px` is already under the
   60px floor before any rotation code runs (worse still with a second
-  y-axis, e.g. `(800 − 90·2 − 25) / 12 ≈ 51px`), so that count blanks for
+  y-axis, e.g. `(800 − 90·2) / 12 ≈ 51.7px` — no `− 25` here since a right
+  axis makes `rightPadding` reproduce uPlot's own `0`-cushion `autoPadSide`
+  result, not `DEFAULT_RIGHT_CUSHION_PX`), so that count blanks for
   pre-existing reasons (see Overview), not because of anything this fix
   changes.
   Additionally, on that same rotated chart, confirm the **last** category's
