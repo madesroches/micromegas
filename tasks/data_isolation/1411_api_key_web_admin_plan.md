@@ -126,10 +126,12 @@ pub struct AnalyticsKeysState {
     pub auth_disabled: bool,    // true when `--disable-auth` is on, set once at startup, see §4/Security
 }
 
-pub enum AnalyticsKeyError { BadRequest(String), NotFound, Database(sqlx::Error) }
-// IntoResponse: 400 / 404 / 500, same ErrorResponse{code,message} shape as data_sources.rs;
-// AnalyticsKeyError also gains `NotConfigured` (503, `state.pool == None`) and `AuthDisabled`
-// (503, `state.auth_disabled == true`, checked first in every handler — see §4/Security) variants.
+pub enum AnalyticsKeyError {
+    BadRequest(String), NotFound, Database(sqlx::Error),
+    NotConfigured, // 503, `state.pool == None`
+    AuthDisabled,  // 503, `state.auth_disabled == true`, checked first in every handler — see §4/Security
+}
+// IntoResponse: 400 / 404 / 500 / 503 / 503, same ErrorResponse{code,message} shape as data_sources.rs.
 // No `Forbidden` variant here: the admin gate is the `AdminUser` extractor (below), whose
 // rejection renders as `AdminRequired`'s own 403 body, not `AnalyticsKeyError`'s.
 
@@ -189,8 +191,9 @@ pub fn analytics_keys_router(base_path: &str) -> Router; // routes only; state i
   `cookie_auth_middleware` (`web_server.rs:292-301`), so `require_admin` would unconditionally pass
   for any unauthenticated caller reaching the port. Both `analytics_keys_router` and
   `ingestion_keys_proxy_router` (§2) are therefore **still merged — never skipped —** with
-  `auth_disabled: true` set on their state; every handler checks `state.auth_disabled` *first*,
-  ahead of `require_admin` and any pool/config check, and returns a fixed 503 ("key management is
+  `auth_disabled: true` set on their state; `auth_disabled` is checked first *inside the handler*,
+  ahead of any pool/config check and any outbound call — the `AdminUser` extractor runs earlier
+  still and only narrows who reaches the handler — and returns a fixed 503 ("key management is
   unavailable when auth is disabled") when it's set, so an unauthenticated caller never reaches
   real mint/revoke/forward logic — preserving the security property `ingestion.rs`'s precedent
   (`ingestion.rs:176-196`, skipping registration of `api_keys_router` entirely) protects, without
@@ -215,7 +218,7 @@ New file `rust/analytics-web-srv/src/ingestion_keys_proxy.rs`:
 
 ```rust
 /// Config for reaching ingestion's admin API, plus the client that reaches it.
-/// Held as `Extension<IngestionProxyState>` (`state.config: Option<IngestionProxyConfig>`,
+/// Held as `Extension<IngestionProxyState>` (`state.config: Option<Arc<IngestionProxyConfig>>`,
 /// `None` when unconfigured) so the proxy routes can be registered unconditionally and
 /// return 503 per-request instead of being conditionally merged — see §4/§5's "always
 /// register, 503 when unconfigured" rule.
@@ -255,8 +258,12 @@ async fn forward(
 ) -> Result<Response, ProxyError> {
     if state.auth_disabled { return Err(ProxyError::AuthDisabled) } // 503, checked first, see §4/Security
     let Some(cfg) = state.config else { return Err(ProxyError::NotConfigured) }; // 503
-    let mut req = cfg.client.request(method, format!("{}{}", cfg.base_url, path_suffix));
-    if let Some(q) = query { req = req.query(...) }
+    // `reqwest::RequestBuilder::query` serializes via `serde_urlencoded`, which only accepts
+    // maps/structs, not a raw `limit=10&offset=0` string — append the query string to the URL
+    // directly instead.
+    let url = format!("{}{}{}", cfg.base_url, path_suffix,
+        query.map(|q| format!("?{q}")).unwrap_or_default());
+    let mut req = cfg.client.request(method, url);
     if let Some(b) = body {
         // Required: mint_key's `Json<MintRequest>` extractor 415s (`MissingJsonContentType`)
         // on a request with no Content-Type at all. Every body this proxy relays is JSON.
@@ -408,7 +415,12 @@ POST {base_path}/api/analytics-api-keys/import   (analytics-web-srv, analytics_k
 
 Request `{"name": "...", "key": "<the existing key string, verbatim>"}`. Response mirrors
 `mint_key`'s shape minus the cleartext (the caller already has it — never echo a key back):
-`{"key_id", "name", "created_at", "created_by", "revoked_at", "imported": bool}`. `imported: true`
+`{"key_id", "name", "created_at", "created_by", "revoked_at", "imported": bool}`.
+**`created_by` is the importing caller's own OIDC identity** (`email.unwrap_or(subject)` on
+ingestion, `user.email.clone().unwrap_or(user.subject.clone())` on `analytics-web-srv` — the same
+resolution mint already uses on each service, §1), not the literal string `'import'`; the CLI
+tool authenticates as the operator running it (§6), so there is no distinct "import" identity to
+attribute rows to. `imported: true`
 on a fresh `INSERT`; `false` when the hash already exists (idempotent re-run — the CLI tool can be
 run against the same legacy keyring twice without side effects, matching the existing hand-written
 recipe's `ON CONFLICT ... DO NOTHING` idempotency). `revoked_at` is always present (`null` unless
@@ -464,6 +476,19 @@ pub struct WebCliArgs {
 }
 ```
 
+- **Precondition: the telemetry DB must already have run the v5 migration
+  (`upgrade_data_lake_schema_v5`, `rust/ingestion/src/sql_migration.rs:100-140`) that creates
+  `analytics_api_keys`, before the analytics-key routes will work.** That migration runs only via
+  `connect_to_remote_data_lake`, reached by ingestion or by a lakehouse-role monolith
+  (`needs_lakehouse()` — ingestion/flightsql/maintenance) — never by a standalone
+  `analytics-web-srv` or a `--roles web`-only monolith, neither of which calls it. Combined with
+  `connect_lazy` (below), a pre-v5 telemetry DB gives no startup signal at all: the pool "connects"
+  lazily and every mint/list/revoke/import call against `analytics_api_keys` fails with an opaque
+  `500 internal database error` (`relation "analytics_api_keys" does not exist`) the first time a
+  request actually acquires a connection. Operationally: run ingestion (or a lakehouse-role
+  monolith) against the target telemetry DB at least once before relying on
+  `analytics-web-srv`'s analytics-key routes — documented in Security and in the
+  `MICROMEGAS_SQL_CONNECTION_STRING` doc rows (Phase 6, step 21).
 - **`from_cli_and_env` stays synchronous.** It only reads `MICROMEGAS_SQL_CONNECTION_STRING`
   (`.ok()`) into `analytics_keys_db_string` and passes `cli.analytics_keys_pool` straight through
   to `analytics_keys_pool_override` — no `.await` added. The new `WebCliArgs` field is still a new
@@ -511,9 +536,10 @@ pub struct WebCliArgs {
   either. This is the same always-register, 503-when-unconfigured shape `/api/maps/*` already uses
   (`maps.rs:116-123`), and it's what lets both new admin tiles stay visible unconditionally (§5)
   *and* always get a meaningful JSON error rather than falling through to the SPA fallback. **When
-  `auth_state` is `None` (`--disable-auth`), the router is still merged**, but every handler checks
-  `state.auth_disabled` first and returns the fixed 503 for every call before any pool/`require_admin`
-  check — see the `--disable-auth` exception above and in Security.
+  `auth_state` is `None` (`--disable-auth`), the router is still merged**, but `auth_disabled` is
+  checked first *inside the handler*, ahead of any pool/config check and any outbound call — the
+  `AdminUser` extractor runs earlier still and only narrows who reaches the handler — and returns
+  the fixed 503 for every call regardless — see the `--disable-auth` exception above and in Security.
 
 ### 5. Frontend
 
@@ -566,6 +592,9 @@ micromegas-import-keys --table ingestion --source env --var MICROMEGAS_API_KEYS 
 micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS_API_KEYS --url https://analytics.example.com
 ```
 
+- `--version`, wired via `micromegas.cli.version.add_version_argument(parser)`, the same
+  convention `micromegas-query`/`-logout`/`-screens` already use (`pyproject.toml:37-39`) — kept
+  consistent across all four console scripts.
 - `--table {ingestion,analytics}` (required) — selects the import route and, for `analytics`,
   goes through the *analytics-web-srv* base URL (`--url`, mandatory on every invocation); for
   `ingestion`, `--url` points at the ingestion service directly (**not** through the
@@ -633,8 +662,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 ### Phase 2 — Analytics key API (`analytics-web-srv`)
 
-4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeysState { pool: Option<PgPool> }`,
-   `AnalyticsKeyError` (incl. `NotConfigured` → 503, no `Forbidden` variant — see §1), every handler
+4. `rust/analytics-web-srv/src/analytics_keys.rs` (new): `AnalyticsKeysState { pool: Option<PgPool>,
+   auth_disabled: bool }`,
+   `AnalyticsKeyError` (incl. `NotConfigured` → 503, `AuthDisabled` → 503, no `Forbidden` variant — see §1), every handler
    gated by the `AdminUser` extractor (`auth/handlers.rs:553-568`), not an in-handler
    `require_admin` call — `mint_key`/`list_keys`/`revoke_key`/`import_key`,
    `analytics_keys_router(base_path: &str)`.
@@ -654,8 +684,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `build_protected_routes` `.merge()`s `analytics_keys_router(base_path)` and layers
    `Extension(analytics_keys_state)` before its existing
    `.layer(middleware::from_fn(observability_middleware))` call, `warn!` when the resolved pool is
-   `None`. Handlers check `state.auth_disabled` first and return a fixed 503 for every call when
-   it's set (i.e. `--disable-auth` is on — see §4/Security), before any pool/`require_admin` check.
+   `None`. `auth_disabled` is checked first *inside the handler*, ahead of any pool/config check
+   and any outbound call, and returns a fixed 503 for every call when it's set (i.e.
+   `--disable-auth` is on — see §4/Security); the `AdminUser` extractor runs earlier still and
+   only narrows who reaches the handler.
 6. `rust/monolith/src/main.rs`: inside the existing `if roles.web { ... }` block, set
    `WebCliArgs.analytics_keys_pool = lake_pool.clone()` (`lake_pool` is already `Option<PgPool>`,
    reusing the pool already opened for the ingestion/flightsql/maintenance roles when one of
@@ -665,19 +697,23 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    `web`), so `lake_pool` is `None` there and `run_web_server` falls back to
    `MICROMEGAS_SQL_CONNECTION_STRING` like the standalone binary.
 7. New tests: `rust/analytics-web-srv/tests/analytics_keys_tests.rs`, modeled on
-   `folders_tests.rs` (`sqlx::PgPool::connect_lazy` for route-shape/guard tests that never touch
-   the DB) and `screens_tests.rs` (`ValidatedUser` extension injection); `#[ignore]`d live-DB
-   tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips. Also: with
-   `AnalyticsKeysState.auth_disabled: true` and an admin `ValidatedUser` injected (per
-   `screens_tests.rs:49-50`) — under real `--disable-auth`, `build_protected_routes` layers exactly
-   this synthetic admin `ValidatedUser`, so it satisfies the `AdminUser` extractor and reaches the
-   handler regardless — every route still returns 503, asserting that the in-handler
+   `maps_tests.rs`'s `build_handler_router_with_user` + `.oneshot(...)` pattern
+   (`rust/analytics-web-srv/tests/maps_tests.rs:75-87`) for exercising the `AdminUser` extractor
+   and layering a `ValidatedUser` extension the way `--disable-auth` does — `folders_tests.rs`
+   and `screens_tests.rs` call handlers as plain functions with `Extension(test_user())`, which
+   never runs the `AdminUser` extractor at all, so they're kept only as the precedent for the
+   `#[ignore]`d live-DB round trips (`sqlx::PgPool::connect_lazy` for a real pool, per
+   `folders_tests.rs`'s precedent) on mint/list/revoke/import. Also: with
+   `AnalyticsKeysState.auth_disabled: true` and an admin `ValidatedUser` layered via
+   `build_handler_router_with_user` — under real `--disable-auth`, `build_protected_routes` layers
+   exactly this synthetic admin `ValidatedUser`, so it satisfies the `AdminUser` extractor and
+   reaches the handler regardless — every route still returns 503, asserting that the in-handler
    `auth_disabled` check fires even past a passing admin extractor and ahead of the pool check.
    Also: with
-   `AnalyticsKeysState { pool: None, auth_disabled: false }` and an admin `ValidatedUser`
-   injected, every route returns the `NotConfigured` 503 — this needs no live DB either (the
+   `AnalyticsKeysState { pool: None, auth_disabled: false }` and an admin `ValidatedUser` layered
+   the same way, every route returns the `NotConfigured` 503 — this needs no live DB either (the
    handler returns before ever touching `state.pool`), so it uses the same `connect_lazy`
-   harness as every other route-shape test here, per `folders_tests.rs:21`'s precedent.
+   harness as every other route-shape test here.
 
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
@@ -686,7 +722,8 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
    — production's `from_env()` wraps an
    `micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator`
    built from the four `MICROMEGAS_INGESTION_PROXY_OIDC_*` vars in `Arc::new(...)`; no new
-   credential type, see §2) + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>> }`,
+   credential type, see §2) + `IngestionProxyState { config: Option<Arc<IngestionProxyConfig>>,
+   auth_disabled: bool }`,
    `IngestionProxyConfig::from_env()`, `forward` (a plain helper, not a handler — takes an
    already-resolved `IngestionProxyState` plus method/path/query/body), `list`/`mint`/`revoke`
    wrappers (each declaring `Extension<IngestionProxyState>` then `AdminUser` then any body
@@ -699,10 +736,15 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     `Extension(ingestion_proxy_state)`, where `ingestion_proxy_state.config` is `None` when
     `IngestionProxyConfig::from_env()` returns `None` (routes stay registered either way with
     respect to that config; `forward` returns 503 when `config` is `None`) and
-    `ingestion_proxy_state.auth_disabled = auth_state.is_none()`. `forward` checks
-    `state.auth_disabled` first and returns the fixed `AuthDisabled` 503 for every call when it's
-    set (§4/§1/Security), ahead of `require_admin` and the `config` check.
-10. Tests: a mock ingestion server using `wiremock` (already a workspace dependency —
+    `ingestion_proxy_state.auth_disabled = auth_state.is_none()`. `auth_disabled` is checked
+    first *inside* `forward`, ahead of any pool/config check and any outbound call, and returns
+    the fixed `AuthDisabled` 503 for every call when it's set (§4/§1/Security); the `AdminUser`
+    extractor each wrapper declares runs earlier still and only narrows who reaches the wrapper.
+10. Tests: `rust/analytics-web-srv/tests/ingestion_keys_proxy_tests.rs`, modeled on
+    `maps_tests.rs`'s `build_handler_router_with_user` + `.oneshot(...)` pattern
+    (`rust/analytics-web-srv/tests/maps_tests.rs:75-87`) for layering a `ValidatedUser` extension
+    the way `--disable-auth` does and exercising the `AdminUser` extractor — a mock ingestion
+    server using `wiremock` (already a workspace dependency —
     `rust/Cargo.toml:105`, already used by `rust/public/Cargo.toml` and `rust/auth/Cargo.toml`;
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body/`Content-Type` and status/body correctly (assert the
@@ -713,11 +755,12 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     `.decorate()` call is a no-op — see §2's "Service credential" section. And that a non-admin's
     `AdminUser` rejection happens before any outbound call (assert via a counter/mock never being
     hit). Also: with `IngestionProxyState { config: None, auth_disabled: false }` and an admin
-    `ValidatedUser` injected, every route returns the `NotConfigured` 503 and the wiremock server
-    is never hit (no live ingestion, no live DB — this is a pure route-shape assertion). Also: with
-    `IngestionProxyState.auth_disabled: true` and an admin `ValidatedUser` injected, every route
-    returns 503 and the wiremock server is never hit — asserting the `auth_disabled` check
-    pre-empts both `require_admin` and the outbound call.
+    `ValidatedUser` layered via `build_handler_router_with_user`, every route returns the
+    `NotConfigured` 503 and the wiremock server is never hit (no live ingestion, no live DB —
+    this is a pure route-shape assertion). Also: with
+    `IngestionProxyState.auth_disabled: true` and an admin `ValidatedUser` layered the same way,
+    every route returns 503 and the wiremock server is never hit — asserting the `auth_disabled`
+    check fires even past a passing admin `AdminUser` extractor, ahead of any outbound call.
 
 ### Phase 4 — Frontend
 
@@ -736,10 +779,14 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 15. `python/micromegas/micromegas/web_client.py`: `import_analytics_api_key(name, key)`.
 16. `python/micromegas/micromegas/ingestion_client.py` (new): `import_ingestion_api_key(name, key)`
     against ingestion's `/auth/api_keys/import` directly.
-17. `python/micromegas/micromegas/cli/import_keys.py` (new): argument parsing, env/file keyring
-    source, per-key import loop with per-key error reporting, non-zero exit on any failure.
+17. `python/micromegas/micromegas/cli/import_keys.py` (new): argument parsing (incl.
+    `add_version_argument(parser)` from `micromegas.cli.version`, per the other three console
+    scripts), env/file keyring source, per-key import loop with per-key error reporting,
+    non-zero exit on any failure.
 18. `python/micromegas/pyproject.toml`: `micromegas-import-keys = "micromegas.cli.import_keys:main"`.
 19. `python/micromegas/tests/cli/test_import_keys.py` (new), modeled on `tests/cli/test_logout.py`.
+    `python/micromegas/tests/cli/test_version.py`: add `test_import_keys_version_flag`, matching
+    the existing per-script `--version` regression tests for the other three scripts.
 
 ### Phase 6 — Documentation
 
@@ -761,9 +808,16 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     says analytics keys "are not mintable through this API... manually issued (direct SQL by an
     operator with DB access)" and points at the runbook this plan deletes — it needs to instead
     say analytics keys are minted via `analytics-web-srv`'s own routes (§1), not through this
-    ingestion-hosted API. The section replacing "Minting an analytics key by hand" gets a stable
+    ingestion-hosted API. Also fix the `created_by` schema comment (`api-keys.md:41`,
+    "OIDC email/subject of the minter, or 'import'") — the import routes write the caller's own
+    OIDC identity, never the literal string `'import'` (§3) — drop the "or 'import'" clause. The
+    section replacing "Minting an analytics key by hand" gets a stable
     new heading, "Minting an analytics key over HTTP" (anchor `#minting-an-analytics-key-over-http`),
-    so the other docs retargeted in step 21 below have a fixed target to link to.
+    so the other docs retargeted in step 21 below have a fixed target to link to. Also extend the
+    existing TLS-terminating-ingress warning (`api-keys.md:14-21`) to cover the proxied ingestion
+    mint route's two additional legs — `analytics-web-srv`→ingestion and back, on top of the
+    browser↔`analytics-web-srv` leg already covered — and note that `MICROMEGAS_INGESTION_ADMIN_URL`
+    should be `https://` or the link confined to a trusted network (see Security).
 21. Five more places outside `api-keys.md` still assert the now-false "analytics keys are never
     mintable over HTTP / issued by hand" claim and need the same correction — a repo-wide grep for
     "issued by hand"/"mints nothing over HTTP"/"never mintable" finds them:
@@ -773,7 +827,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
       routes (§1), linking `api-keys.md`. Also update this same file's env-var table
       (`monolith.md:42`, `MICROMEGAS_SQL_CONNECTION_STRING` currently marked "Yes (lake roles)")
       to note it's also read by a `--roles web`-only monolith as the fallback source for the
-      analytics-key pool (§4) when no lakehouse-needing role is active. Also fold in the former
+      analytics-key pool (§4) when no lakehouse-needing role is active — and that a `--roles web`
+      -only monolith never runs the v5 migration itself, so the target telemetry DB must already
+      have had ingestion or a lakehouse-role monolith run against it at least once (§4/Security),
+      or the analytics-key routes fail at request time with an opaque `500`. Also fold in the former
       step 22's note here, in the same edit to the same file: the web role now optionally shares
       the lake pool for analytics-key management instead of opening this second connection (§4).
     - `mkdocs/docs/admin/flight-sql.md:57-59` ("mints nothing over HTTP — it has no
@@ -822,7 +879,8 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - `python/micromegas/micromegas/web_client.py`, `ingestion_client.py` (new),
   `cli/import_keys.py` (new)
 - `python/micromegas/pyproject.toml`
-- `python/micromegas/tests/cli/test_import_keys.py` (new)
+- `python/micromegas/tests/cli/test_import_keys.py` (new), `test_version.py` (add
+  `test_import_keys_version_flag`)
 - `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`,
   `mkdocs/docs/admin/flight-sql.md`, `mkdocs/docs/admin/authentication.md`,
   `mkdocs/docs/grafana/authentication.md` (see Phase 6 step 21 for the last four)
@@ -840,12 +898,19 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   let one drive `forward` → `get_token()` → mint/revoke against ingestion's real admin API, using
   the proxy's own privileged service credential. Both routers are therefore still merged — unlike
   `ingestion.rs`'s own precedent of skipping registration for `api_keys_router`
-  (`ingestion.rs:176-196`) — but every handler checks `state.auth_disabled` first and returns 503
-  unconditionally, before `require_admin`, before touching `state.pool`/`state.config`, and before
-  any outbound call: an unauthenticated caller can never reach the mint/revoke/forward logic at
+  (`ingestion.rs:176-196`) — but `auth_disabled` is checked first *inside the handler*, ahead of
+  any pool/config check and any outbound call, and returns 503 unconditionally; the `AdminUser`
+  extractor runs earlier still and only narrows who reaches the handler — an unauthenticated
+  caller can never reach the mint/revoke/forward logic at
   all. Registering the routers rather than omitting them also keeps the admin pages' error
   surfacing meaningful (§5) instead of falling through to the SPA fallback's `200 text/html`
   (`web_server.rs:374-383`).
+- **Precondition: the telemetry DB's v5 migration (`analytics_api_keys`) must already have run,
+  via ingestion or a lakehouse-role monolith, before the analytics-key routes work** (see §4).
+  A standalone `analytics-web-srv` and a `--roles web`-only monolith never run that migration
+  themselves; against a pre-v5 telemetry DB, `connect_lazy` gives no startup signal and every
+  mint/list/revoke/import call instead fails at request time with an opaque
+  `500 internal database error`.
 - **The proxy's `forward` takes the `AdminUser` extractor (§2), not an in-handler `require_admin`
   call, so the admin check runs before fetching a service-credential token, before forwarding
   anything, and before the request body is even buffered.** A non-admin `analytics-web-srv`
@@ -882,12 +947,21 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - **Import never logs the key**, matching mint (§3).
 - **No new secret-scanning surface**: imported keys keep whatever shape they already had; the
   route hashes and discards the cleartext identically to mint.
-- **Inherits #1383's TLS-terminating-ingress prerequisite.** `POST {base_path}/api/analytics-api-keys`
-  returns a one-time cleartext key over whatever transport the request arrives on, exactly like
-  ingestion's `mint_key` (`mkdocs/docs/admin/api-keys.md:14-21`); `analytics-web-srv` binds plain
-  HTTP with no TLS acceptor of its own (`web_server.rs:553,568`), same as ingestion. The import
-  routes on both services are the mirror case: they carry a legacy key's cleartext *inbound* in
-  the request body. None of this is new to this plan — deploy behind a TLS-terminating
+- **Inherits #1383's TLS-terminating-ingress prerequisite — and extends it to two new legs the
+  proxy adds.** `POST {base_path}/api/analytics-api-keys` returns a one-time cleartext key over
+  whatever transport the request arrives on, exactly like ingestion's `mint_key`
+  (`mkdocs/docs/admin/api-keys.md:14-21`); `analytics-web-srv` binds plain HTTP with no TLS
+  acceptor of its own (`web_server.rs:553,568`), same as ingestion. The import routes on both
+  services are the mirror case: they carry a legacy key's cleartext *inbound* in the request body.
+  **The proxied ingestion mint route (§2) adds a second hop the browser-facing cleartext crosses
+  twice, on top of the browser↔`analytics-web-srv` leg above**: `analytics-web-srv` calls
+  `MICROMEGAS_INGESTION_ADMIN_URL` (the plan's own example is plain `http://127.0.0.1:8081`) to
+  mint, receives the one-time cleartext key back over that same connection, then relays it to the
+  browser over the plain-HTTP leg already covered above. **`MICROMEGAS_INGESTION_ADMIN_URL` should
+  be `https://`, or the link between `analytics-web-srv` and ingestion confined to a trusted
+  network** (e.g. a private subnet or service mesh) — this hop is new to this plan and not covered
+  by #1383's original warning, which was scoped to the single ingestion↔browser hop. None of the
+  rest of this is new to this plan — deploy behind a TLS-terminating
   reverse proxy, as `api-keys.md` already documents for ingestion's mint route.
 
 ## Trade-offs
@@ -911,7 +985,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - `mkdocs/docs/admin/api-keys.md`: new HTTP-routes rows (import, analytics mint/list/revoke/import),
   replace the two manual-SQL runbooks, extend the grant-recipe table, note the two new env-var
   groups (`MICROMEGAS_SQL_CONNECTION_STRING` read by `analytics-web-srv`,
-  `MICROMEGAS_INGESTION_PROXY_OIDC_*` / `MICROMEGAS_INGESTION_ADMIN_URL`) and their optionality.
+  `MICROMEGAS_INGESTION_PROXY_OIDC_*` / `MICROMEGAS_INGESTION_ADMIN_URL`) and their optionality —
+  and, next to `MICROMEGAS_SQL_CONNECTION_STRING`, the v5-migration precondition (§4/Security):
+  the analytics-key routes need `analytics_api_keys` to already exist, which only ingestion or a
+  lakehouse-role monolith creates, on first run against the target telemetry DB.
 - `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool for
   analytics-key management; rewrite its "analytics keys are issued by hand" sentence (§103-105);
   update its `MICROMEGAS_SQL_CONNECTION_STRING` env-var row to cover a `--roles web`-only monolith
@@ -923,8 +1000,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `#minting-an-analytics-key-by-hand` link is retargeted at `api-keys.md`'s new
   `#minting-an-analytics-key-over-http` heading (see Phase 6 step 21).
 - `mkdocs/docs/admin/api-keys.md`: extend the existing TLS-terminating-ingress warning
-  (currently scoped to ingestion's mint route) to cover the new analytics mint route and both
-  import routes' inbound cleartext (see Security).
+  (currently scoped to ingestion's mint route) to cover the new analytics mint route, both
+  import routes' inbound cleartext, and the proxied ingestion mint route's two additional legs
+  (`analytics-web-srv`↔ingestion, on top of the browser↔`analytics-web-srv` leg) — noting
+  `MICROMEGAS_INGESTION_ADMIN_URL` should be `https://` or confined to a trusted network
+  (see Security, step 20).
 - `mkdocs/docs/admin/web-app.md`: this is the canonical env-var/route reference for
   `analytics-web-srv` specifically (its "Environment Variables → Required / Optional" table,
   lines 14-57, and its enumerated "API Routes" list, lines 111-129) — add the five new optional
@@ -932,7 +1012,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_ENDPOINT`/`_AUDIENCE`,
   `MICROMEGAS_INGESTION_ADMIN_URL`) to "Optional" alongside `MICROMEGAS_MAPS_OBJECT_STORE_URI`'s
   existing 503-when-absent pattern — noting that setting the ingestion-proxy vars makes
-  `analytics-web-srv`'s admin list a de-facto ingestion-key-admin list (see Security) — and add
+  `analytics-web-srv`'s admin list a de-facto ingestion-key-admin list (see Security), and that
+  `MICROMEGAS_SQL_CONNECTION_STRING` must point at a telemetry DB where the v5 migration has
+  already run (via ingestion or a lakehouse-role monolith) or the analytics-key routes fail at
+  request time with an opaque `500` (§4/Security) — and add
   the new routes
   (`GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`,
   `DELETE /api/analytics-api-keys/{key_id}`, `GET`/`POST /api/ingestion-api-keys`,
@@ -958,7 +1041,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 ## Testing Strategy
 
 - Rust: route-shape tests with a lazy pool (no live DB) for every new handler's validation/gating
-  branches, per `firehose_tests.rs`'s precedent; `#[ignore]`d live-DB tests for the actual SQL,
+  branches, per `firehose_tests.rs`'s precedent, exercising the `AdminUser` extractor and a
+  layered `ValidatedUser` via `maps_tests.rs`'s `build_handler_router_with_user` + `.oneshot(...)`
+  pattern (`maps_tests.rs:75-87` — see steps 7/10; `folders_tests.rs`/`screens_tests.rs`'s plain
+  `Extension(test_user())` injection never runs an extractor, so it's not a fit here);
+  `#[ignore]`d live-DB tests for the actual SQL,
   per `folders_tests.rs`'s precedent, run manually against a local Postgres. Named gating branches
   covered: 403 non-admin (the `AdminUser` extractor's rejection, not an in-handler `require_admin`
   call — see §1/§2), 400 empty `key`/`name`, `imported: false` idempotency, the fixed 503
