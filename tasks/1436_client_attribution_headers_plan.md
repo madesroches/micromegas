@@ -414,15 +414,23 @@ specific to the two headers the gateway itself controls.
    bytes tuples) when the new params are passed, and absent when they're left at their
    `None` defaults — keeping the "no I/O" hermetic property documented in the file's own
    docstring, since `make_call_headers` itself never reads env/`sys` state. Also add a test
-   that monkeypatches the environment (e.g. sets `CLAUDECODE`), monkeypatches
-   `pyarrow.flight.FlightClient` (or `flight.connect`) to a stub, then constructs a real
-   `FlightSQLClient(uri, client_entrypoint="cli-query")` and asserts that `query()`,
-   `query_stream()`, and `query_arrow()` each issue calls whose `FlightCallOptions.headers`
-   (readable in pyarrow 23.0.1) carry `x-client-entrypoint: cli-query` plus the env-derived
-   `x-client-agent`/`x-client-session` values — exercising `resolve_client_entrypoint(explicit=...)`
-   end-to-end through the real constructor (not by hand-setting the private
-   `__client_agent`/`__client_entrypoint`/`__session_id` attributes), guarding all three call
-   sites (`client.py:356/415/447`), not just the CLI path `tests/cli/test_query.py` covers.
+   that constructs a real `FlightSQLClient(uri, client_entrypoint="cli-query")` and asserts
+   that `query()`, `query_stream()`, and `query_arrow()` each issue calls whose
+   `FlightCallOptions.headers` (readable in pyarrow 23.0.1) carry `x-client-entrypoint:
+   cli-query` plus the env-derived `x-client-agent`/`x-client-session` values — exercising
+   `resolve_client_entrypoint(explicit=...)` end-to-end through the real constructor (not by
+   hand-setting the private `__client_agent`/`__client_entrypoint`/`__session_id`
+   attributes), guarding all three call sites (`client.py:356/415/447`), not just the CLI
+   path `tests/cli/test_query.py` covers. This test lives outside `tests/cli/`, so
+   `tests/cli/conftest.py`'s autouse env scrub does not apply here either — same as step 8,
+   it must explicitly set `monkeypatch.setenv("CLAUDECODE", "1")` and
+   `monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", <a test-chosen UUID string>)`, and
+   `monkeypatch.delenv("MICROMEGAS_CLIENT_AGENT", raising=False)` /
+   `monkeypatch.delenv("MICROMEGAS_CLIENT_ENTRYPOINT", raising=False)` so neither override
+   wins over the detected value. Also monkeypatch `pyarrow.flight.FlightClient` (or
+   `flight.connect`) to a stub. Assert the concrete expected values:
+   `x-client-agent == b"claude-code"` and `x-client-session` equal to the pinned
+   `CLAUDE_CODE_SESSION_ID` value the test set, encoded as bytes.
 10. New `python/micromegas/tests/cli/test_query.py`: monkeypatch `sys.argv` to a minimal valid
     invocation (e.g. `["micromegas-query", "SELECT 1", "--all"]`) and
     `connection.connect` (as imported in `cli/query.py`) to a fake that records its kwargs and
