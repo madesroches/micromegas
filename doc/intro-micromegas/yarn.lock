@@ -1390,7 +1390,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "intro-micromegas@workspace:."
   dependencies:
-    mermaid: "npm:^11.16.1"
+    mermaid: "npm:11.16.1"
     reveal.js: "npm:^5.2.1"
     reveal.js-mermaid-plugin: "npm:11.6.0"
     vite: "npm:^7.3.5"
@@ -1452,7 +1452,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mermaid@npm:^11.16.1":
+"mermaid@npm:11.16.1":
   version: 11.16.1
   resolution: "mermaid@npm:11.16.1"
   dependencies:
