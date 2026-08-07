@@ -15,8 +15,9 @@ This plan adds three new headers, resolved once per client instance in
 
 - `x-client-agent` — who is driving the client (`claude-code`, `none`, or an explicit
   override), detected from ambient environment variables.
-- `x-client-entrypoint` — how the client was invoked (`cli-query`, `script`, `jupyter`,
-  `repl`), from a closed vocabulary.
+- `x-client-entrypoint` — how the client was invoked. Auto-detected values (`cli-query`,
+  `script`, `jupyter`, `repl`) come from a closed vocabulary; the explicit-argument and
+  `MICROMEGAS_CLIENT_ENTRYPOINT` override paths accept any gRPC-safe free-form string.
 - `x-client-session` — an opaque id that correlates every query from one client instance, so
   per-task/per-session metrics (queries per task, retries after error, bytes scanned per
   session) become possible for a long-lived script or notebook process that issues several
@@ -158,7 +159,10 @@ def resolve_client_entrypoint(explicit=None):
     through: a caller-supplied argument deserves a catchable error at the
     call site, not a masked native gRPC-metadata crash later on the first
     query. Otherwise: a sanitized env override, then `-c`/jupyter/repl
-    detection, then "script". Closed vocabulary only -- never raw
+    detection, then "script". `explicit`/the env override are free-form
+    (validated only for gRPC-safety, not against a vocabulary) -- the closed
+    vocabulary ({cli-query, script, jupyter, repl}) applies only to the
+    auto-detection branch below, which must never return raw
     sys.argv[0]/__main__.__file__."""
     if explicit:
         sanitized = _sanitize_override(explicit)
@@ -427,8 +431,13 @@ specific to the two headers the gateway itself controls.
    `monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", <a test-chosen UUID string>)`, and
    `monkeypatch.delenv("MICROMEGAS_CLIENT_AGENT", raising=False)` /
    `monkeypatch.delenv("MICROMEGAS_CLIENT_ENTRYPOINT", raising=False)` so neither override
-   wins over the detected value. Also monkeypatch `pyarrow.flight.FlightClient` (or
-   `flight.connect`) to a stub. Assert the concrete expected values:
+   wins over the detected value. `FlightSQLClient.__init__` calls `flight.connect(...)`
+   (`client.py:216`), and `flight.connect` is Cython code that resolves `FlightClient`
+   internally — monkeypatching `pyarrow.flight.FlightClient` does not intercept it (verified
+   directly against pyarrow 23.0.1: it still returns a real `FlightClient`). Instead,
+   monkeypatch `flight.connect` as imported/seen by `micromegas.flightsql.client` to return a
+   stub client whose `do_get` records the passed `options` (`FlightCallOptions.headers` is
+   readable in pyarrow 23.0.1 — verified). Assert the concrete expected values:
    `x-client-agent == b"claude-code"` and `x-client-session` equal to the pinned
    `CLAUDE_CODE_SESSION_ID` value the test set, encoded as bytes.
 10. New `python/micromegas/tests/cli/test_query.py`: monkeypatch `sys.argv` to a minimal valid
