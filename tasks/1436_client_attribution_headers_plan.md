@@ -19,7 +19,10 @@ This plan adds three new headers, resolved once per client instance in
   `repl`), from a closed vocabulary.
 - `x-client-session` — an opaque per-instance id that correlates every query from one client
   instance, so per-task/per-session metrics (queries per task, retries after error, bytes
-  scanned per session) become possible.
+  scanned per session) become possible for a long-lived script or notebook process that issues
+  several queries through the same `FlightSQLClient`. This does **not** hold for the CLI, where
+  each `micromegas-query` invocation constructs a fresh client and gets a fresh session id per
+  query — see Trade-offs below.
 
 The server reads all three, logs them alongside the existing `client=` field, and adds them
 to `QueryAuditRecord`. Both are analytics-only signals — never used for auth, quota, or rate
@@ -96,6 +99,7 @@ moves to a new module, `python/micromegas/micromegas/flightsql/attribution.py`:
 
 ```python
 import os
+import re
 import sys
 import uuid
 
@@ -103,11 +107,27 @@ _KNOWN_AGENT_HARNESS_ENV_VARS = {
     "CLAUDECODE": "claude-code",
 }
 
+# gRPC metadata values must be plain ASCII with no control characters (a
+# non-ASCII or newline-containing value passed through pyarrow's
+# FlightCallOptions aborts the process with a native "Check failed" crash,
+# not a catchable Python exception) -- so overrides are validated before use,
+# with a silent fall-through to the detected value on rejection.
+_MAX_OVERRIDE_LEN = 64
+_VALID_OVERRIDE_RE = re.compile(r"^[\x20-\x7e]+$")
+
+
+def _sanitize_override(value):
+    """Return `value` if it's a safe gRPC header value (printable ASCII,
+    bounded length), else None so the caller falls back to detection."""
+    if value and len(value) <= _MAX_OVERRIDE_LEN and _VALID_OVERRIDE_RE.match(value):
+        return value
+    return None
+
 
 def resolve_client_agent():
     """Who is driving this client: an explicit override, a known agent harness
     detected from its marker env var, or "none" for a plain human/script."""
-    override = os.environ.get("MICROMEGAS_CLIENT_AGENT")
+    override = _sanitize_override(os.environ.get("MICROMEGAS_CLIENT_AGENT"))
     if override:
         return override
     for env_var, agent_name in _KNOWN_AGENT_HARNESS_ENV_VARS.items():
@@ -118,15 +138,21 @@ def resolve_client_agent():
 
 def resolve_client_entrypoint(explicit=None):
     """How this client was invoked. `explicit` (set by our own CLI main()s)
-    always wins; otherwise an env override, then jupyter/repl detection, then
-    "script". Closed vocabulary only -- never sys.argv[0]/__main__.__file__."""
+    always wins; otherwise a sanitized env override, then `-c`/jupyter/repl
+    detection, then "script". Closed vocabulary only -- never raw
+    sys.argv[0]/__main__.__file__."""
     if explicit:
         return explicit
-    override = os.environ.get("MICROMEGAS_CLIENT_ENTRYPOINT")
+    override = _sanitize_override(os.environ.get("MICROMEGAS_CLIENT_ENTRYPOINT"))
     if override:
         return override
     if "ipykernel" in sys.modules:
         return "jupyter"
+    if sys.argv and sys.argv[0] == "-c":
+        # `python -c "..."` has no `__main__.__file__`, so without this check
+        # it would fall through to "repl" below -- mislabeling exactly the
+        # invocation mode agent harnesses most often use.
+        return "script"
     main_module = sys.modules.get("__main__")
     if sys.flags.interactive or not hasattr(main_module, "__file__"):
         return "repl"
@@ -288,8 +314,11 @@ specific to the two headers the gateway itself controls.
 
 **Phase 1 — Python client**
 1. New `python/micromegas/micromegas/flightsql/attribution.py`: `resolve_client_agent()`,
-   `resolve_client_entrypoint(explicit=None)`, `new_session_id()`, and the
-   `_KNOWN_AGENT_HARNESS_ENV_VARS` table (just `CLAUDECODE` → `claude-code` for now).
+   `resolve_client_entrypoint(explicit=None)`, `new_session_id()`, a `_sanitize_override()`
+   helper guarding `MICROMEGAS_CLIENT_AGENT`/`MICROMEGAS_CLIENT_ENTRYPOINT` (printable ASCII,
+   length-bounded, else fall through to detection instead of sending an unsafe gRPC header
+   value), and the `_KNOWN_AGENT_HARNESS_ENV_VARS` table (just `CLAUDECODE` → `claude-code` for
+   now).
 2. `client.py`: extend `make_call_headers` with `client_agent=None, client_entrypoint=None,
    client_session=None` params (conditionally appended, per Design). Update the three call
    sites (`:356`, `:415`, `:447`) to pass the new cached attributes.
@@ -317,16 +346,26 @@ specific to the two headers the gateway itself controls.
 **Phase 2 — Python tests**
 8. New `python/micromegas/tests/test_client_attribution.py`: hermetic unit tests for
    `resolve_client_agent`/`resolve_client_entrypoint`/`new_session_id`, using `monkeypatch` on
-   `os.environ` and `sys.modules`/`sys.flags` — covering: no env vars → `"none"`/`"script"`;
-   `MICROMEGAS_CLIENT_AGENT` override wins over the harness table; `CLAUDECODE` set → `
-   "claude-code"`; `explicit="cli-query"` wins over every other entrypoint signal;
-   `MICROMEGAS_CLIENT_ENTRYPOINT` override; `"ipykernel"` in `sys.modules` → `"jupyter"`;
-   `sys.flags.interactive` (or no `__main__.__file__`) → `"repl"`; `new_session_id()` returns a
-   valid, distinct UUID string on each call.
+   `os.environ` and `sys.modules`/`sys.flags`/`sys.argv` — covering: no env vars → `"none"`/
+   `"script"`; `MICROMEGAS_CLIENT_AGENT` override wins over the harness table; `CLAUDECODE` set
+   → `"claude-code"`; a non-ASCII or newline-containing `MICROMEGAS_CLIENT_AGENT`/
+   `MICROMEGAS_CLIENT_ENTRYPOINT` override is rejected and falls back to the detected value
+   (not sent as-is); an over-length override is rejected the same way; `explicit="cli-query"`
+   wins over every other entrypoint signal; `MICROMEGAS_CLIENT_ENTRYPOINT` override;
+   `sys.argv[0] == "-c"` → `"script"` (not `"repl"`); `"ipykernel"` in `sys.modules` →
+   `"jupyter"`; `sys.flags.interactive` (or no `__main__.__file__`) → `"repl"`;
+   `new_session_id()` returns a valid, distinct UUID string on each call. Also add
+   `"tests/test_client_attribution.py"` to `HERMETIC_TEST_ARGS` in `build/python_ci.py` — the
+   explicit hermetic file list CI actually invokes — so this new file isn't silently skipped.
 9. `test_flightsql_headers.py`: add a case asserting the three new headers are present (as
    bytes tuples) when the new params are passed, and absent when they're left at their
    `None` defaults — keeping the "no I/O" hermetic property documented in the file's own
-   docstring, since `make_call_headers` itself never reads env/`sys` state.
+   docstring, since `make_call_headers` itself never reads env/`sys` state. Also add a test
+   that constructs a `FlightSQLClient` with `pyarrow.flight.FlightClient` (or
+   `flight.connect`) monkeypatched to a stub, sets known `__client_agent`/`__client_entrypoint`/
+   `__session_id` values, and asserts that `query()`, `query_stream()`, and `query_arrow()`
+   each forward those cached values into the call headers they build — guarding all three call
+   sites (`client.py:356/415/447`), not just the CLI path `tests/cli/test_query.py` covers.
 10. New `python/micromegas/tests/cli/test_query.py`: monkeypatch `sys.argv` to a minimal valid
     invocation (e.g. `["micromegas-query", "SELECT 1", "--all"]`) and
     `connection.connect` (as imported in `cli/query.py`) to a fake that records its kwargs and
@@ -389,6 +428,7 @@ specific to the two headers the gateway itself controls.
   `client_entrypoint="cli-query"`.
 - `python/micromegas/tests/test_client_attribution.py` — new.
 - `python/micromegas/tests/test_flightsql_headers.py` — new-headers cases.
+- `build/python_ci.py` — add `"tests/test_client_attribution.py"` to `HERMETIC_TEST_ARGS`.
 - `rust/public/src/servers/flight_sql_service_impl.rs` — header reads, log lines,
   `QueryAuditState`.
 - `rust/public/src/servers/query_audit.rs` — `QueryAuditRecord` fields.
@@ -439,7 +479,12 @@ specific to the two headers the gateway itself controls.
   fresh session id, same as any other new client instance.
 - **No server-side validation/allowlist on `agent`/`entrypoint` values.** Same as
   `x-client-type` today: the header is caller-controlled and analytics-only, so a malicious or
-  buggy client can send anything. Not a new risk this plan introduces.
+  buggy client can send anything. Not a new risk this plan introduces. Client-side, though,
+  `attribution.py`'s `_sanitize_override` does validate `MICROMEGAS_CLIENT_AGENT`/
+  `MICROMEGAS_CLIENT_ENTRYPOINT` (printable ASCII, bounded length) before they reach gRPC
+  metadata, since an unvalidated non-ASCII or newline-containing value there crashes the
+  process rather than raising a catchable exception — that's a client-side safety check, not
+  a server-side trust boundary, so the risk described above is unchanged.
 
 ## Documentation
 
@@ -451,9 +496,12 @@ specific to the two headers the gateway itself controls.
 
 ## Testing Strategy
 
-1. `poetry run pytest` in `python/micromegas/` (per `python/CLAUDE.md`), covering the new
-   `test_client_attribution.py` and `tests/cli/test_query.py`, and the updated
-   `test_flightsql_headers.py`/`tests/cli/test_connection.py`.
+1. `python3 ../../build/python_ci.py` from `python/micromegas/` (per `python/CLAUDE.md`'s CI
+   line) — **not** a bare `poetry run pytest`, which would also collect the integration suite
+   under `tests/` (e.g. `tests/auth/test_oidc_integration.py`), which needs live services. This
+   runs the hermetic `HERMETIC_TEST_ARGS` list, covering the new `test_client_attribution.py`
+   and `tests/cli/test_query.py`, and the updated `test_flightsql_headers.py`/
+   `tests/cli/test_connection.py`, once `HERMETIC_TEST_ARGS` is updated per step 8 above.
 2. `poetry run black <changed files>` before commit (per `python/CLAUDE.md`).
 3. `cargo test -p micromegas --features server` covering the updated
    `query_audit_tests.rs`/`http_gateway_tests.rs`.
