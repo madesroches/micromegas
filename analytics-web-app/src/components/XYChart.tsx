@@ -12,7 +12,7 @@ import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
-import { buildXAxisConfig, buildXScale, formatYAxisTick } from './xychart-axis'
+import { buildXAxisConfig, buildXScale, formatYAxisTick, RIGHT_AXIS_SIZE_PX } from './xychart-axis'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -748,7 +748,7 @@ export function XYChart({
           grid: scaleInfo.side === 1 ? { stroke: '#2a2a35', width: 1 } : { show: false },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: 90,
+          size: RIGHT_AXIS_SIZE_PX,
           values: (_u: uPlot, vals: number[]) => {
             return vals.map((v) =>
               formatYAxisTick(v, axisCf, yAxisUnit, isCurrencyScale ? scaleInfo.unitName : null)
@@ -1003,7 +1003,7 @@ export function XYChart({
             grid: { stroke: '#2a2a35', width: 1 },
             ticks: { stroke: '#2a2a35', width: 1 },
             font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-            size: 90,
+            size: RIGHT_AXIS_SIZE_PX,
             values: (_u: uPlot, vals: number[]) => {
               return vals.map((v) =>
                 formatYAxisTick(v, 1, yAxisUnit, isCurrencyScale ? primaryUnit : null)
