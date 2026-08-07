@@ -17,12 +17,14 @@ This plan adds three new headers, resolved once per client instance in
   override), detected from ambient environment variables.
 - `x-client-entrypoint` — how the client was invoked (`cli-query`, `script`, `jupyter`,
   `repl`), from a closed vocabulary.
-- `x-client-session` — an opaque per-instance id that correlates every query from one client
-  instance, so per-task/per-session metrics (queries per task, retries after error, bytes
-  scanned per session) become possible for a long-lived script or notebook process that issues
-  several queries through the same `FlightSQLClient`. This does **not** hold for the CLI, where
-  each `micromegas-query` invocation constructs a fresh client and gets a fresh session id per
-  query — see Trade-offs below.
+- `x-client-session` — an opaque id that correlates every query from one client instance, so
+  per-task/per-session metrics (queries per task, retries after error, bytes scanned per
+  session) become possible for a long-lived script or notebook process that issues several
+  queries through the same `FlightSQLClient`. For the CLI, where each `micromegas-query`
+  invocation constructs a fresh client, this correlates across invocations only when a known
+  agent harness's session env var is present (currently just Claude Code's
+  `CLAUDE_CODE_SESSION_ID`); otherwise each invocation gets its own fresh session id — see
+  Trade-offs below.
 
 The server reads all three, logs them alongside the existing `client=` field, and adds them
 to `QueryAuditRecord`. Both are analytics-only signals — never used for auth, quota, or rate
@@ -107,19 +109,30 @@ _KNOWN_AGENT_HARNESS_ENV_VARS = {
     "CLAUDECODE": "claude-code",
 }
 
+# Harness-provided session ids, checked in order, that stay stable across every
+# FlightSQLClient/CLI invocation within one agent session -- unlike a fresh
+# UUID, these let per-task metrics (queries per task, retries after error)
+# correlate for the CLI case described in Trade-offs. Confirmed by direct
+# testing: CLAUDE_CODE_SESSION_ID does not vary between a Claude Code parent
+# and its subagents, so it identifies "one agent session," which is the
+# correlation granularity this header wants.
+_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS = (
+    "CLAUDE_CODE_SESSION_ID",
+)
+
 # gRPC metadata values must be plain ASCII with no control characters (a
 # non-ASCII or newline-containing value passed through pyarrow's
 # FlightCallOptions aborts the process with a native "Check failed" crash,
 # not a catchable Python exception) -- so overrides are validated before use,
 # with a silent fall-through to the detected value on rejection.
 _MAX_OVERRIDE_LEN = 64
-_VALID_OVERRIDE_RE = re.compile(r"^[\x20-\x7e]+$")
+_VALID_OVERRIDE_RE = re.compile(r"[\x20-\x7e]+")
 
 
 def _sanitize_override(value):
     """Return `value` if it's a safe gRPC header value (printable ASCII,
     bounded length), else None so the caller falls back to detection."""
-    if value and len(value) <= _MAX_OVERRIDE_LEN and _VALID_OVERRIDE_RE.match(value):
+    if value and len(value) <= _MAX_OVERRIDE_LEN and _VALID_OVERRIDE_RE.fullmatch(value):
         return value
     return None
 
@@ -160,6 +173,15 @@ def resolve_client_entrypoint(explicit=None):
 
 
 def new_session_id():
+    """A per-instance session id. Prefers a stable harness-provided session id
+    (see `_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS`) so every FlightSQLClient/CLI
+    invocation within one agent session correlates; falls back to a fresh
+    UUID when no such signal is present (plain script/notebook process, or an
+    unrecognized harness)."""
+    for env_var in _KNOWN_AGENT_HARNESS_SESSION_ENV_VARS:
+        harness_session = _sanitize_override(os.environ.get(env_var))
+        if harness_session:
+            return harness_session
     return str(uuid.uuid4())
 ```
 
@@ -317,8 +339,9 @@ specific to the two headers the gateway itself controls.
    `resolve_client_entrypoint(explicit=None)`, `new_session_id()`, a `_sanitize_override()`
    helper guarding `MICROMEGAS_CLIENT_AGENT`/`MICROMEGAS_CLIENT_ENTRYPOINT` (printable ASCII,
    length-bounded, else fall through to detection instead of sending an unsafe gRPC header
-   value), and the `_KNOWN_AGENT_HARNESS_ENV_VARS` table (just `CLAUDECODE` → `claude-code` for
-   now).
+   value), the `_KNOWN_AGENT_HARNESS_ENV_VARS` table (just `CLAUDECODE` → `claude-code` for
+   now), and the `_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS` table (just `CLAUDE_CODE_SESSION_ID`
+   for now) that `new_session_id()` checks before minting a fresh UUID.
 2. `client.py`: extend `make_call_headers` with `client_agent=None, client_entrypoint=None,
    client_session=None` params (conditionally appended, per Design). Update the three call
    sites (`:356`, `:415`, `:447`) to pass the new cached attributes.
@@ -337,7 +360,10 @@ specific to the two headers the gateway itself controls.
    `connection.connect(profile="dev", client_entrypoint="cli-query")`, and assert
    `captured_entrypoints == ["cli-query"]` — covering the plain (non-OIDC) branch
    (`cli/connection.py:26`). Add a second test covering the OIDC branch
-   (`cli/connection.py:14-22`): configure a profile with `oidc_issuer`/`oidc_client_id` set,
+   (`cli/connection.py:14-22`): configure a profile with the config-file keys that make
+   `resolve_connection` populate `oidc_issuer`/`oidc_client_id` — i.e. `{"uri": ...,
+   "client_id": "...", "issuers": [{"issuer": "https://...", "audience": "..."}]}` (see
+   `cli/config.py:135-146`), not the `ConnectionConfig` field names themselves,
    `monkeypatch.setattr(oidc_connection, "connect", fake_oidc_connect)` where
    `fake_oidc_connect(**kwargs)` records `kwargs` and returns a stub client, then assert
    `connection.connect(profile=<oidc-profile>, client_entrypoint="cli-query")` results in
@@ -346,15 +372,28 @@ specific to the two headers the gateway itself controls.
 **Phase 2 — Python tests**
 8. New `python/micromegas/tests/test_client_attribution.py`: hermetic unit tests for
    `resolve_client_agent`/`resolve_client_entrypoint`/`new_session_id`, using `monkeypatch` on
-   `os.environ` and `sys.modules`/`sys.flags`/`sys.argv` — covering: no env vars → `"none"`/
-   `"script"`; `MICROMEGAS_CLIENT_AGENT` override wins over the harness table; `CLAUDECODE` set
-   → `"claude-code"`; a non-ASCII or newline-containing `MICROMEGAS_CLIENT_AGENT`/
+   `os.environ` and `sys.modules`/`sys.flags`/`sys.argv`. The env-scrubbing autouse fixture in
+   `tests/cli/conftest.py` is scoped to `tests/cli/` only, so it does not apply here — and
+   `CLAUDECODE` in particular is set in the environment of every subprocess this development
+   harness spawns (which is how this repo's own `python3 ../../build/python_ci.py` gets run), so
+   every negative-case test in this file must explicitly `monkeypatch.delenv("CLAUDECODE",
+   raising=False)` (plus every `MICROMEGAS_CLIENT_*` var, `CLAUDE_CODE_SESSION_ID`, and any
+   other harness marker var in `_KNOWN_AGENT_HARNESS_ENV_VARS`/
+   `_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS`) before asserting on the no-signal path. Covering: no
+   env vars/markers present → `"none"`/`"script"`; `MICROMEGAS_CLIENT_AGENT` override wins over
+   the harness table; `CLAUDECODE` set → `"claude-code"`; a non-ASCII, embedded-newline, or
+   *trailing*-newline (e.g. `"claude-code\n"`) `MICROMEGAS_CLIENT_AGENT`/
    `MICROMEGAS_CLIENT_ENTRYPOINT` override is rejected and falls back to the detected value
-   (not sent as-is); an over-length override is rejected the same way; `explicit="cli-query"`
-   wins over every other entrypoint signal; `MICROMEGAS_CLIENT_ENTRYPOINT` override;
-   `sys.argv[0] == "-c"` → `"script"` (not `"repl"`); `"ipykernel"` in `sys.modules` →
-   `"jupyter"`; `sys.flags.interactive` (or no `__main__.__file__`) → `"repl"`;
-   `new_session_id()` returns a valid, distinct UUID string on each call. Also add
+   (not sent as-is) — the trailing-newline case guards against `^...$`-style regexes, where `$`
+   matches before a trailing newline and would wrongly accept it; an over-length override is
+   rejected the same way; `explicit="cli-query"` wins over every other entrypoint signal;
+   `MICROMEGAS_CLIENT_ENTRYPOINT` override; `sys.argv[0] == "-c"` → `"script"` (not `"repl"`);
+   `"ipykernel"` in `sys.modules` → `"jupyter"`; `sys.flags.interactive` (or no
+   `__main__.__file__`) → `"repl"`; with no harness session var set, `new_session_id()` returns
+   a valid, distinct UUID string on each call; with `CLAUDE_CODE_SESSION_ID` set,
+   `new_session_id()` returns that value verbatim (and does so identically on repeated calls,
+   unlike the UUID case); an unsafe (non-ASCII/over-length) `CLAUDE_CODE_SESSION_ID` value falls
+   back to a fresh UUID via the same `_sanitize_override` path. Also add
    `"tests/test_client_attribution.py"` to `HERMETIC_TEST_ARGS` in `build/python_ci.py` — the
    explicit hermetic file list CI actually invokes — so this new file isn't silently skipped.
 9. `test_flightsql_headers.py`: add a case asserting the three new headers are present (as
@@ -456,27 +495,27 @@ specific to the two headers the gateway itself controls.
   calls FlightSQL — it manages screen configs over `analytics-web-srv`'s REST API. Adding an
   unreachable enum value would be dead code; it's deferred until (if) `screens.py` gains a
   FlightSQL-querying code path.
-- **No env override for `x-client-session`, and CLI multi-query tasks are not
-  session-correlated.** Unlike agent/entrypoint, the issue doesn't propose an override. A
-  fresh UUID per `FlightSQLClient` instance matches "one client instantiation = one task" for
-  a long-lived script/notebook process that issues several queries, but **not** for the CLI:
+- **`x-client-session` correlates CLI multi-query tasks only for known agent harnesses, not
+  in general.** A bare fresh UUID per `FlightSQLClient` instance would match "one client
+  instantiation = one task" for a long-lived script/notebook process, but **not** for the CLI:
   `cli/query.py::main()` constructs exactly one `FlightSQLClient` and issues exactly one query
   per process invocation, so an agent driving `micromegas-query` once per query (the "queries
-  per task, retries after error" scenario this issue is motivated by) gets a *different*
-  session id for every query in that task — those queries are not correlatable via
-  `x-client-session` under this design. Fixing that would mean either the orchestrating agent
-  injecting a shared id (needs a `MICROMEGAS_CLIENT_SESSION` override, not proposed by the
-  issue) or the CLI persisting a session id across invocations (needs on-disk state, out of
-  scope). Left as a known limitation; an override could be added later without breaking
-  anything, since it's purely additive. **Confirmed by direct testing:** a Claude Code
-  subagent does not get a distinct `CLAUDE_CODE_SESSION_ID` from its parent — spawning a
-  subagent and inspecting its environment shows the identical session id — and
-  `CLAUDE_CODE_CHILD_SESSION=1` is set for *any* subprocess the CLI's tool layer spawns
-  (including the top-level session's own shell commands), not only subagent-issued ones. So
-  neither variable is a reliable signal for parent/subagent correlation, and since this plan
-  reads neither of them, there's nothing to key off even if `x-client-session` correlation
-  were desired here; a subagent constructing its own `FlightSQLClient` simply gets its own
-  fresh session id, same as any other new client instance.
+  per task, retries after error" scenario this issue is motivated by) would get a *different*
+  session id for every query in that task under a naive UUID-only scheme. `new_session_id()`
+  closes this for the harness this issue is motivated by: it checks
+  `_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS` (`CLAUDE_CODE_SESSION_ID`) before minting a UUID, and
+  **confirmed by direct testing**, that variable does not vary between a Claude Code parent and
+  its subagents — spawning a subagent and inspecting its environment shows the identical
+  session id — so every `micromegas-query` invocation within one Claude Code session shares a
+  session id, without any orchestrator cooperation or on-disk state. This is deliberately
+  narrower than a general fix: a plain script/notebook process, a human's shell, or an
+  unrecognized agent harness still gets a fresh UUID per instantiation (the "one client
+  instantiation = one task" case above), and there's no env override for callers that want to
+  force a shared id outside a known harness — left as a known limitation, addable later without
+  breaking anything since it's purely additive. `CLAUDE_CODE_CHILD_SESSION=1` was considered as
+  an alternate signal but rejected: it's set for *any* subprocess the CLI's tool layer spawns
+  (including the top-level session's own shell commands), not only subagent-issued ones, so it
+  doesn't identify a session the way `CLAUDE_CODE_SESSION_ID` does.
 - **No server-side validation/allowlist on `agent`/`entrypoint` values.** Same as
   `x-client-type` today: the header is caller-controlled and analytics-only, so a malicious or
   buggy client can send anything. Not a new risk this plan introduces. Client-side, though,
