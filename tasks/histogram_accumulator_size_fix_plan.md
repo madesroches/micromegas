@@ -38,12 +38,15 @@ reservation — making this under-report compound with group count.
 
 ## Design
 
-Change `size()` to add the bins' allocated bytes (`capacity * size_of::<u64>()`) instead of the
-`Vec` header size:
+Change `size()` to add the bins' allocated bytes instead of the `Vec` header size, using
+DataFusion's `VecAllocExt::allocated_size()` helper (the pattern DataFusion itself uses in its
+own `Accumulator`/`GroupsAccumulator::size()` implementations):
 
 ```rust
+use datafusion::common::utils::proxy::VecAllocExt;
+
 fn size(&self) -> usize {
-    size_of_val(self) + self.bins.capacity() * size_of::<u64>()
+    size_of_val(self) + self.bins.allocated_size()
 }
 ```
 
@@ -54,28 +57,29 @@ added separately — no double-counting.
 ## Implementation Steps
 
 1. In `rust/datafusion-extensions/src/histogram/accumulator.rs`, replace the `size()` body
-   (lines 310-312) with the capacity-based calculation shown above.
+   (lines 310-312) with the `allocated_size()`-based calculation shown above.
 2. Add a unit test asserting `size()` grows with `nb_bins` (e.g. construct two
    `HistogramAccumulator`s via `HistogramAccumulator::new` with differing `nb_bins`, e.g. 10 and
    10,000, and assert the larger one's `size()` is larger by roughly `capacity_diff * 8` bytes).
-   Per the crate's test convention, add this to
-   `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` (or a new
-   `histogram_accumulator_size_tests.rs` file if a unit-level test on the accumulator type itself
-   doesn't fit that file's SQL-level testing style) rather than inline in `accumulator.rs`.
+   Add this to `rust/datafusion-extensions/tests/expand_histogram_tests.rs`, which already
+   constructs `HistogramAccumulator` directly (via its `make_test_histogram` helper) and is the
+   crate's established precedent for direct-construction accumulator tests, rather than inline in
+   `accumulator.rs`.
 3. Run `cargo fmt` and `cargo clippy --workspace -- -D warnings` in `rust/`.
 
 ## Files to Modify
 
 - `rust/datafusion-extensions/src/histogram/accumulator.rs` — fix `size()`
-- `rust/datafusion-extensions/tests/histogram_runtime_bounds_tests.rs` (or a new test file) — add
-  the size-growth regression test
+- `rust/datafusion-extensions/tests/expand_histogram_tests.rs` — add the size-growth regression
+  test
 
 ## Trade-offs
 
-- The issue's suggested fix computes `self.bins.capacity() * size_of::<u64>()` rather than calling
-  a generic "allocated size of Vec" helper — there's no such helper in the codebase or a current
-  dependency, and this is the only `Vec` needing it, so a one-off inline calculation is simplest
-  (avoids the open/closed and DRY concerns of introducing an abstraction for a single call site).
+- Rather than a hand-written `self.bins.capacity() * size_of::<u64>()`, the fix uses
+  `datafusion::common::utils::proxy::VecAllocExt::allocated_size()`, already reachable through the
+  existing `datafusion` dependency. It computes the identical value but matches the idiomatic
+  pattern DataFusion itself uses for `Accumulator`/`GroupsAccumulator::size()` implementations,
+  so no one-off inline calculation or new abstraction is needed.
 
 ## Testing Strategy
 
