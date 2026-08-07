@@ -73,9 +73,14 @@ Audience assignment (#1372) and query-time enforcement are explicitly out of sco
   `/api/...` route, `.layer(Extension(app_db_pool))` + `.layer(Extension(data_source_cache))` +
   `.layer(Extension(maps_state))`, then the auth middleware layer. New routes/extensions are
   added the same way.
-- Admin hub: `analytics-web-app/src/routes/AdminPage.tsx` — a grid of `AppLink` tiles
-  (`/admin/data-sources`, `/admin/export-screens`, `/admin/import-screens`, `/admin/maps`), each
-  wrapped in `<AuthGuard requireAdmin>`. `DataSourcesPage.tsx` (372 lines) is the CRUD-page
+- Admin hub: `analytics-web-app/src/routes/AdminPage.tsx` — wraps its *entire* content (the whole
+  grid of `AppLink` tiles: `/admin/data-sources`, `/admin/export-screens`,
+  `/admin/import-screens`, `/admin/maps`) in a single `<AuthGuard requireAdmin>`; the tiles
+  themselves carry no guard. `router.tsx` applies no guard of its own to any `/admin/*` route —
+  the client-side admin gate for each admin *page* instead lives inside that page's own component,
+  which self-wraps in `<AuthGuard requireAdmin>` (`DataSourcesPage.tsx:143,350`, and again at
+  `358-366` for its Suspense fallback; `MapsPage.tsx:163,318`; `ImportScreensPage.tsx:512`).
+  `DataSourcesPage.tsx` (372 lines) is the CRUD-page
   template: `list*`/`create*`/`update*`/`delete*` calls into a `lib/*-api.ts` fetch wrapper,
   local `useState` for the list + a create/edit form + a `ConfirmDialog` for delete, no
   React Query. Router registration: `analytics-web-app/src/router.tsx:48-51`.
@@ -466,9 +471,11 @@ Two new pages, one per key table — kept separate rather than tabs on one page,
   `lib/ingestion-api-keys-api.ts` calling `/api/ingestion-api-keys[...]`. The mint response's
   `key` field is shown **once**, in a dismissable banner with a copy-to-clipboard button, exactly
   like the ingestion API's own doc callout ("the cleartext, returned exactly once") — never
-  persisted client-side, never refetchable.
+  persisted client-side, never refetchable. Self-wraps its content — and its Suspense fallback —
+  in `<AuthGuard requireAdmin>`, per `DataSourcesPage.tsx:143,350,358-366`; `AdminPage.tsx`'s own
+  guard covers only the hub grid, not the pages behind its tiles (see Current State).
 - `analytics-web-app/src/routes/AnalyticsApiKeysPage.tsx` — identical shape, calling
-  `/api/analytics-api-keys[...]`.
+  `/api/analytics-api-keys[...]`, and identically self-wrapped in `<AuthGuard requireAdmin>`.
 - No frontend UI for the import routes — they exist for the CLI tool only (§6). A stray "Import"
   button inviting an operator to paste a legacy key into a browser form is the wrong shape for a
   bulk one-shot migration and reintroduces the "key transits a browser" exposure #1383 already
@@ -595,7 +602,10 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 7. New tests: `rust/analytics-web-srv/tests/analytics_keys_tests.rs`, modeled on
    `folders_tests.rs` (`sqlx::PgPool::connect_lazy` for route-shape/guard tests that never touch
    the DB) and `screens_tests.rs` (`ValidatedUser` extension injection); `#[ignore]`d live-DB
-   tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips.
+   tests per `folders_tests.rs`'s precedent for mint/list/revoke/import round trips. Also: with
+   `AnalyticsKeysState.auth_disabled: true` and an admin `ValidatedUser` injected (per
+   `screens_tests.rs:49-50`), every route returns 503 — asserting the `auth_disabled` check
+   pre-empts `require_admin` and the pool check even when both would otherwise pass.
 
 ### Phase 3 — Ingestion key proxy (`analytics-web-srv`)
 
@@ -620,14 +630,19 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     add `wiremock.workspace = true` as an `analytics-web-srv` dev-dependency) verifying
     the proxy forwards method/path/query/body/`Content-Type` and status/body correctly (assert the
     mock receives `Content-Type: application/json` on the mint request), and that `require_admin`
-    rejects before any outbound call (assert via a counter/mock never being hit).
+    rejects before any outbound call (assert via a counter/mock never being hit). Also: with
+    `IngestionProxyState.auth_disabled: true` and an admin `ValidatedUser` injected, every route
+    returns 503 and the wiremock server is never hit — asserting the `auth_disabled` check
+    pre-empts both `require_admin` and the outbound call.
 
 ### Phase 4 — Frontend
 
 11. `lib/ingestion-api-keys-api.ts`, `lib/analytics-api-keys-api.ts` (new), modeled on
     `lib/data-sources-api.ts`'s `handleResponse`/error-class shape.
 12. `routes/IngestionApiKeysPage.tsx`, `routes/AnalyticsApiKeysPage.tsx` (new), modeled on
-    `DataSourcesPage.tsx`.
+    `DataSourcesPage.tsx`, each self-wrapping its content and Suspense fallback in
+    `<AuthGuard requireAdmin>` (`DataSourcesPage.tsx:143,350,358-366`) — `AdminPage.tsx`'s guard
+    covers only the hub grid, not these pages (§5/Current State).
 13. `router.tsx`: two new routes. `AdminPage.tsx`: two new tiles, both always visible, no
     availability probe (§5).
 14. `yarn lint && yarn type-check && yarn test` (per `analytics-web-app/CLAUDE.md`).
@@ -665,6 +680,11 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
     ingestion-hosted API.
 21. `mkdocs/docs/admin/web-app.md`: add the new optional env vars and the new API routes
     (see Documentation) to the "Environment Variables" and "API Routes" sections respectively.
+    Note next to `MICROMEGAS_INGESTION_PROXY_OIDC_*`/`MICROMEGAS_INGESTION_ADMIN_URL` that
+    configuring the proxy makes `analytics-web-srv`'s own admin list a de-facto
+    ingestion-key-admin list (see Security), so operators who deliberately keep
+    `MICROMEGAS_INGESTION_ADMINS` distinct from `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`
+    must keep them aligned or leave the proxy unconfigured.
 22. `mkdocs/docs/admin/monolith.md`: note that the web role now optionally shares the lake pool
     for analytics-key management (see [Documentation](#documentation)).
 23. `CHANGELOG.md`: add `## Unreleased` bullets for the ingestion import route, the analytics-key
@@ -718,6 +738,18 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 - **The proxy's service credential is distinct from the self-telemetry one**, so a compromise of
   either doesn't automatically grant the other's privilege (see §2). Its subject must be added to
   ingestion's admin allowlist deliberately, not incidentally.
+- **Enabling the proxy makes `analytics-web-srv`'s admin list a de-facto ingestion-key-admin
+  list.** Ingestion resolves its own admin list from `MICROMEGAS_INGESTION_ADMINS`, falling back
+  to `MICROMEGAS_ADMINS` (`rust/auth/src/default_provider.rs:77-83`, via
+  `ProviderBuilder::new("MICROMEGAS_INGESTION")` in `rust/monolith/src/main.rs:205`).
+  `analytics-web-srv` resolves a *different* list — `MICROMEGAS_ADMINS` directly
+  (`rust/analytics-web-srv/src/main.rs:37`) or `MICROMEGAS_ANALYTICS_ADMINS` → `MICROMEGAS_ADMINS`
+  on the monolith (`analytics_admin_var`). The proxy gates only on its own `require_admin` and
+  then forwards under its privileged service credential, so anyone in the analytics admin list
+  gets mint/list/revoke on `ingestion_api_keys` even if deliberately excluded from
+  `MICROMEGAS_INGESTION_ADMINS`. Operators who intentionally keep the two admin lists separate
+  must either keep them aligned or leave the proxy unconfigured (`IngestionProxyConfig::from_env()`
+  returning `None`) — configuring the proxy is itself the decision to unify them.
 - **`analytics-web-srv` still never gains write access to `ingestion_api_keys`.** All ingestion
   writes go through ingestion's own HTTP API; the new telemetry-DB pool (§4) only ever touches
   `analytics_api_keys`, exactly the asymmetry #1383 built the two-table split to preserve.
@@ -775,7 +807,9 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
   env vars this service now reads (`MICROMEGAS_SQL_CONNECTION_STRING`,
   `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_ENDPOINT`/`_AUDIENCE`,
   `MICROMEGAS_INGESTION_ADMIN_URL`) to "Optional" alongside `MICROMEGAS_MAPS_OBJECT_STORE_URI`'s
-  existing 503-when-absent pattern, and add the new routes
+  existing 503-when-absent pattern — noting that setting the ingestion-proxy vars makes
+  `analytics-web-srv`'s admin list a de-facto ingestion-key-admin list (see Security) — and add
+  the new routes
   (`GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`,
   `DELETE /api/analytics-api-keys/{key_id}`, `GET`/`POST /api/ingestion-api-keys`,
   `DELETE /api/ingestion-api-keys/{key_id}`) to the "API Routes" list.
@@ -801,10 +835,12 @@ micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS
 
 - Rust: route-shape tests with a lazy pool (no live DB) for every new handler's validation/gating
   branches, per `firehose_tests.rs`'s precedent; `#[ignore]`d live-DB tests for the actual SQL,
-  per `folders_tests.rs`'s precedent, run manually against a local Postgres.
+  per `folders_tests.rs`'s precedent, run manually against a local Postgres. Named gating branches
+  covered: 403 non-admin, 400 empty `key`/`name`, `imported: false` idempotency, and the fixed 503
+  when `auth_disabled` is set (asserted ahead of `require_admin`/pool checks — steps 7 and 10).
 - Proxy: a loopback mock ingestion router asserting exact forwarding of method/path/query/body/
   `Content-Type` and response passthrough, plus a "rejected before forwarding" assertion for
-  non-admins.
+  non-admins and for `auth_disabled` (mock never hit in either case).
 - Python: `pytest` unit tests for `import_keys.py`'s per-key result classification (imported /
   already-present / errored) against a mocked `requests` session, per `test_logout.py`'s
   lightweight-mocking style; an end-to-end run importing a small test keyring into both tables
