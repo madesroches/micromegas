@@ -19,6 +19,13 @@ Pushing category *count* high enough instead drops per-tick space below that
 before `rotate()` or `size()` ever run. That's a pre-existing gap independent
 of rotation (arguably its own issue) and out of scope here.
 
+Out of scope does *not* mean ignorable: this plan's right-side `padding`
+shrinks `plotWidCss`, which is the very dimension per-tick space is derived
+from, so a naive implementation would push charts that render today over
+that cliff (see the `space` subsection under Design). The design must not
+create new instances of the gap, even though it doesn't close the existing
+one.
+
 ## Current State
 
 **File:** `analytics-web-app/src/components/xychart-axis.ts`, `buildXAxisConfig()` (lines 12-45)
@@ -56,8 +63,9 @@ multi-series and single-series uPlot option objects built in `XYChart.tsx`
 
 ### How uPlot resolves axis rotation and size
 
-uPlot's `Axis.Rotate` and `Axis.Size` types (`node_modules/uplot/dist/uPlot.d.ts:1069,1111`)
-each accept either a static number or a function:
+uPlot's `Axis.Rotate` (`node_modules/uplot/dist/uPlot.d.ts:1024`) and
+`Axis.Size` (`uPlot.d.ts:983`) types each accept either a static number or a
+function:
 
 ```ts
 type Rotate = number | ((self: uPlot, values: (string|number)[], axisIdx: number, foundSpace: number) => number)
@@ -73,30 +81,56 @@ axis._rotate = side == 2 ? axis.rotate(self, values, i, _space) : 0   // rotate(
 axis._size = ceil(axis.size(self, values, i, cycleNum))               // size() called right after, same values, but NO foundSpace
 ```
 
-Two things matter for the design:
+Four things matter for the design:
 1. `rotate()` receives `foundSpace` — the actual CSS-pixel space available
-   per tick at the current layout — so it can decide whether labels fit.
+   per tick at the current layout (`getIncrSpace` is called with
+   `plotWidCss`, so this really is CSS pixels, matching our estimator's
+   units) — so it can decide whether labels fit.
 2. `size()` does **not** receive `foundSpace`, only `values` and `cycleNum`.
    It runs immediately after `rotate()` for the same axis in the same cycle,
    so the only way for `size()` to know whether we rotated is a value shared
    between the two closures (uPlot itself does this internally via `axis._rotate`,
    a private field we should not depend on).
+3. `size()` is *also* called once at init, outside `axesCalc`, as
+   `axis._size = axis.size(self, null, i, 0)` (`uPlot.iife.js:3785`) — note
+   `values` is **`null`** and `rotate()` has not run yet. Our `size()` must
+   therefore never dereference `values`; it reads the shared `maxWidth`
+   instead, and returns `BASE_SIZE` on this first call because `rotated` is
+   still `false`. (The top-level `padding` functions are likewise invoked
+   once at init with `cycleNum: 0` — `uPlot.iife.js:3819` — before any
+   `rotate()` call.)
+4. `axesCalc` bails out with `if (_space == 0) return` (`uPlot.iife.js:4501`)
+   *before* reaching the `rotate()`/`size()` lines. So when the per-tick
+   space floor isn't met, our closure state is not merely unset — it keeps
+   whatever the previous cycle left there. See the `space` subsection for
+   why that matters.
+
+`convergeSize()` runs at most `CYCLE_LIMIT = 3` cycles (`uPlot.iife.js:3393`,
+`3406`); past that it stops with whatever the last cycle produced, converged
+or not. The design below settles in 2 cycles (cycle 1 flips `rotated` and
+grows both `size` and `rightPadding`; cycle 2 recomputes identical values and
+converges), comfortably inside that limit.
 
 ## Design
 
-Extend the categorical branch of `buildXAxisConfig` with `rotate` and `size`
-as functions instead of the current static `size: 65`. Both close over a
-small piece of mutable state (`rotated: boolean`) that `rotate()` sets and
-`size()` reads — safe because uPlot always calls `rotate()` immediately
-before `size()` for the same axis in the same cycle (see trace above), and a
-fresh `xAxisConfig` object (and thus fresh closure) is built per `XYChart`
+Extend the categorical branch of `buildXAxisConfig` with `rotate`, `size` and
+`space` as functions instead of the current static `size: 65` / `space: 60`,
+plus a top-level `padding` value returned alongside the axis. All four close
+over two pieces of mutable state — `rotated: boolean` and `maxWidth: number`
+— that `rotate()` writes and the other three read. That's safe because uPlot
+always calls `rotate()` immediately before `size()` for the same axis in the
+same cycle, and `paddingCalc` after `axesCalc` in the same cycle (see trace
+above); `space()` is the one reader that runs *before* `rotate()` and so
+intentionally reads the previous cycle's value (see its subsection). A fresh
+`xAxisConfig` object — and thus a fresh closure — is built per `XYChart`
 render via `buildXAxisConfig()`, so no state leaks across chart instances.
 
-This logic only runs when uPlot actually calls `rotate()`/`size()` for the
-axis at all, which requires per-tick space to clear uPlot's own `space: 60`
-floor (see Current State and Overview) — high category counts that push
-per-tick space below that floor blank the axis before this code ever
-executes, regardless of label length.
+Rotation is only ever *initiated* when uPlot actually calls `rotate()` for
+the axis, which requires per-tick space to clear the `space` floor (see
+Current State and Overview) — high category counts that push per-tick space
+below that floor blank the axis before this code ever executes, regardless of
+label length. The `space` subsection covers why that floor has to become
+rotation-dependent rather than staying at a static 60.
 
 ### Overlap heuristic
 
@@ -122,11 +156,14 @@ sooner or later than strictly necessary," not incorrect rendering).
 
 ```ts
 xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
-  const maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v))))
+  maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v))))
   rotated = maxWidth + TICK_LABEL_PADDING_PX > foundSpace
   return rotated ? ROTATE_DEG : 0
 }
 ```
+
+`rotate()` is the sole writer of both shared values (`rotated` and
+`maxWidth`); `size()`, `space()`, and `rightPadding()` are all pure readers.
 
 - `TICK_LABEL_PADDING_PX` (e.g. `8`): small buffer so labels rotate slightly
   before they'd visually touch, not exactly at the pixel where they'd overlap.
@@ -137,14 +174,21 @@ xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
 ### `size`
 
 ```ts
-xAxisConfig.size = (_u, values) => {
+xAxisConfig.size = () => {
   if (!rotated) return BASE_SIZE // 65, unchanged from today
-  const maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v))))
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const rotatedExtent = maxWidth * Math.sin(angleRad) + LABEL_LINE_HEIGHT_PX * Math.cos(angleRad)
   return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
 }
 ```
+
+`size()` deliberately takes **no** parameters and reads the shared `maxWidth`
+rather than recomputing it from `values`: uPlot's init call passes
+`values === null` (`uPlot.iife.js:3785`, see point 3 above), so a
+`values.map(...)` here would only be safe by accident — it happens to sit
+behind the `!rotated` early return on that one call. Reading shared state
+removes the hazard entirely and is what the `padding` subsection below needs
+anyway.
 
 - `LABEL_LINE_HEIGHT_PX` (e.g. `14`): approximate single-line text height for
   the 11px axis font.
@@ -155,6 +199,65 @@ xAxisConfig.size = (_u, values) => {
   will simply run past the axis box height in that rare case, same failure
   mode uPlot already has for any axis, rather than a chart that's all axis.
 
+### `space`
+
+The current static `xAxisConfig.space = 60` must become rotation-aware, or
+the `padding` fix below regresses charts that render correctly today.
+
+`calcPlotRect` applies right padding as `plotWidCss -= _padding[1] +
+_padding[3]` (`uPlot.iife.js:3468`), and `axesCalc` derives the x-axis's
+`foundSpace` from that same `plotWidCss`. So reserving ~95px on the right
+directly subtracts from the quantity that has to clear the `space` floor.
+Worked example, 12 categories in an 800px plot:
+
+- cycle 1: `foundSpace = 800/12 = 66.7 ≥ 60` → axis renders → `rotate()`
+  fires → `rightPadding ≈ 95`.
+- cycle 2: `plotWidCss = 705` → `foundSpace = 58.75 < 60` → `findIncr`
+  returns `[0, 0]` → `axesCalc` hits its `_space == 0` early return and
+  `drawAxesGrid` `continue`s → **the entire x-axis blanks**.
+
+That is the fix converting a chart with overlapping-but-readable labels into
+a chart with no x-axis at all — a regression, not the pre-existing gap. Fix:
+
+```ts
+xAxisConfig.space = () => (rotated ? ROTATED_MIN_SPACE_PX : BASE_MIN_SPACE_PX)
+```
+
+- `BASE_MIN_SPACE_PX = 60`: unchanged from today's static value.
+- `ROTATED_MIN_SPACE_PX` (e.g. `20`): once labels are tilted they no longer
+  need to fit horizontally within a tick slot — adjacent rotated baselines
+  are `foundSpace · sin45°` apart, so clearing `LABEL_LINE_HEIGHT_PX` only
+  takes `14 / 0.707 ≈ 20px` of per-tick width.
+
+Because this branch pins `incrs = [1]`, `space` is *purely* a blank/don't-blank
+floor here, not a tick-density control: `findIncr` can only return
+`[1, foundSpace]` or `[0, 0]`, so lowering the floor never adds or removes
+ticks — every category index is a tick either way. That keeps the change
+narrowly scoped to the failure above.
+
+`space()` is called from `getIncrSpace` *before* `rotate()` in the same cycle,
+so it reads the previous cycle's `rotated` — the same one-cycle lag uPlot's
+own convergence loop is built to absorb. The state machine is monotone and
+cannot oscillate: rotating can only *shrink* `foundSpace` (padding grows),
+which can only make the rotate predicate more true; and un-rotating can only
+*grow* `foundSpace`, which can only make it more false. So `rotated` changes
+at most once after the initial cycle, well inside `CYCLE_LIMIT = 3`.
+
+This does **not** close the pre-existing gap from the Overview: a chart with
+enough categories to miss the 60px floor on cycle 1 never reaches `rotate()`,
+so `rotated` stays `false`, the floor stays 60, and the axis blanks exactly as
+it does today. The rotated floor only protects charts that *did* start
+rotating from being blanked by our own padding.
+
+One consequence of `axesCalc`'s early return (point 4 above) is worth
+recording: if a later resize drops `foundSpace` below even the rotated floor,
+`rotate()` doesn't run, so `rotated`/`maxWidth` stay latched at their last
+values and `rightPadding` keeps reserving its ~95px while the axis is blank.
+Widening the window recovers normally (the floor is met again and `rotate()`
+re-evaluates); the only artifact is that the blank/render threshold has a
+little hysteresis. Acceptable — the alternative is resetting shared state
+from a callback uPlot doesn't call in that path.
+
 ### `padding`
 
 `rotate`/`size` only grow the axis's own vertical band — they reserve no
@@ -163,13 +266,24 @@ label actually overflows. uPlot anchors each rotated label at its tick and
 draws it down-and-to-the-right (`uPlot.iife.js:4614-4667`), so the last
 category's label can extend well past the plot's right edge. The only
 cushion uPlot gives that edge by default is `autoPadSide`
-(`uPlot.iife.js:3804-3816`): `yAxisOpts.size / 2` (~25px) when there's *no*
-right-side y-axis, `0` when there is one — and `XYChart.tsx:~264-271`
+(`uPlot.iife.js:3804-3816`): `round(yAxisOpts.size / 2)` — exactly **25px**,
+since `yAxisOpts.size` defaults to `50` (`uPlot.iife.js:1614`) — when there's
+*no* right-side y-axis, `0` when there is one. And `XYChart.tsx:~264-271`
 (`unitScaleInfo`) assigns the *first* unit's y-axis `side: 1` (right)
 whenever there are 2+ visible series, regardless of how many distinct units
 those series share, so any multi-series categorical chart (2+ series,
 regardless of unit count) gets no right-side cushion at all — only the true
-single-series path (no explicit `side`, defaulting to left) is cushioned. A
+single-series path (no explicit `side`, defaulting to left) is cushioned.
+
+> Careful reading `unitScaleInfo`: the trailing comment on that line reads
+> `// 1=left, 3=right`, which is **backwards** relative to uPlot, where
+> `side` is `0=top, 1=right, 2=bottom, 3=left` (`Axis.Side`). The *values*
+> are what this plan reasons about, and `side: 1` really does place a
+> right-hand axis. Don't "fix" the values to match the comment; if anything,
+> fix the comment. (Out of scope here — flagged only so the padding analysis
+> isn't misread.)
+
+A
 ~20-char rotated label's horizontal projection — per the `rightPadding`
 formula below, `(20·AVG_CHAR_WIDTH_PX + LABEL_LINE_HEIGHT_PX)·cos45° ≈ 95px`
 — far exceeds either buffer.
@@ -185,12 +299,11 @@ after `rotate`/`size` run for every axis): `convergeSize()` calls
 whatever shared state `rotate()`/`size()` just finished updating that same
 cycle — the same guarantee the plan already relies on for `rotated`.
 
-Today `size()` independently *recomputes* `maxWidth` from `values` rather
-than reading something `rotate()` set — harmless there since both get the
-same `values` array. A padding function gets no `values` at all
-(`PaddingSide`'s signature is `(self, side, sidesWithAxes, cycleNum)`), so
-`maxWidth` needs to become genuine shared closure state, not just a
-same-named local in two places. `rightPadding` itself must be declared (as
+A padding function gets no `values` at all (`PaddingSide`'s signature is
+`(self, side, sidesWithAxes, cycleNum)`), which is the second reason
+`maxWidth` is genuine shared closure state written by `rotate()` rather than
+recomputed per callback (the first being `size()`'s `values === null` init
+call). `rightPadding` itself must be declared (as
 `let rightPadding: uPlot.PaddingSide = null`) alongside `const xAxisConfig` at
 the top of the function, before the if/else-if chain — otherwise it's out of
 scope at the function's single trailing return, and the `time`/`numeric`
@@ -213,15 +326,18 @@ xAxisConfig.rotate = (_u, values, _axisIdx, foundSpace) => {
   rotated = maxWidth + TICK_LABEL_PADDING_PX > foundSpace
   return rotated ? ROTATE_DEG : 0
 }
-xAxisConfig.size = (_u) => {
+xAxisConfig.size = () => {
   if (!rotated) return BASE_SIZE
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const rotatedExtent = maxWidth * Math.sin(angleRad) + LABEL_LINE_HEIGHT_PX * Math.cos(angleRad)
   return Math.min(MAX_ROTATED_SIZE, Math.ceil(rotatedExtent) + AXIS_CHROME_PX)
 }
+xAxisConfig.space = () => (rotated ? ROTATED_MIN_SPACE_PX : BASE_MIN_SPACE_PX)
 
-rightPadding = () => {
-  if (!rotated) return 0
+rightPadding = (_u, _side, sidesWithAxes) => {
+  // Not rotated: reproduce uPlot's own autoPadSide result for the right edge,
+  // since a function's numeric return can never fall back to it (see below).
+  if (!rotated) return sidesWithAxes[1] ? 0 : DEFAULT_RIGHT_CUSHION_PX
   const angleRad = (Math.abs(ROTATE_DEG) * Math.PI) / 180
   const horizontalExtent = maxWidth * Math.cos(angleRad) + LABEL_LINE_HEIGHT_PX * Math.sin(angleRad)
   return Math.min(MAX_ROTATED_SIZE, Math.ceil(horizontalExtent))
@@ -236,14 +352,42 @@ return { axis: xAxisConfig, rightPadding }
 single-series `~998`) destructure it and set `padding: [null, rightPadding,
 null, null]` on their uPlot `Options` object — neither currently sets
 `padding` at all (confirmed via grep), so `null` on the other three sides
-keeps uPlot's default `autoPadSide` behavior there, and `rightPadding`
-defaults to `null` too, preserving that same cushion on the right edge for
-`time`/`numeric` mode and any non-rotated categorical chart — it only
-overrides the right edge with a computed value once the categorical branch
-actually rotates. `MAX_ROTATED_SIZE` doubles as the horizontal cap
-too: at `ROTATE_DEG = -45`, `sin` and `cos` are equal, so the horizontal and
-vertical projections share the same magnitude and the same ceiling is
-exactly as valid here.
+keeps uPlot's default `autoPadSide` behavior there, and in `time`/`numeric`
+mode `rightPadding` stays at its hoisted `null` and keeps that cushion on the
+right edge too.
+
+The categorical branch is different, and this is the subtlety the
+non-rotated `sidesWithAxes[1] ? 0 : DEFAULT_RIGHT_CUSHION_PX` line above
+exists for. uPlot normalizes the option once, at init:
+
+```js
+const padding = (opts.padding || [...]).map(p => fnOrSelf(ifNull(p, autoPadSide)))   // 3818
+```
+
+`ifNull` substitutes `autoPadSide` only for a `null` **option value**. Once
+we install a *function*, whatever number it returns is final — there is no
+per-call fallback, and `PaddingSide`'s function form is typed
+`=> number`, so it cannot return `null` to opt back in. A naive
+`if (!rotated) return 0` would therefore silently strip the 25px cushion from
+every non-rotated categorical chart — precisely the cushion that keeps the
+last *horizontal* label from being chopped, i.e. a regression in the exact
+case this plan is supposed to leave untouched. Reproducing `autoPadSide`'s
+result is cheap because uPlot passes `sidesWithAxes` straight into the
+callback: `sidesWithAxes[1]` is `hasRgtAxis`, and the branch it selects is
+uPlot's own (`0` with a right axis, `round(yAxisOpts.size / 2)` = 25 without).
+
+- `DEFAULT_RIGHT_CUSHION_PX = 25`: mirrors `round(yAxisOpts.size / 2)` with
+  uPlot's default `yAxisOpts.size = 50`. It is a mirror of a library
+  constant, so note it as such — if a future uPlot upgrade changes that
+  default, this drifts silently (a 25-vs-whatever px cushion, not a
+  correctness break).
+
+No `Math.max` with the cushion is needed in the rotated branch: the rotated
+projection is ~95px for a 20-char label and grows from there, always well
+above 25. `MAX_ROTATED_SIZE` doubles as the horizontal cap too: at
+`ROTATE_DEG = -45`, `sin` and `cos` are equal, so the horizontal and vertical
+projections share the same magnitude and the same ceiling is exactly as valid
+here.
 
 This only reserves the *right* side, matching the app's current layout:
 the categorical axis is always the bottom `axes[0]`, and with `ROTATE_DEG`
@@ -267,8 +411,11 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 1. **`analytics-web-app/src/components/xychart-axis.ts`**
    - Add module-level constants: `ROTATE_DEG`, `AVG_CHAR_WIDTH_PX`,
      `TICK_LABEL_PADDING_PX`, `LABEL_LINE_HEIGHT_PX`, `AXIS_CHROME_PX`,
-     `MAX_ROTATED_SIZE`, and keep `65` as `BASE_SIZE` (used both as the
-     default `size` and the flat-label return value).
+     `MAX_ROTATED_SIZE`, `DEFAULT_RIGHT_CUSHION_PX` (25, mirroring uPlot's
+     `round(yAxisOpts.size / 2)`), `ROTATED_MIN_SPACE_PX` (20), and keep `65`
+     as `BASE_SIZE` (used both as the default `size` and the flat-label
+     return value) and `60` as `BASE_MIN_SPACE_PX` (today's static
+     `space`, still used by the `numeric` branch as a plain number).
    - Add `estimateLabelWidth(label: string): number` (exported for direct
      unit testing, matching the module's existing export style).
    - Change `buildXAxisConfig`'s return type from `uPlot.Axis` to
@@ -282,15 +429,21 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
      rightPadding }`.
    - Inside the `xAxisMode === 'categorical' && xLabels` branch, declare
      `let rotated = false` and `let maxWidth = 0`, set `xAxisConfig.rotate` /
-     `xAxisConfig.size`, and *reassign* (not redeclare) `rightPadding = () =>
-     {...}` as described in the Design section's `padding` subsection above,
-     replacing the top-level static `size: 65` for this branch only (the
-     `time`/`numeric` branches keep the static `size: 65` from the base
-     config object and leave `rightPadding` at its hoisted `null` default).
-   - Cast `values` elements to `string` defensively (`Rotate`'s type allows
-     `string | number`; our categorical `values` closure only ever produces
-     strings, but `size`'s declared type is `string[]` too so no cast should
-     actually be needed — confirm during implementation).
+     `xAxisConfig.size` / `xAxisConfig.space`, and *reassign* (not redeclare)
+     `rightPadding = (_u, _side, sidesWithAxes) => {...}` as described in the
+     Design section's `space` and `padding` subsections above, replacing the
+     top-level static `size: 65` **and** this branch's static `space = 60`
+     for this branch only (the `time`/`numeric` branches keep the static
+     `size: 65` from the base config object, `numeric` keeps its static
+     `space = 60`, and both leave `rightPadding` at its hoisted `null`
+     default).
+   - `xAxisConfig.size` takes no parameters — do **not** read `values` in it.
+     uPlot's init call passes `values === null` (`uPlot.iife.js:3785`).
+   - `xAxisConfig.space` is assigned a function; `Axis.Space`
+     (`uPlot.d.ts:985`) accepts one, so this type-checks without a cast.
+   - Cast `values` elements to `string` defensively in `rotate` (`Rotate`'s
+     type allows `string | number`); `size` no longer touches `values` at
+     all, so its `string[]` parameter type is moot.
 
 2. **`analytics-web-app/src/components/XYChart.tsx`** — update the single
    call site (`XYChart.tsx:618`) to destructure `{ axis: xAxisConfig,
@@ -300,7 +453,7 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
 
 ## Files to Modify
 
-- `analytics-web-app/src/components/xychart-axis.ts` — add rotation/size/padding heuristic to the categorical branch of `buildXAxisConfig`.
+- `analytics-web-app/src/components/xychart-axis.ts` — add the rotation/size/space/padding heuristic to the categorical branch of `buildXAxisConfig`.
 - `analytics-web-app/src/components/XYChart.tsx` — wire the new `rightPadding` return value into both uPlot `Options` objects.
 - `analytics-web-app/src/components/__tests__/xychart-axis.test.ts` — new test cases (see Testing Strategy).
 
@@ -358,14 +511,25 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
     that uPlot itself guarantees.
   - After a `rotate()` call that does *not* trigger rotation, `size()`
     returns exactly `BASE_SIZE` (unchanged behavior for the flat-label case).
+  - `size()` called with no arguments at all (uPlot's init call shape,
+    `values === null`) returns `BASE_SIZE` and does not throw — guards the
+    regression of reintroducing a `values.map(...)` in `size`.
   - `time` and `numeric` modes keep static `size: 65` (no `rotate` set) —
     extend the existing tests for those branches to assert `axis.rotate` is
-    `undefined` and `rightPadding` is `null`.
-  - Calling `rightPadding()` before any `rotate()` call, or after a
-    `rotate()` call that doesn't trigger rotation, returns `0`.
+    `undefined` and `rightPadding` is `null`. `numeric` also keeps a numeric
+    `axis.space === 60` (not a function).
+  - `space()` returns `BASE_MIN_SPACE_PX` (60) before any `rotate()` call and
+    after a non-rotating one, and `ROTATED_MIN_SPACE_PX` (20) after a
+    rotating one — the assertion that keeps our own `padding` from blanking
+    the axis.
+  - `rightPadding(u, 1, [false, false, true, true], 0)` before any `rotate()`
+    call (no right axis) returns `DEFAULT_RIGHT_CUSHION_PX` (25), and with
+    `sidesWithAxes[1] === true` returns `0` — i.e. it reproduces uPlot's
+    `autoPadSide` rather than collapsing the cushion to `0`.
   - After a `rotate()` call that triggers rotation, `rightPadding()` returns
-    a value `> 0` and `<= MAX_ROTATED_SIZE` — same call-order contract as
-    the `size()` test above (`rotate()` before `rightPadding()`).
+    a value `> DEFAULT_RIGHT_CUSHION_PX` and `<= MAX_ROTATED_SIZE`,
+    independent of `sidesWithAxes` — same call-order contract as the `size()`
+    test above (`rotate()` before `rightPadding()`).
 - **Manual/visual**: build (or reuse) a chart cell with `xAxisMode:
   'categorical'` and ~10 long category labels (e.g.
   `++product+channel+branch-CL-123456`-style ~34-char strings) at a normal
@@ -378,6 +542,14 @@ roughly maximizes labels-per-pixel-width for typical label lengths.
   uPlot blanks the axis entirely before rotation logic ever runs — a
   separate pre-existing gap (see Overview), not evidence that rotation
   "isn't needed."
+  **Also test 12–14 long categories at ~800px specifically.** ~10 is *not*
+  sufficient coverage: at 10 categories the post-padding per-tick space is
+  ~70px and clears the 60px floor either way, so it passes with or without
+  the rotation-aware `space` fix. 12 categories is the first count that
+  lands between the pre-padding (66.7px) and post-padding (58.75px) sides of
+  that floor, and is therefore the case that blanks the axis if `space` is
+  left static — see the `space` subsection. Confirm the axis renders, not
+  just that labels are tilted.
   Additionally, on that same rotated chart, confirm the **last** category's
   label is fully visible and not clipped at the chart's right edge, in both
   a true single-series chart (no explicit `side`, the only cushioned case)
@@ -404,3 +576,11 @@ docs updates required.
   `buildXAxisConfig` cases must be updated to destructure `{ axis }` from
   the new return shape (see Testing Strategy) — a mechanical but total
   rewrite of that describe block, not a small extension.
+- Deliberately left open (not blocking): the pre-existing high-category-count
+  blanking described in the Overview is still present after this change. The
+  rotation-aware `space` floor only prevents *this* fix from creating new
+  instances of it; a chart whose labels never get a chance to rotate still
+  blanks. Closing that properly means deciding the floor from the label set
+  known at build time (`xLabels` is in the closure) rather than from
+  `rotated`, which changes behavior for charts that don't rotate — its own
+  issue, its own regression surface.
