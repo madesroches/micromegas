@@ -400,11 +400,19 @@ specific to the two headers the gateway itself controls.
   calls FlightSQL — it manages screen configs over `analytics-web-srv`'s REST API. Adding an
   unreachable enum value would be dead code; it's deferred until (if) `screens.py` gains a
   FlightSQL-querying code path. See Open Questions.
-- **No env override for `x-client-session`.** Unlike agent/entrypoint, the issue doesn't
-  propose one, and a fresh UUID per `FlightSQLClient` instance already matches "one client
-  instantiation = one task" for the CLI and typical script/notebook usage. An override could
-  be added later (e.g. for a long-lived orchestrator process that wants one session id across
-  several short-lived client instances) without breaking anything, since it's purely additive.
+- **No env override for `x-client-session`, and CLI multi-query tasks are not
+  session-correlated.** Unlike agent/entrypoint, the issue doesn't propose an override. A
+  fresh UUID per `FlightSQLClient` instance matches "one client instantiation = one task" for
+  a long-lived script/notebook process that issues several queries, but **not** for the CLI:
+  `cli/query.py::main()` constructs exactly one `FlightSQLClient` and issues exactly one query
+  per process invocation, so an agent driving `micromegas-query` once per query (the "queries
+  per task, retries after error" scenario this issue is motivated by) gets a *different*
+  session id for every query in that task — those queries are not correlatable via
+  `x-client-session` under this design. Fixing that would mean either the orchestrating agent
+  injecting a shared id (needs a `MICROMEGAS_CLIENT_SESSION` override, not proposed by the
+  issue) or the CLI persisting a session id across invocations (needs on-disk state, out of
+  scope). Left as a known limitation; an override could be added later without breaking
+  anything, since it's purely additive.
 - **No server-side validation/allowlist on `agent`/`entrypoint` values.** Same as
   `x-client-type` today: the header is caller-controlled and analytics-only, so a malicious or
   buggy client can send anything. Not a new risk this plan introduces.
@@ -427,20 +435,18 @@ specific to the two headers the gateway itself controls.
    `query_audit_tests.rs`/`http_gateway_tests.rs`.
 4. `cargo fmt` and `cargo clippy --workspace -- -D warnings` (per `rust/CLAUDE.md`).
 5. Manual smoke test: start services (`start_services.py`), run
-   `CLAUDECODE=1 MICROMEGAS_CLIENT_SESSION_DEMO=x micromegas-query "SELECT 1" --all` and
-   `tail -f /tmp/analytics.log` (or the relevant service log) for that request's
-   `execute_query` line, confirming `agent=claude-code entrypoint=cli-query` appears; then
-   query `flightsql_query_audit` (per `query-audit-log.md`'s pattern) and confirm the JSON
-   record has `"agent":"claude-code"`, `"entrypoint":"cli-query"`, and a `"session"` UUID.
-   Repeat without `CLAUDECODE` set to confirm `agent=none`. Run the same query through a
-   plain Python script (not the CLI) to confirm `entrypoint=script`, and through a Jupyter
-   kernel to confirm `entrypoint=jupyter`.
+   `CLAUDECODE=1 micromegas-query "SELECT 1" --all` and `tail -f /tmp/analytics.log` (or the
+   relevant service log) for that request's `execute_query` line, confirming
+   `agent=claude-code entrypoint=cli-query` appears; then query `flightsql_query_audit` (per
+   `query-audit-log.md`'s pattern) and confirm the JSON record has `"agent":"claude-code"`,
+   `"entrypoint":"cli-query"`, and a `"session"` UUID. Run it a second time and confirm the
+   `"session"` UUID differs from the first run (per-invocation, not per-task, per the
+   Trade-offs note above). Repeat without `CLAUDECODE` set to confirm `agent=none`. Run the
+   same query through a plain Python script (not the CLI) to confirm `entrypoint=script`, and
+   through a Jupyter kernel to confirm `entrypoint=jupyter`.
 
 ## Open Questions
 
-- **Should `cli-screens` exist as a value even though nothing sends it yet?** Leaning no (see
-  Trade-offs) — add it, and the plumbing to `screens.py`, only once/if that CLI starts issuing
-  FlightSQL queries directly.
 - **Subagent grouping.** The issue notes `CLAUDE_CODE_CHILD_SESSION` marks a subagent but it's
   unverified whether a subagent's session id differs from its parent's. Not addressed here —
   `x-client-session` is a fresh UUID per `FlightSQLClient` instance regardless, so a subagent
