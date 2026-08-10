@@ -230,6 +230,24 @@ entirely rather than just documenting it.)
 `MICROMEGAS_ANALYTICS_ADMINS`) — there is exactly one admin list to manage
 for key administration, not two lists that must be kept in sync.
 
+**Upgrade note: this merge is unconditional, with no opt-out.** On the
+previous, proxy-based design, ingestion-key mint/revoke/import from
+`analytics-web-srv` only worked if an operator configured
+`MICROMEGAS_INGESTION_ADMIN_URL` plus the `MICROMEGAS_INGESTION_PROXY_OIDC_*`
+quartet; leaving the proxy unconfigured was the documented way to keep the
+two admin lists separate. That knob is gone. `ingestion_api_keys` mint/list/
+revoke/import now hang off the same `analytics_keys_pool` (resolved from
+`MICROMEGAS_SQL_CONNECTION_STRING`) that already backs `analytics_api_keys`
+administration, so every existing deployment's `MICROMEGAS_ADMINS`/
+`MICROMEGAS_ANALYTICS_ADMINS` list silently and irreversibly becomes an
+ingestion-key-admin list too the moment it upgrades — there is no
+configuration left to turn that off short of unsetting
+`MICROMEGAS_SQL_CONNECTION_STRING` entirely, which also disables
+analytics-key administration. Operators who deliberately kept the two admin
+lists separate (i.e. ran with the proxy unconfigured on purpose) must
+re-audit `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS` **before**
+upgrading, not after.
+
 **Under `--disable-auth` on `analytics-web-srv`, both key-management route
 groups are unavailable — not just gated, but not merged at all.** With auth
 disabled, every request would otherwise be treated as an admin, which would
