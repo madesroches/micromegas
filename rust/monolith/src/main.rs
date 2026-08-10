@@ -28,7 +28,6 @@ use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
-use micromegas::servers::api_keys::OnBehalfOfTrust;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion_with_api_key_config;
 use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
@@ -269,7 +268,6 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let auth = ingestion_auth;
         let api_key_config = DbApiKeyConfig::from_env_with_prefix("MICROMEGAS_INGESTION");
-        let on_behalf_of_trust = OnBehalfOfTrust::from_env_with_prefix("MICROMEGAS_INGESTION");
         join_set.spawn(async move {
             serve_ingestion_with_api_key_config(
                 listen_addr,
@@ -278,7 +276,6 @@ async fn main() -> Result<()> {
                 shutdown,
                 grace_c,
                 api_key_config,
-                on_behalf_of_trust,
             )
             .await
         });

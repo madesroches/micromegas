@@ -19,17 +19,8 @@
 //! to the already-verified [`AdminUser`]'s own email/subject on every
 //! request; ingestion's `actor()` only trusts that header once its *own*
 //! `AuthContext` has independently passed `require_key_admin` (OIDC +
-//! `is_admin`) **and** the caller's own identity is a member of ingestion's
-//! `micromegas::servers::api_keys::OnBehalfOfTrust` set — a narrower,
-//! separately-configured allowlist than the general ingestion-key admin
-//! list. Being an ingestion-key admin is not by itself enough to have the
-//! header honored: any other admin (human or service) that sets it has the
-//! header silently ignored, falling back to their own identity. Operators
-//! must add whatever subject/email this proxy's own
-//! `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID` resolves to on ingestion's
-//! token verification to that trust set (e.g.
-//! `MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS`) for this proxy's
-//! header to have any effect at all.
+//! `is_admin`), so a caller that isn't this proxy's admin-listed service
+//! credential can't spoof an identity by setting the header itself.
 
 use crate::auth::{AdminUser, ValidatedUser};
 use axum::body::{Body, Bytes};

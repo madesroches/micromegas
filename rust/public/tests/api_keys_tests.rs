@@ -7,11 +7,10 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
-use micromegas::servers::api_keys::{ON_BEHALF_OF_HEADER, OnBehalfOfTrust, api_keys_router};
+use micromegas::servers::api_keys::{ON_BEHALF_OF_HEADER, api_keys_router};
 use micromegas_auth::db_api_key::DbApiKeyConfig;
 use micromegas_auth::types::{AuthContext, AuthType};
 use serde_json::Value;
-use std::collections::HashSet;
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -71,21 +70,6 @@ fn admin_oidc_ctx() -> AuthContext {
         is_admin: true,
         allow_delegation: false,
     }
-}
-
-/// No identity is trusted to set [`ON_BEHALF_OF_HEADER`] — the safe default,
-/// and correct for every test in this file that never sends the header, or
-/// that asserts the header is (still) ignored.
-fn empty_trust() -> OnBehalfOfTrust {
-    OnBehalfOfTrust::default()
-}
-
-/// Trusts exactly `admin_oidc_ctx()`'s own email — standing in for
-/// `analytics-web-srv`'s proxy having been added to
-/// `MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS` alongside the plain
-/// admin list it must also be a member of.
-fn trust_containing_admin_ctx() -> OnBehalfOfTrust {
-    OnBehalfOfTrust::new(HashSet::from(["admin@example.com".to_string()]))
 }
 
 async fn call(
@@ -148,7 +132,7 @@ fn delete_request_with_on_behalf_of(uri: &str, on_behalf_of: &str) -> Request<Bo
 
 #[tokio::test]
 async fn post_403_for_api_key_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         api_key_ctx(),
@@ -160,7 +144,7 @@ async fn post_403_for_api_key_context() {
 
 #[tokio::test]
 async fn post_403_for_non_admin_oidc_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         non_admin_oidc_ctx(),
@@ -172,21 +156,21 @@ async fn post_403_for_non_admin_oidc_context() {
 
 #[tokio::test]
 async fn get_403_for_api_key_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(router, api_key_ctx(), get_request("/auth/api_keys")).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn get_403_for_non_admin_oidc_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(router, non_admin_oidc_ctx(), get_request("/auth/api_keys")).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn delete_403_for_api_key_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         api_key_ctx(),
@@ -198,7 +182,7 @@ async fn delete_403_for_api_key_context() {
 
 #[tokio::test]
 async fn delete_403_for_non_admin_oidc_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         non_admin_oidc_ctx(),
@@ -215,7 +199,7 @@ async fn delete_403_for_non_admin_oidc_context() {
 /// simply setting the header themselves.
 #[tokio::test]
 async fn mint_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         non_admin_oidc_ctx(),
@@ -231,7 +215,7 @@ async fn mint_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
 
 #[tokio::test]
 async fn delete_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         non_admin_oidc_ctx(),
@@ -248,7 +232,7 @@ async fn delete_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
 /// header is irrelevant once `auth_type != Oidc` fails the gate first.
 #[tokio::test]
 async fn mint_403_for_api_key_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         api_key_ctx(),
@@ -264,7 +248,7 @@ async fn mint_403_for_api_key_context_even_with_on_behalf_of_header() {
 
 #[tokio::test]
 async fn import_403_for_api_key_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         api_key_ctx(),
@@ -279,7 +263,7 @@ async fn import_403_for_api_key_context() {
 
 #[tokio::test]
 async fn import_403_for_non_admin_oidc_context() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         non_admin_oidc_ctx(),
@@ -299,7 +283,7 @@ async fn import_403_for_non_admin_oidc_context() {
 
 #[tokio::test]
 async fn post_400_for_empty_name() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -312,7 +296,7 @@ async fn post_400_for_empty_name() {
 #[tokio::test]
 async fn post_400_for_name_over_255_bytes() {
     let long_name = "a".repeat(256);
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -324,7 +308,7 @@ async fn post_400_for_name_over_255_bytes() {
 
 #[tokio::test]
 async fn get_400_for_zero_limit() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -336,7 +320,7 @@ async fn get_400_for_zero_limit() {
 
 #[tokio::test]
 async fn get_400_for_negative_limit() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -353,7 +337,7 @@ async fn get_400_for_negative_limit() {
 /// test below.
 #[tokio::test]
 async fn get_1000_limit_is_not_bad_request() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -365,7 +349,7 @@ async fn get_1000_limit_is_not_bad_request() {
 
 #[tokio::test]
 async fn import_400_for_empty_name() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -380,7 +364,7 @@ async fn import_400_for_empty_name() {
 
 #[tokio::test]
 async fn import_400_for_empty_key() {
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -393,7 +377,7 @@ async fn import_400_for_empty_key() {
 #[tokio::test]
 async fn import_400_for_name_over_255_bytes() {
     let long_name = "a".repeat(256);
-    let router = api_keys_router(lazy_pool(), test_config(), empty_trust());
+    let router = api_keys_router(lazy_pool(), test_config());
     let response = call(
         router,
         admin_oidc_ctx(),
@@ -448,7 +432,7 @@ async fn json_body(response: axum::response::Response) -> Value {
 #[tokio::test]
 async fn live_mint_authenticates_and_list_hides_hash() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let name = format!("api-keys-test-mint-{}", uuid::Uuid::new_v4());
     let response = call(
@@ -519,19 +503,16 @@ async fn live_mint_authenticates_and_list_hides_hash() {
 }
 
 /// The proxy calls in under its own service-credential identity
-/// (`admin_oidc_ctx()` here stands in for that, and `trust_containing_admin_ctx()`
-/// stands in for that identity having been added to
-/// `MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS`), so without honoring
+/// (`admin_oidc_ctx()` here stands in for that), so without honoring
 /// `ON_BEHALF_OF_HEADER`, `created_by` would be `admin_oidc_ctx()`'s own
 /// `admin@example.com` for every proxied mint — collapsing the audit trail
 /// onto one constant identity. Asserts `created_by` is the header's value
-/// instead, once the caller has independently passed `require_key_admin` *and*
-/// is a member of the trust set.
+/// instead, once the caller has independently passed `require_key_admin`.
 #[ignore]
 #[tokio::test]
 async fn live_mint_with_on_behalf_of_header_attributes_created_by_to_header_value() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), trust_containing_admin_ctx());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let name = format!("api-keys-test-obo-mint-{}", uuid::Uuid::new_v4());
     let operator_email = format!("operator-{}@example.com", uuid::Uuid::new_v4());
@@ -567,72 +548,7 @@ async fn live_mint_with_on_behalf_of_header_attributes_created_by_to_header_valu
     assert_eq!(
         entry["created_by"].as_str(),
         Some(operator_email.as_str()),
-        "created_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity, \
-         since admin_oidc_ctx() is a member of the trust set"
-    );
-
-    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
-        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
-        .execute(&pool)
-        .await
-        .expect("cleanup");
-}
-
-/// The security-fix counterpart to the test above: `admin_oidc_ctx()` is an
-/// ingestion-key admin (passes `require_key_admin`) but, with `empty_trust()`,
-/// is *not* in the on-behalf-of trust set — the header must be silently
-/// ignored, not honored and not rejected. `created_by` falls back to
-/// `admin_oidc_ctx()`'s own identity, exactly as if the header were absent.
-/// This is what stops any admin who isn't a specifically-provisioned trusted
-/// forwarder (e.g. a colleague also holding an admin OIDC session) from
-/// planting a key attributed to an arbitrary other identity.
-#[ignore]
-#[tokio::test]
-async fn live_mint_with_on_behalf_of_header_is_ignored_for_untrusted_admin() {
-    let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
-
-    let name = format!("api-keys-test-obo-untrusted-mint-{}", uuid::Uuid::new_v4());
-    let spoofed_email = format!("spoofed-{}@example.com", uuid::Uuid::new_v4());
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        post_request_with_on_behalf_of(
-            "/auth/api_keys",
-            &format!(r#"{{"name": "{name}"}}"#),
-            &spoofed_email,
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
-
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        get_request("/auth/api_keys"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let list = json_body(response).await;
-    let entry = list
-        .as_array()
-        .expect("array")
-        .iter()
-        .find(|e| e["key_id"].as_str() == Some(key_id.as_str()))
-        .expect("minted key present in listing")
-        .clone();
-    assert_eq!(
-        entry["created_by"].as_str(),
-        Some("admin@example.com"),
-        "created_by must fall back to the caller's own identity — an admin outside the \
-         trust set must never be able to set created_by via the header"
-    );
-    assert_ne!(
-        entry["created_by"].as_str(),
-        Some(spoofed_email.as_str()),
-        "the header must not be honored for a caller outside the trust set"
+        "created_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity"
     );
 
     sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
@@ -647,7 +563,7 @@ async fn live_mint_with_on_behalf_of_header_is_ignored_for_untrusted_admin() {
 #[tokio::test]
 async fn live_revoke_with_on_behalf_of_header_attributes_revoked_by_to_header_value() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), trust_containing_admin_ctx());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let name = format!("api-keys-test-obo-revoke-{}", uuid::Uuid::new_v4());
     let response = call(
@@ -687,76 +603,7 @@ async fn live_revoke_with_on_behalf_of_header_attributes_revoked_by_to_header_va
     assert_eq!(
         entry["revoked_by"].as_str(),
         Some(operator_email.as_str()),
-        "revoked_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity, \
-         since admin_oidc_ctx() is a member of the trust set"
-    );
-
-    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
-        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
-        .execute(&pool)
-        .await
-        .expect("cleanup");
-}
-
-/// The security-fix counterpart, for `revoked_by`: `admin_oidc_ctx()` is an
-/// admin but not a trusted forwarder, so the header must be ignored and
-/// `revoked_by` must fall back to their own identity — a colleague's revoke
-/// action must never be attributable to an arbitrary other identity that an
-/// admin merely typed into the header.
-#[ignore]
-#[tokio::test]
-async fn live_revoke_with_on_behalf_of_header_is_ignored_for_untrusted_admin() {
-    let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
-
-    let name = format!(
-        "api-keys-test-obo-untrusted-revoke-{}",
-        uuid::Uuid::new_v4()
-    );
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        post_request("/auth/api_keys", &format!(r#"{{"name": "{name}"}}"#)),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
-
-    let spoofed_email = format!("spoofed-{}@example.com", uuid::Uuid::new_v4());
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        delete_request_with_on_behalf_of(&format!("/auth/api_keys/{key_id}"), &spoofed_email),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        get_request("/auth/api_keys"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let list = json_body(response).await;
-    let entry = list
-        .as_array()
-        .expect("array")
-        .iter()
-        .find(|e| e["key_id"].as_str() == Some(key_id.as_str()))
-        .expect("revoked key present in listing")
-        .clone();
-    assert_eq!(
-        entry["revoked_by"].as_str(),
-        Some("admin@example.com"),
-        "revoked_by must fall back to the caller's own identity — an admin outside the \
-         trust set must never be able to set revoked_by via the header"
-    );
-    assert_ne!(
-        entry["revoked_by"].as_str(),
-        Some(spoofed_email.as_str()),
-        "the header must not be honored for a caller outside the trust set"
+        "revoked_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity"
     );
 
     sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
@@ -770,7 +617,7 @@ async fn live_revoke_with_on_behalf_of_header_is_ignored_for_untrusted_admin() {
 #[tokio::test]
 async fn live_get_limit_clamp_returns_exactly_500() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let prefix = format!("api-keys-test-clamp-{}", uuid::Uuid::new_v4());
     let mut key_ids = Vec::new();
@@ -810,7 +657,7 @@ async fn live_get_limit_clamp_returns_exactly_500() {
 #[tokio::test]
 async fn live_import_inserts_then_idempotent_reimport() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let name = format!("api-keys-test-import-{}", uuid::Uuid::new_v4());
     let key = format!("legacy-{}", uuid::Uuid::new_v4());
@@ -880,7 +727,7 @@ async fn live_import_inserts_then_idempotent_reimport() {
 #[tokio::test]
 async fn live_delete_is_idempotent_and_404_for_unknown() {
     let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config(), empty_trust());
+    let router = api_keys_router(pool.clone(), test_config());
 
     let name = format!("api-keys-test-delete-{}", uuid::Uuid::new_v4());
     let response = call(

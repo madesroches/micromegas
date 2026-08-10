@@ -110,9 +110,8 @@ pub fn register_routes(router: Router) -> Router {
 /// Thin wrapper around [`serve_ingestion_with_api_key_config`], mirroring the
 /// `ProviderBuilder`/`provider()` split in `micromegas_auth::default_provider`:
 /// this keeps `serve_ingestion`'s published signature (the `server`-feature
-/// crate) unchanged. Uses `DbApiKeyConfig::from_env_with_prefix("")` and
-/// `OnBehalfOfTrust::from_env_with_prefix("")` — the unprefixed default,
-/// correct for `telemetry-ingestion-srv`.
+/// crate) unchanged. Uses `DbApiKeyConfig::from_env_with_prefix("")` — the
+/// unprefixed default, correct for `telemetry-ingestion-srv`.
 pub async fn serve_ingestion(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,
@@ -127,7 +126,6 @@ pub async fn serve_ingestion(
         shutdown,
         grace,
         DbApiKeyConfig::from_env_with_prefix(""),
-        super::api_keys::OnBehalfOfTrust::from_env_with_prefix(""),
     )
     .await
 }
@@ -135,11 +133,10 @@ pub async fn serve_ingestion(
 /// Like [`serve_ingestion`], but also takes the [`DbApiKeyConfig`] the caller's
 /// auth provider was built with, so the key-management routes'
 /// `effective_within_seconds` (in the `DELETE` response) matches the TTL the
-/// running provider actually uses, and the [`OnBehalfOfTrust`](super::api_keys::OnBehalfOfTrust)
-/// set of identities allowed to set `ON_BEHALF_OF_HEADER`. The caller must
-/// build both with the same prefix it gave `ProviderBuilder::with_db_key_store`
-/// (empty for `telemetry-ingestion-srv`, `MICROMEGAS_INGESTION` for the
-/// monolith) so none of the three can silently disagree.
+/// running provider actually uses. The caller must build this with the same
+/// prefix it gave `ProviderBuilder::with_db_key_store` (empty for
+/// `telemetry-ingestion-srv`, `MICROMEGAS_INGESTION` for the monolith) so the
+/// two cannot silently disagree.
 pub async fn serve_ingestion_with_api_key_config(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,
@@ -147,7 +144,6 @@ pub async fn serve_ingestion_with_api_key_config(
     shutdown: impl Future<Output = ()> + Send + 'static,
     grace: Duration,
     api_key_config: DbApiKeyConfig,
-    on_behalf_of_trust: super::api_keys::OnBehalfOfTrust,
 ) -> anyhow::Result<()> {
     use axum::extract::DefaultBodyLimit;
     use axum::middleware;
@@ -185,7 +181,6 @@ pub async fn serve_ingestion_with_api_key_config(
         protected_app = protected_app.merge(super::api_keys::api_keys_router(
             key_store_pool,
             api_key_config,
-            on_behalf_of_trust,
         ));
         protected_app = protected_app.layer(middleware::from_fn(move |req, next| {
             auth_middleware(provider.clone(), req, next)

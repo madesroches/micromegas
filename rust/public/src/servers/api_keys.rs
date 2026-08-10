@@ -21,8 +21,6 @@ use micromegas_auth::types::{AuthContext, AuthType};
 use micromegas_tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::collections::HashSet;
-use std::sync::Arc;
 use uuid::Uuid;
 
 /// Bytes, not chars: deliberately stricter than the `VARCHAR(255)` column, which
@@ -41,79 +39,10 @@ const MAX_LIMIT: i64 = 500;
 /// the admin who actually clicked the button, destroying the audit trail.
 ///
 /// Only consulted by `actor()` *after* `require_key_admin` has already passed
-/// for the request's own `AuthContext` (OIDC + `is_admin`) **and** the
-/// caller's own (pre-header) identity is a member of the
-/// [`OnBehalfOfTrust`] set — an admin who is not specifically trusted to
-/// forward on-behalf-of another identity has the header silently ignored,
-/// falling back to their own identity. This is what stops any *other*
-/// ingestion-key admin (human or service) from spoofing an arbitrary
-/// `created_by`/`revoked_by` value by setting the header themselves; being
-/// an admin alone is not enough.
+/// for the request's own `AuthContext` (OIDC + `is_admin`) — an arbitrary
+/// caller cannot use this header to spoof an identity, since it is ignored
+/// for any non-admin or non-OIDC caller.
 pub const ON_BEHALF_OF_HEADER: &str = "x-micromegas-on-behalf-of";
-
-/// The set of subjects/emails allowed to have [`ON_BEHALF_OF_HEADER`] honored
-/// on their requests — distinct from, and deliberately narrower than, the
-/// general ingestion-key admin list. Every ingestion-key admin can mint and
-/// revoke keys under their own identity; only an identity in *this* set may
-/// additionally act on behalf of someone else.
-///
-/// In practice this holds exactly one entry in most deployments: whatever
-/// subject/email `analytics-web-srv`'s `MICROMEGAS_INGESTION_PROXY_OIDC_*`
-/// service credential resolves to on the token it presents (its OIDC
-/// `client_id`, or whatever claim the issuer maps a client-credentials grant
-/// to). Operators must add that identity here, in addition to — not instead
-/// of — `MICROMEGAS_INGESTION_ADMINS`/`MICROMEGAS_ADMINS`: `require_key_admin`
-/// still gates every route first, so the proxy's service credential also
-/// needs plain admin status to reach `actor()` at all.
-#[derive(Clone, Debug, Default)]
-pub struct OnBehalfOfTrust(Arc<HashSet<String>>);
-
-impl OnBehalfOfTrust {
-    /// Wraps an already-resolved set, e.g. for tests.
-    pub fn new(trusted: HashSet<String>) -> Self {
-        Self(Arc::new(trusted))
-    }
-
-    /// Resolves the trusted-forwarders env var for `prefix`, with the same
-    /// `{prefix}_FOO`-with-fallback-to-unprefixed convention
-    /// `ProviderBuilder::admin_var` uses for `{prefix}_ADMINS`: tries
-    /// `{prefix}_ON_BEHALF_OF_TRUSTED_SUBJECTS` first (e.g.
-    /// `MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS` for the monolith),
-    /// then `MICROMEGAS_ON_BEHALF_OF_TRUSTED_SUBJECTS`. Same JSON-array-of-
-    /// strings shape as `MICROMEGAS_ADMINS`. Empty (not an error) when unset —
-    /// `actor()` then never honors the header for anyone, which is the safe
-    /// default.
-    pub fn from_env_with_prefix(prefix: &str) -> Self {
-        let var = if prefix.is_empty() {
-            "MICROMEGAS_ON_BEHALF_OF_TRUSTED_SUBJECTS".to_string()
-        } else {
-            let prefixed = format!("{prefix}_ON_BEHALF_OF_TRUSTED_SUBJECTS");
-            if std::env::var(&prefixed).is_ok() {
-                prefixed
-            } else {
-                "MICROMEGAS_ON_BEHALF_OF_TRUSTED_SUBJECTS".to_string()
-            }
-        };
-        let trusted = match std::env::var(&var) {
-            Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|e| {
-                warn!("invalid {var} value, ignoring on-behalf-of trust list: {e}");
-                Vec::new()
-            }),
-            Err(_) => Vec::new(),
-        };
-        Self::new(trusted.into_iter().collect())
-    }
-
-    /// Whether `ctx`'s own subject or email (never the header) is in the
-    /// trusted set.
-    fn contains(&self, ctx: &AuthContext) -> bool {
-        self.0.contains(&ctx.subject)
-            || ctx
-                .email
-                .as_deref()
-                .is_some_and(|email| self.0.contains(email))
-    }
-}
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -184,25 +113,19 @@ fn require_key_admin(ctx: &AuthContext) -> Result<(), ApiKeyError> {
 ///
 /// Ordinarily the authenticated caller's own email/subject — but once the
 /// caller has already passed `require_key_admin` (an OIDC-authenticated
-/// admin) **and** their own (pre-header) identity is a member of `trust`
-/// ([`OnBehalfOfTrust`]), an `on_behalf_of` value (from
-/// [`ON_BEHALF_OF_HEADER`]) is preferred instead when present. This is what
-/// lets `analytics-web-srv`'s ingestion-key proxy — which calls in under its
-/// own service-credential identity, added to `trust` alongside (not instead
-/// of) the general admin list — attribute `created_by`/`revoked_by` to the
-/// human admin who actually clicked mint/revoke in the browser.
+/// admin), an `on_behalf_of` value (from [`ON_BEHALF_OF_HEADER`]) is
+/// preferred instead when present. This is what lets `analytics-web-srv`'s
+/// ingestion-key proxy — which calls in under its own service-credential
+/// identity — attribute `created_by`/`revoked_by` to the human admin who
+/// actually clicked mint/revoke in the browser.
 ///
-/// Gating on `require_key_admin` having already passed, *and* on the
-/// caller's own identity being in `trust`, is what keeps any other
-/// ingestion-key admin — human or service, anyone not specifically
-/// provisioned as a trusted forwarder — from spoofing an arbitrary identity
-/// by simply setting this header itself: the header is only ever *read*
-/// here, never treated as its own authentication signal, and it is silently
-/// ignored (not an error) for a caller outside `trust`.
-fn actor(ctx: &AuthContext, on_behalf_of: Option<&str>, trust: &OnBehalfOfTrust) -> String {
+/// Gating on `require_key_admin` having already passed is what keeps a
+/// non-admin (or non-OIDC) caller from spoofing an arbitrary identity by
+/// simply setting this header itself: the header is only ever *read* here,
+/// never treated as its own authentication signal.
+fn actor(ctx: &AuthContext, on_behalf_of: Option<&str>) -> String {
     if ctx.auth_type == AuthType::Oidc
         && ctx.is_admin
-        && trust.contains(ctx)
         && let Some(v) = on_behalf_of.map(str::trim).filter(|v| !v.is_empty())
     {
         return v.to_string();
@@ -236,7 +159,6 @@ struct MintResponse {
 async fn mint_key(
     Extension(ctx): Extension<AuthContext>,
     Extension(pool): Extension<PgPool>,
-    Extension(trust): Extension<OnBehalfOfTrust>,
     headers: HeaderMap,
     Json(body): Json<MintRequest>,
 ) -> Result<(StatusCode, Json<MintResponse>), ApiKeyError> {
@@ -257,7 +179,7 @@ async fn mint_key(
     let hash = hash_key(&key);
     let key_id = Uuid::new_v4();
     let created_at = Utc::now();
-    let created_by = actor(&ctx, on_behalf_of_header(&headers), &trust);
+    let created_by = actor(&ctx, on_behalf_of_header(&headers));
 
     // Table name is a literal, never derived from caller input: no route in this
     // module ever writes to `analytics_api_keys` (see the module doc comment).
@@ -374,13 +296,12 @@ async fn revoke_key(
     Extension(ctx): Extension<AuthContext>,
     Extension(pool): Extension<PgPool>,
     Extension(config): Extension<DbApiKeyConfig>,
-    Extension(trust): Extension<OnBehalfOfTrust>,
     headers: HeaderMap,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<RevokeResponse>, ApiKeyError> {
     require_key_admin(&ctx)?;
 
-    let revoked_by = actor(&ctx, on_behalf_of_header(&headers), &trust);
+    let revoked_by = actor(&ctx, on_behalf_of_header(&headers));
     let row = sqlx::query(
         "UPDATE ingestion_api_keys
          SET revoked_at = COALESCE(revoked_at, now()),
@@ -474,11 +395,8 @@ async fn import_key(
     let created_at = Utc::now();
     // Import is never proxied (see the module doc comment), so there is no
     // on-behalf-of identity to prefer here — always the importing caller's
-    // own OIDC identity, per this function's doc comment above. `on_behalf_of`
-    // is `None`, so the trust set's contents can never change the result;
-    // passing `OnBehalfOfTrust::default()` (empty) rather than threading the
-    // router's real one keeps that plain to read.
-    let created_by = actor(&ctx, None, &OnBehalfOfTrust::default());
+    // own OIDC identity, per this function's doc comment above.
+    let created_by = actor(&ctx, None);
 
     // Table name is a literal, never derived from caller input — same rule as
     // mint_key.
@@ -538,18 +456,16 @@ async fn import_key(
 /// `DELETE` response's `effective_within_seconds` reports; the caller
 /// (`serve_ingestion_with_api_key_config`) must build it with the identical
 /// prefix it gave `ProviderBuilder::with_db_key_store` so the two cannot
-/// silently disagree. `trust` ([`OnBehalfOfTrust`]) is likewise expected to be
-/// built with that same prefix via [`OnBehalfOfTrust::from_env_with_prefix`].
+/// silently disagree.
 ///
 /// Merge this into `protected_app` **before** the `auth_middleware` layer so it
 /// reuses the existing middleware rather than re-implementing auth: handlers
 /// read `Extension<AuthContext>`, inserted by `auth_middleware`.
-pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig, trust: OnBehalfOfTrust) -> Router {
+pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router {
     Router::new()
         .route("/auth/api_keys", post(mint_key).get(list_keys))
         .route("/auth/api_keys/{key_id}", delete(revoke_key))
         .route("/auth/api_keys/import", post(import_key))
-        .layer(Extension(trust))
         .layer(Extension(config))
         .layer(Extension(pool))
 }
