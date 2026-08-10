@@ -295,6 +295,10 @@ pub fn ingestion_keys_router(base_path: &str) -> Router;
 
 - Delete `rust/public/src/servers/api_keys.rs`.
 - Delete `rust/public/tests/api_keys_tests.rs`.
+- `rust/public/Cargo.toml`: remove the matching `[[test]]` block (lines 142-145: `name =
+  "api_keys_tests"`, `path = "tests/api_keys_tests.rs"`, `required-features = ["server"]`) —
+  Cargo errors at build time if a manifest's `[[test]]` path doesn't exist on disk, so this must
+  be deleted together with `tests/api_keys_tests.rs`.
 - `rust/public/src/servers/mod.rs`: remove `pub mod api_keys;` (§57, with its doc comment).
 - `rust/public/src/servers/ingestion.rs`:
   - Collapse `serve_ingestion`/`serve_ingestion_with_api_key_config` into a single
@@ -395,12 +399,18 @@ misleading after this change, and add a direct unit test for `make_client` confi
 - `rust/analytics-web-srv/Cargo.toml` — remove unused `reqwest` dependency
 - `rust/public/src/servers/mod.rs` — remove `pub mod api_keys;`
 - `rust/public/src/servers/ingestion.rs` — collapse to one `serve_ingestion`, remove admin-route merge
+- `rust/public/Cargo.toml` — remove the `api_keys_tests` `[[test]]` block
 - `rust/monolith/src/main.rs` — drop `api_key_config`/`DbApiKeyConfig` usage, call `serve_ingestion`
 - `python/micromegas/micromegas/web_client.py` — add `import_ingestion_api_key`
 - `python/micromegas/micromegas/cli/import_keys.py` — `make_client` always returns `WebClient`
 - `python/micromegas/tests/cli/test_import_keys.py` — URL fixture cleanup, `make_client` unit test
 - `mkdocs/docs/admin/api-keys.md` — remove ingestion admin routes + proxy, describe single surface
 - `mkdocs/docs/admin/web-app.md` — remove proxy env vars, update routes table row
+- `mkdocs/docs/admin/ingestion.md` — remove the ingestion-hosted "Key management" section + admin-var row
+- `mkdocs/docs/admin/monolith.md` — remove the ingestion-hosted "Key management" section + admin-gate mention
+- `mkdocs/docs/admin/authentication.md` — update `POST /auth/api_keys` mint references
+- `docker/README.md` — update the ingestion env-var table's mint-example reference
+- `mkdocs/docs/otlp/index.md` — update the `POST /auth/api_keys` mint reference
 
 ## Trade-offs
 
@@ -458,6 +468,33 @@ misleading after this change, and add a direct unit test for `make_client` confi
     (§61-71) and its de-facto-admin-list comment.
   - Update the routes table row (§146) from "Proxy to ingestion's own key-management routes" to
     describe direct Postgres writes, mirroring the analytics-keys row's wording.
+- `mkdocs/docs/admin/ingestion.md`:
+  - `### Key management (`/auth/api_keys`)` section (lines 62-76): remove entirely — ingestion no
+    longer mints/lists/revokes its own keys over HTTP; point readers at
+    `analytics-web-srv`'s `/api/ingestion-api-keys*` routes in [API Keys](api-keys.md) instead.
+  - Env-var table's `MICROMEGAS_ADMINS` row (line 31): drop the "required for `/auth/api_keys` to
+    accept any caller" clause (no longer true — this service has no admin HTTP route left).
+- `mkdocs/docs/admin/monolith.md`:
+  - `### Key management (`/auth/api_keys`)` section (lines 98-108): remove entirely, same reasoning
+    as `ingestion.md` — fold its "ingestion keys are validated via a DB-backed store" fact into the
+    surrounding text if still relevant, but drop the route documentation and point at
+    `analytics-web-srv`'s `/api/ingestion-api-keys*` routes instead.
+  - The `MICROMEGAS_INGESTION_ADMINS` gate sentence (lines 95-96, "The ingestion role's
+    `/auth/api_keys` gate uses `MICROMEGAS_INGESTION_ADMINS`..."): remove or rewrite — ingestion no
+    longer has an admin-gated route, so this env var no longer gates anything on the ingestion role.
+- `mkdocs/docs/admin/authentication.md`:
+  - `### API Key Configuration` (line 112): change "Mint an ingestion key with
+    `POST /auth/api_keys` on the ingestion service" to mint it via `POST /api/ingestion-api-keys` on
+    `analytics-web-srv`, matching the analytics-key sentence right after it.
+  - Migration walkthrough step 2 (line 675, "...or mint fresh keys via `POST /auth/api_keys` for
+    callers you can update"): update the same way, to `POST /api/ingestion-api-keys` on
+    `analytics-web-srv`.
+- `docker/README.md`: Ingestion Server env-var table's `MICROMEGAS_API_KEYS` row (line 192,
+  "...the steady state is a DB-backed key minted via `POST /auth/api_keys`..."): update to point at
+  `analytics-web-srv`'s `POST /api/ingestion-api-keys` route.
+- `mkdocs/docs/otlp/index.md`: Authentication section (line 38, "mint one via
+  `POST /auth/api_keys`, see [API Keys](../admin/api-keys.md)"): update to
+  `POST /api/ingestion-api-keys` on `analytics-web-srv`.
 - `CHANGELOG.md`: the `pr` skill appends an entry per its own convention; no manual edit needed here.
 
 ## Testing Strategy
