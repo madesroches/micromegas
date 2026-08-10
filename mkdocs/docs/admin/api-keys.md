@@ -306,10 +306,24 @@ authenticated as the `MICROMEGAS_INGESTION_PROXY_OIDC_*` service credential
 above, so without extra care every mint/revoke performed through the web UI
 would attribute to that one constant identity. The proxy avoids this by
 sending an `X-Micromegas-On-Behalf-Of` header carrying the admin's own
-email/subject on every forwarded request; ingestion only trusts that header
-once the request's own identity has independently passed its admin check
-(OIDC + admin list), so a caller that isn't this proxy's admin-listed
-service credential can't use the header to spoof an identity of its own.
+email/subject on every forwarded request.
+
+**Only identities in a separate, narrower trust set can make ingestion
+honor that header — being an ingestion-key admin is not enough by itself.**
+Ingestion gates `X-Micromegas-On-Behalf-Of` on two independent checks: the
+request's own identity must pass the normal admin check (OIDC + admin list)
+*and* that same identity must appear in
+`MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS` (or the unprefixed
+`MICROMEGAS_ON_BEHALF_OF_TRUSTED_SUBJECTS` fallback — same JSON-array-of-
+strings shape and prefix/fallback convention as `MICROMEGAS_ADMINS`). Any
+other ingestion-key admin — human or another service credential — that sets
+the header has it silently ignored: `created_by`/`revoked_by` falls back to
+their own identity, exactly as if the header were absent. Operators must add
+whatever subject/email `MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID` resolves
+to on the token ingestion verifies to this trust set — in addition to, not
+instead of, the admin list — or the proxy's header is a no-op and every
+proxied mint/revoke attributes to the service credential's own identity
+again.
 
 **Under `--disable-auth` on `analytics-web-srv`, both key-management route
 groups are unavailable — not just gated, but not merged at all.** With auth
@@ -326,9 +340,11 @@ privileged credential; instead both path prefixes are answered by a fixed
 | `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` | `60` | Positive-cache TTL — also the revocation-latency bound |
 | `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS` | `10` | Negative-cache TTL (shorter, so a freshly minted key isn't masked by an earlier probe) |
 | `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE` | `10000` | Max distinct unknown tokens cached per process |
+| `MICROMEGAS_ON_BEHALF_OF_TRUSTED_SUBJECTS` | `[]` (empty) | JSON array of subjects/emails allowed to have `X-Micromegas-On-Behalf-Of` honored by ingestion's key-management routes — see [Web app admin pages](#web-app-admin-pages). Distinct from, and narrower than, the admin list. |
 
 Each accepts a role prefix on the monolith — `MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS`
-/ `MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` — falling back to the
+/ `MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` /
+`MICROMEGAS_INGESTION_ON_BEHALF_OF_TRUSTED_SUBJECTS` — falling back to the
 unprefixed name, the same convention `MICROMEGAS_API_KEYS` /
 `MICROMEGAS_OIDC_CONFIG` / `MICROMEGAS_ADMINS` already use.
 
