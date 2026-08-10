@@ -37,6 +37,26 @@ async fn collect_expand(
 }
 
 #[test]
+fn test_accumulator_size_grows_with_nb_bins() {
+    const SMALL_NB_BINS: usize = 10;
+    const LARGE_NB_BINS: usize = 10_000;
+
+    let small = HistogramAccumulator::new(0.0, 30.0, SMALL_NB_BINS);
+    let large = HistogramAccumulator::new(0.0, 30.0, LARGE_NB_BINS);
+
+    let capacity_diff = LARGE_NB_BINS - SMALL_NB_BINS;
+    let expected_min_diff = capacity_diff * size_of::<u64>();
+
+    assert!(
+        large.size() >= small.size() + expected_min_diff,
+        "size() should grow with nb_bins to reflect the bins' heap allocation: \
+         small={}, large={}, expected_min_diff={expected_min_diff}",
+        small.size(),
+        large.size(),
+    );
+}
+
+#[test]
 fn test_call_accepts_cast_expression() {
     let func = ExpandHistogramTableFunction::new();
     let inner = Expr::Literal(ScalarValue::Null, None);
