@@ -38,11 +38,14 @@ async fn collect_expand(
 
 #[test]
 fn test_accumulator_size_grows_with_nb_bins() {
-    let small = HistogramAccumulator::new(0.0, 30.0, 10);
-    let large = HistogramAccumulator::new(0.0, 30.0, 10_000);
+    const SMALL_NB_BINS: usize = 10;
+    const LARGE_NB_BINS: usize = 10_000;
 
-    let capacity_diff = 10_000 - 10;
-    let expected_min_diff = capacity_diff * std::mem::size_of::<u64>();
+    let small = HistogramAccumulator::new(0.0, 30.0, SMALL_NB_BINS);
+    let large = HistogramAccumulator::new(0.0, 30.0, LARGE_NB_BINS);
+
+    let capacity_diff = LARGE_NB_BINS - SMALL_NB_BINS;
+    let expected_min_diff = capacity_diff * size_of::<u64>();
 
     assert!(
         large.size() >= small.size() + expected_min_diff,
