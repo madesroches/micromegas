@@ -145,6 +145,22 @@ never sets these) sends exactly what it sends today.
     no-engine branch (`executeSql`, `:237`).
   - `context.runQueryAs`'s remote-with-engine branch (`fetchQueryIPC`, `:254-261`) and no-engine
     branch (`executeSql`, `:273`).
+- `PerfettoExportCell` (`screen-renderers/cells/PerfettoExportCell.tsx`) is a notebook cell that
+  bypasses `useCellExecution` entirely: `handleOpenInPerfetto`/`handleDownloadTrace` call
+  `fetchPerfettoTrace()` (`lib/perfetto-trace.ts:24-82`), which calls `streamQuery()` directly
+  (`:35`). It needs the same `notebook`/`cell` values threaded through this separate path:
+  - `CellRendererProps` (`screen-renderers/cell-registry.ts:11-...`) gains `notebookName?:
+    string` (the cell's own name is already carried as `name`, `:13`).
+  - `CellViewContext` (`screen-renderers/notebook-cell-view.ts:11-23`) gains `notebookName?:
+    string`; `buildCellRendererProps` (`:224-...`) copies it into the returned props alongside
+    `name`/`dataSource` (`:225`, `:243`).
+  - `NotebookRenderer.tsx` passes `notebookName: screenName` into the context object it builds for
+    `buildCellRendererProps` (`:637-646`), the same `screenName` prop introduced above.
+  - `FetchPerfettoTraceOptions` (`perfetto-trace.ts:15-22`) gains `notebook?: string, cell?:
+    string`; `fetchPerfettoTrace()` forwards them into its `streamQuery({...})` call (`:35`).
+  - `PerfettoExportCell.tsx` destructures `name` and `notebookName` from `CellRendererProps` and
+    passes `notebook: notebookName, cell: name` in both `fetchPerfettoTrace()` call sites
+    (`handleOpenInPerfetto` `:123-130`, `handleDownloadTrace` `:176-183`).
 - Other renderers (`TableRenderer`, `LogRenderer`, `ProcessListRenderer`, `MetricsRenderer` via
   `useScreenQuery`, the process pages) are unchanged — they have no cell concept and keep omitting
   both fields, same as today.
@@ -312,71 +328,97 @@ header like `x-client-type`.
      forwarded into its `streamQuery({...})` call.
    - Update all four `executeSql`/`fetchQueryIPC` call sites inside `executeCell`'s `runQuery`/
      `runQueryAs` (`:209-275`) to pass `notebook: notebookName, cell: cell.name`.
+   - Add `notebookName` to `executeCell`'s `useCallback` dependency array (`:307`, currently
+     `[cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine,
+     completeCellExecution]`) — it's now read from the closure at all four call sites, so
+     `eslint-plugin-react-hooks`'s exhaustive-deps rule requires it there.
 5. `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`: accept `screenName` from
-   `ScreenRendererProps` and pass `notebookName: screenName` into `useCellExecution({...})`
-   (`:335-343`).
+   `ScreenRendererProps`; pass `notebookName: screenName` into `useCellExecution({...})`
+   (`:335-343`); pass `notebookName: screenName` into the context object built for
+   `buildCellRendererProps` (`:637-646`), alongside `dataSource: cellDataSource`.
+6. `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`: add `notebookName?: string` to
+   `CellRendererProps` (`:11-...`), next to the existing `name: string` (`:13`).
+7. `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts`: add `notebookName?: string`
+   to `CellViewContext` (`:11-23`); `buildCellRendererProps` (`:224-...`) copies
+   `notebookName: context.notebookName` into the returned props, alongside `name`/`dataSource`
+   (`:225`, `:243`).
+8. `analytics-web-app/src/lib/perfetto-trace.ts`: add `notebook?: string, cell?: string` to
+   `FetchPerfettoTraceOptions` (`:15-22`); forward them into the `streamQuery({...})` call inside
+   `fetchPerfettoTrace()` (`:35`).
+9. `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx`: destructure `name`
+   and `notebookName` from `CellRendererProps` (`:15-20`); pass `notebook: notebookName, cell:
+   name` in both `fetchPerfettoTrace()` call sites (`handleOpenInPerfetto` `:123-130`,
+   `handleDownloadTrace` `:176-183`) — this cell type calls `fetchPerfettoTrace()` directly and
+   never goes through `useCellExecution`, so it needs this separate wiring.
 
 **Phase 2 — Browser tests**
 
-6. `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts`: add cases asserting `notebook`/
-   `cell` appear in the POST body when passed, and are absent (`undefined`, dropped by
-   `JSON.stringify`) when omitted, for both `streamQuery()` and `fetchQueryIPC()`.
-7. `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`: extend the
-   existing `mockStreamQuery`/`mockFetchQueryIPC` assertions (e.g. the "should execute SQL for
-   table cells" and "should use fetchQueryIPC..." cases) to assert the call arguments include
-   `notebook: <notebookName>, cell: <cell.name>` when `notebookName` is passed to the hook, and
-   `notebook: undefined` when it isn't.
+10. `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts`: add cases asserting `notebook`/
+    `cell` appear in the POST body when passed, and are absent (`undefined`, dropped by
+    `JSON.stringify`) when omitted, for both `streamQuery()` and `fetchQueryIPC()`.
+11. `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`: extend the
+    existing `mockStreamQuery`/`mockFetchQueryIPC` assertions (e.g. the "should execute SQL for
+    table cells" and "should use fetchQueryIPC..." cases) to assert the call arguments include
+    `notebook: <notebookName>, cell: <cell.name>` when `notebookName` is passed to the hook, and
+    `notebook: undefined` when it isn't.
+12. `analytics-web-app/src/lib/__tests__/perfetto-trace.test.ts`: extend the existing
+    `mockStreamQuery` assertions to cover `notebook`/`cell` being forwarded into the `streamQuery`
+    call when passed in `FetchPerfettoTraceOptions`, and absent when omitted.
+13. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/PerfettoExportCell.test.tsx`:
+    extend the existing `fetchPerfettoTrace` mock assertions to confirm `notebook`/`cell` are
+    passed through from `notebookName`/`name` props on both the "Open in Perfetto" and "Download"
+    actions.
 
 **Phase 3 — Rust server**
 
-8. `rust/public/src/client/flightsql_client_factory.rs`: add `extra_metadata: Vec<(String,
-   String)>` field (initialized empty in all four constructors), add `with_metadata(mut self, key:
-   impl Into<String>, value: impl Into<String>) -> Self` builder, and set the extra headers in
-   `make_client()` after the existing `client_type` header (`:118-123`).
-9. `rust/analytics-web-srv/src/stream_query.rs`:
-   - Add `pub notebook: Option<String>, pub cell: Option<String>` to `StreamQueryRequest`
-     (`:30-39`).
-   - Add `MAX_ORIGIN_LABEL_LEN` and `sanitize_origin_label()` next to `contains_blocked_function`.
-   - Sanitize `request.notebook`/`request.cell` at the top of `stream_query_handler`; add
-     `notebook={notebook:?} cell={cell:?}` to the start-of-request `info!` line (`:168-171`); chain
-     `.with_metadata("x-client-notebook", ...)`/`.with_metadata("x-client-cell", ...)` onto the
-     `client_factory` inside the `stream!{}` block (`:244-248`) when present.
-10. `rust/public/src/servers/flight_sql_service_impl.rs::execute_query`: read
+14. `rust/public/src/client/flightsql_client_factory.rs`: add `extra_metadata: Vec<(String,
+    String)>` field (initialized empty in all four constructors), add `with_metadata(mut self,
+    key: impl Into<String>, value: impl Into<String>) -> Self` builder, and set the extra headers
+    in `make_client()` after the existing `client_type` header (`:118-123`).
+15. `rust/analytics-web-srv/src/stream_query.rs`:
+    - Add `pub notebook: Option<String>, pub cell: Option<String>` to `StreamQueryRequest`
+      (`:30-39`).
+    - Add `MAX_ORIGIN_LABEL_LEN` and `sanitize_origin_label()` next to `contains_blocked_function`.
+    - Sanitize `request.notebook`/`request.cell` at the top of `stream_query_handler`; add
+      `notebook={notebook:?} cell={cell:?}` to the start-of-request `info!` line (`:168-171`);
+      chain `.with_metadata("x-client-notebook", ...)`/`.with_metadata("x-client-cell", ...)` onto
+      the `client_factory` inside the `stream!{}` block (`:244-248`) when present.
+16. `rust/public/src/servers/flight_sql_service_impl.rs::execute_query`: read
     `x-client-notebook`/`x-client-cell` (`Option<String>`, alongside `client_session` at
     `:570-574`); add `notebook={client_notebook:?} cell={client_cell:?}` to both `info!` lines
     (`:580-593`); add `notebook`/`cell` fields to `QueryAuditState` (`:262-295`), populated at
     construction (`:608-630`); thread them into `QueryAuditState::emit`'s `QueryAuditRecord`
     construction (`:320-348`).
-11. `rust/public/src/servers/query_audit.rs`: add `#[serde(skip_serializing_if =
+17. `rust/public/src/servers/query_audit.rs`: add `#[serde(skip_serializing_if =
     "Option::is_none")] pub notebook: Option<String>` and the same for `cell`, placed after
     `session` (`:79-123`).
-12. `rust/public/src/servers/http_gateway.rs::HeaderForwardingConfig::default()`: add
+18. `rust/public/src/servers/http_gateway.rs::HeaderForwardingConfig::default()`: add
     `"X-Client-Notebook"` and `"X-Client-Cell"` to `allowed_headers` (`:44-56`).
 
 **Phase 4 — Rust tests**
 
-13. `rust/analytics-web-srv/tests/stream_query_tests.rs`: add unit tests for
+19. `rust/analytics-web-srv/tests/stream_query_tests.rs`: add unit tests for
     `sanitize_origin_label` — a normal name passes through unchanged; a control character
     (`"cell\u{0}name"`) is rejected; an over-`MAX_ORIGIN_LABEL_LEN` string is rejected; a non-ASCII
     string (e.g. `"café"`) is rejected; an empty or whitespace-only string is rejected; leading/
     trailing whitespace is trimmed on an otherwise-valid label.
-14. `rust/public/tests/query_audit_tests.rs`: add `notebook`/`cell` to the full-record fixture
+20. `rust/public/tests/query_audit_tests.rs`: add `notebook`/`cell` to the full-record fixture
     (`full_record`, `:187-`) asserting both are present when set, and to the omits-optionals
     fixture (`:256-`) asserting both are omitted from the JSON when `None` — matching the
     `session` precedent already there.
-15. `rust/public/tests/http_gateway_tests.rs`: extend `test_default_config` to assert
+21. `rust/public/tests/http_gateway_tests.rs`: extend `test_default_config` to assert
     `should_forward("X-Client-Notebook")` and `should_forward("X-Client-Cell")` are both `true`.
 
 **Phase 5 — Docs**
 
-16. `mkdocs/docs/query-guide/query-audit-log.md`: add `notebook`/`cell` rows to the `## Fields`
+22. `mkdocs/docs/query-guide/query-audit-log.md`: add `notebook`/`cell` rows to the `## Fields`
     table (both present only when the query originated from a notebook cell); note in `## Notes`
     that cell names are mutable — grouping by name splits across a rename (`migrateCellState`),
     which is acceptable for analytics per the issue's own caveat.
-17. `mkdocs/docs/gateway/configuration.md`: add `X-Client-Notebook`/`X-Client-Cell` to the "Default
+23. `mkdocs/docs/gateway/configuration.md`: add `X-Client-Notebook`/`X-Client-Cell` to the "Default
     headers" bullet list, with the same `MICROMEGAS_GATEWAY_HEADERS`-replaces-not-merges caveat
     already documented there for the #1436 headers.
-18. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the server/audit/gateway changes,
+24. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the server/audit/gateway changes,
     flagging `QueryAuditRecord` as a **minor breaking change** again (gains `notebook`, `cell`),
     and a **Web App:** entry for the notebook-cell attribution. Note that a deployment with a
     custom `MICROMEGAS_GATEWAY_HEADERS` allowlist must add the two new header names explicitly.
@@ -388,10 +430,22 @@ header like `x-client-type`.
 - `analytics-web-app/src/routes/ScreenPage.tsx` — pass `screenName`.
 - `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` — `notebookName` param,
   `executeSql()`, four query call sites.
-- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` — pass `notebookName`.
+- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` — pass `notebookName` to
+  `useCellExecution` and to `buildCellRendererProps`'s context.
+- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` — `notebookName` on
+  `CellRendererProps`.
+- `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts` — `notebookName` on
+  `CellViewContext`, copied in `buildCellRendererProps`.
+- `analytics-web-app/src/lib/perfetto-trace.ts` — `notebook`/`cell` on
+  `FetchPerfettoTraceOptions`, forwarded to `streamQuery()`.
+- `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx` — pass
+  `notebook`/`cell` into both `fetchPerfettoTrace()` call sites.
 - `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts` — new cases.
 - `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts` — extended
   assertions.
+- `analytics-web-app/src/lib/__tests__/perfetto-trace.test.ts` — extended assertions.
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/PerfettoExportCell.test.tsx` —
+  extended assertions.
 - `rust/public/src/client/flightsql_client_factory.rs` — `extra_metadata`, `with_metadata()`.
 - `rust/analytics-web-srv/src/stream_query.rs` — `StreamQueryRequest`, `sanitize_origin_label`,
   handler wiring.
@@ -432,7 +486,10 @@ header like `x-client-type`.
 - **Grouping by cell *name*, not a new stable per-cell id.** Per the issue's own analysis: names are
   the established identifier throughout `useCellExecution.ts` already; a rename
   (`migrateCellState`) splits historical grouping, which is accepted as adequate for analytics. A
-  stable id is a larger, separate change to the notebook format and is out of scope here.
+  stable id is a larger, separate change to the notebook format and is out of scope here. The same
+  reasoning applies to `notebook`: `Screen` (`analytics-web-app/src/lib/screens-api.ts:25-35`) has
+  no id field at all — `getScreen`/`updateScreen`/`deleteScreen` are all keyed by `name` — so the
+  saved screen name is the only identifier available today, not a choice among alternatives.
 - **No change to `useScreenQuery`/`ScreenQueryParams`, `TableRenderer`, `LogRenderer`,
   `ProcessListRenderer`, or the process pages.** None of these have a "cell" concept; they keep
   omitting `notebook`/`cell`, unchanged from today's `client=web`-only attribution.
@@ -460,11 +517,3 @@ header like `x-client-type`.
    confirm the JSON record has `"notebook"` and `"cell"` keys with the expected values. Run a query
    from the standalone query editor (a non-notebook screen) and confirm both keys are absent from
    its audit record, same as today.
-
-## Open Questions
-
-- Should `notebook` identify the screen by its saved **name** (used here, matching what
-  `flightsql_query_audit`'s `client`/`agent`/etc. use — short, human-readable, consistent with
-  `screen?.name` already shown in the UI) or by a stable screen id/path? Screens are currently
-  looked up and saved by `name` throughout `ScreenPage.tsx`/`screens-api`, so name is the only
-  identifier available today; revisit only if screens gain a separate stable id later.
