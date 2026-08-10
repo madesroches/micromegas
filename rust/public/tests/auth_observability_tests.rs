@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
 use axum::routing::get;
-use micromegas::servers::axum_utils::auth_observability_middleware;
+use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::levels::{LevelFilter, set_max_level};
 use micromegas_tracing::logs::LogMsgQueueAny;
@@ -140,4 +140,47 @@ async fn auth_observability_middleware_logs_path_only_route_unchanged() {
             .iter()
             .any(|m| m.starts_with("response ") && m.contains("uri=/auth/me"))
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn observability_middleware_logs_the_query_string() {
+    // Unlike `auth_observability_middleware`, the plain `observability_middleware` (used for
+    // `/api/*` and `/ingestion/*`) must keep logging the full query string. This pins the
+    // `log_query_string: true` call site in `observability_middleware` against ever being
+    // flipped to `false` -- which would silently strip query strings from every such route
+    // without failing any other test in this file.
+    let guard = init_in_memory_tracing();
+    enable_info_logging();
+
+    let app = Router::new()
+        .route("/some/path", get(ok_handler))
+        .layer(middleware::from_fn(observability_middleware));
+
+    let request = Request::builder()
+        .uri("/some/path?foo=bar")
+        .body(Body::empty())
+        .expect("request");
+
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let messages = collect_log_messages(&guard.sink);
+    let request_line = messages
+        .iter()
+        .find(|m| m.starts_with("request "))
+        .expect("a request= log line was captured");
+    let response_line = messages
+        .iter()
+        .find(|m| m.starts_with("response "))
+        .expect("a response= log line was captured");
+
+    for line in [request_line, response_line] {
+        assert!(
+            line.contains("uri=/some/path?foo=bar"),
+            "expected query string to be logged, got: {line}"
+        );
+    }
 }
