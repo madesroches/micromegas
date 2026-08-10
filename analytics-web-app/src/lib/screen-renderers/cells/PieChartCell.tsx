@@ -81,6 +81,23 @@ function polarToCartesian(cx: number, cy: number, r: number, angleRad: number): 
   return [cx + r * Math.cos(angleRad), cy + r * Math.sin(angleRad)]
 }
 
+/** Tolerance for treating a slice's angular span as a full circle (float error near 2π). */
+const FULL_CIRCLE_EPSILON = 1e-9
+
+/**
+ * Full-circle path built from two 180° arcs back-to-back. A single arc spanning
+ * a full 360° is degenerate — its start/end points coincide and SVG collapses it
+ * to nothing — so the circle must be split into two halves instead.
+ */
+function fullCirclePath(cx: number, cy: number, r: number): string {
+  return [
+    `M ${cx + r} ${cy}`,
+    `A ${r} ${r} 0 1 1 ${cx - r} ${cy}`,
+    `A ${r} ${r} 0 1 1 ${cx + r} ${cy}`,
+    'Z',
+  ].join(' ')
+}
+
 /** Builds an SVG path for one slice: `M/L/A/Z` for a pie wedge, `M/A/L/A/Z` for a donut ring segment. */
 function slicePath(
   cx: number,
@@ -90,6 +107,16 @@ function slicePath(
   startAngle: number,
   endAngle: number,
 ): string {
+  // A 100%-share slice spans (near) the full circle, which is degenerate for the arc
+  // math below (start/end points coincide). Render a full ring instead: a solid disc
+  // for the pie case, or an outer+inner circle pair (drawn with fill-rule evenodd) for
+  // the donut case.
+  if (endAngle - startAngle >= 2 * Math.PI - FULL_CIRCLE_EPSILON) {
+    return rInner <= 0
+      ? fullCirclePath(cx, cy, rOuter)
+      : `${fullCirclePath(cx, cy, rOuter)} ${fullCirclePath(cx, cy, rInner)}`
+  }
+
   const large = endAngle - startAngle > Math.PI ? 1 : 0
   const [x1, y1] = polarToCartesian(cx, cy, rOuter, startAngle)
   const [x2, y2] = polarToCartesian(cx, cy, rOuter, endAngle)
@@ -129,7 +156,8 @@ const R_INNER_DONUT = 56
 /** Slices at or above this share get a direct percentage label. */
 const DIRECT_LABEL_THRESHOLD = 0.08
 
-function buildSliceGeometry(slices: ResolvedPieSlice[], total: number, chartType: PieChartType): SliceGeometry[] {
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildSliceGeometry(slices: ResolvedPieSlice[], total: number, chartType: PieChartType): SliceGeometry[] {
   const rInner = chartType === 'donut' ? R_INNER_DONUT : 0
   let angle = -Math.PI / 2 // start at 12 o'clock
   const geometry: SliceGeometry[] = []
@@ -290,6 +318,7 @@ export function PieChartCell({
                 key={i}
                 d={g.path}
                 fill={g.slice.color}
+                fillRule="evenodd"
                 stroke={SURFACE_GAP_COLOR}
                 strokeWidth={2}
                 className="cursor-pointer transition-opacity hover:opacity-85"

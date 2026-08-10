@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { makeTable, tableFromArrays, vectorFromArray, Utf8 } from 'apache-arrow'
-import { PieChartCell, groupPieSlices, pieChartMetadata } from '../PieChartCell'
+import { PieChartCell, groupPieSlices, buildSliceGeometry, pieChartMetadata } from '../PieChartCell'
+import type { ResolvedPieSlice } from '../PieChartCell'
 import type { CellRendererProps, CellEditorProps } from '../../cell-registry'
 import type { PieSlice } from '@/lib/arrow-utils'
 import type { QueryCellConfig } from '../../notebook-types'
@@ -87,6 +88,38 @@ describe('groupPieSlices', () => {
     expect(resolved[0].color).toBe('#123456ff')
     // Y has no SQL color, so it gets the first palette entry (not the second)
     expect(resolved[1].color).toBe('#bf360c')
+  })
+})
+
+describe('buildSliceGeometry', () => {
+  // A single category holding 100% of the total is a degenerate case for the raw
+  // arc math: start/end angles differ by exactly 2π, so their cartesian points
+  // coincide and a plain `A` arc command collapses to nothing (blank disc).
+  const fullSlice: ResolvedPieSlice[] = [{ label: 'A', value: 10, color: '#123456' }]
+
+  it('produces a non-degenerate full-ring path for a single 100%-share pie slice', () => {
+    const [g] = buildSliceGeometry(fullSlice, 10, 'pie')
+    expect(g.fraction).toBe(1)
+    // Two 180° arcs back-to-back, not a single (degenerate) 360° arc.
+    const arcCount = (g.path.match(/A\s/g) ?? []).length
+    expect(arcCount).toBe(2)
+    // The two arc endpoints must be distinct points, not a coincident start/end.
+    const points = [...g.path.matchAll(/A [\d.]+ [\d.]+ 0 1 1 ([\d.-]+) ([\d.-]+)/g)].map(
+      (m) => `${m[1]},${m[2]}`,
+    )
+    expect(new Set(points).size).toBe(points.length)
+  })
+
+  it('produces a non-degenerate full-ring path (outer + inner circle) for a single 100%-share donut slice', () => {
+    const [g] = buildSliceGeometry(fullSlice, 10, 'donut')
+    expect(g.fraction).toBe(1)
+    // Outer circle (2 arcs) + inner circle (2 arcs) = 4 arc commands total.
+    const arcCount = (g.path.match(/A\s/g) ?? []).length
+    expect(arcCount).toBe(4)
+    const points = [...g.path.matchAll(/A [\d.]+ [\d.]+ 0 1 1 ([\d.-]+) ([\d.-]+)/g)].map(
+      (m) => `${m[1]},${m[2]}`,
+    )
+    expect(new Set(points).size).toBe(points.length)
   })
 })
 
