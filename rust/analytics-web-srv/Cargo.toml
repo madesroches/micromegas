@@ -49,7 +49,6 @@ name = "analytics-web-srv"
 path = "src/main.rs"
 
 [dev-dependencies]
-async-trait.workspace = true
 axum-test = "16.4"
 jsonwebtoken.workspace = true
 rsa.workspace = true

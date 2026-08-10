@@ -42,10 +42,12 @@ const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
 
 /// Holds the (possibly absent) telemetry-DB pool for the ingestion-key
-/// routes. `None` when `MICROMEGAS_SQL_CONNECTION_STRING` is unset, or when
-/// the target telemetry DB hasn't run the v5 migration yet — the routes stay
-/// registered either way and return 503 per-request, the same
-/// always-register-503-when-unconfigured shape `AnalyticsKeysState` uses.
+/// routes. `None` only when `MICROMEGAS_SQL_CONNECTION_STRING` is unset — the
+/// routes stay registered either way and return 503 per-request in that case,
+/// the same always-register-503-when-unconfigured shape `AnalyticsKeysState`
+/// uses. An unmigrated DB (missing the v5 migration's tables) is a separate
+/// failure mode: the pool is still `Some`, and a request fails with a 500 at
+/// query time instead.
 #[derive(Clone)]
 pub struct IngestionKeysState {
     pub pool: Option<PgPool>,

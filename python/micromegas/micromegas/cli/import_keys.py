@@ -127,8 +127,8 @@ def build_auth_provider(args, parser):
     service-account use, else an interactive/cached `load_or_login` built
     from the resolved `--profile` connection -- same auth-setup precedent as
     `screens.py`/`query.py`. Returns `None` when no OIDC config is available
-    at all (e.g. `--disable-auth` targets), matching `WebClient`/
-    `IngestionClient`'s own "no auth provider" support.
+    at all (e.g. `--disable-auth` targets), matching `WebClient`'s own "no
+    auth provider" support.
     """
     issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
     client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")

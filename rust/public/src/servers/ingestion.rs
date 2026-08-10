@@ -152,7 +152,7 @@ pub async fn serve_ingestion(
             auth_middleware(provider.clone(), req, next)
         }));
     } else {
-        info!("Ingestion: authentication disabled — development mode only");
+        warn!("Ingestion: authentication disabled — development mode only");
     }
 
     // The Firehose routes carry their own auth (Firehose can only send its credential via

@@ -1,22 +1,19 @@
 //! Analytics key management API for `analytics-web-srv` (#1411).
 //!
-//! Modeled on `rust/public/src/servers/api_keys.rs`'s ingestion key-management
-//! routes, but bound to `ValidatedUser`/cookie auth (via the `AdminUser`
-//! extractor) instead of `AuthContext`/bearer, and to a dedicated
-//! [`AnalyticsKeysState`] (holding a small pool into the telemetry DB) instead
-//! of a bare `Extension<PgPool>` — `build_protected_routes` already layers
-//! `Extension<PgPool>` for `app_db_pool`; axum extensions are keyed by type,
-//! so a second bare `Extension<PgPool>` would silently resolve to the app pool
-//! instead. Routes live under `{base_path}/api/analytics-api-keys`, distinct
-//! from this service's own `/auth/*` routes (login/callback/refresh/logout/me)
+//! Bound to `ValidatedUser`/cookie auth (via the `AdminUser` extractor), and
+//! to a dedicated [`AnalyticsKeysState`] (holding a small pool into the
+//! telemetry DB) instead of a bare `Extension<PgPool>` — `build_protected_routes`
+//! already layers `Extension<PgPool>` for `app_db_pool`; axum extensions are
+//! keyed by type, so a second bare `Extension<PgPool>` would silently resolve
+//! to the app pool instead. Routes live under `{base_path}/api/analytics-api-keys`,
+//! distinct from this service's own `/auth/*` routes (login/callback/refresh/logout/me)
 //! — a completely different concern (browser session lifecycle).
 //!
-//! **Duplication, accepted.** This duplicates most of `api_keys.rs`'s
+//! **Duplication, accepted.** This duplicates most of `ingestion_keys.rs`'s
 //! validation/SQL/error shape. Sharing it would mean a generic abstraction
-//! over two different caller-identity types (`AuthContext` bearer vs.
-//! `ValidatedUser` cookie/bearer) for a handful of near-identical handlers —
-//! the same shape the codebase already declines to share between
-//! `data_sources.rs`/`screens.rs`/`folders.rs` today.
+//! over a handful of near-identical handlers differing only in which table
+//! they target — the same shape the codebase already declines to share
+//! between `data_sources.rs`/`screens.rs`/`folders.rs` today.
 
 use crate::auth::AdminUser;
 use axum::extract::{Extension, Path, Query};
@@ -32,17 +29,18 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Bytes, not chars: deliberately stricter than the `VARCHAR(255)` column,
-/// which bounds characters — same rule as `api_keys.rs`.
+/// which bounds characters — same rule as `ingestion_keys.rs`.
 const MAX_NAME_BYTES: usize = 255;
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
 
 /// Holds the (possibly absent) telemetry-DB pool for the analytics-key
-/// routes. `None` when `MICROMEGAS_SQL_CONNECTION_STRING` is unset, or when
-/// the target telemetry DB hasn't run the v5 migration yet — the routes stay
-/// registered either way and return 503 per-request, the same
-/// always-register-503-when-unconfigured shape `maps::MapsState`'s
-/// `Option<Arc<dyn ObjectStore>>` already uses.
+/// routes. `None` only when `MICROMEGAS_SQL_CONNECTION_STRING` is unset — the
+/// routes stay registered either way and return 503 per-request in that case,
+/// the same always-register-503-when-unconfigured shape `maps::MapsState`'s
+/// `Option<Arc<dyn ObjectStore>>` already uses. An unmigrated DB (missing the
+/// v5 migration's tables) is a separate failure mode: the pool is still
+/// `Some`, and a request fails with a 500 at query time instead.
 #[derive(Clone)]
 pub struct AnalyticsKeysState {
     pub pool: Option<PgPool>,
@@ -354,7 +352,7 @@ struct ImportedRow {
 }
 
 /// `POST {base_path}/api/analytics-api-keys/import` — same shape as
-/// `api_keys.rs`'s ingestion import route: hashes and stores a caller-supplied
+/// `ingestion_keys.rs`'s import route: hashes and stores a caller-supplied
 /// key string verbatim, rather than generating a fresh one. `created_by` is
 /// the importing caller's own OIDC identity, never the literal string
 /// `"import"`.

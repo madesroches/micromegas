@@ -673,9 +673,9 @@ the `object-cache-srv` exception, which never migrates).
    `micromegas-import-keys` CLI tool (see
    [Migrating from the env keyring](api-keys.md#migrating-from-the-env-keyring)
    for the exact commands), or mint fresh keys via `POST /api/ingestion-api-keys`
-   on `analytics-web-srv` for callers you can update. A key valid on both ingestion and flight-sql today
-   must become two distinct keys — "never both" is enforced at the code level
-   once the tables are in use.
+   on `analytics-web-srv` for callers you can update. A key valid on both
+   ingestion and flight-sql today must become two distinct keys — "never both"
+   is enforced at the code level once the tables are in use.
 3. **Set up an OIDC provider** (Google, Azure AD, etc.) for human/service-account
    identities, if you haven't already.
 4. **Update clients**: machine credentials point at their new DB-backed key;

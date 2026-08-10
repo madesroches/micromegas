@@ -59,7 +59,6 @@ dependencies = [
  "anyhow",
  "arrow-ipc",
  "async-stream",
- "async-trait",
  "axum 0.8.9",
  "axum-extra",
  "axum-test",

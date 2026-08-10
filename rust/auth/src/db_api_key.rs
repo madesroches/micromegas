@@ -104,9 +104,9 @@ impl DbApiKeyConfig {
     }
 }
 
-/// SHA-256 of the full key string. The only place a key is hashed; the mint route
-/// (`rust/public/src/servers/api_keys.rs`) and this provider's lookup go through
-/// the same digest definition.
+/// SHA-256 of the full key string. The only place a key is hashed; the mint
+/// routes (`rust/analytics-web-srv/src/ingestion_keys.rs`, `analytics_keys.rs`)
+/// and this provider's lookup go through the same digest definition.
 pub fn hash_key(key: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
