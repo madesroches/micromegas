@@ -1,4 +1,9 @@
 from . import FlightSql_pb2
+from .attribution import (
+    resolve_client_agent,
+    resolve_client_entrypoint,
+    resolve_session_id,
+)
 from ..time import format_datetime
 from google.protobuf import any_pb2
 from pyarrow import flight
@@ -61,10 +66,29 @@ class DynamicAuthMiddlewareFactory(flight.ClientMiddlewareFactory):
         return DynamicAuthMiddleware(self.auth_provider)
 
 
-def make_call_headers(begin, end, preserve_dictionary=False):
+def make_call_headers(
+    begin,
+    end,
+    preserve_dictionary=False,
+    client_agent=None,
+    client_entrypoint=None,
+    client_session=None,
+):
     call_headers = [
         ("x-client-type".encode("utf8"), "python".encode("utf8")),
     ]
+    if client_agent is not None:
+        call_headers.append(
+            ("x-client-agent".encode("utf8"), client_agent.encode("utf8"))
+        )
+    if client_entrypoint is not None:
+        call_headers.append(
+            ("x-client-entrypoint".encode("utf8"), client_entrypoint.encode("utf8"))
+        )
+    if client_session is not None:
+        call_headers.append(
+            ("x-client-session".encode("utf8"), client_session.encode("utf8"))
+        )
     if begin is not None:
         call_headers.append(
             (
@@ -170,7 +194,12 @@ class FlightSQLClient:
     """
 
     def __init__(
-        self, uri, headers=None, preserve_dictionary=False, auth_provider=None
+        self,
+        uri,
+        headers=None,
+        preserve_dictionary=False,
+        auth_provider=None,
+        client_entrypoint=None,
     ):
         """Initialize a FlightSQL client connection.
 
@@ -186,6 +215,11 @@ class FlightSQLClient:
             auth_provider (optional): Authentication provider that implements get_token() method.
                 When provided, tokens are automatically refreshed before each request.
                 Example: OidcAuthProvider. This is the recommended way to handle authentication.
+            client_entrypoint (str, optional): Explicit label for how this client was
+                invoked (e.g. "cli-query"), sent as the `x-client-entrypoint` header on
+                every query. When omitted, the entrypoint is auto-detected (`script`,
+                `jupyter`, or `repl`). Raises ValueError if the value isn't a safe gRPC
+                header value (printable ASCII, 64 chars or fewer).
 
         Example:
             >>> # Connect to local server
@@ -214,6 +248,14 @@ class FlightSQLClient:
                 stacklevel=2,
             )
 
+        # Resolve attribution before any I/O below, so a bad client_entrypoint
+        # argument fails fast with a ValueError instead of only after the
+        # certifi read / flight.connect() have already run.
+        self.__preserve_dictionary = preserve_dictionary
+        self.__client_agent = resolve_client_agent()
+        self.__client_entrypoint = resolve_client_entrypoint(explicit=client_entrypoint)
+        self.__session_id = resolve_session_id()
+
         # Normalize URI scheme for Arrow Flight
         uri = self._normalize_uri(uri)
 
@@ -230,7 +272,6 @@ class FlightSQLClient:
         self.__flight_client = flight.connect(
             location=uri, tls_root_certs=cert, middleware=[factory]
         )
-        self.__preserve_dictionary = preserve_dictionary
 
     @staticmethod
     def _normalize_uri(uri: str) -> str:
@@ -353,7 +394,14 @@ class FlightSQLClient:
             Use preserve_dictionary=True in client constructor with dictionary-encoded UDFs
             for significant memory reduction.
         """
-        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
+        call_headers = make_call_headers(
+            begin,
+            end,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
+        )
         options = flight.FlightCallOptions(headers=call_headers)
         ticket = make_query_ticket(sql)
         reader = self.__flight_client.do_get(ticket, options=options)
@@ -412,7 +460,14 @@ class FlightSQLClient:
             for significant memory reduction.
         """
         ticket = make_query_ticket(sql)
-        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
+        call_headers = make_call_headers(
+            begin,
+            end,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
+        )
         options = flight.FlightCallOptions(headers=call_headers)
         reader = self.__flight_client.do_get(ticket, options=options)
         record_batches = []
@@ -444,7 +499,14 @@ class FlightSQLClient:
             ...     # Process Arrow data without pandas conversion
             ...     pass
         """
-        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
+        call_headers = make_call_headers(
+            begin,
+            end,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
+        )
         options = flight.FlightCallOptions(headers=call_headers)
         ticket = make_query_ticket(sql)
         reader = self.__flight_client.do_get(ticket, options=options)

@@ -125,6 +125,9 @@ ORDER BY failures DESC;
 |-------|------|---------|--------------|
 | `query_id` | string (UUID) | always | Unique id minted at the start of the request; also embedded in the client-facing error message and the server-side log line for the same failure, so the three can be correlated by grepping this id |
 | `client` | string | always | Client type from the `x-client-type` metadata header (e.g. `python`, `grafana`), `unknown` if absent |
+| `agent` | string | always | Who is driving the client, from the `x-client-agent` metadata header (e.g. `claude-code`, `none`), `unknown` if absent |
+| `entrypoint` | string | always | How the client was invoked, from the `x-client-entrypoint` metadata header (e.g. `script`, `jupyter`, `repl`, `cli-query`), `unknown` if absent |
+| `session` | string | if the caller sent `x-client-session` | Opaque id correlating every query issued through one client instance/session |
 | `user` | string | always | Resolved user id |
 | `email` | string | always | Resolved user email |
 | `name` | string | if known | Display name from the `x-user-name` header |
@@ -156,6 +159,18 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
 
 ## Notes
 
+- **`agent`/`entrypoint`/`session` distinguish three states, not two.** `unknown` means the
+  client didn't report that header at all (e.g. Grafana, or any client older than this feature).
+  `none` (for `agent`) or `script` (for `entrypoint`) means the Python client actively resolved
+  the value and found nothing distinctive — a real, reported answer, not an absence. A detected
+  value (`claude-code`, `jupyter`, `repl`, `cli-query`, ...) means the client found and reported a
+  specific signal. Don't conflate `unknown` with `none`/`script` when grouping or filtering.
+- **`agent` measures environment provenance, not SQL authorship.** It reflects whether the
+  client process ran inside a known agent harness's environment (detected from that harness's
+  marker environment variable), not whether an LLM actually wrote the SQL text. Environment
+  variables are inherited by child processes, so a human running `micromegas-query` from a shell
+  nested inside an agent session (e.g. a terminal opened from within Claude Code) is labelled
+  with that agent too, even though a person typed the query.
 - **One row per query, at completion.** The record can only be assembled once the response stream
   has been fully drained (or has errored), since `total_ms`, `status`, `output_rows`, and
   `bytes_scanned` only settle at that point. If a client abandons the stream mid-drain (disconnect

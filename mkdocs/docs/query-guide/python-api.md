@@ -278,7 +278,7 @@ for batch in client.query_stream(sql, begin, end):
 
 ## Connection Configuration
 
-### `FlightSQLClient(uri, headers=None, preserve_dictionary=False, auth_provider=None)`
+### `FlightSQLClient(uri, headers=None, preserve_dictionary=False, auth_provider=None, client_entrypoint=None)`
 
 For advanced connection scenarios, use the `FlightSQLClient` class directly:
 
@@ -309,9 +309,42 @@ client = FlightSQLClient("grpc://localhost:50051")
 - `headers` (dict, optional): **Deprecated.** Use `auth_provider` instead. Static headers for authentication. This parameter is deprecated because it doesn't support automatic token refresh
 - `preserve_dictionary` (bool, optional): When True, preserve dictionary encoding in Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs. Defaults to False
 - `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider`. This is the recommended way to handle authentication
+- `client_entrypoint` (str, optional): Explicit label for how this client was invoked (e.g. `"cli-query"`, the label `micromegas-query` passes). When omitted, the entrypoint is auto-detected. Raises `ValueError` if the value isn't a safe gRPC header value (printable ASCII, 64 chars or fewer). See Client Attribution below.
 
 **Authentication Note:**
 The `auth_provider` parameter is the recommended authentication method as it supports automatic token refresh. The `headers` parameter is deprecated and will be removed in a future version. See the [Authentication Guide](../admin/authentication.md) for details on setting up OIDC authentication.
+
+### Client Attribution
+
+Every query sends three additional headers, resolved once per `FlightSQLClient` instance and
+recorded in the server's [query audit log](query-audit-log.md):
+
+- **`x-client-agent`** — who is driving the client. Auto-detected from known agent-harness
+  marker environment variables (currently just Claude Code's `CLAUDECODE`, reported as
+  `claude-code`); `"none"` when no known harness is detected. Override with
+  `MICROMEGAS_CLIENT_AGENT`.
+- **`x-client-entrypoint`** — how the client was invoked: `"script"`, `"jupyter"`, or `"repl"`,
+  auto-detected from the interpreter's own state (`sys.modules`, `sys.argv`, `sys.flags`). The
+  CLI passes the explicit label `"cli-query"` instead of relying on auto-detection. Override
+  with the `client_entrypoint` constructor parameter (raises `ValueError` on an unsafe value) or
+  `MICROMEGAS_CLIENT_ENTRYPOINT` (silently falls back to the detected value on an unsafe value).
+- **`x-client-session`** — an opaque id correlating every query issued through one client
+  instance. A fresh UUID per `FlightSQLClient` instance, unless a known agent harness's session
+  environment variable is present (currently just Claude Code's `CLAUDE_CODE_SESSION_ID`), in
+  which case that value is reused verbatim so multiple `FlightSQLClient` instances within the
+  same agent session correlate (this is what lets `micromegas-query`, which builds a fresh
+  client per invocation, still correlate queries from the same agent session).
+
+These are **analytics-only signals** — never used for authentication, quota, or rate limiting —
+and, like the existing `x-client-type` header, trivially spoofable or omittable by the caller.
+`MICROMEGAS_CLIENT_AGENT`/`MICROMEGAS_CLIENT_ENTRYPOINT` overrides must be printable ASCII, 64
+characters or fewer; an invalid override is silently ignored in favor of the auto-detected value
+(unlike the `client_entrypoint` constructor parameter, which raises `ValueError` instead).
+
+Note that the top-level `micromegas.connect()` helper does not expose a `client_entrypoint`
+parameter — auto-detection always runs for it. If you want an explicit label, construct
+`FlightSQLClient` directly, or use `oidc_connection.connect()`/the CLI's `connection.connect()`,
+both of which do take `client_entrypoint`.
 
 ## Schema Discovery
 
@@ -659,6 +692,8 @@ Each setting is resolved independently once a profile (if any) is selected, so y
 | `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier (e.g., for Auth0, Azure) | — |
 | `MICROMEGAS_OIDC_SCOPE` | Custom OAuth scopes | `openid email profile offline_access` |
 | `MICROMEGAS_PROFILE` | Named profile to select from the config file's `profiles` map (see Named profiles below) | — |
+| `MICROMEGAS_CLIENT_AGENT` | Override for the auto-detected `x-client-agent` value (see Client Attribution above) | auto-detected |
+| `MICROMEGAS_CLIENT_ENTRYPOINT` | Override for the auto-detected `x-client-entrypoint` value (see Client Attribution above); the CLI always passes `"cli-query"` regardless of this var | auto-detected |
 
 **Config file (`~/.micromegas/config.json`):**
 

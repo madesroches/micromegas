@@ -83,6 +83,10 @@ pub struct QueryAuditRecord {
     /// carries it) and this record can be correlated by grepping the id.
     pub query_id: String,
     pub client: String,
+    pub agent: String,
+    pub entrypoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     pub user: String,
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
