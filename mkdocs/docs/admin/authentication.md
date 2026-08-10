@@ -701,7 +701,7 @@ export MICROMEGAS_OIDC_CONFIG='{
 }'
 # See api-keys.md#migrating-from-the-env-keyring for the exact commands
 micromegas-import-keys --table ingestion --source env --var MICROMEGAS_API_KEYS \
-  --url http://ingestion:8081
+  --url https://analytics.example.com
 
 # Step 3/4: Update clients to use OIDC (human/service-account) or their new
 # DB-backed key (machine credentials). Test both authentication methods work.
