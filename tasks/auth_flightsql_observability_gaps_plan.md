@@ -15,7 +15,7 @@ during an auth-related investigation:
    in the module.
 3. `flight-sql-srv`'s per-query audit trail (`QueryAuditRecord`, `execute_query`'s start-of-query
    log) carries rich client-reported attribution (`client`, `agent`, `user`, `email`, ...) but no
-   network-level identifier — there's no peer IP anywhere in that trail.
+   network-level identifier — there's no client IP anywhere in that trail.
 
 All three are pure logging/observability changes: no behavior, request handling, or API surface
 changes for any client.
@@ -50,7 +50,8 @@ changes for any client.
   `request method=... uri=... client_ip=...` line before calling the handler and a
   `response status=... uri=... client_ip=...` line after — `client_ip` comes from
   `get_client_ip(&parts.headers, &parts.extensions)` (`rust/public/src/servers/http_utils.rs:11-40`),
-  which checks `X-Forwarded-For`, then `X-Real-IP`, then falls back to the
+  which checks `X-Forwarded-For` (today taking its *leftmost* entry — Design §3 changes that to
+  the rightmost), then `X-Real-IP`, then falls back to the
   `ConnectInfo<SocketAddr>` extension axum populates via
   `into_make_service_with_connect_info::<SocketAddr>` (already wired up in `run_web_server`,
   `web_server.rs:701-703`).
@@ -79,7 +80,30 @@ changes for any client.
   (which the issue references only to point out that `email` is *available*, not that this exact
   code path should be reused).
 
-### 3. No peer IP anywhere in the FlightSQL query audit trail
+### 3. No client IP anywhere in the FlightSQL query audit trail
+
+**Deployment context: every service sits behind an AWS ALB (layer 7).** In-repo evidence:
+`flight_sql_server.rs`'s optional health sidecar (`with_health_addr`, `:168-175`) exists to
+"[enable] plain-HTTP ALB health checks without changing the gRPC protocol";
+`mkdocs/docs/admin/flight-sql.md:86-87` documents FlightSQL scaling "horizontally behind a
+gRPC-aware load balancer"; `mkdocs/docs/gateway/index.md:62` documents the gateway's liveness
+endpoint as being "for load balancer probes (e.g. AWS ALB)". The ALB **appends** the address it
+observed to `X-Forwarded-For` — it does not overwrite (default
+`routing.http.xff_header_processing.mode = append`). Three consequences for the shared
+`get_client_ip` (`rust/public/src/servers/http_utils.rs:11-40`):
+
+- It returns the **leftmost** `X-Forwarded-For` entry today (`:14-19`,
+  `value.split(',').next()`), and its doc comment asserts "leftmost IP is the original client
+  when behind proxies" (`:6`). With an *appending* proxy that is wrong and unsafe: everything to
+  the left of the ALB's own appended entry is whatever the caller sent, so any caller can prepend
+  an arbitrary address and have it win. Today's `client_ip` is therefore fully spoofable on every
+  route that logs it.
+- The **rightmost** entry is the address the ALB itself observed on the connection it accepted.
+  A caller cannot forge it — whatever the caller writes lands to the *left* of the ALB's own
+  observation. With exactly one trusted proxy hop (the ALB), rightmost is the correct read.
+- The raw peer `SocketAddr` fallback (`:35-37`) is, behind the ALB, always the ALB's own address —
+  never the client's. A peer-address-only design would report nothing useful in the deployed
+  topology, and is only meaningful for direct (e.g. local-dev) connections.
 
 `rust/public/src/servers/flight_sql_service_impl.rs`:
 
@@ -92,7 +116,8 @@ changes for any client.
 - The two call sites, `do_get_fallback` (`:786-795`) and `do_get_statement` (`:949-956`), each
   receive `request: Request<Ticket>` (or `Request<Ticket>` via the trait method) and currently
   only ever call `.metadata()` on it before delegating to `execute_query`.
-- **The gRPC peer address *is* available, but not via `tonic::Request::remote_addr()`.** The
+- **The gRPC peer address *is* available as a fallback, but not via
+  `tonic::Request::remote_addr()`.** The
   server doesn't use a plain `tonic::transport::Server` TCP listener (which would populate the
   `TcpConnectInfo` extension `remote_addr()` looks for); it uses a custom `Connected` transport,
   `ConnectedIncoming`/`ConnectedStream` (`rust/public/src/servers/connect_info_layer.rs`), whose
@@ -113,24 +138,26 @@ changes for any client.
   `flightsql_query_audit` record. It doesn't satisfy the issue's ask (correlatable, per-query
   attribution), but it does confirm the mechanism works and that `request.extensions()` still
   carries the `SocketAddr` all the way down to `execute_query`'s call sites (tonic's generated
-  per-method dispatch preserves the underlying `http::Extensions`). **Note this `client_ip` is not
-  the same trust level as the one this plan adds.** `get_client_ip` checks `x-forwarded-for`/
-  `x-real-ip` gRPC metadata (which tonic maps onto HTTP/2 headers) before ever reaching the
-  `SocketAddr` fallback, so `LogUriService`'s `client_ip` is header-derived and spoofable by any
-  direct gRPC caller — unlike the new `get_grpc_peer_ip` (Design §3), which deliberately ignores
-  headers and reads only the raw peer address. The two can disagree for the same request; see
-  Design §3 and the docs step for the same caveat spelled out where it matters.
+  per-method dispatch preserves the underlying `http::Extensions`). Because this plan fixes
+  `get_client_ip` itself rather than adding a second client-IP implementation (Design §3),
+  `LogUriService`'s `client_ip` and the new audit-record `client_ip` are produced by the same
+  function from the same request and always agree — the only difference is granularity
+  (per-RPC-call line vs. per-query structured record). `LogUriService` also gains the
+  spoofing fix for free.
 - `QueryAuditRecord` (`rust/public/src/servers/query_audit.rs:79-129`) is a plain
   `#[derive(serde::Serialize)]` struct with no client-IP field.
-- Unrelated existing mechanism, **not wired up, out of scope**: the HTTP gateway
+- Existing adjacent mechanism, **not wired up, out of scope**: the HTTP gateway
   (`rust/public/src/servers/http_gateway.rs`) already computes an `x-client-ip` gRPC metadata
-  header from the *real* HTTP connection before forwarding a `/gateway/query` REST call to
-  FlightSQL (`build_origin_metadata`, `:183-219`), specifically to avoid the gateway's own peer
-  address (which is what a naive peer-address read would see for gateway-proxied traffic)
-  overwriting the original caller's IP — and it explicitly blocks a caller from spoofing that
-  same header directly (`blocked_headers: ["X-Client-IP"]`, `:64`). Nothing on the FlightSQL
-  server reads `x-client-ip` today, so this value is computed and sent but currently dropped on
-  the floor. See Trade-offs/Open Questions for why this plan doesn't wire it up.
+  header from its *own* inbound HTTP request before forwarding a `/gateway/query` REST call to
+  FlightSQL (`build_origin_metadata`, `:183-219`), specifically so the gateway's own address
+  (which is what the FlightSQL side sees for gateway-proxied traffic) doesn't stand in for the
+  original caller's IP — and it explicitly blocks a caller from spoofing that same header
+  directly (`blocked_headers: ["X-Client-IP"]`, `:60-66`). That value is itself computed by
+  `get_client_ip` (`:213`), so it inherits this plan's fix. Nothing on the FlightSQL server reads
+  `x-client-ip` today, so it is computed and sent but currently dropped on the floor.
+  Separately, the gateway's header forwarding is allow-list based (`should_forward`, `:79-104`)
+  and `x-forwarded-for` is **not** on the allow-list (`:44-57`), so the gateway does not pass the
+  original caller's XFF chain through to FlightSQL either. See Trade-offs/Open Questions.
 
 ## Design
 
@@ -148,8 +175,9 @@ its own copy that logs only `uri.path()` (dropping the query string entirely —
 /// Like `observability_middleware`, but logs only the request path, never the query string --
 /// `/auth/callback`'s query carries the OAuth authorization code and the PKCE verifier
 /// (embedded in the signed `state` param) and must never be written to the telemetry log.
-/// `client_ip` here reuses `get_client_ip` (honors `X-Forwarded-For`/`X-Real-IP`), same as every
-/// other axum route -- see Trade-offs for the trust caveat that implies.
+/// `client_ip` here reuses the shared `get_client_ip` (rightmost `X-Forwarded-For` entry, then
+/// `X-Real-IP`, then the socket address), same as every other route in this codebase -- see
+/// Design 3 and Trade-offs.
 pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
     let (parts, body) = request.into_parts();
     let path = parts.uri.path().to_string();
@@ -263,37 +291,71 @@ existing convention exactly (`:497-500`), so the two success-path formats stay c
 
 ### 3. Add `client_ip` to the FlightSQL query audit trail
 
-**New helper**, `rust/public/src/servers/http_utils.rs`, alongside `get_client_ip`:
+**One client-IP implementation, fixed in place.** The only reason this codebase resolves a client
+IP is logging, so there is no case for a second implementation with different semantics. Instead
+of adding a gRPC-specific peer-address helper, this plan changes the shared `get_client_ip`
+(`rust/public/src/servers/http_utils.rs:11-40`) to read the **rightmost** `X-Forwarded-For` entry,
+and then calls that same function — unchanged — from the FlightSQL path:
 
 ```rust
-/// Extracts the client IP from the gRPC connection's peer socket address.
+/// Extracts the client IP address from HTTP headers and extensions.
 ///
-/// Unlike `get_client_ip` (the HTTP/axum path, which also honors `X-Forwarded-For`/`X-Real-IP`
-/// for requests behind a reverse proxy), FlightSQL's tonic transport has no such header-based
-/// override applied at this layer -- the only source available at `execute_query`'s call sites
-/// is the raw peer `SocketAddr` the tower `Connected` transport
-/// (`connect_info_layer::ConnectedStream`) inserts into request extensions.
+/// This function checks sources in order of priority:
+/// 1. X-Forwarded-For (rightmost entry -- the address the nearest trusted proxy observed)
+/// 2. X-Real-IP (used by some proxies like nginx)
+/// 3. Socket address from extensions (direct connection)
 ///
-/// Note this deliberately diverges from the pre-existing `LogUriService`
-/// (`log_uri_service.rs`), which logs a `client_ip` derived from `get_client_ip` -- i.e.
-/// honoring caller-supplied `x-forwarded-for`/`x-real-ip` gRPC metadata before falling back to
-/// the peer address. That value is spoofable by any direct gRPC caller and is not the same
-/// trust level as the field this function produces; the two `client_ip`s that end up in
-/// `flight-sql-srv`'s logs are not interchangeable (see Current State §3).
-pub fn get_grpc_peer_ip(extensions: &http::Extensions) -> String {
-    extensions
-        .get::<std::net::SocketAddr>()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+/// The *rightmost* `X-Forwarded-For` entry is used, not the leftmost, because the AWS ALB every
+/// service is deployed behind *appends* the address it observed rather than overwriting the
+/// header (`routing.http.xff_header_processing.mode = append`, the ALB default). Every entry to
+/// the left of the last one is caller-supplied and therefore spoofable; the last entry is the
+/// ALB's own observation and cannot be forged by the caller. This is correct for exactly one
+/// trusted proxy hop -- putting a second trusted proxy in front of the ALB would mean skipping
+/// one more entry from the right.
+///
+/// Returns "unknown" if no IP can be extracted.
+pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> String {
+    // Check X-Forwarded-For header first (for load balancers/proxies).
+    // The rightmost entry is what the nearest trusted proxy (the ALB) observed; entries to its
+    // left are caller-supplied and spoofable.
+    if let Some(forwarded_for) = headers.get("x-forwarded-for")
+        && let Ok(value) = forwarded_for.to_str()
+        && let Some(client_ip) = value.rsplit(',').next()
+        && !client_ip.trim().is_empty()
+    {
+        return client_ip.trim().to_string();
+    }
+
+    // ... X-Real-IP, ConnectInfo<SocketAddr>, bare SocketAddr and "unknown" branches unchanged
 }
 ```
 
+Two details in that first branch: `rsplit(',').next()` is the rightmost element (mirroring the
+existing `split(',').next()` for the leftmost), and the added `!client_ip.trim().is_empty()` guard
+makes a present-but-empty `X-Forwarded-For` fall through to `X-Real-IP`/the socket address instead
+of returning `""` as it does today.
+
 **Call sites** (`flight_sql_service_impl.rs`), resolved once per RPC before the request is
-consumed, then threaded into `execute_query`:
+consumed, then threaded into `execute_query`. Getting the two arguments out of a
+`tonic::Request` is a plain borrow — no conversion, no allocation (verified against the vendored
+tonic 0.14.6 source):
+
+- `tonic::metadata::MetadataMap` wraps a private `http::HeaderMap` and exposes it via
+  `impl AsRef<http::HeaderMap> for MetadataMap` (`src/metadata/map.rs:41-45`), so
+  `request.metadata().as_ref()` yields exactly the `&http::HeaderMap` `get_client_ip` takes.
+  (`MetadataMap::into_headers() -> http::HeaderMap` also exists, `map.rs:261`, but consumes the
+  map and so is unusable from a `&Request`; `AsRef` is the right mechanism here.)
+- `tonic::Request::extensions()` returns `&Extensions` where `tonic::Extensions` is a re-export
+  of `http::Extensions` (`src/lib.rs:126`, `pub use http::Extensions;`, imported as such in
+  `src/request.rs:6`) — the same type, passed straight through.
+
+Since tonic surfaces HTTP/2 headers as gRPC metadata, an `x-forwarded-for` appended by the ALB in
+front of `flight-sql-srv` is readable there; for a direct connection (local dev, in-cluster
+peer) the header is absent and the existing `SocketAddr` fallback applies.
 
 ```rust
 async fn do_get_fallback(&self, request: Request<Ticket>, _message: Any) -> ... {
-    let client_ip = get_grpc_peer_ip(request.extensions());
+    let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
     let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
         .map_err(|e| status!("Could not read ticket", e))?;
     self.execute_query(ticket_stmt, request.metadata(), &client_ip).await
@@ -302,10 +364,13 @@ async fn do_get_fallback(&self, request: Request<Ticket>, _message: Any) -> ... 
 
 ```rust
 async fn do_get_statement(&self, ticket: TicketStatementQuery, request: Request<Ticket>) -> ... {
-    let client_ip = get_grpc_peer_ip(request.extensions());
+    let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
     self.execute_query(ticket, request.metadata(), &client_ip).await
 }
 ```
+
+`flight_sql_service_impl.rs` gains `use super::http_utils::get_client_ip;` (it imports nothing
+from `http_utils` today).
 
 **`execute_query`** gains a `client_ip: &str` parameter (`:519`), used in:
 - Both start-of-query `info!` lines (`:589-604`): add `client_ip={client_ip}`.
@@ -319,13 +384,37 @@ async fn do_get_statement(&self, ticket: TicketStatementQuery, request: Request<
 pub client_ip: String,
 ```
 
-placed right after `query_id` — the peer address is the one field in this record that comes from
-the network layer rather than from client-controlled attribution headers, so it's grouped with
+placed right after `query_id` — it's the one field in this record that comes from the network /
+trusted-proxy layer rather than from client-controlled attribution headers, so it's grouped with
 the record's other "how do I trust/correlate this" identifier rather than with `client`/`agent`/
 `entrypoint` (which are all self-reported and spoofable). Always present (never `Option`), same
-convention as `client`: `"unknown"` on the (practically unreachable, since every accepted
-connection has a peer address) case where the extension is missing, mirroring `get_client_ip`'s
-own fallback string.
+convention as `client`: `"unknown"` in the (practically unreachable) case where neither a header
+nor a peer address is available — `get_client_ip`'s own fallback string, returned verbatim.
+
+**Blast radius of the `get_client_ip` change.** It has exactly three callers today, and none of
+them break:
+
+- `rust/public/src/servers/axum_utils.rs:21` (`observability_middleware`) — logs `client_ip` on
+  `/api/*` and `/gateway/*` routes. Same type, same "unknown" fallback; the value logged simply
+  becomes the ALB-observed address instead of a caller-chosen one. Behavior change, no API change.
+- `rust/public/src/servers/log_uri_service.rs:29` — same, for the per-RPC FlightSQL line. Also the
+  reason it now agrees with the new audit-record field (Current State §3).
+- `rust/public/src/servers/http_gateway.rs:213` (`build_origin_metadata`) — computes the
+  `x-client-ip` metadata header the gateway forwards to FlightSQL. It constructs a fresh
+  `http::Extensions` holding `ConnectInfo(*addr)` and passes the *inbound* HTTP `headers`, so the
+  change makes that header non-spoofable in the same way. The gateway's existing anti-spoofing
+  guarantee (`blocked_headers: ["X-Client-IP"]`) is unaffected — that blocks a different header.
+
+No existing test asserts leftmost `X-Forwarded-For` selection. The only tests that assert on a
+`client_ip` value are three `build_origin_metadata` cases in
+`rust/public/tests/http_gateway_tests.rs` — `test_build_origin_metadata_with_client_type`
+(`:73-97`), `test_build_origin_metadata_without_client_type` (`:99-122`) and
+`test_build_origin_metadata_ignores_client_ip_header` (`:152-167`) — and none of them sets an
+`X-Forwarded-For` (or `X-Real-IP`) header at all, so all three exercise the
+`ConnectInfo<SocketAddr>` fallback and pass unchanged. (The last one asserts that an inbound
+`x-client-ip: 1.2.3.4` header does not become the computed `client_ip`, which stays true: nothing
+in `get_client_ip` reads `x-client-ip`.) `get_client_ip` has no direct unit tests today; step 10
+adds them.
 
 ## Implementation Steps
 
@@ -360,18 +449,33 @@ own fallback string.
    regression from step 1.
 
 **Phase 3 — `flight-sql-srv`**
-7. `http_utils.rs`: add `get_grpc_peer_ip`, per Design §3.
-8. `flight_sql_service_impl.rs`: thread `client_ip` through `do_get_fallback` (`:786-795`),
-   `do_get_statement` (`:949-956`), `execute_query`'s signature and both `info!` lines
-   (`:519-604`), `QueryAuditState` (`:262-297`, `:619-643`), and `QueryAuditState::emit`
-   (`:309-357`), per Design §3.
+7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost**
+   `X-Forwarded-For` entry (`rsplit` + non-empty guard) and rewrite its doc comment (`:3-10`, and
+   the inline comment at `:12-13`), which currently claims the leftmost entry is the original
+   client. Per Design §3. This is a behavior change for all three existing callers — see Design
+   §3's blast-radius note; no signature or type changes, so no caller edits are needed.
+8. `flight_sql_service_impl.rs`: add `use super::http_utils::get_client_ip;` and thread `client_ip`
+   through `do_get_fallback` (`:786-795`, `get_client_ip(request.metadata().as_ref(),
+   request.extensions())`), `do_get_statement` (`:949-956`, same), `execute_query`'s signature and
+   both `info!` lines (`:519-604`), `QueryAuditState` (`:262-297`, `:619-643`), and
+   `QueryAuditState::emit` (`:309-357`), per Design §3.
 9. `query_audit.rs`: add `pub client_ip: String` to `QueryAuditRecord` (`:79-129`), placed right
    after `query_id`.
 
 **Phase 4 — `flight-sql-srv` tests**
-10. New `rust/public/tests/http_utils_tests.rs`: unit tests for `get_grpc_peer_ip` — a
-    `SocketAddr` extension present returns its IP (string, no port); no extension present returns
-    `"unknown"`.
+10. New `rust/public/tests/http_utils_tests.rs`: unit tests for `get_client_ip`'s selection rules —
+    (a) a multi-entry `X-Forwarded-For` chain (`"1.2.3.4, 10.0.0.1, 198.51.100.9"`) returns the
+    rightmost entry, whitespace-trimmed; (b) a single-entry chain returns that entry; (c) the
+    spoofing case: a client-prepended value plus the ALB's appended observation
+    (`"666.spoof, 198.51.100.9"` or `"203.0.113.1, 198.51.100.9"`) returns the ALB's entry, not
+    the client's — the client-prepended value must be ignored; (d) no `X-Forwarded-For` but an
+    `X-Real-IP` header returns the `X-Real-IP` value; (e) neither header but a
+    `ConnectInfo<SocketAddr>` / bare `SocketAddr` extension returns its IP (string, no port); (f)
+    no header and no extension returns `"unknown"`. Optionally (g) a present-but-empty
+    `X-Forwarded-For` falls through to the next source rather than returning `""`. The test builds
+    `http::HeaderMap`/`http::Extensions` (and `axum::extract::ConnectInfo`) directly — both crates
+    are already reachable from this package's tests under the `server` feature, as
+    `http_gateway_tests.rs:1` shows for `http`.
 11. `rust/public/Cargo.toml`: register the new test file with an explicit `[[test]]` entry
     (`name = "http_utils_tests"`, `path = "tests/http_utils_tests.rs"`,
     `required-features = ["server"]`), matching every other file under `rust/public/tests/` —
@@ -385,20 +489,39 @@ own fallback string.
 
 **Phase 5 — docs**
 13. `mkdocs/docs/query-guide/query-audit-log.md`: add a `client_ip` row to the `## Fields` table
-    (always present, right after `query_id`), describing it as the gRPC peer address (network
-    truth, not self-reported) and noting the caveat from Trade-offs: for FlightSQL calls proxied
+    (always present, right after `query_id`, i.e. after `:126`), describing it as network-level
+    truth rather than self-reported attribution — the rightmost `X-Forwarded-For` entry (the
+    address the ALB in front of the service observed) falling back to the gRPC peer address for
+    direct connections — and noting the caveat from Trade-offs: for FlightSQL calls proxied
     through a server-side hop — the HTTP gateway's `/gateway/query` or `analytics-web-srv`'s
     `/api/query-stream` (the web app's notebook/query-editor path) — this reports the proxy's own
-    address, not the original browser/HTTP caller's. Also note that this `client_ip` is distinct
-    from (and not comparable to) the `client_ip` that `flight-sql-srv`'s pre-existing
-    `LogUriService` writes to its generic per-call log line: that one is header-derived
-    (`x-forwarded-for`/`x-real-ip`) and spoofable by any direct gRPC caller, while this
-    audit-record field is the raw, non-spoofable peer address.
-14. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
+    address, not the original browser/HTTP caller's, because neither proxy forwards the caller's
+    `X-Forwarded-For` chain. Also note it matches the `client_ip` on `flight-sql-srv`'s generic
+    per-call `uri=... client_ip=...` line (both come from the same `get_client_ip`), so the two can
+    be cross-referenced.
+14. `mkdocs/docs/gateway/index.md`: the "Client IP Security" bullet at `:342` currently reads
+    "Uses real socket address or `X-Forwarded-For` (from trusted proxies)", which becomes stale
+    once the leftmost read is gone. Restate as: uses the rightmost `X-Forwarded-For` entry (the
+    address the trusted proxy/ALB observed, which a caller cannot forge), falling back to
+    `X-Real-IP` and then the real socket address. The lead-in at `:339` ("The gateway always
+    extracts client IP from the actual connection") is also loose — headers are consulted first —
+    and should say "from the connection, or from the trusted proxy that observed it". The
+    neighbouring bullets (`:341` blocks `x-client-ip` from clients, `:343` "Prevents IP spoofing in
+    audit logs") stay correct and are in fact only now accurate.
+    `mkdocs/docs/gateway/configuration.md:51` and
+    `mkdocs/docs/gateway/index.md:128` ("Real client IP (prevents spoofing)") need no change.
+15. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
     (**minor breaking change**: `QueryAuditRecord` is published API and gains a field, matching
     the convention every prior addition to this struct used — e.g. #1436, #1437, #1406); **Auth:**
     entry (or a new bullet under the existing Auth section) for the `/auth/*` `client_ip` logging
-    fix and the `email` addition to `[auth_success]` lines.
+    fix and the `email` addition to `[auth_success]` lines. The `get_client_ip` change must be
+    called out as a **behavior change for every existing `client_ip` logger**, not just an
+    addition: `observability_middleware` (`/api/*`, `/gateway/*` request/response lines),
+    `LogUriService` (FlightSQL per-RPC lines) and the gateway's forwarded `x-client-ip` metadata
+    header all switch from the leftmost `X-Forwarded-For` entry (caller-supplied, spoofable) to the
+    rightmost (ALB-observed, non-forgeable). Deployments *not* behind exactly one appending proxy
+    will see different values than before — including anyone who was relying on the old leftmost
+    read behind an overwriting proxy.
 
 ## Files to Modify
 
@@ -410,14 +533,18 @@ own fallback string.
 - `rust/analytics-web-srv/tests/auth_unit_tests.rs` — new `extract_audit_claims_from_token` cases.
 - `rust/analytics-web-srv/tests/auth_observability_tests.rs` — new; asserts query-string redaction
   in `auth_observability_middleware`'s log lines.
-- `rust/public/src/servers/http_utils.rs` — new `get_grpc_peer_ip`.
+- `rust/public/src/servers/http_utils.rs` — `get_client_ip` switches to the rightmost
+  `X-Forwarded-For` entry (+ doc comment). No signature change; no edits needed at its three
+  existing call sites (`axum_utils.rs:21`, `log_uri_service.rs:29`, `http_gateway.rs:213`).
 - `rust/public/src/servers/flight_sql_service_impl.rs` — `do_get_fallback`, `do_get_statement`,
   `execute_query`, `QueryAuditState`, `QueryAuditState::emit`.
 - `rust/public/src/servers/query_audit.rs` — `QueryAuditRecord`.
-- `rust/public/tests/http_utils_tests.rs` — new.
+- `rust/public/tests/http_utils_tests.rs` — new; `get_client_ip` selection/fallback/spoofing cases.
 - `rust/public/Cargo.toml` — new `[[test]]` entry for `http_utils_tests`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates.
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table.
+- `mkdocs/docs/gateway/index.md` — "Client IP Security" section (`:337-343`), now-stale
+  `X-Forwarded-For` wording.
 - `CHANGELOG.md` — `## Unreleased` entries.
 
 ## Trade-offs
@@ -430,58 +557,60 @@ own fallback string.
   issue doesn't mention and that carries its own risk (e.g. whether `cookie_auth_middleware`'s
   own `warn!("[auth_failure] ...")` lines are expected to fire before or after the generic
   request/response log). Left as a separate, pre-existing gap — worth its own issue if wanted.
-- **Peer IP, not a proxy-forwarded client-IP header.** The HTTP gateway already computes and
-  forwards `x-client-ip` gRPC metadata (`http_gateway.rs:209-216`) specifically so gateway-proxied
-  queries could report the *original* caller's IP instead of the gateway's own; there's no
-  equivalent today on `analytics-web-srv`'s `/api/query-stream` path (`stream_query.rs:271-282`),
-  which builds its `BearerFlightSQLClientFactory` with only `x-client-notebook`/`x-client-cell`
-  metadata and forwards no client-IP information at all. This plan doesn't wire up either as a
-  trusted source of `client_ip` on the FlightSQL server side, for two reasons: (1) any such value
-  is self-reported gRPC metadata like any other header, and unlike `x-client-type`/`x-client-agent`,
-  trusting it blindly would let *any* direct gRPC caller (bypassing the proxy entirely, e.g. the
-  Python client talking straight to `flight-sql-srv`) spoof an arbitrary IP into an audit trail
-  whose whole purpose is "who did what from where" — the gateway's own spoofing protection
-  (blocking a client from setting this header on its *inbound* HTTP request) only holds for
-  traffic that actually goes through the gateway, and `analytics-web-srv` has no such protection
-  at all; (2) safely trusting it would require the FlightSQL server to first establish that the
-  immediate gRPC peer *is* the proxy (e.g. mTLS service identity, or a network-topology
-  assumption), which is a real design decision this issue doesn't ask for and shouldn't be bundled
-  into a straightforward logging-gap fix. This plan's `client_ip` is therefore the literal,
-  non-spoofable gRPC peer address: correct and trustworthy for direct clients, but reports the
-  proxy's own address — the HTTP gateway's for `/gateway/query`, or `analytics-web-srv`'s for
-  every notebook/query-editor query submitted through the web app (`client="web"`, by far the
-  highest-volume source of audit records) — for anything proxied. Flagged as a known limitation in
-  the doc update (step 13) and as an Open Question below.
+- **One trusted proxy hop is assumed; a server-side proxy hop still hides the end user.**
+  Rightmost-`X-Forwarded-For` is exactly right for one appending proxy in front of the service
+  (the ALB) and nothing else. Two consequences worth stating plainly:
+  - *If a second trusted proxy is ever put in front of the ALB*, the ALB will append after that
+    proxy's entry and the rightmost read will report the *upstream proxy's* address instead of the
+    client's. The fix at that point is to skip a fixed number of entries from the right (or make
+    the hop count configurable), not to go back to the leftmost read. Not built now: there is one
+    hop today, and a configurable trusted-hop count is scope this issue doesn't ask for.
+  - *For FlightSQL calls that a Micromegas service proxies*, `client_ip` is that service's address
+    as seen by FlightSQL's own front, not the browser's. Neither proxy forwards the caller's XFF
+    chain: the gateway's header forwarding is allow-list based and `x-forwarded-for` is not on the
+    allow-list (`http_gateway.rs:44-57`, `:79-104`), and `analytics-web-srv`'s `/api/query-stream`
+    (`stream_query.rs:271-282`) builds its `BearerFlightSQLClientFactory` with only
+    `x-client-notebook`/`x-client-cell` and forwards no client-IP information at all. The gateway
+    does compute an `x-client-ip` metadata header (`http_gateway.rs:209-216`) that would carry the
+    original caller's IP, but nothing on the FlightSQL side reads it, and this plan doesn't wire it
+    up: doing so safely requires FlightSQL to first establish that its immediate gRPC peer really
+    *is* the gateway (mTLS service identity, or a network-topology assumption), since a direct gRPC
+    caller — e.g. the Python client talking straight to `flight-sql-srv` — could otherwise set
+    `x-client-ip` to anything. `analytics-web-srv` has no such header at all. Both are real design
+    decisions that shouldn't be bundled into a logging-gap fix. So `/gateway/query` records report
+    the gateway's address and every web-app notebook/query-editor query (`client="web"`, by far the
+    highest-volume source of audit records) reports `analytics-web-srv`'s. Flagged as a known
+    limitation in the doc update (step 13) and as an Open Question below.
 - **`AuditClaims` reads unverified claims, same as the `sub`-only extraction it replaces.**
   `auth_callback`/`auth_refresh` don't run the freshly-exchanged `id_token` through
   `auth_provider.validate_request()` before logging — they trust the raw JWT payload from the
   token endpoint's own response (reached over TLS directly), same as today. This plan doesn't
   change that trust boundary; it only extracts one more field from the same already-trusted
   payload.
-- **`/auth/*`'s `client_ip` trusts `X-Forwarded-For`/`X-Real-IP`, unlike the FlightSQL audit
-  trail's peer-address choice above.** `auth_observability_middleware` calls the same
-  `get_client_ip` every other axum route in this codebase uses, which honors a caller-supplied
-  `X-Forwarded-For`/`X-Real-IP` header before falling back to `ConnectInfo<SocketAddr>`. That's
-  deliberately different from `get_grpc_peer_ip`'s peer-only design for FlightSQL: it's only
-  trustworthy when the deployment sits behind a proxy that *overwrites* (not appends to)
-  `X-Forwarded-For`, otherwise a direct caller can spoof it. This is not a regression — it's the
-  existing behavior of every other `/api/*` and `/gateway/*` axum route today — but it means the
-  `/auth/*` investigation log this plan adds inherits the same spoofing exposure the Trade-offs
-  above explicitly reject for the FlightSQL audit trail, rather than the non-spoofable
-  peer-address guarantee.
-- **No `x-forwarded-for`-style override for the gRPC peer IP.** `get_client_ip` (HTTP path) checks
-  `X-Forwarded-For`/`X-Real-IP` headers before falling back to the connection's `SocketAddr`,
-  because HTTP traffic commonly passes through a reverse proxy that sets those headers. FlightSQL
-  gRPC traffic has no equivalent header convention in this codebase (the closest is the gateway's
-  `x-client-ip`, addressed above) — `get_grpc_peer_ip` only ever reads the extension, and doesn't
-  need `MetadataMap`-to-`HeaderMap` conversion machinery it would otherwise require to also check
-  headers.
+- **`/auth/*`'s `client_ip` is the same value as everywhere else, and the spoofing hole it used to
+  inherit is closed by this plan.** `auth_observability_middleware` calls the same shared
+  `get_client_ip`, which after Design §3 returns the ALB-observed address. A caller can still
+  *prepend* entries to `X-Forwarded-For`, but they land to the left of the ALB's own appended
+  observation and are ignored. Two residual caveats: (1) `X-Real-IP` is only consulted when
+  `X-Forwarded-For` is absent entirely — behind the ALB it never is, so that branch is effectively
+  unreachable in the deployed topology, but a caller reaching a service *directly* (bypassing the
+  ALB) can still set `X-Real-IP` and have it believed; (2) the one-trusted-hop assumption above
+  applies here too. Neither is a regression, and both are strictly better than today's leftmost
+  read, which any caller could win outright.
+- **A single `get_client_ip` rather than one implementation per transport.** The only reason this
+  codebase resolves a client IP is logging, so there is no benefit to two functions with different
+  trust semantics — that only produces two `client_ip` fields in the same service's logs that
+  disagree and can't be compared. The extra machinery a shared function costs on the gRPC side is
+  a single `.as_ref()` (Design §3), which is not enough to justify a fork.
 
 ## Documentation
 
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table (`client_ip` row) and a Notes
   bullet on the proxy-hop caveat (HTTP gateway *and* `analytics-web-srv`'s `/api/query-stream`).
-- `CHANGELOG.md` — `## Unreleased` entries under **Analytics:** and **Auth:**.
+- `mkdocs/docs/gateway/index.md` — "Client IP Security" (`:337-343`): the `X-Forwarded-For`
+  bullet and its lead-in, restated for rightmost-entry semantics.
+- `CHANGELOG.md` — `## Unreleased` entries under **Analytics:** and **Auth:**, including the
+  behavior change to every existing `client_ip` logger.
 
 ## Testing Strategy
 
@@ -489,8 +618,9 @@ own fallback string.
 2. `cargo test -p analytics-web-srv` — existing suite plus the new `extract_audit_claims_from_token`
    cases (step 5); confirms no routing regression from wrapping `/auth/*` in
    `auth_observability_middleware`.
-3. `cargo test -p micromegas --features server` — covers the updated `query_audit_tests.rs` and
-   new `http_utils_tests.rs`.
+3. `cargo test -p micromegas --features server` — covers the updated `query_audit_tests.rs`, the
+   new `http_utils_tests.rs`, and (unchanged, as a regression check on the `get_client_ip`
+   behavior change) `http_gateway_tests.rs`'s four `build_origin_metadata` cases.
 4. **Manual verification** (the redaction rule itself is covered by the automated test in step 6;
    the rest — real OIDC flow, real FlightSQL traffic — still needs manual checks; see
    `python3 local_test_env/ai_scripts/start_services.py`):
@@ -504,7 +634,13 @@ own fallback string.
    - Run `micromegas-query "SELECT 1" --all` directly against `flight-sql-srv` and confirm the
      `execute_query ...` start-of-query line now includes `client_ip=<your real IP>`; query
      `flightsql_query_audit` (per `query-audit-log.md`'s pattern) and confirm the JSON record has
-     `"client_ip"` set to the same value.
+     `"client_ip"` set to the same value, and that `LogUriService`'s `uri=... client_ip=...` line
+     for the same request agrees (they now share one implementation). Locally there is no ALB, so
+     this exercises the `SocketAddr` fallback.
+   - Rightmost-`X-Forwarded-For` selection against a running service: `curl -H 'X-Forwarded-For:
+     1.2.3.4, 198.51.100.9' http://127.0.0.1:3000/...` and confirm the logged `client_ip` is
+     `198.51.100.9`, not `1.2.3.4` — i.e. the client-prepended entry is ignored. (Unit-tested in
+     step 10; this just confirms the wiring end to end.)
    - Run a query from the web app's notebook/query editor (`/api/query-stream`) and confirm
      `client_ip` in the resulting audit record is `analytics-web-srv`'s own address, not the
      browser's — this is the highest-volume (`client="web"`) case of the proxy caveat. If a
@@ -514,7 +650,17 @@ own fallback string.
 
 ## Open Questions
 
-- Should a follow-up wire up the gateway's already-computed `x-client-ip` metadata header into
-  `QueryAuditRecord` (e.g. a second field, `gateway_client_ip`, populated only when a gateway is
-  known to be the trusted intermediary), so gateway-proxied queries also get the original caller's
-  IP? This plan deliberately leaves that as future work — see Trade-offs.
+- **How should a server-side proxy hop pass the original caller's IP to FlightSQL?** Still open,
+  but reframed by the single-implementation decision. The gateway already computes `x-client-ip`
+  via `get_client_ip` (`http_gateway.rs:213`), so after this change that header carries the
+  ALB-observed address of the *original HTTP caller* and is no longer spoofable at the point it's
+  computed — the remaining obstacle is on the receiving end: `flight-sql-srv` has no way to know
+  that its immediate gRPC peer is a trusted gateway rather than an arbitrary client setting the
+  header, so reading `x-client-ip` would reintroduce exactly the spoofing hole this plan removes.
+  Given the "one client-IP implementation" rule, the cleaner follow-up is probably not a second
+  audit field but making the proxies *append to `X-Forwarded-For`* when they open their downstream
+  gRPC connection (gateway: add it to `build_origin_metadata` and drop the bespoke `x-client-ip`;
+  `analytics-web-srv`: add it in `stream_query.rs`), so the existing `get_client_ip` picks it up
+  with no new code on the server — but that raises the trusted-hop count from one to two and so
+  needs the configurable-hop-count work from Trade-offs first. Left as future work either way;
+  until then the documented caveat (step 13) stands.
