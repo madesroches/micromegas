@@ -35,8 +35,6 @@ export type MintIngestionApiKeyResponse = MintApiKeyResponse
 
 export interface RevokeIngestionApiKeyResponse {
   revoked_at: string
-  /** Revocation is not instantaneous — see ingestion's cache TTL. */
-  effective_within_seconds: number
 }
 
 export interface IngestionApiKeyErrorResponse {

@@ -90,7 +90,7 @@ describe('IngestionApiKeysPage', () => {
     expect(screen.getByText('Active')).toBeInTheDocument()
   })
 
-  it('mints a key via the proxy and shows the one-time-key banner', async () => {
+  it('mints a key and shows the one-time-key banner', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -271,8 +271,7 @@ describe('IngestionApiKeysPage', () => {
       } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({ revoked_at: '2026-01-02T00:00:00Z', effective_within_seconds: 60 }),
+        json: () => Promise.resolve({ revoked_at: '2026-01-02T00:00:00Z' }),
       } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
