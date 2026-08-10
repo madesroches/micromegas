@@ -1320,6 +1320,7 @@ describe('shouldShowTimeRange', () => {
     const types = [
       'table', 'chart', 'log', 'propertytimeline', 'swimlane',
       'transposed', 'flamegraph', 'map', 'perfettoexport', 'image',
+      'piechart',
     ]
     for (const type of types) {
       expect(shouldShowTimeRange({ ...base, type, sql: '' } as CellConfig)).toBe(true)

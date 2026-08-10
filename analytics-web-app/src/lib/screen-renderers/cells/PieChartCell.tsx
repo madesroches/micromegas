@@ -453,6 +453,21 @@ function PieChartCellEditor({
   const maxSlices =
     typeof pieConfig.options?.max_slices === 'number' ? pieConfig.options.max_slices : DEFAULT_MAX_SLICES
 
+  // Raw text buffer for the Max Slices input, so the field can be cleared/edited
+  // without snapping back to the committed value on every keystroke. Only a
+  // valid integer >= 1 is written back to the cell config; on blur an invalid
+  // buffer reverts to the last committed value.
+  const [maxSlicesInput, setMaxSlicesInput] = useState(() => String(maxSlices))
+  // Resync the buffer when switching to a different cell — the editor component
+  // instance is reused across cell selections, so track the previously-seen
+  // cell name and adjust state during render (React's recommended pattern,
+  // rather than an effect, which would clobber in-progress edits on commit).
+  const [maxSlicesInputName, setMaxSlicesInputName] = useState(pieConfig.name)
+  if (maxSlicesInputName !== pieConfig.name) {
+    setMaxSlicesInputName(pieConfig.name)
+    setMaxSlicesInput(String(maxSlices))
+  }
+
   const validationErrors = useMemo(() => {
     const errors: string[] = []
     validateMacros(pieConfig.sql, variables, cellResults, cellSelections).errors.forEach((e) => errors.push(e))
@@ -516,10 +531,20 @@ function PieChartCellEditor({
           <input
             type="number"
             min={1}
-            value={maxSlices}
+            value={maxSlicesInput}
             onChange={(e) => {
-              const n = parseInt(e.target.value, 10)
-              updateOption('max_slices', Number.isFinite(n) && n >= 1 ? n : DEFAULT_MAX_SLICES)
+              const text = e.target.value
+              setMaxSlicesInput(text)
+              const n = parseInt(text, 10)
+              if (Number.isFinite(n) && n >= 1) {
+                updateOption('max_slices', n)
+              }
+            }}
+            onBlur={() => {
+              const n = parseInt(maxSlicesInput, 10)
+              if (!Number.isFinite(n) || n < 1) {
+                setMaxSlicesInput(String(maxSlices))
+              }
             }}
             className="w-full px-3 py-1.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-xs focus:outline-hidden focus:border-accent-link"
           />
