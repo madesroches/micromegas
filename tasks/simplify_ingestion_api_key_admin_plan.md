@@ -410,7 +410,10 @@ misleading after this change, and add a direct unit test for `make_client` confi
 - `mkdocs/docs/admin/monolith.md` — remove the ingestion-hosted "Key management" section + admin-gate mention
 - `mkdocs/docs/admin/authentication.md` — update `POST /auth/api_keys` mint references
 - `docker/README.md` — update the ingestion env-var table's mint-example reference
+- `docker/docker-compose.monolith.yaml` — update the steady-state minting comment
 - `mkdocs/docs/otlp/index.md` — update the `POST /auth/api_keys` mint reference
+- `mkdocs/docs/grafana/authentication.md` — verify/update the `api-keys.md#minting-an-analytics-key-over-http` link
+- `mkdocs/docs/admin/flight-sql.md` — verify/update the `api-keys.md#minting-an-analytics-key-over-http` link
 
 ## Trade-offs
 
@@ -443,7 +446,11 @@ misleading after this change, and add a direct unit test for `make_client` confi
     remove entirely; fold its route/response documentation into a generalized
     `HTTP routes (key management)` section covering both `{base_path}/api/analytics-api-keys*` and
     `{base_path}/api/ingestion-api-keys*` on `analytics-web-srv`, replacing the current
-    `HTTP routes (analytics keys)` section (§209-273).
+    `HTTP routes (analytics keys)` section (§209-273). Keep the existing `### Minting an analytics
+    key over HTTP` heading (and thus its `#minting-an-analytics-key-over-http` anchor) intact inside
+    the merged section — `mkdocs/docs/grafana/authentication.md` (§30-32) and
+    `mkdocs/docs/admin/flight-sql.md` (§59-61) both link to that exact anchor, and preserving it
+    avoids touching either file. If the heading text changes instead, update both links accordingly.
   - TLS warning (§22-34): drop the "proxied ingestion mint/import routes... add a second hop"
     paragraph — one hop now (browser → `analytics-web-srv` → Postgres) for both tables.
   - Env-var table (§242-248): remove `MICROMEGAS_INGESTION_PROXY_OIDC_*` /
@@ -457,7 +464,12 @@ misleading after this change, and add a direct unit test for `make_client` confi
   - `Grant recipe (separated DB roles)` (§356-390): update the ingestion-role and
     `analytics-web-srv`-role grants — `analytics-web-srv`'s role (`micromegas_web`) now needs
     `SELECT, INSERT` on `ingestion_api_keys` too (and `UPDATE (revoked_at, revoked_by)`), matching
-    its existing `analytics_api_keys` grants; correct the framing that says
+    its existing `analytics_api_keys` grants; narrow the `micromegas_ingestion` role's own grant
+    (§370-371, currently `GRANT SELECT, INSERT` plus `UPDATE (last_used_at, revoked_at,
+    revoked_by)` on `ingestion_api_keys`) down to `GRANT SELECT ON ingestion_api_keys` +
+    `GRANT UPDATE (last_used_at) ON ingestion_api_keys` — mint/revoke are no longer ingestion's job
+    once `DbApiKeyAuthProvider` is all that's left reading the table, mirroring the analytics role's
+    read+touch-only grant shape a few lines below in the same doc; correct the framing that says
     "`analytics-web-srv` still never gains write access to `ingestion_api_keys`" (§388-390 — this is
     no longer true and must not ship as stated).
   - `Migrating from the env keyring` (§392-471): update the CLI recipe — both `--table ingestion`
@@ -492,6 +504,12 @@ misleading after this change, and add a direct unit test for `make_client` confi
 - `docker/README.md`: Ingestion Server env-var table's `MICROMEGAS_API_KEYS` row (line 192,
   "...the steady state is a DB-backed key minted via `POST /auth/api_keys`..."): update to point at
   `analytics-web-srv`'s `POST /api/ingestion-api-keys` route.
+- `docker/docker-compose.monolith.yaml`: the env-var comment block (line 55, "...or a non-empty
+  `ingestion_api_keys` / `analytics_api_keys` DB table (see `mkdocs/docs/admin/api-keys.md` — the
+  steady-state path, minted via `POST /auth/api_keys` once the ingestion role is up)"): update to
+  say both tables are minted via `analytics-web-srv`'s `/api/ingestion-api-keys` /
+  `/api/analytics-api-keys` routes instead — the `POST /auth/api_keys` route this comment describes
+  no longer exists.
 - `mkdocs/docs/otlp/index.md`: Authentication section (line 38, "mint one via
   `POST /auth/api_keys`, see [API Keys](../admin/api-keys.md)"): update to
   `POST /api/ingestion-api-keys` on `analytics-web-srv`.
