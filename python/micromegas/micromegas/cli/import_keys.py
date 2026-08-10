@@ -20,14 +20,25 @@ from micromegas.cli.version import add_version_argument
 from micromegas.ingestion_client import IngestionClient
 from micromegas.web_client import WebClient
 
-# `--var`'s default when omitted: ingestion defaults to the plain,
-# unprefixed legacy var; analytics defaults to its own prefixed var --
-# mirroring `ProviderBuilder`'s `{PREFIX}_API_KEYS`-falls-back-to-
-# `MICROMEGAS_API_KEYS` convention (`rust/auth/src/default_provider.rs`).
+# `--var`'s default when omitted: each table's own prefixed legacy var --
+# the same names the monolith's per-role `ProviderBuilder` reads
+# (`ProviderBuilder::new("MICROMEGAS_INGESTION")` /
+# `ProviderBuilder::new("MICROMEGAS_ANALYTICS")`, `rust/monolith/src/main.rs`).
 DEFAULT_VAR = {
-    "ingestion": "MICROMEGAS_API_KEYS",
+    "ingestion": "MICROMEGAS_INGESTION_API_KEYS",
     "analytics": "MICROMEGAS_ANALYTICS_API_KEYS",
 }
+
+# When the default var above isn't set, `read_keyring` falls back to this
+# unprefixed name -- mirroring `ProviderBuilder`'s `{PREFIX}_API_KEYS`-falls-
+# back-to-`MICROMEGAS_API_KEYS` convention (`rust/auth/src/default_provider.rs`).
+# This is exactly what a split deployment populates: `telemetry-ingestion-srv`
+# and `flight-sql-srv` both build with `ProviderBuilder::new("")`
+# (`rust/telemetry-ingestion-srv/src/main.rs`,
+# `rust/public/src/servers/flight_sql_server.rs`), so the unprefixed var is
+# the *only* one they ever read. The fallback applies only to the default --
+# an explicit `--var` is used as-is, with no fallback.
+FALLBACK_VAR = "MICROMEGAS_API_KEYS"
 
 
 def read_keyring(args, parser):
@@ -35,12 +46,29 @@ def read_keyring(args, parser):
     `{"name": ..., "key": ...}` objects, exactly what `parse_key_ring` reads
     (`rust/auth/src/api_key.rs`'s `KeyRingEntry`) -- from the named env var
     or a file. Returns a list of `(name, key)` tuples, in source order.
+
+    For `--source env` with no explicit `--var`, tries the table's prefixed
+    default first, then falls back to the unprefixed `MICROMEGAS_API_KEYS`
+    (see `DEFAULT_VAR`/`FALLBACK_VAR` above) -- matching `ProviderBuilder`'s
+    fallback convention so this recipe works unmodified on both monolith and
+    split deployments. An explicit `--var` is used as-is.
     """
     if args.source == "env":
-        var = args.var or DEFAULT_VAR[args.table]
-        raw = os.environ.get(var)
-        if raw is None:
-            parser.error(f"environment variable '{var}' is not set")
+        if args.var:
+            var = args.var
+            raw = os.environ.get(var)
+            if raw is None:
+                parser.error(f"environment variable '{var}' is not set")
+        else:
+            default_var = DEFAULT_VAR[args.table]
+            raw = os.environ.get(default_var)
+            if raw is None:
+                raw = os.environ.get(FALLBACK_VAR)
+            if raw is None:
+                parser.error(
+                    f"neither '{default_var}' nor '{FALLBACK_VAR}' "
+                    "environment variable is set"
+                )
     else:
         try:
             raw = Path(args.path).read_text(encoding="utf-8")

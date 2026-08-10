@@ -424,17 +424,26 @@ APIs stand on their own without the import tool; it only affects carrying
    or via poetry in `python/micromegas`):
 
    ```bash
-   micromegas-import-keys --table ingestion --source env --var MICROMEGAS_API_KEYS \
+   micromegas-import-keys --table ingestion --source env \
      --url http://ingestion:8081
-   micromegas-import-keys --table analytics --source env --var MICROMEGAS_ANALYTICS_API_KEYS \
+   micromegas-import-keys --table analytics --source env \
      --url https://analytics.example.com
    ```
 
    `--table` selects the import route; `--url` points directly at the target
    service (ingestion's own base URL for `--table ingestion` — **not**
    through `analytics-web-srv`'s proxy, which exists only for the browser).
-   `--source env --var NAME` (or `--source file --path ...`) reads the legacy
-   keyring's real shape — a JSON array of `{"name", "key"}` objects. Auth
+   With no explicit `--var`, `--source env` tries the table's own prefixed
+   legacy var first (`MICROMEGAS_INGESTION_API_KEYS` /
+   `MICROMEGAS_ANALYTICS_API_KEYS`) and falls back to the unprefixed
+   `MICROMEGAS_API_KEYS` — the same `{PREFIX}_API_KEYS`-falls-back-to-
+   `MICROMEGAS_API_KEYS` convention `ProviderBuilder` uses, so this recipe
+   works unmodified whether the legacy keyring was populated by the monolith
+   (which reads the prefixed name) or by split `telemetry-ingestion-srv` /
+   `flight-sql-srv` (which only ever read the unprefixed name). Pass
+   `--var NAME` explicitly to pin an exact source var, or `--source file
+   --path ...` to read the legacy keyring's real shape — a JSON array of
+   `{"name", "key"}` objects — from a file instead. Auth
    follows the same OIDC setup as `micromegas-screens`/`-query`
    (`MICROMEGAS_OIDC_*` env vars for a service-account/non-interactive run,
    or an interactive/cached login via `--profile`); the OIDC identity used

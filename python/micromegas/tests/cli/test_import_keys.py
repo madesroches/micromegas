@@ -60,6 +60,10 @@ class FakeParser:
 
 
 def test_read_keyring_from_env_var(monkeypatch):
+    # No prefixed `MICROMEGAS_INGESTION_API_KEYS` set -- this exercises the
+    # fallback-to-unprefixed path, which is exactly what a split deployment's
+    # `telemetry-ingestion-srv` (built with `ProviderBuilder::new("")`) needs.
+    monkeypatch.delenv("MICROMEGAS_INGESTION_API_KEYS", raising=False)
     monkeypatch.setenv(
         "MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "secret-a"}])
     )
@@ -77,6 +81,36 @@ def test_read_keyring_uses_analytics_default_var(monkeypatch):
     assert entries == [("b", "secret-b")]
 
 
+def test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set(monkeypatch):
+    """The prefixed var (as the monolith's ingestion-role `ProviderBuilder`
+    would populate it) is used as-is when present, with no need to fall
+    back."""
+    monkeypatch.setenv(
+        "MICROMEGAS_INGESTION_API_KEYS",
+        json.dumps([{"name": "a", "key": "secret-a"}]),
+    )
+    monkeypatch.delenv("MICROMEGAS_API_KEYS", raising=False)
+    args = make_args(table="ingestion")
+    entries = import_keys.read_keyring(args, FakeParser())
+    assert entries == [("a", "secret-a")]
+
+
+def test_read_keyring_falls_back_to_unprefixed_var_for_analytics(monkeypatch):
+    """Regression test for the bug this fix addresses: on a split deployment,
+    `flight-sql-srv` builds its provider with `ProviderBuilder::new("")`
+    (`rust/public/src/servers/flight_sql_server.rs`), so the analytics
+    keyring only ever lives in the unprefixed `MICROMEGAS_API_KEYS` --
+    `MICROMEGAS_ANALYTICS_API_KEYS` is never populated outside the monolith.
+    `--table analytics --source env` with no `--var` must still find it."""
+    monkeypatch.delenv("MICROMEGAS_ANALYTICS_API_KEYS", raising=False)
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS", json.dumps([{"name": "b", "key": "secret-b"}])
+    )
+    args = make_args(table="analytics")
+    entries = import_keys.read_keyring(args, FakeParser())
+    assert entries == [("b", "secret-b")]
+
+
 def test_read_keyring_explicit_var_overrides_default(monkeypatch):
     monkeypatch.setenv("CUSTOM_VAR", json.dumps([{"name": "c", "key": "secret-c"}]))
     args = make_args(var="CUSTOM_VAR")
@@ -84,11 +118,42 @@ def test_read_keyring_explicit_var_overrides_default(monkeypatch):
     assert entries == [("c", "secret-c")]
 
 
+def test_read_keyring_explicit_var_does_not_fall_back(monkeypatch):
+    """An explicit `--var` is used as-is -- no fallback to
+    `MICROMEGAS_API_KEYS` even when it's set, since the fallback only exists
+    to cover the *default*, not an override the operator asked for
+    specifically."""
+    monkeypatch.delenv("CUSTOM_VAR", raising=False)
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS", json.dumps([{"name": "z", "key": "secret-z"}])
+    )
+    args = make_args(var="CUSTOM_VAR")
+    with pytest.raises(SystemExit) as exc_info:
+        import_keys.read_keyring(args, FakeParser())
+    assert "CUSTOM_VAR" in str(exc_info.value)
+
+
 def test_read_keyring_missing_env_var_errors(monkeypatch):
     monkeypatch.delenv("MICROMEGAS_API_KEYS", raising=False)
     args = make_args()
     with pytest.raises(SystemExit):
         import_keys.read_keyring(args, FakeParser())
+
+
+def test_read_keyring_both_prefixed_and_unprefixed_absent_errors_mentions_both(
+    monkeypatch,
+):
+    """Neither the table's prefixed default nor the unprefixed fallback is
+    set -- the error must name both, since either one being set would have
+    worked."""
+    monkeypatch.delenv("MICROMEGAS_ANALYTICS_API_KEYS", raising=False)
+    monkeypatch.delenv("MICROMEGAS_API_KEYS", raising=False)
+    args = make_args(table="analytics")
+    with pytest.raises(SystemExit) as exc_info:
+        import_keys.read_keyring(args, FakeParser())
+    message = str(exc_info.value)
+    assert "MICROMEGAS_ANALYTICS_API_KEYS" in message
+    assert "MICROMEGAS_API_KEYS" in message
 
 
 def test_read_keyring_from_file(tmp_path):
