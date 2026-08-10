@@ -35,8 +35,9 @@ For a production deployment with auth, see [Authentication](#authentication) bel
 
 The OTLP routes share the same auth chain as the rest of the ingestion service:
 DB-backed `ingestion_api_keys` (the steady-state path — mint one via
-`POST /auth/api_keys`, see [API Keys](../admin/api-keys.md)), transitional
-env-keyring bearer tokens (`MICROMEGAS_API_KEYS`), and OIDC.
+`POST /api/ingestion-api-keys` on `analytics-web-srv`, see
+[API Keys](../admin/api-keys.md)), transitional env-keyring bearer tokens
+(`MICROMEGAS_API_KEYS`), and OIDC.
 
 OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and attach the parsed headers to every export request:
 

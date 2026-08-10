@@ -95,9 +95,9 @@ impl ProviderBuilder {
     ///
     /// **The DB provider is always pushed onto the chain whenever a key store is
     /// attached** — registration never depends on the existence query below, so a
-    /// deployment that mints its first key through `POST /auth/api_keys` into a
-    /// previously empty table authenticates it on the very next request, with no
-    /// restart.
+    /// deployment that mints its first key through `analytics-web-srv`'s
+    /// `POST {base_path}/api/ingestion-api-keys` into a previously empty table
+    /// authenticates it on the very next request, with no restart.
     ///
     /// **A DB key store with at least one live key counts as "auth configured";
     /// an empty one does not.** When a key store is attached, this runs one cheap

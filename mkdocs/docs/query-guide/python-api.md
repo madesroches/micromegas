@@ -805,11 +805,13 @@ presenting the same key string after migrating off the keyring. Requires OIDC ad
 target service — no direct Postgres access needed.
 
 ```bash
-micromegas-import-keys --table ingestion --source env --url http://ingestion:8081
+micromegas-import-keys --table ingestion --source env --url https://analytics.example.com
 micromegas-import-keys --table analytics --source env --url https://analytics.example.com
 ```
 
-`--table {ingestion,analytics}` selects the import route and target service. `--source env`
+`--table {ingestion,analytics}` selects the import route; `--url` always points at
+`analytics-web-srv`'s base URL for both tables — ingestion itself exposes no
+key-management route to point at. `--source env`
 (default `--var`, with a fallback — see below) or `--source file --path ...` supplies the keyring.
 `--only NAME [NAME ...]` / `--exclude NAME [NAME ...]` select which keyring entries to import on
 this run. Auth follows the same OIDC setup as `micromegas-query`/`-screens` (`MICROMEGAS_OIDC_*` for

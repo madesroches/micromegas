@@ -140,11 +140,6 @@ path = "tests/firehose_cloudwatch_logs_tests.rs"
 required-features = ["server"]
 
 [[test]]
-name = "api_keys_tests"
-path = "tests/api_keys_tests.rs"
-required-features = ["server"]
-
-[[test]]
 name = "flightsql_client_factory_scheme_tests"
 path = "tests/flightsql_client_factory_scheme_tests.rs"
 required-features = ["server"]

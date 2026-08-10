@@ -204,9 +204,7 @@ def main():
 
     # Start Ingestion Server (WITH auth): the local self-telemetry key
     # provisioned above is set on the ingestion process's own MICROMEGAS_API_KEYS,
-    # so it accepts that key from the other processes' self-telemetry sinks —
-    # and so its /auth/api_keys routes are registered, which they are not under
-    # --disable-auth (there is no AuthContext to gate on in that mode).
+    # so it accepts that key from the other processes' self-telemetry sinks.
     print("📥 Starting Ingestion Server (WITH auth)...")
     ingestion_env = env.copy()
     ingestion_env["MICROMEGAS_API_KEYS"] = json.dumps(

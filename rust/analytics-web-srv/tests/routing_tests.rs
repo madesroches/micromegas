@@ -11,7 +11,7 @@
 
 use analytics_web_srv::analytics_keys::AnalyticsKeysState;
 use analytics_web_srv::data_source_cache::DataSourceCache;
-use analytics_web_srv::ingestion_keys_proxy::IngestionProxyState;
+use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
 use analytics_web_srv::web_server::build_protected_routes;
 use axum::{
@@ -402,7 +402,7 @@ fn disabled_auth_app() -> Router {
     let data_source_cache = DataSourceCache::new(pool.clone(), std::time::Duration::from_secs(60));
     let maps_state = MapsState::new(None);
     let analytics_keys_state = AnalyticsKeysState { pool: None };
-    let ingestion_proxy_state = IngestionProxyState { config: None };
+    let ingestion_keys_state = IngestionKeysState { pool: None };
     build_protected_routes(
         "",
         &None,
@@ -410,7 +410,7 @@ fn disabled_auth_app() -> Router {
         data_source_cache,
         maps_state,
         analytics_keys_state,
-        ingestion_proxy_state,
+        ingestion_keys_state,
     )
 }
 
