@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+import requests
+
 from micromegas.cli import config
 from micromegas.cli.version import add_version_argument
 from micromegas.ingestion_client import IngestionClient
@@ -143,7 +145,10 @@ def make_client(args, parser):
 def import_one(client, table, name, key):
     """Calls the table-appropriate import method and returns the parsed
     response dict. Raises `RuntimeError` on a 4xx/5xx (from
-    `WebClient`/`IngestionClient`'s `_check_response`)."""
+    `WebClient`/`IngestionClient`'s `_check_response`), or
+    `requests.exceptions.RequestException` on a network-level failure
+    (connection reset, DNS failure, timeout) from the underlying
+    `session.post` call."""
     if table == "ingestion":
         return client.import_ingestion_api_key(name, key)
     return client.import_analytics_api_key(name, key)
@@ -158,7 +163,7 @@ def run_import(client, table, entries):
     for name, key in entries:
         try:
             result = import_one(client, table, name, key)
-        except RuntimeError as e:
+        except (RuntimeError, requests.exceptions.RequestException) as e:
             print(f"{name}: error: {e}", file=sys.stderr)
             all_ok = False
             continue

@@ -3,6 +3,7 @@ import json
 import sys
 
 import pytest
+import requests
 
 from micromegas.cli import import_keys
 
@@ -223,6 +224,27 @@ def test_run_import_continues_past_individual_failures(capsys):
     client = FakeClient(
         {
             "a": RuntimeError("HTTP 400: name must not be empty"),
+            "b": {"key_id": "id-b", "imported": True, "revoked_at": None},
+        }
+    )
+    ok = import_keys.run_import(client, "ingestion", [("a", "ka"), ("b", "kb")])
+    assert ok is False
+    # Both keys were attempted -- the batch didn't abort at the first failure.
+    assert client.calls == [("a", "ka"), ("b", "kb")]
+    captured = capsys.readouterr()
+    assert "b: imported (key_id=id-b)" in captured.out
+    assert "a: error:" in captured.err
+
+
+def test_run_import_continues_past_network_level_failures(capsys):
+    """A `requests.exceptions.RequestException` (connection reset, DNS
+    failure, timeout) escapes straight out of `session.post` -- unlike an
+    HTTP 4xx/5xx, it's never wrapped into a `RuntimeError` by
+    `_check_response`. `run_import` must catch it too, or one bad-network
+    key aborts every key after it."""
+    client = FakeClient(
+        {
+            "a": requests.exceptions.ConnectionError("connection reset by peer"),
             "b": {"key_id": "id-b", "imported": True, "revoked_at": None},
         }
     )
