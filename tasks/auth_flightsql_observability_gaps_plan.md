@@ -692,14 +692,19 @@ adds them.
     `x-client-ip` to anything. `analytics-web-srv` has no such header at all. Both are real design
     decisions that shouldn't be bundled into a logging-gap fix. So `/gateway/query` records report
     the gateway's address and every web-app notebook/query-editor query (`client="web"`, by far the
-    highest-volume source of audit records) reports `analytics-web-srv`'s. Flagged as a known
-    limitation in the doc update (step 13); the follow-up direction is settled in the next
-    sub-bullet.
+    highest-volume source of audit records) reports `analytics-web-srv`'s. Note the HTTP gateway is
+    an *optional* deployment component, not an essential part of the topology: direct FlightSQL
+    access — the Python client querying `flight-sql-srv` straight, no gateway in between — is a
+    first-class path and gets a true `client_ip` under this plan with no caveat, and in a
+    gateway-less deployment this limitation reduces to the web app's `/api/query-stream` hop alone.
+    Flagged as a known limitation in the doc update (step 13); the follow-up direction is settled
+    in the next sub-bullet.
   - *Follow-up direction (decided, deferred — resolves what was previously an open question):*
     the cleaner follow-up is not a second audit field but making the proxies *append to
-    `X-Forwarded-For`* when they open their downstream gRPC connection (gateway: in
-    `build_origin_metadata`, dropping the bespoke `x-client-ip`; `analytics-web-srv`: in
-    `stream_query.rs`), so the existing `get_client_ip` picks the original caller up with no new
+    `X-Forwarded-For`* when they open their downstream gRPC connection (`analytics-web-srv`: in
+    `stream_query.rs` — the hop every web-app deployment has; the gateway, where deployed: in
+    `build_origin_metadata`, dropping the bespoke `x-client-ip`), so the existing `get_client_ip`
+    picks the original caller up with no new
     server-side code — but that raises the trusted-hop count from one to two and so needs the
     configurable-hop-count work above first. The alternative — FlightSQL reading the gateway's
     already-computed `x-client-ip` (which, after this plan, carries the ALB-observed address of
