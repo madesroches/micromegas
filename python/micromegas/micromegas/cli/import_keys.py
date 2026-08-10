@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """CLI tool for importing legacy env-keyring API keys into the DB-backed
-key store (#1411).
+key store (#1411, revised by #1458).
 
-Carries a pre-existing key string forward via the ingestion/analytics
+Carries a pre-existing key string forward via `analytics-web-srv`'s
 `.../import` HTTP routes -- no `psql`, no direct Postgres network access, an
-HTTP-reachable workstation is enough.
+HTTP-reachable workstation is enough. Both `--table` values go through
+`analytics-web-srv`: ingestion itself exposes no key-management HTTP surface
+at all (#1458).
 """
 
 import argparse
@@ -17,7 +19,6 @@ import requests
 
 from micromegas.cli import config
 from micromegas.cli.version import add_version_argument
-from micromegas.ingestion_client import IngestionClient
 from micromegas.web_client import WebClient
 
 # `--var`'s default when omitted: each table's own prefixed legacy var --
@@ -158,22 +159,19 @@ def build_auth_provider(args, parser):
 
 
 def make_client(args, parser):
-    """`--url` selects the target service directly: ingestion's own base URL
-    for `--table ingestion` (never through `analytics-web-srv`'s proxy --
-    the CLI holds its own bearer token, so it doesn't need the proxy, which
-    exists only because the *browser* can't); `analytics-web-srv`'s base URL
-    for `--table analytics`.
+    """`--url` always points at `analytics-web-srv`'s base URL, for both
+    `--table` values (#1458) -- ingestion no longer exposes any
+    key-management HTTP routes of its own, so there is nothing left for a
+    `--table ingestion` run to call directly.
     """
     auth_provider = build_auth_provider(args, parser)
-    if args.table == "ingestion":
-        return IngestionClient(args.url, auth_provider=auth_provider)
     return WebClient(args.url, auth_provider=auth_provider)
 
 
 def import_one(client, table, name, key):
     """Calls the table-appropriate import method and returns the parsed
     response dict. Raises `RuntimeError` on a 4xx/5xx (from
-    `WebClient`/`IngestionClient`'s `_check_response`), or
+    `WebClient`'s `_check_response`), or
     `requests.exceptions.RequestException` on a network-level failure
     (connection reset, DNS failure, timeout) from the underlying
     `session.post` call."""
@@ -223,9 +221,8 @@ def main():
         "--url",
         required=True,
         help=(
-            "Target service base URL: ingestion's own base URL for --table ingestion "
-            "(called directly, never through analytics-web-srv's proxy), or "
-            "analytics-web-srv's base URL for --table analytics"
+            "analytics-web-srv's base URL -- used for both --table values, "
+            "since ingestion itself exposes no key-management HTTP routes"
         ),
     )
     parser.add_argument(

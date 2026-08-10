@@ -3,7 +3,7 @@
 use crate::app_db;
 use crate::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
 use crate::data_source_cache::DataSourceCache;
-use crate::ingestion_keys_proxy;
+use crate::ingestion_keys;
 use crate::maps;
 use crate::stream_query;
 use crate::{analytics_keys, data_sources, folders, screens};
@@ -253,7 +253,7 @@ async fn key_management_disabled() -> Response {
 /// Answers both key-management path prefixes with a fixed 503 instead of the
 /// real routers — merged only under `--disable-auth`, in place of
 /// `analytics_keys::analytics_keys_router` /
-/// `ingestion_keys_proxy::ingestion_keys_proxy_router`. Under
+/// `ingestion_keys::ingestion_keys_router`. Under
 /// `--disable-auth`, `build_protected_routes` layers a hardcoded
 /// `ValidatedUser { is_admin: true, .. }` on every request instead of running
 /// `cookie_auth_middleware`, so the `AdminUser` extractor would pass for any
@@ -295,7 +295,7 @@ pub fn build_protected_routes(
     data_source_cache: DataSourceCache,
     maps_state: maps::MapsState,
     analytics_keys_state: analytics_keys::AnalyticsKeysState,
-    ingestion_proxy_state: ingestion_keys_proxy::IngestionProxyState,
+    ingestion_keys_state: ingestion_keys::IngestionKeysState,
 ) -> Router {
     let routes = Router::new()
         .route(
@@ -356,14 +356,14 @@ pub fn build_protected_routes(
     // hardcoded admin `ValidatedUser` is layered on every request in that
     // mode (see below), so the `AdminUser` extractor would otherwise pass
     // for any unauthenticated caller — merging the static 503 router instead
-    // makes the real mint/list/revoke/forward logic structurally
-    // unreachable, not merely flag-gated (see Security).
+    // makes the real mint/list/revoke logic structurally unreachable, not
+    // merely flag-gated (see Security).
     let routes = if auth_state.is_some() {
         routes
             .merge(analytics_keys::analytics_keys_router(base_path))
-            .merge(ingestion_keys_proxy::ingestion_keys_proxy_router(base_path))
+            .merge(ingestion_keys::ingestion_keys_router(base_path))
             .layer(Extension(analytics_keys_state))
-            .layer(Extension(ingestion_proxy_state))
+            .layer(Extension(ingestion_keys_state))
     } else {
         routes.merge(key_management_disabled_router(base_path))
     };
@@ -620,26 +620,21 @@ pub async fn run_web_server(
         None => None,
     };
     if analytics_keys_pool.is_some() {
-        info!("Analytics-key store pool configured");
+        info!("Telemetry-DB pool configured (analytics-api-keys, ingestion-api-keys)");
     } else {
         warn!(
-            "MICROMEGAS_SQL_CONNECTION_STRING not set — /api/analytics-api-keys/* will return 503"
+            "MICROMEGAS_SQL_CONNECTION_STRING not set — /api/analytics-api-keys/* and /api/ingestion-api-keys/* will return 503"
         );
     }
     let analytics_keys_state = analytics_keys::AnalyticsKeysState {
-        pool: analytics_keys_pool,
+        pool: analytics_keys_pool.clone(),
     };
 
-    let ingestion_proxy_config = ingestion_keys_proxy::IngestionProxyConfig::from_env();
-    if ingestion_proxy_config.is_some() {
-        info!("Ingestion key-management proxy configured");
-    } else {
-        warn!(
-            "MICROMEGAS_INGESTION_ADMIN_URL / MICROMEGAS_INGESTION_PROXY_OIDC_* not fully set — /api/ingestion-api-keys/* will return 503"
-        );
-    }
-    let ingestion_proxy_state = ingestion_keys_proxy::IngestionProxyState {
-        config: ingestion_proxy_config.map(Arc::new),
+    // Both tables live in the same telemetry DB behind the same
+    // `MICROMEGAS_SQL_CONNECTION_STRING` — reuse the same pool rather than
+    // opening a second one.
+    let ingestion_keys_state = ingestion_keys::IngestionKeysState {
+        pool: analytics_keys_pool,
     };
 
     let auth_state = if config.disable_auth {
@@ -660,7 +655,7 @@ pub async fn run_web_server(
             data_source_cache,
             maps_state.clone(),
             analytics_keys_state,
-            ingestion_proxy_state,
+            ingestion_keys_state,
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));
 

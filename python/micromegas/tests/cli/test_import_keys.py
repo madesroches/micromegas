@@ -6,13 +6,14 @@ import pytest
 import requests
 
 from micromegas.cli import import_keys
+from micromegas.web_client import WebClient
 
 
 class FakeClient:
     """Records every import call and returns a canned response per name,
     raising `RuntimeError` for names mapped to an exception -- mirrors
-    `WebClient`/`IngestionClient`'s own `_check_response` contract, per
-    `test_logout.py`'s lightweight-mocking style."""
+    `WebClient`'s own `_check_response` contract, per `test_logout.py`'s
+    lightweight-mocking style."""
 
     def __init__(self, responses):
         self.responses = responses
@@ -52,6 +53,31 @@ class FakeParser:
 
     def error(self, message):
         raise SystemExit(f"error: {message}")
+
+
+# ---------------------------------------------------------------------------
+# make_client
+# ---------------------------------------------------------------------------
+
+
+def test_make_client_returns_web_client_for_ingestion_table(monkeypatch):
+    """Regression test for #1458: `--table ingestion` used to return an
+    `IngestionClient` (calling ingestion directly); it now always returns a
+    `WebClient` pointed at `analytics-web-srv`, since ingestion exposes no
+    key-management HTTP routes of its own."""
+    monkeypatch.setattr(import_keys, "build_auth_provider", lambda args, parser: None)
+    args = make_args(table="ingestion", url="http://analytics:3000")
+    client = import_keys.make_client(args, FakeParser())
+    assert isinstance(client, WebClient)
+    assert client.base_url == "http://analytics:3000"
+
+
+def test_make_client_returns_web_client_for_analytics_table(monkeypatch):
+    monkeypatch.setattr(import_keys, "build_auth_provider", lambda args, parser: None)
+    args = make_args(table="analytics", url="http://analytics:3000")
+    client = import_keys.make_client(args, FakeParser())
+    assert isinstance(client, WebClient)
+    assert client.base_url == "http://analytics:3000"
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +261,7 @@ def test_only_and_exclude_are_mutually_exclusive(monkeypatch):
             "--table",
             "ingestion",
             "--url",
-            "http://ingestion:8081",
+            "http://analytics:3000",
             "--only",
             "a",
             "--exclude",
@@ -363,7 +389,7 @@ def test_main_exits_nonzero_when_a_key_fails(monkeypatch):
             "--table",
             "ingestion",
             "--url",
-            "http://ingestion:8081",
+            "http://analytics:3000",
         ],
     )
     with pytest.raises(SystemExit) as exc_info:
@@ -391,7 +417,7 @@ def test_main_succeeds_when_every_key_imports(monkeypatch, capsys):
             "--table",
             "ingestion",
             "--url",
-            "http://ingestion:8081",
+            "http://analytics:3000",
         ],
     )
     import_keys.main()
@@ -417,7 +443,7 @@ def test_main_with_no_selected_keys_prints_message_and_does_not_call_client(
             "--table",
             "ingestion",
             "--url",
-            "http://ingestion:8081",
+            "http://analytics:3000",
             "--exclude",
             "a",
         ],

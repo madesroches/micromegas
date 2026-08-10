@@ -96,6 +96,26 @@ class WebClient:
         )
         self._check_response(resp)
 
+    def import_ingestion_api_key(self, name, key):
+        """Import an existing ingestion API key string (#1458).
+
+        Hashes and stores `key` verbatim via
+        `POST /api/ingestion-api-keys/import` rather than minting a fresh one
+        -- this is what lets a legacy env-keyring key's own string carry
+        forward, since existing clients must keep presenting the same key.
+        Mirrors `mint_key`'s response shape minus the cleartext:
+        `{"key_id", "name", "created_at", "created_by", "revoked_at",
+        "imported"}`.
+        """
+        resp = self.session.post(
+            self._api_url("ingestion-api-keys/import"),
+            headers=self._headers(),
+            json={"name": name, "key": key},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
     def import_analytics_api_key(self, name, key):
         """Import an existing analytics API key string (#1411).
 

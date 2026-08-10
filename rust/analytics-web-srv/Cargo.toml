@@ -28,7 +28,6 @@ http.workspace = true
 moka.workspace = true
 object_store.workspace = true
 openidconnect.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

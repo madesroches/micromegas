@@ -4,7 +4,6 @@ use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
-use micromegas_auth::db_api_key::DbApiKeyConfig;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
@@ -107,43 +106,18 @@ pub fn register_routes(router: Router) -> Router {
 /// the supplied `auth_provider` (or runs open when `None`), and shuts down
 /// gracefully when `shutdown` resolves.
 ///
-/// Thin wrapper around [`serve_ingestion_with_api_key_config`], mirroring the
-/// `ProviderBuilder`/`provider()` split in `micromegas_auth::default_provider`:
-/// this keeps `serve_ingestion`'s published signature (the `server`-feature
-/// crate) unchanged. Uses `DbApiKeyConfig::from_env_with_prefix("")` — the
-/// unprefixed default, correct for `telemetry-ingestion-srv`.
+/// Ingestion exposes no key-management HTTP surface of its own (#1458) — keys
+/// for both `ingestion_api_keys` and `analytics_api_keys` are administered
+/// exclusively through `analytics-web-srv`'s own routes. Ingestion still
+/// *validates* incoming API keys via whichever `auth_provider` it was built
+/// with (including a `DbApiKeyAuthProvider`, unaffected by this), it just no
+/// longer exposes a way to mint/list/revoke/import them.
 pub async fn serve_ingestion(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,
     auth_provider: Option<Arc<dyn AuthProvider>>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     grace: Duration,
-) -> anyhow::Result<()> {
-    serve_ingestion_with_api_key_config(
-        listen_addr,
-        lake,
-        auth_provider,
-        shutdown,
-        grace,
-        DbApiKeyConfig::from_env_with_prefix(""),
-    )
-    .await
-}
-
-/// Like [`serve_ingestion`], but also takes the [`DbApiKeyConfig`] the caller's
-/// auth provider was built with, so the key-management routes'
-/// `effective_within_seconds` (in the `DELETE` response) matches the TTL the
-/// running provider actually uses. The caller must build this with the same
-/// prefix it gave `ProviderBuilder::with_db_key_store` (empty for
-/// `telemetry-ingestion-srv`, `MICROMEGAS_INGESTION` for the monolith) so the
-/// two cannot silently disagree.
-pub async fn serve_ingestion_with_api_key_config(
-    listen_addr: SocketAddr,
-    lake: DataLakeConnection,
-    auth_provider: Option<Arc<dyn AuthProvider>>,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-    grace: Duration,
-    api_key_config: DbApiKeyConfig,
 ) -> anyhow::Result<()> {
     use axum::extract::DefaultBodyLimit;
     use axum::middleware;
@@ -154,7 +128,6 @@ pub async fn serve_ingestion_with_api_key_config(
     use super::axum_utils::observability_middleware;
     use super::shutdown::serve_axum_with_graceful_shutdown;
 
-    let key_store_pool = lake.db_pool.clone();
     let service = Arc::new(WebIngestionService::new(lake));
 
     let health_router = Router::new()
@@ -175,24 +148,11 @@ pub async fn serve_ingestion_with_api_key_config(
     let auth_enabled = auth_provider.is_some();
     if let Some(provider) = auth_provider {
         info!("Ingestion: authentication enabled");
-        // Merged before the auth_middleware layer below, so it reuses the same
-        // middleware rather than re-implementing auth: handlers read
-        // `Extension<AuthContext>`, inserted by `auth_middleware`.
-        protected_app = protected_app.merge(super::api_keys::api_keys_router(
-            key_store_pool,
-            api_key_config,
-        ));
         protected_app = protected_app.layer(middleware::from_fn(move |req, next| {
             auth_middleware(provider.clone(), req, next)
         }));
     } else {
-        // With --disable-auth there is no AuthContext in extensions and the
-        // key-management handlers' Extension<AuthContext> extractor would 500 —
-        // there is nothing to authenticate in that mode, so skip registration
-        // entirely rather than exposing a route that always fails.
-        warn!(
-            "Ingestion: authentication disabled — development mode only; /auth/api_keys routes not registered"
-        );
+        info!("Ingestion: authentication disabled — development mode only");
     }
 
     // The Firehose routes carry their own auth (Firehose can only send its credential via

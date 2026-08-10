@@ -39,7 +39,7 @@ cargo run --bin micromegas-monolith -- \
 
 | Variable | Required | Description |
 |---|---|---|
-| `MICROMEGAS_SQL_CONNECTION_STRING` | Yes (lake roles) | PostgreSQL for the data lake. Also read by the `web` role to open its own small pool for the analytics-key routes (`/api/analytics-api-keys*`, see [API Keys](api-keys.md)) — a `--roles web`-only monolith never runs the v5 migration itself, so the target telemetry DB must already have had ingestion or a lakehouse-role monolith run against it at least once, or those routes fail at request time with an opaque `500` |
+| `MICROMEGAS_SQL_CONNECTION_STRING` | Yes (lake roles) | PostgreSQL for the data lake. Also read by the `web` role to open its own small pool backing **both** key-management route groups (`/api/ingestion-api-keys*`, `/api/analytics-api-keys*` — the same pool serves both tables, see [API Keys](api-keys.md)) — a `--roles web`-only monolith never runs the v5 migration itself, so the target telemetry DB must already have had ingestion or a lakehouse-role monolith run against it at least once, or those routes fail at request time with an opaque `500` |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes (lake roles) | Object store URI (`file:///path` or `s3://…`) |
 | `MICROMEGAS_APP_SQL_CONNECTION_STRING` | Yes (web role) | PostgreSQL for the web app |
 | `MICROMEGAS_WEB_CORS_ORIGIN` | Yes (web role) | Allowed CORS origin (e.g. `http://localhost:3000`) |
@@ -92,19 +92,19 @@ micromegas-monolith --disable-ingestion-auth
 ```
 
 Admin users are controlled by `MICROMEGAS_ANALYTICS_ADMINS` (falls back to `MICROMEGAS_ADMINS`).
-The ingestion role's `/auth/api_keys` gate uses `MICROMEGAS_INGESTION_ADMINS`
-(falls back to `MICROMEGAS_ADMINS`) — see [API Keys](api-keys.md).
+The ingestion role has no admin-gated route of its own — `MICROMEGAS_INGESTION_ADMINS`
+no longer gates anything on this role (see [API Keys](api-keys.md)).
 
-### Key management (`/auth/api_keys`)
+### Key management
 
 The ingestion role always attaches a DB-backed key store (`ingestion_api_keys`)
-built from the shared lake connection, and — when its auth is enabled — exposes
-the same four routes documented in [API Keys](api-keys.md) to mint, list,
-revoke, and import ingestion keys without a redeploy. FlightSQL validates
-`analytics_api_keys` the same way; minting/listing/revoking/importing
-analytics keys happens through the `web` role's own
-`/api/analytics-api-keys*` HTTP routes instead (a separate `analytics-web-srv`
-process, or the monolith's own `web` role) — see
+built from the shared lake connection, for *validating* incoming API keys —
+but exposes no HTTP routes of its own to mint, list, revoke, or import them.
+FlightSQL validates `analytics_api_keys` the same way. Minting, listing,
+revoking, and importing keys for **both** tables happens exclusively through
+the `web` role's own `/api/ingestion-api-keys*` / `/api/analytics-api-keys*`
+HTTP routes instead (a separate `analytics-web-srv` process, or the
+monolith's own `web` role) — see
 [API Keys](api-keys.md#minting-an-analytics-key-over-http).
 
 ## Role selection

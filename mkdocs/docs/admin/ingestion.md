@@ -28,7 +28,7 @@ binary as its entrypoint.
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads (`file:///path`, `s3://…`, `gs://…`) |
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
-| `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — required for `/auth/api_keys` to accept any caller (see [API Keys](api-keys.md)) |
+| `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags
@@ -59,19 +59,14 @@ export MICROMEGAS_API_KEYS='[{"name":"game-client","key":"…"}]'
 telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
 ```
 
-### Key management (`/auth/api_keys`)
+### Key management
 
 This service always attaches a DB-backed key store (`ingestion_api_keys`) built
-from its own data-lake connection, and — when auth is enabled — exposes three
-OIDC-authenticated, admin-gated routes to mint, list, and revoke keys without a
-redeploy: `POST`/`GET`/`DELETE /auth/api_keys`. See [API Keys](api-keys.md) for
-the full route reference.
-
-**These routes 403 for every caller until `MICROMEGAS_ADMINS` (a JSON array of
-OIDC emails/subjects) is set on this service** — `is_admin` is only ever set by
-`OidcAuthProvider`, so an otherwise-correctly-configured OIDC setup still can't
-manage keys without it. There is no other symptom; if every `/auth/api_keys`
-call 403s, check this first.
+from its own data-lake connection for *validating* incoming API keys, but
+exposes no HTTP routes to mint, list, revoke, or import them — ingestion has
+no key-management HTTP surface of its own. Those operations are handled
+exclusively by `analytics-web-srv`'s own `/api/ingestion-api-keys*` routes
+instead — see [API Keys](api-keys.md).
 
 ## Health and readiness
 
