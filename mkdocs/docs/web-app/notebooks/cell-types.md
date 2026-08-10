@@ -1,6 +1,6 @@
 # Cell Types Reference
 
-Notebooks support 14 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
+Notebooks support 15 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
@@ -497,6 +497,58 @@ Exports trace data to [Perfetto UI](https://ui.perfetto.dev) for visualization, 
 - Caches the generated trace buffer — cleared when process ID, span type, time range, or data source changes
 - Progress indicator during trace generation (shows running MB received as chunks stream in)
 - No automatic execution — triggered by user button click
+
+---
+
+## ![Pie Chart](../../assets/images/cell-icons/pie-chart.svg){ .cell-icon } Pie Chart
+
+Single-query pie or donut chart for proportions and breakdowns (share of events by category, error-type distribution, etc.), with a side legend and top-N + "Other" grouping.
+
+**Configuration:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SQL query returning category + value columns (plus optional `color`) |
+| `dataSource` | string | Data source override |
+| `options.unit` | string | Value unit, formatted the same way as the Chart cell (e.g. `bytes`, `ms`, `percent`) |
+| `options.chart_type` | `'pie'` \| `'donut'` | Slice shape (default `'donut'`) |
+| `options.max_slices` | number | Cap on visible slices before folding the tail into "Other" (default `8`) |
+
+**SQL columns:**
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| Category (1st non-color) | Yes | String label per slice |
+| Value (2nd non-color) | Yes | Numeric value — the query's own `GROUP BY` is trusted to have already aggregated it; duplicate labels are not merged client-side |
+| `color` | No | Per-slice fill color — packed RGBA u32 (e.g. from `rgba()` or `color_scale()`), `'#rrggbb'`/`'#rrggbbaa'` string, or 4-byte binary |
+
+Rows with a null category, a null value, or a negative value are dropped (a negative slice has no geometric meaning).
+
+**Features:**
+
+- Donut mode shows the total (sum of all slice values, unit-formatted) in the center; pie mode is a full disc
+- Always-visible side legend — swatch, label, value, and percentage per slice — since a pie identifies categories by fill color alone
+- Direct percentage labels inside slices with an 8%+ share; smaller slices rely on the legend or tooltip
+- Hover tooltip shows category, value, and percentage
+- Slices beyond `max_slices` (sorted descending by value) are folded into a single "Other" slice, colored a fixed muted gray rather than the rotating palette; other slices use SQL-supplied `color` when present, otherwise the default palette in fixed order
+- Pie/Donut toggle in both the cell header and the editor
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
+**Example SQL:**
+
+```sql
+SELECT CASE level
+  WHEN 1 THEN 'FATAL'
+  WHEN 2 THEN 'ERROR'
+  WHEN 3 THEN 'WARN'
+  WHEN 4 THEN 'INFO'
+  WHEN 5 THEN 'DEBUG'
+  ELSE 'TRACE'
+END AS level_name, count(*) AS count
+FROM log_entries
+GROUP BY level_name
+ORDER BY count DESC
+```
 
 ---
 

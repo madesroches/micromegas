@@ -280,8 +280,10 @@ export function validateChartColumns(table: Table):
   const resolved = resolveChartColumns(fields)
   const { xType, yType, xColumnName, yColumnName, colorColumnName, colorColumnKind } = resolved
 
-  // X column must be timestamp, numeric, or string
-  if (!isTimeType(xType) && !isNumericType(xType) && !isStringType(xType)) {
+  // X column must be timestamp, numeric, or string (dictionary-encoded
+  // strings, e.g. FlightSQL's preserved Dictionary<Int32, Utf8> columns,
+  // decode to plain strings and must be accepted here too)
+  if (!isTimeType(xType) && !isNumericType(xType) && !isStringType(unwrapDictionary(xType))) {
     return {
       valid: false,
       error: 'First column must be timestamp, numeric, or string type for X-axis',
@@ -636,4 +638,61 @@ export function extractChartData(table: Table):
 
     return { ok: true, data, xAxisMode, xColumnName, yColumnName }
   }
+}
+
+// =============================================================================
+// Pie Chart Data
+// =============================================================================
+
+export interface PieSlice {
+  label: string
+  value: number
+  /** CSS color decoded from the SQL `color` column, if present. */
+  color?: string
+}
+
+/**
+ * Extract pie/donut chart data from an Arrow table: category + value (plus
+ * optional 'color'), reusing the same 2-or-3-column contract as chart cells
+ * (`validateChartColumns`/`resolveChartColumns`) — read as category/value
+ * instead of x/y since a pie has no axis (no `detectXAxisMode` needed).
+ *
+ * Rows with a null category or a null/non-finite/negative value are dropped —
+ * a negative slice has no geometric meaning. Values are trusted to already be
+ * aggregated by the query's own GROUP BY; duplicate labels are not merged.
+ */
+export function extractPieData(table: Table):
+  | { ok: true; slices: PieSlice[] }
+  | { ok: false; error: string } {
+  const validation = validateChartColumns(table)
+  if (!validation.valid) {
+    return { ok: false, error: validation.error }
+  }
+
+  const { xColumnName: labelColumnName, yColumnName: valueColumnName, colorColumnName, colorColumnKind } = validation
+
+  const slices: PieSlice[] = []
+  for (let i = 0; i < table.numRows; i++) {
+    const row = table.get(i)
+    if (!row) continue
+
+    const labelVal = row[labelColumnName]
+    const valueVal = row[valueColumnName]
+    if (labelVal == null || valueVal == null) continue
+
+    const valueNum = Number(valueVal)
+    if (!Number.isFinite(valueNum) || valueNum < 0) continue
+
+    const slice: PieSlice = { label: String(labelVal), value: valueNum }
+    if (colorColumnName && colorColumnKind) {
+      const colorVal = row[colorColumnName]
+      if (colorVal != null) {
+        const css = cellColorToCss(colorVal, colorColumnKind)
+        if (css !== null) slice.color = css
+      }
+    }
+    slices.push(slice)
+  }
+
+  return { ok: true, slices }
 }

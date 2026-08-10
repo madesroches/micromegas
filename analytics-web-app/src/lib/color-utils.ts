@@ -47,6 +47,46 @@ export function coerceCellToU32(value: unknown): number {
   return (value as number) >>> 0
 }
 
+/** Parses '#rrggbb' or '#rrggbbaa' to [r, g, b] (0-255, alpha ignored). Returns null on malformed input. */
+export function hexToRgb(hex: string): [number, number, number] | null {
+  if (typeof hex !== 'string' || (hex.length !== 7 && hex.length !== 9) || hex.charCodeAt(0) !== 35) {
+    return null
+  }
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return null
+  return [r, g, b]
+}
+
+/** WCAG relative luminance (0 = black, 1 = white) of a '#rrggbb'/'#rrggbbaa' color. Malformed input reads as black. */
+export function relativeLuminance(hex: string): number {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return 0
+  const [r, g, b] = rgb.map((c) => {
+    const s = c / 255
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function wcagContrastRatio(l1: number, l2: number): number {
+  const lighter = Math.max(l1, l2)
+  const darker = Math.min(l1, l2)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+/**
+ * Picks whichever of `darkText`/`lightText` has the higher WCAG contrast ratio against
+ * `bgHex`, so callers get readable text on an arbitrary (e.g. palette-driven) fill color.
+ */
+export function contrastingTextColor(bgHex: string, darkText = '#0a0a0f', lightText = '#ffffff'): string {
+  const bgLuminance = relativeLuminance(bgHex)
+  const darkRatio = wcagContrastRatio(bgLuminance, relativeLuminance(darkText))
+  const lightRatio = wcagContrastRatio(bgLuminance, relativeLuminance(lightText))
+  return darkRatio >= lightRatio ? darkText : lightText
+}
+
 /**
  * Decode a color cell value (from an Arrow color column) to a CSS color string.
  * Returns null for invalid/malformed string input; callers treat null as absent color.
