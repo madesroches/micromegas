@@ -83,7 +83,7 @@ changes for any client.
 ### 3. No client IP anywhere in the FlightSQL query audit trail
 
 **Deployment context: every service sits behind an AWS ALB (layer 7).** In-repo evidence:
-`flight_sql_server.rs`'s optional health sidecar (`with_health_addr`, `:168-175`) exists to
+`flight_sql_server.rs`'s optional health sidecar (`with_health_addr`, `:169-176`) exists to
 "[enable] plain-HTTP ALB health checks without changing the gRPC protocol";
 `mkdocs/docs/admin/flight-sql.md:86-87` documents FlightSQL scaling "horizontally behind a
 gRPC-aware load balancer"; `mkdocs/docs/gateway/index.md:62` documents the gateway's liveness
@@ -113,7 +113,7 @@ observed to `X-Forwarded-For` — it does not overwrite (default
   (`:571-585`) and logs them in the start-of-query `info!` (`:589-604`), and threads them into
   `QueryAuditState`/`QueryAuditRecord`. There is no `client_ip`-equivalent field anywhere in this
   path.
-- The two call sites, `do_get_fallback` (`:786-795`) and `do_get_statement` (`:949-956`), each
+- The two call sites, `do_get_fallback` (`:787-795`) and `do_get_statement` (`:950-956`), each
   receive `request: Request<Ticket>` (or `Request<Ticket>` via the trait method) and currently
   only ever call `.metadata()` on it before delegating to `execute_query`.
 - **The gRPC peer address *is* available as a fallback, but not via
@@ -157,7 +157,7 @@ observed to `X-Forwarded-For` — it does not overwrite (default
   `x-client-ip` today, so it is computed and sent but currently dropped on the floor.
   Separately, the gateway's header forwarding is allow-list based (`should_forward`, `:79-104`)
   and `x-forwarded-for` is **not** on the allow-list (`:44-57`), so the gateway does not pass the
-  original caller's XFF chain through to FlightSQL either. See Trade-offs/Open Questions.
+  original caller's XFF chain through to FlightSQL either. See Trade-offs.
 
 ## Design
 
@@ -503,13 +503,24 @@ adds them.
    belongs there too, per `rust/CLAUDE.md`'s "unit tests ... under the tests folder of the crate":
    drive a request whose path carries a `code`/`state` query string through
    `auth_observability_middleware` under `micromegas_tracing::test_utils::init_in_memory_tracing()`
-   (the same `InMemorySink`/`flush_log_buffer` harness already used elsewhere in this workspace,
-   e.g. `rust/analytics/tests/log_tests.rs`; imported directly as `micromegas_tracing::...` since
-   `rust/public/Cargo.toml` already depends on `micromegas-tracing` directly, not just through the
-   `micromegas` facade), then inspect the captured log blocks and assert the `request`/`response`
-   lines contain the path but never the query string. `rust/public/Cargo.toml` gains a
-   `serial_test` dev-dependency (alphabetical, between `reqwest` and `tokio`) — `init_in_memory_tracing`
-   requires it — and a `[[test]]` entry (`name = "auth_observability_tests"`,
+   (the same `InMemorySink`/`flush_log_buffer` harness `rust/analytics/tests/log_tests.rs` already
+   initializes; imported directly as `micromegas_tracing::...` since `rust/public/Cargo.toml`
+   already depends on `micromegas-tracing` directly, not just through the `micromegas` facade),
+   then assert the captured `request`/`response` lines contain the path but never the query string.
+   **No existing code reads captured log text** — nothing in the repo touches
+   `InMemorySinkState::log_blocks` today (`log_tests.rs` only asserts on process/stream metadata,
+   and the only sink-walking helpers, e.g. `count_integer_metric` in
+   `rust/object-cache/tests/telemetry_tests.rs`, iterate `metrics_blocks`) — so the test hand-rolls
+   a small helper: after `flush_log_buffer()`, lock `guard.sink.state`, walk each `log_blocks`
+   entry's `events` queue, and collect messages by matching `LogMsgQueueAny::LogStringEvent` (the
+   middleware's `info!` calls have runtime format args, so they record as dynamic strings; the
+   event's `msg` is a `micromegas_transit::DynString` tuple struct, readable as `.msg.0` without
+   adding a `micromegas-transit` dependency). `rust/public/Cargo.toml` gains a
+   `serial_test = "3.2"` dev-dependency (alphabetical, between `reqwest` and `tokio`; a direct pin,
+   not `workspace = true` — `serial_test` is not in the workspace root's dependency table, and all
+   eight crates that already use it pin `"3.2"` directly in their own `[dev-dependencies]`) —
+   `init_in_memory_tracing` requires every test using it to be `#[serial]` — and a `[[test]]` entry
+   (`name = "auth_observability_tests"`,
    `path = "tests/auth_observability_tests.rs"`, `required-features = ["server"]`), matching every
    other file under `rust/public/tests/`. `cargo test -p micromegas --features server` (existing
    suite plus this new test) must still pass; this checks query-string redaction in
@@ -526,8 +537,8 @@ adds them.
    Per Design §3. This is a behavior change for all three existing callers — see Design §3's
    blast-radius note; no signature or type changes, so no caller edits are needed.
 8. `flight_sql_service_impl.rs`: add `use super::http_utils::get_client_ip;` and thread `client_ip`
-   through `do_get_fallback` (`:786-795`, `get_client_ip(request.metadata().as_ref(),
-   request.extensions())`), `do_get_statement` (`:949-956`, same), `execute_query`'s signature and
+   through `do_get_fallback` (`:787-795`, `get_client_ip(request.metadata().as_ref(),
+   request.extensions())`), `do_get_statement` (`:950-956`, same), `execute_query`'s signature and
    both `info!` lines (`:519-604`), `QueryAuditState` (`:262-297`, `:619-643`), and
    `QueryAuditState::emit` (`:309-357`), per Design §3.
 9. `query_audit.rs`: add `pub client_ip: String` to `QueryAuditRecord` (`:79-129`), placed right
@@ -627,7 +638,7 @@ adds them.
   `execute_query`, `QueryAuditState`, `QueryAuditState::emit`.
 - `rust/public/src/servers/query_audit.rs` — `QueryAuditRecord`.
 - `rust/public/tests/http_utils_tests.rs` — new; `get_client_ip` selection/fallback/spoofing cases.
-- `rust/public/Cargo.toml` — `serial_test` dev-dependency; new `[[test]]` entries for
+- `rust/public/Cargo.toml` — `serial_test = "3.2"` dev-dependency (direct pin); new `[[test]]` entries for
   `auth_observability_tests` and `http_utils_tests`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates.
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table.
@@ -682,7 +693,31 @@ adds them.
     decisions that shouldn't be bundled into a logging-gap fix. So `/gateway/query` records report
     the gateway's address and every web-app notebook/query-editor query (`client="web"`, by far the
     highest-volume source of audit records) reports `analytics-web-srv`'s. Flagged as a known
-    limitation in the doc update (step 13) and as an Open Question below.
+    limitation in the doc update (step 13); the follow-up direction is settled in the next
+    sub-bullet.
+  - *Follow-up direction (decided, deferred — resolves what was previously an open question):*
+    the cleaner follow-up is not a second audit field but making the proxies *append to
+    `X-Forwarded-For`* when they open their downstream gRPC connection (gateway: in
+    `build_origin_metadata`, dropping the bespoke `x-client-ip`; `analytics-web-srv`: in
+    `stream_query.rs`), so the existing `get_client_ip` picks the original caller up with no new
+    server-side code — but that raises the trusted-hop count from one to two and so needs the
+    configurable-hop-count work above first. The alternative — FlightSQL reading the gateway's
+    already-computed `x-client-ip` (which, after this plan, carries the ALB-observed address of
+    the original HTTP caller and is no longer spoofable at the point it's computed) — stays
+    blocked on the receiving end: neither proxy presents a service identity `flight-sql-srv`
+    could verify today, so reading the header would reintroduce exactly the spoofing hole this
+    plan removes. The gateway authenticates downstream *as the end user* — it forwards the
+    caller's own `Authorization` header (`http_gateway.rs:44-57`) over server-auth-only TLS with
+    no client certificate (`:302-304`) — and `/api/query-stream` likewise sends the browser
+    user's bearer token (`stream_query.rs:271-274`). The closest existing primitive is the
+    delegation gate in `rust/auth/src/user_attribution.rs:127-206` (`x-allow-delegation`, granted
+    only to API-key principals), but moving the proxies onto their own API-key identity to use it
+    would flip every web/gateway audit record into the service-account-delegation attribution
+    shape — a user-visible change far outside a logging fix — and mTLS for backend connections is
+    already on record as an unbuilt future enhancement in
+    `tasks/completed/http-gateway-auth-forwarding.md` (the plan that introduced `x-client-ip`).
+    Deferred as future work along the `X-Forwarded-For`-append path; until then the documented
+    caveat (step 13) stands.
 - **`AuditClaims` reads unverified claims, same as the `sub`-only extraction it replaces.**
   `auth_callback`/`auth_refresh` don't run the freshly-exchanged `id_token` through
   `auth_provider.validate_request()` before logging — they trust the raw JWT payload from the
@@ -762,20 +797,3 @@ adds them.
      gateway deployment is available, also run the same query through `/gateway/query` and confirm
      `client_ip` is the *gateway's* address, not the original HTTP caller's — together confirming
      the documented caveat (step 13) matches actual behavior for both proxy hops.
-
-## Open Questions
-
-- **How should a server-side proxy hop pass the original caller's IP to FlightSQL?** Still open,
-  but reframed by the single-implementation decision. The gateway already computes `x-client-ip`
-  via `get_client_ip` (`http_gateway.rs:213`), so after this change that header carries the
-  ALB-observed address of the *original HTTP caller* and is no longer spoofable at the point it's
-  computed — the remaining obstacle is on the receiving end: `flight-sql-srv` has no way to know
-  that its immediate gRPC peer is a trusted gateway rather than an arbitrary client setting the
-  header, so reading `x-client-ip` would reintroduce exactly the spoofing hole this plan removes.
-  Given the "one client-IP implementation" rule, the cleaner follow-up is probably not a second
-  audit field but making the proxies *append to `X-Forwarded-For`* when they open their downstream
-  gRPC connection (gateway: add it to `build_origin_metadata` and drop the bespoke `x-client-ip`;
-  `analytics-web-srv`: add it in `stream_query.rs`), so the existing `get_client_ip` picks it up
-  with no new code on the server — but that raises the trusted-hop count from one to two and so
-  needs the configurable-hop-count work from Trade-offs first. Left as future work either way;
-  until then the documented caveat (step 13) stands.
