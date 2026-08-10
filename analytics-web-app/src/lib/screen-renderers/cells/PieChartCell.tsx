@@ -13,14 +13,19 @@ import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils
 import { extractPieData, type PieSlice } from '@/lib/arrow-utils'
 import { formatValueWithUnit } from '@/lib/format-value'
 import { SERIES_COLORS } from '@/components/chart-constants'
+import { contrastingTextColor } from '@/lib/color-utils'
 import { PieChart as PieChartIcon } from 'lucide-react'
 
 export type PieChartType = 'pie' | 'donut'
 
 const DEFAULT_MAX_SLICES = 8
 
-/** Fixed muted-gray fill for the synthetic "Other" slice — never the rotating palette. */
-const OTHER_SLICE_COLOR = 'var(--text-muted)'
+/**
+ * Fixed muted-gray fill for the synthetic "Other" slice — never the rotating palette.
+ * A literal value (not `var(--text-muted)`) so its relative luminance can be computed
+ * synchronously for direct-label contrast — a CSS custom property can't be read that way.
+ */
+const OTHER_SLICE_COLOR = '#6b7280'
 /** Stroke color between touching slices ("surface gap"), matching the panel background. */
 const SURFACE_GAP_COLOR = 'var(--panel-bg)'
 
@@ -342,7 +347,7 @@ export function PieChartCell({
                     dominantBaseline="middle"
                     fontSize={11}
                     fontWeight={600}
-                    fill="#0a0a0f"
+                    fill={contrastingTextColor(g.slice.color)}
                     opacity={0.85}
                     className="pointer-events-none select-none"
                   >

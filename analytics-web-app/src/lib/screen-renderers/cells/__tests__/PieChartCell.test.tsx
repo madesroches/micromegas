@@ -76,7 +76,7 @@ describe('groupPieSlices', () => {
 
   it('gives "Other" the fixed muted color, never the rotating palette', () => {
     const resolved = groupPieSlices(slices, 3)
-    expect(resolved[2].color).toBe('var(--text-muted)')
+    expect(resolved[2].color).toBe('#6b7280')
   })
 
   it('assigns palette colors in fixed order, skipping SQL-supplied colors', () => {
