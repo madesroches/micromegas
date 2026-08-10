@@ -202,10 +202,14 @@ pub async fn auth_observability_middleware(request: Request, next: Next) -> Resp
 This lives next to `observability_middleware` in `rust/public/src/servers/axum_utils.rs` (both
 are generic, reusable across servers, not `analytics-web-srv`-specific). `build_auth_routes`
 (`web_server.rs:141-170`) gains one `.layer(middleware::from_fn(auth_observability_middleware))`
-call on each branch's router:
+call on each branch's router, and becomes `pub` — following the precedent `build_protected_routes`
+already documents at `web_server.rs:280-290` ("so integration tests (`tests/routing_tests.rs`) can
+exercise the real ... branching directly ... rather than reimplementing the merge logic
+standalone") — so the new `routing_tests.rs` case in step 5 can drive the real, layered router
+instead of an ad-hoc stand-in:
 
 ```rust
-fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router {
+pub fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router {
     if let Some(state) = auth_state {
         Router::new()
             .route(&format!("{base_path}/auth/login"), get(crate::auth::auth_login))
@@ -310,12 +314,16 @@ and then calls that same function — unchanged — from the FlightSQL path:
 /// service is deployed behind *appends* the address it observed rather than overwriting the
 /// header (`routing.http.xff_header_processing.mode = append`, the ALB default). Every entry to
 /// the left of the last one is caller-supplied and therefore spoofable; the last entry is the
-/// ALB's own observation and cannot be forged by the caller -- this holds even if the caller sends
-/// its own `X-Forwarded-For` as a *separate* header field line, since `HeaderMap::get` returns
-/// only the first such line and would surface a fully caller-chosen value; `get_all(...).last()`
-/// is required to reach the ALB's line. This is correct for exactly one trusted proxy hop --
-/// putting a second trusted proxy in front of the ALB would mean skipping one more entry from the
-/// right.
+/// ALB's own observation and cannot be forged by the caller *for requests that actually traversed
+/// the ALB* -- this holds even if the caller sends its own `X-Forwarded-For` as a *separate*
+/// header field line, since `HeaderMap::get` returns only the first such line and would surface a
+/// fully caller-chosen value; `get_all(...).last()` is required to reach the ALB's line. This is
+/// correct for exactly one trusted proxy hop -- putting a second trusted proxy in front of the ALB
+/// would mean skipping one more entry from the right. For a request that reaches this service
+/// *without* going through the ALB (local dev, an in-cluster peer, or any other direct connection),
+/// there is no trusted proxy appending anything, so the rightmost entry is just as caller-chosen
+/// as every other entry and this guarantee does not apply -- the socket-address fallback (branch
+/// 3) is the only non-forgeable source in that case.
 ///
 /// Returns "unknown" if no IP can be extracted.
 pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> String {
@@ -431,7 +439,9 @@ adds them.
 **Phase 1 — `analytics-web-srv`**
 1. `rust/public/src/servers/axum_utils.rs`: add `auth_observability_middleware` (path-only
    logging, no query string), per Design §1. `web_server.rs::build_auth_routes` (`:141-170`): add
-   `.layer(middleware::from_fn(auth_observability_middleware))` to both branches.
+   `.layer(middleware::from_fn(auth_observability_middleware))` to both branches, and make the
+   function `pub`, matching the `build_protected_routes` precedent (`:280-290`) so step 5 can test
+   it directly.
 2. `claims.rs`: replace `extract_subject_from_token` (`:98-111`) with `pub` `AuditClaims` +
    `pub fn extract_audit_claims_from_token`, per Design §2.
 3. `handlers.rs`: update the `use super::claims::{...}` import (`:3-6`, drop
@@ -448,6 +458,11 @@ adds them.
    `{"sub": "user-123", "email": "alice@example.com"}`) asserts both fields populate; a payload
    with no `email` key asserts `email: None`, `sub: Some(...)`; a malformed token (not 3
    dot-separated parts, or non-base64/non-JSON payload) asserts `AuditClaims { sub: None, email: None }`.
+   New test in `rust/analytics-web-srv/tests/routing_tests.rs`: build the now-`pub`
+   `build_auth_routes(base_path, &None)` (the `--disable-auth` branch, no `AuthState` fixture
+   needed) and drive a `GET /auth/me` request through it, asserting a `200` response — this is the
+   real, layered router (not an ad-hoc stand-in), so it's what actually confirms adding the
+   `.layer()` call in step 1 didn't break `/auth/*` routing.
 6. New test, `rust/public/tests/auth_observability_tests.rs` — the middleware under test
    (`auth_observability_middleware`) lives in the `micromegas` crate (`rust/public`), so its test
    belongs there too, per `rust/CLAUDE.md`'s "unit tests ... under the tests folder of the crate":
@@ -462,7 +477,9 @@ adds them.
    requires it — and a `[[test]]` entry (`name = "auth_observability_tests"`,
    `path = "tests/auth_observability_tests.rs"`, `required-features = ["server"]`), matching every
    other file under `rust/public/tests/`. `cargo test -p micromegas --features server` (existing
-   suite plus this new test) must still pass, confirming no routing regression from step 1.
+   suite plus this new test) must still pass; this checks query-string redaction in
+   `auth_observability_middleware` itself, not routing — the `rust/public` crate never sees
+   `build_auth_routes` (see step 5 for that check).
 
 **Phase 3 — `flight-sql-srv`**
 7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost** entry of the
@@ -524,12 +541,14 @@ adds them.
 14. `mkdocs/docs/gateway/index.md`: the "Client IP Security" bullet at `:342` currently reads
     "Uses real socket address or `X-Forwarded-For` (from trusted proxies)", which becomes stale
     once the leftmost read is gone. Restate as: uses the rightmost `X-Forwarded-For` entry (the
-    address the trusted proxy/ALB observed, which a caller cannot forge), falling back to
-    `X-Real-IP` and then the real socket address. The lead-in at `:339` ("The gateway always
-    extracts client IP from the actual connection") is also loose — headers are consulted first —
-    and should say "from the connection, or from the trusted proxy that observed it". The
-    neighbouring bullets (`:341` blocks `x-client-ip` from clients, `:343` "Prevents IP spoofing in
-    audit logs") stay correct and are in fact only now accurate.
+    address the trusted proxy/ALB observed, which a caller cannot forge *for requests that actually
+    traversed that proxy* — a caller connecting to the gateway directly, bypassing the ALB, can
+    still set `X-Forwarded-For` itself and have it believed), falling back to `X-Real-IP` and then
+    the real socket address. The lead-in at `:339` ("The gateway always extracts client IP from the
+    actual connection") is also loose — headers are consulted first — and should say "from the
+    connection, or from the trusted proxy that observed it". The neighbouring bullets (`:341`
+    blocks `x-client-ip` from clients, `:343` "Prevents IP spoofing in audit logs") stay correct and
+    are in fact only now accurate for traffic that goes through the ALB.
     `mkdocs/docs/gateway/configuration.md:51` and
     `mkdocs/docs/gateway/index.md:128` ("Real client IP (prevents spoofing)") need no change.
 15. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
@@ -548,11 +567,13 @@ adds them.
 ## Files to Modify
 
 - `rust/public/src/servers/axum_utils.rs` — new `auth_observability_middleware`.
-- `rust/analytics-web-srv/src/web_server.rs` — `build_auth_routes`.
+- `rust/analytics-web-srv/src/web_server.rs` — `build_auth_routes` (add the layer, make `pub`).
 - `rust/analytics-web-srv/src/auth/claims.rs` — `extract_subject_from_token` → `AuditClaims`/`extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/src/auth/handlers.rs` — imports, `auth_callback`, `auth_refresh`.
 - `rust/analytics-web-srv/src/auth/mod.rs` — re-export `AuditClaims`, `extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/tests/auth_unit_tests.rs` — new `extract_audit_claims_from_token` cases.
+- `rust/analytics-web-srv/tests/routing_tests.rs` — new `/auth/me` case driving the now-`pub`
+  `build_auth_routes` directly, confirming no routing regression from step 1's added layer.
 - `rust/public/tests/auth_observability_tests.rs` — new; asserts query-string redaction
   in `auth_observability_middleware`'s log lines.
 - `rust/public/src/servers/http_utils.rs` — `get_client_ip` switches to the rightmost
@@ -611,17 +632,22 @@ adds them.
   change that trust boundary; it only extracts one more field from the same already-trusted
   payload.
 - **`/auth/*`'s `client_ip` is the same value as everywhere else, and the spoofing hole it used to
-  inherit is closed by this plan.** `auth_observability_middleware` calls the same shared
-  `get_client_ip`, which after Design §3 returns the ALB-observed address. A caller can still
+  inherit is closed by this plan for requests that actually traverse the ALB.**
+  `auth_observability_middleware` calls the same shared `get_client_ip`, which after Design §3
+  returns the ALB-observed address *when the request went through the ALB*. A caller can still
   *prepend* entries to `X-Forwarded-For` (or send it as a separate header field line before the
   ALB's), but `get_all(...).last()` plus taking the rightmost entry of that last line always
-  resolves to the ALB's own appended observation, so those entries are ignored regardless of which
-  form the caller uses. Two residual caveats: (1) `X-Real-IP` is only consulted when
-  `X-Forwarded-For` is absent entirely — behind the ALB it never is, so that branch is effectively
-  unreachable in the deployed topology, but a caller reaching a service *directly* (bypassing the
-  ALB) can still set `X-Real-IP` and have it believed; (2) the one-trusted-hop assumption above
-  applies here too. Neither is a regression, and both are strictly better than today's leftmost
-  read, which any caller could win outright.
+  resolves to the ALB's own appended observation in that case, so those entries are ignored
+  regardless of which form the caller uses. Three residual caveats: (1) `X-Real-IP` is only
+  consulted when `X-Forwarded-For` is absent entirely — behind the ALB it never is, so that branch
+  is effectively unreachable in the deployed topology, but a caller reaching a service *directly*
+  (bypassing the ALB) can still set `X-Real-IP` and have it believed; (2) the one-trusted-hop
+  assumption above applies here too; (3) **for a request that bypasses the ALB altogether** — local
+  dev, an in-cluster peer, or any other direct connection to the service — there is no trusted
+  proxy in the path to append a non-forgeable entry, so a caller-supplied `X-Forwarded-For` is
+  believed outright, rightmost entry included; only the socket-address fallback is non-forgeable
+  in that topology. None of these is a regression, and all are strictly better than today's
+  leftmost read, which any caller could win outright even behind the ALB.
 - **A single `get_client_ip` rather than one implementation per transport.** The only reason this
   codebase resolves a client IP is logging, so there is no benefit to two functions with different
   trust semantics — that only produces two `client_ip` fields in the same service's logs that
@@ -641,12 +667,14 @@ adds them.
 
 1. `cargo fmt` and `cargo clippy --workspace -- -D warnings` (per `rust/CLAUDE.md`).
 2. `cargo test -p analytics-web-srv` — existing suite plus the new `extract_audit_claims_from_token`
-   cases (step 5); confirms no routing regression from wrapping `/auth/*` in
-   `auth_observability_middleware`.
+   cases and the new `routing_tests.rs` `/auth/me` case (both step 5); the latter is what actually
+   confirms no routing regression from wrapping `/auth/*` in `auth_observability_middleware` in
+   step 1, since it drives the real, now-`pub` `build_auth_routes`.
 3. `cargo test -p micromegas --features server` — covers the new `auth_observability_tests.rs`
-   (step 6, query-string redaction), the updated `query_audit_tests.rs`, the new
-   `http_utils_tests.rs`, and (unchanged, as a regression check on the `get_client_ip` behavior
-   change) `http_gateway_tests.rs`'s four `build_origin_metadata` cases.
+   (step 6, query-string redaction in the middleware itself, not routing), the updated
+   `query_audit_tests.rs`, the new `http_utils_tests.rs`, and (unchanged, as a regression check on
+   the `get_client_ip` behavior change) `http_gateway_tests.rs`'s four `build_origin_metadata`
+   cases.
 4. **Manual verification** (the redaction rule itself is covered by the automated test in step 6;
    the rest — real OIDC flow, real FlightSQL traffic — still needs manual checks; see
    `python3 local_test_env/ai_scripts/start_services.py`):
