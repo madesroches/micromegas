@@ -347,7 +347,10 @@ observed it:
   which a caller cannot forge *for requests that actually traversed that proxy* — a caller
   connecting to the gateway directly, bypassing the ALB, can still set `X-Forwarded-For` itself
   and have it believed), falling back to `X-Real-IP` and then the real socket address
-- ✅ Prevents IP spoofing in audit logs (for traffic that goes through the ALB)
+- ⚠️ Computes a non-forgeable `x-client-ip` value, but nothing downstream consumes it today —
+  the gateway's own logs don't include it, and FlightSQL's audit `client_ip` comes from its own
+  `X-Forwarded-For`/`X-Real-IP`/socket lookup, not from this header (see the note in
+  [Logging](#logging) above)
 
 ### Header Forwarding Security
 
