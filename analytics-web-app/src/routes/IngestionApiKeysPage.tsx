@@ -27,6 +27,7 @@ function IngestionApiKeysPageContent() {
   usePageTitle('Ingestion API Keys')
 
   const [keys, setKeys] = useState<IngestionApiKeyListEntry[]>([])
+  const [offset, setOffset] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showMintForm, setShowMintForm] = useState(false)
@@ -44,14 +45,22 @@ function IngestionApiKeysPageContent() {
     setIsLoading(true)
     setError(null)
     try {
-      const data = await listIngestionApiKeys()
+      const data = await listIngestionApiKeys(true, offset)
       setKeys(data)
     } catch (err) {
       setError(err instanceof IngestionApiKeyError ? err.message : 'Failed to load ingestion API keys')
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [offset])
+
+  const goToPreviousPage = () => {
+    setOffset((current) => Math.max(0, current - MAX_INGESTION_API_KEYS_LIST_LIMIT))
+  }
+
+  const goToNextPage = () => {
+    setOffset((current) => current + MAX_INGESTION_API_KEYS_LIST_LIMIT)
+  }
 
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level — see react-hooks/set-state-in-effect
@@ -136,13 +145,6 @@ function IngestionApiKeysPageContent() {
 
           {error && (
             <ErrorBanner title="Error" message={error} onDismiss={() => setError(null)} />
-          )}
-
-          {!isLoading && keys.length === MAX_INGESTION_API_KEYS_LIST_LIMIT && (
-            <div className="mb-4 p-3 rounded-lg border border-accent-warning/40 bg-accent-warning/10 text-sm text-theme-text-secondary">
-              Showing the first {MAX_INGESTION_API_KEYS_LIST_LIMIT} keys. More keys may exist and
-              are not shown here.
-            </div>
           )}
 
           {mintedKey && (
@@ -238,13 +240,21 @@ function IngestionApiKeysPageContent() {
                 <span className="text-theme-text-secondary">Loading keys...</span>
               </div>
             </div>
-          ) : keys.length === 0 ? (
+          ) : keys.length === 0 && offset === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center">
               <KeyRound className="w-10 h-10 text-theme-text-muted opacity-40 mb-3" />
               <p className="text-theme-text-muted mb-4">No ingestion API keys yet.</p>
               <Button onClick={openMintForm} className="gap-1.5">
                 <Plus className="w-4 h-4" />
                 Mint Key
+              </Button>
+            </div>
+          ) : keys.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center">
+              <KeyRound className="w-10 h-10 text-theme-text-muted opacity-40 mb-3" />
+              <p className="text-theme-text-muted mb-4">No more keys on this page.</p>
+              <Button variant="outline" onClick={goToPreviousPage} className="gap-1.5">
+                Previous
               </Button>
             </div>
           ) : (
@@ -309,6 +319,24 @@ function IngestionApiKeysPageContent() {
                   ))}
                 </tbody>
               </table>
+              {(offset > 0 || keys.length === MAX_INGESTION_API_KEYS_LIST_LIMIT) && (
+                <div className="flex items-center justify-between border-t border-theme-border bg-app-panel px-4 py-2.5">
+                  {offset > 0 ? (
+                    <Button variant="outline" size="sm" onClick={goToPreviousPage}>
+                      Previous
+                    </Button>
+                  ) : (
+                    <span />
+                  )}
+                  {keys.length === MAX_INGESTION_API_KEYS_LIST_LIMIT ? (
+                    <Button variant="outline" size="sm" onClick={goToNextPage}>
+                      Next
+                    </Button>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

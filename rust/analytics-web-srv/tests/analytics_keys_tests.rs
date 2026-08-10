@@ -260,6 +260,30 @@ async fn import_503_when_pool_unconfigured() {
 }
 
 // ---------------------------------------------------------------------------
+// Source-scan regression guard
+// ---------------------------------------------------------------------------
+
+/// Mirrors `api_keys_tests.rs`'s `mint_statement_names_ingestion_table_only`:
+/// `analytics_keys_router` takes no table parameter, so no route in this
+/// module can insert into `ingestion_api_keys` by construction. This unit
+/// test asserts the mint statement names `analytics_api_keys` to keep it that
+/// way under refactoring.
+#[test]
+fn mint_statement_names_analytics_table_only() {
+    let src = include_str!("../src/analytics_keys.rs");
+    assert!(
+        src.contains("INSERT INTO analytics_api_keys"),
+        "expected the mint statement to name analytics_api_keys"
+    );
+    // Doc comments are allowed to *mention* ingestion_api_keys (to explain why
+    // it's out of scope); no SQL statement in this module may write to it.
+    assert!(
+        !src.contains("INTO ingestion_api_keys") && !src.contains("UPDATE ingestion_api_keys"),
+        "this module must never write to ingestion_api_keys"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #[ignore], live DB
 // ---------------------------------------------------------------------------
 

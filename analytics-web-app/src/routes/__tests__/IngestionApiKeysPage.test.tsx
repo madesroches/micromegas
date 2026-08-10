@@ -150,7 +150,7 @@ describe('IngestionApiKeysPage', () => {
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument()
   })
 
-  it('shows a truncation notice when the list returns exactly the max limit', async () => {
+  it('shows a Next button when the list returns exactly the max limit', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
@@ -159,10 +159,11 @@ describe('IngestionApiKeysPage', () => {
     renderPage()
 
     await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
-    expect(screen.getByText(/More keys may exist and are not shown/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument()
   })
 
-  it('shows no truncation notice when the list returns fewer than the max limit', async () => {
+  it('shows no Next button when the list returns fewer than the max limit', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(makeKeys(1)),
@@ -171,7 +172,33 @@ describe('IngestionApiKeysPage', () => {
     renderPage()
 
     await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
-    expect(screen.queryByText(/More keys may exist and are not shown/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument()
+  })
+
+  it('clicking Next re-fetches with the next offset and reveals a Previous button', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(makeKeys(1)),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    const nextButton = await screen.findByRole('button', { name: 'Next' })
+    fireEvent.click(nextButton)
+
+    await waitFor(() => {
+      const [url] = fetchMock.mock.calls[1]
+      expect(url).toContain(`offset=${MAX_INGESTION_API_KEYS_LIST_LIMIT}`)
+    })
+
+    expect(await screen.findByRole('button', { name: 'Previous' })).toBeInTheDocument()
   })
 
   it('opens the revoke confirm dialog and DELETEs the right URL on confirm', async () => {
