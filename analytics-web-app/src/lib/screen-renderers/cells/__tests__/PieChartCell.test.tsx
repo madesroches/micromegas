@@ -121,6 +121,17 @@ describe('buildSliceGeometry', () => {
     )
     expect(new Set(points).size).toBe(points.length)
   })
+
+  it('produces an empty path (no geometry) for a zero-value slice, instead of a degenerate line', () => {
+    const slices: ResolvedPieSlice[] = [
+      { label: 'A', value: 10, color: '#123456' },
+      { label: 'B', value: 0, color: '#654321' },
+    ]
+    const geometry = buildSliceGeometry(slices, 10, 'pie')
+    const zeroSlice = geometry.find((g) => g.slice.label === 'B')
+    expect(zeroSlice?.fraction).toBe(0)
+    expect(zeroSlice?.path).toBe('')
+  })
 })
 
 describe('PieChartCell renderer', () => {
@@ -184,6 +195,34 @@ describe('PieChartCell renderer', () => {
     )
     fireEvent.click(screen.getByText('Pie'))
     expect(onOptionsChange).toHaveBeenCalledWith({ chart_type: 'pie' })
+  })
+
+  it('lists a zero-value slice in the legend at 0% without drawing a stray path for it', () => {
+    const table = pieTable([
+      { label: 'ERROR', value: 40 },
+      { label: 'SILENT', value: 0 },
+    ])
+    const { container } = render(
+      <PieChartCell {...createMockProps({ data: [table], options: { chart_type: 'pie' } })} />
+    )
+    expect(screen.getByText('SILENT')).toBeInTheDocument()
+    expect(screen.getByText('0.0%')).toBeInTheDocument()
+    // Two slices exist, but only the nonzero one should paint an actual path —
+    // the zero-value slice's path must be empty (no degenerate line drawn).
+    const paths = container.querySelectorAll('svg path')
+    expect(paths).toHaveLength(2)
+    const nonEmptyPaths = Array.from(paths).filter((p) => (p.getAttribute('d') ?? '').length > 0)
+    expect(nonEmptyPaths).toHaveLength(1)
+  })
+
+  it('shows "No data available" when every slice has value 0, instead of a blank chart', () => {
+    const table = pieTable([
+      { label: 'A', value: 0 },
+      { label: 'B', value: 0 },
+    ])
+    render(<PieChartCell {...createMockProps({ data: [table] })} />)
+    expect(screen.getByText('No data available')).toBeInTheDocument()
+    expect(screen.queryByText('total')).not.toBeInTheDocument()
   })
 
   it('shows the donut center total only in donut mode', () => {

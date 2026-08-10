@@ -173,7 +173,11 @@ export function buildSliceGeometry(slices: ResolvedPieSlice[], total: number, ch
     angle = end
     geometry.push({
       slice,
-      path: slicePath(CENTER, CENTER, R_OUTER, rInner, start, end),
+      // A zero-value slice has zero angular span; the arc math for a zero-span
+      // slice degenerates to a pair of coincident points (pure line segments,
+      // no area), so skip building geometry for it entirely — it still appears
+      // in the legend at 0%, but paints nothing onto the disc.
+      path: fraction > 0 ? slicePath(CENTER, CENTER, R_OUTER, rInner, start, end) : '',
       fraction,
       midAngle: (start + end) / 2,
     })
@@ -266,6 +270,18 @@ export function PieChartCell({
   }
 
   if (resolvedSlices.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
+        No data available
+      </div>
+    )
+  }
+
+  // Every present value is zero (distinct from having no slices at all, handled
+  // above): every fraction would be 0, so the disc would render empty while the
+  // header/legend still show "total: 0" — indistinguishable from a rendering bug.
+  // Show the same empty state instead of a blank chart.
+  if (total === 0) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
         No data available
