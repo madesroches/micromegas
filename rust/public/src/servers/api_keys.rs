@@ -1,12 +1,14 @@
-//! Key-management API for the ingestion service (#1383): three OIDC-authenticated,
-//! admin-gated HTTP routes that let an operator mint, list, and revoke
-//! `ingestion_api_keys` rows without a redeploy.
+//! Key-management API for the ingestion service (#1383, extended by #1411):
+//! four OIDC-authenticated, admin-gated HTTP routes that let an operator
+//! mint, list, revoke, and import `ingestion_api_keys` rows without a
+//! redeploy.
 //!
-//! **Analytics keys are not mintable through this API.** They are few, manually
-//! issued (direct SQL by an operator with DB access), and stay out of every HTTP
-//! write path: issuing read credentials from the fleet-facing ingestion service is
-//! the wrong direction for the write/read asymmetry. See
-//! `mkdocs/docs/admin/api-keys.md` for the analytics-key runbook.
+//! **Analytics keys are not minted through this API.** They are minted,
+//! listed, revoked, and imported through `analytics-web-srv`'s own
+//! `/api/analytics-api-keys*` routes instead (#1411) — issuing read
+//! credentials from the fleet-facing ingestion service would be the wrong
+//! direction for the write/read asymmetry. See `mkdocs/docs/admin/api-keys.md`
+//! for the analytics-key HTTP-route reference.
 
 use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;
@@ -281,6 +283,126 @@ async fn revoke_key(
     }
 }
 
+#[derive(Deserialize)]
+struct ImportRequest {
+    name: String,
+    key: String,
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    key_id: Uuid,
+    name: String,
+    created_at: DateTime<Utc>,
+    created_by: String,
+    /// `null` unless the already-present row (on the `imported: false` path)
+    /// was itself revoked — lets a caller distinguish "already present and
+    /// usable" from "already present but revoked".
+    revoked_at: Option<DateTime<Utc>>,
+    /// `true` on a fresh insert; `false` when `key_hash` already existed
+    /// (idempotent re-run of the same legacy keyring).
+    imported: bool,
+}
+
+/// Row shape shared by both branches of `import_key`'s `INSERT ... ON
+/// CONFLICT` / fallback `SELECT`.
+#[derive(sqlx::FromRow)]
+struct ImportedRow {
+    key_id: Uuid,
+    name: String,
+    created_at: DateTime<Utc>,
+    created_by: String,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+/// `POST /auth/api_keys/import` — hashes and stores a caller-supplied key
+/// string verbatim, rather than generating a fresh one (`mint_key`'s only
+/// mode). This is what lets a legacy env-keyring key's own string carry
+/// forward into the DB-backed store, since existing clients must keep
+/// presenting the *same* key. `created_by` is the importing caller's own OIDC
+/// identity (§3 of the plan) — never the literal string `"import"`.
+///
+/// No format validation on `key` beyond non-empty: `hash_key` covers the whole
+/// string regardless of shape, which is what lets an operator-chosen legacy
+/// key of any format import cleanly.
+async fn import_key(
+    Extension(ctx): Extension<AuthContext>,
+    Extension(pool): Extension<PgPool>,
+    Json(body): Json<ImportRequest>,
+) -> Result<(StatusCode, Json<ImportResponse>), ApiKeyError> {
+    require_key_admin(&ctx)?;
+
+    if body.name.is_empty() {
+        return Err(ApiKeyError::BadRequest(
+            "name must not be empty".to_string(),
+        ));
+    }
+    if body.name.len() > MAX_NAME_BYTES {
+        return Err(ApiKeyError::BadRequest(format!(
+            "name must be at most {MAX_NAME_BYTES} bytes"
+        )));
+    }
+    if body.key.is_empty() {
+        return Err(ApiKeyError::BadRequest("key must not be empty".to_string()));
+    }
+
+    let hash = hash_key(&body.key);
+    let key_id = Uuid::new_v4();
+    let created_at = Utc::now();
+    let created_by = actor(&ctx);
+
+    // Table name is a literal, never derived from caller input — same rule as
+    // mint_key.
+    let inserted = sqlx::query_as::<_, ImportedRow>(
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (key_hash) DO NOTHING
+         RETURNING key_id, name, created_at, created_by, revoked_at",
+    )
+    .bind(key_id)
+    .bind(&hash[..])
+    .bind(&body.name)
+    .bind(created_at)
+    .bind(&created_by)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (row, imported, status) = match inserted {
+        Some(row) => (row, true, StatusCode::CREATED),
+        None => {
+            // The hash already exists: report the existing row (including
+            // whether it's revoked) instead of the freshly-generated values
+            // above, which never made it into the table.
+            let row = sqlx::query_as::<_, ImportedRow>(
+                "SELECT key_id, name, created_at, created_by, revoked_at
+                 FROM ingestion_api_keys
+                 WHERE key_hash = $1",
+            )
+            .bind(&hash[..])
+            .fetch_one(&pool)
+            .await?;
+            (row, false, StatusCode::OK)
+        }
+    };
+
+    info!(
+        "imported ingestion api key key_id={} name={} created_by={} imported={imported}",
+        row.key_id, row.name, row.created_by
+    );
+
+    Ok((
+        status,
+        Json(ImportResponse {
+            key_id: row.key_id,
+            name: row.name,
+            created_at: row.created_at,
+            created_by: row.created_by,
+            revoked_at: row.revoked_at,
+            imported,
+        }),
+    ))
+}
+
 /// Router for the ingestion key-management routes. Hardcodes
 /// `ingestion_api_keys`: there is no parameter an operator or a defaulting bug
 /// could point at `analytics_api_keys`. `config.cache_ttl_secs` is what the
@@ -296,6 +418,7 @@ pub fn api_keys_router(pool: PgPool, config: DbApiKeyConfig) -> Router {
     Router::new()
         .route("/auth/api_keys", post(mint_key).get(list_keys))
         .route("/auth/api_keys/{key_id}", delete(revoke_key))
+        .route("/auth/api_keys/import", post(import_key))
         .layer(Extension(config))
         .layer(Extension(pool))
 }

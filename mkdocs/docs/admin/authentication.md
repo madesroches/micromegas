@@ -109,10 +109,11 @@ The `MICROMEGAS_ADMINS` environment variable is a JSON array of user identifiers
 
 ### API Key Configuration
 
-**Steady state: DB-backed keys.** Mint a key with `POST /auth/api_keys` on the
-ingestion service (OIDC + admin required) — see [API Keys](api-keys.md) for the
-full route reference, the `mmk_`-prefixed key shape, and the analytics-key runbook
-(analytics keys are never mintable over HTTP; they're issued by hand).
+**Steady state: DB-backed keys.** Mint an ingestion key with `POST /auth/api_keys`
+on the ingestion service, or an analytics key with `POST /api/analytics-api-keys`
+on `analytics-web-srv` (both OIDC + admin required) — see
+[API Keys](api-keys.md) for the full route reference and the `mmk_`-prefixed
+key shape.
 
 **Legacy/bootstrap: the env keyring.** Still the only option for
 `object-cache-srv` (env-only permanently — see [Object Cache](object-cache.md)),
@@ -660,19 +661,21 @@ This prevents authorization code interception attacks even if the client secret 
 OIDC is the destination for human/service-account identities. It is **not** the
 destination for machine credentials — service keys and Firehose access keys
 migrate to DB-backed `ingestion_api_keys` instead, not OIDC. See
-[API Keys](api-keys.md) for the full picture (schema, HTTP routes, the manual
-legacy-key import procedure, and the `object-cache-srv` exception, which never
-migrates).
+[API Keys](api-keys.md) for the full picture (schema, HTTP routes, the
+`micromegas-import-keys`-driven
+[legacy-key import procedure](api-keys.md#migrating-from-the-env-keyring), and
+the `object-cache-srv` exception, which never migrates).
 
 1. **Deploy the new binaries.** The migration creates `ingestion_api_keys` /
    `analytics_api_keys` (schema v5). Nothing changes yet: the env keyring still
    authenticates every existing key, and the DB tables are empty.
-2. **Populate the tables** from the existing env keyring — one hand-written
-   `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key (see
-   [API Keys](api-keys.md) for the exact recipe), or mint fresh keys via
-   `POST /auth/api_keys` for callers you can update. A key valid on both
-   ingestion and flight-sql today must become two distinct keys — "never both"
-   is enforced at the code level once the tables are in use.
+2. **Populate the tables** from the existing env keyring using the
+   `micromegas-import-keys` CLI tool (see
+   [Migrating from the env keyring](api-keys.md#migrating-from-the-env-keyring)
+   for the exact commands), or mint fresh keys via `POST /auth/api_keys` for
+   callers you can update. A key valid on both ingestion and flight-sql today
+   must become two distinct keys — "never both" is enforced at the code level
+   once the tables are in use.
 3. **Set up an OIDC provider** (Google, Azure AD, etc.) for human/service-account
    identities, if you haven't already.
 4. **Update clients**: machine credentials point at their new DB-backed key;
@@ -696,7 +699,9 @@ export MICROMEGAS_OIDC_CONFIG='{
     "audience": "new-client-id.apps.googleusercontent.com"
   }]
 }'
-# INSERT INTO ingestion_api_keys ... ON CONFLICT (key_hash) DO NOTHING;  -- see api-keys.md
+# See api-keys.md#migrating-from-the-env-keyring for the exact commands
+micromegas-import-keys --table ingestion --source env --var MICROMEGAS_API_KEYS \
+  --url http://ingestion:8081
 
 # Step 3/4: Update clients to use OIDC (human/service-account) or their new
 # DB-backed key (machine credentials). Test both authentication methods work.

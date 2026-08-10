@@ -52,7 +52,27 @@ export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
 export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 
-# Disable auth (dev only)
+# Analytics-key management (Admin -> Analytics API Keys); 503 if unset.
+# Must point at a telemetry DB where the v5 migration has already run (via
+# ingestion or a lakehouse-role monolith), or the routes fail at request
+# time with an opaque 500 -- see mkdocs/docs/admin/api-keys.md.
+export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
+
+# Ingestion-key management proxy (Admin -> Ingestion API Keys); 503 if unset.
+# This service credential's subject must be added to ingestion's own admin
+# list (MICROMEGAS_INGESTION_ADMINS / MICROMEGAS_ADMINS) -- see
+# mkdocs/docs/admin/api-keys.md. Configuring this also makes this service's
+# own admin list (MICROMEGAS_ADMINS / MICROMEGAS_ANALYTICS_ADMINS) a de-facto
+# ingestion-key-admin list.
+export MICROMEGAS_INGESTION_ADMIN_URL="http://127.0.0.1:8081"
+export MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_ID="analytics-web-srv"
+export MICROMEGAS_INGESTION_PROXY_OIDC_CLIENT_SECRET="..."
+export MICROMEGAS_INGESTION_PROXY_OIDC_TOKEN_ENDPOINT="https://issuer.example.com/oauth/token"
+export MICROMEGAS_INGESTION_PROXY_OIDC_AUDIENCE="..."  # optional
+
+# Disable auth (dev only) -- also disables both key-management route groups
+# above (a fixed 503 answers them instead), not just cookie auth on the rest
+# of the API.
 analytics-web-srv --disable-auth
 ```
 
@@ -122,6 +142,8 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET /api/data-sources/{name}`, `PUT`, `DELETE` — Get / update / delete data source
 - `GET /api/maps/catalog` — List map assets
 - `GET /api/maps/blob/{filename}`, `PUT`, `DELETE` — Fetch / upload / delete map GLB
+- `GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/import/revoke analytics API keys (503 if `MICROMEGAS_SQL_CONNECTION_STRING` unset — see [API Keys](api-keys.md))
+- `GET`/`POST /api/ingestion-api-keys`, `DELETE /api/ingestion-api-keys/{key_id}` — Proxy to ingestion's own key-management routes (503 if the proxy env vars are unset — see [API Keys](api-keys.md))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback
 - `POST /auth/refresh` — Refresh tokens

@@ -10,6 +10,7 @@ const BASE_PATH_VAR: &str = "MICROMEGAS_BASE_PATH";
 const APP_DB_VAR: &str = "MICROMEGAS_APP_SQL_CONNECTION_STRING";
 const MAPS_URI_VAR: &str = "MICROMEGAS_MAPS_OBJECT_STORE_URI";
 const MAPS_MAX_UPLOAD_VAR: &str = "MICROMEGAS_MAPS_MAX_UPLOAD_BYTES";
+const ANALYTICS_KEYS_DB_VAR: &str = "MICROMEGAS_SQL_CONNECTION_STRING";
 
 /// Clears every var this config touches on drop, so a failing assertion in
 /// one test can't leak state into the next.
@@ -24,6 +25,7 @@ impl Drop for EnvGuard {
             std::env::remove_var(APP_DB_VAR);
             std::env::remove_var(MAPS_URI_VAR);
             std::env::remove_var(MAPS_MAX_UPLOAD_VAR);
+            std::env::remove_var(ANALYTICS_KEYS_DB_VAR);
         }
     }
 }
@@ -146,4 +148,35 @@ fn maps_vars_are_optional() {
     let config = WebServerConfig::from_cli_and_env(cli_args()).expect("valid config");
     assert_eq!(config.maps_uri, None);
     assert_eq!(config.max_upload_bytes, None);
+}
+
+#[test]
+#[serial]
+fn analytics_keys_db_string_is_optional() {
+    let _guard = EnvGuard;
+    set_required_vars("/");
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(ANALYTICS_KEYS_DB_VAR);
+    }
+
+    let config = WebServerConfig::from_cli_and_env(cli_args()).expect("valid config");
+    assert_eq!(config.analytics_keys_db_string, None);
+}
+
+#[test]
+#[serial]
+fn analytics_keys_db_string_is_read_when_set() {
+    let _guard = EnvGuard;
+    set_required_vars("/");
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(ANALYTICS_KEYS_DB_VAR, "postgres://localhost/lake");
+    }
+
+    let config = WebServerConfig::from_cli_and_env(cli_args()).expect("valid config");
+    assert_eq!(
+        config.analytics_keys_db_string,
+        Some("postgres://localhost/lake".to_string())
+    );
 }

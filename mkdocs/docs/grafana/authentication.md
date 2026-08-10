@@ -20,15 +20,16 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
 
 flight-sql validates DB-backed `analytics_api_keys` the same way it validates
 the transitional env keyring below — see [API Keys](../admin/api-keys.md) for
-the full reference, including the analytics-key mint-by-hand runbook (flight-sql
-mints nothing over HTTP). A non-empty `analytics_api_keys` table counts as "auth
-configured" on its own, so **this key-only deployment (no OIDC) is fully
-supported** with either key source.
+the full reference, including `analytics-web-srv`'s own analytics-key HTTP
+routes (flight-sql itself mints nothing over HTTP). A non-empty
+`analytics_api_keys` table counts as "auth configured" on its own, so **this
+key-only deployment (no OIDC) is fully supported** with either key source.
 
 ### Quick Setup (DB-backed key — steady state)
 
-1. **Mint a key by hand** in `analytics_api_keys` — see the runbook in
-   [API Keys](../admin/api-keys.md#minting-an-analytics-key-by-hand).
+1. **Mint a key** via `POST /api/analytics-api-keys` on `analytics-web-srv`
+   (or its Admin → Analytics API Keys page) — see
+   [API Keys](../admin/api-keys.md#minting-an-analytics-key-over-http).
 2. **Configure Grafana datasource**:
    - Auth Type: token
    - Token: the minted `mmk_...` key
