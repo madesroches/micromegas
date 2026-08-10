@@ -81,6 +81,12 @@ def select_entries(entries, args, parser):
         return [(name, key) for name, key in entries if name in selected]
     if args.exclude:
         excluded = set(args.exclude)
+        known = {name for name, _ in entries}
+        missing = excluded - known
+        if missing:
+            parser.error(
+                f"--exclude names not found in keyring: {', '.join(sorted(missing))}"
+            )
         return [(name, key) for name, key in entries if name not in excluded]
     return entries
 

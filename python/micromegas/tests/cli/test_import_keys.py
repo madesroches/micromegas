@@ -153,6 +153,12 @@ def test_select_entries_only_unknown_name_errors():
         import_keys.select_entries(ENTRIES, args, FakeParser())
 
 
+def test_select_entries_exclude_unknown_name_errors():
+    args = make_args(exclude=["nope"])
+    with pytest.raises(SystemExit):
+        import_keys.select_entries(ENTRIES, args, FakeParser())
+
+
 def test_only_and_exclude_are_mutually_exclusive(monkeypatch):
     monkeypatch.setenv("MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "ka"}]))
     monkeypatch.setattr(
