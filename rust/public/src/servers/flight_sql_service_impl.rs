@@ -506,6 +506,15 @@ impl FlightSqlServiceImpl {
             .unwrap_or(false)
     }
 
+    /// Extracts an optional client-attribution header, treating an empty string as absent.
+    fn optional_metadata(metadata: &MetadataMap, key: &str) -> Option<String> {
+        metadata
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    }
+
     #[span_fn]
     async fn execute_query(
         &self,
@@ -571,21 +580,9 @@ impl FlightSqlServiceImpl {
             .get("x-client-entrypoint")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown");
-        let client_session = metadata
-            .get("x-client-session")
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        let client_notebook = metadata
-            .get("x-client-notebook")
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        let client_cell = metadata
-            .get("x-client-cell")
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+        let client_session = Self::optional_metadata(metadata, "x-client-session");
+        let client_notebook = Self::optional_metadata(metadata, "x-client-notebook");
+        let client_cell = Self::optional_metadata(metadata, "x-client-cell");
 
         let user_name_display = attr.user_name.as_deref().unwrap_or("");
 

@@ -56,10 +56,9 @@ async function executeSql(
   sql: string,
   timeRange: { begin: string; end: string },
   abortSignal: AbortSignal,
-  dataSource?: string,
-  notebookName?: string,
-  cellName?: string
+  attribution: { dataSource?: string; notebookName?: string; cellName?: string } = {}
 ): Promise<Table> {
+  const { dataSource, notebookName, cellName } = attribution
   const batches: import('apache-arrow').RecordBatch[] = []
 
   for await (const result of streamQuery(
@@ -243,7 +242,11 @@ export function useCellExecution({
               return tableFromIPC(ipcBytes)
             } else {
               // Remote execution without WASM engine
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource, notebookName, cell.name)
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+                dataSource: cellDataSource,
+                notebookName,
+                cellName: cell.name,
+              })
             }
           },
           runQueryAs: async (sql, tableName, queryDataSource) => {
@@ -281,7 +284,11 @@ export function useCellExecution({
               engine.register_table(tableName, ipcBytes)
               return tableFromIPC(ipcBytes)
             } else {
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, resolvedDs, notebookName, cell.name)
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+                dataSource: resolvedDs,
+                notebookName,
+                cellName: cell.name,
+              })
             }
           },
         }

@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PerfettoExportCell, perfettoExportMetadata } from '../PerfettoExportCell'
 import type { CellRendererProps } from '../../cell-registry'
@@ -13,20 +12,6 @@ vi.mock('@/lib/perfetto-trace', () => ({
 
 vi.mock('@/lib/perfetto', () => ({
   openInPerfetto: vi.fn(),
-}))
-
-// The shared test mock at src/__mocks__/@radix-ui/react-dropdown-menu.tsx (aliased in
-// vite.config.ts) forwards `onSelect`, but SplitButton's secondary actions wire up via
-// `onClick` — override it locally so this file's "Download" split-button action is
-// actually clickable in tests.
-vi.mock('@radix-ui/react-dropdown-menu', () => ({
-  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
-  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Item: ({ children, ...props }: { children: ReactNode } & Record<string, unknown>) => (
-    <button {...props}>{children}</button>
-  ),
 }))
 
 const mockFetchPerfettoTrace = fetchPerfettoTrace as MockedFunction<typeof fetchPerfettoTrace>

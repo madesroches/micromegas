@@ -13,6 +13,14 @@ export const Item = ({
   onSelect,
   ...props
 }: { children: ReactNode; onSelect?: () => void } & Record<string, unknown>) => (
-  <button {...props} onClick={onSelect}>{children}</button>
+  <button
+    {...props}
+    onClick={(e: unknown) => {
+      ;(props.onClick as ((e: unknown) => void) | undefined)?.(e)
+      onSelect?.()
+    }}
+  >
+    {children}
+  </button>
 )
 export const Separator = (props: Record<string, unknown>) => <hr {...props} />
