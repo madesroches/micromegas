@@ -301,7 +301,8 @@ and then calls that same function — unchanged — from the FlightSQL path:
 /// Extracts the client IP address from HTTP headers and extensions.
 ///
 /// This function checks sources in order of priority:
-/// 1. X-Forwarded-For (rightmost entry -- the address the nearest trusted proxy observed)
+/// 1. X-Forwarded-For (rightmost entry of the last header field line -- the address the nearest
+///    trusted proxy observed)
 /// 2. X-Real-IP (used by some proxies like nginx)
 /// 3. Socket address from extensions (direct connection)
 ///
@@ -309,16 +310,22 @@ and then calls that same function — unchanged — from the FlightSQL path:
 /// service is deployed behind *appends* the address it observed rather than overwriting the
 /// header (`routing.http.xff_header_processing.mode = append`, the ALB default). Every entry to
 /// the left of the last one is caller-supplied and therefore spoofable; the last entry is the
-/// ALB's own observation and cannot be forged by the caller. This is correct for exactly one
-/// trusted proxy hop -- putting a second trusted proxy in front of the ALB would mean skipping
-/// one more entry from the right.
+/// ALB's own observation and cannot be forged by the caller -- this holds even if the caller sends
+/// its own `X-Forwarded-For` as a *separate* header field line, since `HeaderMap::get` returns
+/// only the first such line and would surface a fully caller-chosen value; `get_all(...).last()`
+/// is required to reach the ALB's line. This is correct for exactly one trusted proxy hop --
+/// putting a second trusted proxy in front of the ALB would mean skipping one more entry from the
+/// right.
 ///
 /// Returns "unknown" if no IP can be extracted.
 pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> String {
     // Check X-Forwarded-For header first (for load balancers/proxies).
-    // The rightmost entry is what the nearest trusted proxy (the ALB) observed; entries to its
-    // left are caller-supplied and spoofable.
-    if let Some(forwarded_for) = headers.get("x-forwarded-for")
+    // `get_all(...).last()` -- not `get(...)`, which returns only the *first* field line -- picks
+    // the last field line, since the ALB appends its own observation as (or onto) the last line;
+    // within that line, the rightmost comma-separated entry is what the ALB itself observed.
+    // Everything else (earlier lines in full, and earlier entries within the last line) is
+    // caller-supplied and spoofable.
+    if let Some(forwarded_for) = headers.get_all("x-forwarded-for").iter().last()
         && let Ok(value) = forwarded_for.to_str()
         && let Some(client_ip) = value.rsplit(',').next()
         && !client_ip.trim().is_empty()
@@ -330,10 +337,13 @@ pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -
 }
 ```
 
-Two details in that first branch: `rsplit(',').next()` is the rightmost element (mirroring the
-existing `split(',').next()` for the leftmost), and the added `!client_ip.trim().is_empty()` guard
-makes a present-but-empty `X-Forwarded-For` fall through to `X-Real-IP`/the socket address instead
-of returning `""` as it does today.
+Three details in that first branch: `get_all("x-forwarded-for").iter().last()` selects the last
+header field line (`headers.get` would silently return only the *first* line, letting a caller who
+sends its own separate `X-Forwarded-For` line win outright); `rsplit(',').next()` then takes the
+rightmost comma-separated element *of that last line* (mirroring the existing `split(',').next()`
+for the leftmost); and the added `!client_ip.trim().is_empty()` guard makes a present-but-empty
+`X-Forwarded-For` fall through to `X-Real-IP`/the socket address instead of returning `""` as it
+does today.
 
 **Call sites** (`flight_sql_service_impl.rs`), resolved once per RPC before the request is
 consumed, then threaded into `execute_query`. Getting the two arguments out of a
@@ -438,22 +448,30 @@ adds them.
    `{"sub": "user-123", "email": "alice@example.com"}`) asserts both fields populate; a payload
    with no `email` key asserts `email: None`, `sub: Some(...)`; a malformed token (not 3
    dot-separated parts, or non-base64/non-JSON payload) asserts `AuditClaims { sub: None, email: None }`.
-6. New test, `rust/analytics-web-srv/tests/auth_observability_tests.rs`: drive a request whose
-   path carries a `code`/`state` query string through `auth_observability_middleware` under
-   `micromegas_tracing::test_utils::init_in_memory_tracing()` (the same `InMemorySink`/
-   `flush_log_buffer` harness already used by `rust/auth/tests/*`, `rust/object-cache/tests/
-   telemetry_tests.rs`, and others; `rust/analytics-web-srv/Cargo.toml` already carries the
-   `serial_test` dev-dependency it requires), then inspect the captured log blocks and assert the
-   `request`/`response` lines contain the path but never the query string. `cargo test -p
-   analytics-web-srv` (existing suite plus this new test) must still pass, confirming no routing
-   regression from step 1.
+6. New test, `rust/public/tests/auth_observability_tests.rs` — the middleware under test
+   (`auth_observability_middleware`) lives in the `micromegas` crate (`rust/public`), so its test
+   belongs there too, per `rust/CLAUDE.md`'s "unit tests ... under the tests folder of the crate":
+   drive a request whose path carries a `code`/`state` query string through
+   `auth_observability_middleware` under `micromegas_tracing::test_utils::init_in_memory_tracing()`
+   (the same `InMemorySink`/`flush_log_buffer` harness already used elsewhere in this workspace,
+   e.g. `rust/analytics/tests/log_tests.rs`; imported directly as `micromegas_tracing::...` since
+   `rust/public/Cargo.toml` already depends on `micromegas-tracing` directly, not just through the
+   `micromegas` facade), then inspect the captured log blocks and assert the `request`/`response`
+   lines contain the path but never the query string. `rust/public/Cargo.toml` gains a
+   `serial_test` dev-dependency (alphabetical, between `reqwest` and `tokio`) — `init_in_memory_tracing`
+   requires it — and a `[[test]]` entry (`name = "auth_observability_tests"`,
+   `path = "tests/auth_observability_tests.rs"`, `required-features = ["server"]`), matching every
+   other file under `rust/public/tests/`. `cargo test -p micromegas --features server` (existing
+   suite plus this new test) must still pass, confirming no routing regression from step 1.
 
 **Phase 3 — `flight-sql-srv`**
-7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost**
-   `X-Forwarded-For` entry (`rsplit` + non-empty guard) and rewrite its doc comment (`:3-10`, and
-   the inline comment at `:12-13`), which currently claims the leftmost entry is the original
-   client. Per Design §3. This is a behavior change for all three existing callers — see Design
-   §3's blast-radius note; no signature or type changes, so no caller edits are needed.
+7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost** entry of the
+   **last** `X-Forwarded-For` header field line (`headers.get_all(...).iter().last()` +
+   `rsplit` + non-empty guard — not `headers.get(...)`, which would return only the first field
+   line and let a caller-sent separate line win) and rewrite its doc comment (`:3-10`, and the
+   inline comment at `:12-13`), which currently claims the leftmost entry is the original client.
+   Per Design §3. This is a behavior change for all three existing callers — see Design §3's
+   blast-radius note; no signature or type changes, so no caller edits are needed.
 8. `flight_sql_service_impl.rs`: add `use super::http_utils::get_client_ip;` and thread `client_ip`
    through `do_get_fallback` (`:786-795`, `get_client_ip(request.metadata().as_ref(),
    request.extensions())`), `do_get_statement` (`:949-956`, same), `execute_query`'s signature and
@@ -468,10 +486,14 @@ adds them.
     rightmost entry, whitespace-trimmed; (b) a single-entry chain returns that entry; (c) the
     spoofing case: a client-prepended value plus the ALB's appended observation
     (`"666.spoof, 198.51.100.9"` or `"203.0.113.1, 198.51.100.9"`) returns the ALB's entry, not
-    the client's — the client-prepended value must be ignored; (d) no `X-Forwarded-For` but an
-    `X-Real-IP` header returns the `X-Real-IP` value; (e) neither header but a
-    `ConnectInfo<SocketAddr>` / bare `SocketAddr` extension returns its IP (string, no port); (f)
-    no header and no extension returns `"unknown"`. Optionally (g) a present-but-empty
+    the client's — the client-prepended value must be ignored; (d) **two separate
+    `X-Forwarded-For` header field lines** (via `HeaderMap::append`, e.g. a caller-sent
+    `"666.spoof"` line followed by the ALB's own appended `"198.51.100.9"` line) returns the ALB's
+    entry from the *last* line, not the caller's line — this is the case `headers.get(...)` alone
+    would get wrong (it would return the caller's line outright); (e) no `X-Forwarded-For` but an
+    `X-Real-IP` header returns the `X-Real-IP` value; (f) neither header but a
+    `ConnectInfo<SocketAddr>` / bare `SocketAddr` extension returns its IP (string, no port); (g)
+    no header and no extension returns `"unknown"`. Optionally (h) a present-but-empty
     `X-Forwarded-For` falls through to the next source rather than returning `""`. The test builds
     `http::HeaderMap`/`http::Extensions` (and `axum::extract::ConnectInfo`) directly — both crates
     are already reachable from this package's tests under the `server` feature, as
@@ -531,7 +553,7 @@ adds them.
 - `rust/analytics-web-srv/src/auth/handlers.rs` — imports, `auth_callback`, `auth_refresh`.
 - `rust/analytics-web-srv/src/auth/mod.rs` — re-export `AuditClaims`, `extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/tests/auth_unit_tests.rs` — new `extract_audit_claims_from_token` cases.
-- `rust/analytics-web-srv/tests/auth_observability_tests.rs` — new; asserts query-string redaction
+- `rust/public/tests/auth_observability_tests.rs` — new; asserts query-string redaction
   in `auth_observability_middleware`'s log lines.
 - `rust/public/src/servers/http_utils.rs` — `get_client_ip` switches to the rightmost
   `X-Forwarded-For` entry (+ doc comment). No signature change; no edits needed at its three
@@ -540,7 +562,8 @@ adds them.
   `execute_query`, `QueryAuditState`, `QueryAuditState::emit`.
 - `rust/public/src/servers/query_audit.rs` — `QueryAuditRecord`.
 - `rust/public/tests/http_utils_tests.rs` — new; `get_client_ip` selection/fallback/spoofing cases.
-- `rust/public/Cargo.toml` — new `[[test]]` entry for `http_utils_tests`.
+- `rust/public/Cargo.toml` — `serial_test` dev-dependency; new `[[test]]` entries for
+  `auth_observability_tests` and `http_utils_tests`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates.
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table.
 - `mkdocs/docs/gateway/index.md` — "Client IP Security" section (`:337-343`), now-stale
@@ -590,8 +613,10 @@ adds them.
 - **`/auth/*`'s `client_ip` is the same value as everywhere else, and the spoofing hole it used to
   inherit is closed by this plan.** `auth_observability_middleware` calls the same shared
   `get_client_ip`, which after Design §3 returns the ALB-observed address. A caller can still
-  *prepend* entries to `X-Forwarded-For`, but they land to the left of the ALB's own appended
-  observation and are ignored. Two residual caveats: (1) `X-Real-IP` is only consulted when
+  *prepend* entries to `X-Forwarded-For` (or send it as a separate header field line before the
+  ALB's), but `get_all(...).last()` plus taking the rightmost entry of that last line always
+  resolves to the ALB's own appended observation, so those entries are ignored regardless of which
+  form the caller uses. Two residual caveats: (1) `X-Real-IP` is only consulted when
   `X-Forwarded-For` is absent entirely — behind the ALB it never is, so that branch is effectively
   unreachable in the deployed topology, but a caller reaching a service *directly* (bypassing the
   ALB) can still set `X-Real-IP` and have it believed; (2) the one-trusted-hop assumption above
@@ -618,9 +643,10 @@ adds them.
 2. `cargo test -p analytics-web-srv` — existing suite plus the new `extract_audit_claims_from_token`
    cases (step 5); confirms no routing regression from wrapping `/auth/*` in
    `auth_observability_middleware`.
-3. `cargo test -p micromegas --features server` — covers the updated `query_audit_tests.rs`, the
-   new `http_utils_tests.rs`, and (unchanged, as a regression check on the `get_client_ip`
-   behavior change) `http_gateway_tests.rs`'s four `build_origin_metadata` cases.
+3. `cargo test -p micromegas --features server` — covers the new `auth_observability_tests.rs`
+   (step 6, query-string redaction), the updated `query_audit_tests.rs`, the new
+   `http_utils_tests.rs`, and (unchanged, as a regression check on the `get_client_ip` behavior
+   change) `http_gateway_tests.rs`'s four `build_origin_metadata` cases.
 4. **Manual verification** (the redaction rule itself is covered by the automated test in step 6;
    the rest — real OIDC flow, real FlightSQL traffic — still needs manual checks; see
    `python3 local_test_env/ai_scripts/start_services.py`):
