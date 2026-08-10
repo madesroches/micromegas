@@ -113,7 +113,13 @@ changes for any client.
   `flightsql_query_audit` record. It doesn't satisfy the issue's ask (correlatable, per-query
   attribution), but it does confirm the mechanism works and that `request.extensions()` still
   carries the `SocketAddr` all the way down to `execute_query`'s call sites (tonic's generated
-  per-method dispatch preserves the underlying `http::Extensions`).
+  per-method dispatch preserves the underlying `http::Extensions`). **Note this `client_ip` is not
+  the same trust level as the one this plan adds.** `get_client_ip` checks `x-forwarded-for`/
+  `x-real-ip` gRPC metadata (which tonic maps onto HTTP/2 headers) before ever reaching the
+  `SocketAddr` fallback, so `LogUriService`'s `client_ip` is header-derived and spoofable by any
+  direct gRPC caller — unlike the new `get_grpc_peer_ip` (Design §3), which deliberately ignores
+  headers and reads only the raw peer address. The two can disagree for the same request; see
+  Design §3 and the docs step for the same caveat spelled out where it matters.
 - `QueryAuditRecord` (`rust/public/src/servers/query_audit.rs:79-129`) is a plain
   `#[derive(serde::Serialize)]` struct with no client-IP field.
 - Unrelated existing mechanism, **not wired up, out of scope**: the HTTP gateway
@@ -142,6 +148,8 @@ its own copy that logs only `uri.path()` (dropping the query string entirely —
 /// Like `observability_middleware`, but logs only the request path, never the query string --
 /// `/auth/callback`'s query carries the OAuth authorization code and the PKCE verifier
 /// (embedded in the signed `state` param) and must never be written to the telemetry log.
+/// `client_ip` here reuses `get_client_ip` (honors `X-Forwarded-For`/`X-Real-IP`), same as every
+/// other axum route -- see Trade-offs for the trust caveat that implies.
 pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
     let (parts, body) = request.into_parts();
     let path = parts.uri.path().to_string();
@@ -265,6 +273,13 @@ existing convention exactly (`:497-500`), so the two success-path formats stay c
 /// override applied at this layer -- the only source available at `execute_query`'s call sites
 /// is the raw peer `SocketAddr` the tower `Connected` transport
 /// (`connect_info_layer::ConnectedStream`) inserts into request extensions.
+///
+/// Note this deliberately diverges from the pre-existing `LogUriService`
+/// (`log_uri_service.rs`), which logs a `client_ip` derived from `get_client_ip` -- i.e.
+/// honoring caller-supplied `x-forwarded-for`/`x-real-ip` gRPC metadata before falling back to
+/// the peer address. That value is spoofable by any direct gRPC caller and is not the same
+/// trust level as the field this function produces; the two `client_ip`s that end up in
+/// `flight-sql-srv`'s logs are not interchangeable (see Current State §3).
 pub fn get_grpc_peer_ip(extensions: &http::Extensions) -> String {
     extensions
         .get::<std::net::SocketAddr>()
@@ -334,10 +349,15 @@ own fallback string.
    `{"sub": "user-123", "email": "alice@example.com"}`) asserts both fields populate; a payload
    with no `email` key asserts `email: None`, `sub: Some(...)`; a malformed token (not 3
    dot-separated parts, or non-base64/non-JSON payload) asserts `AuditClaims { sub: None, email: None }`.
-6. No automated test asserts the *rendered log line content* for steps 1/3 — this codebase has no
-   log-content-capture test harness wired up for `analytics-web-srv` (see Testing Strategy);
-   covered by manual verification instead. `cargo test -p analytics-web-srv` (existing suite)
-   must still pass unchanged, confirming no routing regression from step 1.
+6. New test, `rust/analytics-web-srv/tests/auth_observability_tests.rs`: drive a request whose
+   path carries a `code`/`state` query string through `auth_observability_middleware` under
+   `micromegas_tracing::test_utils::init_in_memory_tracing()` (the same `InMemorySink`/
+   `flush_log_buffer` harness already used by `rust/auth/tests/*`, `rust/object-cache/tests/
+   telemetry_tests.rs`, and others; `rust/analytics-web-srv/Cargo.toml` already carries the
+   `serial_test` dev-dependency it requires), then inspect the captured log blocks and assert the
+   `request`/`response` lines contain the path but never the query string. `cargo test -p
+   analytics-web-srv` (existing suite plus this new test) must still pass, confirming no routing
+   regression from step 1.
 
 **Phase 3 — `flight-sql-srv`**
 7. `http_utils.rs`: add `get_grpc_peer_ip`, per Design §3.
@@ -369,7 +389,11 @@ own fallback string.
     truth, not self-reported) and noting the caveat from Trade-offs: for FlightSQL calls proxied
     through a server-side hop — the HTTP gateway's `/gateway/query` or `analytics-web-srv`'s
     `/api/query-stream` (the web app's notebook/query-editor path) — this reports the proxy's own
-    address, not the original browser/HTTP caller's.
+    address, not the original browser/HTTP caller's. Also note that this `client_ip` is distinct
+    from (and not comparable to) the `client_ip` that `flight-sql-srv`'s pre-existing
+    `LogUriService` writes to its generic per-call log line: that one is header-derived
+    (`x-forwarded-for`/`x-real-ip`) and spoofable by any direct gRPC caller, while this
+    audit-record field is the raw, non-spoofable peer address.
 14. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
     (**minor breaking change**: `QueryAuditRecord` is published API and gains a field, matching
     the convention every prior addition to this struct used — e.g. #1436, #1437, #1406); **Auth:**
@@ -384,6 +408,8 @@ own fallback string.
 - `rust/analytics-web-srv/src/auth/handlers.rs` — imports, `auth_callback`, `auth_refresh`.
 - `rust/analytics-web-srv/src/auth/mod.rs` — re-export `AuditClaims`, `extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/tests/auth_unit_tests.rs` — new `extract_audit_claims_from_token` cases.
+- `rust/analytics-web-srv/tests/auth_observability_tests.rs` — new; asserts query-string redaction
+  in `auth_observability_middleware`'s log lines.
 - `rust/public/src/servers/http_utils.rs` — new `get_grpc_peer_ip`.
 - `rust/public/src/servers/flight_sql_service_impl.rs` — `do_get_fallback`, `do_get_statement`,
   `execute_query`, `QueryAuditState`, `QueryAuditState::emit`.
@@ -432,6 +458,17 @@ own fallback string.
   token endpoint's own response (reached over TLS directly), same as today. This plan doesn't
   change that trust boundary; it only extracts one more field from the same already-trusted
   payload.
+- **`/auth/*`'s `client_ip` trusts `X-Forwarded-For`/`X-Real-IP`, unlike the FlightSQL audit
+  trail's peer-address choice above.** `auth_observability_middleware` calls the same
+  `get_client_ip` every other axum route in this codebase uses, which honors a caller-supplied
+  `X-Forwarded-For`/`X-Real-IP` header before falling back to `ConnectInfo<SocketAddr>`. That's
+  deliberately different from `get_grpc_peer_ip`'s peer-only design for FlightSQL: it's only
+  trustworthy when the deployment sits behind a proxy that *overwrites* (not appends to)
+  `X-Forwarded-For`, otherwise a direct caller can spoof it. This is not a regression — it's the
+  existing behavior of every other `/api/*` and `/gateway/*` axum route today — but it means the
+  `/auth/*` investigation log this plan adds inherits the same spoofing exposure the Trade-offs
+  above explicitly reject for the FlightSQL audit trail, rather than the non-spoofable
+  peer-address guarantee.
 - **No `x-forwarded-for`-style override for the gRPC peer IP.** `get_client_ip` (HTTP path) checks
   `X-Forwarded-For`/`X-Real-IP` headers before falling back to the connection's `SocketAddr`,
   because HTTP traffic commonly passes through a reverse proxy that sets those headers. FlightSQL
@@ -454,12 +491,13 @@ own fallback string.
    `auth_observability_middleware`.
 3. `cargo test -p micromegas --features server` — covers the updated `query_audit_tests.rs` and
    new `http_utils_tests.rs`.
-4. **Manual verification** (this repo has no log-content-capture test harness for
-   `analytics-web-srv`/`flight-sql-srv` — see `python3 local_test_env/ai_scripts/start_services.py`):
+4. **Manual verification** (the redaction rule itself is covered by the automated test in step 6;
+   the rest — real OIDC flow, real FlightSQL traffic — still needs manual checks; see
+   `python3 local_test_env/ai_scripts/start_services.py`):
    - Start services, hit `GET /auth/login` (or trigger any `/auth/*` request) and `tail -f
      /tmp/analytics.log` (or the monolith log), confirming a `request method=GET
-     uri=.../auth/login client_ip=...` / `response status=... client_ip=...` pair now appears —
-     it did not before this change.
+     path=/auth/login client_ip=...` / `response status=... path=... client_ip=...` pair now
+     appears — it did not before this change.
    - Complete a real OIDC login flow and confirm the `[auth_success] event=login sub=... email=...
      issuer=...` line now includes a real email address, not just `sub`. Trigger a token refresh
      (or wait for one) and confirm `[auth_success] event=token_refresh sub=... email=...` likewise.
