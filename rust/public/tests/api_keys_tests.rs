@@ -173,6 +173,36 @@ async fn delete_403_for_non_admin_oidc_context() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn import_403_for_api_key_context() {
+    let router = api_keys_router(lazy_pool(), test_config());
+    let response = call(
+        router,
+        api_key_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            r#"{"name": "legacy", "key": "legacy-secret"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn import_403_for_non_admin_oidc_context() {
+    let router = api_keys_router(lazy_pool(), test_config());
+    let response = call(
+        router,
+        non_admin_oidc_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            r#"{"name": "legacy", "key": "legacy-secret"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 // ---------------------------------------------------------------------------
 // §4's 400 validation — checked before any hashing or DB access, so these run
 // against the same never-really-touched pool as the 403 cases above.
@@ -242,6 +272,49 @@ async fn get_1000_limit_is_not_bad_request() {
     )
     .await;
     assert_ne!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_400_for_empty_name() {
+    let router = api_keys_router(lazy_pool(), test_config());
+    let response = call(
+        router,
+        admin_oidc_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            r#"{"name": "", "key": "legacy-secret"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_400_for_empty_key() {
+    let router = api_keys_router(lazy_pool(), test_config());
+    let response = call(
+        router,
+        admin_oidc_ctx(),
+        post_request("/auth/api_keys/import", r#"{"name": "legacy", "key": ""}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_400_for_name_over_255_bytes() {
+    let long_name = "a".repeat(256);
+    let router = api_keys_router(lazy_pool(), test_config());
+    let response = call(
+        router,
+        admin_oidc_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            &format!(r#"{{"name": "{long_name}", "key": "legacy-secret"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 /// `api_keys_router` takes no table parameter, so no route in this module can
@@ -394,6 +467,76 @@ async fn live_get_limit_clamp_returns_exactly_500() {
             .await
             .expect("cleanup");
     }
+}
+
+#[ignore]
+#[tokio::test]
+async fn live_import_inserts_then_idempotent_reimport() {
+    let pool = live_pool().await;
+    let router = api_keys_router(pool.clone(), test_config());
+
+    let name = format!("api-keys-test-import-{}", uuid::Uuid::new_v4());
+    let key = format!("legacy-{}", uuid::Uuid::new_v4());
+
+    let response = call(
+        router.clone(),
+        admin_oidc_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            &format!(r#"{{"name": "{name}", "key": "{key}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["imported"], true);
+    assert_eq!(body["revoked_at"], Value::Null);
+    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
+
+    // The imported key authenticates, same as a minted key.
+    let provider = micromegas_auth::db_api_key::DbApiKeyAuthProvider::new(
+        pool.clone(),
+        micromegas_auth::db_api_key::ApiKeyTable::Ingestion,
+        test_config(),
+    );
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        format!("Bearer {key}").parse().expect("valid header"),
+    );
+    let parts = micromegas_auth::types::HttpRequestParts {
+        headers,
+        method: http::Method::GET,
+        uri: "/test".parse().expect("valid uri"),
+    };
+    use micromegas_auth::types::AuthProvider as _;
+    provider
+        .validate_request(&parts as &dyn micromegas_auth::types::RequestParts)
+        .await
+        .expect("imported key should authenticate");
+
+    // Re-importing the same key string is idempotent: same key_id, imported: false.
+    let response = call(
+        router.clone(),
+        admin_oidc_ctx(),
+        post_request(
+            "/auth/api_keys/import",
+            &format!(r#"{{"name": "{name}-again", "key": "{key}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["imported"], false);
+    assert_eq!(body["key_id"].as_str(), Some(key_id.as_str()));
+    // The original name is preserved — the re-import did not overwrite it.
+    assert_eq!(body["name"].as_str(), Some(name.as_str()));
+
+    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
+        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
+        .execute(&pool)
+        .await
+        .expect("cleanup");
 }
 
 #[ignore]

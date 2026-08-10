@@ -55,9 +55,11 @@ administrative SQL functions — see [Admin SQL Functions](functions-reference.m
 For provider configuration and precedence, see [Authentication](authentication.md).
 
 flight-sql validates `analytics_api_keys` (see [API Keys](api-keys.md)) but
-mints nothing over HTTP — it has no key-management routes. Analytics keys are
-issued by hand, following the runbook in [API Keys](api-keys.md). This also
-covers the key-only deployment (no OIDC) some Grafana setups use — see
+mints nothing over HTTP itself — it has no key-management routes of its own.
+Analytics keys are minted, listed, revoked, and imported through
+`analytics-web-srv`'s own HTTP routes instead — see
+[API Keys](api-keys.md#minting-an-analytics-key-over-http). This also covers
+the key-only deployment (no OIDC) some Grafana setups use — see
 [Grafana Authentication](../grafana/authentication.md).
 
 `--disable-auth` treats every FlightSQL caller as admin — it is a development-only

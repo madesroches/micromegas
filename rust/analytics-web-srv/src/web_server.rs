@@ -3,17 +3,18 @@
 use crate::app_db;
 use crate::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
 use crate::data_source_cache::DataSourceCache;
+use crate::ingestion_keys_proxy;
 use crate::maps;
 use crate::stream_query;
-use crate::{data_sources, folders, screens};
+use crate::{analytics_keys, data_sources, folders, screens};
 use anyhow::{Context, Result};
 use axum::{
     Extension, Json, Router, ServiceExt,
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Redirect},
-    routing::{get, post, put},
+    response::{IntoResponse, Redirect, Response},
+    routing::{any, get, post, put},
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
@@ -22,6 +23,7 @@ use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::tracing::prelude::*;
 use serde::Serialize;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +45,12 @@ pub struct WebServerConfig {
     pub maps_uri: Option<String>,
     /// Optional override for the maximum maps upload size in bytes.
     pub max_upload_bytes: Option<usize>,
+    /// `MICROMEGAS_SQL_CONNECTION_STRING`, read but not connected by
+    /// `from_cli_and_env` — the telemetry-DB connection string backing the
+    /// analytics-key routes' small pool (`run_web_server` connects it
+    /// lazily). `None` when unset; the routes stay registered either way and
+    /// return 503 per-request.
+    pub analytics_keys_db_string: Option<String>,
     /// Disable OIDC/cookie auth (anonymous access, development only).
     pub disable_auth: bool,
     /// Environment variable name used to load the OIDC admin list.
@@ -75,6 +83,7 @@ impl WebServerConfig {
         let max_upload_bytes = std::env::var("MICROMEGAS_MAPS_MAX_UPLOAD_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok());
+        let analytics_keys_db_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING").ok();
         Ok(Self {
             port: cli.port,
             frontend_dir: cli.frontend_dir,
@@ -83,6 +92,7 @@ impl WebServerConfig {
             app_db_string,
             maps_uri,
             max_upload_bytes,
+            analytics_keys_db_string,
             disable_auth: cli.disable_auth,
             admin_var_name: cli.admin_var_name,
         })
@@ -222,12 +232,70 @@ fn build_public_routes(base_path: &str, readiness_state: Arc<ReadinessState>) ->
         .layer(Extension(readiness_state))
 }
 
-fn build_protected_routes(
+/// JSON body returned by the static key-management-disabled router below.
+#[derive(Serialize)]
+struct KeyManagementDisabled {
+    code: &'static str,
+    message: &'static str,
+}
+
+async fn key_management_disabled() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(KeyManagementDisabled {
+            code: "AUTH_DISABLED",
+            message: "key management is unavailable when auth is disabled",
+        }),
+    )
+        .into_response()
+}
+
+/// Answers both key-management path prefixes with a fixed 503 instead of the
+/// real routers — merged only under `--disable-auth`, in place of
+/// `analytics_keys::analytics_keys_router` /
+/// `ingestion_keys_proxy::ingestion_keys_proxy_router`. Under
+/// `--disable-auth`, `build_protected_routes` layers a hardcoded
+/// `ValidatedUser { is_admin: true, .. }` on every request instead of running
+/// `cookie_auth_middleware`, so the `AdminUser` extractor would pass for any
+/// unauthenticated caller reaching the port — the real handlers are therefore
+/// not merged at all in this mode (structurally unreachable, not gated by a
+/// flag), while a base route plus a `/{*rest}` wildcard per prefix still
+/// resolve to a meaningful JSON error instead of falling through to
+/// `build_frontend`'s SPA fallback (`200 text/html`).
+fn key_management_disabled_router(base_path: &str) -> Router {
+    Router::new()
+        .route(
+            &format!("{base_path}/api/analytics-api-keys"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/analytics-api-keys/{{*rest}}"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/ingestion-api-keys"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/ingestion-api-keys/{{*rest}}"),
+            any(key_management_disabled),
+        )
+}
+
+/// `pub` (unlike the other `build_*` helpers here) so integration tests
+/// (`tests/routing_tests.rs`) can exercise the real `--disable-auth`
+/// branching directly — asserting that the static 503 router answers both
+/// key-management prefixes and that the real routers are never merged in
+/// that mode — rather than reimplementing the merge logic standalone and
+/// risking it drifting out of sync with production.
+pub fn build_protected_routes(
     base_path: &str,
     auth_state: &Option<AuthState>,
     app_db_pool: PgPool,
     data_source_cache: DataSourceCache,
     maps_state: maps::MapsState,
+    analytics_keys_state: analytics_keys::AnalyticsKeysState,
+    ingestion_proxy_state: ingestion_keys_proxy::IngestionProxyState,
 ) -> Router {
     let routes = Router::new()
         .route(
@@ -278,7 +346,29 @@ fn build_protected_routes(
             put(maps::maps_upload)
                 .layer(DefaultBodyLimit::max(maps_state.max_upload_bytes))
                 .delete(maps::maps_delete),
-        )
+        );
+
+    // The key-management routers are merged *before* the `Extension`/
+    // `observability_middleware` layers below, so they're covered by the
+    // same `cookie_auth_middleware` layer that wraps every other `/api/...`
+    // route — same as every route added above. Under `--disable-auth`
+    // (`auth_state == None`) the real routers are not merged at all: a
+    // hardcoded admin `ValidatedUser` is layered on every request in that
+    // mode (see below), so the `AdminUser` extractor would otherwise pass
+    // for any unauthenticated caller — merging the static 503 router instead
+    // makes the real mint/list/revoke/forward logic structurally
+    // unreachable, not merely flag-gated (see Security).
+    let routes = if auth_state.is_some() {
+        routes
+            .merge(analytics_keys::analytics_keys_router(base_path))
+            .merge(ingestion_keys_proxy::ingestion_keys_proxy_router(base_path))
+            .layer(Extension(analytics_keys_state))
+            .layer(Extension(ingestion_proxy_state))
+    } else {
+        routes.merge(key_management_disabled_router(base_path))
+    };
+
+    let routes = routes
         .layer(Extension(app_db_pool))
         .layer(Extension(data_source_cache))
         .layer(Extension(maps_state))
@@ -514,6 +604,44 @@ pub async fn run_web_server(
         .unwrap_or(maps::DEFAULT_MAX_UPLOAD_BYTES);
     let maps_state = maps::MapsState::with_max_upload_bytes(maps_store, max_upload_bytes);
 
+    // `max_connections(2)`, a bounded `acquire_timeout`, and `connect_lazy`
+    // (not an eager `PgPool::connect`) — this is an admin-console path, not
+    // the hot per-request validation path `dedicated_key_store_pool` tunes
+    // for, and a briefly-unreachable telemetry DB must not stop
+    // `analytics-web-srv` from starting.
+    let analytics_keys_pool = match &config.analytics_keys_db_string {
+        Some(conn_str) => Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .acquire_timeout(Duration::from_secs(2))
+                .connect_lazy(conn_str)
+                .context("Failed to construct analytics-key store pool")?,
+        ),
+        None => None,
+    };
+    if analytics_keys_pool.is_some() {
+        info!("Analytics-key store pool configured");
+    } else {
+        warn!(
+            "MICROMEGAS_SQL_CONNECTION_STRING not set — /api/analytics-api-keys/* will return 503"
+        );
+    }
+    let analytics_keys_state = analytics_keys::AnalyticsKeysState {
+        pool: analytics_keys_pool,
+    };
+
+    let ingestion_proxy_config = ingestion_keys_proxy::IngestionProxyConfig::from_env();
+    if ingestion_proxy_config.is_some() {
+        info!("Ingestion key-management proxy configured");
+    } else {
+        warn!(
+            "MICROMEGAS_INGESTION_ADMIN_URL / MICROMEGAS_INGESTION_PROXY_OIDC_* not fully set — /api/ingestion-api-keys/* will return 503"
+        );
+    }
+    let ingestion_proxy_state = ingestion_keys_proxy::IngestionProxyState {
+        config: ingestion_proxy_config.map(Arc::new),
+    };
+
     let auth_state = if config.disable_auth {
         println!("WARNING: Authentication is disabled (--disable-auth)");
         None
@@ -531,6 +659,8 @@ pub async fn run_web_server(
             app_db_pool,
             data_source_cache,
             maps_state.clone(),
+            analytics_keys_state,
+            ingestion_proxy_state,
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));
 

@@ -109,10 +109,11 @@ The `MICROMEGAS_ADMINS` environment variable is a JSON array of user identifiers
 
 ### API Key Configuration
 
-**Steady state: DB-backed keys.** Mint a key with `POST /auth/api_keys` on the
-ingestion service (OIDC + admin required) — see [API Keys](api-keys.md) for the
-full route reference, the `mmk_`-prefixed key shape, and the analytics-key runbook
-(analytics keys are never mintable over HTTP; they're issued by hand).
+**Steady state: DB-backed keys.** Mint an ingestion key with `POST /auth/api_keys`
+on the ingestion service, or an analytics key with `POST /api/analytics-api-keys`
+on `analytics-web-srv` (both OIDC + admin required) — see
+[API Keys](api-keys.md) for the full route reference and the `mmk_`-prefixed
+key shape.
 
 **Legacy/bootstrap: the env keyring.** Still the only option for
 `object-cache-srv` (env-only permanently — see [Object Cache](object-cache.md)),

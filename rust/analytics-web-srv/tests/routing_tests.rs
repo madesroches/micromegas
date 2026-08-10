@@ -9,6 +9,11 @@
 //! Key insight: `Router::layer()` runs AFTER routing, so `NormalizePathLayer`
 //! must WRAP the router using `layer()` method, not be added via `Router::layer()`.
 
+use analytics_web_srv::analytics_keys::AnalyticsKeysState;
+use analytics_web_srv::data_source_cache::DataSourceCache;
+use analytics_web_srv::ingestion_keys_proxy::IngestionProxyState;
+use analytics_web_srv::maps::MapsState;
+use analytics_web_srv::web_server::build_protected_routes;
 use axum::{
     Router, body::Body, extract::State, http::StatusCode, response::IntoResponse, routing::get,
 };
@@ -375,4 +380,78 @@ async fn test_empty_base_path_produces_root_base_href() {
         body_str.contains(r#"basePath:"""#),
         "Config should have empty basePath"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `--disable-auth`: both key-management prefixes answer with the static 503
+// router, not the real mint/list/revoke/forward handlers (#1411). Calls the
+// real `build_protected_routes` with `auth_state: &None` (the exact
+// `--disable-auth` shape `run_web_server` builds), rather than
+// reimplementing the merge branching standalone, so this stays a regression
+// guard against a future refactor accidentally merging the real routers in
+// that mode.
+// ---------------------------------------------------------------------------
+
+fn lazy_pool() -> sqlx::PgPool {
+    sqlx::PgPool::connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
+
+fn disabled_auth_app() -> Router {
+    let pool = lazy_pool();
+    let data_source_cache = DataSourceCache::new(pool.clone(), std::time::Duration::from_secs(60));
+    let maps_state = MapsState::new(None);
+    let analytics_keys_state = AnalyticsKeysState { pool: None };
+    let ingestion_proxy_state = IngestionProxyState { config: None };
+    build_protected_routes(
+        "",
+        &None,
+        pool,
+        data_source_cache,
+        maps_state,
+        analytics_keys_state,
+        ingestion_proxy_state,
+    )
+}
+
+async fn assert_key_management_disabled_503(app: Router, uri: &str) {
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "expected 503 for {uri}"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert_eq!(json["code"], "AUTH_DISABLED");
+}
+
+#[tokio::test]
+async fn disable_auth_analytics_keys_base_route_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/analytics-api-keys").await;
+}
+
+#[tokio::test]
+async fn disable_auth_analytics_keys_sub_path_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/analytics-api-keys/import").await;
+}
+
+#[tokio::test]
+async fn disable_auth_ingestion_keys_base_route_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/ingestion-api-keys").await;
+}
+
+#[tokio::test]
+async fn disable_auth_ingestion_keys_sub_path_returns_503() {
+    let key_id = uuid::Uuid::new_v4();
+    assert_key_management_disabled_503(
+        disabled_auth_app(),
+        &format!("/api/ingestion-api-keys/{key_id}"),
+    )
+    .await;
 }

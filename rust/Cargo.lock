@@ -75,6 +75,7 @@ dependencies = [
  "moka",
  "object_store",
  "openidconnect",
+ "reqwest",
  "rsa",
  "serde",
  "serde_json",
@@ -86,6 +87,8 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]

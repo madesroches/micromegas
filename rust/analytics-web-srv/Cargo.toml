@@ -28,6 +28,7 @@ http.workspace = true
 moka.workspace = true
 object_store.workspace = true
 openidconnect.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -35,6 +36,7 @@ time = "0.3"
 tokio.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["compression-gzip", "fs", "normalize-path"] }
+uuid.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator.workspace = true
@@ -54,3 +56,4 @@ rsa.workspace = true
 serial_test = "3.2"
 tempfile = "3.14"
 tower.workspace = true
+wiremock.workspace = true

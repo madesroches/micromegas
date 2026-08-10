@@ -29,8 +29,9 @@ use std::time::Duration;
 pub enum ApiKeyTable {
     /// `ingestion_api_keys` — write credentials, minted/listed/revoked over HTTP.
     Ingestion,
-    /// `analytics_api_keys` — read credentials, issued only by hand (see the admin
-    /// runbook); never mintable through the HTTP API.
+    /// `analytics_api_keys` — read credentials, minted/listed/revoked over
+    /// HTTP through `analytics-web-srv`'s own routes (`/api/analytics-api-keys*`,
+    /// see the admin runbook) — not through this crate's ingestion-hosted API.
     Analytics,
 }
 

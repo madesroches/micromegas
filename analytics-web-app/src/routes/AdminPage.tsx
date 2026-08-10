@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Database, Download, Upload, Map } from 'lucide-react'
+import { Database, Download, Upload, Map, KeyRound, ShieldCheck } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -64,6 +64,30 @@ function AdminPageContent() {
                 <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Maps</h3>
                 <p className="text-sm text-theme-text-muted leading-relaxed">
                   Upload and remove GLB map assets served to map cells.
+                </p>
+              </div>
+            </AppLink>
+
+            <AppLink href="/admin/ingestion-keys" className="block">
+              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-orange-500/15 text-orange-500">
+                  <KeyRound className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Ingestion API Keys</h3>
+                <p className="text-sm text-theme-text-muted leading-relaxed">
+                  Mint, list, and revoke write credentials for telemetry ingestion clients.
+                </p>
+              </div>
+            </AppLink>
+
+            <AppLink href="/admin/analytics-keys" className="block">
+              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-purple-500/15 text-purple-500">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Analytics API Keys</h3>
+                <p className="text-sm text-theme-text-muted leading-relaxed">
+                  Mint, list, and revoke read credentials for FlightSQL/analytics access.
                 </p>
               </div>
             </AppLink>
