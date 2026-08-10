@@ -615,6 +615,7 @@ export function NotebookRenderer({
                   defaultDataSource={dataSource}
                   allCellNames={existingNames}
                   onChildRef={setCellRef}
+                  notebookName={screenName}
                 />
               </CellContainer>
             </div>
