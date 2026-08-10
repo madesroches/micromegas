@@ -1159,6 +1159,27 @@ describe('extractPieData', () => {
     }
   })
 
+  it('should accept a dictionary-encoded string label column (e.g. FlightSQL-preserved target/exe/name columns)', () => {
+    const table = createMockTable(
+      [
+        { name: 'target', type: createDictionaryType(createUtf8Type()) },
+        { name: 'count', type: createIntType() },
+      ],
+      [
+        { target: 'micromegas_tracing', count: 42 },
+        { target: 'flight_sql_srv', count: 17 },
+      ]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices).toEqual([
+        { label: 'micromegas_tracing', value: 42 },
+        { label: 'flight_sql_srv', value: 17 },
+      ])
+    }
+  })
+
   it('should return an error for the wrong column count', () => {
     const table = createMockTable([{ name: 'label', type: createUtf8Type() }], [])
     const result = extractPieData(table as never)

@@ -384,10 +384,10 @@ export function PieChartCell({
 
       {hover && (
         <div
-          className="fixed z-10 px-3 py-2 text-xs rounded-md shadow-lg pointer-events-none"
+          className="fixed z-50 px-3 py-2 text-xs rounded-md shadow-lg pointer-events-none"
           style={{
-            left: hover.x + 14,
-            top: hover.y - 10,
+            left: Math.min(hover.x + 14, window.innerWidth - 196),
+            top: Math.min(hover.y - 10, window.innerHeight - 76),
             background: 'var(--app-bg)',
             border: '1px solid var(--border-color)',
             color: 'var(--text-primary)',

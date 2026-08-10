@@ -537,9 +537,16 @@ Rows with a null category, a null value, or a negative value are dropped (a nega
 **Example SQL:**
 
 ```sql
-SELECT level, count(*) AS count
+SELECT CASE level
+  WHEN 1 THEN 'FATAL'
+  WHEN 2 THEN 'ERROR'
+  WHEN 3 THEN 'WARN'
+  WHEN 4 THEN 'INFO'
+  WHEN 5 THEN 'DEBUG'
+  ELSE 'TRACE'
+END AS level_name, count(*) AS count
 FROM log_entries
-GROUP BY level
+GROUP BY level_name
 ORDER BY count DESC
 ```
 

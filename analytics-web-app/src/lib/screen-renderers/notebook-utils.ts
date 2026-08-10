@@ -172,7 +172,7 @@ ORDER BY name, begin`,
 FROM process_spans('$process_id', 'both')
 ORDER BY lane, begin`,
   map: `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z`,
-  piechart: `SELECT level, count(*) AS count FROM log_entries GROUP BY level ORDER BY count DESC`,
+  piechart: `SELECT CASE level WHEN 1 THEN 'FATAL' WHEN 2 THEN 'ERROR' WHEN 3 THEN 'WARN' WHEN 4 THEN 'INFO' WHEN 5 THEN 'DEBUG' ELSE 'TRACE' END AS level_name, count(*) AS count FROM log_entries GROUP BY level_name ORDER BY count DESC`,
 }
 
 /**

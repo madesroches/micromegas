@@ -280,8 +280,10 @@ export function validateChartColumns(table: Table):
   const resolved = resolveChartColumns(fields)
   const { xType, yType, xColumnName, yColumnName, colorColumnName, colorColumnKind } = resolved
 
-  // X column must be timestamp, numeric, or string
-  if (!isTimeType(xType) && !isNumericType(xType) && !isStringType(xType)) {
+  // X column must be timestamp, numeric, or string (dictionary-encoded
+  // strings, e.g. FlightSQL's preserved Dictionary<Int32, Utf8> columns,
+  // decode to plain strings and must be accepted here too)
+  if (!isTimeType(xType) && !isNumericType(xType) && !isStringType(unwrapDictionary(xType))) {
     return {
       valid: false,
       error: 'First column must be timestamp, numeric, or string type for X-axis',
