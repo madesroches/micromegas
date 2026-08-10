@@ -797,6 +797,29 @@ is its only narrowing mechanism.
 
 Pass `--version` to print the installed package and interpreter version and exit.
 
+### micromegas-import-keys
+
+Walks a legacy env-keyring (or a file with the same shape) and imports each key into the DB-backed
+`ingestion_api_keys` / `analytics_api_keys` store via the HTTP import routes, so a client can keep
+presenting the same key string after migrating off the keyring. Requires OIDC admin access on the
+target service — no direct Postgres access needed.
+
+```bash
+micromegas-import-keys --table ingestion --source env --url http://ingestion:8081
+micromegas-import-keys --table analytics --source env --url https://analytics.example.com
+```
+
+`--table {ingestion,analytics}` selects the import route and target service. `--source env`
+(default `--var`, with a fallback — see below) or `--source file --path ...` supplies the keyring.
+`--only NAME [NAME ...]` / `--exclude NAME [NAME ...]` select which keyring entries to import on
+this run. Auth follows the same OIDC setup as `micromegas-query`/`-screens` (`MICROMEGAS_OIDC_*` for
+a non-interactive run, or `--profile` for an interactive/cached login).
+
+See [Migrating from the env keyring](../admin/api-keys.md#migrating-from-the-env-keyring) for the
+full recipe, including the exact keyring shape and the env var fallback convention.
+
+Pass `--version` to print the installed package and interpreter version and exit.
+
 ## Time Utilities
 
 ### `format_datetime(value)`, `parse_datetime(value)`, and `parse_time_delta(user_string)`

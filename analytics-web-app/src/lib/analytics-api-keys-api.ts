@@ -10,7 +10,7 @@
 
 import { authenticatedFetch, getApiBase } from './api'
 
-// The server's own hard cap (`MAX_LIMIT` in `rust/public/src/servers/api_keys.rs`),
+// The server's own hard cap (`MAX_LIMIT` in `rust/analytics-web-srv/src/analytics_keys.rs`),
 // used here as the page size for offset-based paging. Requested explicitly on
 // every list call — omitting `limit` falls back to the server's lower
 // `DEFAULT_LIMIT` (100), which silently truncates the list on any deployment

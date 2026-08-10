@@ -201,6 +201,56 @@ describe('AnalyticsApiKeysPage', () => {
     expect(await screen.findByRole('button', { name: 'Previous' })).toBeInTheDocument()
   })
 
+  it('minting while on a later page resets to page 1 so the new key is visible', async () => {
+    const fetchMock = vi
+      .fn()
+      // Initial load: page 1, full page (so Next is shown).
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(makeKeys(MAX_ANALYTICS_API_KEYS_LIST_LIMIT)),
+      } as unknown as Response)
+      // Load after clicking Next: page 2.
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(makeKeys(1)),
+      } as unknown as Response)
+      // Mint call.
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            key_id: 'key-new',
+            name: 'new-key',
+            created_at: '2026-01-01T00:00:00Z',
+            key: 'mmk_test_cleartext',
+          }),
+      } as unknown as Response)
+      // Reload after mint: should be page 1 again (offset=0).
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(makeKeys(1)),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    const nextButton = await screen.findByRole('button', { name: 'Next' })
+    fireEvent.click(nextButton)
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2))
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
+    const nameInput = await screen.findByPlaceholderText(/grafana-datasource/i)
+    fireEvent.change(nameInput, { target: { value: 'new-key' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Mint' }))
+    })
+
+    await waitFor(() => {
+      const [url] = fetchMock.mock.calls[3]
+      expect(url).toContain('offset=0')
+    })
+  })
+
   it('opens the revoke confirm dialog and DELETEs the right URL on confirm', async () => {
     const fetchMock = vi
       .fn()

@@ -83,7 +83,15 @@ function AnalyticsApiKeysPageContent() {
       setShowMintForm(false)
       setMintedKey(result.key)
       setCopied(false)
-      await loadKeys()
+      // A key minted while on a later page would otherwise land on page 1
+      // (newest-first ordering) and never show up in the visible table.
+      // Resetting to page 1 changes `loadKeys`'s dep and triggers the
+      // load-on-offset-change effect; already on page 1, so refetch directly.
+      if (offset !== 0) {
+        setOffset(0)
+      } else {
+        await loadKeys()
+      }
     } catch (err) {
       setMintError(err instanceof AnalyticsApiKeyError ? err.message : 'Failed to mint key')
     } finally {
