@@ -166,31 +166,35 @@ def test_resolve_client_entrypoint_default_script(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# new_session_id
+# resolve_session_id
 # ---------------------------------------------------------------------------
 
 
-def test_new_session_id_no_harness_var_returns_distinct_valid_uuids(monkeypatch):
+def test_resolve_session_id_no_harness_var_returns_distinct_valid_uuids(monkeypatch):
     _scrub_all_attribution_env(monkeypatch)
-    first = attribution.new_session_id()
-    second = attribution.new_session_id()
+    first = attribution.resolve_session_id()
+    second = attribution.resolve_session_id()
     # Valid UUID strings.
     uuid_module.UUID(first)
     uuid_module.UUID(second)
     assert first != second
 
 
-def test_new_session_id_with_claude_code_session_id_returns_it_verbatim(monkeypatch):
+def test_resolve_session_id_with_claude_code_session_id_returns_it_verbatim(
+    monkeypatch,
+):
     _scrub_all_attribution_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc-123-session")
-    first = attribution.new_session_id()
-    second = attribution.new_session_id()
+    first = attribution.resolve_session_id()
+    second = attribution.resolve_session_id()
     assert first == "abc-123-session"
     assert second == "abc-123-session"
 
 
-def test_new_session_id_unsafe_claude_code_session_id_falls_back_to_uuid(monkeypatch):
+def test_resolve_session_id_unsafe_claude_code_session_id_falls_back_to_uuid(
+    monkeypatch,
+):
     _scrub_all_attribution_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "bad\nvalue")
-    result = attribution.new_session_id()
+    result = attribution.resolve_session_id()
     uuid_module.UUID(result)

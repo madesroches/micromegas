@@ -1,9 +1,11 @@
-"""Hermetic unit test for micromegas.flightsql.client.make_call_headers.
+"""Tests for micromegas.flightsql.client's header handling.
 
-make_call_headers is the function on the live query path that actually
+Covers make_call_headers -- the function on the live query path that
 formats `begin`/`end` values for the FlightSQL call headers (see
 client.py's query()/query_stream()/query_arrow()); it has no I/O, so it
-can be tested directly without a service or mocking.
+can be tested directly without a service or mocking -- and
+FlightSQLClient's emission of attribution headers on every call site,
+exercised via a stubbed `flight.connect` (no real service or network I/O).
 """
 
 import pyarrow

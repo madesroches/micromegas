@@ -2,7 +2,7 @@ from . import FlightSql_pb2
 from .attribution import (
     resolve_client_agent,
     resolve_client_entrypoint,
-    new_session_id,
+    resolve_session_id,
 )
 from ..time import format_datetime
 from google.protobuf import any_pb2
@@ -248,6 +248,14 @@ class FlightSQLClient:
                 stacklevel=2,
             )
 
+        # Resolve attribution before any I/O below, so a bad client_entrypoint
+        # argument fails fast with a ValueError instead of only after the
+        # certifi read / flight.connect() have already run.
+        self.__preserve_dictionary = preserve_dictionary
+        self.__client_agent = resolve_client_agent()
+        self.__client_entrypoint = resolve_client_entrypoint(explicit=client_entrypoint)
+        self.__session_id = resolve_session_id()
+
         # Normalize URI scheme for Arrow Flight
         uri = self._normalize_uri(uri)
 
@@ -264,10 +272,6 @@ class FlightSQLClient:
         self.__flight_client = flight.connect(
             location=uri, tls_root_certs=cert, middleware=[factory]
         )
-        self.__preserve_dictionary = preserve_dictionary
-        self.__client_agent = resolve_client_agent()
-        self.__client_entrypoint = resolve_client_entrypoint(explicit=client_entrypoint)
-        self.__session_id = new_session_id()
 
     @staticmethod
     def _normalize_uri(uri: str) -> str:
@@ -393,10 +397,10 @@ class FlightSQLClient:
         call_headers = make_call_headers(
             begin,
             end,
-            self.__preserve_dictionary,
-            self.__client_agent,
-            self.__client_entrypoint,
-            self.__session_id,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
         )
         options = flight.FlightCallOptions(headers=call_headers)
         ticket = make_query_ticket(sql)
@@ -459,10 +463,10 @@ class FlightSQLClient:
         call_headers = make_call_headers(
             begin,
             end,
-            self.__preserve_dictionary,
-            self.__client_agent,
-            self.__client_entrypoint,
-            self.__session_id,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
         )
         options = flight.FlightCallOptions(headers=call_headers)
         reader = self.__flight_client.do_get(ticket, options=options)
@@ -498,10 +502,10 @@ class FlightSQLClient:
         call_headers = make_call_headers(
             begin,
             end,
-            self.__preserve_dictionary,
-            self.__client_agent,
-            self.__client_entrypoint,
-            self.__session_id,
+            preserve_dictionary=self.__preserve_dictionary,
+            client_agent=self.__client_agent,
+            client_entrypoint=self.__client_entrypoint,
+            client_session=self.__session_id,
         )
         options = flight.FlightCallOptions(headers=call_headers)
         ticket = make_query_ticket(sql)

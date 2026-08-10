@@ -106,7 +106,7 @@ def resolve_client_entrypoint(explicit=None):
     return "script"
 
 
-def new_session_id():
+def resolve_session_id():
     """A per-instance session id. Prefers a stable harness-provided session id
     (see `_KNOWN_AGENT_HARNESS_SESSION_ENV_VARS`) so every FlightSQLClient/CLI
     invocation within one agent session correlates; falls back to a fresh

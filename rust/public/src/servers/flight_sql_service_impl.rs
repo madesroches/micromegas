@@ -570,6 +570,7 @@ impl FlightSqlServiceImpl {
         let client_session = metadata
             .get("x-client-session")
             .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
         let user_name_display = attr.user_name.as_deref().unwrap_or("");

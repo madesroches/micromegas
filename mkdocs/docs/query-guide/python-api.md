@@ -341,6 +341,11 @@ and, like the existing `x-client-type` header, trivially spoofable or omittable 
 characters or fewer; an invalid override is silently ignored in favor of the auto-detected value
 (unlike the `client_entrypoint` constructor parameter, which raises `ValueError` instead).
 
+Note that the top-level `micromegas.connect()` helper does not expose a `client_entrypoint`
+parameter — auto-detection always runs for it. If you want an explicit label, construct
+`FlightSQLClient` directly, or use `oidc_connection.connect()`/the CLI's `connection.connect()`,
+both of which do take `client_entrypoint`.
+
 ## Schema Discovery
 
 ### `prepare_statement(sql)`
