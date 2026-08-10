@@ -9,6 +9,22 @@
 //! *before* [`forward`] is ever called — an unauthorized `analytics-web-srv`
 //! caller never triggers a service-credential token fetch, let alone a call
 //! to ingestion.
+//!
+//! **Known limitation, accepted:** ingestion has no way to see *which* admin
+//! is behind a proxied call — every mint/list/revoke request it receives is
+//! authenticated solely as this proxy's own service credential
+//! (`MICROMEGAS_INGESTION_PROXY_OIDC_*`). So `ingestion_api_keys.created_by`/
+//! `revoked_by` for every key minted or revoked through this web UI records
+//! that service identity, not the human admin who clicked the button. An
+//! earlier revision of this proxy forwarded the admin's own identity via a
+//! header, but any scheme for ingestion to trust that header safely (i.e.
+//! only from this proxy, not from an arbitrary admin caller) requires its own
+//! distinct trust configuration — a second admin-adjacent allowlist to
+//! provision and keep in sync — to close a narrow gap that only exists
+//! *between* already-equally-privileged ingestion admins. Given the added
+//! configuration surface and failure modes that requires, documenting the
+//! limitation was judged the better trade for now; revisit if per-admin
+//! attribution through the proxy becomes a real operational need.
 
 use crate::auth::AdminUser;
 use axum::body::{Body, Bytes};
@@ -26,6 +42,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Bound applied to every outbound admin-console call this proxy makes to
+/// ingestion — both the token fetch inside `cfg.credentials.decorate(..)`
+/// (whose own internal `reqwest::Client` has no timeout of its own; see
+/// [`forward`]) and the forwarded request itself (via `cfg.client`'s
+/// `.timeout(..)`). Without wrapping the former explicitly, a black-holed
+/// `MICROMEGAS_INGESTION_PROXY_OIDC_TOKEN_ENDPOINT` would hang the admin's
+/// browser request indefinitely, since `forward` awaits `decorate()` before
+/// ever calling `cfg.client.execute(..)`.
+const OUTBOUND_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Config for reaching ingestion's admin API, plus the client that reaches
 /// it. Held as `Extension<IngestionProxyState>` (`state.config: Option<Arc<..>>`,
 /// `None` when unconfigured) so the proxy routes can be registered
@@ -37,9 +63,15 @@ pub struct IngestionProxyConfig {
     /// Trait object, not the concrete `OidcClientCredentialsDecorator` —
     /// lets tests inject `TrivialRequestDecorator` and skip the token fetch
     /// entirely (the concrete decorator's fields are all private, with no
-    /// way to pre-seed a cached token).
+    /// way to pre-seed a cached token). Its `decorate()` call is itself
+    /// wrapped in [`OUTBOUND_TIMEOUT`] by [`forward`] — the concrete
+    /// `OidcClientCredentialsDecorator`'s internal token-fetch client has no
+    /// timeout of its own.
     pub credentials: Arc<dyn RequestDecorator>,
-    /// Single client, built once with an explicit timeout.
+    /// Single client, built once with an explicit [`OUTBOUND_TIMEOUT`]. This
+    /// bounds only the forwarded request itself — the separate token fetch
+    /// inside `credentials.decorate(..)` is bounded independently by
+    /// [`forward`].
     pub client: reqwest::Client,
 }
 
@@ -64,7 +96,7 @@ impl IngestionProxyConfig {
         let audience = std::env::var("MICROMEGAS_INGESTION_PROXY_OIDC_AUDIENCE").ok();
 
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(OUTBOUND_TIMEOUT)
             .build()
             .expect("building the ingestion-proxy reqwest client");
 
@@ -193,9 +225,16 @@ async fn forward(
     let mut built = req
         .build()
         .map_err(|e| ProxyError::Request(format!("building request: {e}")))?;
-    cfg.credentials
-        .decorate(&mut built)
+    // `decorate()` (for the real `OidcClientCredentialsDecorator`) fetches a
+    // token using its own internal `reqwest::Client`, which has no timeout
+    // of its own — bound it explicitly so a black-holed OIDC token endpoint
+    // can't hang this admin request indefinitely ahead of the `cfg.client`
+    // timeout below, which only covers the forwarded request itself.
+    tokio::time::timeout(OUTBOUND_TIMEOUT, cfg.credentials.decorate(&mut built))
         .await
+        .map_err(|_| {
+            ProxyError::Request("decorating request: timed out fetching token".to_string())
+        })?
         .map_err(|e| ProxyError::Request(format!("decorating request: {e}")))?;
 
     let resp = cfg

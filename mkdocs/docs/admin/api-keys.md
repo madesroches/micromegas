@@ -300,6 +300,23 @@ even if deliberately excluded from `MICROMEGAS_INGESTION_ADMINS`. Operators
 who intentionally keep the two admin lists separate must either keep them
 aligned or leave the proxy unconfigured.
 
+**Known limitation: every ingestion key minted or revoked through the web UI
+is attributed to the proxy's own service credential, not the admin who
+performed it.** Ingestion has no way to see which admin is behind a proxied
+call — it only ever authenticates the proxy's own
+`MICROMEGAS_INGESTION_PROXY_OIDC_*` identity — so `created_by`/`revoked_by`
+on every proxied row records that service identity. Minting/revoking directly
+against ingestion's own routes (not through the proxy) still attributes
+correctly to the caller's own OIDC identity, as does every analytics-key
+route on `analytics-web-srv` (§ above), since neither goes through a
+service-credential hop. Accepted for now: closing this gap would mean
+ingestion trusting a caller-supplied "acting on behalf of" identity, which
+only helps if it's restricted to this proxy specifically — a second
+admin-adjacent allowlist to provision and keep in sync, to close a narrow
+accountability gap that only exists between admins who are already equally
+privileged. Revisit if per-admin attribution through the proxy becomes an
+operational need.
+
 **Under `--disable-auth` on `analytics-web-srv`, both key-management route
 groups are unavailable — not just gated, but not merged at all.** With auth
 disabled, every request would otherwise be treated as an admin, which would

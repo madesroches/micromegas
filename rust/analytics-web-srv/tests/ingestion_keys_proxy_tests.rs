@@ -16,12 +16,28 @@ use analytics_web_srv::ingestion_keys_proxy::{
     IngestionProxyConfig, IngestionProxyState, ingestion_keys_proxy_router,
 };
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
-use micromegas::telemetry_sink::request_decorator::TrivialRequestDecorator;
+use micromegas::telemetry_sink::request_decorator::{RequestDecorator, TrivialRequestDecorator};
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Simulates a black-holed OIDC token endpoint: `decorate()` never resolves
+/// on its own. Used to verify `forward` bounds the token fetch itself,
+/// rather than only the (never-reached) forwarded request.
+struct HangingRequestDecorator;
+
+#[async_trait::async_trait]
+impl RequestDecorator for HangingRequestDecorator {
+    async fn decorate(
+        &self,
+        _request: &mut reqwest::Request,
+    ) -> micromegas::telemetry_sink::request_decorator::Result<()> {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        Ok(())
+    }
+}
 
 fn admin_user() -> ValidatedUser {
     ValidatedUser {
@@ -209,6 +225,42 @@ async fn empty_404_is_mapped_to_a_clearer_error() {
         .expect("call service");
     assert_ne!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+/// A black-holed OIDC token endpoint must not hang the admin's request
+/// forever — the token fetch inside `decorate()` is bounded independently of
+/// (and ahead of) `cfg.client`'s own timeout, which only covers the
+/// forwarded request that `decorate()` never lets `forward` reach.
+/// `start_paused` lets tokio's virtual clock jump straight to the timeout
+/// deadline instead of the test actually waiting out the bound in real time.
+#[tokio::test(start_paused = true)]
+async fn hanging_token_fetch_times_out_instead_of_hanging_forever() {
+    let mock_server = MockServer::start().await;
+    // Deliberately no `Mock::given(...)` mounted — the timed-out token fetch
+    // must prevent `forward` from ever calling ingestion at all.
+
+    let state = IngestionProxyState {
+        config: Some(Arc::new(IngestionProxyConfig {
+            base_url: mock_server.uri(),
+            credentials: Arc::new(HangingRequestDecorator),
+            client: reqwest::Client::new(),
+        })),
+    };
+    let app = build_router(state, admin_user());
+    let response = app
+        .oneshot(get_request("/api/ingestion-api-keys"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    let received = mock_server
+        .received_requests()
+        .await
+        .expect("request recording enabled");
+    assert!(
+        received.is_empty(),
+        "a hanging token fetch must never let the forwarded call go out"
+    );
 }
 
 // ---------------------------------------------------------------------------

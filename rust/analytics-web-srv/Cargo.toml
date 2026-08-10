@@ -50,10 +50,12 @@ name = "analytics-web-srv"
 path = "src/main.rs"
 
 [dev-dependencies]
+async-trait.workspace = true
 axum-test = "16.4"
 jsonwebtoken.workspace = true
 rsa.workspace = true
 serial_test = "3.2"
 tempfile = "3.14"
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 wiremock.workspace = true
