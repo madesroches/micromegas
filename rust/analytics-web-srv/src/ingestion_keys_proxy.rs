@@ -9,8 +9,20 @@
 //! *before* [`forward`] is ever called — an unauthorized `analytics-web-srv`
 //! caller never triggers a service-credential token fetch, let alone a call
 //! to ingestion.
+//!
+//! Every proxied call reaches ingestion authenticated as this service's own
+//! `MICROMEGAS_INGESTION_PROXY_OIDC_*` service credential — never as the
+//! operator, who has no bearer token to present. Left uncorrected, that would
+//! make every `ingestion_api_keys.created_by`/`revoked_by` value produced
+//! through this proxy collapse onto that one constant identity. [`forward`]
+//! avoids that by setting `micromegas::servers::api_keys::ON_BEHALF_OF_HEADER`
+//! to the already-verified [`AdminUser`]'s own email/subject on every
+//! request; ingestion's `actor()` only trusts that header once its *own*
+//! `AuthContext` has independently passed `require_key_admin` (OIDC +
+//! `is_admin`), so a caller that isn't this proxy's admin-listed service
+//! credential can't spoof an identity by setting the header itself.
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, ValidatedUser};
 use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Path, RawQuery};
 use axum::http::{StatusCode, header::CONTENT_TYPE};
@@ -18,6 +30,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
 use http::Method;
+use micromegas::servers::api_keys::ON_BEHALF_OF_HEADER;
 use micromegas::telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
 use micromegas::telemetry_sink::request_decorator::RequestDecorator;
 use micromegas::tracing::prelude::*;
@@ -158,15 +171,19 @@ impl IntoResponse for ProxyError {
 /// path, not a hot one.
 ///
 /// Not an axum handler — a plain helper the `list`/`mint`/`revoke` wrappers
-/// below call with already-extracted values; it performs no extraction
-/// itself and takes no `user` parameter (forwarding never depends on *who*
-/// the admin is, only that they are one).
+/// below call with already-extracted values. Unlike the outbound bearer
+/// token (always this service's own credential, regardless of caller),
+/// `on_behalf_of` *does* depend on who the admin is — it carries their
+/// email/subject to ingestion via [`ON_BEHALF_OF_HEADER`] so `created_by`/
+/// `revoked_by` can attribute to them instead of to this proxy's service
+/// account. See the module doc comment.
 async fn forward(
     state: IngestionProxyState,
     method: Method,
     path_suffix: &str,
     query: Option<&str>,
     body: Option<Bytes>,
+    on_behalf_of: &str,
 ) -> Result<Response, ProxyError> {
     let Some(cfg) = state.config else {
         return Err(ProxyError::NotConfigured);
@@ -182,7 +199,10 @@ async fn forward(
         query.map(|q| format!("?{q}")).unwrap_or_default()
     );
 
-    let mut req = cfg.client.request(method, url);
+    let mut req = cfg
+        .client
+        .request(method, url)
+        .header(ON_BEHALF_OF_HEADER, on_behalf_of);
     if let Some(b) = body {
         // Required: ingestion's `mint_key`'s `Json<MintRequest>` extractor
         // 415s (`MissingJsonContentType`) on a request with no Content-Type
@@ -227,15 +247,31 @@ async fn forward(
         .map_err(|e| ProxyError::Request(format!("building proxied response: {e}")))
 }
 
+/// The identity `forward` sets `ON_BEHALF_OF_HEADER` to: the admin's own
+/// email, falling back to their subject — same precedence ingestion's own
+/// `actor()` uses for the caller's own identity.
+fn admin_identity(user: &ValidatedUser) -> String {
+    user.email.clone().unwrap_or_else(|| user.subject.clone())
+}
+
 /// `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` —
 /// forwards the incoming query string verbatim so the frontend can reuse the
 /// same paging UI as the analytics-key page.
 async fn list(
     Extension(state): Extension<IngestionProxyState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(user): AdminUser,
     RawQuery(query): RawQuery,
 ) -> Result<Response, ProxyError> {
-    forward(state, Method::GET, "/auth/api_keys", query.as_deref(), None).await
+    let on_behalf_of = admin_identity(&user);
+    forward(
+        state,
+        Method::GET,
+        "/auth/api_keys",
+        query.as_deref(),
+        None,
+        &on_behalf_of,
+    )
+    .await
 }
 
 /// `POST {base_path}/api/ingestion-api-keys`.
@@ -244,24 +280,35 @@ async fn list(
 /// extractor — a non-admin's body is never buffered.
 async fn mint(
     Extension(state): Extension<IngestionProxyState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(user): AdminUser,
     body: Bytes,
 ) -> Result<Response, ProxyError> {
-    forward(state, Method::POST, "/auth/api_keys", None, Some(body)).await
+    let on_behalf_of = admin_identity(&user);
+    forward(
+        state,
+        Method::POST,
+        "/auth/api_keys",
+        None,
+        Some(body),
+        &on_behalf_of,
+    )
+    .await
 }
 
 /// `DELETE {base_path}/api/ingestion-api-keys/{key_id}`.
 async fn revoke(
     Extension(state): Extension<IngestionProxyState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(user): AdminUser,
     Path(key_id): Path<Uuid>,
 ) -> Result<Response, ProxyError> {
+    let on_behalf_of = admin_identity(&user);
     forward(
         state,
         Method::DELETE,
         &format!("/auth/api_keys/{key_id}"),
         None,
         None,
+        &on_behalf_of,
     )
     .await
 }

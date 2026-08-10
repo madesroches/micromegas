@@ -6,6 +6,19 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import IngestionApiKeysPage from '../IngestionApiKeysPage'
+import { MAX_INGESTION_API_KEYS_LIST_LIMIT } from '@/lib/ingestion-api-keys-api'
+
+function makeKeys(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    key_id: `key-${i}`,
+    name: `key-${i}`,
+    created_at: '2026-01-01T00:00:00Z',
+    created_by: 'alice@example.com',
+    last_used_at: null,
+    revoked_at: null,
+    revoked_by: null,
+  }))
+}
 
 // Force useAuth to report an admin user so AuthGuard renders the page.
 vi.mock('@/lib/auth', () => ({
@@ -135,6 +148,30 @@ describe('IngestionApiKeysPage', () => {
 
     await waitFor(() => expect(screen.getByText('mmk_test_cleartext')).toBeInTheDocument())
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument()
+  })
+
+  it('shows a truncation notice when the list returns exactly the max limit', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
+    } as unknown as Response) as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
+    expect(screen.getByText(/More keys may exist and are not shown/i)).toBeInTheDocument()
+  })
+
+  it('shows no truncation notice when the list returns fewer than the max limit', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(makeKeys(1)),
+    } as unknown as Response) as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
+    expect(screen.queryByText(/More keys may exist and are not shown/i)).not.toBeInTheDocument()
   })
 
   it('opens the revoke confirm dialog and DELETEs the right URL on confirm', async () => {

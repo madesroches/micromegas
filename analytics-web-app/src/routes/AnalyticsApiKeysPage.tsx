@@ -13,6 +13,7 @@ import {
   revokeAnalyticsApiKey,
   AnalyticsApiKeyListEntry,
   AnalyticsApiKeyError,
+  MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
 } from '@/lib/analytics-api-keys-api'
 
 function formatDate(iso: string | null): string {
@@ -135,6 +136,13 @@ function AnalyticsApiKeysPageContent() {
 
           {error && (
             <ErrorBanner title="Error" message={error} onDismiss={() => setError(null)} />
+          )}
+
+          {!isLoading && keys.length === MAX_ANALYTICS_API_KEYS_LIST_LIMIT && (
+            <div className="mb-4 p-3 rounded-lg border border-accent-warning/40 bg-accent-warning/10 text-sm text-theme-text-secondary">
+              Showing the first {MAX_ANALYTICS_API_KEYS_LIST_LIMIT} keys. More keys may exist and
+              are not shown here.
+            </div>
           )}
 
           {mintedKey && (

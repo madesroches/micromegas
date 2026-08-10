@@ -16,6 +16,7 @@ use analytics_web_srv::ingestion_keys_proxy::{
     IngestionProxyConfig, IngestionProxyState, ingestion_keys_proxy_router,
 };
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
+use micromegas::servers::api_keys::ON_BEHALF_OF_HEADER;
 use micromegas::telemetry_sink::request_decorator::TrivialRequestDecorator;
 use serde_json::json;
 use std::sync::Arc;
@@ -120,6 +121,95 @@ async fn mint_forwards_method_path_body_and_content_type() {
     let body = json_body(response).await;
     assert_eq!(body["name"], "game-client-42");
     assert_eq!(body["key"], "mmk_test");
+}
+
+/// The proxy calls ingestion under its own service credential (never the
+/// operator's), so without this header every mint/revoke performed through
+/// the web UI would attribute to that one constant identity instead of the
+/// admin who actually clicked the button. Asserts the header carries the
+/// admin's email, not the service credential's identity or anything else.
+#[tokio::test]
+async fn mint_sets_on_behalf_of_header_to_admin_email() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/api_keys"))
+        .and(header(ON_BEHALF_OF_HEADER, "admin@example.com"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "key_id": "b3f6d9d2-0000-0000-0000-000000000001",
+            "name": "game-client-42",
+            "created_at": "2026-01-01T00:00:00Z",
+            "key": "mmk_test"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let app = build_router(configured_state(mock_server.uri()), admin_user());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "game-client-42"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+/// When the admin has no email (subject-only identity), the header falls
+/// back to the subject — same precedence ingestion's own `actor()` uses.
+#[tokio::test]
+async fn mint_sets_on_behalf_of_header_to_subject_when_no_email() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/api_keys"))
+        .and(header(ON_BEHALF_OF_HEADER, "admin-no-email"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "key_id": "b3f6d9d2-0000-0000-0000-000000000002",
+            "name": "game-client-42",
+            "created_at": "2026-01-01T00:00:00Z",
+            "key": "mmk_test"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let user = ValidatedUser {
+        subject: "admin-no-email".to_string(),
+        email: None,
+        issuer: "local".to_string(),
+        is_admin: true,
+    };
+    let app = build_router(configured_state(mock_server.uri()), user);
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "game-client-42"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+/// `revoke` forwards the same header as `mint` — the admin's own identity,
+/// not the proxy's service credential.
+#[tokio::test]
+async fn revoke_sets_on_behalf_of_header_to_admin_email() {
+    let key_id = uuid::Uuid::new_v4();
+    let mock_server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(format!("/auth/api_keys/{key_id}")))
+        .and(header(ON_BEHALF_OF_HEADER, "admin@example.com"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "revoked_at": "2026-01-03T00:00:00Z",
+            "effective_within_seconds": 60
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let app = build_router(configured_state(mock_server.uri()), admin_user());
+    let response = app
+        .oneshot(delete_request(&format!("/api/ingestion-api-keys/{key_id}")))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

@@ -300,6 +300,17 @@ even if deliberately excluded from `MICROMEGAS_INGESTION_ADMINS`. Operators
 who intentionally keep the two admin lists separate must either keep them
 aligned or leave the proxy unconfigured.
 
+**`created_by`/`revoked_by` for proxied calls still reflects the human
+admin, not the service credential.** Every proxied call reaches ingestion
+authenticated as the `MICROMEGAS_INGESTION_PROXY_OIDC_*` service credential
+above, so without extra care every mint/revoke performed through the web UI
+would attribute to that one constant identity. The proxy avoids this by
+sending an `X-Micromegas-On-Behalf-Of` header carrying the admin's own
+email/subject on every forwarded request; ingestion only trusts that header
+once the request's own identity has independently passed its admin check
+(OIDC + admin list), so a caller that isn't this proxy's admin-listed
+service credential can't use the header to spoof an identity of its own.
+
 **Under `--disable-auth` on `analytics-web-srv`, both key-management route
 groups are unavailable — not just gated, but not merged at all.** With auth
 disabled, every request would otherwise be treated as an admin, which would

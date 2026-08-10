@@ -11,6 +11,15 @@
 
 import { authenticatedFetch, getApiBase } from './api'
 
+// The server's own hard cap (`MAX_LIMIT` in `rust/public/src/servers/api_keys.rs`).
+// Requested explicitly on every list call — omitting `limit` falls back to the
+// server's lower `DEFAULT_LIMIT` (100), which silently truncates the list on
+// any deployment with more than 100 *lifetime* keys (revoked keys are never
+// deleted, and `include_revoked` defaults to true) with zero indication
+// anything is missing. Exported so the page can detect "the list may be
+// truncated" by comparing the returned row count against this same value.
+export const MAX_INGESTION_API_KEYS_LIST_LIMIT = 500
+
 export interface IngestionApiKeyListEntry {
   key_id: string
   name: string
@@ -72,7 +81,7 @@ export async function listIngestionApiKeys(
   includeRevoked = true
 ): Promise<IngestionApiKeyListEntry[]> {
   const response = await authenticatedFetch(
-    `${getApiBase()}/ingestion-api-keys?include_revoked=${includeRevoked}`
+    `${getApiBase()}/ingestion-api-keys?limit=${MAX_INGESTION_API_KEYS_LIST_LIMIT}&include_revoked=${includeRevoked}`
   )
   return handleResponse<IngestionApiKeyListEntry[]>(response)
 }

@@ -13,6 +13,7 @@ import {
   revokeIngestionApiKey,
   IngestionApiKeyListEntry,
   IngestionApiKeyError,
+  MAX_INGESTION_API_KEYS_LIST_LIMIT,
 } from '@/lib/ingestion-api-keys-api'
 
 function formatDate(iso: string | null): string {
@@ -135,6 +136,13 @@ function IngestionApiKeysPageContent() {
 
           {error && (
             <ErrorBanner title="Error" message={error} onDismiss={() => setError(null)} />
+          )}
+
+          {!isLoading && keys.length === MAX_INGESTION_API_KEYS_LIST_LIMIT && (
+            <div className="mb-4 p-3 rounded-lg border border-accent-warning/40 bg-accent-warning/10 text-sm text-theme-text-secondary">
+              Showing the first {MAX_INGESTION_API_KEYS_LIST_LIMIT} keys. More keys may exist and
+              are not shown here.
+            </div>
           )}
 
           {mintedKey && (
