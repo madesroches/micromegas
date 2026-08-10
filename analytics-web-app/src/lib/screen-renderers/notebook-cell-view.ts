@@ -16,6 +16,8 @@ export interface CellViewContext {
   timeRange: { begin: string; end: string }
   isEditing: boolean
   dataSource?: string
+  /** Originating notebook name (the screen's saved name), for query attribution. Undefined for an unsaved new screen. */
+  notebookName?: string
   /** Upstream cell result tables (for $cell[N].col macro substitution) */
   cellResults: Record<string, Table>
   /** Selected rows from upstream cells (for $cell.selected.col macro substitution) */
@@ -223,6 +225,7 @@ export function buildCellRendererProps(
 
   return {
     name: cell.name,
+    notebookName: context.notebookName,
     data: state.data,
     status: state.status,
     error: state.error,

@@ -16,6 +16,8 @@ fn test_default_config() {
     assert!(config.should_forward("X-Client-Agent"));
     assert!(config.should_forward("X-Client-Entrypoint"));
     assert!(config.should_forward("X-Client-Session"));
+    assert!(config.should_forward("X-Client-Notebook"));
+    assert!(config.should_forward("X-Client-Cell"));
 
     // Should block blocked headers
     assert!(!config.should_forward("Cookie"));

@@ -19,12 +19,16 @@ export interface FetchPerfettoTraceOptions {
   onProgress?: (message: string) => void
   signal?: AbortSignal
   dataSource?: string
+  /** Originating notebook name, for query attribution. Omitted outside a notebook. */
+  notebook?: string
+  /** Originating cell name within the notebook, for query attribution. */
+  cell?: string
 }
 
 export async function fetchPerfettoTrace(
   options: FetchPerfettoTraceOptions
 ): Promise<ArrayBuffer> {
-  const { processId, spanType, timeRange, onProgress, signal, dataSource } = options
+  const { processId, spanType, timeRange, onProgress, signal, dataSource, notebook, cell } = options
 
   const sql = `SELECT chunk_id, chunk_data FROM perfetto_trace_chunks('${processId}', '${spanType}', TIMESTAMP '${timeRange.begin}', TIMESTAMP '${timeRange.end}')`
 
@@ -32,7 +36,7 @@ export async function fetchPerfettoTrace(
   let totalBytes = 0
   let expectedChunkId = 0
 
-  for await (const result of streamQuery({ sql, begin: timeRange.begin, end: timeRange.end, dataSource }, signal)) {
+  for await (const result of streamQuery({ sql, begin: timeRange.begin, end: timeRange.end, dataSource, notebook, cell }, signal)) {
     if (signal?.aborted) {
       throw new Error(signal.reason ?? 'Trace fetch aborted')
     }

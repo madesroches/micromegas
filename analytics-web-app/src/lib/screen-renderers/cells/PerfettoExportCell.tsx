@@ -13,6 +13,8 @@ import { resolveQueryTimeRange } from '../notebook-utils'
 // =============================================================================
 
 export function PerfettoExportCell({
+  name,
+  notebookName,
   options,
   timeRange,
   variables,
@@ -127,6 +129,8 @@ export function PerfettoExportCell({
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: abortRef.current.signal,
         dataSource,
+        notebook: notebookName,
+        cell: name,
       })
 
       setCachedTraceBuffer(buffer)
@@ -180,6 +184,8 @@ export function PerfettoExportCell({
         onProgress: (message) => setProgress({ type: 'progress', message }),
         signal: abortRef.current.signal,
         dataSource,
+        notebook: notebookName,
+        cell: name,
       })
 
       // Cache for potential subsequent "Open in Perfetto"

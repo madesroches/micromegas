@@ -15,6 +15,7 @@ pub struct BearerFlightSQLClientFactory {
     url: String,
     token: String,
     client_type: Option<String>,
+    extra_metadata: Vec<(String, String)>,
 }
 
 impl BearerFlightSQLClientFactory {
@@ -29,6 +30,7 @@ impl BearerFlightSQLClientFactory {
             url,
             token,
             client_type: None,
+            extra_metadata: Vec::new(),
         }
     }
 
@@ -44,6 +46,7 @@ impl BearerFlightSQLClientFactory {
             url,
             token,
             client_type: Some(client_type),
+            extra_metadata: Vec::new(),
         }
     }
 
@@ -56,6 +59,7 @@ impl BearerFlightSQLClientFactory {
             url,
             token,
             client_type: None,
+            extra_metadata: Vec::new(),
         })
     }
 
@@ -68,7 +72,16 @@ impl BearerFlightSQLClientFactory {
             url,
             token,
             client_type: Some(client_type),
+            extra_metadata: Vec::new(),
         })
+    }
+
+    /// Attaches an additional gRPC metadata header sent with every request made by
+    /// clients from this factory (e.g., the web app's notebook/cell origin labels).
+    /// `key` must already be a valid lowercase gRPC metadata key.
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_metadata.push((key.into(), value.into()));
+        self
     }
 }
 
@@ -120,6 +133,11 @@ impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
             client
                 .inner_mut()
                 .set_header("x-client-type", client_type.clone());
+        }
+
+        // Set any additional per-factory metadata (e.g., notebook/cell origin labels)
+        for (key, value) in &self.extra_metadata {
+            client.inner_mut().set_header(key, value.clone());
         }
 
         // Preserve dictionary encoding for bandwidth efficiency

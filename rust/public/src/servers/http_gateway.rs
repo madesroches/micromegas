@@ -48,6 +48,8 @@ impl Default for HeaderForwardingConfig {
                 "X-Client-Agent".to_string(),
                 "X-Client-Entrypoint".to_string(),
                 "X-Client-Session".to_string(),
+                "X-Client-Notebook".to_string(),
+                "X-Client-Cell".to_string(),
                 "X-Correlation-ID".to_string(),
                 "X-Request-ID".to_string(),
                 "X-User-Email".to_string(),

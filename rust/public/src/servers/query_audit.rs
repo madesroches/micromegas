@@ -87,6 +87,12 @@ pub struct QueryAuditRecord {
     pub entrypoint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Originating notebook name, if the query was issued from a notebook cell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notebook: Option<String>,
+    /// Originating cell name within the notebook, if the query was issued from a notebook cell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
     pub user: String,
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]

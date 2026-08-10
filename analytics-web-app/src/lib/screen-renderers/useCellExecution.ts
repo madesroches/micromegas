@@ -30,6 +30,8 @@ interface UseCellExecutionParams {
   dataSource?: string
   /** WASM query engine for notebook-local queries (null when not loaded yet) */
   engine: NotebookQueryEngine | null
+  /** Originating notebook name, for query attribution. Undefined for an unsaved new screen. */
+  notebookName?: string
 }
 
 export interface UseCellExecutionResult {
@@ -54,8 +56,9 @@ async function executeSql(
   sql: string,
   timeRange: { begin: string; end: string },
   abortSignal: AbortSignal,
-  dataSource?: string
+  attribution: { dataSource?: string; notebookName?: string; cellName?: string } = {}
 ): Promise<Table> {
+  const { dataSource, notebookName, cellName } = attribution
   const batches: import('apache-arrow').RecordBatch[] = []
 
   for await (const result of streamQuery(
@@ -65,6 +68,8 @@ async function executeSql(
       begin: timeRange.begin,
       end: timeRange.end,
       dataSource,
+      notebook: notebookName,
+      cell: cellName,
     },
     abortSignal
   )) {
@@ -99,6 +104,7 @@ export function useCellExecution({
   refreshTrigger,
   dataSource,
   engine,
+  notebookName,
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -221,6 +227,8 @@ export function useCellExecution({
                   begin: timeRange.begin,
                   end: timeRange.end,
                   dataSource: cellDataSource,
+                  notebook: notebookName,
+                  cell: cell.name,
                 },
                 abortControllerRef.current!.signal,
                 (progress) => {
@@ -234,7 +242,11 @@ export function useCellExecution({
               return tableFromIPC(ipcBytes)
             } else {
               // Remote execution without WASM engine
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, cellDataSource)
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+                dataSource: cellDataSource,
+                notebookName,
+                cellName: cell.name,
+              })
             }
           },
           runQueryAs: async (sql, tableName, queryDataSource) => {
@@ -258,6 +270,8 @@ export function useCellExecution({
                   begin: timeRange.begin,
                   end: timeRange.end,
                   dataSource: resolvedDs,
+                  notebook: notebookName,
+                  cell: cell.name,
                 },
                 abortControllerRef.current!.signal,
                 (progress) => {
@@ -270,7 +284,11 @@ export function useCellExecution({
               engine.register_table(tableName, ipcBytes)
               return tableFromIPC(ipcBytes)
             } else {
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, resolvedDs)
+              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+                dataSource: resolvedDs,
+                notebookName,
+                cellName: cell.name,
+              })
             }
           },
         }
@@ -304,7 +322,7 @@ export function useCellExecution({
         return false
       }
     },
-    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine, completeCellExecution]
+    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
   )
 
   // Execute from a cell index (that cell and all below)

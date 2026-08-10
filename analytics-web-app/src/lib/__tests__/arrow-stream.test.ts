@@ -4,6 +4,7 @@
 import { authenticatedFetch } from '@/lib/api';
 import { ErrorCode, StreamResult } from '../arrow-stream';
 import type { MockedFunction } from 'vitest';
+import type { StreamQueryParams } from '../arrow-stream';
 
 // We need to import the module after mocking
 vi.mock('@/lib/api', () => ({
@@ -245,6 +246,41 @@ describe('streamQuery', () => {
       expect(body.end).toBe('2024-01-02T00:00:00Z');
     });
 
+    it('should include notebook/cell in the request body when provided', async () => {
+      mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+
+      const { streamQuery } = await import('../arrow-stream');
+
+      const params: StreamQueryParams = {
+        sql: 'SELECT 1',
+        notebook: 'My Notebook',
+        cell: 'Results',
+      };
+      for await (const _ of streamQuery(params)) {
+        // consume
+      }
+
+      const [, options] = mockedFetch.mock.calls[0];
+      const body = JSON.parse(options?.body as string);
+      expect(body.notebook).toBe('My Notebook');
+      expect(body.cell).toBe('Results');
+    });
+
+    it('should omit notebook/cell from the request body when not provided', async () => {
+      mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+
+      const { streamQuery } = await import('../arrow-stream');
+
+      for await (const _ of streamQuery({ sql: 'SELECT 1' })) {
+        // consume
+      }
+
+      const [, options] = mockedFetch.mock.calls[0];
+      const body = JSON.parse(options?.body as string);
+      expect(body.notebook).toBeUndefined();
+      expect(body.cell).toBeUndefined();
+    });
+
     it('should pass abort signal', async () => {
       mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
 
@@ -260,6 +296,43 @@ describe('streamQuery', () => {
         expect.objectContaining({ signal: controller.signal })
       );
     });
+  });
+});
+
+describe('fetchQueryIPC', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('should include notebook/cell in the request body when provided', async () => {
+    mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+
+    const { fetchQueryIPC } = await import('../arrow-stream');
+
+    const params: StreamQueryParams = {
+      sql: 'SELECT 1',
+      notebook: 'My Notebook',
+      cell: 'Results',
+    };
+    await fetchQueryIPC(params);
+
+    const [, options] = mockedFetch.mock.calls[0];
+    const body = JSON.parse(options?.body as string);
+    expect(body.notebook).toBe('My Notebook');
+    expect(body.cell).toBe('Results');
+  });
+
+  it('should omit notebook/cell from the request body when not provided', async () => {
+    mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+
+    const { fetchQueryIPC } = await import('../arrow-stream');
+
+    await fetchQueryIPC({ sql: 'SELECT 1' });
+
+    const [, options] = mockedFetch.mock.calls[0];
+    const body = JSON.parse(options?.body as string);
+    expect(body.notebook).toBeUndefined();
+    expect(body.cell).toBeUndefined();
   });
 });
 

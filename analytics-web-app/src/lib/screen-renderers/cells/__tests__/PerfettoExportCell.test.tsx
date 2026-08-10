@@ -20,6 +20,7 @@ const mockOpenInPerfetto = openInPerfetto as MockedFunction<typeof openInPerfett
 // Create minimal mock props for CellRendererProps
 const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRendererProps => ({
   name: 'test-perfetto-export',
+  notebookName: undefined,
   sql: undefined,
   options: {
     processIdVar: '$process_id',
@@ -227,6 +228,8 @@ describe('PerfettoExportCell', () => {
       render(
         <PerfettoExportCell
           {...createMockProps({
+            name: 'Trace',
+            notebookName: 'My Notebook',
             variables: { process_id: 'abc-123' },
             timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
           })}
@@ -243,6 +246,32 @@ describe('PerfettoExportCell', () => {
             spanType: 'both',
             timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
             onProgress: expect.any(Function),
+            notebook: 'My Notebook',
+            cell: 'Trace',
+          })
+        )
+      })
+    })
+
+    it('should call fetchPerfettoTrace with notebook/cell on Download too', async () => {
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            name: 'Trace',
+            notebookName: 'My Notebook',
+            variables: { process_id: 'abc-123' },
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Download'))
+
+      await waitFor(() => {
+        expect(mockFetchPerfettoTrace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            notebook: 'My Notebook',
+            cell: 'Trace',
           })
         )
       })

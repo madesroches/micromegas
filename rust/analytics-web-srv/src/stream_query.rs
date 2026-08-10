@@ -36,6 +36,10 @@ pub struct StreamQueryRequest {
     pub end: Option<DateTime<Utc>>,
     #[serde(default)]
     pub data_source: String,
+    /// Originating notebook name, for query attribution. Omitted outside a notebook.
+    pub notebook: Option<String>,
+    /// Originating cell name within the notebook, for query attribution.
+    pub cell: Option<String>,
 }
 
 /// Error codes for stream query errors
@@ -96,6 +100,26 @@ pub fn contains_blocked_function(sql: &str) -> Option<&'static str> {
         .iter()
         .find(|&func| sql_lower.contains(func))
         .copied()
+}
+
+/// Maximum length for a client-supplied origin label (notebook/cell name) before
+/// it's rejected outright rather than forwarded into a gRPC header and a log line.
+const MAX_ORIGIN_LABEL_LEN: usize = 128;
+
+/// Returns `value` if it's a safe gRPC metadata value (printable ASCII, no control
+/// characters, bounded length) and non-empty after trimming, else `None` so the
+/// caller silently omits the field — same reject-whole-value strategy as the
+/// Python client's `_sanitize_override` (attribution.py) for the analogous
+/// MICROMEGAS_CLIENT_AGENT/MICROMEGAS_CLIENT_ENTRYPOINT overrides.
+pub fn sanitize_origin_label(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_ORIGIN_LABEL_LEN {
+        return None;
+    }
+    if !trimmed.chars().all(|c| (' '..='~').contains(&c)) {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 /// Substitute macro variables in SQL query
@@ -165,8 +189,11 @@ pub async fn stream_query_handler(
     Extension(cache): Extension<DataSourceCache>,
     Json(request): Json<StreamQueryRequest>,
 ) -> impl IntoResponse {
+    let notebook = request.notebook.as_deref().and_then(sanitize_origin_label);
+    let cell = request.cell.as_deref().and_then(sanitize_origin_label);
+
     info!(
-        "stream query sql={} params={:?} begin={:?} end={:?} data_source={}",
+        "stream query sql={} params={:?} begin={:?} end={:?} data_source={} notebook={notebook:?} cell={cell:?}",
         request.sql, request.params, request.begin, request.end, request.data_source
     );
 
@@ -241,11 +268,17 @@ pub async fn stream_query_handler(
 
     let stream = stream! {
         // Create FlightSQL client
-        let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
+        let mut client_factory = BearerFlightSQLClientFactory::new_with_client_type(
             flightsql_url,
             auth_token.0,
             "web".to_string(),
         );
+        if let Some(notebook) = &notebook {
+            client_factory = client_factory.with_metadata("x-client-notebook", notebook.clone());
+        }
+        if let Some(cell) = &cell {
+            client_factory = client_factory.with_metadata("x-client-cell", cell.clone());
+        }
         let mut client = match client_factory.make_client().await {
             Ok(c) => c,
             Err(e) => {

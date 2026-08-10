@@ -26,14 +26,14 @@ export MICROMEGAS_GATEWAY_HEADERS='{
 | `blocked_headers` | Headers to block (overrides allows) |
 
 **Default headers (if not configured):**
-- `Authorization`, `User-Agent`, `X-Client-Type`, `X-Client-Agent`, `X-Client-Entrypoint`, `X-Client-Session`, `X-Correlation-ID`, `X-Request-ID`, `X-User-Email`, `X-User-ID`, `X-User-Name`
+- `Authorization`, `User-Agent`, `X-Client-Type`, `X-Client-Agent`, `X-Client-Entrypoint`, `X-Client-Session`, `X-Client-Notebook`, `X-Client-Cell`, `X-Correlation-ID`, `X-Request-ID`, `X-User-Email`, `X-User-ID`, `X-User-Name`
 - Blocks: `Cookie`, `Set-Cookie`, `X-Client-IP`
 
 **Note:** `HeaderForwardingConfig::from_env()` *replaces* the default allowlist entirely when
 `MICROMEGAS_GATEWAY_HEADERS` is set, rather than merging with it. A deployment with a custom
-`MICROMEGAS_GATEWAY_HEADERS` JSON must add `X-Client-Agent`, `X-Client-Entrypoint`, and
-`X-Client-Session` to that JSON explicitly, or upgrading will silently start dropping those
-three headers on the gateway hop.
+`MICROMEGAS_GATEWAY_HEADERS` JSON must add `X-Client-Agent`, `X-Client-Entrypoint`,
+`X-Client-Session`, `X-Client-Notebook`, and `X-Client-Cell` to that JSON explicitly, or upgrading
+will silently start dropping those headers on the gateway hop.
 
 **Security:**
 - `X-Client-IP` is always blocked (gateway sets from actual connection)

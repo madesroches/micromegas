@@ -11,6 +11,8 @@ export type { CellType, CellStatus, CellConfig, CellState, VariableValue }
 export interface CellRendererProps {
   /** Cell name (unique within notebook) */
   name: string
+  /** Originating notebook name (the screen's saved name), for query attribution. Undefined for an unsaved new screen. */
+  notebookName?: string
   /** SQL query for this cell (undefined for markdown cells) */
   sql?: string
   /** Cell-specific options (e.g., chart options) */

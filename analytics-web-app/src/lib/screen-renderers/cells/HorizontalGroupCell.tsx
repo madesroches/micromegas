@@ -64,6 +64,8 @@ export interface HorizontalGroupCellProps {
   allCellNames: Set<string>
   /** Callback to register a child cell's DOM element for keyboard navigation */
   onChildRef?: (name: string, el: HTMLElement | null) => void
+  /** Notebook name, forwarded to children for client attribution headers */
+  notebookName?: string
 }
 
 // =============================================================================
@@ -91,6 +93,7 @@ export function HorizontalGroupCell({
   onSelectionChange,
   defaultDataSource,
   onChildRef,
+  notebookName,
 }: HorizontalGroupCellProps) {
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -189,6 +192,7 @@ export function HorizontalGroupCell({
                 dataSource: resolveCellDataSource(child, variables, defaultDataSource),
                 cellResults,
                 cellSelections,
+                notebookName,
               },
               {
                 onRun: () => onChildRun(child.name),
