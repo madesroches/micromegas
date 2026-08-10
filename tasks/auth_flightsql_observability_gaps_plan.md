@@ -128,11 +128,45 @@ changes for any client.
 
 ## Design
 
-### 1. Wrap `/auth/*` in `observability_middleware`
+### 1. Wrap `/auth/*` in a query-string-redacting observability middleware
 
-`build_auth_routes` (`web_server.rs:141-170`) gains one `.layer(middleware::from_fn(observability_middleware))`
-call on each branch's router, mirroring the existing pattern in `build_protected_routes`/
-`build_protected_maps_blob_route`:
+**Redaction rule**: `/auth/callback` carries the OAuth authorization `code` and the signed
+`state` (which embeds the PKCE `code_verifier`, see Current State §3/`oauth_state.rs`) in its
+query string. `observability_middleware` logs `parts.uri` verbatim, and `http::Uri`'s `Display`
+includes the query string, so reusing it unmodified on `/auth/*` would put a live auth code and
+PKCE verifier into `log_entries`. Instead of the plain `observability_middleware`, `/auth/*` gets
+its own copy that logs only `uri.path()` (dropping the query string entirely — no route under
+`/auth/*` needs its query params for correlation; `client_ip`/method/status/duration are enough):
+
+```rust
+/// Like `observability_middleware`, but logs only the request path, never the query string --
+/// `/auth/callback`'s query carries the OAuth authorization code and the PKCE verifier
+/// (embedded in the signed `state` param) and must never be written to the telemetry log.
+pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
+    let (parts, body) = request.into_parts();
+    let path = parts.uri.path().to_string();
+    let client_ip = get_client_ip(&parts.headers, &parts.extensions);
+    info!(
+        "request method={} path={path} client_ip={client_ip}",
+        parts.method
+    );
+    let begin_ticks = now();
+    let response = next.run(Request::from_parts(parts, body)).await;
+    let end_ticks = now();
+    let duration = end_ticks - begin_ticks;
+    imetric!("request_duration", "ticks", duration as u64);
+    info!(
+        "response status={} path={path} client_ip={client_ip}",
+        response.status()
+    );
+    response
+}
+```
+
+This lives next to `observability_middleware` in `rust/public/src/servers/axum_utils.rs` (both
+are generic, reusable across servers, not `analytics-web-srv`-specific). `build_auth_routes`
+(`web_server.rs:141-170`) gains one `.layer(middleware::from_fn(auth_observability_middleware))`
+call on each branch's router:
 
 ```rust
 fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router {
@@ -144,12 +178,12 @@ fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router 
             .route(&format!("{base_path}/auth/logout"), post(crate::auth::auth_logout))
             .route(&format!("{base_path}/auth/me"), get(crate::auth::auth_me))
             .with_state(state.clone())
-            .layer(middleware::from_fn(observability_middleware))
+            .layer(middleware::from_fn(auth_observability_middleware))
     } else {
         Router::new()
             .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
             .route(&format!("{base_path}/auth/logout"), post(auth_logout_no_auth))
-            .layer(middleware::from_fn(observability_middleware))
+            .layer(middleware::from_fn(auth_observability_middleware))
     }
 }
 ```
@@ -162,20 +196,23 @@ the now-instrumented router automatically.
 ### 2. Extend raw-claim extraction to include `email`
 
 `claims.rs`'s `extract_subject_from_token` is replaced by a small struct + function that decodes
-the JWT payload once and pulls both fields, used by both `auth_callback` and `auth_refresh`:
+the JWT payload once and pulls both fields, used by both `auth_callback` and `auth_refresh`. Both
+are `pub` (not `pub(crate)`) and re-exported from `auth/mod.rs`, so the integration-test crate
+`rust/analytics-web-srv/tests/auth_unit_tests.rs` (which only sees the crate's public API via
+`analytics_web_srv::auth::{...}`) can reach them:
 
 ```rust
 /// Claims read directly from an unverified JWT payload, for audit logging in
 /// `auth_callback`/`auth_refresh` where the token has not yet been through JWKS
 /// signature validation (that happens later, per-request, via `cookie_auth_middleware`) --
 /// same trust level the old `sub`-only extraction already had.
-pub(crate) struct AuditClaims {
-    pub(crate) sub: Option<String>,
-    pub(crate) email: Option<String>,
+pub struct AuditClaims {
+    pub sub: Option<String>,
+    pub email: Option<String>,
 }
 
 /// Extract the 'sub' and 'email' claims from a JWT payload for audit logging.
-pub(crate) fn extract_audit_claims_from_token(token: &str) -> AuditClaims {
+pub fn extract_audit_claims_from_token(token: &str) -> AuditClaims {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return AuditClaims { sub: None, email: None };
@@ -278,52 +315,62 @@ own fallback string.
 ## Implementation Steps
 
 **Phase 1 — `analytics-web-srv`**
-1. `web_server.rs::build_auth_routes` (`:141-170`): add `.layer(middleware::from_fn(observability_middleware))`
-   to both branches, per Design §1.
-2. `claims.rs`: replace `extract_subject_from_token` (`:98-111`) with `AuditClaims` +
-   `extract_audit_claims_from_token`, per Design §2.
+1. `rust/public/src/servers/axum_utils.rs`: add `auth_observability_middleware` (path-only
+   logging, no query string), per Design §1. `web_server.rs::build_auth_routes` (`:141-170`): add
+   `.layer(middleware::from_fn(auth_observability_middleware))` to both branches.
+2. `claims.rs`: replace `extract_subject_from_token` (`:98-111`) with `pub` `AuditClaims` +
+   `pub fn extract_audit_claims_from_token`, per Design §2.
 3. `handlers.rs`: update the `use super::claims::{...}` import (`:3-6`, drop
    `extract_subject_from_token`, add `extract_audit_claims_from_token`); update `auth_callback`'s
    login-success log (`:204-210`) and `auth_refresh`'s refresh-success log (`:318-321`) per
    Design §2.
+4. `auth/mod.rs` (`:31`): add `AuditClaims, extract_audit_claims_from_token` to the
+   `pub use claims::{...}` line so the new test file can reach them through the crate's public
+   API.
 
 **Phase 2 — `analytics-web-srv` tests**
-4. New test in `rust/analytics-web-srv/tests/auth_unit_tests.rs`: `extract_audit_claims_from_token`
+5. New test in `rust/analytics-web-srv/tests/auth_unit_tests.rs`: `extract_audit_claims_from_token`
    with a hand-built unsigned JWT (`base64url(header).base64url(payload).base64url(sig)`, payload
    `{"sub": "user-123", "email": "alice@example.com"}`) asserts both fields populate; a payload
    with no `email` key asserts `email: None`, `sub: Some(...)`; a malformed token (not 3
    dot-separated parts, or non-base64/non-JSON payload) asserts `AuditClaims { sub: None, email: None }`.
-5. No automated test asserts the *rendered log line content* for steps 1/3 — this codebase has no
+6. No automated test asserts the *rendered log line content* for steps 1/3 — this codebase has no
    log-content-capture test harness wired up for `analytics-web-srv` (see Testing Strategy);
    covered by manual verification instead. `cargo test -p analytics-web-srv` (existing suite)
    must still pass unchanged, confirming no routing regression from step 1.
 
 **Phase 3 — `flight-sql-srv`**
-6. `http_utils.rs`: add `get_grpc_peer_ip`, per Design §3.
-7. `flight_sql_service_impl.rs`: thread `client_ip` through `do_get_fallback` (`:786-795`),
+7. `http_utils.rs`: add `get_grpc_peer_ip`, per Design §3.
+8. `flight_sql_service_impl.rs`: thread `client_ip` through `do_get_fallback` (`:786-795`),
    `do_get_statement` (`:949-956`), `execute_query`'s signature and both `info!` lines
    (`:519-604`), `QueryAuditState` (`:262-297`, `:619-643`), and `QueryAuditState::emit`
    (`:309-357`), per Design §3.
-8. `query_audit.rs`: add `pub client_ip: String` to `QueryAuditRecord` (`:79-129`), placed right
+9. `query_audit.rs`: add `pub client_ip: String` to `QueryAuditRecord` (`:79-129`), placed right
    after `query_id`.
 
 **Phase 4 — `flight-sql-srv` tests**
-9. New `rust/public/tests/http_utils_tests.rs`: unit tests for `get_grpc_peer_ip` — a
-   `SocketAddr` extension present returns its IP (string, no port); no extension present returns
-   `"unknown"`.
-10. `rust/public/tests/query_audit_tests.rs`: add `client_ip: "203.0.113.7".to_string()` to
+10. New `rust/public/tests/http_utils_tests.rs`: unit tests for `get_grpc_peer_ip` — a
+    `SocketAddr` extension present returns its IP (string, no port); no extension present returns
+    `"unknown"`.
+11. `rust/public/Cargo.toml`: register the new test file with an explicit `[[test]]` entry
+    (`name = "http_utils_tests"`, `path = "tests/http_utils_tests.rs"`,
+    `required-features = ["server"]`), matching every other file under `rust/public/tests/` —
+    without it, the new test is auto-discovered without the `server` feature gate and fails to
+    compile on a plain `cargo test -p micromegas`.
+12. `rust/public/tests/query_audit_tests.rs`: add `client_ip: "203.0.113.7".to_string()` to
     `full_record` (`:187-219`) and to the literal in `query_audit_record_omits_absent_optionals`
     (`:257-287`, e.g. `"unknown".to_string()`, since that test's other always-present fields use
     the "server saw nothing distinctive" placeholder), and assert
     `value["client_ip"] == "203.0.113.7"` / `"unknown"` respectively in each test.
 
 **Phase 5 — docs**
-11. `mkdocs/docs/query-guide/query-audit-log.md`: add a `client_ip` row to the `## Fields` table
+13. `mkdocs/docs/query-guide/query-audit-log.md`: add a `client_ip` row to the `## Fields` table
     (always present, right after `query_id`), describing it as the gRPC peer address (network
-    truth, not self-reported) and noting the one caveat from Trade-offs: for FlightSQL calls
-    proxied through the HTTP gateway's `/gateway/query`, this reports the gateway's own address,
-    not the original browser/HTTP caller's.
-12. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
+    truth, not self-reported) and noting the caveat from Trade-offs: for FlightSQL calls proxied
+    through a server-side hop — the HTTP gateway's `/gateway/query` or `analytics-web-srv`'s
+    `/api/query-stream` (the web app's notebook/query-editor path) — this reports the proxy's own
+    address, not the original browser/HTTP caller's.
+14. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
     (**minor breaking change**: `QueryAuditRecord` is published API and gains a field, matching
     the convention every prior addition to this struct used — e.g. #1436, #1437, #1406); **Auth:**
     entry (or a new bullet under the existing Auth section) for the `/auth/*` `client_ip` logging
@@ -331,15 +378,18 @@ own fallback string.
 
 ## Files to Modify
 
+- `rust/public/src/servers/axum_utils.rs` — new `auth_observability_middleware`.
 - `rust/analytics-web-srv/src/web_server.rs` — `build_auth_routes`.
 - `rust/analytics-web-srv/src/auth/claims.rs` — `extract_subject_from_token` → `AuditClaims`/`extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/src/auth/handlers.rs` — imports, `auth_callback`, `auth_refresh`.
+- `rust/analytics-web-srv/src/auth/mod.rs` — re-export `AuditClaims`, `extract_audit_claims_from_token`.
 - `rust/analytics-web-srv/tests/auth_unit_tests.rs` — new `extract_audit_claims_from_token` cases.
 - `rust/public/src/servers/http_utils.rs` — new `get_grpc_peer_ip`.
 - `rust/public/src/servers/flight_sql_service_impl.rs` — `do_get_fallback`, `do_get_statement`,
   `execute_query`, `QueryAuditState`, `QueryAuditState::emit`.
 - `rust/public/src/servers/query_audit.rs` — `QueryAuditRecord`.
 - `rust/public/tests/http_utils_tests.rs` — new.
+- `rust/public/Cargo.toml` — new `[[test]]` entry for `http_utils_tests`.
 - `rust/public/tests/query_audit_tests.rs` — fixture updates.
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table.
 - `CHANGELOG.md` — `## Unreleased` entries.
@@ -354,22 +404,28 @@ own fallback string.
   issue doesn't mention and that carries its own risk (e.g. whether `cookie_auth_middleware`'s
   own `warn!("[auth_failure] ...")` lines are expected to fire before or after the generic
   request/response log). Left as a separate, pre-existing gap — worth its own issue if wanted.
-- **Peer IP, not the gateway's `x-client-ip` metadata header.** The HTTP gateway already computes
-  and forwards `x-client-ip` gRPC metadata (`http_gateway.rs:209-216`) specifically so
-  gateway-proxied queries could report the *original* caller's IP instead of the gateway's own.
-  This plan doesn't wire that up on the FlightSQL server side, for two reasons: (1) it's a
-  self-reported gRPC metadata value like any other header, and unlike `x-client-type`/`x-client-agent`,
-  trusting it blindly would let *any* direct gRPC caller (bypassing the gateway entirely, e.g. the
+- **Peer IP, not a proxy-forwarded client-IP header.** The HTTP gateway already computes and
+  forwards `x-client-ip` gRPC metadata (`http_gateway.rs:209-216`) specifically so gateway-proxied
+  queries could report the *original* caller's IP instead of the gateway's own; there's no
+  equivalent today on `analytics-web-srv`'s `/api/query-stream` path (`stream_query.rs:271-282`),
+  which builds its `BearerFlightSQLClientFactory` with only `x-client-notebook`/`x-client-cell`
+  metadata and forwards no client-IP information at all. This plan doesn't wire up either as a
+  trusted source of `client_ip` on the FlightSQL server side, for two reasons: (1) any such value
+  is self-reported gRPC metadata like any other header, and unlike `x-client-type`/`x-client-agent`,
+  trusting it blindly would let *any* direct gRPC caller (bypassing the proxy entirely, e.g. the
   Python client talking straight to `flight-sql-srv`) spoof an arbitrary IP into an audit trail
   whose whole purpose is "who did what from where" — the gateway's own spoofing protection
   (blocking a client from setting this header on its *inbound* HTTP request) only holds for
-  traffic that actually goes through the gateway; (2) safely trusting it would require the
-  FlightSQL server to first establish that the immediate gRPC peer *is* the gateway (e.g. mTLS
-  service identity, or a network-topology assumption), which is a real design decision this issue
-  doesn't ask for and shouldn't be bundled into a straightforward logging-gap fix. This plan's
-  `client_ip` is therefore the literal, non-spoofable gRPC peer address: correct and trustworthy
-  for direct clients, but reports the gateway's own address for gateway-proxied queries. Flagged
-  as a known limitation in the doc update (step 11) and as an Open Question below.
+  traffic that actually goes through the gateway, and `analytics-web-srv` has no such protection
+  at all; (2) safely trusting it would require the FlightSQL server to first establish that the
+  immediate gRPC peer *is* the proxy (e.g. mTLS service identity, or a network-topology
+  assumption), which is a real design decision this issue doesn't ask for and shouldn't be bundled
+  into a straightforward logging-gap fix. This plan's `client_ip` is therefore the literal,
+  non-spoofable gRPC peer address: correct and trustworthy for direct clients, but reports the
+  proxy's own address — the HTTP gateway's for `/gateway/query`, or `analytics-web-srv`'s for
+  every notebook/query-editor query submitted through the web app (`client="web"`, by far the
+  highest-volume source of audit records) — for anything proxied. Flagged as a known limitation in
+  the doc update (step 13) and as an Open Question below.
 - **`AuditClaims` reads unverified claims, same as the `sub`-only extraction it replaces.**
   `auth_callback`/`auth_refresh` don't run the freshly-exchanged `id_token` through
   `auth_provider.validate_request()` before logging — they trust the raw JWT payload from the
@@ -387,15 +443,15 @@ own fallback string.
 ## Documentation
 
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table (`client_ip` row) and a Notes
-  bullet on the gateway-proxied caveat.
+  bullet on the proxy-hop caveat (HTTP gateway *and* `analytics-web-srv`'s `/api/query-stream`).
 - `CHANGELOG.md` — `## Unreleased` entries under **Analytics:** and **Auth:**.
 
 ## Testing Strategy
 
 1. `cargo fmt` and `cargo clippy --workspace -- -D warnings` (per `rust/CLAUDE.md`).
 2. `cargo test -p analytics-web-srv` — existing suite plus the new `extract_audit_claims_from_token`
-   cases (step 4); confirms no routing regression from wrapping `/auth/*` in
-   `observability_middleware`.
+   cases (step 5); confirms no routing regression from wrapping `/auth/*` in
+   `auth_observability_middleware`.
 3. `cargo test -p micromegas --features server` — covers the updated `query_audit_tests.rs` and
    new `http_utils_tests.rs`.
 4. **Manual verification** (this repo has no log-content-capture test harness for
@@ -411,9 +467,12 @@ own fallback string.
      `execute_query ...` start-of-query line now includes `client_ip=<your real IP>`; query
      `flightsql_query_audit` (per `query-audit-log.md`'s pattern) and confirm the JSON record has
      `"client_ip"` set to the same value.
-   - If a gateway deployment is available, run the same query through `/gateway/query` and confirm
-     `client_ip` in the resulting audit record is the *gateway's* address, not the original HTTP
-     caller's — confirming the documented caveat (step 11) matches actual behavior.
+   - Run a query from the web app's notebook/query editor (`/api/query-stream`) and confirm
+     `client_ip` in the resulting audit record is `analytics-web-srv`'s own address, not the
+     browser's — this is the highest-volume (`client="web"`) case of the proxy caveat. If a
+     gateway deployment is available, also run the same query through `/gateway/query` and confirm
+     `client_ip` is the *gateway's* address, not the original HTTP caller's — together confirming
+     the documented caveat (step 13) matches actual behavior for both proxy hops.
 
 ## Open Questions
 
