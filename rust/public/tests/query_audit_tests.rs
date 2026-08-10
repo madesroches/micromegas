@@ -188,6 +188,9 @@ fn full_record(sql: &str) -> QueryAuditRecord {
     QueryAuditRecord {
         query_id: "11111111-1111-1111-1111-111111111111".to_string(),
         client: "python".to_string(),
+        agent: "claude-code".to_string(),
+        entrypoint: "cli-query".to_string(),
+        session: Some("session-abc".to_string()),
         user: "alice".to_string(),
         email: "alice@example.com".to_string(),
         name: Some("Alice".to_string()),
@@ -221,6 +224,9 @@ fn query_audit_record_serializes_required_fields() {
 
     assert_eq!(value["query_id"], "11111111-1111-1111-1111-111111111111");
     assert_eq!(value["client"], "python");
+    assert_eq!(value["agent"], "claude-code");
+    assert_eq!(value["entrypoint"], "cli-query");
+    assert_eq!(value["session"], "session-abc");
     assert_eq!(value["user"], "alice");
     assert_eq!(value["email"], "alice@example.com");
     assert_eq!(value["name"], "Alice");
@@ -247,6 +253,9 @@ fn query_audit_record_omits_absent_optionals() {
     let record = QueryAuditRecord {
         query_id: "22222222-2222-2222-2222-222222222222".to_string(),
         client: "grpc".to_string(),
+        agent: "unknown".to_string(),
+        entrypoint: "unknown".to_string(),
+        session: None,
         user: "unknown".to_string(),
         email: "unknown".to_string(),
         name: None,
@@ -282,6 +291,9 @@ fn query_audit_record_omits_absent_optionals() {
     assert!(!object.contains_key("range_end"));
     assert!(!object.contains_key("limit"));
     assert!(!object.contains_key("output_rows"));
+    assert!(!object.contains_key("session"));
+    assert_eq!(value["agent"], "unknown");
+    assert_eq!(value["entrypoint"], "unknown");
     assert_eq!(value["service_account"], true);
     assert_eq!(value["service_account_name"], "svc-ci");
     assert_eq!(value["status"], "error");

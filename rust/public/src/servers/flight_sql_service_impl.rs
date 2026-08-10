@@ -267,6 +267,9 @@ struct QueryAuditState {
     /// correlated by grepping this id.
     query_id: String,
     client: String,
+    agent: String,
+    entrypoint: String,
+    session: Option<String>,
     user: String,
     email: String,
     name: Option<String>,
@@ -317,6 +320,9 @@ impl QueryAuditState {
         let record = QueryAuditRecord {
             query_id: self.query_id.clone(),
             client: self.client.clone(),
+            agent: self.agent.clone(),
+            entrypoint: self.entrypoint.clone(),
+            session: self.session.clone(),
             user: self.user.clone(),
             email: self.email.clone(),
             name: self.name.clone(),
@@ -553,20 +559,32 @@ impl FlightSqlServiceImpl {
             .get("x-client-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown");
+        let client_agent = metadata
+            .get("x-client-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+        let client_entrypoint = metadata
+            .get("x-client-entrypoint")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+        let client_session = metadata
+            .get("x-client-session")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
         let user_name_display = attr.user_name.as_deref().unwrap_or("");
 
         // Log query with full attribution
         if let Some(service_account_name) = &attr.service_account {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type} agent={client_agent} entrypoint={client_entrypoint}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
             );
         } else {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type} agent={client_agent} entrypoint={client_entrypoint}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
@@ -589,6 +607,9 @@ impl FlightSqlServiceImpl {
         let mut audit_state = QueryAuditState {
             query_id: query_id.clone(),
             client: client_type.to_string(),
+            agent: client_agent.to_string(),
+            entrypoint: client_entrypoint.to_string(),
+            session: client_session,
             user: attr.user_id.clone(),
             email: attr.user_email.clone(),
             name: attr.user_name.clone(),

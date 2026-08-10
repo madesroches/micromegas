@@ -20,6 +20,7 @@ HERMETIC_TEST_ARGS = [
     "micromegas/time.py",
     "tests/test_time.py",
     "tests/test_flightsql_headers.py",
+    "tests/test_client_attribution.py",
     "tests/cli",
     "tests/test_query.py",
     "tests/test_web_client.py",

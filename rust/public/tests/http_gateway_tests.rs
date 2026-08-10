@@ -13,6 +13,9 @@ fn test_default_config() {
     assert!(config.should_forward("authorization")); // case-insensitive
     assert!(config.should_forward("X-Request-ID"));
     assert!(config.should_forward("X-User-ID"));
+    assert!(config.should_forward("X-Client-Agent"));
+    assert!(config.should_forward("X-Client-Entrypoint"));
+    assert!(config.should_forward("X-Client-Session"));
 
     // Should block blocked headers
     assert!(!config.should_forward("Cookie"));

@@ -139,7 +139,7 @@ def main():
         end = datetime.datetime.now(datetime.timezone.utc)
 
     try:
-        client = connection.connect(profile=args.profile)
+        client = connection.connect(profile=args.profile, client_entrypoint="cli-query")
     except ProfileError as e:
         parser.error(str(e))
     df = client.query(sql, begin, end)

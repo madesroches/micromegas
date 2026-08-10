@@ -1,7 +1,7 @@
 from micromegas.cli.config import resolve_connection
 
 
-def connect(profile=None):
+def connect(profile=None, client_entrypoint=None):
     """Create FlightSQL client using resolved configuration.
 
     Priority: env vars > active profile (or config file) > defaults.
@@ -19,8 +19,9 @@ def connect(profile=None):
             token_file=cfg.token_file,
             audience=cfg.oidc_audience,
             scope=cfg.oidc_scope,
+            client_entrypoint=client_entrypoint,
         )
 
     from micromegas.flightsql.client import FlightSQLClient
 
-    return FlightSQLClient(cfg.uri)
+    return FlightSQLClient(cfg.uri, client_entrypoint=client_entrypoint)

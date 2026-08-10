@@ -97,6 +97,7 @@ def connect(
     preserve_dictionary: bool = False,
     audience: Optional[str] = None,
     scope: Optional[str] = None,
+    client_entrypoint: Optional[str] = None,
 ) -> FlightSQLClient:
     """Create FlightSQL client with OIDC authentication.
 
@@ -116,6 +117,9 @@ def connect(
         scope: OAuth scopes to request (optional). If None, defaults to
             "openid email profile offline_access". For Azure custom API, use
             "api://{client_id}/.default" to request access tokens for your API.
+        client_entrypoint: Explicit label for how this client was invoked (e.g.
+            "cli-query"), forwarded to `FlightSQLClient`. When omitted, the
+            entrypoint is auto-detected. See `FlightSQLClient`'s docstring.
 
     Returns:
         FlightSQLClient: Configured client ready for queries
@@ -161,5 +165,8 @@ def connect(
     """
     auth = load_or_login(issuer, client_id, client_secret, token_file, audience, scope)
     return FlightSQLClient(
-        uri, auth_provider=auth, preserve_dictionary=preserve_dictionary
+        uri,
+        auth_provider=auth,
+        preserve_dictionary=preserve_dictionary,
+        client_entrypoint=client_entrypoint,
     )
