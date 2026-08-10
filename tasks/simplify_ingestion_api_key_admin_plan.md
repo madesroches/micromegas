@@ -192,7 +192,12 @@ suite doesn't actually assert which concrete client class `make_client` returns,
 `analytics-web-app/src/lib/ingestion-api-keys-api.ts` and
 `analytics-web-app/src/routes/IngestionApiKeysPage.tsx` already call
 `/api/ingestion-api-keys[/...]` — the same paths the new direct-write module will keep serving. No
-frontend change is needed.
+frontend *behavior* change is needed — only `ingestion-api-keys-api.ts`'s header comment (lines
+1-11) is stale: it currently describes calling "`analytics-web-srv`'s server-side proxy
+(`/api/ingestion-api-keys`), which forwards to ingestion's own `/auth/api_keys` routes under this
+service's privileged service credential" and cites `rust/public/src/servers/api_keys.rs` (line 19,
+being deleted by §4) as the source of the `MAX_LIMIT` constant. Both need rewriting to describe
+direct-write behavior; see Documentation.
 
 ### Documentation referencing the removed pieces
 
@@ -404,6 +409,8 @@ misleading after this change, and add a direct unit test for `make_client` confi
 - `python/micromegas/micromegas/web_client.py` — add `import_ingestion_api_key`
 - `python/micromegas/micromegas/cli/import_keys.py` — `make_client` always returns `WebClient`
 - `python/micromegas/tests/cli/test_import_keys.py` — URL fixture cleanup, `make_client` unit test
+- `rust/auth/src/default_provider.rs` — reword the stale `POST /auth/api_keys` comment (~line 98)
+- `analytics-web-app/src/lib/ingestion-api-keys-api.ts` — rewrite stale module header comment (lines 1-11, 19)
 - `mkdocs/docs/admin/api-keys.md` — remove ingestion admin routes + proxy, describe single surface
 - `mkdocs/docs/admin/web-app.md` — remove proxy env vars, update routes table row
 - `mkdocs/docs/admin/ingestion.md` — remove the ingestion-hosted "Key management" section + admin-var row
@@ -435,6 +442,17 @@ misleading after this change, and add a direct unit test for `make_client` confi
   flagged as "worth deciding later, not a blocker now" under the narrower proposal; removing
   ingestion's admin routes entirely makes it the design, not a caveat — the Grant recipe doc section
   is updated accordingly (see Documentation).
+- **This plan moves the ground the in-flight AbAC plan (`tasks/data_isolation/audience_based_access_control_plan.md`,
+  not yet implemented) was designed to stand on.** That plan's Stage 0c puts the "Key-management
+  API" — `POST`/`DELETE`/`GET /auth/api_keys` — "on the ingestion service (and the monolith by
+  inheritance)", and its Stage 4 step 9 adds an `audience` column to `ingestion_api_keys` on the
+  premise that "`resolve_audience` runs once at mint and the result is recorded on the key" via that
+  same route. Once this plan ships, that route no longer exists: mint-time audience resolution will
+  need to move into `analytics-web-srv`'s `ingestion_keys.rs::mint_key` (§1) instead, calling
+  `MintPolicy::resolve_audience` there rather than in a handler on ingestion.
+  `audience_based_access_control_plan.md` will need its Stage 0c/Stage 4 wording updated to match
+  before Stage 4 is implemented. This is a forward-looking note only — reconciling that plan's text
+  is not part of this plan's scope.
 
 ## Documentation
 
@@ -513,6 +531,19 @@ misleading after this change, and add a direct unit test for `make_client` confi
 - `mkdocs/docs/otlp/index.md`: Authentication section (line 38, "mint one via
   `POST /auth/api_keys`, see [API Keys](../admin/api-keys.md)"): update to
   `POST /api/ingestion-api-keys` on `analytics-web-srv`.
+- `rust/auth/src/default_provider.rs` (module doc comment on `build()`, ~line 98): the sentence "a
+  deployment that mints its first key through `POST /auth/api_keys` into a previously empty table
+  authenticates it on the very next request" describes a route this plan deletes. Reword to mint
+  through `analytics-web-srv`'s `POST {base_path}/api/ingestion-api-keys` instead — the underlying
+  point (no restart needed once the DB provider is attached) still holds, only the minting route
+  changes.
+- `analytics-web-app/src/lib/ingestion-api-keys-api.ts` (module header comment, lines 1-11, and the
+  `MAX_LIMIT` citation at line 19): rewrite to describe `analytics-web-srv` writing directly to
+  `ingestion_api_keys` (no proxy, no forwarding to ingestion, no service credential), and repoint
+  the `MAX_LIMIT` citation from `rust/public/src/servers/api_keys.rs` (deleted by §4) to the new
+  `rust/analytics-web-srv/src/ingestion_keys.rs`. The module's actual fetch logic/paths are
+  unaffected by this rewrite — only the comment text is stale, consistent with "Frontend is
+  unaffected" above.
 - `CHANGELOG.md`: the `pr` skill appends an entry per its own convention; no manual edit needed here.
 
 ## Testing Strategy
