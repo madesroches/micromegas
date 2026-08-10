@@ -152,3 +152,43 @@ fn trailing_comma_x_forwarded_for_returns_the_last_non_empty_entry() {
 
     assert_eq!(ip, "203.0.113.1");
 }
+
+#[test]
+fn non_ip_rightmost_x_forwarded_for_falls_through_to_x_real_ip() {
+    // Not fronted by the trusted ALB (or any proxy that validates/appends), a caller can put
+    // arbitrary text -- including a forged `key=value` pair -- in the rightmost entry. That
+    // entry must be rejected rather than returned verbatim, since it flows straight into
+    // structured `key=value` log lines.
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-forwarded-for",
+        "1.2.3.4, evil user=admin".parse().unwrap(),
+    );
+    headers.insert("x-real-ip", "203.0.113.42".parse().unwrap());
+
+    let ip = get_client_ip(&headers, &Extensions::new());
+
+    assert_eq!(ip, "203.0.113.42");
+}
+
+#[test]
+fn non_ip_x_real_ip_falls_through_to_connect_info_extension() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-real-ip", "evil user=admin".parse().unwrap());
+    let mut extensions = Extensions::new();
+    extensions.insert(ConnectInfo(socket_addr("192.168.1.100:8080")));
+
+    let ip = get_client_ip(&headers, &extensions);
+
+    assert_eq!(ip, "192.168.1.100");
+}
+
+#[test]
+fn non_ip_x_forwarded_for_with_no_other_source_returns_unknown() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-forwarded-for", "evil user=admin".parse().unwrap());
+
+    let ip = get_client_ip(&headers, &Extensions::new());
+
+    assert_eq!(ip, "unknown");
+}

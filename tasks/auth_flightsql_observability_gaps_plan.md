@@ -445,8 +445,10 @@ nor a peer address is available — `get_client_ip`'s own fallback string, retur
 them break:
 
 - `rust/public/src/servers/axum_utils.rs:21` (`observability_middleware`) — logs `client_ip` on
-  `/api/*` and `/gateway/*` routes. Same type, same "unknown" fallback; the value logged simply
-  becomes the ALB-observed address instead of a caller-chosen one. Behavior change, no API change.
+  `analytics-web-srv`'s `/api/*` routes and, via `rust/public/src/servers/ingestion.rs`, the
+  ingestion service's `/ingestion/*`, OTLP, webhook, Firehose, and `/auth/api_keys` routes. Same
+  type, same "unknown" fallback; the value logged simply becomes the ALB-observed address instead
+  of a caller-chosen one. Behavior change, no API change.
 - `rust/public/src/servers/log_uri_service.rs:29` — same, for the per-RPC FlightSQL line. Also the
   reason it now agrees with the new audit-record field (Current State §3).
 - `rust/public/src/servers/http_gateway.rs:213` (`build_origin_metadata`) — computes the
@@ -612,9 +614,10 @@ adds them.
     entry (or a new bullet under the existing Auth section) for the `/auth/*` `client_ip` logging
     fix and the `email` addition to `[auth_success]` lines. The `get_client_ip` change must be
     called out as a **behavior change for every existing `client_ip` logger**, not just an
-    addition: `observability_middleware` (`/api/*`, `/gateway/*` request/response lines),
-    `LogUriService` (FlightSQL per-RPC lines) and the gateway's forwarded `x-client-ip` metadata
-    header all switch from the leftmost `X-Forwarded-For` entry (caller-supplied, spoofable) to the
+    addition: `observability_middleware` (`/api/*` request/response lines, and the ingestion
+    service's `/ingestion/*`, OTLP, webhook, Firehose, and `/auth/api_keys` request/response
+    lines), `LogUriService` (FlightSQL per-RPC lines) and the gateway's forwarded `x-client-ip`
+    metadata header all switch from the leftmost `X-Forwarded-For` entry (caller-supplied, spoofable) to the
     rightmost (ALB-observed, non-forgeable). Deployments *not* behind exactly one appending proxy
     will see different values than before — including anyone who was relying on the old leftmost
     read behind an overwriting proxy.

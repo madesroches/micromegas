@@ -23,6 +23,11 @@
 /// as every other entry and this guarantee does not apply -- the socket-address fallback (branch
 /// 3) is the only non-forgeable source in that case.
 ///
+/// Every candidate is validated as a parseable `IpAddr` before being returned; a header value
+/// that fails to parse (e.g. malformed input or an attempted log-injection payload) is treated as
+/// absent and the function falls through to the next source in priority order instead of
+/// returning the raw text.
+///
 /// Returns "unknown" if no IP can be extracted.
 pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> String {
     // Check X-Forwarded-For header first (for load balancers/proxies).
@@ -35,7 +40,8 @@ pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -
     // `DoubleEndedIterator`.
     if let Some(forwarded_for) = headers.get_all("x-forwarded-for").iter().next_back()
         && let Ok(value) = forwarded_for.to_str()
-        && let Some(client_ip) = value.rsplit(',').map(str::trim).find(|s| !s.is_empty())
+        && let Some(candidate) = value.rsplit(',').map(str::trim).find(|s| !s.is_empty())
+        && let Ok(client_ip) = candidate.parse::<std::net::IpAddr>()
     {
         return client_ip.to_string();
     }
@@ -43,8 +49,9 @@ pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -
     // Check X-Real-IP header (used by some proxies like nginx)
     if let Some(real_ip) = headers.get("x-real-ip")
         && let Ok(value) = real_ip.to_str()
+        && let Ok(client_ip) = value.trim().parse::<std::net::IpAddr>()
     {
-        return value.to_string();
+        return client_ip.to_string();
     }
 
     // Fall back to socket address from extensions
