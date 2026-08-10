@@ -480,6 +480,7 @@ function ScreenPageContent() {
               dataSource={dataSource}
               onExecutingChange={setIsExecuting}
               onErrorChange={setHasError}
+              screenName={screen?.name}
             />
           </div>
         </div>

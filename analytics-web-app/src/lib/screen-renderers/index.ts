@@ -42,6 +42,8 @@ export interface ScreenRendererProps {
   onExecutingChange?: (executing: boolean) => void
   /** Report error state changes (for tab favicon/title) */
   onErrorChange?: (hasError: boolean) => void
+  /** Saved screen name (the notebook's own identity), undefined for an unsaved new screen — used for query attribution */
+  screenName?: string
 }
 
 /**

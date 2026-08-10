@@ -270,6 +270,8 @@ struct QueryAuditState {
     agent: String,
     entrypoint: String,
     session: Option<String>,
+    notebook: Option<String>,
+    cell: Option<String>,
     user: String,
     email: String,
     name: Option<String>,
@@ -323,6 +325,8 @@ impl QueryAuditState {
             agent: self.agent.clone(),
             entrypoint: self.entrypoint.clone(),
             session: self.session.clone(),
+            notebook: self.notebook.clone(),
+            cell: self.cell.clone(),
             user: self.user.clone(),
             email: self.email.clone(),
             name: self.name.clone(),
@@ -572,20 +576,30 @@ impl FlightSqlServiceImpl {
             .and_then(|v| v.to_str().ok())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        let client_notebook = metadata
+            .get("x-client-notebook")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let client_cell = metadata
+            .get("x-client-cell")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         let user_name_display = attr.user_name.as_deref().unwrap_or("");
 
         // Log query with full attribution
         if let Some(service_account_name) = &attr.service_account {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type} agent={client_agent} entrypoint={client_entrypoint}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
             );
         } else {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type} agent={client_agent} entrypoint={client_entrypoint}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
@@ -611,6 +625,8 @@ impl FlightSqlServiceImpl {
             agent: client_agent.to_string(),
             entrypoint: client_entrypoint.to_string(),
             session: client_session,
+            notebook: client_notebook,
+            cell: client_cell,
             user: attr.user_id.clone(),
             email: attr.user_email.clone(),
             name: attr.user_name.clone(),

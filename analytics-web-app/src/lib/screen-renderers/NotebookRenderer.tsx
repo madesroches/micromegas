@@ -281,6 +281,7 @@ export function NotebookRenderer({
   dataSource,
   onExecutingChange,
   onErrorChange,
+  screenName,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -340,6 +341,7 @@ export function NotebookRenderer({
     refreshTrigger,
     dataSource,
     engine,
+    notebookName: screenName,
   })
 
   // Report execution state to parent
@@ -643,6 +645,7 @@ export function NotebookRenderer({
         dataSource: cellDataSource,
         cellResults: availableCellResults,
         cellSelections: availableCellSelections,
+        notebookName: screenName,
       },
       {
         onRun: () => executeCellByName(cell.name),

@@ -173,6 +173,47 @@ describe('fetchPerfettoTrace', () => {
     )
   })
 
+  it('should forward notebook/cell into the streamQuery call when provided', async () => {
+    mockStreamQuery.mockReturnValue(
+      fakeStream([
+        { type: 'batch', batch: makeBatch(new Uint8Array([1])) },
+        { type: 'done' },
+      ])
+    )
+
+    await fetchPerfettoTrace({
+      processId: 'proc-1',
+      spanType: 'both',
+      timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+      notebook: 'My Notebook',
+      cell: 'Trace',
+    })
+
+    expect(mockStreamQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ notebook: 'My Notebook', cell: 'Trace' }),
+      undefined
+    )
+  })
+
+  it('should omit notebook/cell from the streamQuery call when not provided', async () => {
+    mockStreamQuery.mockReturnValue(
+      fakeStream([
+        { type: 'batch', batch: makeBatch(new Uint8Array([1])) },
+        { type: 'done' },
+      ])
+    )
+
+    await fetchPerfettoTrace({
+      processId: 'proc-1',
+      spanType: 'both',
+      timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+    })
+
+    const call = mockStreamQuery.mock.calls[0]
+    expect(call[0].notebook).toBeUndefined()
+    expect(call[0].cell).toBeUndefined()
+  })
+
   it('should build correct SQL with parameters', async () => {
     mockStreamQuery.mockReturnValue(
       fakeStream([

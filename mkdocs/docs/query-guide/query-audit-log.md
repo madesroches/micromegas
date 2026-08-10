@@ -128,6 +128,8 @@ ORDER BY failures DESC;
 | `agent` | string | always | Who is driving the client, from the `x-client-agent` metadata header (e.g. `claude-code`, `none`), `unknown` if absent |
 | `entrypoint` | string | always | How the client was invoked, from the `x-client-entrypoint` metadata header (e.g. `script`, `jupyter`, `repl`, `cli-query`), `unknown` if absent |
 | `session` | string | if the caller sent `x-client-session` | Opaque id correlating every query issued through one client instance/session |
+| `notebook` | string | if the query originated from a notebook cell | Saved name of the originating notebook (screen), from the `x-client-notebook` metadata header |
+| `cell` | string | if the query originated from a notebook cell | Name of the originating cell within the notebook, from the `x-client-cell` metadata header |
 | `user` | string | always | Resolved user id |
 | `email` | string | always | Resolved user email |
 | `name` | string | if known | Display name from the `x-user-name` header |
@@ -171,6 +173,13 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
   variables are inherited by child processes, so a human running `micromegas-query` from a shell
   nested inside an agent session (e.g. a terminal opened from within Claude Code) is labelled
   with that agent too, even though a person typed the query.
+- **`notebook`/`cell` are reported by the web app only, and both are keyed by name, not a stable
+  id.** They're set by `analytics-web-srv`'s `/api/query-stream` endpoint from the originating
+  screen's saved name and the executing cell's name, and are absent for any query not issued from
+  a notebook cell (the standalone query editor, other clients). Cell (and notebook) names are
+  mutable — renaming a cell after it has already produced audit records means historical rows
+  under the old name won't be grouped with new ones under the new name. This is accepted as
+  adequate for analytics; a stable per-cell id is a larger, separate change to the notebook format.
 - **One row per query, at completion.** The record can only be assembled once the response stream
   has been fully drained (or has errored), since `total_ms`, `status`, `output_rows`, and
   `bytes_scanned` only settle at that point. If a client abandons the stream mid-drain (disconnect

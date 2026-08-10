@@ -139,6 +139,10 @@ export interface StreamQueryParams {
   begin?: string; // ISO date
   end?: string;   // ISO date
   dataSource?: string;
+  /** Originating notebook name, for query attribution. Omitted outside a notebook. */
+  notebook?: string;
+  /** Originating cell name within the notebook, for query attribution. */
+  cell?: string;
 }
 
 /**
@@ -165,6 +169,8 @@ export async function* streamQuery(
       begin: params.begin,
       end: params.end,
       data_source: params.dataSource || '',
+      notebook: params.notebook,
+      cell: params.cell,
     }),
     signal,
   });
@@ -332,6 +338,8 @@ export async function fetchQueryIPC(
       begin: params.begin,
       end: params.end,
       data_source: params.dataSource || '',
+      notebook: params.notebook,
+      cell: params.cell,
     }),
     signal,
   });

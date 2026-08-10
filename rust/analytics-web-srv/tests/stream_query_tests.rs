@@ -1,7 +1,8 @@
 //! Unit tests for stream_query module
 
 use analytics_web_srv::stream_query::{
-    contains_blocked_function, encode_batch, encode_schema, substitute_macros,
+    contains_blocked_function, encode_batch, encode_schema, sanitize_origin_label,
+    substitute_macros,
 };
 use arrow_ipc::writer::{DictionaryTracker, IpcWriteOptions};
 use datafusion::arrow::array::{
@@ -362,6 +363,58 @@ fn test_encode_schema_and_batch_readable() {
     assert!(
         total_size > 0,
         "Combined IPC data should have non-zero size"
+    );
+}
+
+// =============================================================================
+// sanitize_origin_label tests
+// =============================================================================
+
+#[test]
+fn test_sanitize_origin_label_normal_name_passes_through() {
+    assert_eq!(
+        sanitize_origin_label("My Notebook Cell"),
+        Some("My Notebook Cell".to_string())
+    );
+}
+
+#[test]
+fn test_sanitize_origin_label_rejects_control_characters() {
+    assert_eq!(sanitize_origin_label("cell\u{0}name"), None);
+}
+
+#[test]
+fn test_sanitize_origin_label_rejects_over_max_length() {
+    let too_long = "a".repeat(129);
+    assert_eq!(sanitize_origin_label(&too_long), None);
+}
+
+#[test]
+fn test_sanitize_origin_label_accepts_max_length() {
+    let max_len = "a".repeat(128);
+    assert_eq!(sanitize_origin_label(&max_len), Some(max_len));
+}
+
+#[test]
+fn test_sanitize_origin_label_rejects_non_ascii() {
+    assert_eq!(sanitize_origin_label("café"), None);
+}
+
+#[test]
+fn test_sanitize_origin_label_rejects_empty() {
+    assert_eq!(sanitize_origin_label(""), None);
+}
+
+#[test]
+fn test_sanitize_origin_label_rejects_whitespace_only() {
+    assert_eq!(sanitize_origin_label("   "), None);
+}
+
+#[test]
+fn test_sanitize_origin_label_trims_leading_and_trailing_whitespace() {
+    assert_eq!(
+        sanitize_origin_label("  My Cell  "),
+        Some("My Cell".to_string())
     );
 }
 

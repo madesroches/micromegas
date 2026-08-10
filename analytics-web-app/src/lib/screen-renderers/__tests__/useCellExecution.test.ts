@@ -373,6 +373,37 @@ describe('useCellExecution', () => {
         expect(mockStreamQuery).toHaveBeenCalled()
         expect(result.current.cellStates['Results'].status).toBe('success')
         expect(result.current.cellStates['Results'].data.length).toBeGreaterThan(0)
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.notebook).toBeUndefined()
+        expect(callArgs.cell).toBe('Results')
+      })
+
+      it('should pass notebook and cell name to streamQuery when notebookName is provided', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Results', sql: 'SELECT * FROM logs', layout: { height: 'auto' } },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: vi.fn(),
+            refreshTrigger: 0,
+            notebookName: 'My Notebook',
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.notebook).toBe('My Notebook')
+        expect(callArgs.cell).toBe('Results')
       })
 
       it('should succeed with null data when SQL is empty', async () => {
@@ -1350,6 +1381,7 @@ describe('useCellExecution', () => {
           setVariableValue: vi.fn(),
           refreshTrigger: 0,
           engine,
+          notebookName: 'My Notebook',
         })
       )
 
@@ -1362,6 +1394,9 @@ describe('useCellExecution', () => {
       expect(mockStreamQuery).not.toHaveBeenCalled()
       expect(result.current.cellStates['Remote'].status).toBe('success')
       expect(result.current.cellStates['Remote'].data.length).toBeGreaterThan(0)
+      const callArgs = mockFetchQueryIPC.mock.calls[0][0]
+      expect(callArgs.notebook).toBe('My Notebook')
+      expect(callArgs.cell).toBe('Remote')
     })
 
     it('should fall back to streamQuery when no engine is present', async () => {

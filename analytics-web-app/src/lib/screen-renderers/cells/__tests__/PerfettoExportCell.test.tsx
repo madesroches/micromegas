@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { PerfettoExportCell, perfettoExportMetadata } from '../PerfettoExportCell'
 import type { CellRendererProps } from '../../cell-registry'
@@ -14,12 +15,27 @@ vi.mock('@/lib/perfetto', () => ({
   openInPerfetto: vi.fn(),
 }))
 
+// The shared test mock at src/__mocks__/@radix-ui/react-dropdown-menu.tsx (aliased in
+// vite.config.ts) forwards `onSelect`, but SplitButton's secondary actions wire up via
+// `onClick` — override it locally so this file's "Download" split-button action is
+// actually clickable in tests.
+vi.mock('@radix-ui/react-dropdown-menu', () => ({
+  Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Item: ({ children, ...props }: { children: ReactNode } & Record<string, unknown>) => (
+    <button {...props}>{children}</button>
+  ),
+}))
+
 const mockFetchPerfettoTrace = fetchPerfettoTrace as MockedFunction<typeof fetchPerfettoTrace>
 const mockOpenInPerfetto = openInPerfetto as MockedFunction<typeof openInPerfetto>
 
 // Create minimal mock props for CellRendererProps
 const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRendererProps => ({
   name: 'test-perfetto-export',
+  notebookName: undefined,
   sql: undefined,
   options: {
     processIdVar: '$process_id',
@@ -227,6 +243,8 @@ describe('PerfettoExportCell', () => {
       render(
         <PerfettoExportCell
           {...createMockProps({
+            name: 'Trace',
+            notebookName: 'My Notebook',
             variables: { process_id: 'abc-123' },
             timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
           })}
@@ -243,6 +261,32 @@ describe('PerfettoExportCell', () => {
             spanType: 'both',
             timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
             onProgress: expect.any(Function),
+            notebook: 'My Notebook',
+            cell: 'Trace',
+          })
+        )
+      })
+    })
+
+    it('should call fetchPerfettoTrace with notebook/cell on Download too', async () => {
+      render(
+        <PerfettoExportCell
+          {...createMockProps({
+            name: 'Trace',
+            notebookName: 'My Notebook',
+            variables: { process_id: 'abc-123' },
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+          })}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Download'))
+
+      await waitFor(() => {
+        expect(mockFetchPerfettoTrace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            notebook: 'My Notebook',
+            cell: 'Trace',
           })
         )
       })
