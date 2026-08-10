@@ -124,6 +124,7 @@ ORDER BY failures DESC;
 | Field | Type | Present | Description |
 |-------|------|---------|--------------|
 | `query_id` | string (UUID) | always | Unique id minted at the start of the request; also embedded in the client-facing error message and the server-side log line for the same failure, so the three can be correlated by grepping this id |
+| `client_ip` | string | always | Network-level truth, not self-reported attribution: the rightmost `X-Forwarded-For` entry (the address the trusted proxy/ALB in front of this service observed), falling back to the gRPC peer address for a direct connection. `unknown` if neither is available. Matches the `client_ip` on `flight-sql-srv`'s generic per-call `uri=... client_ip=...` log line (both come from the same `get_client_ip`), so the two can be cross-referenced |
 | `client` | string | always | Client type from the `x-client-type` metadata header (e.g. `python`, `grafana`), `unknown` if absent |
 | `agent` | string | always | Who is driving the client, from the `x-client-agent` metadata header (e.g. `claude-code`, `none`), `unknown` if absent |
 | `entrypoint` | string | always | How the client was invoked, from the `x-client-entrypoint` metadata header (e.g. `script`, `jupyter`, `repl`, `cli-query`), `unknown` if absent |
@@ -190,6 +191,14 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
   logically needed — not necessarily bytes fetched from origin storage. The `range_cache_origin_block_bytes`
   object-cache metric remains the process-global origin-fetch signal; the two are complementary, not
   interchangeable.
+- **`client_ip` reports the nearest proxy's address, not the original caller's, for queries
+  proxied through a server-side hop.** For FlightSQL calls made through the HTTP gateway's
+  `/gateway/query` or through `analytics-web-srv`'s `/api/query-stream` (the web app's
+  notebook/query-editor path), `client_ip` is that proxy's own address, since neither proxy
+  forwards the original caller's `X-Forwarded-For` chain today. This means `client="web"` queries
+  — by far the highest-volume source of audit records — all report `analytics-web-srv`'s address.
+  Direct FlightSQL access (e.g. the Python client talking straight to `flight-sql-srv`, no gateway
+  or web app in between) is unaffected and reports a true client IP.
 - **No fingerprint field (yet).** The raw `sql` field is enough to drill down into individual
   expensive queries; a normalized fingerprint (with literals stripped) could be added later as an
   additive field without breaking existing consumers.

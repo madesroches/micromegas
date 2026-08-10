@@ -1,8 +1,8 @@
 //! Axum request/response glue: the auth endpoints, middleware, and extractors.
 
 use super::claims::{
-    CookieTokenRequestParts, UserInfo, ValidatedUser, extract_name_from_token,
-    extract_subject_from_token,
+    CookieTokenRequestParts, UserInfo, ValidatedUser, extract_audit_claims_from_token,
+    extract_name_from_token,
 };
 use super::cookies::{
     ID_TOKEN_COOKIE, OAUTH_STATE_COOKIE, REFRESH_TOKEN_COOKIE, clear_cookie, create_cookie,
@@ -201,11 +201,12 @@ pub async fn auth_callback(
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
 
-    // Log successful login (extract subject from token for audit trail)
-    if let Some(sub) = extract_subject_from_token(&id_token) {
+    // Log successful login (extract subject/email from token for audit trail)
+    let audit_claims = extract_audit_claims_from_token(&id_token);
+    if let Some(sub) = &audit_claims.sub {
         info!(
-            "[auth_success] event=login sub={sub} issuer={}",
-            state.config.issuer
+            "[auth_success] event=login sub={sub} email={:?} issuer={}",
+            audit_claims.email, state.config.issuer
         );
     }
 
@@ -316,8 +317,12 @@ pub async fn auth_refresh(
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
 
     // Log successful token refresh
-    if let Some(sub) = extract_subject_from_token(&id_token) {
-        info!("[auth_success] event=token_refresh sub={sub}");
+    let audit_claims = extract_audit_claims_from_token(&id_token);
+    if let Some(sub) = &audit_claims.sub {
+        info!(
+            "[auth_success] event=token_refresh sub={sub} email={:?}",
+            audit_claims.email
+        );
     }
 
     // Update cookies

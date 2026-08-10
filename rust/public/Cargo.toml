@@ -86,8 +86,10 @@ tower-http = { workspace = true, optional = true }
 async-trait.workspace = true
 base64.workspace = true
 flate2.workspace = true
+micromegas-transit.workspace = true
 opentelemetry-proto.workspace = true
 reqwest.workspace = true
+serial_test = "3.2"
 tokio = { workspace = true }
 wiremock = "0.6"
 
@@ -142,4 +144,14 @@ required-features = ["server"]
 [[test]]
 name = "flightsql_client_factory_scheme_tests"
 path = "tests/flightsql_client_factory_scheme_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "auth_observability_tests"
+path = "tests/auth_observability_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "http_utils_tests"
+path = "tests/http_utils_tests.rs"
 required-features = ["server"]

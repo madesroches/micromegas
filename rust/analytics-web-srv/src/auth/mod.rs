@@ -28,7 +28,7 @@ mod cookies;
 mod handlers;
 mod state;
 
-pub use claims::{UserInfo, ValidatedUser};
+pub use claims::{AuditClaims, UserInfo, ValidatedUser, extract_audit_claims_from_token};
 pub use config::OidcClientConfig;
 pub use cookies::{clear_cookie, create_cookie};
 pub use handlers::{

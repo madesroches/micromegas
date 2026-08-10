@@ -2,6 +2,7 @@
 
 use analytics_web_srv::auth::{
     AuthApiError, AuthState, OidcClientConfig, clear_cookie, create_cookie,
+    extract_audit_claims_from_token,
 };
 use axum::response::IntoResponse;
 use axum_extra::extract::cookie::SameSite;
@@ -109,4 +110,67 @@ fn test_auth_api_error_status_codes() {
 
     let internal_resp = AuthApiError::Internal("test error".to_string()).into_response();
     assert_eq!(internal_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// ---------------------------------------------------------------------------
+// extract_audit_claims_from_token
+// ---------------------------------------------------------------------------
+
+/// Builds an unsigned JWT (`base64url(header).base64url(payload).base64url(sig)`)
+/// carrying the given JSON payload -- `extract_audit_claims_from_token` never
+/// verifies the signature, so any placeholder bytes work for the third segment.
+fn unsigned_jwt(payload_json: &str) -> String {
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s.as_bytes());
+    format!(
+        "{}.{}.{}",
+        b64(r#"{"alg":"none","typ":"JWT"}"#),
+        b64(payload_json),
+        b64("sig")
+    )
+}
+
+#[test]
+fn extract_audit_claims_from_token_reads_sub_and_email() {
+    let token = unsigned_jwt(r#"{"sub": "user-123", "email": "alice@example.com"}"#);
+
+    let claims = extract_audit_claims_from_token(&token);
+
+    assert_eq!(claims.sub, Some("user-123".to_string()));
+    assert_eq!(claims.email, Some("alice@example.com".to_string()));
+}
+
+#[test]
+fn extract_audit_claims_from_token_missing_email_yields_none() {
+    let token = unsigned_jwt(r#"{"sub": "user-123"}"#);
+
+    let claims = extract_audit_claims_from_token(&token);
+
+    assert_eq!(claims.sub, Some("user-123".to_string()));
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn extract_audit_claims_from_token_malformed_shape_yields_both_none() {
+    // Not 3 dot-separated parts.
+    let claims = extract_audit_claims_from_token("not-a-jwt");
+    assert_eq!(claims.sub, None);
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn extract_audit_claims_from_token_non_base64_payload_yields_both_none() {
+    let claims = extract_audit_claims_from_token("header.not!base64url.sig");
+    assert_eq!(claims.sub, None);
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn extract_audit_claims_from_token_non_json_payload_yields_both_none() {
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s.as_bytes());
+    let token = format!("{}.{}.{}", b64("header"), b64("not json"), b64("sig"));
+
+    let claims = extract_audit_claims_from_token(&token);
+
+    assert_eq!(claims.sub, None);
+    assert_eq!(claims.email, None);
 }

@@ -1,3 +1,4 @@
+use super::http_utils::get_client_ip;
 use super::query_audit::{QueryAuditRecord, ScanMetrics, aggregate_scan_metrics};
 use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
@@ -266,6 +267,7 @@ struct QueryAuditState {
     /// record, so a failure's server-log line and its audit record can be
     /// correlated by grepping this id.
     query_id: String,
+    client_ip: String,
     client: String,
     agent: String,
     entrypoint: String,
@@ -321,6 +323,7 @@ impl QueryAuditState {
         let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
         let record = QueryAuditRecord {
             query_id: self.query_id.clone(),
+            client_ip: self.client_ip.clone(),
             client: self.client.clone(),
             agent: self.agent.clone(),
             entrypoint: self.entrypoint.clone(),
@@ -520,6 +523,7 @@ impl FlightSqlServiceImpl {
         &self,
         ticket_stmt: TicketStatementQuery,
         metadata: &MetadataMap,
+        client_ip: &str,
     ) -> Result<Response<FlightDataStream>, Status> {
         // Minted first, before any fallible step, so it's Always available --
         // for every client-facing `Status` built by `client_error`/
@@ -589,14 +593,14 @@ impl FlightSqlServiceImpl {
         // Log query with full attribution
         if let Some(service_account_name) = &attr.service_account {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?} client_ip={client_ip}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
             );
         } else {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?}",
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type} agent={client_agent} entrypoint={client_entrypoint} notebook={client_notebook:?} cell={client_cell:?} client_ip={client_ip}",
                 metadata.get("limit"),
                 attr.user_id,
                 attr.user_email
@@ -618,6 +622,7 @@ impl FlightSqlServiceImpl {
         // only after the physical plan exists.
         let mut audit_state = QueryAuditState {
             query_id: query_id.clone(),
+            client_ip: client_ip.to_string(),
             client: client_type.to_string(),
             agent: client_agent.to_string(),
             entrypoint: client_entrypoint.to_string(),
@@ -789,9 +794,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Ticket>,
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
         let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
             .map_err(|e| status!("Could not read ticket", e))?;
-        self.execute_query(ticket_stmt, request.metadata()).await
+        self.execute_query(ticket_stmt, request.metadata(), &client_ip)
+            .await
     }
 
     #[span_fn]
@@ -952,7 +959,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ticket: TicketStatementQuery,
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        self.execute_query(ticket, request.metadata()).await
+        let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
+        self.execute_query(ticket, request.metadata(), &client_ip)
+            .await
     }
 
     async fn do_get_prepared_statement(
