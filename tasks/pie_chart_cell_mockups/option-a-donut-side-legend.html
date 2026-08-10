@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pie Chart Cell — Option A: Donut + side legend</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 32px;
+  }
+  h1 { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin: 0 0 4px; }
+  .note { font-size: 12px; color: var(--text-muted); margin: 0 0 20px; }
+
+  .cell {
+    max-width: 720px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    height: 360px;
+  }
+  .cell-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .cell-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .cell-title .unit { color: var(--text-muted); font-weight: 400; font-size: 13px; }
+  .cell-stats { display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); }
+  .cell-stats b { color: var(--text-secondary); font-weight: 500; }
+
+  .cell-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 20px 28px;
+    min-height: 0;
+  }
+
+  .chart-area {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    flex-shrink: 0;
+  }
+  .chart-area svg { width: 100%; height: 100%; }
+  .center-label {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+  .center-label .total { font-size: 22px; font-weight: 600; color: var(--text-primary); }
+  .center-label .caption { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .slice { cursor: pointer; transition: opacity 0.12s; }
+  .slice:hover { opacity: 0.85; }
+
+  .legend {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .legend-row:hover { background: rgba(255,255,255,0.04); }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .legend-label { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-value { font-size: 12px; color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .legend-pct { font-size: 11px; color: var(--text-muted); width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .tooltip {
+    position: fixed;
+    display: none;
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    z-index: 10;
+  }
+  .tooltip .t-label { color: var(--text-muted); margin-bottom: 2px; }
+  .tooltip .t-value { color: var(--text-primary); font-weight: 600; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Option A — Donut with center total + side legend</h1>
+  <p class="note">Trade-off: the empty center is put to use as a headline number (sum of all categories), at the cost of slightly less area for the ring itself. Best when the total is itself a meaningful figure (e.g. total error count).</p>
+
+  <div class="cell">
+    <div class="cell-header">
+      <div class="cell-title">error_type_distribution <span class="unit">(count)</span></div>
+      <div class="cell-stats">
+        <div>categories: <b>6</b></div>
+        <div>total: <b>2,340</b></div>
+      </div>
+    </div>
+    <div class="cell-body">
+      <div class="chart-area">
+        <svg id="donut" viewBox="0 0 220 220"></svg>
+        <div class="center-label">
+          <div class="total">2,340</div>
+          <div class="caption">total errors</div>
+        </div>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip">
+    <div class="t-label" id="tt-label"></div>
+    <div class="t-value" id="tt-value"></div>
+  </div>
+
+<script>
+  // Sample data: "share of error types" (from the issue's motivating example)
+  const data = [
+    { label: 'Timeout', value: 812, color: '#bf360c' },
+    { label: 'ValidationError', value: 634, color: '#1565c0' },
+    { label: 'NotFound', value: 401, color: '#ffb300' },
+    { label: 'InternalError', value: 289, color: '#2e7d32' },
+    { label: 'RateLimited', value: 137, color: '#5e35b1' },
+    { label: 'Other', value: 67, color: '#6b7280' },
+  ]
+
+  const total = data.reduce((s, d) => s + d.value, 0)
+  const cx = 110, cy = 110, rOuter = 100, rInner = 62
+  const surfaceGap = '#12121a' // stroke color matching panel bg — separates touching slices
+
+  function arcPoint(r, angle) {
+    return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)]
+  }
+
+  function donutPath(startAngle, endAngle) {
+    const large = (endAngle - startAngle) > Math.PI ? 1 : 0
+    const [x1, y1] = arcPoint(rOuter, startAngle)
+    const [x2, y2] = arcPoint(rOuter, endAngle)
+    const [x3, y3] = arcPoint(rInner, endAngle)
+    const [x4, y4] = arcPoint(rInner, startAngle)
+    return [
+      `M ${x1} ${y1}`,
+      `A ${rOuter} ${rOuter} 0 ${large} 1 ${x2} ${y2}`,
+      `L ${x3} ${y3}`,
+      `A ${rInner} ${rInner} 0 ${large} 0 ${x4} ${y4}`,
+      'Z',
+    ].join(' ')
+  }
+
+  const svg = document.getElementById('donut')
+  const legend = document.getElementById('legend')
+  const tooltip = document.getElementById('tooltip')
+  const ttLabel = document.getElementById('tt-label')
+  const ttValue = document.getElementById('tt-value')
+
+  let angle = -Math.PI / 2
+  data.forEach(d => {
+    const frac = d.value / total
+    const start = angle
+    const end = angle + frac * 2 * Math.PI
+    angle = end
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', donutPath(start, end))
+    path.setAttribute('fill', d.color)
+    path.setAttribute('stroke', surfaceGap)
+    path.setAttribute('stroke-width', '2')
+    path.classList.add('slice')
+    path.addEventListener('pointermove', (e) => {
+      tooltip.style.display = 'block'
+      tooltip.style.left = (e.clientX + 14) + 'px'
+      tooltip.style.top = (e.clientY - 10) + 'px'
+      ttLabel.textContent = d.label
+      ttValue.textContent = `${d.value.toLocaleString()}  (${(frac * 100).toFixed(1)}%)`
+    })
+    path.addEventListener('pointerleave', () => { tooltip.style.display = 'none' })
+    svg.appendChild(path)
+
+    // Direct label for slices >= 8% share
+    if (frac >= 0.08) {
+      const mid = (start + end) / 2
+      const [lx, ly] = arcPoint((rOuter + rInner) / 2, mid)
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      text.setAttribute('x', lx)
+      text.setAttribute('y', ly)
+      text.setAttribute('text-anchor', 'middle')
+      text.setAttribute('dominant-baseline', 'middle')
+      text.setAttribute('font-size', '11')
+      text.setAttribute('font-weight', '600')
+      text.setAttribute('fill', '#0a0a0f')
+      text.setAttribute('opacity', '0.85')
+      text.textContent = `${Math.round(frac * 100)}%`
+      svg.appendChild(text)
+    }
+
+    const row = document.createElement('div')
+    row.className = 'legend-row'
+    row.innerHTML = `
+      <div class="swatch" style="background:${d.color}"></div>
+      <span class="legend-label"></span>
+      <span class="legend-value"></span>
+      <span class="legend-pct"></span>
+    `
+    row.querySelector('.legend-label').textContent = d.label
+    row.querySelector('.legend-value').textContent = d.value.toLocaleString()
+    row.querySelector('.legend-pct').textContent = `${(frac * 100).toFixed(1)}%`
+    legend.appendChild(row)
+  })
+</script>
+</body>
+</html>

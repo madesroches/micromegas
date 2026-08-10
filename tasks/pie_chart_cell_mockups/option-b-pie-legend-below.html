@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pie Chart Cell — Option B: Full pie + legend below</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent: hsl(213 79% 42%);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 32px;
+  }
+  h1 { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin: 0 0 4px; }
+  .note { font-size: 12px; color: var(--text-muted); margin: 0 0 20px; max-width: 640px; }
+
+  .cell {
+    max-width: 560px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    height: 420px;
+  }
+  .cell-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .cell-title { font-size: 15px; font-weight: 500; color: var(--text-primary); }
+  .cell-title .unit { color: var(--text-muted); font-weight: 400; font-size: 13px; }
+  .toggle {
+    display: flex;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .toggle button {
+    font-size: 11px;
+    padding: 3px 10px;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-left: 1px solid var(--border-color);
+    cursor: pointer;
+  }
+  .toggle button:first-child { border-left: none; }
+  .toggle button.active { background: var(--accent); color: white; }
+
+  .cell-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    min-height: 0;
+    gap: 12px;
+  }
+
+  .chart-area { position: relative; width: 210px; height: 210px; flex-shrink: 0; }
+  .chart-area svg { width: 100%; height: 100%; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px 16px;
+    max-width: 480px;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .legend-row:hover { background: rgba(255,255,255,0.04); }
+  .swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .legend-label { color: var(--text-secondary); }
+  .legend-value { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+  .tooltip {
+    position: fixed;
+    display: none;
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    z-index: 10;
+  }
+  .tooltip .t-label { color: var(--text-muted); margin-bottom: 2px; }
+  .tooltip .t-value { color: var(--text-primary); font-weight: 600; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Option B — Full pie with legend below + "Other" grouping</h1>
+  <p class="note">Trade-off: no room for a center total, but the full disc reads as a cleaner "part-to-whole" shape and the legend wraps below rather than competing for horizontal space — better for narrower cells. Demonstrates capping to the top N categories and folding the long tail into a single "Other" slice (source query returned 9 categories; the 6th+ are grouped).</p>
+
+  <div class="cell">
+    <div class="cell-header">
+      <div class="cell-title">events_by_category <span class="unit">(share)</span></div>
+      <div class="toggle">
+        <button class="active">Pie</button>
+        <button>Table</button>
+      </div>
+    </div>
+    <div class="cell-body">
+      <div class="chart-area">
+        <svg id="pie" viewBox="0 0 210 210"></svg>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip">
+    <div class="t-label" id="tt-label"></div>
+    <div class="t-value" id="tt-value"></div>
+  </div>
+
+<script>
+  // Sample data: 9 raw categories, capped to top 5 + "Other" (6 slices max)
+  const raw = [
+    { label: 'page_view', value: 5210 },
+    { label: 'click', value: 3877 },
+    { label: 'api_call', value: 2140 },
+    { label: 'form_submit', value: 1325 },
+    { label: 'search', value: 940 },
+    { label: 'scroll', value: 410 },
+    { label: 'share', value: 210 },
+    { label: 'export', value: 150 },
+    { label: 'feedback', value: 88 },
+  ]
+
+  const CAP = 5
+  const PALETTE = ['#bf360c', '#1565c0', '#ffb300', '#2e7d32', '#5e35b1', '#6b7280']
+  const sorted = [...raw].sort((a, b) => b.value - a.value)
+  const topCategories = sorted.slice(0, CAP)
+  const rest = sorted.slice(CAP)
+  const otherValue = rest.reduce((s, d) => s + d.value, 0)
+  const data = [...topCategories, { label: 'Other', value: otherValue, isOther: true }]
+    .map((d, i) => ({ ...d, color: PALETTE[i] }))
+
+  const total = data.reduce((s, d) => s + d.value, 0)
+  const cx = 105, cy = 105, r = 95
+  const surfaceGap = '#12121a'
+
+  function arcPoint(radius, angle) {
+    return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)]
+  }
+
+  function piePath(startAngle, endAngle) {
+    const large = (endAngle - startAngle) > Math.PI ? 1 : 0
+    const [x1, y1] = arcPoint(r, startAngle)
+    const [x2, y2] = arcPoint(r, endAngle)
+    return [
+      `M ${cx} ${cy}`,
+      `L ${x1} ${y1}`,
+      `A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`,
+      'Z',
+    ].join(' ')
+  }
+
+  const svg = document.getElementById('pie')
+  const legend = document.getElementById('legend')
+  const tooltip = document.getElementById('tooltip')
+  const ttLabel = document.getElementById('tt-label')
+  const ttValue = document.getElementById('tt-value')
+
+  let angle = -Math.PI / 2
+  data.forEach(d => {
+    const frac = d.value / total
+    const start = angle
+    const end = angle + frac * 2 * Math.PI
+    angle = end
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', piePath(start, end))
+    path.setAttribute('fill', d.color)
+    path.setAttribute('stroke', surfaceGap)
+    path.setAttribute('stroke-width', '2')
+    path.style.cursor = 'pointer'
+    path.addEventListener('pointermove', (e) => {
+      tooltip.style.display = 'block'
+      tooltip.style.left = (e.clientX + 14) + 'px'
+      tooltip.style.top = (e.clientY - 10) + 'px'
+      ttLabel.textContent = d.isOther ? `${d.label} (${rest.length} categories)` : d.label
+      ttValue.textContent = `${d.value.toLocaleString()}  (${(frac * 100).toFixed(1)}%)`
+    })
+    path.addEventListener('pointerleave', () => { tooltip.style.display = 'none' })
+    path.addEventListener('mouseenter', () => path.setAttribute('opacity', '0.85'))
+    path.addEventListener('mouseleave', () => path.setAttribute('opacity', '1'))
+    svg.appendChild(path)
+
+    if (frac >= 0.08) {
+      const mid = (start + end) / 2
+      const [lx, ly] = arcPoint(r * 0.65, mid)
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      text.setAttribute('x', lx)
+      text.setAttribute('y', ly)
+      text.setAttribute('text-anchor', 'middle')
+      text.setAttribute('dominant-baseline', 'middle')
+      text.setAttribute('font-size', '11')
+      text.setAttribute('font-weight', '600')
+      text.setAttribute('fill', '#0a0a0f')
+      text.setAttribute('opacity', '0.85')
+      text.textContent = `${Math.round(frac * 100)}%`
+      svg.appendChild(text)
+    }
+
+    const row = document.createElement('div')
+    row.className = 'legend-row'
+    row.innerHTML = `
+      <div class="swatch" style="background:${d.color}"></div>
+      <span class="legend-label"></span>
+      <span class="legend-value"></span>
+    `
+    row.querySelector('.legend-label').textContent = d.label
+    row.querySelector('.legend-value').textContent = `${(frac * 100).toFixed(1)}%`
+    legend.appendChild(row)
+  })
+</script>
+</body>
+</html>
