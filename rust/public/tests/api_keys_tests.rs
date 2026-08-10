@@ -7,7 +7,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
-use micromegas::servers::api_keys::{ON_BEHALF_OF_HEADER, api_keys_router};
+use micromegas::servers::api_keys::api_keys_router;
 use micromegas_auth::db_api_key::DbApiKeyConfig;
 use micromegas_auth::types::{AuthContext, AuthType};
 use serde_json::Value;
@@ -106,25 +106,6 @@ fn delete_request(uri: &str) -> Request<Body> {
         .expect("build request")
 }
 
-fn post_request_with_on_behalf_of(uri: &str, body: &str, on_behalf_of: &str) -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(CONTENT_TYPE, "application/json")
-        .header(ON_BEHALF_OF_HEADER, on_behalf_of)
-        .body(Body::from(body.to_string()))
-        .expect("build request")
-}
-
-fn delete_request_with_on_behalf_of(uri: &str, on_behalf_of: &str) -> Request<Body> {
-    Request::builder()
-        .method("DELETE")
-        .uri(uri)
-        .header(ON_BEHALF_OF_HEADER, on_behalf_of)
-        .body(Body::empty())
-        .expect("build request")
-}
-
 // ---------------------------------------------------------------------------
 // The gate: 403 for a non-OIDC (API key) context and for a non-admin OIDC
 // context, on every route. Both directions, since these are the whole gate.
@@ -187,60 +168,6 @@ async fn delete_403_for_non_admin_oidc_context() {
         router,
         non_admin_oidc_ctx(),
         delete_request(&format!("/auth/api_keys/{}", uuid::Uuid::new_v4())),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-/// `ON_BEHALF_OF_HEADER` is only ever *read*, never treated as its own
-/// authentication signal — a non-admin OIDC caller that sets it is still
-/// rejected before `actor()` (and therefore the header) is ever consulted.
-/// This is what stops an arbitrary caller from spoofing an identity by
-/// simply setting the header themselves.
-#[tokio::test]
-async fn mint_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config());
-    let response = call(
-        router,
-        non_admin_oidc_ctx(),
-        post_request_with_on_behalf_of(
-            "/auth/api_keys",
-            r#"{"name": "x"}"#,
-            "someone-else@example.com",
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn delete_403_for_non_admin_oidc_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config());
-    let response = call(
-        router,
-        non_admin_oidc_ctx(),
-        delete_request_with_on_behalf_of(
-            &format!("/auth/api_keys/{}", uuid::Uuid::new_v4()),
-            "someone-else@example.com",
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-/// Same for a non-OIDC (API key) caller: even an `is_admin`-adjacent-looking
-/// header is irrelevant once `auth_type != Oidc` fails the gate first.
-#[tokio::test]
-async fn mint_403_for_api_key_context_even_with_on_behalf_of_header() {
-    let router = api_keys_router(lazy_pool(), test_config());
-    let response = call(
-        router,
-        api_key_ctx(),
-        post_request_with_on_behalf_of(
-            "/auth/api_keys",
-            r#"{"name": "x"}"#,
-            "someone-else@example.com",
-        ),
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -495,117 +422,6 @@ async fn live_mint_authenticates_and_list_hides_hash() {
     assert!(entry.get("key").is_none());
 
     // Clean up.
-    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
-        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
-        .execute(&pool)
-        .await
-        .expect("cleanup");
-}
-
-/// The proxy calls in under its own service-credential identity
-/// (`admin_oidc_ctx()` here stands in for that), so without honoring
-/// `ON_BEHALF_OF_HEADER`, `created_by` would be `admin_oidc_ctx()`'s own
-/// `admin@example.com` for every proxied mint — collapsing the audit trail
-/// onto one constant identity. Asserts `created_by` is the header's value
-/// instead, once the caller has independently passed `require_key_admin`.
-#[ignore]
-#[tokio::test]
-async fn live_mint_with_on_behalf_of_header_attributes_created_by_to_header_value() {
-    let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config());
-
-    let name = format!("api-keys-test-obo-mint-{}", uuid::Uuid::new_v4());
-    let operator_email = format!("operator-{}@example.com", uuid::Uuid::new_v4());
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        post_request_with_on_behalf_of(
-            "/auth/api_keys",
-            &format!(r#"{{"name": "{name}"}}"#),
-            &operator_email,
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
-
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        get_request("/auth/api_keys"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let list = json_body(response).await;
-    let entry = list
-        .as_array()
-        .expect("array")
-        .iter()
-        .find(|e| e["key_id"].as_str() == Some(key_id.as_str()))
-        .expect("minted key present in listing")
-        .clone();
-    assert_eq!(
-        entry["created_by"].as_str(),
-        Some(operator_email.as_str()),
-        "created_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity"
-    );
-
-    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
-        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
-        .execute(&pool)
-        .await
-        .expect("cleanup");
-}
-
-/// Same attribution fix, for `revoked_by` via `revoke_key`.
-#[ignore]
-#[tokio::test]
-async fn live_revoke_with_on_behalf_of_header_attributes_revoked_by_to_header_value() {
-    let pool = live_pool().await;
-    let router = api_keys_router(pool.clone(), test_config());
-
-    let name = format!("api-keys-test-obo-revoke-{}", uuid::Uuid::new_v4());
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        post_request("/auth/api_keys", &format!(r#"{{"name": "{name}"}}"#)),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
-
-    let operator_email = format!("operator-{}@example.com", uuid::Uuid::new_v4());
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        delete_request_with_on_behalf_of(&format!("/auth/api_keys/{key_id}"), &operator_email),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = call(
-        router.clone(),
-        admin_oidc_ctx(),
-        get_request("/auth/api_keys"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let list = json_body(response).await;
-    let entry = list
-        .as_array()
-        .expect("array")
-        .iter()
-        .find(|e| e["key_id"].as_str() == Some(key_id.as_str()))
-        .expect("revoked key present in listing")
-        .clone();
-    assert_eq!(
-        entry["revoked_by"].as_str(),
-        Some(operator_email.as_str()),
-        "revoked_by must reflect ON_BEHALF_OF_HEADER, not admin_oidc_ctx()'s own identity"
-    );
-
     sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
         .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
         .execute(&pool)

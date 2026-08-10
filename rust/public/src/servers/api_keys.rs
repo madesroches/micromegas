@@ -11,7 +11,7 @@
 //! for the analytics-key HTTP-route reference.
 
 use axum::extract::{Extension, Path, Query};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, post};
 use axum::{Json, Router};
@@ -28,21 +28,6 @@ use uuid::Uuid;
 const MAX_NAME_BYTES: usize = 255;
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
-
-/// Header `analytics-web-srv`'s ingestion-key proxy (`ingestion_keys_proxy.rs`)
-/// sets to carry the identity of the human admin it is acting on behalf of.
-///
-/// Every proxied call reaches this module authenticated as the proxy's own
-/// `MICROMEGAS_INGESTION_PROXY_OIDC_*` service credential, not the operator —
-/// without this header, `actor()` would attribute every mint/revoke performed
-/// through the web UI to that one constant service-account identity instead of
-/// the admin who actually clicked the button, destroying the audit trail.
-///
-/// Only consulted by `actor()` *after* `require_key_admin` has already passed
-/// for the request's own `AuthContext` (OIDC + `is_admin`) — an arbitrary
-/// caller cannot use this header to spoof an identity, since it is ignored
-/// for any non-admin or non-OIDC caller.
-pub const ON_BEHALF_OF_HEADER: &str = "x-micromegas-on-behalf-of";
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -109,35 +94,8 @@ fn require_key_admin(ctx: &AuthContext) -> Result<(), ApiKeyError> {
     Ok(())
 }
 
-/// Resolves the identity to attribute a mutation to.
-///
-/// Ordinarily the authenticated caller's own email/subject — but once the
-/// caller has already passed `require_key_admin` (an OIDC-authenticated
-/// admin), an `on_behalf_of` value (from [`ON_BEHALF_OF_HEADER`]) is
-/// preferred instead when present. This is what lets `analytics-web-srv`'s
-/// ingestion-key proxy — which calls in under its own service-credential
-/// identity — attribute `created_by`/`revoked_by` to the human admin who
-/// actually clicked mint/revoke in the browser.
-///
-/// Gating on `require_key_admin` having already passed is what keeps a
-/// non-admin (or non-OIDC) caller from spoofing an arbitrary identity by
-/// simply setting this header itself: the header is only ever *read* here,
-/// never treated as its own authentication signal.
-fn actor(ctx: &AuthContext, on_behalf_of: Option<&str>) -> String {
-    if ctx.auth_type == AuthType::Oidc
-        && ctx.is_admin
-        && let Some(v) = on_behalf_of.map(str::trim).filter(|v| !v.is_empty())
-    {
-        return v.to_string();
-    }
+fn actor(ctx: &AuthContext) -> String {
     ctx.email.clone().unwrap_or_else(|| ctx.subject.clone())
-}
-
-/// Reads [`ON_BEHALF_OF_HEADER`] out of the request, if present.
-fn on_behalf_of_header(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(ON_BEHALF_OF_HEADER)
-        .and_then(|v| v.to_str().ok())
 }
 
 #[derive(Deserialize)]
@@ -159,7 +117,6 @@ struct MintResponse {
 async fn mint_key(
     Extension(ctx): Extension<AuthContext>,
     Extension(pool): Extension<PgPool>,
-    headers: HeaderMap,
     Json(body): Json<MintRequest>,
 ) -> Result<(StatusCode, Json<MintResponse>), ApiKeyError> {
     require_key_admin(&ctx)?;
@@ -179,7 +136,7 @@ async fn mint_key(
     let hash = hash_key(&key);
     let key_id = Uuid::new_v4();
     let created_at = Utc::now();
-    let created_by = actor(&ctx, on_behalf_of_header(&headers));
+    let created_by = actor(&ctx);
 
     // Table name is a literal, never derived from caller input: no route in this
     // module ever writes to `analytics_api_keys` (see the module doc comment).
@@ -296,12 +253,11 @@ async fn revoke_key(
     Extension(ctx): Extension<AuthContext>,
     Extension(pool): Extension<PgPool>,
     Extension(config): Extension<DbApiKeyConfig>,
-    headers: HeaderMap,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<RevokeResponse>, ApiKeyError> {
     require_key_admin(&ctx)?;
 
-    let revoked_by = actor(&ctx, on_behalf_of_header(&headers));
+    let revoked_by = actor(&ctx);
     let row = sqlx::query(
         "UPDATE ingestion_api_keys
          SET revoked_at = COALESCE(revoked_at, now()),
@@ -393,10 +349,7 @@ async fn import_key(
     let hash = hash_key(&body.key);
     let key_id = Uuid::new_v4();
     let created_at = Utc::now();
-    // Import is never proxied (see the module doc comment), so there is no
-    // on-behalf-of identity to prefer here — always the importing caller's
-    // own OIDC identity, per this function's doc comment above.
-    let created_by = actor(&ctx, None);
+    let created_by = actor(&ctx);
 
     // Table name is a literal, never derived from caller input — same rule as
     // mint_key.
