@@ -382,7 +382,7 @@ export function PieChartCell({
           )}
         </div>
 
-        <div className="flex-1 min-w-0 h-full overflow-y-auto space-y-1.5">
+        <div className="min-w-0 h-full overflow-y-auto space-y-1.5">
           {geometry.map((g, i) => (
             <div key={i} className="flex items-center gap-2 px-1.5 py-0.5 rounded-sm">
               <div className="w-2.5 h-2.5 rounded-xs shrink-0" style={{ background: g.slice.color }} />
