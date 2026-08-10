@@ -164,26 +164,46 @@ observed to `X-Forwarded-For` — it does not overwrite (default
 ### 1. Wrap `/auth/*` in a query-string-redacting observability middleware
 
 **Redaction rule**: `/auth/callback` carries the OAuth authorization `code` and the signed
-`state` (which embeds the PKCE `code_verifier`, see Current State §3/`oauth_state.rs`) in its
-query string. `observability_middleware` logs `parts.uri` verbatim, and `http::Uri`'s `Display`
-includes the query string, so reusing it unmodified on `/auth/*` would put a live auth code and
-PKCE verifier into `log_entries`. Instead of the plain `observability_middleware`, `/auth/*` gets
-its own copy that logs only `uri.path()` (dropping the query string entirely — no route under
-`/auth/*` needs its query params for correlation; `client_ip`/method/status/duration are enough):
+`state` (which embeds the PKCE `code_verifier` — `OAuthState::pkce_verifier`,
+`rust/auth/src/oauth_state.rs:46-54`) in its query string. `observability_middleware` logs
+`parts.uri` verbatim, and `http::Uri`'s `Display` includes the query string, so reusing it
+unmodified on `/auth/*` would put a live auth code and PKCE verifier into `log_entries`. Instead
+of the plain `observability_middleware`, `/auth/*` gets its own copy that logs only `uri.path()`,
+dropping the query string entirely for every route under the prefix — for safety, not because no
+route has a useful query param: `/auth/login`'s `return_url`
+(`rust/analytics-web-srv/src/auth/handlers.rs:31-34`) isn't a secret and would be useful for an
+open-redirect/phishing-abuse investigation, but it's dropped too rather than special-casing one
+route out of the blanket rule. Only `/auth/callback`'s `code`/`state` are the actual secrets this
+rule exists to protect:
+
+`observability_middleware` itself (`axum_utils.rs:18-36`) is refactored into a shared private
+helper parameterized by whether to log the query string, so the timing/metric/logging body exists
+in exactly one place:
 
 ```rust
-/// Like `observability_middleware`, but logs only the request path, never the query string --
-/// `/auth/callback`'s query carries the OAuth authorization code and the PKCE verifier
-/// (embedded in the signed `state` param) and must never be written to the telemetry log.
-/// `client_ip` here reuses the shared `get_client_ip` (rightmost `X-Forwarded-For` entry, then
-/// `X-Real-IP`, then the socket address), same as every other route in this codebase -- see
-/// Design 3 and Trade-offs.
-pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
+/// Shared body for `observability_middleware` and `auth_observability_middleware`. Logs only
+/// the request path (never the query string) when `log_query_string` is `false` -- used by
+/// `auth_observability_middleware` because `/auth/callback`'s query carries the OAuth
+/// authorization code and the PKCE verifier (embedded in the signed `state` param) and must
+/// never be written to the telemetry log. The logged field is always named `uri=`, not `path=`
+/// -- even when the value is path-only -- so queries that grep `uri=` to reconstruct HTTP traffic
+/// across the whole `log_entries` stream still match `/auth/*` lines. `client_ip` reuses the
+/// shared `get_client_ip` (rightmost `X-Forwarded-For` entry, then `X-Real-IP`, then the socket
+/// address), same as every other route in this codebase -- see Design 3 and Trade-offs.
+async fn observability_middleware_impl(
+    request: Request,
+    next: Next,
+    log_query_string: bool,
+) -> Response {
     let (parts, body) = request.into_parts();
-    let path = parts.uri.path().to_string();
+    let uri = if log_query_string {
+        parts.uri.to_string()
+    } else {
+        parts.uri.path().to_string()
+    };
     let client_ip = get_client_ip(&parts.headers, &parts.extensions);
     info!(
-        "request method={} path={path} client_ip={client_ip}",
+        "request method={} uri={uri} client_ip={client_ip}",
         parts.method
     );
     let begin_ticks = now();
@@ -192,15 +212,26 @@ pub async fn auth_observability_middleware(request: Request, next: Next) -> Resp
     let duration = end_ticks - begin_ticks;
     imetric!("request_duration", "ticks", duration as u64);
     info!(
-        "response status={} path={path} client_ip={client_ip}",
+        "response status={} uri={uri} client_ip={client_ip}",
         response.status()
     );
     response
 }
+
+/// Logs http requests, their duration and status code, including the query string.
+pub async fn observability_middleware(request: Request, next: Next) -> Response {
+    observability_middleware_impl(request, next, true).await
+}
+
+/// Like `observability_middleware`, but never logs the query string -- see
+/// `observability_middleware_impl`'s doc comment for why.
+pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
+    observability_middleware_impl(request, next, false).await
+}
 ```
 
-This lives next to `observability_middleware` in `rust/public/src/servers/axum_utils.rs` (both
-are generic, reusable across servers, not `analytics-web-srv`-specific). `build_auth_routes`
+Both live in `rust/public/src/servers/axum_utils.rs` (both are generic, reusable across servers,
+not `analytics-web-srv`-specific). `build_auth_routes`
 (`web_server.rs:141-170`) gains one `.layer(middleware::from_fn(auth_observability_middleware))`
 call on each branch's router, and becomes `pub` — following the precedent `build_protected_routes`
 already documents at `web_server.rs:280-290` ("so integration tests (`tests/routing_tests.rs`) can
@@ -335,10 +366,9 @@ pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -
     // caller-supplied and spoofable.
     if let Some(forwarded_for) = headers.get_all("x-forwarded-for").iter().last()
         && let Ok(value) = forwarded_for.to_str()
-        && let Some(client_ip) = value.rsplit(',').next()
-        && !client_ip.trim().is_empty()
+        && let Some(client_ip) = value.rsplit(',').map(str::trim).find(|s| !s.is_empty())
     {
-        return client_ip.trim().to_string();
+        return client_ip.to_string();
     }
 
     // ... X-Real-IP, ConnectInfo<SocketAddr>, bare SocketAddr and "unknown" branches unchanged
@@ -347,11 +377,13 @@ pub fn get_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -
 
 Three details in that first branch: `get_all("x-forwarded-for").iter().last()` selects the last
 header field line (`headers.get` would silently return only the *first* line, letting a caller who
-sends its own separate `X-Forwarded-For` line win outright); `rsplit(',').next()` then takes the
-rightmost comma-separated element *of that last line* (mirroring the existing `split(',').next()`
-for the leftmost); and the added `!client_ip.trim().is_empty()` guard makes a present-but-empty
-`X-Forwarded-For` fall through to `X-Real-IP`/the socket address instead of returning `""` as it
-does today.
+sends its own separate `X-Forwarded-For` line win outright); `rsplit(',').map(str::trim).find(|s|
+!s.is_empty())` then takes the rightmost *non-empty* comma-separated element *of that last line*
+(mirroring the existing `split(',').next()` for the leftmost, but skipping empty entries instead
+of taking the literal last one); and that skip-empty behavior is exactly what makes a
+trailing-comma value like `"203.0.113.1, "` still resolve to `203.0.113.1` instead of falling
+through to `X-Real-IP`/the socket address — a present-but-genuinely-empty `X-Forwarded-For`
+(`""`, or `","`) still falls through, since `find` then yields `None`.
 
 **Call sites** (`flight_sql_service_impl.rs`), resolved once per RPC before the request is
 consumed, then threaded into `execute_query`. Getting the two arguments out of a
@@ -437,8 +469,11 @@ adds them.
 ## Implementation Steps
 
 **Phase 1 — `analytics-web-srv`**
-1. `rust/public/src/servers/axum_utils.rs`: add `auth_observability_middleware` (path-only
-   logging, no query string), per Design §1. `web_server.rs::build_auth_routes` (`:141-170`): add
+1. `rust/public/src/servers/axum_utils.rs`: factor `observability_middleware`'s body into a
+   private `observability_middleware_impl(request, next, log_query_string: bool)` helper and add
+   `auth_observability_middleware` as a thin wrapper calling it with `log_query_string: false`
+   (path-only logging, no query string), per Design §1. `web_server.rs::build_auth_routes`
+   (`:141-170`): add
    `.layer(middleware::from_fn(auth_observability_middleware))` to both branches, and make the
    function `pub`, matching the `build_protected_routes` precedent (`:280-290`) so step 5 can test
    it directly.
@@ -482,10 +517,11 @@ adds them.
    `build_auth_routes` (see step 5 for that check).
 
 **Phase 3 — `flight-sql-srv`**
-7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost** entry of the
-   **last** `X-Forwarded-For` header field line (`headers.get_all(...).iter().last()` +
-   `rsplit` + non-empty guard — not `headers.get(...)`, which would return only the first field
-   line and let a caller-sent separate line win) and rewrite its doc comment (`:3-10`, and the
+7. `http_utils.rs`: change `get_client_ip` (`:11-40`) to select the **rightmost non-empty** entry
+   of the **last** `X-Forwarded-For` header field line (`headers.get_all(...).iter().last()` +
+   `rsplit(',').map(str::trim).find(|s| !s.is_empty())` — not `headers.get(...)`, which would
+   return only the first field line and let a caller-sent separate line win) and rewrite its doc
+   comment (`:3-10`, and the
    inline comment at `:12-13`), which currently claims the leftmost entry is the original client.
    Per Design §3. This is a behavior change for all three existing callers — see Design §3's
    blast-radius note; no signature or type changes, so no caller edits are needed.
@@ -510,8 +546,10 @@ adds them.
     would get wrong (it would return the caller's line outright); (e) no `X-Forwarded-For` but an
     `X-Real-IP` header returns the `X-Real-IP` value; (f) neither header but a
     `ConnectInfo<SocketAddr>` / bare `SocketAddr` extension returns its IP (string, no port); (g)
-    no header and no extension returns `"unknown"`. Optionally (h) a present-but-empty
-    `X-Forwarded-For` falls through to the next source rather than returning `""`. The test builds
+    no header and no extension returns `"unknown"`; (h) a present-but-empty `X-Forwarded-For`
+    (`""` or `","`) falls through to the next source rather than returning `""`; (i) a
+    **trailing-comma** `X-Forwarded-For` (`"203.0.113.1, "`) returns `203.0.113.1` — the last
+    non-empty entry, not the empty one after the trailing comma. The test builds
     `http::HeaderMap`/`http::Extensions` (and `axum::extract::ConnectInfo`) directly — both crates
     are already reachable from this package's tests under the `server` feature, as
     `http_gateway_tests.rs:1` shows for `http`.
@@ -551,6 +589,12 @@ adds them.
     are in fact only now accurate for traffic that goes through the ALB.
     `mkdocs/docs/gateway/configuration.md:51` and
     `mkdocs/docs/gateway/index.md:128` ("Real client IP (prevents spoofing)") need no change.
+    Also update the "Corresponding FlightSQL logs" sample at `:270`
+    (`INFO execute_query sql="SELECT * FROM processes" user=alice@example.com
+    email=alice@example.com client=web+gateway`) to add `client_ip=<gateway address>`, plus a
+    one-line note that this is the gateway's own address, not the original HTTP caller's (the
+    proxy-hop caveat from Trade-offs/step 13, made concrete at exactly the spot the doc shows a
+    gateway-proxied query's FlightSQL log line).
 15. `CHANGELOG.md`: `## Unreleased` → **Analytics:** entry for the `client_ip` addition
     (**minor breaking change**: `QueryAuditRecord` is published API and gains a field, matching
     the convention every prior addition to this struct used — e.g. #1436, #1437, #1406); **Auth:**
@@ -601,6 +645,20 @@ adds them.
   issue doesn't mention and that carries its own risk (e.g. whether `cookie_auth_middleware`'s
   own `warn!("[auth_failure] ...")` lines are expected to fire before or after the generic
   request/response log). Left as a separate, pre-existing gap — worth its own issue if wanted.
+- **The analogous gRPC-side gap is left alone too: a query rejected by user-attribution
+  validation gets no audit record and no start-of-query log line, so it never gets the new
+  `client_ip` either.** In `flight_sql_service_impl.rs`, `execute_query` calls
+  `validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?` (`:569`) before the
+  start-of-query `info!` lines (`:591`, `:598`) and before `QueryAuditState` is constructed
+  (`:619`), so an attribution failure returns early with neither. The only trace such a rejected
+  call leaves is `LogUriService`'s generic per-RPC `uri=... client_ip=...` line
+  (`log_uri_service.rs`) — it sits outside `AuthService` in the layer stack built in
+  `flight_sql_server.rs:251-258` (`ServiceBuilder` calls the first-added layer first, and
+  `LogUriService` is added before `AuthService`), so it fires unconditionally before either
+  `AuthService` or `execute_query`'s attribution check can reject the call — but that line carries
+  no `query_id`, SQL, or user attribution. Moving the attribution check would change what's
+  logged for a class of requests the issue doesn't ask about, so it's left as a documentation-only
+  note here rather than folded into this plan's scope.
 - **One trusted proxy hop is assumed; a server-side proxy hop still hides the end user.**
   Rightmost-`X-Forwarded-For` is exactly right for one appending proxy in front of the service
   (the ALB) and nothing else. Two consequences worth stating plainly:
@@ -659,7 +717,9 @@ adds them.
 - `mkdocs/docs/query-guide/query-audit-log.md` — `## Fields` table (`client_ip` row) and a Notes
   bullet on the proxy-hop caveat (HTTP gateway *and* `analytics-web-srv`'s `/api/query-stream`).
 - `mkdocs/docs/gateway/index.md` — "Client IP Security" (`:337-343`): the `X-Forwarded-For`
-  bullet and its lead-in, restated for rightmost-entry semantics.
+  bullet and its lead-in, restated for rightmost-entry semantics; also the "Corresponding
+  FlightSQL logs" sample (`:270`), adding `client_ip=<gateway address>` and a note that it's the
+  gateway's address, not the original caller's.
 - `CHANGELOG.md` — `## Unreleased` entries under **Analytics:** and **Auth:**, including the
   behavior change to every existing `client_ip` logger.
 
@@ -680,8 +740,9 @@ adds them.
    `python3 local_test_env/ai_scripts/start_services.py`):
    - Start services, hit `GET /auth/login` (or trigger any `/auth/*` request) and `tail -f
      /tmp/analytics.log` (or the monolith log), confirming a `request method=GET
-     path=/auth/login client_ip=...` / `response status=... path=... client_ip=...` pair now
-     appears — it did not before this change.
+     uri=/auth/login client_ip=...` / `response status=... uri=... client_ip=...` pair now
+     appears — it did not before this change. (The field is still `uri=`, just path-only for
+     `/auth/*`; a `?code=...&state=...` query string on `/auth/callback` must never appear.)
    - Complete a real OIDC login flow and confirm the `[auth_success] event=login sub=... email=...
      issuer=...` line now includes a real email address, not just `sub`. Trigger a token refresh
      (or wait for one) and confirm `[auth_success] event=token_refresh sub=... email=...` likewise.
