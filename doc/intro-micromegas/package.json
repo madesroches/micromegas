@@ -23,7 +23,7 @@
     "vite": "^7.3.5"
   },
   "resolutions": {
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "esbuild": "0.28.1",
     "lodash-es": "^4.17.23",
     "postcss": "^8.5.18",
