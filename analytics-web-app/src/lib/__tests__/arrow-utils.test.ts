@@ -113,6 +113,7 @@ vi.mock('apache-arrow', () => {
 import {
   extractChartData,
   extractMultiSeriesChartData,
+  extractPieData,
   validateChartColumns,
   detectXAxisMode,
   isTimeType,
@@ -1131,5 +1132,145 @@ describe('resolveChartColumns', () => {
     expect(resolved.yColumnName).toBe('y')
     expect(resolved.colorColumnName).toBe('color')
     expect(resolved.colorColumnKind).toBe('integer')
+  })
+})
+
+describe('extractPieData', () => {
+  it('should extract category/value slices in SQL order', () => {
+    const table = createMockTable(
+      [
+        { name: 'level', type: createUtf8Type() },
+        { name: 'count', type: createIntType() },
+      ],
+      [
+        { level: 'ERROR', count: 42 },
+        { level: 'WARN', count: 17 },
+        { level: 'INFO', count: 100 },
+      ]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices).toEqual([
+        { label: 'ERROR', value: 42 },
+        { label: 'WARN', value: 17 },
+        { label: 'INFO', value: 100 },
+      ])
+    }
+  })
+
+  it('should return an error for the wrong column count', () => {
+    const table = createMockTable([{ name: 'label', type: createUtf8Type() }], [])
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain('X and Y columns')
+    }
+  })
+
+  it('should return an error for a non-numeric value column', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createUtf8Type() },
+      ],
+      [{ label: 'A', value: 'not a number' }]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toMatch(/numeric/)
+    }
+  })
+
+  it('should decode an integer color column into slice.color', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createIntType() },
+        { name: 'color', type: createIntType() },
+      ],
+      [
+        { label: 'A', value: 10, color: 0xff0000ff },
+        { label: 'B', value: 20, color: 0x00ff00ff },
+      ]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices[0].color).toBeDefined()
+      expect(result.slices[1].color).toBeDefined()
+    }
+  })
+
+  it('should decode a string color column into slice.color', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createIntType() },
+        { name: 'color', type: createUtf8Type() },
+      ],
+      [{ label: 'A', value: 10, color: '#ff0000' }]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices[0].color).toBe('#ff0000ff')
+    }
+  })
+
+  it('should decode a binary color column into slice.color', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createIntType() },
+        { name: 'color', type: createBinaryType() },
+      ],
+      [{ label: 'A', value: 10, color: new Uint8Array([0xff, 0x00, 0x00, 0xff]) }]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices[0].color).toBe('#ff0000ff')
+    }
+  })
+
+  it('should drop rows with null value, null label, or negative value', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createIntType() },
+      ],
+      [
+        { label: 'A', value: 10 },
+        { label: null, value: 5 },
+        { label: 'B', value: null },
+        { label: 'C', value: -3 },
+        { label: 'D', value: 7 },
+      ]
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices).toEqual([
+        { label: 'A', value: 10 },
+        { label: 'D', value: 7 },
+      ])
+    }
+  })
+
+  it('should return ok with an empty slices array for an empty table', () => {
+    const table = createMockTable(
+      [
+        { name: 'label', type: createUtf8Type() },
+        { name: 'value', type: createIntType() },
+      ],
+      []
+    )
+    const result = extractPieData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.slices).toEqual([])
+    }
   })
 })

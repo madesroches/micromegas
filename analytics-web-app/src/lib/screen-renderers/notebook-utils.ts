@@ -172,6 +172,7 @@ ORDER BY name, begin`,
 FROM process_spans('$process_id', 'both')
 ORDER BY lane, begin`,
   map: `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z`,
+  piechart: `SELECT level, count(*) AS count FROM log_entries GROUP BY level ORDER BY count DESC`,
 }
 
 /**
@@ -348,6 +349,6 @@ export function shouldShowTimeRange(cell: CellConfig): boolean {
     case 'variable':
       return cell.variableType === 'combobox' || cell.variableType === 'expression'
     default:
-      return true // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image
+      return true // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart
   }
 }

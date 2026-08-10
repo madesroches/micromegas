@@ -183,6 +183,7 @@ import { transposedTableMetadata } from './cells/TransposedTableCell'
 import { flamegraphMetadata } from './cells/FlameGraphCell'
 import { mapMetadata } from './cells/MapCell'
 import { imageMetadata } from './cells/ImageCell'
+import { pieChartMetadata } from './cells/PieChartCell'
 
 /**
  * Registry of all cell type metadata.
@@ -203,6 +204,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   flamegraph: flamegraphMetadata,
   map: mapMetadata,
   image: imageMetadata,
+  piechart: pieChartMetadata,
 }
 
 /**
