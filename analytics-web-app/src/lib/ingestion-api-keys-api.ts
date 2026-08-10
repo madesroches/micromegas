@@ -2,14 +2,19 @@
 // proxy (`/api/ingestion-api-keys`), which forwards to ingestion's own
 // `/auth/api_keys` routes under this service's privileged service credential.
 // The browser can't call ingestion directly: the `id_token` cookie is
-// `http_only`, so there's no bearer token for browser JS to attach. Modeled
-// on `data-sources-api.ts`'s `handleResponse`/error-class shape.
+// `http_only`, so there's no bearer token for browser JS to attach. Thin
+// wrapper around the shared factory in `api-keys-shared.ts` — see that file
+// for the common list/mint/revoke/error-handling logic.
 //
 // No `importKey` here: the import route exists for the `micromegas-import-keys`
 // CLI tool only, which calls ingestion directly with the operator's own
 // bearer token — it doesn't go through this proxy at all.
 
-import { authenticatedFetch, getApiBase } from './api'
+import {
+  createApiKeysApi,
+  ApiKeyListEntry,
+  MintApiKeyResponse,
+} from './api-keys-shared'
 
 // The server's own hard cap (`MAX_LIMIT` in `rust/public/src/servers/api_keys.rs`),
 // used here as the page size for offset-based paging. Requested explicitly on
@@ -21,23 +26,9 @@ import { authenticatedFetch, getApiBase } from './api'
 // comparing the returned row count against this same value.
 export const MAX_INGESTION_API_KEYS_LIST_LIMIT = 500
 
-export interface IngestionApiKeyListEntry {
-  key_id: string
-  name: string
-  created_at: string
-  created_by: string
-  last_used_at: string | null
-  revoked_at: string | null
-  revoked_by: string | null
-}
+export type IngestionApiKeyListEntry = ApiKeyListEntry
 
-export interface MintIngestionApiKeyResponse {
-  key_id: string
-  name: string
-  created_at: string
-  /** The cleartext key, returned exactly once. Never persisted client-side. */
-  key: string
-}
+export type MintIngestionApiKeyResponse = MintApiKeyResponse
 
 export interface RevokeIngestionApiKeyResponse {
   revoked_at: string
@@ -50,59 +41,14 @@ export interface IngestionApiKeyErrorResponse {
   message: string
 }
 
-export class IngestionApiKeyError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status: number
-  ) {
-    super(message)
-    this.name = 'IngestionApiKeyError'
-  }
-}
+const api = createApiKeysApi<IngestionApiKeyErrorResponse, RevokeIngestionApiKeyResponse>({
+  basePath: '/ingestion-api-keys',
+  errorName: 'IngestionApiKeyError',
+  maxListLimit: MAX_INGESTION_API_KEYS_LIST_LIMIT,
+})
 
-async function handleResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    let errorData: IngestionApiKeyErrorResponse | undefined
-    try {
-      errorData = await response.json()
-    } catch {
-      // Ignore JSON parse errors
-    }
-    throw new IngestionApiKeyError(
-      errorData?.code ?? 'UNKNOWN_ERROR',
-      errorData?.message ?? `HTTP ${response.status}`,
-      response.status
-    )
-  }
-  return response.json()
-}
+export const IngestionApiKeyError = api.ErrorClass
 
-export async function listIngestionApiKeys(
-  includeRevoked = true,
-  offset = 0
-): Promise<IngestionApiKeyListEntry[]> {
-  const response = await authenticatedFetch(
-    `${getApiBase()}/ingestion-api-keys?limit=${MAX_INGESTION_API_KEYS_LIST_LIMIT}&offset=${offset}&include_revoked=${includeRevoked}`
-  )
-  return handleResponse<IngestionApiKeyListEntry[]>(response)
-}
-
-export async function mintIngestionApiKey(name: string): Promise<MintIngestionApiKeyResponse> {
-  const response = await authenticatedFetch(`${getApiBase()}/ingestion-api-keys`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
-  return handleResponse<MintIngestionApiKeyResponse>(response)
-}
-
-export async function revokeIngestionApiKey(
-  keyId: string
-): Promise<RevokeIngestionApiKeyResponse> {
-  const response = await authenticatedFetch(
-    `${getApiBase()}/ingestion-api-keys/${encodeURIComponent(keyId)}`,
-    { method: 'DELETE' }
-  )
-  return handleResponse<RevokeIngestionApiKeyResponse>(response)
-}
+export const listIngestionApiKeys = api.list
+export const mintIngestionApiKey = api.mint
+export const revokeIngestionApiKey = api.revoke
