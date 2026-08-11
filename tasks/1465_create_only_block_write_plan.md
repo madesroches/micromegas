@@ -107,8 +107,9 @@ land in the same commit series, but they have a **rollout order** between servic
 
 #### 1a. `BlobStorage::put_if_absent` (`rust/telemetry/src/blob_storage.rs`)
 
-`put` must keep overwrite semantics — `rust/analytics/src/replication.rs:169` and
-`async_parquet_writer.rs:30` rely on it — so add a sibling rather than changing it. `put` returns
+`put` must keep overwrite semantics — `async_parquet_writer.rs:30` (partition files, a different
+namespace) relies on it — so add a sibling rather than changing it. `replication.rs:168` moves to the
+new sibling too (see 1b). `put` returns
 `anyhow::Result`, which erases `object_store::Error`, so the create-only variant must classify the
 collision itself and return it as a value:
 
@@ -159,6 +160,12 @@ rather than two independent warnings on the common retry path:
 | `AlreadyExists` | inserted | orphaned object healed — a prior attempt died between PUT and INSERT | `warn!` | `block_orphan_object_healed` |
 | `Created` | conflict | row existed but object did not — object lost or deleted out from under its row | `warn!` | `block_object_recreated` |
 
+`block_object_recreated` stays a genuine signal, not routine noise: retention's
+`delete_expired_blocks_batch` (`rust/analytics/src/delete.rs:12-47`) deletes the row and the object
+together inside one transaction (`DELETE ... RETURNING`, then `blob_storage.delete_batch`, then
+commit), so a row surviving without its object requires a commit failure after the blob delete — an
+anomaly, not a normal event. `warn!` is the right level for all three non-`Created`-inserted cases.
+
 All three counters follow the existing convention — `imetric!("<name>", "count", 1_u64)`, matching
 `object_warm_requested` (`rust/ingestion/src/data_lake_connection.rs:68`) and the `range_cache_*`
 family. `block_object_duplicate` is the detector the issue asks for: with Part 1 in place it should
@@ -171,9 +178,13 @@ the request rate, which is already bounded by the body-size cap and auth. Includ
 `process_id`, and `stream_id` in the message so an operator can go straight from a warn to a
 `list_blocks()` query.
 
-Leave `rust/analytics/src/replication.rs:204` alone: dedup there is expected, and its `put` stays
-`Overwrite` — replication re-writes the same `block_id` from the same source bytes, so it is not a
-content-changing overwrite.
+`rust/analytics/src/replication.rs:168` writes into the same `blobs/{process_id}/{stream_id}/{block_id}`
+namespace via the same `BlobStorage::put`, and its block-row insert is already
+`ON CONFLICT (block_id) DO NOTHING` (`replication.rs:~207`) — i.e. dedup is already the expected
+outcome there, the same as the ingestion path. Switch it to `put_if_absent` too (fall through to the
+INSERT on both `Created` and `AlreadyExists`, same as 1b), so the write-once guarantee holds for
+every writer into this namespace, not just the ingestion path. `async_parquet_writer.rs:30` is a
+different namespace (partition files) and correctly keeps `Overwrite`.
 
 #### Configuration risk: `PutMode::Create` support
 
@@ -207,6 +218,13 @@ one more error visible to clients than before.
 
 Delete the mutation loop and the second `encode_to_vec` in `split_logs_with_extra_hash_input`
 (`block.rs:314-338`): encode once, hash those bytes, store those bytes.
+
+Behavior change for **mixed** blocks (some records timestamped, some not): today `logs_bounds` sees
+the *post-backfill* records, so a zero-timestamp record's freshly-stamped `Utc::now()` can push
+`end_time` out to arrival time even though every other record is old. After this change,
+`logs_bounds` sees only the original timestamps, so a mixed block's bounds come solely from its
+timestamped records — `end_time` no longer gets stretched to arrival time by an untimestamped record
+sharing the block. Only fully zero-timestamp blocks still get the arrival-time sentinel.
 
 This is small because `logs_bounds` + `build_prepared_block` already substitute arrival time for an
 all-zero-timestamp resource (see Current State). The only functional gap is downstream, in
@@ -256,6 +274,14 @@ What Part 2 buys:
 3. `block_object_duplicate` becomes cleanly interpretable: a collision now always means "these exact
    bytes were stored before," with no "same id, different content" case to disambiguate.
 
+No CloudWatch fixture is affected: every fixture in `cloudwatch_logs_tests.rs` uses a non-zero
+millisecond `timestamp`, and a negative one is rejected outright
+(`negative_log_event_timestamp_is_parse_error`), so no existing fixture produces a record with both
+`time_unix_nano` and `observed_time_unix_nano` at 0. `cloudwatch_logs.rs:173-174` maps
+`timestamp * 1_000_000` into `time_unix_nano` with `observed_time_unix_nano: 0`, so only a literal
+`timestamp: 0` would reach the substitution path — with the same observable result (the block's
+`begin_time`) either way.
+
 ### Rollout order
 
 Both parts land in one PR, so the source is always self-consistent. The constraint is at **deploy**
@@ -291,6 +317,9 @@ read-side change precedes the write-side change it enables — the same ordering
    `put_duration` metric around it, fall through to the INSERT on `AlreadyExists`, and replace the
    `debug!` at `:203-205` with the four-case classification (three `imetric!` counters + one log
    line per outcome).
+2b. `rust/analytics/src/replication.rs:168`: switch the block-payload PUT to `put_if_absent`, falling
+    through to the existing `ON CONFLICT DO NOTHING` INSERT on both outcomes (same shape as item 2,
+    no new counters needed there).
 3. `rust/telemetry/tests/`: unit tests for `put_if_absent` over `InMemory` — create, collide,
    original bytes preserved after a collision.
 4. `rust/ingestion/tests/insert_block_dedup_db_test.rs` (new, env-gated on
@@ -318,6 +347,10 @@ read-side change precedes the write-side change it enables — the same ordering
 8. `rust/otel-ingestion/tests/split_tests.rs:232-241`: flip the assertion — the stored proto now
    keeps `observed_time_unix_nano == 0`. Keep the `:228-231` envelope-time assertions unchanged;
    `build_prepared_block` still stamps arrival time on the bounds.
+   Also update `logs_split_mixed_timestamps_all_survive` (`:262-283`): with the backfill gone,
+   `logs_bounds` no longer sees a stamped `now_nanos` for the untimestamped record, so `end_time`
+   is now the same as `begin_time` — both equal `known_ts`. Replace the
+   `assert!(b.end_time... > sentinel_ns)` check with `assert_eq!(b.end_time.timestamp_nanos_opt().unwrap(), known_ts as i64)`.
 9. Add a test asserting `split_logs` on a timestamp-less request produces a payload whose
    `block_id` hash matches the stored bytes (`block_id_from_payload(&block.payload.objects) ==
    block.block_id`) — the invariant Part 1 enforces and Part 2 restores.
@@ -334,6 +367,7 @@ read-side change precedes the write-side change it enables — the same ordering
 |---|---|
 | `rust/telemetry/src/blob_storage.rs` | new `PutIfAbsent` + `put_if_absent` |
 | `rust/ingestion/src/web_ingestion_service.rs` | create-only write, fall-through, 3 counters, 4-case log |
+| `rust/analytics/src/replication.rs` | create-only block-payload write, fall-through to existing INSERT |
 | `rust/analytics/src/lakehouse/otel/logs_block_processor.rs` | substitute block `begin_time` instead of dropping |
 | `rust/otel-ingestion/src/block.rs` | delete backfill + dual encode; rewrite doc comments |
 | `rust/otel-ingestion/src/handler.rs` | rewrite `build_webhook_request` doc comment |
@@ -346,7 +380,8 @@ read-side change precedes the write-side change it enables — the same ordering
 
 **Create-only vs. keeping the dual-encode fix as the primary fix.** The issue framed "hash the bytes
 you store" as fix #1 and create-only as fix #3. Create-only is the load-bearing one: it enforces
-*object bytes for a key never change* for **every** writer and every future mutation, including ones
+*object bytes for a key never change* for **every writer into the block-object namespace** (ingestion
+and, after 1b's `replication.rs` change, replication too) and every future mutation, including ones
 nobody has written yet, whereas hashing-the-stored-bytes only fixes the one call site that currently
 violates it. Part 2 is worth doing anyway (see its three benefits), but as hardening and cleanup on
 top of a structural guarantee, not as the guarantee itself. Both ship together; the distinction
@@ -402,20 +437,27 @@ No new metrics doc page exists to update (`put_duration`/`insert_duration` are u
   block.block_id`, and `begin_time`/`end_time` still land at arrival time, not 1970.
 - `split_logs` twice on the same timestamp-less request: identical `block_id` **and** identical
   `payload.objects` (today the second differs).
-- Existing `split_tests.rs` / `webhook_tests.rs` / `identity_tests.rs` must stay green apart from the
-  one flipped backfill assertion.
+- Existing `split_tests.rs` / `webhook_tests.rs` / `identity_tests.rs` must stay green apart from two
+  flipped assertions in `split_tests.rs`: the `observed_time_unix_nano` backfill check, and
+  `logs_split_mixed_timestamps_all_survive`'s `end_time` check (now equal to `begin_time` rather than
+  stretched to arrival time — see Commit 3 item 8).
 
 ### Integration, env-gated (`rust/ingestion/tests/insert_block_dedup_db_test.rs`)
 
 The four-case matrix against a real PG + object store, following the harness pattern in
 `rust/analytics/tests/net_spans_retire_overlap_db_test.rs`:
 
-1. Same block twice → one object, one row, `block_object_duplicate` incremented; the object's bytes
-   equal the first write's.
-2. Object pre-written directly, then `insert_block_typed` → row appears (orphan healed),
-   `block_orphan_object_healed` incremented.
-3. Row pre-inserted, no object, then `insert_block_typed` → object appears,
-   `block_object_recreated` incremented.
+Assertions are on observable state (object bytes, row presence, `payload_size`), not on the
+`imetric!` counters themselves: reading a named counter back out of `micromegas_tracing::test_utils`
+requires `parse_block` + `StreamMetadata` from `micromegas-analytics`, which `micromegas-ingestion`'s
+dev-deps cannot reach without a dependency cycle (`micromegas-analytics` already depends on
+`micromegas-ingestion`). The precedent (`analytics/tests/metrics_test.rs:71-79`) only checks that a
+metrics stream exists, not a counter's value; this plan doesn't go further than that.
+
+1. Same block twice → one object, one row; the object's bytes equal the first write's.
+2. Object pre-written directly, then `insert_block_typed` → row appears (orphan healed).
+3. Row pre-inserted, no object, then `insert_block_typed` → object appears, and its bytes plus the
+   row's `payload_size` are consistent with the second write.
 4. Two blocks differing in one payload byte → two objects, two rows.
 
 ### End-to-end against the local test env
@@ -436,14 +478,3 @@ Start services (`python3 local_test_env/ai_scripts/start_services.py`), then a P
 
 `micromegas-query "SELECT block_id, payload_size, begin_time FROM list_blocks() ..."` covers the
 row-side assertions.
-
-## Open Questions
-
-1. **Does retention ever delete a block object while keeping its row?** If so, re-ingesting that
-   `block_id` produces the `Created` + row-conflict case as a *normal* event, and
-   `block_object_recreated` would be noise rather than a signal. Worth a look at the maintenance
-   daemon's deletion path before choosing `warn!` for that case specifically.
-2. **`cloudwatch_logs.rs:174`** sets `observed_time_unix_nano: 0` and relies on the CloudWatch event
-   timestamp for `time_unix_nano`. A CloudWatch event with a `0` timestamp would take the
-   substitution path rather than the backfill path — same observable result, but worth confirming no
-   CloudWatch fixture depends on the old behavior.
