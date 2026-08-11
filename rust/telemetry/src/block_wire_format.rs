@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 /// `UserDefinedType` that are required to deserialize the `objects`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockPayload {
-    // Encoded as a CBOR byte string, but decoding also accepts the legacy
-    // array-of-integers form still present in object storage — see the
-    // wire-compat note on `crate::serde_byte_buf`.
+    /// Encoded as a CBOR byte string, but decoding also accepts the legacy
+    /// array-of-integers form still present in object storage — see the
+    /// wire-compat note on `crate::serde_byte_buf`.
     #[serde(with = "crate::serde_byte_buf")]
     pub dependencies: Vec<u8>,
+    /// See `dependencies`.
     #[serde(with = "crate::serde_byte_buf")]
     pub objects: Vec<u8>,
 }

@@ -1,5 +1,5 @@
 //! Wire-format tests for `BlockPayload`'s CBOR encoding: the switch to
-//! `serialize_bytes` via `crate::serde_byte_buf`, and continued acceptance of
+//! `serialize_bytes` via `micromegas_telemetry::serde_byte_buf`, and continued acceptance of
 //! the legacy array-of-integers form already present in object storage.
 //!
 //! Item 3 (`legacy_array_form_still_decodes`) is the regression guard for
@@ -291,7 +291,7 @@ fn corrupt_bytes(rng: &mut Lcg, buf: &[u8]) -> Vec<u8> {
 // the *encoded* `BlockPayload` bytes themselves. Unlike
 // `analytics/tests/parse_corrupt_block_tests.rs` (which decodes the CBOR
 // envelope up front and only fuzzes the decompressed transit buffers), this
-// is what actually exercises `crate::serde_byte_buf`'s deserializer against
+// is what actually exercises `micromegas_telemetry::serde_byte_buf`'s deserializer against
 // hostile input on the decode path.
 #[test]
 fn corrupted_or_truncated_envelope_never_panics() {
