@@ -35,9 +35,10 @@ pub struct PreparedBlock {
 /// Walks `ResourceLogs` to find min/max `time_unix_nano`. Falls back to
 /// `observed_time_unix_nano` when the per-record `time` is 0.
 ///
-/// Records with no usable timestamp still count toward `count` even though the
-/// downstream processor drops them — keeps `block.nb_objects` consistent with
-/// the proto payload bytes (matching the metrics-side trade-off).
+/// Every record counts toward `count` and materializes exactly one row: the
+/// downstream processor (`OtelLogsBlockProcessor`) substitutes the block's
+/// `begin_time` for records with no usable timestamp instead of dropping them,
+/// so `block.nb_objects` is an exact count of the rows the processor emits.
 fn logs_bounds(rl: &ResourceLogs) -> Option<(i64, i64, i32)> {
     let mut min = i64::MAX;
     let mut max = i64::MIN;
@@ -260,26 +261,21 @@ fn build_prepared_block(
 
 /// Splits a logs request into per-resource blocks.
 ///
-/// Records where both `time_unix_nano` and `observed_time_unix_nano` are zero are
-/// backfilled with the current wall-clock time before encoding, conforming to the
-/// OTLP spec requirement that the collecting system supply an observed timestamp.
-///
-/// The `block_id` is derived from the pre-backfill bytes so retries with the same
-/// original payload always produce the same ID, preserving deduplication semantics.
-///
-/// The re-encode below is skipped when nothing was backfilled, which is the common case
-/// for real OTLP producers (they normally supply at least one of the two timestamps). The
-/// webhook path (`handler::build_webhook_request`) intentionally leaves both timestamps at
-/// 0 on every record, so for webhook-sourced requests `nb_backfilled > 0` unconditionally
-/// and this function always pays for two full `encode_to_vec()` calls. That's an accepted,
-/// bounded tradeoff (see the doc comment on `build_webhook_request`) — not a bug in this
-/// function — so it's left as shared, unconditional behavior rather than special-cased here.
+/// Records where both `time_unix_nano` and `observed_time_unix_nano` are zero are stored
+/// as-is — no backfill, no mutation. The stored payload is a pure function of the
+/// incoming bytes, so `block_id` (hashed from those same bytes) is always the hash of
+/// what actually gets stored: a colliding write can never be "the same id, different
+/// content." The OTLP spec's requirement that the collecting system supply an observed
+/// timestamp is satisfied at the block-bounds layer instead: `logs_bounds` falls back to
+/// arrival time for an all-zero-timestamp resource (see `build_prepared_block`), and the
+/// downstream processor (`OtelLogsBlockProcessor`) substitutes the block's `begin_time`
+/// for any record that still has no timestamp of its own.
 pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<PreparedBlock>> {
     split_logs_with_extra_hash_input(req, &[])
 }
 
 /// Same as [`split_logs`], but folds `extra_hash_input` into the `block_id` hash alongside
-/// the pre-backfill `ResourceLogs` bytes. Used by the webhook path (`handler::ingest_webhook`)
+/// the encoded `ResourceLogs` bytes. Used by the webhook path (`handler::ingest_webhook`)
 /// to fold in the full incoming HTTP header set: the synthetic `ResourceLogs` only carries the
 /// 3 recognized `X-Micromegas-*` headers as resource attrs, so without this, any other header
 /// (a delivery-id, a signature, an event-type header) would have zero influence on `block_id`
@@ -291,58 +287,29 @@ pub fn split_logs_with_extra_hash_input(
     extra_hash_input: &[u8],
 ) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_logs.len());
-    for mut rl in req.resource_logs {
+    for rl in req.resource_logs {
         // Fast-path: skip ResourceLogs with no records before incurring encode overhead.
         let total_records: usize = rl.scope_logs.iter().map(|s| s.log_records.len()).sum();
         if total_records == 0 {
             continue;
         }
 
-        // Encode before any mutation so the block_id is stable across retries with the same
-        // original payload, regardless of whether backfill fires.
-        let pre_mutation_bytes = rl.encode_to_vec();
-        let block_id = if extra_hash_input.is_empty() {
-            block_id_from_payload(&pre_mutation_bytes)
-        } else {
-            let mut hash_input =
-                Vec::with_capacity(extra_hash_input.len() + pre_mutation_bytes.len());
-            hash_input.extend_from_slice(extra_hash_input);
-            hash_input.extend_from_slice(&pre_mutation_bytes);
-            block_id_from_payload(&hash_input)
-        };
-
-        // Backfill observed_time_unix_nano for records missing both timestamps.
-        // now_nanos is captured once per ResourceLogs so all records in the batch share the same value.
-        let now_nanos = Utc::now()
-            .timestamp_nanos_opt()
-            .expect("Utc::now() is always representable as nanoseconds")
-            as u64;
-        let mut nb_backfilled: usize = 0;
-        for scope in &mut rl.scope_logs {
-            for record in &mut scope.log_records {
-                if record.time_unix_nano == 0 && record.observed_time_unix_nano == 0 {
-                    record.observed_time_unix_nano = now_nanos;
-                    nb_backfilled += 1;
-                }
-            }
-        }
-        if nb_backfilled > 0 {
-            debug!("OTLP logs: backfilled observed_time_unix_nano on {nb_backfilled} records");
-        }
-
-        // Re-encode only when the payload was mutated; otherwise reuse the bytes already produced.
-        let payload_bytes = if nb_backfilled > 0 {
-            rl.encode_to_vec()
-        } else {
-            pre_mutation_bytes
-        };
-
-        // Derive bounds from the mutated rl so the envelope and stored proto are consistent.
         // logs_bounds is expected to be Some here (the total_records == 0 fast-path above
-        // skipped empty resources, and backfill only mutates timestamps without changing
-        // count), but skip defensively rather than panic on the ingestion request path.
+        // already skipped empty resources), but skip defensively rather than panic on the
+        // ingestion request path.
         let Some(bounds) = logs_bounds(&rl) else {
             continue;
+        };
+
+        // Single encode: the hash and the stored bytes are always the same bytes.
+        let payload_bytes = rl.encode_to_vec();
+        let block_id = if extra_hash_input.is_empty() {
+            block_id_from_payload(&payload_bytes)
+        } else {
+            let mut hash_input = Vec::with_capacity(extra_hash_input.len() + payload_bytes.len());
+            hash_input.extend_from_slice(extra_hash_input);
+            hash_input.extend_from_slice(&payload_bytes);
+            block_id_from_payload(&hash_input)
         };
 
         let resource_attrs = rl

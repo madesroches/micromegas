@@ -6,6 +6,7 @@ use datafusion::arrow::array::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::blob_storage::PutIfAbsent;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -165,10 +166,18 @@ async fn ingest_payloads(
             let block_id = block_id_column.value(row)?;
             let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
             let payload = bytes::Bytes::copy_from_slice(payload_column.value(row));
-            lake.blob_storage
-                .put(&obj_path, payload)
+            // Create-only: the block-object namespace is write-once and content-addressed
+            // (see `micromegas_telemetry::blob_storage::put_if_absent`). A colliding write
+            // here just means the object was already replicated; `ingest_blocks` handles
+            // row-level dedup independently via its own `ON CONFLICT DO NOTHING` INSERT.
+            let put_outcome = lake
+                .blob_storage
+                .put_if_absent(&obj_path, payload)
                 .await
                 .with_context(|| "Error writing block to blob storage")?;
+            if put_outcome == PutIfAbsent::AlreadyExists {
+                debug!("block payload already exists at {obj_path}, skipping");
+            }
         }
     }
     info!("ingested {nb_rows} payloads");

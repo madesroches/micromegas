@@ -61,6 +61,11 @@ impl BlockProcessor for OtelLogsBlockProcessor {
             .insert_time
             .timestamp_nanos_opt()
             .with_context(|| "block.insert_time → nanos")?;
+        let begin_time_nanos = src_block
+            .block
+            .begin_time
+            .timestamp_nanos_opt()
+            .with_context(|| "block.begin_time → nanos")?;
 
         // Pre-count rows so dictionary builders can size their backing storage.
         let row_count: usize = resource_logs
@@ -90,7 +95,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         let mut min_time = i64::MAX;
         let mut max_time = i64::MIN;
         let mut nb_appended = 0usize;
-        let mut nb_dropped_no_timestamp = 0usize;
+        let mut nb_substituted_block_time = 0usize;
         let mut nb_severity_out_of_range = 0usize;
 
         for scope_logs in &resource_logs.scope_logs {
@@ -105,10 +110,13 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 } else if record.observed_time_unix_nano != 0 {
                     record.observed_time_unix_nano as i64
                 } else {
-                    // No timestamp at all — skip so it doesn't anchor the partition
-                    // at 1970-01-01. Aggregated below to one log line per block.
-                    nb_dropped_no_timestamp += 1;
-                    continue;
+                    // No timestamp in the payload: the block's begin_time carries the
+                    // arrival-time fallback that ingestion applied in build_prepared_block.
+                    // Using begin_time (not insert_time) keeps the row inside
+                    // [block.begin_time, block.end_time], which partition bounds and
+                    // min/max stats depend on. Aggregated below to one log line per block.
+                    nb_substituted_block_time += 1;
+                    begin_time_nanos
                 };
                 min_time = min_time.min(time_nanos);
                 max_time = max_time.max(time_nanos);
@@ -196,9 +204,9 @@ impl BlockProcessor for OtelLogsBlockProcessor {
             }
         }
 
-        if nb_dropped_no_timestamp > 0 {
+        if nb_substituted_block_time > 0 {
             debug!(
-                "OTel log records without timestamp dropped (block_id={block_id_str}, count={nb_dropped_no_timestamp})"
+                "OTel log records without timestamp substituted the block's begin_time (block_id={block_id_str}, count={nb_substituted_block_time})"
             );
         }
         if nb_severity_out_of_range > 0 {

@@ -12,7 +12,7 @@ mod fixtures;
 use fixtures::*;
 use micromegas_otel_ingestion::FORMAT_OTLP_LOGS;
 use micromegas_otel_ingestion::block::{split_logs, split_metrics, split_traces};
-use micromegas_otel_ingestion::identity::SignalKey;
+use micromegas_otel_ingestion::identity::{SignalKey, block_id_from_payload};
 use micromegas_otel_ingestion::proto::{ExportLogsServiceRequest, ResourceLogs};
 use prost::Message;
 
@@ -211,7 +211,7 @@ fn format_constants_match_signal_keys() {
 }
 
 #[test]
-fn logs_split_backfills_observed_time_when_both_timestamps_zero() {
+fn logs_split_leaves_zero_timestamps_unmodified() {
     let req = make_logs_request(
         "svc",
         "h1",
@@ -225,17 +225,19 @@ fn logs_split_backfills_observed_time_when_both_timestamps_zero() {
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 2);
-    // Envelope times must be well past epoch after backfill (sentinel: 2024-01-01).
+    // Envelope times still land at arrival time via the block-bounds fallback
+    // (sentinel: 2024-01-01), even though no record itself carries a timestamp.
     let sentinel_ns: i64 = 1_704_067_200_000_000_000;
     assert!(b.begin_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
     assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
-    // Stored proto must have observed_time_unix_nano backfilled on every record.
+    // The stored proto is no longer mutated: observed_time_unix_nano stays 0 on every
+    // record, so the stored bytes are a pure function of the input (and of block_id).
     let decoded = ResourceLogs::decode(&*b.block.payload.objects).unwrap();
     for scope in &decoded.scope_logs {
         for record in &scope.log_records {
-            assert_ne!(
+            assert_eq!(
                 record.observed_time_unix_nano, 0,
-                "record still has zero observed timestamp after backfill"
+                "zero-timestamp records must be stored unmodified"
             );
         }
     }
@@ -278,9 +280,10 @@ fn logs_split_mixed_timestamps_all_survive() {
     assert_eq!(b.nb_records, 2);
     // begin_time reflects the known minimum non-zero timestamp.
     assert_eq!(b.begin_time.timestamp_nanos_opt().unwrap(), known_ts as i64);
-    // end_time is the backfilled now_nanos, which must be after 2024-01-01.
-    let sentinel_ns: i64 = 1_704_067_200_000_000_000;
-    assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
+    // With the backfill gone, logs_bounds sees only the original timestamps, so a mixed
+    // block's bounds come solely from its timestamped records: end_time equals begin_time
+    // rather than being stretched to arrival time by the untimestamped record.
+    assert_eq!(b.end_time.timestamp_nanos_opt().unwrap(), known_ts as i64);
 }
 
 #[test]
@@ -292,5 +295,21 @@ fn logs_split_block_id_stable_across_retries_for_zero_timestamp_payload() {
     assert_eq!(
         blocks1[0].block.block_id, blocks2[0].block.block_id,
         "block_id must be stable across retries with identical zero-timestamp payloads"
+    );
+}
+
+/// The invariant Part 1 (create-only writes) enforces and Part 2 (single encode) restores:
+/// with no backfill mutation, `block_id` is always the hash of the exact bytes stored in
+/// the payload, for a timestamp-less request just as much as any other.
+#[test]
+fn logs_split_block_id_matches_stored_payload_hash_for_zero_timestamp_request() {
+    let req = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "no-ts")]);
+    let blocks = split_logs(req).unwrap();
+    assert_eq!(blocks.len(), 1);
+    let block = &blocks[0].block;
+    assert_eq!(
+        block_id_from_payload(&block.payload.objects),
+        block.block_id,
+        "block_id must be the hash of the exact bytes stored in the payload"
     );
 }

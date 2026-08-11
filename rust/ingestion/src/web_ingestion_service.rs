@@ -3,6 +3,7 @@ use crate::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
 use crate::remote_data_lake::migrate_db;
 use anyhow::Context;
 use bytes::Buf;
+use micromegas_telemetry::blob_storage::PutIfAbsent;
 use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::property::Property;
 use micromegas_telemetry::property::make_properties;
@@ -161,11 +162,12 @@ impl WebIngestionService {
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing begin_time: {e}")))?;
         let end_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.end_time)
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing end_time: {e}")))?;
-        {
+        let put_outcome = {
             let begin_put = now();
-            self.lake
+            let outcome = self
+                .lake
                 .blob_storage
-                .put(&obj_path, encoded_payload.into())
+                .put_if_absent(&obj_path, encoded_payload.into())
                 .await
                 .map_err(|e| {
                     IngestionServiceError::StorageError(format!(
@@ -173,7 +175,8 @@ impl WebIngestionService {
                     ))
                 })?;
             imetric!("put_duration", "ticks", (now() - begin_put) as u64);
-        }
+            outcome
+        };
 
         debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
         let begin_insert = now();
@@ -200,20 +203,58 @@ impl WebIngestionService {
         .map_err(|e| IngestionServiceError::DatabaseError(format!("inserting into blocks: {e}")))?;
         imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
 
-        if result.rows_affected() == 0 {
-            debug!("duplicate block_id={block_id} skipped (already exists)");
+        // The object write (create-only) and the row insert (ON CONFLICT DO NOTHING) each
+        // independently succeed or find the target already present, so there are four
+        // (object, row) combinations. Each gets one log line and one counter — see
+        // tasks/1465_create_only_block_write_plan.md's classification table.
+        let row_inserted = result.rows_affected() > 0;
+        match (put_outcome, row_inserted) {
+            (PutIfAbsent::Created, true) => {
+                // Normal first write — covered by the unconditional "recorded" debug! below.
+            }
+            (PutIfAbsent::AlreadyExists, false) => {
+                // Retry, or two distinct events with identical bytes.
+                warn!(
+                    "duplicate block: object and row both already exist \
+                     block_id={block_id} process_id={process_id} stream_id={stream_id}"
+                );
+                imetric!("block_object_duplicate", "count", 1_u64);
+            }
+            (PutIfAbsent::AlreadyExists, true) => {
+                // Orphaned object healed (a prior attempt died between PUT and INSERT), or
+                // the losing side of a concurrent-duplicate race.
+                warn!(
+                    "healed orphaned block object (row was missing) \
+                     block_id={block_id} process_id={process_id} stream_id={stream_id}"
+                );
+                imetric!("block_orphan_object_healed", "count", 1_u64);
+            }
+            (PutIfAbsent::Created, false) => {
+                // Row existed but object did not (object lost or deleted out from under its
+                // row), or the winning side of a concurrent-duplicate race.
+                debug!(
+                    "recreated block object for a row that already existed \
+                     block_id={block_id} process_id={process_id} stream_id={stream_id}"
+                );
+                imetric!("block_object_recreated", "count", 1_u64);
+            }
         }
         // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
         // the cost in this context should be reasonnable
-        imetric!(
-            "payload_size_inserted",
-            "bytes",
-            property_set::PropertySet::find_or_create(vec![property_set::Property::new(
-                "target",
-                "micromegas::ingestion"
-            ),]),
-            payload_size as u64
-        );
+        // Only count bytes that were actually stored: on the AlreadyExists arms, put_if_absent
+        // rejected the write and the payload was discarded, so counting payload_size there would
+        // inflate reported ingest volume by the redelivery/duplicate rate.
+        if put_outcome == PutIfAbsent::Created {
+            imetric!(
+                "payload_size_inserted",
+                "bytes",
+                property_set::PropertySet::find_or_create(vec![property_set::Property::new(
+                    "target",
+                    "micromegas::ingestion"
+                ),]),
+                payload_size as u64
+            );
+        }
         debug!("recorded block_id={block_id} stream_id={stream_id} process_id={process_id}");
 
         Ok(())
