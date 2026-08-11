@@ -32,7 +32,8 @@ fn build_webhook_request_shape() {
         Some(any_value::Value::StringValue(s)) => assert_eq!(s, "{\"a\":1}"),
         other => panic!("expected StringValue body, got {other:?}"),
     }
-    // Left at 0 so split_logs's existing backfill stamps ingestion time.
+    // Left at 0 and stored as-is — the arrival-time fallback lives in the block's
+    // begin_time/end_time (see split_logs's doc comment), not in the record.
     assert_eq!(record.time_unix_nano, 0);
     assert_eq!(record.observed_time_unix_nano, 0);
 }
@@ -52,7 +53,7 @@ fn build_webhook_request_lossy_converts_non_utf8_body() {
 }
 
 #[test]
-fn split_logs_on_webhook_request_yields_one_backfilled_block_with_matching_identity() {
+fn split_logs_on_webhook_request_yields_one_block_with_arrival_time_bounds_and_matching_identity() {
     let attrs = vec![
         s_kv("service.name", "gitlab"),
         s_kv("service.namespace", "ci"),
@@ -63,7 +64,8 @@ fn split_logs_on_webhook_request_yields_one_backfilled_block_with_matching_ident
     let b = &blocks[0];
     assert_eq!(b.nb_records, 1);
 
-    // Backfilled timestamp is well past epoch (sentinel: 2024-01-01).
+    // Block bounds fall back to arrival time (sentinel: 2024-01-01) via
+    // logs_bounds/build_prepared_block, even though no record carries a timestamp.
     let sentinel_ns: i64 = 1_704_067_200_000_000_000;
     assert!(b.begin_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
     assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);

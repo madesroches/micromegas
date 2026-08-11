@@ -80,8 +80,17 @@ health checks at `/ready`. See
 Ingestion is stateless — every instance reads and writes the same lake — so it
 scales horizontally behind a load balancer. Add instances to raise write
 throughput; PostgreSQL and the object store are the shared backends. Writes are
-idempotent (blocks are stored at deterministic paths and recorded with
-`ON CONFLICT DO NOTHING`), so retried or duplicated requests never double-count.
+idempotent: block payload objects are stored at deterministic paths with a
+**create-only** write (first write wins; a colliding write is rejected, not
+applied), and the row insert still uses `ON CONFLICT DO NOTHING`, so retried or
+duplicated requests never double-count or corrupt a previously stored payload.
+
+The object store backing ingestion must support conditional put
+(`PutMode::Create`). AWS S3 supports it with no configuration. An S3-compatible
+store explicitly configured with `aws_conditional_put=disabled` will fail every
+block write rather than silently falling back to overwrite — see the CHANGELOG
+entry for this behavior and how to verify conditional-put support against a new
+S3-compatible endpoint before depending on it.
 
 ## Producer configuration
 

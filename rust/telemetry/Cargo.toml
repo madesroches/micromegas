@@ -30,6 +30,9 @@ object_store = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [[test]]
 name = "blob_storage_tests"
 path = "tests/blob_storage_tests.rs"

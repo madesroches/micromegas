@@ -221,7 +221,7 @@ Per the OTLP spec, error responses always carry a `google.rpc.Status` proto, **n
 
 ## Idempotency
 
-Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`. Retried POSTs collide on `ON CONFLICT (block_id) DO NOTHING` and add no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting.
+Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`. The block's payload object is written create-only — a retried POST that hashes to the same `block_id` finds the object already present and leaves it untouched (first write wins), and the row insert still collides on `ON CONFLICT (block_id) DO NOTHING` and adds no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting or corrupting a previously stored payload. Both the object collision and the row conflict are counted (`block_object_duplicate`), so a sustained rate of duplicates is visible to operators rather than silent.
 
 ## Client recipes
 
@@ -341,9 +341,12 @@ that omits the attribute. The body is never parsed or validated server-side; an
 empty body returns `400 Bad Request` (nothing to store). `Content-Type` is not
 negotiated — send whatever the producer sends (typically `application/json`).
 
-Because no per-record timestamp is known, `time` is the server's ingestion wall-clock
-time. Retried deliveries dedup via the same content-addressed `block_id` scheme
-described in [Idempotency](#idempotency), with two webhook-specific wrinkles:
+Because no per-record timestamp is known, the record's `time_unix_nano` /
+`observed_time_unix_nano` both stay 0 in the stored payload, and `log_entries.time` for
+such a record falls back to the block's `begin_time` — the server's ingestion wall-clock
+time at the moment the resource was split into a block, not a value carried inside the
+record itself. Retried deliveries dedup via the same content-addressed `block_id` scheme
+described in [Idempotency](#idempotency), with a webhook-specific wrinkle:
 
 - **`block_id` is hashed from the *full* incoming header set, not just the 3 recognized
   ones.** Only `X-Micromegas-Service-Name`/`-Service-Namespace`/`-Target` become resource
@@ -354,9 +357,12 @@ described in [Idempotency](#idempotency), with two webhook-specific wrinkles:
   other. The flip side: a genuine retry that picks up a new value for some header along
   the way (e.g. a proxy stamping a fresh `Date` or request-id on each hop) is no longer
   deduped, since that header now participates in the hash too.
-- **The hash is computed before the server backfills the record's timestamp**, so the
-  wall-clock `time` written on a retry doesn't affect `block_id` — otherwise identical
-  deliveries would never dedup, since the backfilled timestamp is different every time.
+
+Leaving both timestamps at 0 in the stored record (rather than backfilling a timestamp
+before storing, as an earlier version of this endpoint did) keeps the stored payload byte-
+identical across retries, which is what lets `block_id` — hashed from those same bytes —
+double as a create-only write key: the arrival-time fallback lives entirely in the block's
+`begin_time`/`end_time`, never in the record.
 
 ### GitLab example
 

@@ -121,9 +121,12 @@ Graceful shutdown is what keeps a rolling deploy from losing telemetry:
   recorded in PostgreSQL *before* the request returns `200`. A request that has
   been acknowledged is already durable; a request still in flight at `SIGTERM` is
   given the full grace period to complete.
-- **Writes are idempotent.** Blocks are stored at a deterministic path and
-  recorded with `ON CONFLICT DO NOTHING`. If a request is cut off at the deadline,
-  the client receives an error (no `200`) and can safely retry — no duplication.
+- **Writes are idempotent.** The block payload object is stored at a
+  deterministic path with a create-only write: a retried request finds the
+  object already present and leaves it untouched, rather than overwriting it.
+  The row is recorded with `ON CONFLICT DO NOTHING`. If a request is cut off at
+  the deadline, the client receives an error (no `200`) and can safely retry —
+  no duplication.
 - **Maintenance work is re-runnable.** Materialization only reads source data and
   writes derived partitions. A task interrupted at the deadline simply leaves its
   partition unwritten; the next scheduled run redoes it. No source data is lost.

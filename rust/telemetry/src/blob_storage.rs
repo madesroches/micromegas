@@ -2,8 +2,17 @@ use anyhow::Result;
 use futures::StreamExt;
 use futures::stream;
 use object_store::prefix::PrefixStore;
-use object_store::{ObjectStore, ObjectStoreExt, path::Path};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, path::Path};
 use std::sync::Arc;
+
+/// Outcome of a create-only write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutIfAbsent {
+    /// The object did not exist and now holds the supplied bytes.
+    Created,
+    /// The object already existed; it was left untouched and the bytes were discarded.
+    AlreadyExists,
+}
 
 /// Parses an object-store URI into the raw store + root prefix, feeding
 /// `object_store` the process env vars lowercased (its expected option keys).
@@ -77,6 +86,32 @@ impl BlobStorage {
             .put(&Path::from(obj_path), buffer.into())
             .await?;
         Ok(())
+    }
+
+    /// Writes a blob only if the key is absent, leaving an existing object untouched.
+    ///
+    /// The lake's object keys are write-once and content-addressed — the range cache keys
+    /// carry no etag or generation and are never invalidated (see `range_cache`'s module
+    /// docs) — and this is what enforces that: a colliding write is reported, never applied.
+    pub async fn put_if_absent(&self, obj_path: &str, buffer: bytes::Bytes) -> Result<PutIfAbsent> {
+        match self
+            .blob_store
+            .put_opts(
+                &Path::from(obj_path),
+                buffer.into(),
+                PutOptions::from(PutMode::Create),
+            )
+            .await
+        {
+            Ok(_) => Ok(PutIfAbsent::Created),
+            Err(object_store::Error::AlreadyExists { .. }) => Ok(PutIfAbsent::AlreadyExists),
+            Err(object_store::Error::NotImplemented { .. }) => Err(anyhow::anyhow!(
+                "object store does not support conditional put (PutMode::Create), which \
+                 create-only block writes require; if this is an S3-compatible store, check \
+                 that it is not configured with aws_conditional_put=disabled"
+            )),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Reads a blob from storage at the specified path.
