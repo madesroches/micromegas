@@ -184,12 +184,17 @@ envelope fields — it matches the existing `__type` convention from `transit_va
                      "otel.scope.attr.<key>": "...", "otel.scope.schema_url": "..." },
   "__metric":     { "name": "...", "unit": "...", "description": "...",   // parent `Metric`
                      "otel.metric.kind": "sum", "otel.metric.aggregation_temporality": 2,
-                     "otel.metric.is_monotonic": true },   // metrics only; the `otel.metric.*`
-                                                            // keys are the per-kind `extras`
-                                                            // arrays in `metrics_block_processor.rs`,
-                                                            // verbatim; `name`/`unit`/`description`
-                                                            // are synthesized (no data point
-                                                            // carries its parent metric's identity)
+                     "otel.metric.is_monotonic": true },   // metrics only; `name`/`unit`/
+                                                            // `description`/`otel.metric.kind`
+                                                            // are synthesized for every leaf
+                                                            // kind (no data point carries its
+                                                            // parent metric's identity), and
+                                                            // `otel.metric.aggregation_temporality`
+                                                            // is copied from the parent
+                                                            // Sum/Histogram/ExponentialHistogram
+                                                            // message for those three kinds;
+                                                            // `otel.metric.is_monotonic` is
+                                                            // Sum-only, per `metrics_block_processor.rs`
 
   // faithful OTLP/JSON dump of the leaf record itself
   "timeUnixNano": "1700000000000000000",
@@ -210,12 +215,21 @@ compares key-for-key with the record-attribute portion of `properties`. `__resou
 `otel-ingestion/src/block.rs`) — `__resource` is bare-keyed instead, matching `__attributes`'s
 convention rather than `process_properties`'s. `__scope` is `scope_extras`'s own flat
 `otel.scope.*` list, unchanged — kept verbatim rather than renamed into a nested object, so it
-compares key-for-key with the `otel.scope.*` entries inside `properties`. `__metric`'s
-`otel.metric.*` keys are the per-kind `extras` array `metrics_block_processor.rs` builds for
-Sum/Gauge, again verbatim — no renaming to camelCase, and no `properties` counterpart since
-metrics extras normally ride on `measures.properties`, not a nested object; `name`/`unit`/
-`description` are added on top because the parent `Metric` — not the leaf data point — is
-where OTLP carries them, and no properties-building helper covers that gap. The raw
+compares key-for-key with the `otel.scope.*` entries inside `properties`. `__metric` always
+synthesizes `otel.metric.kind` (one of `sum`, `gauge`, `histogram`, `exponential_histogram`,
+`summary`) for every leaf kind,
+since `metrics_block_processor.rs` only builds an `otel.metric.*` `extras` array for Sum and
+Gauge and Summary builds none at all (`append_summary`'s doc comment: "No derived
+`otel.metric.*` extras … are added for Summary rows") — leaving Histogram, ExponentialHistogram,
+and Summary rows with no kind marker otherwise. `otel.metric.aggregation_temporality` is a
+field of the parent `Sum`/`Histogram`/`ExponentialHistogram` message, not the data point
+(`opentelemetry.proto.metrics.v1.rs:288,305`), so `leaf_jsonb` carries it through for those
+three kinds regardless of what `extras` would otherwise contain; `otel.metric.is_monotonic`
+stays Sum-only, matching `metrics_block_processor.rs`. No renaming to camelCase, and no
+`properties` counterpart since metrics extras normally ride on `measures.properties`, not a
+nested object; `name`/`unit`/`description` are added on top because the parent `Metric` — not
+the leaf data point — is where OTLP carries them, and no properties-building helper covers
+that gap. The raw
 `attributes` array is kept alongside `__attributes`: the point of this tool is a faithful
 dump, and the flattened view is a lossy convenience (duplicate keys collapse). This is the
 shape that answers the issue's question directly:
@@ -261,20 +275,23 @@ metadata lookups stay on the DataFusion/lakehouse path.
 
 ### Phase 1 — decoder abstraction (no behavior change)
 
-1. Add `serde.workspace = true` and `serde_json.workspace = true` to `rust/analytics/Cargo.toml`
-   (alphabetical order) — `leaf_jsonb`'s `T: Serialize` bound (§3) names `serde` directly.
-2. Create `rust/analytics/src/lakehouse/block_object_decoder.rs` with `ObjectVisitor`,
+1. Create `rust/analytics/src/lakehouse/block_object_decoder.rs` with `ObjectVisitor`,
    `BlockObjectDecoder`, `BlockObjectDecoderMap`, `TransitBlockDecoder`, and
    `default_block_object_decoders()` (transit only, for now). Register the module in
    `rust/analytics/src/lakehouse/mod.rs`.
-3. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` implements `ObjectVisitor`;
-   `fetch_block_metadata` returns the format; `scan` dispatches through the map;
-   `ParseBlockTableFunction::with_decoders` added. Behavior for transit blocks — including
-   the early-limit path and non-Object index gaps — must be identical. Add the regression
-   test in `parse_block_tests.rs` that exercises both (see Testing Strategy).
+2. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` (made `pub`, including its
+   constructor and `skip`/`finish`, so it can be driven directly from the external integration
+   test described in Testing Strategy) implements `ObjectVisitor`; `fetch_block_metadata`
+   returns the format; `scan` dispatches through the map; `ParseBlockTableFunction::with_decoders`
+   added. Behavior for transit blocks — including the early-limit path and non-Object index
+   gaps — must be identical. Add the regression test in `parse_block_tests.rs` that exercises
+   both by calling `ParseBlockRowBuilder`'s `ObjectVisitor::visit`/`skip` directly (see Testing
+   Strategy).
 
 ### Phase 2 — OTLP decoders
 
+3. Add `serde.workspace = true` and `serde_json.workspace = true` to `rust/analytics/Cargo.toml`
+   (alphabetical order) — `leaf_jsonb`'s `T: Serialize` bound (§3) names `serde` directly.
 4. `otel/attrs.rs`: extract `attrs_to_jsonb_value`; keep `attrs_to_jsonb` as a wrapper.
 5. Create `rust/analytics/src/lakehouse/otel/block_decoders.rs` with the shared `leaf_jsonb`
    helper and the three decoders; export from `otel/mod.rs`.
@@ -376,7 +393,8 @@ matches the existing `parse_block_tests.rs` style):
 
 - logs: 2 scopes × N records → correct row count, `type_name = "otlp.LogRecord"`,
   `__attributes` carries a record attribute, `__resource` carries a resource attribute,
-  `__scope.name` is the scope name, `timeUnixNano` is the quoted-string form, `traceId` is hex.
+  `__scope["otel.scope.name"]` is the scope name, `timeUnixNano` is the quoted-string form,
+  `traceId` is hex.
 - metrics: one Sum + one Gauge + one Summary → per-data-point rows with the right
   `type_name`s and `__metric.name`.
 - traces: one span with an event and a link → `otlp.Span` with `events`/`links` nested.
@@ -384,11 +402,12 @@ matches the existing `parse_block_tests.rs` style):
 - a truncated/garbage payload returns `Err` rather than panicking.
 
 **Rust regression** — existing `parse_block_tests.rs` and `parse_corrupt_block_tests.rs` must
-pass unchanged (transit path untouched). Neither covers `ParseBlockRowBuilder`/
-`parse_block_objects` itself, so Phase 1 also adds a new test driving it directly over a
-transit block: assert the early-limit stop point (a visitor-side `false` after N objects
-halts the walk at N rows) and the `object_index` gap left by a non-Object value (index
-advances past the skipped entry without emitting a row for it).
+pass unchanged (transit path untouched). Neither covers `ParseBlockRowBuilder` itself, so
+Phase 1 also adds a new test in `parse_block_tests.rs` that constructs a `ParseBlockRowBuilder`
+directly and drives it through `ObjectVisitor::visit`/`skip` calls (possible because
+`ParseBlockRowBuilder` is `pub`, per Phase 1 step 2): assert the early-limit stop point (`visit`
+returning `false` after N objects halts the walk at N rows) and the `object_index` gap left by
+a `skip()` call (index advances past the skipped entry without emitting a row for it).
 
 **Python e2e** — extend `python/micromegas/tests/test_otlp_e2e.py`: after
 `test_otlp_logs_e2e` posts its batch, poll (`assert_eventually`, as elsewhere in that file)
