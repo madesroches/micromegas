@@ -169,14 +169,23 @@ fn leaf_jsonb<T: Serialize>(
     resource: Option<&Resource>,
     scope: Option<&InstrumentationScope>,
     schema_url: &str,
-    extras: &[(String, JsonbValue<'static>)],
+    metric_extras: &[(String, JsonbValue<'static>)],
 ) -> Result<Vec<u8>>
 ```
 
 It serializes the leaf with `serde_json::to_value` (OTLP/JSON), converts with
-`jsonb::Value::from(&json)`, and injects synthesized keys. The `__`-prefix marks synthesized
-envelope fields — it matches the existing `__type` convention from `transit_value_to_jsonb`
-(`parse_block_table_function.rs:51-54`) and cannot collide with OTLP/JSON's camelCase names.
+`jsonb::Value::from(&json)`, and injects synthesized keys. `metric_extras` is `leaf_jsonb`'s
+only channel for anything belonging to the parent `Metric`/`Sum`/`Histogram`/
+`ExponentialHistogram` message — none of that is reachable from `leaf`, `resource`, or
+`scope` — so its entries are emitted as a nested `__metric` object (the key is omitted when
+`metric_extras` is empty). Only the metrics decoder populates it: holding the parent `Metric`
+and its `Data`, it builds `metric_extras` with `name`/`unit`/`description`/`otel.metric.kind`
+for every leaf kind, plus `otel.metric.aggregation_temporality` for
+Sum/Histogram/ExponentialHistogram and `otel.metric.is_monotonic` for Sum only (details below).
+The logs and traces decoders always pass `&[]`, so their rows carry no `__metric` key. The
+`__`-prefix marks synthesized envelope fields — it matches the existing `__type` convention
+from `transit_value_to_jsonb` (`parse_block_table_function.rs:51-54`) and cannot collide with
+OTLP/JSON's camelCase names.
 
 ```jsonc
 {
@@ -233,9 +242,9 @@ Gauge and Summary builds none at all (`append_summary`'s doc comment: "No derive
 `otel.metric.*` extras … are added for Summary rows") — leaving Histogram, ExponentialHistogram,
 and Summary rows with no kind marker otherwise. `otel.metric.aggregation_temporality` is a
 field of the parent `Sum`/`Histogram`/`ExponentialHistogram` message, not the data point
-(`opentelemetry.proto.metrics.v1.rs:288,305`), so `leaf_jsonb` carries it through for those
-three kinds regardless of what `extras` would otherwise contain; `otel.metric.is_monotonic`
-stays Sum-only, matching `metrics_block_processor.rs`. No renaming to camelCase, and no
+(`opentelemetry.proto.metrics.v1.rs:288,305`), so the metrics decoder includes it in
+`metric_extras` for those three kinds; `otel.metric.is_monotonic` stays Sum-only, matching
+`metrics_block_processor.rs`, and is included in `metric_extras` the same way. No renaming to camelCase, and no
 `properties` counterpart since metrics extras normally ride on `measures.properties`, not a
 nested object; `name`/`unit`/`description` are added on top because the parent `Metric` — not
 the leaf data point — is where OTLP carries them, and no properties-building helper covers
