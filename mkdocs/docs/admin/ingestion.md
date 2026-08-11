@@ -89,8 +89,21 @@ The object store backing ingestion must support conditional put
 (`PutMode::Create`). AWS S3 supports it with no configuration. An S3-compatible
 store explicitly configured with `aws_conditional_put=disabled` will fail every
 block write rather than silently falling back to overwrite — see the CHANGELOG
-entry for this behavior and how to verify conditional-put support against a new
-S3-compatible endpoint before depending on it.
+entry for this behavior.
+
+Before depending on a new S3-compatible endpoint, verify it actually enforces
+conditional put: write a key, write different bytes to the same key, read it
+back, and confirm either an `AlreadyExists` error on the second write, or (if
+it succeeded) that the read still returns the *first* write's bytes. If
+neither holds, the store does not honor conditional put and the write-once
+guarantee does not hold against it.
+
+**Caveat**: a store that *accepts* `If-None-Match: *` but doesn't enforce it
+(returns 200 and overwrites regardless) will make `put_if_absent` return
+`Created` on every call — no error, no log line — so the write-once invariant
+silently degrades to a plain overwrite. There is no code-level way to detect
+this; it must be verified operationally with the procedure above before
+depending on the store.
 
 ## Producer configuration
 

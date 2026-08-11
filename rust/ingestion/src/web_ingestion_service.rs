@@ -241,15 +241,20 @@ impl WebIngestionService {
         }
         // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
         // the cost in this context should be reasonnable
-        imetric!(
-            "payload_size_inserted",
-            "bytes",
-            property_set::PropertySet::find_or_create(vec![property_set::Property::new(
-                "target",
-                "micromegas::ingestion"
-            ),]),
-            payload_size as u64
-        );
+        // Only count bytes that were actually stored: on the AlreadyExists arms, put_if_absent
+        // rejected the write and the payload was discarded, so counting payload_size there would
+        // inflate reported ingest volume by the redelivery/duplicate rate.
+        if put_outcome == PutIfAbsent::Created {
+            imetric!(
+                "payload_size_inserted",
+                "bytes",
+                property_set::PropertySet::find_or_create(vec![property_set::Property::new(
+                    "target",
+                    "micromegas::ingestion"
+                ),]),
+                payload_size as u64
+            );
+        }
         debug!("recorded block_id={block_id} stream_id={stream_id} process_id={process_id}");
 
         Ok(())

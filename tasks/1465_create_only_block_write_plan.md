@@ -613,6 +613,9 @@ metrics stream exists, not a counter's value; this plan doesn't go further than 
 
 ### End-to-end against the local test env
 
+(Note: this file — `python/micromegas/tests/test_otlp_e2e.py` — is missing from the "Files to
+Modify" table above; it belongs there alongside the other test files.)
+
 New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its existing
 `WEBHOOK_ENDPOINT` and `log_entries` polling helpers (it already covers this exact surface, e.g.
 `test_webhook_ingestion_e2e`, `test_webhook_ingestion_block_id_folds_in_full_header_set`,
