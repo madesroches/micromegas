@@ -69,7 +69,8 @@ Registered in `rust/analytics/src/lakehouse/query.rs:129-137` — one constructi
 (`rust/Cargo.toml:70`), so every OTLP message implements `serde::Serialize` in OTLP/JSON
 form: camelCase field names, 64-bit nanos as quoted strings, `trace_id`/`span_id` as hex
 (`opentelemetry.proto.logs.v1.rs:75-200`). `jsonb::Value` implements
-`From<&serde_json::Value>` (jsonb 0.5.5 `src/from.rs:161`), so a faithful proto → JSONB dump
+`From<&serde_json::Value>` (jsonb 0.5.6 in the current lockfile, `src/from.rs:161`), so a
+faithful proto → JSONB dump
 is a two-line conversion with no hand-written per-field mapping.
 
 ### Format dispatch precedent
@@ -347,9 +348,13 @@ parse_block: block '<block_id>' not found in `blocks` for the queried range
 ```
 
 When `query_range` is `None` (no time restriction applied), the message drops the range clause since the block
-genuinely isn't in `blocks` for any window. The metadata partition still catches up within
-about a second of ingestion — a block posted moments ago and queried immediately may need a
-retry, which the same error/guidance already covers.
+genuinely isn't in `blocks` for any window. The `blocks` view is materialized by the
+maintenance daemon's every-second task, which each tick writes the window `[t-2s, t-1s)`
+(`rust/public/src/servers/maintenance.rs:183-212`), so a freshly posted block typically
+becomes visible ~2-3 s after ingestion; if the daemon falls more than 10 s behind, that tick
+is skipped and the every-minute task catches up instead (a 1-2 minute lag). A block posted
+moments ago and queried immediately may therefore need a retry — occasionally a longer one —
+which the same error/guidance already covers.
 
 ## Implementation Steps
 
@@ -371,8 +376,8 @@ error from §5 also takes effect here since it lives in `scan`, not in a decoder
    regression test in `parse_block_tests.rs` that drives
    `TransitBlockDecoder::decode` over a real transit `BlockPayload` with a limiting test
    `ObjectVisitor` (see Testing Strategy) to exercise the early-limit stop point through an
-   actual walk; the non-Object index-gap branch is unreachable via any in-tree transit reader
-   and is deliberately left uncovered (see Testing Strategy).
+   actual walk; the non-Object index-gap branch is unreachable for data written by in-tree
+   SDKs and is deliberately left uncovered (see Testing Strategy).
 
 ### Phase 2 — OTLP decoders
 
@@ -530,11 +535,15 @@ real transit `(StreamMetadata, BlockPayload)` (as in `parse_corrupt_block_tests.
 asserts the walk actually stops at N rows. This exercises `TransitBlockDecoder`'s lifted loop
 itself (not just the boolean return of `visit`), so it catches a regression where `local_index`
 keeps advancing past a `false` return. The non-Object `object_index` gap branch (the `skip()`
-call on a payload entry the decoder recognizes but cannot represent) has no counterpart in any
-in-tree transit reader — `parse_pod_instance` and every custom reader in
-`rust/tracing/src/parsing.rs` always return `Value::Object` — so it is defensive dead code
-against real data and is deliberately left uncovered rather than forced via a synthetic
-non-Object payload. `ParseBlockRowBuilder` and its constructor stay private; the test only
+call on a payload entry the decoder recognizes but cannot represent) is unreachable for data
+written by the in-tree SDK: every custom reader in `rust/tracing/src/parsing.rs` returns
+`Value::Object`, and the one non-Object top-level path in the generic parser —
+`parse_pod_instance` returns the `id` member directly for a UDT with `is_reference: true`
+(`rust/transit/src/parser.rs:251-257`), which can be a `U64` or `String` — requires stream
+metadata no in-tree writer emits for top-level objects (`is_reference` is set only on
+`StaticStringRef`/`StringId`, which appear as members and dependencies, never as objects). It
+is therefore a defensive branch against foreign or crafted stream metadata rather than dead
+code, and is deliberately left uncovered rather than forced via synthetic metadata. `ParseBlockRowBuilder` and its constructor stay private; the test only
 needs the already-public `TransitBlockDecoder`, `BlockObjectDecoder`, and `ObjectVisitor`
 items. §4's unknown-format branch in `scan` is, similarly, deliberately left uncovered: once
 all four in-tree formats are registered in `default_block_object_decoders()`, no in-tree
