@@ -202,22 +202,40 @@ duplicate-delivery divergence would become **silent** rather than fixed. This ch
 described as addressing #1462, and #1462 must be fixed on its own terms (stabilizing `block_id` vs.
 stored bytes in the OTLP path). Worth a line in the PR description so nobody closes #1462 off this.
 
-**Rollout window caveat — re-delivery can change size at rest.** `insert_block`
-(`rust/ingestion/src/web_ingestion_service.rs:164-176`) `put`s the payload blob unconditionally
-*before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` at line 183. If a block_id
-that was first stored *before* this change is redelivered *after* the ingestion server is deployed,
-the object gets overwritten with the smaller byte-string encoding while the `blocks.payload_size`
-row keeps the old (larger) array-form size — a real size divergence, for the duration of the deploy
-window, for exactly the block_ids that happen to be re-delivered across the cutover. When the object
-cache is configured (`ingestion/src/data_lake_connection.rs:90-119` wraps the store in
-`CacheClientStore`), it snapshots the object size once via `origin.head()`
-(`object-cache/src/range_cache/mod.rs:258-294`) and treats a length mismatch on a subsequent origin
-fetch as a hard error, `"origin object changed size mid-fetch"`
-(`object-cache/src/range_cache/fetch.rs:386-401`). This plan accepts that transient failure mode
-rather than adding invalidation logic: it can only affect block_ids re-delivered within the narrow
-window around one ingestion-server deploy, the client retry path already handles ingestion errors,
-and the cache entry self-heals once it expires or is re-fetched after the overwrite. No code change
-is scoped for this; call it out explicitly in the PR description alongside the #1462 caveat above.
+**Rollout window caveat — re-delivery can change size at rest.** `insert_block_typed`
+(`rust/ingestion/src/web_ingestion_service.rs:145-205`) `put`s the payload blob unconditionally
+*before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING`. If a block_id that was first
+stored *before* this change is redelivered *after* the ingestion server is deployed, the object gets
+overwritten with the smaller byte-string encoding while the `blocks.payload_size` row keeps the old
+(larger) array-form size — a real size divergence, for the duration of the deploy window, for exactly
+the block_ids that happen to be re-delivered across the cutover. When the object cache is configured
+(`ingestion/src/data_lake_connection.rs:90-119` wraps the store in `CacheClientStore`), it snapshots
+the object size once via `origin.head()` (`object-cache/src/range_cache/mod.rs:258-294`) and treats a
+length mismatch on a subsequent origin fetch as a hard error, `"origin object changed size mid-fetch"`
+(`object-cache/src/range_cache/fetch.rs:386-401`). Crucially, that cache entry does **not** self-heal:
+`range_cache/mod.rs:54-63` documents the contract explicitly — object keys are assumed write-once and
+content-addressed, so "the size and block caches therefore carry no TTL, etag, or generation in their
+keys and are never invalidated. Overwriting an existing key with different content would cause stale
+size/block data to be served indefinitely." `RangeCache::size()` repeats this at `mod.rs:217-220` — a
+cached size is never invalidated, and the only escape hatches are an implausible-size guard and a
+backend miss. Nothing in `range_cache/fetch.rs` removes the `meta:{ns}:{key}` entry when a run errors
+with `origin object changed size mid-fetch` (`fetch.rs:386-401` only calls `entry.fulfill(Err(...))`;
+`scheduler.remove_entry` at `fetch.rs:354` is in-flight bookkeeping, not cache invalidation). So the
+real blast radius is: every affected block_id gets repeated **read-path** failures — analytics queries,
+ETL partition builds via `fetch_block_payload`, and the `get_payload` UDF — and the stale cached size
+persists until capacity eviction, not until "expiry" or "re-fetch." There is also no client retry to
+fall back on: ingestion itself succeeds (the blob `put` and the `blocks` row both write without error),
+so no client ever sees an error to retry — the failure only surfaces later, on the read side.
+
+That is not an acceptable failure mode to ship unmitigated, so this plan scopes a small guard for it:
+in `insert_block_typed`, reorder the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of
+the blob `put`, and skip the `put` when the insert reports the row already existed
+(`result.rows_affected() == 0`). A re-delivered block_id then leaves the existing object untouched, so
+the blob and `blocks.payload_size` can never diverge across the cutover — closing the rollout-window
+gap outright rather than accepting it. This is a small, self-contained ingestion change that also
+removes a pre-existing duplicate-write inefficiency (today's code always re-puts the blob for a
+duplicate block_id even outside this plan) independent of the #1463 encoding change. Call it out in the
+PR description alongside the #1462 caveat above.
 
 ## Implementation Steps
 
@@ -237,8 +255,13 @@ is scoped for this; call it out explicitly in the PR description alongside the #
    of the new deserializer itself — that gap is closed by item 8 in Testing Strategy.
 6. Verify no Unreal change is needed — `byte_string_value` already emits the target form. Confirm by
    reading `InsertBlockRequest.h`; no code change expected.
-7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
-8. End-to-end check against a local stack (see Testing Strategy).
+7. In `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed`, move the
+   `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of the blob `put`, and skip the
+   `put` when `result.rows_affected() == 0` (row already existed). Closes the rollout-window size
+   divergence described in the #1462 caveat and removes the pre-existing duplicate-write
+   inefficiency for re-delivered block_ids.
+8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
+9. End-to-end check against a local stack (see Testing Strategy).
 
 ## Files to Modify
 
@@ -246,10 +269,13 @@ is scoped for this; call it out explicitly in the PR description alongside the #
 - `rust/telemetry/src/lib.rs` — register module
 - `rust/telemetry/src/block_wire_format.rs` — field attributes
 - `rust/telemetry/tests/block_wire_format_tests.rs` — **new**
+- `rust/ingestion/src/web_ingestion_service.rs` — in `insert_block_typed`, reorder the
+  `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of the blob `put`, and skip the
+  `put` when the insert reports the row already existed (rollout-window guard, see Design)
 
-No changes required in `rust/ingestion/`, `rust/telemetry-sink/`, `rust/analytics/`,
-`rust/otel-ingestion/`, or `unreal/` — the attributes propagate through the existing
-`encode_cbor` / `ciborium::from_reader` call sites.
+No changes required in `rust/telemetry-sink/`, `rust/analytics/`, `rust/otel-ingestion/`, or
+`unreal/` — the attributes propagate through the existing `encode_cbor` / `ciborium::from_reader`
+call sites.
 
 ## Trade-offs
 
