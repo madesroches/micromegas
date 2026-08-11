@@ -141,10 +141,14 @@ Row granularity and `type_name`:
 | `otlp/v1/traces` | one per `Span` (events/links nested in the value) | `otlp.Span` |
 | `otlp/v1/metrics` | one per data point | `otlp.NumberDataPoint`, `otlp.HistogramDataPoint`, `otlp.ExponentialHistogramDataPoint`, `otlp.SummaryDataPoint` |
 
-Metrics are per-data-point rather than per-`Metric`: `measures` materialization already emits
-one row per data point (`otel/metrics_block_processor.rs:275,306`), and `metrics_bounds`
-counts data points as its `nb_objects` basis, so this granularity is the one already implied
-by the rest of the pipeline.
+Metrics are per-data-point rather than per-`Metric`: for Sum and Gauge, `measures`
+materialization already emits one row per data point (`otel/metrics_block_processor.rs:275`);
+that correspondence is not universal, though — `append_summary` fans one `SummaryDataPoint`
+into up to `SUMMARY_MAX_ROWS_PER_POINT = 4` `measures` rows, and Histogram/ExponentialHistogram
+data points emit zero `measures` rows at all. `metrics_bounds` nonetheless counts data points
+as its `nb_objects` basis across every kind, so per-data-point is still the granularity already
+implied by the rest of the pipeline, even where `measures`'s own row count doesn't match it
+one-for-one.
 
 A `Metric` with `data: None` emits nothing and consumes no ordinal (a `debug!` is enough):
 `metrics_bounds` (`otel-ingestion/src/block.rs:178`) already contributes zero to `nb_objects`
@@ -165,7 +169,7 @@ fn leaf_jsonb<T: Serialize>(
     resource: Option<&Resource>,
     scope: Option<&InstrumentationScope>,
     schema_url: &str,
-    extras: &[(&str, JsonbValue<'static>)],
+    extras: &[(String, JsonbValue<'static>)],
 ) -> Result<Vec<u8>>
 ```
 
@@ -213,9 +217,15 @@ compares key-for-key with the record-attribute portion of `properties`. `__resou
 `properties` counterpart to compare against: resource attrs never appear there, only in
 `process_properties` under `otel.resource.*`-prefixed keys (a separate, simpler loop in
 `otel-ingestion/src/block.rs`) — `__resource` is bare-keyed instead, matching `__attributes`'s
-convention rather than `process_properties`'s. `__scope` is `scope_extras`'s own flat
-`otel.scope.*` list, unchanged — kept verbatim rather than renamed into a nested object, so it
-compares key-for-key with the `otel.scope.*` entries inside `properties`. `__metric` always
+convention rather than `process_properties`'s. `__resource` is attributes only: the
+resource-level `schema_url` and `dropped_attributes_count` fields on `ResourceLogs` /
+`ResourceMetrics` / `ResourceSpans` are intentionally omitted from every row (the single
+`schema_url` parameter to `leaf_jsonb` is the *scope's* schema URL, feeding
+`otel.scope.schema_url` below, not the resource's — there is no resource-level counterpart in
+the envelope). `__scope` is a nested object holding `scope_extras`'s entries under their
+original `otel.scope.*` key names. For `log_entries`/`otel_spans` this compares key-for-key
+with the `otel.scope.*` entries inside `properties`; `metrics_block_processor.rs` never calls
+`scope_extras`, so `measures.properties` carries no scope keys to compare against. `__metric` always
 synthesizes `otel.metric.kind` (one of `sum`, `gauge`, `histogram`, `exponential_histogram`,
 `summary`) for every leaf kind,
 since `metrics_block_processor.rs` only builds an `otel.metric.*` `extras` array for Sum and
@@ -239,6 +249,12 @@ SELECT jsonb_as_string(jsonb_get(jsonb_get(value, '__attributes'), 'my.event.id'
 FROM parse_block('<block_id>');
 ```
 
+Known lossy case: `serde_json`'s `f64` serializer maps NaN/±Infinity to JSON `null`
+(`impl From<f64> for Value`), and `jsonb::Value::from(&JsonValue)` carries that `Null` straight
+through, so a non-finite `asDouble`/histogram `sum`/`min`/`max` renders as `null` —
+indistinguishable from an absent field — even though OTLP/JSON itself encodes NaN as the string
+`"NaN"`. Not fixed; noted as a known deviation from true OTLP/JSON fidelity.
+
 To build the flattened maps without duplicating `attrs.rs`, extract from `attrs_to_jsonb`
 (`otel/attrs.rs:87`) a `pub fn attrs_to_jsonb_value(attrs, extras) -> JsonbValue<'static>`
 and make the existing byte-returning function a one-line wrapper — no behavior change for
@@ -253,19 +269,30 @@ its current callers.
   (`query.rs:129-137` is unchanged).
 - `fetch_block_metadata` drops the format check and returns the format string alongside the
   rest: `Option<(Uuid, i64, String, StreamMetadata)>`.
-- `scan` looks the format up in the map. On a miss:
+- `scan` looks the format up in the map. On a miss, the "known formats" list is built from the
+  decoder map's own keys — not hardcoded — sorted for deterministic output (the map is a
+  `HashMap`, so unsorted iteration would print in nondeterministic order):
 
   ```
   parse_block: no decoder for streams.format='<fmt>' (known formats: micromegas-transit,
   otlp/v1/logs, otlp/v1/metrics, otlp/v1/traces)
   ```
 
+  This keeps registering a new format a purely additive change: the message updates itself
+  from `default_block_object_decoders()` with no second string to edit.
+
 - `parse_block_objects` becomes `ParseBlockRowBuilder`, an `ObjectVisitor` implementation
   holding the three builders, `object_offset`, `local_index`, `nb_objects`, and `early_limit`.
 
 ### 5. Block metadata lookup — lookup path unchanged, missing-block behavior fixed
 
-`fetch_block_metadata` keeps resolving the block through the `blocks` view — same
+`fetch_block_metadata` first parses `block_id` as a `Uuid` (`Uuid::parse_str`) before touching
+the `blocks` view, and returns a distinct "`<block_id>` is not a valid block id" error on
+failure — today a malformed argument is interpolated straight into the `WHERE block_id = '…'`
+lookup, silently yields zero rows, and would otherwise surface the misleading
+range-widening advice added below.
+
+`fetch_block_metadata` otherwise keeps resolving the block through the `blocks` view — same
 DataFusion/lakehouse path, no raw-Postgres fallback. What changes is what happens when the
 block isn't there: today `scan` silently returns zero rows, which is indistinguishable from
 "the block was found but has no matching records." Since a caller's `query_range` is applied
@@ -274,21 +301,28 @@ both to `fetch_block_metadata`'s session and to partition pruning (`query.rs:226
 outside the query window is invisible by default — the common case, not an edge case.
 
 `scan` now returns an error instead of an empty batch when `fetch_block_metadata` returns
-`None`, naming the query range and pointing at wider `--begin`/`--all`:
+`None`, naming the query range in client-neutral terms — this error surfaces through
+`DataFusionError::External` to every FlightSQL caller (Grafana, the Python API, the web app),
+not just `micromegas-query`, so it must not name CLI-specific flags:
 
 ```
 parse_block: block '<block_id>' not found in `blocks` for the queried range
-[<begin>, <end>]. If the block may be outside this window, widen --begin or pass --all.
+[<begin>, <end>]. The block may be outside the query's time range — widen the range to include it.
 ```
 
-When `query_range` is `None` (`--all`), the message drops the range clause since the block
+When `query_range` is `None` (no time restriction applied), the message drops the range clause since the block
 genuinely isn't in `blocks` for any window. The metadata partition still catches up within
 about a second of ingestion — a block posted moments ago and queried immediately may need a
 retry, which the same error/guidance already covers.
 
 ## Implementation Steps
 
-### Phase 1 — decoder abstraction (no behavior change)
+### Phase 1 — decoder abstraction (no behavior change for transit blocks)
+
+Non-transit blocks (including OTLP, before Phase 2 registers decoders for them) already
+change behavior in this phase: the old `parse_block does not support format=…` message is
+replaced by the "no decoder for streams.format=…" message from §4, and the missing-block
+error from §5 also takes effect here since it lives in `scan`, not in a decoder.
 
 1. Create `rust/analytics/src/lakehouse/block_object_decoder.rs` with `ObjectVisitor`,
    `BlockObjectDecoder`, `BlockObjectDecoderMap`, `TransitBlockDecoder`, and
@@ -353,8 +387,12 @@ bytes" niche.
 
 **`serde_json` round-trip vs. hand-written proto → JSONB.** Hand-writing gives full control
 over the shape but is three signal-specific walkers over dozens of proto fields, and silently
-goes stale when `opentelemetry-proto` adds fields. The serde path is generic, faithful to
-OTLP/JSON (the wire form users already know), and free. The cost is a verbose value: with no
+goes stale when `opentelemetry-proto` adds fields. The serde path is generic, matches OTLP/JSON
+field naming and 64-bit/ID encoding (the wire form users already know), and is free — though
+enum fields (`severityNumber`, `aggregationTemporality`, …) come through as their raw `i32`
+values rather than the OTLP/JSON enum *names*, and non-finite `f64`s (NaN/±Infinity) collapse
+to JSON `null` (see §3) rather than OTLP/JSON's `"NaN"`/`"Infinity"` strings, so "faithful to
+OTLP/JSON" overstates it slightly. The cost is also a verbose value: with no
 `skip_serializing_if` attributes on the generated types, empty strings and zero fields are
 always present. Acceptable for a debug tool. Chosen.
 
@@ -384,15 +422,25 @@ subject to whatever the data-isolation work layers on the query path.
 Unchanged for transit blocks (same parse loop, same early-limit rule). For OTLP, prost
 decodes the whole `Resource*` message up front, so the early limit only avoids the JSONB
 conversion of the remaining leaves, not the proto decode — worth a sentence in the docs
-alongside the existing early-limit note. A block is a single HTTP export batch, so the
-decoded message is bounded by the ingestion body cap.
+alongside the existing early-limit note. A block is a single HTTP export batch, so the decoded
+proto message is bounded by the ingestion body cap, but the output is larger than that cap
+suggests: `__resource`, `__scope`, and (for metrics) `__metric` are re-serialized into every
+row rather than shared once, and `scan` materializes the whole result as one `RecordBatch` in
+memory, so a capped export batch can expand to a multiple of that cap by the time it reaches
+the client. The mitigation is the same one that already exists for any query: a filter-free
+`LIMIT`.
 
 ## Documentation
 
 - `mkdocs/docs/query-guide/functions-reference.md:196-246` — rewrite the `parse_block`
   section: supported formats table, the `type_name` values per format, the `__`-prefixed
   envelope keys, and an OTLP example extracting one attribute via
-  `jsonb_get(value, '__attributes')`.
+  `jsonb_get(value, '__attributes')`. Notes: (1) for OTLP blocks `object_index` is a positional
+  index only and is not guaranteed to match `nb_objects` from `list_partitions()`/`blocks`,
+  since Summary data points are over-counted there by `SUMMARY_MAX_ROWS_PER_POINT = 4`; (2)
+  non-finite `f64` values (NaN/±Infinity) in the source payload render as JSON `null` in
+  `value`, indistinguishable from an absent field, because the `serde_json` conversion path
+  does not preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding.
 - `mkdocs/docs/otlp/index.md:617` — delete the "`parse_block` does not decode OTel payloads"
   limitation and add a Troubleshooting entry: *"`log_entries` is empty but ingestion
   succeeded"* → find the block in `blocks` by `process_id` / `"streams.format"`, run
@@ -441,17 +489,24 @@ in-tree transit reader — `parse_pod_instance` and every custom reader in
 against real data and is deliberately left uncovered rather than forced via a synthetic
 non-Object payload. `ParseBlockRowBuilder` and its constructor stay private; the test only
 needs the already-public `TransitBlockDecoder`, `BlockObjectDecoder`, and `ObjectVisitor`
-items.
+items. §4's unknown-format branch in `scan` is, similarly, deliberately left uncovered: once
+all four in-tree formats are registered in `default_block_object_decoders()`, no in-tree
+caller can construct a `streams.format` value that misses the map, so there is no way to reach
+that branch without a synthetic decoder map — not worth adding for a message that is otherwise
+covered by inspection.
 
 **Python e2e** — extend `python/micromegas/tests/test_otlp_e2e.py`: after
 `test_otlp_logs_e2e` posts its batch, poll (`assert_eventually`, as elsewhere in that file)
 `blocks` for the block of that `process_id` with `"streams.format" = 'otlp/v1/logs'`, then
 assert `SELECT type_name, jsonb_as_string(jsonb_get(jsonb_get(value,'__attributes'), '<key>'))
-FROM parse_block('<block_id>')` returns the 5 records with the expected attribute value.
-One test, one assertion path — the unit tests cover the shape.
+FROM parse_block('<block_id>')` returns the 5 records with the expected attribute value. Also
+assert that `parse_block('<a random UUID not present in `blocks`>')` raises — this is the one
+place in the test suite that exercises §5's missing-block error instead of the pre-existing
+empty-result behavior. Two assertion paths — the unit tests cover the shape.
 
 **Manual** — `python3 local_test_env/ai_scripts/start_services.py`, post an OTLP batch, then
-`micromegas-query "SELECT type_name, jsonb_format_json(value) FROM parse_block('<id>')"`.
+`micromegas-query "SELECT type_name, jsonb_format_json(value) FROM parse_block('<id>')" --begin 1h`
+(the CLI errors without `--begin` or `--all`).
 
 ## Open Questions
 
