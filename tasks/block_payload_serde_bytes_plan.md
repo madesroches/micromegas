@@ -215,6 +215,11 @@ behavior:
    ships inside client builds on a slower cadence, so old array-form senders remain in the field
    indefinitely after the deploy. That is fine: the ingestion reader handles both forever.
 
+This ordering covers only reader/writer compatibility. It does **not** address the re-delivery
+exposure — see "Recommended sequencing" under [Interaction with #1462](#interaction-with-1462--a-caveat-not-a-fix)
+for whether #1462 must land first and, if not, the maintenance-pause and cache-flush steps that
+wrap the ingestion deploy.
+
 Old and new writers coexist permanently, and the array-form objects already in storage are read by
 the `visit_seq` path forever. The dual-path reader is **not a temporary shim** — say so in the code
 comment so a future cleanup pass does not delete it.
@@ -251,12 +256,41 @@ length mismatch on a subsequent origin fetch as a hard error, `"origin object ch
 (`object-cache/src/range_cache/fetch.rs:386-401`). That cache entry does **not** self-heal:
 `range_cache/mod.rs:54-63` documents the size and block caches as carrying no TTL, etag, or generation
 in their keys and being never invalidated, and `RangeCache::size()` repeats this at `mod.rs:217-220`.
-So the real blast radius is: every affected block_id gets repeated **read-path** failures — analytics
-queries, ETL partition builds via `fetch_block_payload`, and the `get_payload` UDF — and the stale
-cached size persists until capacity eviction, not until "expiry" or "re-fetch." There is also no
-client retry to fall back on: ingestion itself succeeds (the blob `put` and the `blocks` row both
-write without error), so no client ever sees an error to retry — the failure only surfaces later, on
-the read side.
+The stale cached size therefore persists until capacity eviction, not until "expiry" or "re-fetch."
+There is also no client retry to fall back on: ingestion itself succeeds (the blob `put` and the
+`blocks` row both write without error), so no client ever sees an error to retry — the failure only
+surfaces later, on the read side.
+
+The blast radius splits by read path, and the ETL half is the dangerous one:
+
+- **Ad-hoc query paths fail loudly.** `parse_block`, the `get_payload` UDF, and any direct query that
+  reaches `fetch_block_payload` surface the error to the caller.
+- **ETL partition builds absorb the error and write an incomplete partition.**
+  `block_partition_spec.rs:145-152` handles a failed block with `error!` plus
+  `logger.write_log_entry(...)` and then **continues the loop**; after `drop(tx)` the partition is
+  written from whatever rows succeeded and is marked complete. So the build reports success while
+  silently omitting the affected block's rows. Nothing repairs it later, either: the re-delivery hit
+  `ON CONFLICT (block_id) DO NOTHING`, so the `blocks` row — including `payload_size` — is unchanged,
+  the source-data hash is unchanged, and the view has no reason to rebuild that partition. The only
+  trace is an error in the partition-build log of a build that succeeded.
+
+**Bounding the worst case.** The damage is *missing rows*, not corrupted ones:
+
+- Granularity is the whole block — a fetch failure errors before `process()` produces any rows, so
+  the block contributes nothing rather than something half-written. Every row that *is* present is
+  correct.
+- The overwritten blob is not corrupt. It is a valid byte-string encoding of the same payload, which
+  the new reader decodes fine, so the source data remains intact in the lake. The gaps are therefore
+  **repairable**: flush the object cache and force a rebuild of the affected partitions, as long as
+  the source blocks are still within retention.
+- One thing does stay durably wrong: `blocks.payload_size` keeps the old, larger value. It is
+  user-queryable through the `blocks` view (`analytics/src/lakehouse/blocks_view.rs:61,256`) and is
+  copied onward by replication (`analytics/src/replication.rs:196-214`). Impact is limited — it feeds
+  the `nb_tasks` heuristic as a harmless overestimate (fewer concurrent fetches) and misreports a size
+  to whoever queries it — but unlike the partition gaps, a rebuild does not fix it.
+
+So the worst case is silent, permanent-until-rebuilt gaps in materialized views, plus a stale
+`payload_size` in metadata. Nothing decodes wrong and nothing is unrecoverable.
 
 An earlier revision of this plan proposed closing this gap here by reordering `insert_block_typed` to
 INSERT before `put` and skipping the `put` when the row already exists. That reorder is rejected for
@@ -276,8 +310,26 @@ of how `block_id` is derived: for the Rust sink, `block_id` is a UUID, so a rewr
 client genuinely retries — a narrow deploy-window exposure. For OTLP, `block_id` is a content hash, so
 any re-delivery of byte-identical OTLP content — the designed idempotency path, e.g. an exporter
 retry or duplicate collector — replaces an existing array-form blob with a much smaller byte-string one — a guaranteed large size divergence — and this keeps recurring until
-pre-cutover blocks age out of retention, not just for the duration of the deploy window. That
-asymmetry is an argument for landing #1462 reasonably soon after this change ships.
+pre-cutover blocks age out of retention, not just for the duration of the deploy window.
+
+**Recommended sequencing.** Because the ETL failure mode is silent rather than loud, the asymmetry
+above is a reason to land **#1462 first** for any deployment that runs OTLP ingestion — not merely
+"reasonably soon after." For a Rust-sink-only deployment the exposure is a narrow deploy-window retry
+race and does not warrant gating.
+
+If this change must ship before #1462, flushing the object cache is **not sufficient on its own** — it
+heals future reads but does not repair partitions already written with gaps. In that case:
+
+1. Pause `telemetry-maintenance-srv` (or the monolith's maintenance role) before deploying the
+   ingestion server, so no partition is built while blocks are poisoned.
+2. Deploy the ingestion server.
+3. Drop the object cache, clearing the stale size snapshots. Once a pre-cutover blob has been
+   overwritten with the byte-string form, subsequent `head()` calls agree with it, so the divergence
+   does not regenerate.
+4. Resume maintenance.
+
+The one failure mode this ordering cannot prevent is an ad-hoc query in the window between steps 2
+and 3, which fails loudly and is retryable — an acceptable trade against silent gaps.
 
 ## Implementation Steps
 
