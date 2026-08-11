@@ -19,7 +19,7 @@ All claims below were checked empirically against ciborium 0.2.2 with a throwawa
 | Claim from #1463 | Verdict | Evidence |
 |---|---|---|
 | `Vec<u8>` encodes as a CBOR array, not a byte string | **Confirmed** | Encoding a `BlockPayload` with 256 objects bytes emits `99 01 00` (major type 4, array(256)) after the `objects` key — not `59` (byte string). |
-| Inflation is ~1.6–1.9x and value-dependent | **Confirmed** | 260 raw bytes → 521 CBOR bytes (2.004x) for a uniform 0..=255 payload, where 232/256 bytes are ≥ 24. The ratio genuinely tracks the fraction of bytes ≥ 24. |
+| Inflation is ~1.6–1.9x and value-dependent | **Confirmed, slightly above the claimed range (2.01x measured)** | 256 raw bytes → 514 CBOR bytes (2.008x) for a uniform 0..=255 payload, where 232/256 bytes are ≥ 24. The ratio genuinely tracks the fraction of bytes ≥ 24. |
 | Savings of roughly 38–46% | **Confirmed** | Same payload: old form 514 bytes, byte-string form 282 bytes → **45.1%** smaller. |
 | `serde_bytes` alone will not decode the existing array form | **Confirmed** | A bytes-only visitor (`deserialize_byte_buf`) against array-form input fails with `invalid type: sequence, expected byte array`. This is the real hazard. |
 | Readers must be changed *first*, before any writer, or existing readers cannot parse the new form | **Incorrect** | The *derived* `Vec<u8>` deserializer **already accepts CBOR byte strings** — ciborium's `deserialize_seq` transparently feeds a byte string as a sequence of `u8`. Decoding byte-string-form input with today's unmodified `BlockPayload` round-trips correctly. |
@@ -74,16 +74,19 @@ Writers of this struct:
 
 Readers:
 
-| Reader | Path |
-|---|---|
-| Ingestion (request body) | `rust/ingestion/src/web_ingestion_service.rs:133` |
-| Analytics block parsing | `rust/analytics/src/payload.rs:33-35` (`fetch_block_payload`) |
-| Analytics `get_payload` UDF | `rust/analytics/src/lakehouse/get_payload_function.rs:108` |
-| Replication | `rust/analytics/src/replication.rs:166` |
+| Reader | Path | Decodes `BlockPayload`? |
+|---|---|---|
+| Ingestion (request body) | `rust/ingestion/src/web_ingestion_service.rs:133` | Yes — derived `Deserialize` |
+| Analytics block parsing | `rust/analytics/src/payload.rs:33-35` (`fetch_block_payload`) | Yes — derived `Deserialize` |
+| Analytics `get_payload` UDF | `rust/analytics/src/lakehouse/get_payload_function.rs:107-124` | No — raw blob pass-through, byte-for-byte (`read_blob` appended straight to a `BinaryBuilder`) |
+| Replication | `rust/analytics/src/replication.rs:161-171` | No — raw blob pass-through, byte-for-byte (reads the `BinaryArray` column, `put`s the bytes verbatim) |
 
-All Rust readers go through the derived `Deserialize`, which currently accepts both forms by
-accident of ciborium's behavior. The plan makes that acceptance **explicit and intentional** rather
-than leaving it as an undocumented dependency on a third-party crate's internals.
+Only two sites actually decode `BlockPayload`: the ingestion request-body reader and analytics block
+parsing (`fetch_block_payload`). The `get_payload` UDF and replication move raw bytes without ever
+running `Deserialize`, so byte-string vs. array-form is invisible to them. For the two real decode
+sites, acceptance of both forms today happens by accident of ciborium's behavior; the plan makes that
+acceptance **explicit and intentional** rather than leaving it as an undocumented dependency on a
+third-party crate's internals.
 
 `BlockPayload` is the only wire struct in `telemetry/`, `ingestion/`, or `transit/` with `Vec<u8>`
 fields, so nothing else needs the same treatment.
@@ -110,16 +113,20 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error>
 ```
 
 - `serialize` → `s.serialize_bytes(v)`.
-- `deserialize` → `d.deserialize_any(ByteBufVisitor)`, where the visitor implements
+- `deserialize` → `d.deserialize_byte_buf(ByteBufVisitor)`, where the visitor implements
   `visit_bytes`, `visit_byte_buf`, **and** `visit_seq`.
 
-`deserialize_any` is what makes the dual path work, and it is sound here because CBOR is
-self-describing. Note this in a module comment: the helper is not portable to a non-self-describing
-format (bincode, postcard) without change.
+The dual path works because ciborium's `deserialize_byte_buf` (and `deserialize_bytes`) route both
+CBOR hints to the visitor: a byte-string header goes to `visit_byte_buf`/`visit_bytes`, and an array
+header goes to `visit_seq` (ciborium 0.2.2, `src/de/mod.rs:384-412` and `:364-382`). A visitor that
+implements all three gets the dual path directly from `deserialize_byte_buf`, with no need for
+`deserialize_any`. As an aside, this dual-hint routing is itself only available because CBOR is
+self-describing; note this in a module comment — the helper would need to change to be reused with a
+non-self-describing format (bincode, postcard).
 
-Using `deserialize_any` also buys a performance win the current code does not have — the byte-string
-path lands in `visit_byte_buf`/`visit_bytes` as one contiguous slice instead of being pushed
-element-by-element through `SeqAccess`.
+Using `deserialize_byte_buf` also buys a performance win the current code does not have — the
+byte-string path lands in `visit_byte_buf`/`visit_bytes` as one contiguous slice instead of being
+pushed element-by-element through `SeqAccess`.
 
 Applied to the struct:
 
@@ -140,11 +147,14 @@ No call site changes: the field type stays `Vec<u8>`.
 `Vec::with_capacity(seq.size_hint().unwrap_or(0))` on the legacy path is an allocation-amplification
 vector — this deserializer runs on the **public ingestion endpoint**, and a malicious client can
 declare a multi-gigabyte CBOR array header while sending a few bytes. serde's own `Vec<T>` impl
-guards this with a capacity cap, but that logic (`serde::de::size_hint::cautious`) is not a stable
-public API — as of serde 1.0.228 (pinned in `rust/Cargo.lock`) it lives under the doc-hidden
-`serde::__private::size_hint`, not `serde::de`, so the visitor cannot call it. Use an explicit clamp
-instead: `Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096))`, so the new code is no weaker
-than what it replaces.
+guards this with a capacity cap (`cautious`, capping at `MAX_PREALLOC_BYTES` — 1 MiB worth of
+elements, i.e. 1,048,576 for `u8`), but that logic lives in `serde_core/src/private/size_hint.rs`, a
+private module. serde's `build.rs` re-exports it only under a patch-version-mangled module name (e.g.
+`pub mod __private228 { pub use crate::private::*; }` for the pinned 1.0.228 in `rust/Cargo.lock`), so
+there is no `serde::__private::size_hint` or `serde::de::size_hint` path stable across patch releases
+for user code to call. Use an explicit clamp instead:
+`Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096))` — deliberately stricter than serde's
+1 MiB cap — so the new code is no weaker than what it replaces.
 
 ### Encoding shape before/after
 
@@ -171,9 +181,10 @@ Because deployed readers already accept byte strings, strict ordering is not loa
 Still, ship in this order at zero cost, so the rollout does not depend on ciborium's incidental
 behavior:
 
-1. **Readers** — analytics (`flight-sql-srv`, `telemetry-maintenance-srv`), ingestion, object-cache
-   consumers. This is the same crate change, so "readers first" means deploying the *services*
-   before the clients.
+1. **Readers** — the two real decode sites: ingestion (request body) and analytics block parsing
+   (`fetch_block_payload`, used by `flight-sql-srv` and `telemetry-maintenance-srv`). This is the
+   same crate change, so "readers first" means deploying the *services* before the clients. (The
+   `get_payload` UDF and replication move raw bytes and are unaffected either way.)
 2. **Ingestion server writer** — same binary as step 1; the moment it ships, all newly stored blocks
    are compact. This is where essentially all of the storage win comes from.
 3. **Rust `telemetry-sink` writer** — same crate change as steps 1–2, not a separate diff; it just
@@ -202,40 +213,46 @@ duplicate-delivery divergence would become **silent** rather than fixed. This ch
 described as addressing #1462, and #1462 must be fixed on its own terms (stabilizing `block_id` vs.
 stored bytes in the OTLP path). Worth a line in the PR description so nobody closes #1462 off this.
 
-**Rollout window caveat — re-delivery can change size at rest.** `insert_block_typed`
-(`rust/ingestion/src/web_ingestion_service.rs:145-205`) `put`s the payload blob unconditionally
-*before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING`. If a block_id that was first
-stored *before* this change is redelivered *after* the ingestion server is deployed, the object gets
-overwritten with the smaller byte-string encoding while the `blocks.payload_size` row keeps the old
-(larger) array-form size — a real size divergence, for the duration of the deploy window, for exactly
-the block_ids that happen to be re-delivered across the cutover. When the object cache is configured
+**Rollout window caveat — re-delivery can change size at rest, and this plan does not fix it.**
+`insert_block_typed` (`rust/ingestion/src/web_ingestion_service.rs:145-205`) `put`s the payload blob
+unconditionally *before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING`. If a block_id
+that was first stored *before* this change is redelivered *after* the ingestion server is deployed,
+the object gets overwritten with the smaller byte-string encoding while the `blocks.payload_size` row
+keeps the old (larger) array-form size — a real size divergence for exactly the block_ids that happen
+to be re-delivered across the cutover. When the object cache is configured
 (`ingestion/src/data_lake_connection.rs:90-119` wraps the store in `CacheClientStore`), it snapshots
 the object size once via `origin.head()` (`object-cache/src/range_cache/mod.rs:258-294`) and treats a
 length mismatch on a subsequent origin fetch as a hard error, `"origin object changed size mid-fetch"`
-(`object-cache/src/range_cache/fetch.rs:386-401`). Crucially, that cache entry does **not** self-heal:
-`range_cache/mod.rs:54-63` documents the contract explicitly — object keys are assumed write-once and
-content-addressed, so "the size and block caches therefore carry no TTL, etag, or generation in their
-keys and are never invalidated. Overwriting an existing key with different content would cause stale
-size/block data to be served indefinitely." `RangeCache::size()` repeats this at `mod.rs:217-220` — a
-cached size is never invalidated, and the only escape hatches are an implausible-size guard and a
-backend miss. Nothing in `range_cache/fetch.rs` removes the `meta:{ns}:{key}` entry when a run errors
-with `origin object changed size mid-fetch` (`fetch.rs:386-401` only calls `entry.fulfill(Err(...))`;
-`scheduler.remove_entry` at `fetch.rs:354` is in-flight bookkeeping, not cache invalidation). So the
-real blast radius is: every affected block_id gets repeated **read-path** failures — analytics queries,
-ETL partition builds via `fetch_block_payload`, and the `get_payload` UDF — and the stale cached size
-persists until capacity eviction, not until "expiry" or "re-fetch." There is also no client retry to
-fall back on: ingestion itself succeeds (the blob `put` and the `blocks` row both write without error),
-so no client ever sees an error to retry — the failure only surfaces later, on the read side.
+(`object-cache/src/range_cache/fetch.rs:386-401`). That cache entry does **not** self-heal:
+`range_cache/mod.rs:54-63` documents the size and block caches as carrying no TTL, etag, or generation
+in their keys and being never invalidated, and `RangeCache::size()` repeats this at `mod.rs:217-220`.
+So the real blast radius is: every affected block_id gets repeated **read-path** failures — analytics
+queries, ETL partition builds via `fetch_block_payload`, and the `get_payload` UDF — and the stale
+cached size persists until capacity eviction, not until "expiry" or "re-fetch." There is also no
+client retry to fall back on: ingestion itself succeeds (the blob `put` and the `blocks` row both
+write without error), so no client ever sees an error to retry — the failure only surfaces later, on
+the read side.
 
-That is not an acceptable failure mode to ship unmitigated, so this plan scopes a small guard for it:
-in `insert_block_typed`, reorder the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of
-the blob `put`, and skip the `put` when the insert reports the row already existed
-(`result.rows_affected() == 0`). A re-delivered block_id then leaves the existing object untouched, so
-the blob and `blocks.payload_size` can never diverge across the cutover — closing the rollout-window
-gap outright rather than accepting it. This is a small, self-contained ingestion change that also
-removes a pre-existing duplicate-write inefficiency (today's code always re-puts the blob for a
-duplicate block_id even outside this plan) independent of the #1463 encoding change. Call it out in the
-PR description alongside the #1462 caveat above.
+An earlier revision of this plan proposed closing this gap here by reordering `insert_block_typed` to
+INSERT before `put` and skipping the `put` when the row already exists. That reorder is rejected for
+this PR: it breaks the invariant that a committed `blocks` row implies its payload object exists.
+Today's order (`put` → `INSERT`) means a crash or storage error between the two steps leaves only a
+harmless orphan blob. Under the reorder, if the INSERT commits and the subsequent `put` then fails
+(S3 error, OOM, process kill), the request errors, the client retries the same `block_id` (both
+clients retry: the Rust sink via `tokio_retry2` in `rust/telemetry-sink/src/http_event_sink.rs:24-60,
+342-362`; Unreal via `FHttpRetrySystem` in
+`unreal/MicromegasTelemetrySink/Private/HttpEventSink.cpp:412-424`), `rows_affected() == 0` on the
+retry, the `put` is skipped, and the blob is never written — a permanently unreadable block. That is
+strictly worse than the bounded exposure it was meant to prevent.
+
+So this plan ships without a fix for the rollout-window gap; the put-before-insert change (and the
+invariant trade-off around it) stays in #1462's scope. The actual exposure differs by client because
+of how `block_id` is derived: for the Rust sink, `block_id` is a UUID, so a rewrite only happens if a
+client genuinely retries — a narrow deploy-window exposure. For OTLP, `block_id` is a content hash, so
+any hash collision against a pre-cutover `block_id` replaces an existing array-form blob with a much
+smaller byte-string one — a guaranteed large size divergence — and this keeps recurring until
+pre-cutover blocks age out of retention, not just for the duration of the deploy window. That
+asymmetry is an argument for landing #1462 reasonably soon after this change ships.
 
 ## Implementation Steps
 
@@ -255,13 +272,8 @@ PR description alongside the #1462 caveat above.
    of the new deserializer itself — that gap is closed by item 8 in Testing Strategy.
 6. Verify no Unreal change is needed — `byte_string_value` already emits the target form. Confirm by
    reading `InsertBlockRequest.h`; no code change expected.
-7. In `rust/ingestion/src/web_ingestion_service.rs::insert_block_typed`, move the
-   `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of the blob `put`, and skip the
-   `put` when `result.rows_affected() == 0` (row already existed). Closes the rollout-window size
-   divergence described in the #1462 caveat and removes the pre-existing duplicate-write
-   inefficiency for re-delivered block_ids.
-8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
-9. End-to-end check against a local stack (see Testing Strategy).
+7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
+8. End-to-end check against a local stack (see Testing Strategy).
 
 ## Files to Modify
 
@@ -269,13 +281,10 @@ PR description alongside the #1462 caveat above.
 - `rust/telemetry/src/lib.rs` — register module
 - `rust/telemetry/src/block_wire_format.rs` — field attributes
 - `rust/telemetry/tests/block_wire_format_tests.rs` — **new**
-- `rust/ingestion/src/web_ingestion_service.rs` — in `insert_block_typed`, reorder the
-  `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` ahead of the blob `put`, and skip the
-  `put` when the insert reports the row already existed (rollout-window guard, see Design)
 
-No changes required in `rust/telemetry-sink/`, `rust/analytics/`, `rust/otel-ingestion/`, or
-`unreal/` — the attributes propagate through the existing `encode_cbor` / `ciborium::from_reader`
-call sites.
+No changes required in `rust/telemetry-sink/`, `rust/analytics/`, `rust/ingestion/`,
+`rust/otel-ingestion/`, or `unreal/` — the attributes propagate through the existing `encode_cbor` /
+`ciborium::from_reader` call sites.
 
 ## Trade-offs
 
