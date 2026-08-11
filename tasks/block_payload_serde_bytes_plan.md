@@ -133,11 +133,13 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error>
 
 The dual path works because ciborium's `deserialize_byte_buf` routes both CBOR hints to the visitor:
 a byte-string header goes to `visit_byte_buf`, and an array header goes to `visit_seq` (ciborium
-0.2.2, `src/de/mod.rs:383-412`). `deserialize_bytes` does **not** give the same guarantee: it only
+0.2.2, `src/de/mod.rs:383-412`). `deserialize_bytes` also routes array headers to `visit_seq`
+(`src/de/mod.rs:374`), but it does **not** give the same guarantee for byte-string headers: it only
 accepts `Header::Bytes(Some(len))` when `len <= self.scratch.len()` — the reader's scratch buffer is a
 fixed 4096 bytes (`src/de/mod.rs:829`) — and otherwise falls through to `Err(header.expected("bytes"))`
-(`src/de/mod.rs:369`), including for every array header regardless of size. Real block payloads run
-into the megabytes, so the helper must call `deserialize_byte_buf`, never `deserialize_bytes`. Note
+(`src/de/mod.rs:379`), rejecting both definite-length byte strings longer than 4096 bytes and
+indefinite-length byte strings entirely. Real block payloads run into the megabytes, so the helper
+must call `deserialize_byte_buf`, never `deserialize_bytes`. Note
 also that on the reader path a `Header::Bytes` of any size always routes to `visit_byte_buf`, never to
 `visit_bytes` — `visit_bytes` is only reachable via the `Value`-based deserializer used in tests (see
 Testing Strategy items 3–4), not via `from_reader`. A visitor implementing `visit_bytes`,
