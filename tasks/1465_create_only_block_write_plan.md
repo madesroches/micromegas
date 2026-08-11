@@ -70,7 +70,7 @@ let payload_bytes = if nb_backfilled > 0 { rl.encode_to_vec() } else { pre_mutat
 `build_webhook_request` leaves both timestamps at 0 on every record by design
 (`rust/otel-ingestion/src/handler.rs:243-244`), so for webhook traffic `nb_backfilled > 0`
 *unconditionally*: every redelivery re-derives the same `block_id`, backfills a fresh `Utc::now()`,
-and overwrites the stored object with different bytes. `split_metrics` (`block.rs:363`) and
+and overwrites the stored object with different bytes. `split_metrics` (`block.rs:365`) and
 `split_traces` hash the same bytes they store, so logs is the only affected signal.
 
 ### The arrival-time fallback already exists
@@ -109,7 +109,7 @@ land in the same commit series, but they have a **rollout order** between servic
 
 `put` must keep overwrite semantics — it is public API of the published `micromegas-telemetry` crate
 and `analytics/tests/test_helpers.rs:69` still relies on it — so add a sibling rather than changing
-it. `replication.rs:168` moves to the new sibling too (see 1b); after this change, no production code
+it. `replication.rs:169` moves to the new sibling too (see 1b); after this change, no production code
 path uses `put` — its only remaining caller is that test helper. `put` returns
 `anyhow::Result`, which erases `object_store::Error`, so the create-only variant must classify the
 collision itself and return it as a value:
@@ -156,7 +156,7 @@ rather than two independent warnings on the common retry path:
 
 | Object | Row | Meaning | Log | Counter |
 |---|---|---|---|---|
-| `Created` | inserted | normal first write | `debug!` (as today) | — (`put_duration` counts these) |
+| `Created` | inserted | normal first write | `debug!` (as today) | — (derivable: `put_duration` count minus the three counters below) |
 | `AlreadyExists` | conflict | **retry, or two distinct events with identical bytes** | `warn!` | `block_object_duplicate` |
 | `AlreadyExists` | inserted | orphaned object healed — a prior attempt died between PUT and INSERT; **or** the losing side of a concurrent-duplicate race (its INSERT committed before the winner's) | `warn!` | `block_orphan_object_healed` |
 | `Created` | conflict | row existed but object did not — object lost or deleted out from under its row; **or** the winning side of a concurrent-duplicate race (its PUT committed after the loser's INSERT already had) | `debug!` | `block_object_recreated` |
@@ -170,7 +170,8 @@ the PUT winner then gets `Created`+conflict on its own INSERT. Neither row is an
 bucket: it deletes the row and the object together inside one transaction (`DELETE ... RETURNING`,
 then `blob_storage.delete_batch`, then commit), so a row surviving without its object requires either
 a commit failure after the blob delete, or a partial `delete_batch` failure — `delete_batch`
-propagates on the first non-`NotFound` error (`delete.rs:36`), so a transient object-store error
+propagates on the first non-`NotFound` error (`blob_storage.rs:104-119`; called from
+`delete.rs:41`), so a transient object-store error
 mid-batch can leave some objects deleted and then roll back the whole transaction, restoring rows
 whose objects are already gone. So each of these two counters measures "anomaly or concurrent
 duplicate," not anomaly alone, and cannot on its own distinguish the two. `AlreadyExists`+inserted
@@ -191,7 +192,7 @@ the request rate, which is already bounded by the body-size cap and auth. Includ
 `process_id`, and `stream_id` in the message so an operator can go straight from a warn to a query
 against the `blocks` view.
 
-`rust/analytics/src/replication.rs:168` writes into the same `blobs/{process_id}/{stream_id}/{block_id}`
+`rust/analytics/src/replication.rs:169` writes into the same `blobs/{process_id}/{stream_id}/{block_id}`
 namespace via the same `BlobStorage::put`, inside `ingest_payloads`, which streams only the
 `payloads` table. The block-row `INSERT ... ON CONFLICT (block_id) DO NOTHING` lives in a separate
 function, `ingest_blocks` (`replication.rs:~204`), driven by an independent `bulk_ingest(..., "blocks",
@@ -240,7 +241,11 @@ Two failure modes, and one silent-acceptance risk, all on S3-*compatible* (non-A
   S3-compatible endpoint, do a one-time verification — write a key, write different bytes to the same
   key, read it back, and confirm either an `AlreadyExists` error on the second write or (if it
   succeeded) that the read still returns the *first* write's bytes. If neither holds, the store does
-  not honor conditional put and this plan's invariant does not hold against it.
+  not honor conditional put and this plan's invariant does not hold against it. The repo's own
+  MinIO local env (`local_test_env/ai_scripts/start_minio.py`, documented in
+  `mkdocs/docs/admin/object-cache.md`) is an S3-compatible origin and the natural place to run this
+  verification and the new integration tests — note it pulls `minio/minio:latest`, so the MinIO
+  version tested against is unpinned and can change between runs.
 
 Separately, a smaller behavior change: `object_store` marks `Overwrite` puts `idempotent(true)` but not
 `Create` (`aws/mod.rs:181-182`), so a transient network error on the PUT is no longer retried
@@ -320,7 +325,7 @@ What Part 2 buys:
    byte string. This is a known, bounded exception — one deploy-boundary window, and, per (1) above,
    harmless even when hit, since a `payload_size` mismatch only skews metadata, not readability.
 2. Removes the second `encode_to_vec()` on every webhook request, and with it the accepted-tradeoff
-   note at `block.rs:270-276` and `handler.rs:223-232`. The CPU saving is real but minor — one proto
+   note at `block.rs:270-276` and `handler.rs:222-233`. The CPU saving is real but minor — one proto
    encode of a body bounded by the ~300 MiB decompressed cap; the invariant in (1) is the actual
    reason to do this.
 3. `block_object_duplicate` becomes cleanly interpretable: a collision now always means "these exact
@@ -387,7 +392,7 @@ read-side change precedes the write-side change it enables — the same ordering
    `put_duration` metric around it, fall through to the INSERT on `AlreadyExists`, and replace the
    `debug!` at `:203-205` with the four-case classification (three `imetric!` counters + one log
    line per outcome).
-2b. `rust/analytics/src/replication.rs:168`: switch `ingest_payloads`'s block-payload PUT to
+2b. `rust/analytics/src/replication.rs:169`: switch `ingest_payloads`'s block-payload PUT to
     `put_if_absent`, ignoring (or `debug!`-logging) the `AlreadyExists` outcome and continuing the
     stream — there is no INSERT to fall through to in this function; `ingest_blocks` is a separate
     function with its own independent `ON CONFLICT DO NOTHING` INSERT over a different stream, and
@@ -413,7 +418,11 @@ read-side change precedes the write-side change it enables — the same ordering
    `nb_dropped_no_timestamp` → `nb_substituted_block_time` and adjust the aggregate log line at the
    end of the loop. Effectively inert for new writes until commit 3 ships, but see "Rollout order":
    surviving blocks from the #1031→#1124 window already have zero-timestamp records and will start
-   yielding rows once this deploys and they are rebuilt.
+   yielding rows once this deploys and they are rebuilt. Also update `logs_bounds`'s doc comment
+   (`block.rs:35-39`): "even though the downstream processor drops them" is no longer true for logs
+   once this ships — say the processor substitutes the block's `begin_time` instead (`spans_bounds`'s
+   parallel comment is correct as-is and stays untouched, since the metrics/spans processors still
+   drop).
 
 **Commit 3 — single encode (Part 2).**
 
@@ -426,8 +435,10 @@ read-side change precedes the write-side change it enables — the same ordering
    payload is byte-stable across redeliveries; the arrival-time fallback lives in the block bounds."
 8. `rust/otel-ingestion/tests/split_tests.rs:232-241`: flip the assertion — the stored proto now
    keeps `observed_time_unix_nano == 0`. Keep the `:228-231` envelope-time assertions unchanged;
-   `build_prepared_block` still stamps arrival time on the bounds.
-   Also update `logs_split_mixed_timestamps_all_survive` (`:262-283`): with the backfill gone,
+   `build_prepared_block` still stamps arrival time on the bounds. Rename the test itself, whose name
+   (`logs_split_backfills_observed_time_when_both_timestamps_zero`, `:214`) asserts the behavior being
+   deleted — e.g. `logs_split_leaves_zero_timestamps_unmodified`.
+   Also update `logs_split_mixed_timestamps_all_survive` (`:264-284`): with the backfill gone,
    `logs_bounds` no longer sees a stamped `now_nanos` for the untimestamped record, so `end_time`
    is now the same as `begin_time` — both equal `known_ts`. Replace the
    `assert!(b.end_time... > sentinel_ns)` check with `assert_eq!(b.end_time.timestamp_nanos_opt().unwrap(), known_ts as i64)`.
@@ -440,6 +451,9 @@ read-side change precedes the write-side change it enables — the same ordering
 10. `mkdocs/docs/otlp/index.md`: Idempotency section (create-only, first write wins, new counters)
     and the two webhook-specific "wrinkles" bullets (`:344-359`) — the second one (hash computed
     before backfill) no longer exists. See Documentation below.
+10b. `mkdocs/docs/admin/ingestion.md`: update the Scaling section's idempotency sentence
+    (`:82-84`) for create-only writes, and document the conditional-put requirement for
+    S3-compatible stores. See Documentation below.
 11. `CHANGELOG.md`: add an entry under `## Unreleased` → `**Ingestion:**` covering the create-only
     block write, the three new counters (two `warn!`, one `debug!`), the hard failure on
     S3-compatible stores
@@ -463,6 +477,7 @@ read-side change precedes the write-side change it enables — the same ordering
 | `rust/telemetry/tests/` (new or existing) | `put_if_absent` unit tests over `InMemory` |
 | `rust/ingestion/tests/insert_block_dedup_db_test.rs` | new env-gated integration test |
 | `mkdocs/docs/otlp/index.md` | Idempotency + webhook wrinkles sections |
+| `mkdocs/docs/admin/ingestion.md` | Scaling section: create-only semantics, conditional-put requirement |
 | `CHANGELOG.md` | `## Unreleased` → `**Ingestion:**` entry for the create-only write |
 
 ## Trade-offs
@@ -494,15 +509,19 @@ correct outcome.
 **`warn!` on every duplicate arrival.** Accepted (see Part 1b). The alternative — `debug!` plus a
 counter — is what shipped originally and is why #1462 sat unnoticed for two months.
 
-**Out of scope, per the issue.** Repairing existing broken rows (blocks whose `payload_size`
-disagrees with their object are unreadable; the affected entries are not needed) and stopping data
+**Out of scope, per the issue.** Repairing existing broken rows (blocks whose stored object bytes were
+silently overwritten by a colliding write are effectively unreadable in practice — not because
+`blocks.payload_size` is consulted on the read path, which it isn't, but because the range cache's
+cached size for that key no longer matches the rewritten object's actual length; the affected entries
+are not needed) and stopping data
 loss for producers that supply no event identity (unfixable ingestion-side — a retry and a recurrence
 are byte-identical; tracked producer-side, protocol answer in #1466).
 
 ## Documentation
 
-`mkdocs/docs/otlp/index.md` is the only affected doc page (see Commit 4 for the `CHANGELOG.md`
-entry):
+Two doc pages are affected (see Commit 4 for the `CHANGELOG.md` entry):
+
+`mkdocs/docs/otlp/index.md`:
 
 - **Idempotency** (`:222-224`): add that the object write is create-only, so a retried POST leaves
   the stored payload untouched — first write wins — and that both the object collision and the row
@@ -518,6 +537,16 @@ entry):
 
 No new metrics doc page exists to update (`put_duration`/`insert_duration` are undocumented today;
 `doc/design-presentation/design.md` mentions them only in passing).
+
+`mkdocs/docs/admin/ingestion.md`:
+
+- **Scaling** (`:82-84`): the sentence "Writes are idempotent (blocks are stored at deterministic
+  paths and recorded with `ON CONFLICT DO NOTHING`)" describes exactly the semantics this plan
+  changes — update it to say the object write is now create-only (first write wins; a colliding
+  write is rejected, not applied) and the row insert still uses `ON CONFLICT DO NOTHING`.
+- Add a note, near that sentence, that an S3-compatible object store must support conditional
+  put (`PutMode::Create`); a store configured with `aws_conditional_put=disabled` will fail every
+  block write (see Configuration risk above and the `CHANGELOG.md` entry in Commit 4).
 
 ## Testing Strategy
 
@@ -552,8 +581,9 @@ metrics stream exists, not a counter's value; this plan doesn't go further than 
 
 1. Same block twice → one object, one row; the object's bytes equal the first write's.
 2. Object pre-written directly, then `insert_block_typed` → row appears (orphan healed).
-3. Row pre-inserted, no object, then `insert_block_typed` → object appears, and its bytes plus the
-   row's `payload_size` are consistent with the second write.
+3. Row pre-inserted, no object, then `insert_block_typed` → the object appears with the second
+   write's bytes; the pre-existing row is left untouched (its `payload_size` is unchanged — the
+   INSERT is `ON CONFLICT (block_id) DO NOTHING`).
 4. Two blocks differing in one payload byte → two objects, two rows.
 
 ### End-to-end against the local test env
@@ -564,11 +594,14 @@ New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its ex
 `test_webhook_ingestion_missing_headers_tolerated`) rather than a standalone script:
 
 1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers and asserts
-   both requests succeed and exactly one row exists in the `blocks` view for that `block_id` — the
-   row-level half of the #1462 regression, observable via SQL alone. `python/micromegas/tests/`
-   has no object-store access (no `boto3`/`s3fs`/`fsspec` reference, no SQL surface returning block
-   bytes), so the object-byte-equality half of the regression is asserted in the Rust env-gated
-   integration test instead (see below), which already has `blob_storage` access.
+   both requests succeed and exactly one row exists in the `blocks` view for that `block_id` —
+   create-only write does not turn a redelivery into an error, observable via SQL alone. (Row-level
+   dedup itself was never broken — `blocks` has always had `ON CONFLICT (block_id) DO NOTHING` over a
+   unique `block_id` index — so this doesn't detect the #1462 regression, which was purely an
+   object-content bug.) `python/micromegas/tests/` has no object-store access (no
+   `boto3`/`s3fs`/`fsspec` reference, no SQL surface returning block bytes), so the
+   object-byte-equality half of the #1462 regression is asserted in the Rust env-gated integration
+   test instead (see below), which already has `blob_storage` access.
 2. Queries `log_entries` for the webhook record and asserts it is present (not dropped) with `time`
    equal to the block's `begin_time` — the Part 2 processor substitution. Requires the maintenance
    daemon to have built the partition, so run it after the ETL catches up (or force a partition
