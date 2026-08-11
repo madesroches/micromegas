@@ -249,9 +249,8 @@ its current callers.
 `parse_block_table_function.rs`:
 
 - `ParseBlockTableFunction` / `ParseBlockProvider` gain a `decoders: Arc<BlockObjectDecoderMap>`
-  field. `new()` keeps its current signature and defaults to `default_block_object_decoders()`;
-  a `with_decoders(self, map)` builder lets an out-of-repo build register additional formats
-  without a signature break (`query.rs:129-137` is unchanged).
+  field. `new()` keeps its current signature and defaults to `default_block_object_decoders()`
+  (`query.rs:129-137` is unchanged).
 - `fetch_block_metadata` drops the format check and returns the format string alongside the
   rest: `Option<(Uuid, i64, String, StreamMetadata)>`.
 - `scan` looks the format up in the map. On a miss:
@@ -264,12 +263,28 @@ its current callers.
 - `parse_block_objects` becomes `ParseBlockRowBuilder`, an `ObjectVisitor` implementation
   holding the three builders, `object_offset`, `local_index`, `nb_objects`, and `early_limit`.
 
-### 5. Block metadata lookup — unchanged
+### 5. Block metadata lookup — lookup path unchanged, missing-block behavior fixed
 
-`fetch_block_metadata` keeps resolving the block through the `blocks` view, and a block that
-is not there still yields zero rows. The metadata partition catches up within about a second
-of ingestion, so this is not part of the gap the issue describes. No raw-Postgres fallback:
-metadata lookups stay on the DataFusion/lakehouse path.
+`fetch_block_metadata` keeps resolving the block through the `blocks` view — same
+DataFusion/lakehouse path, no raw-Postgres fallback. What changes is what happens when the
+block isn't there: today `scan` silently returns zero rows, which is indistinguishable from
+"the block was found but has no matching records." Since a caller's `query_range` is applied
+both to `fetch_block_metadata`'s session and to partition pruning (`query.rs:226-251`), and
+`micromegas-query` requires either `--begin` or `--all`, a block whose `insert_time` falls
+outside the query window is invisible by default — the common case, not an edge case.
+
+`scan` now returns an error instead of an empty batch when `fetch_block_metadata` returns
+`None`, naming the query range and pointing at wider `--begin`/`--all`:
+
+```
+parse_block: block '<block_id>' not found in `blocks` for the queried range
+[<begin>, <end>]. If the block may be outside this window, widen --begin or pass --all.
+```
+
+When `query_range` is `None` (`--all`), the message drops the range clause since the block
+genuinely isn't in `blocks` for any window. The metadata partition still catches up within
+about a second of ingestion — a block posted moments ago and queried immediately may need a
+retry, which the same error/guidance already covers.
 
 ## Implementation Steps
 
@@ -281,9 +296,9 @@ metadata lookups stay on the DataFusion/lakehouse path.
    `rust/analytics/src/lakehouse/mod.rs`.
 2. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` (stays private to the crate —
    no need to make it or its constructor `pub`) implements `ObjectVisitor`; `fetch_block_metadata`
-   returns the format; `scan` dispatches through the map; `ParseBlockTableFunction::with_decoders`
-   added. Behavior for transit blocks — including the early-limit path and non-Object index
-   gaps — must be identical. Add the regression test in `parse_block_tests.rs` that drives
+   returns the format; `scan` dispatches through the map. Behavior for transit blocks —
+   including the early-limit path and non-Object index gaps — must be identical. Add the
+   regression test in `parse_block_tests.rs` that drives
    `TransitBlockDecoder::decode` over a real transit `BlockPayload` with a limiting test
    `ObjectVisitor` (see Testing Strategy) to exercise the early-limit stop point through an
    actual walk; the non-Object index-gap branch is unreachable via any in-tree transit reader
@@ -382,7 +397,10 @@ decoded message is bounded by the ingestion body cap.
   limitation and add a Troubleshooting entry: *"`log_entries` is empty but ingestion
   succeeded"* → find the block in `blocks` by `process_id` / `"streams.format"`, run
   `parse_block` on it, and conclude stalled-materialization vs. bad-payload from whether the
-  records are there.
+  records are there. Note that `parse_block` is subject to the same query range as any other
+  query: a block outside `--begin`/`--all` now errors rather than returning empty rows, so the
+  recipe should tell the reader to widen `--begin` or pass `--all` if the block itself isn't
+  found.
 - `CHANGELOG.md` — Unreleased → Analytics bullet.
 - `README.md:131` mentions `parse_block` only in the v0.24 history section; leave it.
 
