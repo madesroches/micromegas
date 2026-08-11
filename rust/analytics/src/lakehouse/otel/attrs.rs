@@ -82,9 +82,13 @@ pub fn to_jsonb_bytes(value: JsonbValue<'_>) -> Vec<u8> {
     bytes
 }
 
-/// Serializes a flat `(key → value)` map (with optional extra entries layered on top)
-/// to JSONB bytes. Output ordering is alphabetical, matching `serialize_properties_to_jsonb`.
-pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>)]) -> Vec<u8> {
+/// Builds a flat `(key → value)` `JsonbValue::Object` (with optional extra entries
+/// layered on top). Output ordering is alphabetical (a `BTreeMap` underneath),
+/// matching `serialize_properties_to_jsonb`.
+pub fn attrs_to_jsonb_value(
+    attrs: &[KeyValue],
+    extras: &[(String, JsonbValue<'static>)],
+) -> JsonbValue<'static> {
     let mut map: BTreeMap<String, JsonbValue<'static>> = BTreeMap::new();
     for kv in attrs {
         let value = kv
@@ -98,7 +102,13 @@ pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>
     for (k, v) in extras {
         map.insert(k.clone(), v.clone());
     }
-    to_jsonb_bytes(JsonbValue::Object(map))
+    JsonbValue::Object(map)
+}
+
+/// Serializes a flat `(key → value)` map (with optional extra entries layered on top)
+/// to JSONB bytes. Output ordering is alphabetical, matching `serialize_properties_to_jsonb`.
+pub fn attrs_to_jsonb(attrs: &[KeyValue], extras: &[(String, JsonbValue<'static>)]) -> Vec<u8> {
+    to_jsonb_bytes(attrs_to_jsonb_value(attrs, extras))
 }
 
 /// Renders `AnyValue` to a flat string for fields that need a textual form

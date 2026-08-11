@@ -614,7 +614,6 @@ distinct log lines never collide.
 - **No mTLS / client certs.** Only bearer-token and OIDC auth.
 - **Histograms not yet materialized.** Sum, Gauge, and Summary (count/sum/min/max only) land in `measures`; Histogram and ExponentialHistogram are skipped with a debug log. Configured percentile statistics beyond min/max (e.g. p90/p99 from a CloudWatch `statistics_configuration`) are also skipped with a debug log.
 - **`otel_spans` is JIT-only and per-process.** Cross-process trace queries (`WHERE trace_id = X` across all services) need to UNION across each participating process.
-- **`parse_block` does not decode OTel payloads.** It returns a clean error on `format != "micromegas-transit"`.
 - **No per-tenant rate limiting.** Add at the load balancer if needed.
 
 ## Troubleshooting
@@ -632,6 +631,14 @@ distinct log lines never collide.
 **Logs without an explicit severity appear with `level = 4` (Info)** — `severity_number = 0` (UNSPECIFIED) maps to Info so unspecified records pass the default `WHERE level <= 4` filter (lower number = more severe in micromegas; `level <= 4` keeps Info-and-more-severe). Set `severity_number` explicitly on the SDK side if you want a different mapping.
 
 **Trace queries return nothing** — `otel_spans` is a JIT view and only materializes when queried with a specific `process_id`. Use `view_instance('otel_spans', '<process_id>')`, not `FROM otel_spans`. Find the right `process_id` via the `processes` view first.
+
+**`log_entries`/`measures`/`otel_spans` is empty but ingestion returned `200 OK`** — this can mean either the materialization pipeline hasn't caught up yet, or the payload itself doesn't contain what you expect. Tell them apart with [`parse_block`](../query-guide/functions-reference.md#parse_blockblock_id), which decodes a block's raw OTLP payload independently of any view:
+
+1. Find the block: `SELECT block_id, "streams.format" FROM blocks WHERE process_id = '<process_id>' AND "streams.format" LIKE 'otlp/%'`.
+2. Run `SELECT type_name, jsonb_format_json(value) FROM parse_block('<block_id>')` on it.
+3. If the records are there with the fields you expect, the problem is on the materialization side (JIT/daemon lag — see the note on the daemon's per-second/per-minute tasks below). If they're missing or malformed, the problem is upstream, in what the SDK sent.
+
+`parse_block` is subject to the same query range as any other query: a block outside `--begin`/`--all` now errors (naming the queried range) rather than returning empty rows, so pass `--all` or widen `--begin` if step 1 or 2 comes back empty for a block you can see in `blocks` with a wider range. `blocks` itself is materialized by the maintenance daemon's every-second task (each tick covers `[t-2s, t-1s)`), so a block posted moments ago may need a short retry before it's queryable at all.
 
 ## References
 
