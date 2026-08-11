@@ -440,7 +440,10 @@ the client. The mitigation is the same one that already exists for any query: a 
   since Summary data points are over-counted there by `SUMMARY_MAX_ROWS_PER_POINT = 4`; (2)
   non-finite `f64` values (NaN/±Infinity) in the source payload render as JSON `null` in
   `value`, indistinguishable from an absent field, because the `serde_json` conversion path
-  does not preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding.
+  does not preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding; (3) a block absent from
+  `blocks` for the queried time range now errors instead of returning zero rows — widen
+  `--begin` or use `--all` — and a `streams.format` with no registered decoder errors with the
+  list of known formats.
 - `mkdocs/docs/otlp/index.md:617` — delete the "`parse_block` does not decode OTel payloads"
   limitation and add a Troubleshooting entry: *"`log_entries` is empty but ingestion
   succeeded"* → find the block in `blocks` by `process_id` / `"streams.format"`, run
