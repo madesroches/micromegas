@@ -19,7 +19,7 @@ All claims below were checked empirically against ciborium 0.2.2 with a throwawa
 | Claim from #1463 | Verdict | Evidence |
 |---|---|---|
 | `Vec<u8>` encodes as a CBOR array, not a byte string | **Confirmed** | Encoding a `BlockPayload` with 256 objects bytes emits `99 01 00` (major type 4, array(256)) after the `objects` key — not `59` (byte string). |
-| Inflation is ~1.6–1.9x and value-dependent | **Confirmed, at the top of the claimed range (1.92x measured)** | For a uniform 0..=255 payload the `objects` field's array encoding is 491 bytes for 256 raw bytes (1 header + 24×1 + 232×2, since 232/256 bytes are ≥ 24) = **1.918x**, at the top of the claimed range and approaching 2.0x as more bytes are ≥ 24. (The 514-byte figure below is the whole `BlockPayload` envelope, not this field alone: 1 map header + 13 `dependencies` key + 1 empty array + 8 `objects` key + 491 array = 514.) |
+| Inflation is ~1.6–1.9x and value-dependent | **Confirmed, at the top of the claimed range (1.92x measured)** | For a uniform 0..=255 payload the `objects` field's array encoding is 491 bytes for 256 raw bytes (3-byte header + 24×1 + 232×2, since 232/256 bytes are ≥ 24) = **1.918x**, at the top of the claimed range and approaching 2.0x as more bytes are ≥ 24. (The 514-byte figure below is the whole `BlockPayload` envelope, not this field alone: 1 map header + 13 `dependencies` key + 1 empty array + 8 `objects` key + 491 array = 514.) |
 | Savings of roughly 38–46% | **Confirmed** | Same payload: old form 514 bytes, byte-string form 282 bytes → **45.1%** smaller. |
 | `serde_bytes` alone will not decode the existing array form | **Confirmed** | A bytes-only visitor (`deserialize_byte_buf`) against array-form input fails with `invalid type: sequence, expected byte array`. This is the real hazard. |
 | Readers must be changed *first*, before any writer, or existing readers cannot parse the new form | **Incorrect** | The *derived* `Vec<u8>` deserializer **already accepts CBOR byte strings** — ciborium's `deserialize_seq` transparently feeds a byte string as a sequence of `u8`. Decoding byte-string-form input with today's unmodified `BlockPayload` round-trips correctly. |
@@ -224,8 +224,9 @@ No metric for legacy-form decodes: because the path is permanent (blobs are neve
 objects can keep arriving after the cutover indefinitely), a counter meant to signal "the compat
 path can be retired" would never have a consumer. It would also add a `micromegas-tracing`
 dependency edge to `rust/telemetry/`, which today depends on nothing that pulls in tracing
-(`Cargo.toml` lists only `anyhow`, `chrono`, `ciborium`, `lz4`, `micromegas-transit`, `serde`,
-`uuid`) — not worth it for a metric with no consumer.
+(its non-optional deps are only `anyhow`, `chrono`, `ciborium`, `lz4`, `micromegas-transit`,
+`serde`, `uuid`, plus server-feature-gated `bytes`/`futures`/`object_store`/`sqlx`/`url`, none of
+which pull in tracing) — not worth it for a metric with no consumer.
 
 ### Interaction with #1462 — a caveat, not a fix
 
