@@ -158,6 +158,15 @@ after:   a2 6c "dependencies" 44 04 22 4d 18         <-- 0x44 byte string(4), 1 
 
 ### Deployment order
 
+Both compatibility directions hold, so ordering below is a preference, not a constraint:
+
+- **Old client → new server**: array-form senders remain in the field indefinitely; the new
+  `visit_seq` path handles them forever.
+- **New client → old server**: an un-upgraded server decodes byte strings via the derived `Vec<u8>`
+  deserializer, since ciborium's `deserialize_seq` accepts a byte string transparently —
+  production-proven, because the Unreal sink (`InsertBlockRequest.h:67-70`) has always emitted byte
+  strings and every deployed server version ingests that traffic today.
+
 Because deployed readers already accept byte strings, strict ordering is not load-bearing here.
 Still, ship in this order at zero cost, so the rollout does not depend on ciborium's incidental
 behavior:
@@ -223,6 +232,9 @@ is scoped for this; call it out explicitly in the PR description alongside the #
 5. Run the existing block-parsing suites unchanged — they encode with `ciborium::into_writer` and
    decode with `ciborium::from_reader`, so they exercise the new round-trip end to end:
    `analytics/tests/{log_tests,span_tests,metrics_test,image_tests,parse_alloc_test,parse_corrupt_block_tests}.rs`.
+   Note `parse_corrupt_block_tests.rs` decodes the CBOR envelope up front and only fuzzes the
+   decompressed transit buffers afterward, so it covers the round-trip but not corruption/truncation
+   of the new deserializer itself — that gap is closed by item 8 in Testing Strategy.
 6. Verify no Unreal change is needed — `byte_string_value` already emits the target form. Confirm by
    reading `InsertBlockRequest.h`; no code change expected.
 7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
@@ -279,10 +291,17 @@ New unit tests in `rust/telemetry/tests/block_wire_format_tests.rs`:
    for a uniform `0..=255` payload, locking in the win.
 7. **Hostile size hint** — a CBOR array header declaring a huge length with a truncated body errors
    out without a large allocation.
+8. **Corrupted/truncated CBOR envelope** — a truncation/corruption sweep over the *encoded*
+   `BlockPayload` bytes themselves (not the decompressed transit buffers), asserting every result is
+   `Ok`/`Err` and never a panic or hang. This is the sweep that actually exercises the new
+   `serde_byte_buf` deserializer against hostile input on the decode path.
 
-Existing coverage that must stay green: the analytics block-parsing suites listed in step 5, plus
-`analytics/tests/parse_corrupt_block_tests.rs` (byte-sweep fuzzing over encoded blocks — it will now
-sweep the byte-string encoding, which is the right target).
+Existing coverage that must stay green: the analytics block-parsing suites listed in step 5. Note
+that `analytics/tests/parse_corrupt_block_tests.rs` does **not** cover the new deserializer: its
+`received_payload()` decodes the CBOR envelope first via `ciborium::from_reader`, and `sweep_block()`
+then calls `decompress()` and sweeps truncation/corruption only over the resulting decompressed
+*transit* buffers, via `read_dependencies` / `parse_object_buffer`. The CBOR envelope — and therefore
+`serde_byte_buf` — gets no coverage from that suite. Item 8 above closes that gap.
 
 End-to-end:
 
