@@ -158,18 +158,26 @@ rather than two independent warnings on the common retry path:
 |---|---|---|---|---|
 | `Created` | inserted | normal first write | `debug!` (as today) | — (`put_duration` counts these) |
 | `AlreadyExists` | conflict | **retry, or two distinct events with identical bytes** | `warn!` | `block_object_duplicate` |
-| `AlreadyExists` | inserted | orphaned object healed — a prior attempt died between PUT and INSERT | `warn!` | `block_orphan_object_healed` |
-| `Created` | conflict | row existed but object did not — object lost or deleted out from under its row | `warn!` | `block_object_recreated` |
+| `AlreadyExists` | inserted | orphaned object healed — a prior attempt died between PUT and INSERT; **or** the losing side of a concurrent-duplicate race (its INSERT committed before the winner's) | `warn!` | `block_orphan_object_healed` |
+| `Created` | conflict | row existed but object did not — object lost or deleted out from under its row; **or** the winning side of a concurrent-duplicate race (its PUT committed after the loser's INSERT already had) | `debug!` | `block_object_recreated` |
 
-`block_object_recreated` stays a genuine signal, not routine noise: retention's
-`delete_expired_blocks_batch` (`rust/analytics/src/delete.rs:12-47`) deletes the row and the object
-together inside one transaction (`DELETE ... RETURNING`, then `blob_storage.delete_batch`, then
-commit), so a row surviving without its object requires either a commit failure after the blob
-delete, or a partial `delete_batch` failure — `delete_batch` propagates on the first non-`NotFound`
-error (`delete.rs:36`), so a transient object-store error mid-batch can leave some objects deleted
-and then roll back the whole transaction, restoring rows whose objects are already gone. Either way
-it's an anomaly, not a normal event. `warn!` is the right level for all three non-`Created`-inserted
-cases.
+`insert_block_typed` runs per request with no serialization, so two in-flight deliveries of the same
+`block_id` (e.g. a webhook producer retrying on timeout) race PUT against INSERT independently: the
+PUT loser gets `AlreadyExists`, and if its INSERT commits first it lands in `AlreadyExists`+inserted;
+the PUT winner then gets `Created`+conflict on its own INSERT. Neither row is an anomaly in that case
+— it's the ordinary concurrent-duplicate path, just interleaved. Retention's
+`delete_expired_blocks_batch` (`rust/analytics/src/delete.rs:12-47`) can *also* land a row in either
+bucket: it deletes the row and the object together inside one transaction (`DELETE ... RETURNING`,
+then `blob_storage.delete_batch`, then commit), so a row surviving without its object requires either
+a commit failure after the blob delete, or a partial `delete_batch` failure — `delete_batch`
+propagates on the first non-`NotFound` error (`delete.rs:36`), so a transient object-store error
+mid-batch can leave some objects deleted and then roll back the whole transaction, restoring rows
+whose objects are already gone. So each of these two counters measures "anomaly or concurrent
+duplicate," not anomaly alone, and cannot on its own distinguish the two. `AlreadyExists`+inserted
+keeps `warn!` since the retention-failure case is the more consequential one to surface promptly;
+`Created`+conflict drops to `debug!` since the concurrent-duplicate race is the common case for a
+retrying producer and the retention-failure case is already caught via `AlreadyExists`+inserted or
+via retention's own logging.
 
 All three counters follow the existing convention — `imetric!("<name>", "count", 1_u64)`, matching
 `object_warm_requested` (`rust/ingestion/src/data_lake_connection.rs:68`) and the `range_cache_*`
@@ -388,6 +396,12 @@ read-side change precedes the write-side change it enables — the same ordering
 10. `mkdocs/docs/otlp/index.md`: Idempotency section (create-only, first write wins, new counters)
     and the two webhook-specific "wrinkles" bullets (`:344-359`) — the second one (hash computed
     before backfill) no longer exists. See Documentation below.
+11. `CHANGELOG.md`: add an entry under `## Unreleased` → `**Ingestion:**` covering the create-only
+    block write, the three new counters (two `warn!`, one `debug!`), the hard failure on
+    S3-compatible stores
+    configured with `aws_conditional_put=disabled`, the "deploy maintenance/analytics before
+    ingestion" rollout constraint, and the benign row-count increase for surviving #1031→#1124 blocks
+    once rebuilt.
 
 ## Files to Modify
 
@@ -403,6 +417,7 @@ read-side change precedes the write-side change it enables — the same ordering
 | `rust/telemetry/tests/` (new or existing) | `put_if_absent` unit tests over `InMemory` |
 | `rust/ingestion/tests/insert_block_dedup_db_test.rs` | new env-gated integration test |
 | `mkdocs/docs/otlp/index.md` | Idempotency + webhook wrinkles sections |
+| `CHANGELOG.md` | `## Unreleased` → `**Ingestion:**` entry for the create-only write |
 
 ## Trade-offs
 
@@ -438,7 +453,8 @@ are byte-identical; tracked producer-side, protocol answer in #1466).
 
 ## Documentation
 
-`mkdocs/docs/otlp/index.md` is the only affected page:
+`mkdocs/docs/otlp/index.md` is the only affected doc page (see Commit 4 for the `CHANGELOG.md`
+entry):
 
 - **Idempotency** (`:222-224`): add that the object write is create-only, so a retried POST leaves
   the stored payload untouched — first write wins — and that both the object collision and the row
@@ -499,16 +515,17 @@ New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its ex
 `test_webhook_ingestion_e2e`, `test_webhook_ingestion_block_id_folds_in_full_header_set`,
 `test_webhook_ingestion_missing_headers_tolerated`) rather than a standalone script:
 
-1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers, reads the
-   stored object both times, and asserts the bytes are unchanged — this is the #1462 regression,
-   and it fails on `main`.
-2. Asserts one row in `list_blocks()` for that `block_id` and that `payload_size` matches the
-   object's actual length.
-3. Queries `log_entries` for the webhook record and asserts it is present (not dropped) with `time`
+1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers and asserts
+   both requests succeed and exactly one row exists in `list_blocks()` for that `block_id` — the
+   row-level half of the #1462 regression, observable via SQL alone. `python/micromegas/tests/`
+   has no object-store access (no `boto3`/`s3fs`/`fsspec` reference, no SQL surface returning block
+   bytes), so the object-byte-equality half of the regression is asserted in the Rust env-gated
+   integration test instead (see below), which already has `blob_storage` access.
+2. Queries `log_entries` for the webhook record and asserts it is present (not dropped) with `time`
    equal to the block's `begin_time` — the Part 2 processor substitution. Requires the maintenance
    daemon to have built the partition, so run it after the ETL catches up (or force a partition
    build) rather than immediately after the POST.
-4. POSTs two bodies differing only in a per-event attribute and asserts two blocks, both readable.
+3. POSTs two bodies differing only in a per-event attribute and asserts two blocks, both readable.
 
 `micromegas-query "SELECT block_id, payload_size, begin_time FROM list_blocks() ..."` covers the
 row-side assertions.
