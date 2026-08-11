@@ -60,8 +60,12 @@ the client sent. Consequences:
   view whose largest block payload exceeds 100 MB / 64 ≈ 1.56 MB — a threshold real payloads cross
   (`tasks/completed/net_spans_view_plan.md` records a partition with ~1.1 MB average block payload
   size). Decompressed per-block size is unchanged, so this raises peak concurrent memory during
-  partition builds for those views. See Open Questions for whether that increase, or the 100 MB
-  constant, needs revisiting.
+  partition builds for those views. That inverse relationship — smaller payloads get more concurrent
+  fetch tasks — is the heuristic's intent, not a side effect to correct: the 100 MB constant exists so
+  that object-store bandwidth, which is used efficiently on large blocks, gets compensating
+  parallelism on small ones. So the up-to-~1.8x rise in `nb_tasks` (and the corresponding memory
+  increase) is expected and accepted; the 100 MB constant does not need revisiting as part of this
+  change.
 
 ## Current State
 
@@ -127,11 +131,18 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error>
 - `deserialize` → `d.deserialize_byte_buf(ByteBufVisitor)`, where the visitor implements
   `visit_bytes`, `visit_byte_buf`, **and** `visit_seq`.
 
-The dual path works because ciborium's `deserialize_byte_buf` (and `deserialize_bytes`) route both
-CBOR hints to the visitor: a byte-string header goes to `visit_byte_buf`/`visit_bytes`, and an array
-header goes to `visit_seq` (ciborium 0.2.2, `src/de/mod.rs:384-412` and `:364-382`). A visitor that
-implements all three gets the dual path directly from `deserialize_byte_buf`, with no need for
-`deserialize_any`. As an aside, this dual-hint routing is itself only available because CBOR is
+The dual path works because ciborium's `deserialize_byte_buf` routes both CBOR hints to the visitor:
+a byte-string header goes to `visit_byte_buf`, and an array header goes to `visit_seq` (ciborium
+0.2.2, `src/de/mod.rs:383-412`). `deserialize_bytes` does **not** give the same guarantee: it only
+accepts `Header::Bytes(Some(len))` when `len <= self.scratch.len()` — the reader's scratch buffer is a
+fixed 4096 bytes (`src/de/mod.rs:829`) — and otherwise falls through to `Err(header.expected("bytes"))`
+(`src/de/mod.rs:369`), including for every array header regardless of size. Real block payloads run
+into the megabytes, so the helper must call `deserialize_byte_buf`, never `deserialize_bytes`. Note
+also that on the reader path a `Header::Bytes` of any size always routes to `visit_byte_buf`, never to
+`visit_bytes` — `visit_bytes` is only reachable via the `Value`-based deserializer used in tests (see
+Testing Strategy items 3–4), not via `from_reader`. A visitor implementing `visit_bytes`,
+`visit_byte_buf`, and `visit_seq` gets the dual path from `deserialize_byte_buf` alone, with no need
+for `deserialize_any`. As an aside, this dual-hint routing is itself only available because CBOR is
 self-describing; note this in a module comment — the helper would need to change to be reused with a
 non-self-describing format (bincode, postcard).
 
@@ -325,17 +336,26 @@ New unit tests in `rust/telemetry/tests/block_wire_format_tests.rs`:
 
 1. **New writer emits a byte string** — encode a `BlockPayload`, assert the byte after the `objects`
    key has major type 2 (`0x40..=0x5b`), not major type 4.
-2. **Round-trip** — encode/decode a payload containing bytes across the full `0..=255` range and
-   assert equality.
-3. **Legacy array form still decodes** — hand-build array-form CBOR with `ciborium::Value::Array`
-   and assert it deserializes to the expected bytes. This is the regression guard for every block
-   already in storage; it must never be deleted.
-4. **New form decodes** — hand-build `ciborium::Value::Bytes` and assert it deserializes. Covers the
-   Unreal sink's output shape.
+2. **Round-trip** — encode/decode a payload containing bytes across the full `0..=255` range, and a
+   separate payload larger than 4096 bytes (ciborium's fixed reader scratch-buffer size — see
+   Design); assert equality for both. The >4096-byte case is required: it is the one that fails if
+   the deserializer is implemented via `deserialize_bytes` instead of `deserialize_byte_buf`.
+3. **Legacy array form still decodes** — hand-build array-form CBOR with `ciborium::Value::Array`,
+   encode it to bytes with `ciborium::into_writer` (never assert via `Value::deserialized()` /
+   `into_deserializer` — the `Value`-based deserializer has no array→`visit_seq` fallback, unlike the
+   reader path; `ciborium/src/value/de.rs:360-377`), then decode those bytes with
+   `ciborium::from_reader` and assert the result matches the expected bytes. This is the regression
+   guard for every block already in storage; it must never be deleted.
+4. **New form decodes** — hand-build `ciborium::Value::Bytes` at both a small size and a size above
+   4096 bytes, encode each to bytes with `ciborium::into_writer`, and decode with
+   `ciborium::from_reader` (not `Value::deserialized()` / `into_deserializer`, for the same reason as
+   item 3). Assert both deserialize correctly. Covers the Unreal sink's output shape at production
+   scale.
 5. **Empty fields** — `dependencies: vec![]` round-trips in both forms (the OTLP path always sends
    empty dependencies, per `otel-ingestion/src/block.rs:241`).
 6. **Size assertion** — encoded length of the byte-string form is ≥ 35% smaller than the array form
-   for a uniform `0..=255` payload, locking in the win.
+   for a uniform `0..=255` payload, locking in the win. Repeat the same assertion for the >4096-byte
+   payload from item 2, so the win is also locked in beyond ciborium's scratch-buffer boundary.
 7. **Hostile size hint** — a CBOR array header declaring a huge length with a truncated body errors
    out without a large allocation.
 8. **Corrupted/truncated CBOR envelope** — a truncation/corruption sweep over the *encoded*
@@ -374,8 +394,5 @@ micromegas-query "SELECT * FROM parse_block('<block_id ingested before the resta
 
 ## Open Questions
 
-- Both prior questions were settled from the codebase (see Design). One new question remains: is the
-  up-to-~1.8x increase in `block_partition_spec.rs`'s `nb_tasks` (and the corresponding rise in peak
-  concurrent memory during partition builds) acceptable as a side effect of this change, or should the
-  100 MB constant be revisited alongside it? Nothing in the codebase settles this trade-off; it needs
-  a decision from whoever owns ETL memory budgets before or shortly after rollout.
+None. All questions raised during design were settled either from the codebase or by the repo owner
+(see Design).
