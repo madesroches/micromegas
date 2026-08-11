@@ -216,9 +216,8 @@ behavior:
    indefinitely after the deploy. That is fine: the ingestion reader handles both forever.
 
 This ordering covers only reader/writer compatibility. It does **not** address the re-delivery
-exposure — see "Recommended sequencing" under [Interaction with #1462](#interaction-with-1462--a-caveat-not-a-fix)
-for whether #1462 must land first and, if not, the maintenance-pause and cache-flush steps that
-wrap the ingestion deploy.
+exposure, which gates the deploy on #1462 landing first — see
+[Interaction with #1462](#interaction-with-1462--a-caveat-not-a-fix).
 
 Old and new writers coexist permanently, and the array-form objects already in storage are read by
 the `visit_seq` path forever. The dual-path reader is **not a temporary shim** — say so in the code
@@ -249,8 +248,10 @@ unconditionally *before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO N
 that was first stored *before* this change is redelivered *after* the ingestion server is deployed,
 the object gets overwritten with the smaller byte-string encoding while the `blocks.payload_size` row
 keeps the old (larger) array-form size — a real size divergence for exactly the block_ids that happen
-to be re-delivered across the cutover. When the object cache is configured
-(`ingestion/src/data_lake_connection.rs:90-119` wraps the store in `CacheClientStore`), it snapshots
+to be re-delivered across the cutover. When the object cache is configured (`make_cache` in
+`ingestion/src/data_lake_connection.rs:86-108` wraps the store in `CacheClientStore`, used identically
+by ingestion at `web_ingestion_service.rs:124` and by analytics/maintenance/flight-sql via
+`lakehouse_context.rs:51`), it snapshots
 the object size once via `origin.head()` (`object-cache/src/range_cache/mod.rs:258-294`) and treats a
 length mismatch on a subsequent origin fetch as a hard error, `"origin object changed size mid-fetch"`
 (`object-cache/src/range_cache/fetch.rs:386-401`). That cache entry does **not** self-heal:
@@ -261,18 +262,57 @@ There is also no client retry to fall back on: ingestion itself succeeds (the bl
 `blocks` row both write without error), so no client ever sees an error to retry — the failure only
 surfaces later, on the read side.
 
-The blast radius splits by read path, and the ETL half is the dangerous one:
+**The cache client's direct fallback absorbs most of this.** `CacheClientStore::get_opts` falls back
+to `direct_get_opts` on **any** cache error (`object-cache/src/client.rs:1064-1070`), logging only at
+`debug!`, and mid-stream failures resume the remainder from the direct store
+(`full_stream_with_fallback`, `client.rs:763-839`). `object-cache-srv` is built around this: it awaits
+the first chunk before sending headers so a failure surfaces as a 500
+(`object-cache-srv/src/handlers.rs:389-399`), whose own comment notes "The client falls back to the
+direct store on any non-2xx, so an oversized read still succeeds (just uncached)". So the size
+mismatch usually never reaches the reader at all:
+
+- **Payload within one cache block** (default block size 1 MiB, `range_cache/mod.rs:25`) — the
+  mismatch fires on the first chunk, the server 500s, the client silently re-reads the whole new blob
+  direct. **No reader-visible failure**; the cost is a wasted round trip per access until eviction, so
+  this is a performance and metrics nuisance, not a data problem.
+- **Multi-block payload, old blocks not cached** — the mismatch fires at the size boundary, the client
+  resumes from the direct store at the delivered offset, and delivered bytes came from the new object
+  anyway, so the read completes with clean new bytes.
+- **Multi-block payload with stale old-content blocks still cached** from a pre-overwrite read — the
+  only genuinely failing case. Interior cache blocks are validated by length alone
+  (`fetch.rs:386-401`), so an old array-form block assembles with new byte-string origin bytes into a
+  torn stream that `ciborium::from_reader` rejects (`payload.rs:33-35`).
+
+That last case is the one that matters, and it splits by read path:
 
 - **Ad-hoc query paths fail loudly.** `parse_block`, the `get_payload` UDF, and any direct query that
-  reaches `fetch_block_payload` surface the error to the caller.
-- **ETL partition builds absorb the error and write an incomplete partition.**
+  reaches `fetch_block_payload` surface the decode error to the caller.
+- **Partition builds absorb the error and write an incomplete partition.**
   `block_partition_spec.rs:145-152` handles a failed block with `error!` plus
   `logger.write_log_entry(...)` and then **continues the loop**; after `drop(tx)` the partition is
-  written from whatever rows succeeded and is marked complete. So the build reports success while
-  silently omitting the affected block's rows. Nothing repairs it later, either: the re-delivery hit
-  `ON CONFLICT (block_id) DO NOTHING`, so the `blocks` row — including `payload_size` — is unchanged,
-  the source-data hash is unchanged, and the view has no reason to rebuild that partition. The only
-  trace is an error in the partition-build log of a build that succeeded.
+  written from whatever rows succeeded and registered normally by `write_partition_from_rows` →
+  `finalize_partition_write` → `insert_partition`. So the build reports success while silently
+  omitting the affected block's rows. This is not confined to the maintenance daemon: JIT views are
+  materialized on demand inside `flight-sql-srv` query handling through the same loop
+  (`jit_partitions.rs:902-927` builds a `BlockPartitionSpec` and calls the same `write()`).
+- **Nothing repairs it later.** The source-data hash is just the source object count
+  (`SourceDataBlocks::get_source_data_hash` = `object_count.to_le_bytes()`,
+  `partition_source_data.rs:117-119`; the JIT variant hashes block ids, `:84-86`), compared in
+  `verify_overlapping_partitions` (`batch_update.rs:23-101`). A re-delivery hit
+  `ON CONFLICT (block_id) DO NOTHING`, so `nb_objects` is unchanged and the gap partition recorded the
+  full count — the freshness check reports "already up to date" forever, and merges don't re-read
+  source blocks.
+
+**How visible is it?** More than "silent" suggests, but not where alerting usually looks.
+`block_partition_spec.rs:146` emits `error!("{e:?}")` with the full `anyhow` context chain, which goes
+through `micromegas-tracing` into the daemon's own telemetry and is queryable via `log_entries` for
+that process. The accompanying `logger.write_log_entry(...)` is only an INFO duplicate — in the daemon
+the logger is `ResponseWriter::new(None)` (`public/src/servers/maintenance.rs:55`), which `info!`s the
+message and discards it for want of a channel; it streams to the caller only for an interactive
+`materialize` over FlightSQL. What is genuinely silent is the *outcome*: the build reports success, no
+metric or partition field counts the dropped blocks, and the message
+(`origin object changed size mid-fetch`, or a CBOR decode error) points at the cache rather than at an
+encoding change, so it is unlikely to be connected to this deploy by someone reading it cold.
 
 **Bounding the worst case.** The damage is *missing rows*, not corrupted ones:
 
@@ -281,8 +321,11 @@ The blast radius splits by read path, and the ETL half is the dangerous one:
   correct.
 - The overwritten blob is not corrupt. It is a valid byte-string encoding of the same payload, which
   the new reader decodes fine, so the source data remains intact in the lake. The gaps are therefore
-  **repairable**: flush the object cache and force a rebuild of the affected partitions, as long as
-  the source blocks are still within retention.
+  **repairable**: clear the cache's stale state (see below) and force a rebuild of the affected
+  partitions with `regenerate_partitions()`, which exists precisely to bypass the freshness check that
+  would otherwise report the gap partition as up to date. Identifying which partitions are affected
+  means grepping build logs for the errors above, as long as the source blocks are still within
+  retention.
 - One thing does stay durably wrong: `blocks.payload_size` keeps the old, larger value. It is
   user-queryable through the `blocks` view (`analytics/src/lakehouse/blocks_view.rs:61,256`) and is
   copied onward by replication (`analytics/src/replication.rs:196-214`). Impact is limited — it feeds
@@ -290,7 +333,10 @@ The blast radius splits by read path, and the ETL half is the dangerous one:
   to whoever queries it — but unlike the partition gaps, a rebuild does not fix it.
 
 So the worst case is silent, permanent-until-rebuilt gaps in materialized views, plus a stale
-`payload_size` in metadata. Nothing decodes wrong and nothing is unrecoverable.
+`payload_size` in metadata — and it requires a payload larger than one cache block *and* pre-overwrite
+cache residency, on top of a re-delivery and a partition build in the window. The data at rest is
+never corrupt and no wrong rows are ever produced; a read can still assemble a torn old/new byte
+stream from the cache, but that fails decode loudly rather than yielding bad rows.
 
 An earlier revision of this plan proposed closing this gap here by reordering `insert_block_typed` to
 INSERT before `put` and skipping the `put` when the row already exists. That reorder is rejected for
@@ -312,24 +358,30 @@ any re-delivery of byte-identical OTLP content — the designed idempotency path
 retry or duplicate collector — replaces an existing array-form blob with a much smaller byte-string one — a guaranteed large size divergence — and this keeps recurring until
 pre-cutover blocks age out of retention, not just for the duration of the deploy window.
 
-**Recommended sequencing.** Because the ETL failure mode is silent rather than loud, the asymmetry
-above is a reason to land **#1462 first** for any deployment that runs OTLP ingestion — not merely
-"reasonably soon after." For a Rust-sink-only deployment the exposure is a narrow deploy-window retry
-race and does not warrant gating.
+**Decision: #1462 ships before this is deployed.** Implementation of this plan proceeds independently
+— the caveat is a *deployment* gate, not an implementation blocker — but the ingestion-server deploy
+waits on #1462. With #1462 in place the re-delivery divergence never arises, so nothing below is on the
+critical path; it is recorded only so nobody deploys out of order thinking a runbook can substitute.
 
-If this change must ship before #1462, flushing the object cache is **not sufficient on its own** — it
-heals future reads but does not repair partitions already written with gaps. In that case:
+There is no operational procedure that closes this gap without #1462, for three reasons:
 
-1. Pause `telemetry-maintenance-srv` (or the monolith's maintenance role) before deploying the
-   ingestion server, so no partition is built while blocks are poisoned.
-2. Deploy the ingestion server.
-3. Drop the object cache, clearing the stale size snapshots. Once a pre-cutover blob has been
-   overwritten with the byte-string form, subsequent `head()` calls agree with it, so the divergence
-   does not regenerate.
-4. Resume maintenance.
-
-The one failure mode this ordering cannot prevent is an ad-hoc query in the window between steps 2
-and 3, which fails loudly and is retryable — an acceptable trade against silent gaps.
+- **The stale state cannot be flushed.** It lives server-side in the shared `object-cache-srv`
+  (`RangeCache::size` caches via `backend.put`, `range_cache/mod.rs:283-296`) — every reader service
+  reaches it through `CacheClientStore`, and client processes hold no size state of their own. The
+  backend is a foyer hybrid RAM+disk cache whose disk tier deliberately survives restarts:
+  `prepare_disk_dir` (`object-cache/src/foyer_backend.rs:142-148`) reuses the store untouched when the
+  format marker matches. The router exposes only `/obj`, `/ranges`, `/prefetch`, `/health`, `/ready`
+  (`object_cache_srv.rs:194-198`) — no flush or purge. Clearing it means stopping the service and
+  deleting its `--disk-path` contents (or the `micromegas-object-cache-format-version` marker, which
+  forces a wipe on next boot), not restarting it.
+- **Pausing maintenance does not stop partition builds.** JIT views materialize on demand inside
+  `flight-sql-srv` query handling (`jit_partitions.rs:902-927`), so any user query during the window
+  can commit a gap partition regardless of the daemon's state.
+- **A flush does not stop the divergence from recurring.** A pre-cutover blob that has *not yet* been
+  re-delivered gets its old size re-snapshotted by the next read after the flush
+  (`RangeCache::size` caches on first access and is never invalidated, `range_cache/mod.rs:217-224`),
+  and a later duplicate delivery overwrites it again. For OTLP, where re-delivery is the designed
+  idempotency path, this recurs until pre-cutover blocks age out of retention.
 
 ## Implementation Steps
 
