@@ -188,8 +188,8 @@ no event identity is losing data (out of scope here; the protocol answer is #146
 `warn!` on the retry path is a deliberate accepted risk: a producer retrying aggressively will log
 one line per redelivery. That is the point — it is currently invisible — and the volume is bounded by
 the request rate, which is already bounded by the body-size cap and auth. Include `block_id`,
-`process_id`, and `stream_id` in the message so an operator can go straight from a warn to a
-`list_blocks()` query.
+`process_id`, and `stream_id` in the message so an operator can go straight from a warn to a query
+against the `blocks` view.
 
 `rust/analytics/src/replication.rs:168` writes into the same `blobs/{process_id}/{stream_id}/{block_id}`
 namespace via the same `BlobStorage::put`, inside `ingest_payloads`, which streams only the
@@ -209,7 +209,8 @@ Verified against the pinned `object_store` 0.13.2:
 
 - **S3**: `S3ConditionalPut::ETagMatch` is the `#[default]`
   (`aws/precondition.rs:117-130`); `PutMode::Create` sends `If-None-Match: *` and maps
-  412/304 to `Error::AlreadyExists` (`aws/mod.rs:188-202`). Works with no configuration.
+  412/304 to `Error::AlreadyExists` (`aws/mod.rs:188-202`). Works against AWS S3 itself with no
+  configuration; see below for the S3-*compatible* case.
 - **`LocalFileSystem`**: `std::fs::hard_link` from the staging file, `ErrorKind::AlreadyExists`
   → `Error::AlreadyExists` (`local.rs:372-384`).
 - **`InMemory`**: `storage.create(...)` (`memory.rs:213`) — so unit tests can cover the collision
@@ -218,14 +219,30 @@ Verified against the pinned `object_store` 0.13.2:
   delegate `put_opts` straight to the origin (`object-cache/src/l1_store.rs:167-173`,
   `object-cache/src/client.rs:961-967`). Nothing in the stack strips the mode.
 
-The one failure mode is an S3-compatible store explicitly configured with
-`aws_conditional_put=disabled`: `Create` then returns `Error::NotImplemented` (`aws/mod.rs:183-187`)
-and **every block write fails** rather than degrading. Since `parse_object_store_url` feeds the
-process env vars into `parse_url_opts` (`rust/telemetry/src/blob_storage.rs:11-21`), an operator can
-set that var. Mitigation is a clear error message from `put_if_absent`, not a fallback — silently
-falling back to overwrite would restore the bug this plan exists to fix.
+Two failure modes, and one silent-acceptance risk, all on S3-*compatible* (non-AWS) stores:
 
-Second, smaller behavior change: `object_store` marks `Overwrite` puts `idempotent(true)` but not
+- An S3-compatible store explicitly configured with `aws_conditional_put=disabled`: `Create` then
+  returns `Error::NotImplemented` (`aws/mod.rs:183-187`) and **every block write fails** rather than
+  degrading. Since `parse_object_store_url` feeds the process env vars into `parse_url_opts`
+  (`rust/telemetry/src/blob_storage.rs:11-21`), an operator can set that var. Mitigation is a clear
+  error message from `put_if_absent`, not a fallback — silently falling back to overwrite would
+  restore the bug this plan exists to fix.
+- A store that *accepts* `If-None-Match: *` but doesn't enforce it — i.e. it returns 200 and
+  overwrites regardless of the header. `object_store`'s own docs on `S3ConditionalPut` say only
+  "*Some* S3-compatible stores, such as Cloudflare R2 and minio support conditional put," which
+  implies others don't. Against such a store, `put_opts` returns `Ok(PutMode::Created)` on every
+  call — no `Error::NotImplemented`, no `Error::AlreadyExists` — so `put_if_absent` cannot distinguish
+  this from a real create, and the write silently degrades back to plain overwrite with no error and
+  no log line. This is exactly the silent-fallback outcome rejected under Trade-offs, except it
+  arrives from store behavior rather than from a deliberate code path, so no config flag names it.
+  There's no code-level detection for this (a store can lie about `If-None-Match` support
+  indefinitely); the mitigation is operational: before depending on `PutMode::Create` against a new
+  S3-compatible endpoint, do a one-time verification — write a key, write different bytes to the same
+  key, read it back, and confirm either an `AlreadyExists` error on the second write or (if it
+  succeeded) that the read still returns the *first* write's bytes. If neither holds, the store does
+  not honor conditional put and this plan's invariant does not hold against it.
+
+Separately, a smaller behavior change: `object_store` marks `Overwrite` puts `idempotent(true)` but not
 `Create` (`aws/mod.rs:181-182`), so a transient network error on the PUT is no longer retried
 internally and surfaces to the producer as a 503. The producer's retry then lands on the
 `AlreadyExists` path if the first attempt actually committed, so the outcome is correct — just
@@ -235,6 +252,14 @@ one more error visible to clients than before.
 
 Delete the mutation loop and the second `encode_to_vec` in `split_logs_with_extra_hash_input`
 (`block.rs:314-338`): encode once, hash those bytes, store those bytes.
+
+This removes the `observed_time_unix_nano` backfill that #1123/#1124 added to satisfy the OTLP spec's
+requirement that "the collecting system" supply an observed timestamp
+(`rust/otel-ingestion/src/block.rs:263-265`). That requirement bound the record as OTLP data; it no
+longer applies once the record stops being OTLP data at rest. The stored payload is never re-exported
+as OTLP — it is read back only by `logs_block_processor`, internal to this codebase — so the
+observed-timestamp obligation is satisfied at the block-bounds/query layer (`begin_time`/`end_time`
+and, after this change, the processor's substitution) rather than by mutating the record itself.
 
 Behavior change for **mixed** blocks (some records timestamped, some not): today `logs_bounds` sees
 the *post-backfill* records, so a zero-timestamp record's freshly-stamped `Utc::now()` can push
@@ -280,10 +305,20 @@ What Part 2 buys:
    encoding while the object holds arrival #1's bytes. Those lengths happen to be equal —
    `observed_time_unix_nano` is a proto `fixed64`, prost omits it at 0 and emits exactly 9 bytes when
    set, and two arrivals with the same `block_id` have the same set of zero-timestamp records — so
-   the mismatch is unreachable *today*. It is unreachable by accident, and a mismatch means an
-   unreadable block, since range reads request `0..payload_size` (exactly the #1462 failure mode).
-   Part 2 removes the reasoning entirely: identical `block_id` ⇒ identical bytes ⇒ identical length.
+   the mismatch is unreachable *today*. It is unreachable by accident, and a mismatch means
+   inaccurate metadata: `payload_size` feeds `get_max_payload_size` → the `nb_tasks` partition-sizing
+   heuristic (`block_partition_spec.rs:106`), so a wrong value skews ETL concurrency rather than
+   making the block unreadable — reads go through `fetch_block_payload`/`read_blob`
+   (`rust/analytics/src/payload.rs:19-38`), a plain unranged `ObjectStore::get`, so nothing in the
+   read path ever consults the row's `payload_size`. Part 2 removes the reasoning entirely for two
+   arrivals encoded by the *same build*: identical `block_id` ⇒ identical bytes ⇒ identical length.
    This is why the design needs no `head()` call on the collision path to recover the true size.
+   The invariant is scoped to same-encoding arrivals, not unconditionally: a `block_id` orphaned by a
+   pre-#1464 build and healed by a post-#1464 build (or the mirror `Created`+conflict case) still
+   produces a row/object pair from two different CBOR envelope encodings of the same underlying
+   bytes, since #1464 changed the `objects`/`dependencies` envelope from one array item per byte to a
+   byte string. This is a known, bounded exception — one deploy-boundary window, and, per (1) above,
+   harmless even when hit, since a `payload_size` mismatch only skews metadata, not readability.
 2. Removes the second `encode_to_vec()` on every webhook request, and with it the accepted-tradeoff
    note at `block.rs:270-276` and `handler.rs:223-232`. The CPU saving is real but minor — one proto
    encode of a body bounded by the ~300 MiB decompressed cap; the invariant in (1) is the actual
@@ -324,6 +359,15 @@ If the window is missed, it is recoverable but not self-healing: the affected re
 stored payloads and only missing from already-built partitions, so
 `regenerate_partition_range` over the affected time range recovers them once the new processor is
 live. Worth knowing, not worth planning around — ordering the deploy is cheaper.
+
+This plan is also the resolution of a deployment gate already recorded in `CHANGELOG.md`: the
+`## Unreleased` → `**Ingestion:**` entry for #1463 (landed in #1464 / commit `645d67286`, the CBOR
+byte-string envelope encoding) says its ingestion-server rollout "waits on #1462, to avoid a
+re-delivery window where a redelivered `block_id`'s payload object is overwritten with the smaller
+encoding while `blocks.payload_size` keeps the stale, larger value." Commit 1's create-only write is
+that unblocking change — once it ships, a redelivered `block_id` can no longer overwrite an existing
+object with a differently-encoded body, so the #1463/#1464 rollout is no longer gated on this plan.
+Commit 4 amends that CHANGELOG entry to say so (see item 11 below).
 
 Existing blocks written after the #1124 backfill carry backfilled timestamps and keep taking the
 `observed_time_unix_nano != 0` branch forever. Blocks from the #1031→#1124 window are the exception
@@ -401,7 +445,9 @@ read-side change precedes the write-side change it enables — the same ordering
     S3-compatible stores
     configured with `aws_conditional_put=disabled`, the "deploy maintenance/analytics before
     ingestion" rollout constraint, and the benign row-count increase for surviving #1031→#1124 blocks
-    once rebuilt.
+    once rebuilt. Also amend the existing #1463 entry's **Deployment note** to say the create-only
+    write in this plan is the change that unblocks its rollout (replacing "waits on #1462" with a
+    pointer at the shipped fix), so the CHANGELOG no longer asserts an open gate that this PR closes.
 
 ## Files to Modify
 
@@ -430,13 +476,15 @@ violates it. Part 2 is worth doing anyway (see its three benefits), but as harde
 top of a structural guarantee, not as the guarantee itself. Both ship together; the distinction
 matters for how the code is commented and for what a reviewer should hold each part to.
 
-**`head()` on the collision path to recover the true `payload_size`.** Considered and rejected. It
-would make the row provably describe the stored object regardless of what any writer does to
-encoding length, at the cost of one extra round trip per duplicate arrival. Both cache layers pass
-`head:true` straight through (`l1_store.rs:189-199`, `client.rs:1005-1013`), so it is viable. Part 2
-achieves the same guarantee with no request at all, and — since both parts ship in one PR — there is
-no interim window where the mismatch is even theoretically reachable, so the round trip buys nothing.
-Worth revisiting only if a future writer makes stored length depend on something outside `block_id`.
+**`head()` on the collision path to recover the true `payload_size`.** Considered and rejected, on
+cost grounds: a mismatch only skews metadata (`payload_size`, and via it the `nb_tasks`
+partition-sizing heuristic — see "What Part 2 buys" item 1), not readability, so paying one extra
+round trip per duplicate arrival to keep that number exact is not worth it. Both cache layers pass
+`head:true` straight through (`l1_store.rs:189-199`, `client.rs:1005-1013`), so it is viable if the
+calculus ever changes. Part 2 achieves the same guarantee with no request at all for the common,
+same-encoding case (see the cross-encoding exception noted above), so the round trip buys little even
+then. Worth revisiting only if a future writer makes stored length depend on something outside
+`block_id`.
 
 **Silently falling back to `Overwrite` when the store lacks conditional put.** Rejected: it makes the
 system quietly lose the invariant on exactly the deployments where an operator went out of their way
@@ -516,7 +564,7 @@ New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its ex
 `test_webhook_ingestion_missing_headers_tolerated`) rather than a standalone script:
 
 1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers and asserts
-   both requests succeed and exactly one row exists in `list_blocks()` for that `block_id` — the
+   both requests succeed and exactly one row exists in the `blocks` view for that `block_id` — the
    row-level half of the #1462 regression, observable via SQL alone. `python/micromegas/tests/`
    has no object-store access (no `boto3`/`s3fs`/`fsspec` reference, no SQL surface returning block
    bytes), so the object-byte-equality half of the regression is asserted in the Rust env-gated
@@ -527,5 +575,5 @@ New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its ex
    build) rather than immediately after the POST.
 3. POSTs two bodies differing only in a per-event attribute and asserts two blocks, both readable.
 
-`micromegas-query "SELECT block_id, payload_size, begin_time FROM list_blocks() ..."` covers the
-row-side assertions.
+`micromegas-query "SELECT block_id, payload_size, begin_time FROM blocks WHERE block_id = '...'"`
+covers the row-side assertions.
