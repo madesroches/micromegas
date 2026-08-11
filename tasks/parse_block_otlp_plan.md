@@ -436,12 +436,14 @@ Unchanged for transit blocks (same parse loop, same early-limit rule). For OTLP,
 decodes the whole `Resource*` message up front, so the early limit only avoids the JSONB
 conversion of the remaining leaves, not the proto decode — worth a sentence in the docs
 alongside the existing early-limit note. A block is a single HTTP export batch, so the decoded
-proto message is bounded by the ingestion body cap, but the output is larger than that cap
-suggests: `__resource`, `__scope`, and (for metrics) `__metric` are re-serialized into every
-row rather than shared once, and `scan` materializes the whole result as one `RecordBatch` in
-memory, so a capped export batch can expand to a multiple of that cap by the time it reaches
-the client. The mitigation is the same one that already exists for any query: a filter-free
-`LIMIT`.
+proto message is bounded by `INGESTION_DECOMPRESSED_BODY_LIMIT_BYTES` (300 MiB — the cap on the
+*decompressed* body, `ingestion_limits.rs:21`; the 20 MiB `INGESTION_BODY_LIMIT_BYTES` only
+bounds the compressed wire bytes and is not the relevant figure here, since the block stores the
+post-decompression proto), but the output is larger than that cap suggests: `__resource`,
+`__scope`, and (for metrics) `__metric` are re-serialized into every row rather than shared once,
+and `scan` materializes the whole result as one `RecordBatch` in memory, so a 300 MiB export
+batch can expand to a multiple of that by the time it reaches the client. The mitigation is the
+same one that already exists for any query: a filter-free `LIMIT`.
 
 ## Documentation
 
@@ -514,11 +516,16 @@ covered by inspection.
 **Python e2e** — extend `python/micromegas/tests/test_otlp_e2e.py`: after
 `test_otlp_logs_e2e` posts its batch, poll (`assert_eventually`, as elsewhere in that file)
 `blocks` for the block of that `process_id` with `"streams.format" = 'otlp/v1/logs'`, then
-assert `SELECT type_name, jsonb_as_string(jsonb_get(jsonb_get(value,'__attributes'), '<key>'))
-FROM parse_block('<block_id>')` returns the 5 records with the expected attribute value. Also
-assert that `parse_block('<a random UUID not present in `blocks`>')` raises — this is the one
-place in the test suite that exercises §5's missing-block error instead of the pre-existing
-empty-result behavior. Two assertion paths — the unit tests cover the shape.
+assert `SELECT object_index, type_name,
+jsonb_as_string(jsonb_get(jsonb_get(value,'__attributes'), '<key>')) FROM parse_block('<block_id>')
+ORDER BY object_index` returns the 5 records with `object_index` 0-4 (contiguous, no gaps) and
+the expected attribute value on each — this is the only place in the test suite that walks
+`ParseBlockRowBuilder`'s `object_index`/limit bookkeeping end-to-end, since `ParseBlockRowBuilder`
+itself stays private (§4) and the Rust regression test drives `TransitBlockDecoder` with a test
+`ObjectVisitor`, not the row builder. Also assert that `parse_block('<a random UUID not present
+in `blocks`>')` raises — this is the one place in the test suite that exercises §5's
+missing-block error instead of the pre-existing empty-result behavior. Three assertion paths —
+the unit tests cover the shape.
 
 **Manual** — `python3 local_test_env/ai_scripts/start_services.py`, post an OTLP batch, then
 `micromegas-query "SELECT type_name, jsonb_format_json(value) FROM parse_block('<id>')" --begin 1h`
