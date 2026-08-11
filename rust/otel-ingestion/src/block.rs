@@ -35,10 +35,10 @@ pub struct PreparedBlock {
 /// Walks `ResourceLogs` to find min/max `time_unix_nano`. Falls back to
 /// `observed_time_unix_nano` when the per-record `time` is 0.
 ///
-/// Records with no usable timestamp still count toward `count` — the downstream
-/// processor (`OtelLogsBlockProcessor`) substitutes the block's `begin_time` for
-/// such records rather than dropping them, which keeps `block.nb_objects`
-/// consistent with the proto payload bytes (matching the metrics-side trade-off).
+/// Every record counts toward `count` and materializes exactly one row: the
+/// downstream processor (`OtelLogsBlockProcessor`) substitutes the block's
+/// `begin_time` for records with no usable timestamp instead of dropping them,
+/// so `block.nb_objects` is an exact count of the rows the processor emits.
 fn logs_bounds(rl: &ResourceLogs) -> Option<(i64, i64, i32)> {
     let mut min = i64::MAX;
     let mut max = i64::MIN;

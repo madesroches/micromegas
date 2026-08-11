@@ -613,28 +613,33 @@ metrics stream exists, not a counter's value; this plan doesn't go further than 
 
 ### End-to-end against the local test env
 
-(Note: this file — `python/micromegas/tests/test_otlp_e2e.py` — is missing from the "Files to
-Modify" table above; it belongs there alongside the other test files.)
+This section originally prescribed three new test functions for
+`python/micromegas/tests/test_otlp_e2e.py`. None were added — on review, two of the three
+assertions are already covered by existing tests, so only one gap remains:
 
-New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its existing
-`WEBHOOK_ENDPOINT` and `log_entries` polling helpers (it already covers this exact surface, e.g.
-`test_webhook_ingestion_e2e`, `test_webhook_ingestion_block_id_folds_in_full_header_set`,
-`test_webhook_ingestion_missing_headers_tolerated`) rather than a standalone script:
-
-1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers and asserts
-   both requests succeed and exactly one row exists in the `blocks` view for that `block_id` —
+1. **Covered.** `test_otlp_idempotency_e2e` (already in `test_otlp_e2e.py`, unchanged by this
+   plan) POSTs the same logs payload twice and asserts the row count stays at exactly 5 —
    create-only write does not turn a redelivery into an error, observable via SQL alone. (Row-level
    dedup itself was never broken — `blocks` has always had `ON CONFLICT (block_id) DO NOTHING` over a
    unique `block_id` index — so this doesn't detect the #1462 regression, which was purely an
-   object-content bug.) `python/micromegas/tests/` has no object-store access (no
+   object-content bug. `python/micromegas/tests/` has no object-store access (no
    `boto3`/`s3fs`/`fsspec` reference, no SQL surface returning block bytes), so the
    object-byte-equality half of the #1462 regression is asserted in the Rust env-gated integration
-   test instead (see below), which already has `blob_storage` access.
-2. Queries `log_entries` for the webhook record and asserts it is present (not dropped) with `time`
-   equal to the block's `begin_time` — the Part 2 processor substitution. Requires the maintenance
-   daemon to have built the partition, so run it after the ETL catches up (or force a partition
-   build) rather than immediately after the POST.
-3. POSTs two bodies differing only in a per-event attribute and asserts two blocks, both readable.
+   test instead — see above — which already has `blob_storage` access.)
+2. **Covered.** Record survival (not dropped) is covered end-to-end by
+   `test_webhook_ingestion_e2e`: its webhook body carries no `time_unix_nano`, and the test asserts
+   exactly one `log_entries` row is produced (`len(df) == 1`) rather than zero. The stricter
+   assertion — that the row's `time` equals the block's `begin_time` — is covered at the unit level
+   instead, by `rust/analytics/tests/otel_logs_zero_timestamp_tests.rs`'s
+   `zero_timestamp_log_record_materializes_at_block_begin_time`, which decodes the produced batch and
+   checks `time == begin_time` directly. Neither `test_otlp_e2e.py` nor any other e2e test asserts
+   this equality via SQL against a live `log_entries.time` column, so that specific e2e check is not
+   implemented, but the invariant is proven at the unit level plus the record-survival half is proven
+   at the e2e level.
+3. **Not implemented.** POSTing two bodies differing only in a per-event attribute and asserting
+   two distinct blocks, both readable, has no coverage anywhere in this branch — e2e or unit. This
+   remains a genuine gap in the test suite.
 
 `micromegas-query "SELECT block_id, payload_size, begin_time FROM blocks WHERE block_id = '...'"`
-covers the row-side assertions.
+remains a useful ad hoc query for inspecting the row-side state described above, e.g. while manually
+verifying #3 before writing a test for it.
