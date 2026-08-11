@@ -14,10 +14,26 @@ use tokio::sync::mpsc::Receiver;
 
 use super::http_utils::get_client_ip;
 
-/// observability_middleware logs http requests, their duration and status code
-pub async fn observability_middleware(request: Request, next: Next) -> Response {
+/// Shared body for `observability_middleware` and `auth_observability_middleware`. Logs only
+/// the request path (never the query string) when `log_query_string` is `false` -- used by
+/// `auth_observability_middleware` because `/auth/callback`'s query carries the OAuth
+/// authorization code and the PKCE verifier (embedded in the signed `state` param) and must
+/// never be written to the telemetry log. The logged field is always named `uri=`, not `path=`
+/// -- even when the value is path-only -- so queries that grep `uri=` to reconstruct HTTP traffic
+/// across the whole `log_entries` stream still match `/auth/*` lines. `client_ip` reuses the
+/// shared `get_client_ip` (rightmost `X-Forwarded-For` entry, then `X-Real-IP`, then the socket
+/// address), same as every other route in this codebase.
+async fn observability_middleware_impl(
+    request: Request,
+    next: Next,
+    log_query_string: bool,
+) -> Response {
     let (parts, body) = request.into_parts();
-    let uri = parts.uri.clone();
+    let uri = if log_query_string {
+        parts.uri.to_string()
+    } else {
+        parts.uri.path().to_string()
+    };
     let client_ip = get_client_ip(&parts.headers, &parts.extensions);
     info!(
         "request method={} uri={uri} client_ip={client_ip}",
@@ -33,6 +49,17 @@ pub async fn observability_middleware(request: Request, next: Next) -> Response 
         response.status()
     );
     response
+}
+
+/// Logs http requests, their duration and status code, including the query string.
+pub async fn observability_middleware(request: Request, next: Next) -> Response {
+    observability_middleware_impl(request, next, true).await
+}
+
+/// Like `observability_middleware`, but never logs the query string -- see
+/// `observability_middleware_impl`'s doc comment for why.
+pub async fn auth_observability_middleware(request: Request, next: Next) -> Response {
+    observability_middleware_impl(request, next, false).await
 }
 
 /// Makes a streaming body from a Tokio MPSC receiver.

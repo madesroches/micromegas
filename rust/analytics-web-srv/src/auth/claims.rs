@@ -95,17 +95,38 @@ pub(crate) fn extract_name_from_token(token: &str) -> Option<String> {
     claims.name
 }
 
-/// Extract the 'sub' claim from a JWT payload for audit logging
-pub(crate) fn extract_subject_from_token(token: &str) -> Option<String> {
+/// Claims read directly from an unverified JWT payload, for audit logging in
+/// `auth_callback`/`auth_refresh` where the token has not yet been through JWKS
+/// signature validation (that happens later, per-request, via `cookie_auth_middleware`) --
+/// same trust level the old `sub`-only extraction already had.
+pub struct AuditClaims {
+    pub sub: Option<String>,
+    pub email: Option<String>,
+}
+
+/// Extract the 'sub' and 'email' claims from a JWT payload for audit logging.
+pub fn extract_audit_claims_from_token(token: &str) -> AuditClaims {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
-        return None;
+        return AuditClaims {
+            sub: None,
+            email: None,
+        };
     }
 
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let claims: Option<serde_json::Value> = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1].as_bytes())
-        .ok()?;
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
-    claims["sub"].as_str().map(|s| s.to_string())
+    AuditClaims {
+        sub: claims
+            .as_ref()
+            .and_then(|c| c["sub"].as_str())
+            .map(str::to_string),
+        email: claims
+            .as_ref()
+            .and_then(|c| c["email"].as_str())
+            .map(str::to_string),
+    }
 }

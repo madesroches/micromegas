@@ -187,6 +187,7 @@ fn aggregate_scan_metrics_sums_spill_metrics_across_the_tree() {
 fn full_record(sql: &str) -> QueryAuditRecord {
     QueryAuditRecord {
         query_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        client_ip: "203.0.113.7".to_string(),
         client: "python".to_string(),
         agent: "claude-code".to_string(),
         entrypoint: "cli-query".to_string(),
@@ -225,6 +226,7 @@ fn query_audit_record_serializes_required_fields() {
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
     assert_eq!(value["query_id"], "11111111-1111-1111-1111-111111111111");
+    assert_eq!(value["client_ip"], "203.0.113.7");
     assert_eq!(value["client"], "python");
     assert_eq!(value["agent"], "claude-code");
     assert_eq!(value["entrypoint"], "cli-query");
@@ -256,6 +258,7 @@ fn query_audit_record_serializes_required_fields() {
 fn query_audit_record_omits_absent_optionals() {
     let record = QueryAuditRecord {
         query_id: "22222222-2222-2222-2222-222222222222".to_string(),
+        client_ip: "unknown".to_string(),
         client: "grpc".to_string(),
         agent: "unknown".to_string(),
         entrypoint: "unknown".to_string(),
@@ -308,6 +311,7 @@ fn query_audit_record_omits_absent_optionals() {
     assert_eq!(value["error"], "boom");
     assert_eq!(value["error_class"], "internal");
     assert_eq!(value["query_id"], "22222222-2222-2222-2222-222222222222");
+    assert_eq!(value["client_ip"], "unknown");
     assert_eq!(value["bytes_scanned"], 0);
     assert_eq!(value["peak_memory_bytes"], 0);
     assert_eq!(value["spilled_bytes"], 0);

@@ -82,6 +82,15 @@ pub struct QueryAuditRecord {
     /// step -- always present, so a failure's server-log line (which also
     /// carries it) and this record can be correlated by grepping the id.
     pub query_id: String,
+    /// The rightmost `X-Forwarded-For` entry (the address the trusted proxy in front of this
+    /// service observed), falling back to `X-Real-IP` and then the gRPC peer address for a
+    /// direct connection -- see `http_utils::get_client_ip`. Unlike `client`/`agent`/`entrypoint`
+    /// below, this comes from the network / trusted-proxy layer rather than from
+    /// client-controlled attribution headers, so it's grouped with `query_id` rather than with
+    /// the self-reported fields -- but that guarantee holds only for requests that actually
+    /// traversed the trusted proxy; for a direct connection with no proxy in front, both
+    /// `X-Forwarded-For` and `X-Real-IP` are just as caller-chosen as the self-reported fields.
+    pub client_ip: String,
     pub client: String,
     pub agent: String,
     pub entrypoint: String,

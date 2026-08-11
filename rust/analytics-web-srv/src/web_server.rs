@@ -18,7 +18,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
-use micromegas::servers::axum_utils::observability_middleware;
+use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::tracing::prelude::*;
 use serde::Serialize;
@@ -138,7 +138,12 @@ fn build_auth_state(config: &WebServerConfig) -> Result<Option<AuthState>> {
     }))
 }
 
-fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router {
+/// `pub` (unlike most other `build_*` helpers here) so integration tests
+/// (`tests/routing_tests.rs`) can exercise the real, layered `/auth/*` router
+/// directly -- following the precedent `build_protected_routes` documents at
+/// its own definition below -- rather than reimplementing the merge logic
+/// standalone.
+pub fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router {
     if let Some(state) = auth_state {
         Router::new()
             .route(
@@ -159,6 +164,7 @@ fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router 
             )
             .route(&format!("{base_path}/auth/me"), get(crate::auth::auth_me))
             .with_state(state.clone())
+            .layer(middleware::from_fn(auth_observability_middleware))
     } else {
         Router::new()
             .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
@@ -166,6 +172,7 @@ fn build_auth_routes(base_path: &str, auth_state: &Option<AuthState>) -> Router 
                 &format!("{base_path}/auth/logout"),
                 post(auth_logout_no_auth),
             )
+            .layer(middleware::from_fn(auth_observability_middleware))
     }
 }
 

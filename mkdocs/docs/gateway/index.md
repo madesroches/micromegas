@@ -267,10 +267,13 @@ INFO Gateway request completed: request_id=req-12345, duration=37.21ms
 **Corresponding FlightSQL logs:**
 
 ```
-INFO execute_query sql="SELECT * FROM processes" user=alice@example.com email=alice@example.com client=web+gateway
+INFO execute_query sql="SELECT * FROM processes" user=alice@example.com email=alice@example.com client=web+gateway client_ip=<gateway address>
 ```
 
-The request ID appears in both logs for end-to-end tracing.
+The request ID appears in both logs for end-to-end tracing. Note that `client_ip` here is the
+*gateway's own* address, not the original HTTP caller's — the gateway doesn't forward the
+caller's `X-Forwarded-For` chain to FlightSQL, so every gateway-proxied query reports the
+gateway's address (see [Client IP Security](#client-ip-security) below).
 
 ## Security
 
@@ -336,11 +339,18 @@ FlightSQL enforces strict user attribution validation to prevent impersonation a
 
 ### Client IP Security
 
-The gateway always extracts client IP from the actual connection:
+The gateway always extracts client IP from the connection, or from the trusted proxy that
+observed it:
 
 - ✅ Blocks `x-client-ip` header from clients
-- ✅ Uses real socket address or `X-Forwarded-For` (from trusted proxies)
-- ✅ Prevents IP spoofing in audit logs
+- ✅ Uses the rightmost `X-Forwarded-For` entry (the address the trusted proxy/ALB observed,
+  which a caller cannot forge *for requests that actually traversed that proxy* — a caller
+  connecting to the gateway directly, bypassing the ALB, can still set `X-Forwarded-For` itself
+  and have it believed), falling back to `X-Real-IP` and then the real socket address
+- ⚠️ Computes a non-forgeable `x-client-ip` value, but nothing downstream consumes it today —
+  the gateway's own logs don't include it, and FlightSQL's audit `client_ip` comes from its own
+  `X-Forwarded-For`/`X-Real-IP`/socket lookup, not from this header (see the note in
+  [Logging](#logging) above)
 
 ### Header Forwarding Security
 

@@ -13,7 +13,7 @@ use analytics_web_srv::analytics_keys::AnalyticsKeysState;
 use analytics_web_srv::data_source_cache::DataSourceCache;
 use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
-use analytics_web_srv::web_server::build_protected_routes;
+use analytics_web_srv::web_server::{build_auth_routes, build_protected_routes};
 use axum::{
     Router, body::Body, extract::State, http::StatusCode, response::IntoResponse, routing::get,
 };
@@ -454,4 +454,28 @@ async fn disable_auth_ingestion_keys_sub_path_returns_503() {
         &format!("/api/ingestion-api-keys/{key_id}"),
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// `build_auth_routes` is now wrapped in `auth_observability_middleware`
+// (client_ip-tagged request/response logging for `/auth/*`). This drives the
+// real, layered `--disable-auth` router directly to confirm the added
+// `.layer()` call in `build_auth_routes` didn't break `/auth/*` routing.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn auth_me_route_still_works_with_observability_layer() {
+    let app = build_auth_routes("", &None);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
