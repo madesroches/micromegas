@@ -142,7 +142,7 @@ Row granularity and `type_name`:
 | `otlp/v1/metrics` | one per data point | `otlp.NumberDataPoint`, `otlp.HistogramDataPoint`, `otlp.ExponentialHistogramDataPoint`, `otlp.SummaryDataPoint` |
 
 Metrics are per-data-point rather than per-`Metric`: for Sum and Gauge, `measures`
-materialization already emits one row per data point (`otel/metrics_block_processor.rs:275`);
+materialization already emits one row per data point (`otel/metrics_block_processor.rs:108,117`);
 that correspondence is not universal, though — `append_summary` fans one `SummaryDataPoint`
 into up to `SUMMARY_MAX_ROWS_PER_POINT = 4` `measures` rows, and Histogram/ExponentialHistogram
 data points emit zero `measures` rows at all. `metrics_bounds` nonetheless counts data points
@@ -181,7 +181,11 @@ only channel for anything belonging to the parent `Metric`/`Sum`/`Histogram`/
 `metric_extras` is empty). Only the metrics decoder populates it: holding the parent `Metric`
 and its `Data`, it builds `metric_extras` with `name`/`unit`/`description`/`otel.metric.kind`
 for every leaf kind, plus `otel.metric.aggregation_temporality` for
-Sum/Histogram/ExponentialHistogram and `otel.metric.is_monotonic` for Sum only (details below).
+Sum/Histogram/ExponentialHistogram, `otel.metric.is_monotonic` for Sum only, and
+`otel.metric.metadata` — the parent `Metric`'s own `metadata: Vec<KeyValue>` field (tag 12,
+`opentelemetry.proto.metrics.v1.rs:183-209`), flattened via `attrs_to_jsonb_value` and included
+for every leaf kind when non-empty — since that field is likewise unreachable from `leaf`,
+`resource`, or `scope` (details below).
 The logs and traces decoders always pass `&[]`, so their rows carry no `__metric` key. The
 `__`-prefix marks synthesized envelope fields — it matches the existing `__type` convention
 from `transit_value_to_jsonb` (`parse_block_table_function.rs:51-54`) and cannot collide with
@@ -197,7 +201,8 @@ OTLP/JSON's camelCase names.
                      "otel.scope.attr.<key>": "...", "otel.scope.schema_url": "..." },
   "__metric":     { "name": "...", "unit": "...", "description": "...",   // parent `Metric`
                      "otel.metric.kind": "sum", "otel.metric.aggregation_temporality": 2,
-                     "otel.metric.is_monotonic": true },   // metrics only; `name`/`unit`/
+                     "otel.metric.is_monotonic": true,
+                     "otel.metric.metadata": { "...": "..." } },   // metrics only; `name`/`unit`/
                                                             // `description`/`otel.metric.kind`
                                                             // are synthesized for every leaf
                                                             // kind (no data point carries its
@@ -207,7 +212,10 @@ OTLP/JSON's camelCase names.
                                                             // Sum/Histogram/ExponentialHistogram
                                                             // message for those three kinds;
                                                             // `otel.metric.is_monotonic` is
-                                                            // Sum-only, per `metrics_block_processor.rs`
+                                                            // Sum-only, per `metrics_block_processor.rs`;
+                                                            // `otel.metric.metadata` is the parent
+                                                            // `Metric.metadata` (`Vec<KeyValue>`),
+                                                            // flattened, omitted when empty
 
   // faithful OTLP/JSON dump of the leaf record itself
   "timeUnixNano": "1700000000000000000",
@@ -226,12 +234,14 @@ compares key-for-key with the record-attribute portion of `properties`. `__resou
 `properties` counterpart to compare against: resource attrs never appear there, only in
 `process_properties` under `otel.resource.*`-prefixed keys (a separate, simpler loop in
 `otel-ingestion/src/block.rs`) — `__resource` is bare-keyed instead, matching `__attributes`'s
-convention rather than `process_properties`'s. `__resource` is attributes only: the
-resource-level `schema_url` and `dropped_attributes_count` fields on `ResourceLogs` /
-`ResourceMetrics` / `ResourceSpans` are intentionally omitted from every row (the single
-`schema_url` parameter to `leaf_jsonb` is the *scope's* schema URL, feeding
-`otel.scope.schema_url` below, not the resource's — there is no resource-level counterpart in
-the envelope). `__scope` is a nested object holding `scope_extras`'s entries under their
+convention rather than `process_properties`'s. `__resource` is attributes only: `ResourceLogs`'s /
+`ResourceMetrics`'s / `ResourceSpans`'s own `schema_url` field, and `Resource`'s
+`dropped_attributes_count` and `entity_refs` fields (`opentelemetry.proto.resource.v1.rs`), are
+intentionally omitted from every row (the single `schema_url` parameter to `leaf_jsonb` is the
+*scope's* schema URL, feeding `otel.scope.schema_url` below, not the resource's — there is no
+resource-level counterpart in the envelope). `InstrumentationScope`'s own
+`dropped_attributes_count` field is likewise intentionally omitted — `scope_extras`
+(`otel/attrs.rs:173-204`) never emits it. `__scope` is a nested object holding `scope_extras`'s entries under their
 original `otel.scope.*` key names. For `log_entries`/`otel_spans` this compares key-for-key
 with the `otel.scope.*` entries inside `properties`; `metrics_block_processor.rs` never calls
 `scope_extras`, so `measures.properties` carries no scope keys to compare against. `__metric` always
@@ -248,7 +258,11 @@ field of the parent `Sum`/`Histogram`/`ExponentialHistogram` message, not the da
 `properties` counterpart since metrics extras normally ride on `measures.properties`, not a
 nested object; `name`/`unit`/`description` are added on top because the parent `Metric` — not
 the leaf data point — is where OTLP carries them, and no properties-building helper covers
-that gap. The raw
+that gap. `Metric.metadata` (tag 12, `opentelemetry.proto.metrics.v1.rs:183-209`) is a sixth
+`Metric` field reachable from neither the data point, the resource, nor the scope; it is
+flattened via `attrs_to_jsonb_value(&metric.metadata, &[])` into `metric_extras` as
+`otel.metric.metadata`, for every leaf kind, omitted when `metric.metadata` is empty — the
+same omit-when-absent convention `__metric` itself follows. The raw
 `attributes` array is kept alongside `__attributes`: the point of this tool is a faithful
 dump, and the flattened view is a lossy convenience (duplicate keys collapse). This is the
 shape that answers the issue's question directly:
@@ -412,9 +426,13 @@ over the shape but is three signal-specific walkers over dozens of proto fields,
 goes stale when `opentelemetry-proto` adds fields. The serde path is generic, matches OTLP/JSON
 field naming and 64-bit/ID encoding (the wire form users already know), and is free — though
 enum fields (`severityNumber`, `aggregationTemporality`, …) come through as their raw `i32`
-values rather than the OTLP/JSON enum *names*, and non-finite `f64`s (NaN/±Infinity) collapse
-to JSON `null` (see §3) rather than OTLP/JSON's `"NaN"`/`"Infinity"` strings, so "faithful to
-OTLP/JSON" overstates it slightly. The cost is also a verbose value: with no
+values rather than the OTLP/JSON enum *names*, non-finite `f64`s (NaN/±Infinity) collapse
+to JSON `null` (see §3) rather than OTLP/JSON's `"NaN"`/`"Infinity"` strings, and `asInt`
+(`number_data_point::Value::AsInt`, `opentelemetry.proto.metrics.v1.rs:384-396`) and
+`Exemplar.as_int` serialize as bare JSON numbers rather than quoted strings — unlike
+`timeUnixNano`, `HistogramDataPoint.count`, and `bucketCounts`, which do carry
+`serialize_u64_to_string` — so "faithful to OTLP/JSON" overstates it slightly (no precision
+loss for `asInt`, purely a shape difference). The cost is also a verbose value: with no
 `skip_serializing_if` attributes on the generated types, empty strings and zero fields are
 always present. Acceptable for a debug tool. Chosen.
 
@@ -464,7 +482,9 @@ same one that already exists for any query: a filter-free `LIMIT`.
   since Summary data points are over-counted there by `SUMMARY_MAX_ROWS_PER_POINT = 4`; (2)
   non-finite `f64` values (NaN/±Infinity) in the source payload render as JSON `null` in
   `value`, indistinguishable from an absent field, because the `serde_json` conversion path
-  does not preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding; (3) a block absent from
+  does not preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding; (3) `asInt` (metrics
+  `NumberDataPoint`) and `Exemplar.as_int` render as bare JSON numbers rather than
+  OTLP/JSON's quoted-string int64 form; (4) a block absent from
   `blocks` for the queried time range now errors instead of returning zero rows — widen
   `--begin` or use `--all` — and a `streams.format` with no registered decoder errors with the
   list of known formats.
@@ -533,8 +553,7 @@ the expected attribute value on each — this is the only place in the test suit
 itself stays private (§4) and the Rust regression test drives `TransitBlockDecoder` with a test
 `ObjectVisitor`, not the row builder. Also assert that `parse_block('<a random UUID not present
 in `blocks`>')` raises — this is the one place in the test suite that exercises §5's
-missing-block error instead of the pre-existing empty-result behavior. Three assertion paths —
-the unit tests cover the shape.
+missing-block error instead of the pre-existing empty-result behavior.
 
 **Manual** — `python3 local_test_env/ai_scripts/start_services.py`, post an OTLP batch, then
 `micromegas-query "SELECT type_name, jsonb_format_json(value) FROM parse_block('<id>')" --begin 1h`
