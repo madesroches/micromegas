@@ -201,8 +201,13 @@ fall-through and no orphan-heal ordering concern here. Switch `ingest_payloads`'
 `put_if_absent` anyway, so the write-once guarantee holds for every writer into this namespace, not
 just the ingestion path; simply ignore (or `debug!`-log) the `AlreadyExists` outcome and continue the
 stream — `ingest_blocks`'s own `ON CONFLICT DO NOTHING` INSERT already handles row-level dedup
-independently. `async_parquet_writer.rs:30` is a different namespace (partition files) and correctly
-keeps `Overwrite`.
+independently. Partition files are a different namespace and need no change, but not because they
+"keep `Overwrite`" — no code in the workspace selects a `PutMode` at all. They are written through
+`object_store::buffered::BufWriter` multipart uploads
+(`rust/analytics/src/lakehouse/async_parquet_writer.rs:30`), which takes no put mode, to
+`views/{view_set}/{instance}/{date}/{time}_{uuid}.parquet` keys uniquified by a fresh
+`Uuid::new_v4()` (`rust/analytics/src/lakehouse/write_partition.rs:802-818`), so a colliding
+overwrite never arises there.
 
 #### Configuration risk: `PutMode::Create` support
 
@@ -405,9 +410,10 @@ read-side change precedes the write-side change it enables — the same ordering
    placed in a new file, give it its own `[[test]]` block with the same `required-features =
    ["server"]` — `object_store`/`bytes` are optional and server-gated, so a new test file without that
    entry would fail to build under default features.
-4. `rust/ingestion/tests/insert_block_dedup_db_test.rs` (new, env-gated on
-   `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` like
-   `rust/analytics/tests/*_db_test.rs`): the four-case matrix, including the orphan-heal path
+4. `rust/ingestion/tests/insert_block_dedup_db_test.rs` (new; gated `#[ignore]` + `#[tokio::test]`
+   like `rust/analytics/tests/*_db_test.rs` — run via `--ignored`, reading
+   `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`, which error rather than
+   skip when absent): the four-case matrix, including the orphan-heal path
    (write the object directly via `blob_storage`, then call `insert_block_typed` and assert one row
    appears).
 
@@ -454,6 +460,8 @@ read-side change precedes the write-side change it enables — the same ordering
 10b. `mkdocs/docs/admin/ingestion.md`: update the Scaling section's idempotency sentence
     (`:82-84`) for create-only writes, and document the conditional-put requirement for
     S3-compatible stores. See Documentation below.
+10c. `mkdocs/docs/admin/service-lifecycle.md`: update the "Data durability" section's
+    "Writes are idempotent" bullet (`:124-126`) for create-only writes. See Documentation below.
 11. `CHANGELOG.md`: add an entry under `## Unreleased` → `**Ingestion:**` covering the create-only
     block write, the three new counters (two `warn!`, one `debug!`), the hard failure on
     S3-compatible stores
@@ -478,6 +486,7 @@ read-side change precedes the write-side change it enables — the same ordering
 | `rust/ingestion/tests/insert_block_dedup_db_test.rs` | new env-gated integration test |
 | `mkdocs/docs/otlp/index.md` | Idempotency + webhook wrinkles sections |
 | `mkdocs/docs/admin/ingestion.md` | Scaling section: create-only semantics, conditional-put requirement |
+| `mkdocs/docs/admin/service-lifecycle.md` | Data durability section: create-only semantics in the idempotency bullet |
 | `CHANGELOG.md` | `## Unreleased` → `**Ingestion:**` entry for the create-only write |
 
 ## Trade-offs
@@ -519,7 +528,7 @@ are byte-identical; tracked producer-side, protocol answer in #1466).
 
 ## Documentation
 
-Two doc pages are affected (see Commit 4 for the `CHANGELOG.md` entry):
+Three doc pages are affected (see Commit 4 for the `CHANGELOG.md` entry):
 
 `mkdocs/docs/otlp/index.md`:
 
@@ -548,6 +557,17 @@ No new metrics doc page exists to update (`put_duration`/`insert_duration` are u
   put (`PutMode::Create`); a store configured with `aws_conditional_put=disabled` will fail every
   block write (see Configuration risk above and the `CHANGELOG.md` entry in Commit 4).
 
+`mkdocs/docs/admin/service-lifecycle.md`:
+
+- **Data durability** (`:124-126`): the "Writes are idempotent" bullet is a second, more detailed
+  statement of the same semantics as `ingestion.md`'s Scaling sentence — "Blocks are stored at a
+  deterministic path and recorded with `ON CONFLICT DO NOTHING`." Update it to say the object write
+  is create-only (a retried request finds the object already present and leaves it untouched) and
+  the row insert still uses `ON CONFLICT DO NOTHING`. The bullet's conclusion — a request cut off
+  at the deadline can safely be retried with no duplication — remains true and stays; only the
+  mechanism sentence changes. The "Ingestion writes are synchronous" bullet (`:120-123`) is
+  unaffected.
+
 ## Testing Strategy
 
 ### Unit (no services required)
@@ -570,13 +590,18 @@ No new metrics doc page exists to update (`put_duration`/`insert_duration` are u
 ### Integration, env-gated (`rust/ingestion/tests/insert_block_dedup_db_test.rs`)
 
 The four-case matrix against a real PG + object store, following the harness pattern in
-`rust/analytics/tests/net_spans_retire_overlap_db_test.rs`:
+`rust/analytics/tests/thread_spans_ordering_db_test.rs` — the precedent that actually ingests
+through the blocks path (`net_spans_retire_overlap_db_test.rs` shares the same `#[ignore]` +
+env-var gating but never touches ingestion; it inserts synthetic `lakehouse_partitions` rows, and
+its own header defers to the thread-spans test for this kind of work):
 
 Assertions are on observable state (object bytes, row presence, `payload_size`), not on the
 `imetric!` counters themselves: reading a named counter back out of `micromegas_tracing::test_utils`
-requires `parse_block` + `StreamMetadata` from `micromegas-analytics`, which `micromegas-ingestion`'s
-dev-deps cannot reach without a dependency cycle (`micromegas-analytics` already depends on
-`micromegas-ingestion`). The precedent (`analytics/tests/metrics_test.rs:71-79`) only checks that a
+requires `parse_block` + `StreamMetadata` from `micromegas-analytics`, and `micromegas-analytics`
+already depends on `micromegas-ingestion`, so ingestion dev-depending on analytics would be a
+dev-dep cycle. Cargo tolerates cycles through `[dev-dependencies]` (they aren't needed to build the
+lib), but no crate in this workspace uses that pattern and it complicates publish ordering, so this
+plan doesn't introduce one. The precedent (`analytics/tests/metrics_test.rs:71-79`) only checks that a
 metrics stream exists, not a counter's value; this plan doesn't go further than that.
 
 1. Same block twice → one object, one row; the object's bytes equal the first write's.
