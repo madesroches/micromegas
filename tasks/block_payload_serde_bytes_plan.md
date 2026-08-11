@@ -19,7 +19,7 @@ All claims below were checked empirically against ciborium 0.2.2 with a throwawa
 | Claim from #1463 | Verdict | Evidence |
 |---|---|---|
 | `Vec<u8>` encodes as a CBOR array, not a byte string | **Confirmed** | Encoding a `BlockPayload` with 256 objects bytes emits `99 01 00` (major type 4, array(256)) after the `objects` key — not `59` (byte string). |
-| Inflation is ~1.6–1.9x and value-dependent | **Confirmed, slightly above the claimed range (2.01x measured)** | 256 raw bytes → 514 CBOR bytes (2.008x) for a uniform 0..=255 payload, where 232/256 bytes are ≥ 24. The ratio genuinely tracks the fraction of bytes ≥ 24. |
+| Inflation is ~1.6–1.9x and value-dependent | **Confirmed, at the top of the claimed range (1.92x measured)** | For a uniform 0..=255 payload the `objects` field's array encoding is 491 bytes for 256 raw bytes (1 header + 24×1 + 232×2, since 232/256 bytes are ≥ 24) = **1.918x**, at the top of the claimed range and approaching 2.0x as more bytes are ≥ 24. (The 514-byte figure below is the whole `BlockPayload` envelope, not this field alone: 1 map header + 13 `dependencies` key + 1 empty array + 8 `objects` key + 491 array = 514.) |
 | Savings of roughly 38–46% | **Confirmed** | Same payload: old form 514 bytes, byte-string form 282 bytes → **45.1%** smaller. |
 | `serde_bytes` alone will not decode the existing array form | **Confirmed** | A bytes-only visitor (`deserialize_byte_buf`) against array-form input fails with `invalid type: sequence, expected byte array`. This is the real hazard. |
 | Readers must be changed *first*, before any writer, or existing readers cannot parse the new form | **Incorrect** | The *derived* `Vec<u8>` deserializer **already accepts CBOR byte strings** — ciborium's `deserialize_seq` transparently feeds a byte string as a sequence of `u8`. Decoding byte-string-form input with today's unmodified `BlockPayload` round-trips correctly. |
@@ -249,8 +249,8 @@ So this plan ships without a fix for the rollout-window gap; the put-before-inse
 invariant trade-off around it) stays in #1462's scope. The actual exposure differs by client because
 of how `block_id` is derived: for the Rust sink, `block_id` is a UUID, so a rewrite only happens if a
 client genuinely retries — a narrow deploy-window exposure. For OTLP, `block_id` is a content hash, so
-any hash collision against a pre-cutover `block_id` replaces an existing array-form blob with a much
-smaller byte-string one — a guaranteed large size divergence — and this keeps recurring until
+any re-delivery of byte-identical OTLP content — the designed idempotency path, e.g. an exporter
+retry or duplicate collector — replaces an existing array-form blob with a much smaller byte-string one — a guaranteed large size divergence — and this keeps recurring until
 pre-cutover blocks age out of retention, not just for the duration of the deploy window. That
 asymmetry is an argument for landing #1462 reasonably soon after this change ships.
 
