@@ -279,18 +279,27 @@ its current callers.
   ```
 
   This keeps registering a new format a purely additive change: the message updates itself
-  from `default_block_object_decoders()` with no second string to edit.
+  from `default_block_object_decoders()` with no second string to edit. `scan` returns this
+  directly as `DataFusionError::Plan` (via `plan_err!`, the same macro `call_with_args` already
+  uses) rather than via `anyhow`/`External`, so FlightSQL's `classify_datafusion_error` maps it
+  to `InvalidArgument`/`error_class="user"` instead of `Internal`.
 
 - `parse_block_objects` becomes `ParseBlockRowBuilder`, an `ObjectVisitor` implementation
   holding the three builders, `object_offset`, `local_index`, `nb_objects`, and `early_limit`.
 
 ### 5. Block metadata lookup — lookup path unchanged, missing-block behavior fixed
 
-`fetch_block_metadata` first parses `block_id` as a `Uuid` (`Uuid::parse_str`) before touching
-the `blocks` view, and returns a distinct "`<block_id>` is not a valid block id" error on
-failure — today a malformed argument is interpolated straight into the `WHERE block_id = '…'`
-lookup, silently yields zero rows, and would otherwise surface the misleading
-range-widening advice added below.
+`scan` first parses `block_id` as a `Uuid` (`Uuid::parse_str`), before calling
+`fetch_block_metadata` at all, and on failure returns a distinct "`<block_id>` is not a valid
+block id" error directly as `DataFusionError::Plan` (via `plan_err!`) — not through
+`fetch_block_metadata`'s `anyhow::Result`/`External` path used for genuine backend failures — so
+FlightSQL's `classify_datafusion_error` maps it to `InvalidArgument`/`error_class="user"` instead
+of `Internal`. `fetch_block_metadata` receives the already-parsed `Uuid` and interpolates its
+canonical hyphenated rendering (`block_id.to_string()`), not the caller's original string, into
+the `WHERE block_id = '…'` lookup, so a valid-but-non-canonical form (braced, URN, or bare-hex)
+still matches the `blocks` view's canonical rendering instead of silently finding nothing — today
+a malformed argument is interpolated straight into the lookup, silently yields zero rows, and
+would otherwise surface the misleading range-widening advice added below.
 
 `fetch_block_metadata` otherwise keeps resolving the block through the `blocks` view — same
 DataFusion/lakehouse path, no raw-Postgres fallback. What changes is what happens when the
@@ -301,9 +310,13 @@ both to `fetch_block_metadata`'s session and to partition pruning (`query.rs:226
 outside the query window is invisible by default — the common case, not an edge case.
 
 `scan` now returns an error instead of an empty batch when `fetch_block_metadata` returns
-`None`, naming the query range in client-neutral terms — this error surfaces through
-`DataFusionError::External` to every FlightSQL caller (Grafana, the Python API, the web app),
-not just `micromegas-query`, so it must not name CLI-specific flags:
+`None`, naming the query range in client-neutral terms. Like the not-a-valid-block-id error
+above, this is constructed directly as `DataFusionError::Plan` (via `plan_err!`), not routed
+through the generic `anyhow`/`External` mapping used for `fetch_block_metadata`'s other
+(genuine backend) errors — so `classify_datafusion_error` maps it to
+`InvalidArgument`/`error_class="user"` and it is logged at `warn!`, not `error!`. It surfaces to
+every FlightSQL caller (Grafana, the Python API, the web app), not just `micromegas-query`, so
+it must not name CLI-specific flags:
 
 ```
 parse_block: block '<block_id>' not found in `blocks` for the queried range
