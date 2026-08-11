@@ -48,7 +48,9 @@ the client sent. Consequences:
 - Unreal traffic is already compact on the wire but is **re-inflated into array form at rest**.
 - Changing only the server's serializer fixes **100% of the storage inflation for every client**,
   with no client rollout and no coordination.
-- The Rust `telemetry-sink` change is a separate, independent win for *wire* bandwidth only.
+- The Rust `telemetry-sink` (client) picks up the same encoding automatically, since it serializes
+  the same `BlockPayload` struct — there is no separate sink-side diff. Only the *rollout* of client
+  builds is independent of the server deploy; see Deployment order.
 
 ## Current State
 
@@ -138,9 +140,11 @@ No call site changes: the field type stays `Vec<u8>`.
 `Vec::with_capacity(seq.size_hint().unwrap_or(0))` on the legacy path is an allocation-amplification
 vector — this deserializer runs on the **public ingestion endpoint**, and a malicious client can
 declare a multi-gigabyte CBOR array header while sending a few bytes. serde's own `Vec<T>` impl
-guards this with `serde::de::size_hint::cautious`, which caps the initial allocation. The visitor
-must do the same (`size_hint::cautious::<u8>(seq.size_hint())`, or an explicit clamp such as
-`min(hint, 4096)`), so the new code is no weaker than what it replaces.
+guards this with a capacity cap, but that logic (`serde::de::size_hint::cautious`) is not a stable
+public API — as of serde 1.0.228 (pinned in `rust/Cargo.lock`) it lives under the doc-hidden
+`serde::__private::size_hint`, not `serde::de`, so the visitor cannot call it. Use an explicit clamp
+instead: `Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096))`, so the new code is no weaker
+than what it replaces.
 
 ### Encoding shape before/after
 
@@ -163,12 +167,21 @@ behavior:
    before the clients.
 2. **Ingestion server writer** — same binary as step 1; the moment it ships, all newly stored blocks
    are compact. This is where essentially all of the storage win comes from.
-3. **Rust `telemetry-sink` writer** — ships inside client builds, so old array-form senders remain
-   in the field indefinitely. That is fine: the ingestion reader handles both forever.
+3. **Rust `telemetry-sink` writer** — same crate change as steps 1–2, not a separate diff; it just
+   ships inside client builds on a slower cadence, so old array-form senders remain in the field
+   indefinitely after the deploy. That is fine: the ingestion reader handles both forever.
 
 Old and new writers coexist permanently, and the array-form objects already in storage are read by
 the `visit_seq` path forever. The dual-path reader is **not a temporary shim** — say so in the code
 comment so a future cleanup pass does not delete it.
+
+No metric for legacy-form decodes: because the path is permanent (blobs are never rewritten, and
+`analytics/src/replication.rs:162-171` copies payload blobs verbatim between lakes, so array-form
+objects can keep arriving after the cutover indefinitely), a counter meant to signal "the compat
+path can be retired" would never have a consumer. It would also add a `micromegas-tracing`
+dependency edge to `rust/telemetry/`, which today depends on nothing that pulls in tracing
+(`Cargo.toml` lists only `anyhow`, `chrono`, `ciborium`, `lz4`, `micromegas-transit`, `serde`,
+`uuid`) — not worth it for a metric with no consumer.
 
 ### Interaction with #1462 — a caveat, not a fix
 
@@ -179,6 +192,23 @@ encode to the **same** length, so the size mismatch that surfaced #1462 would no
 duplicate-delivery divergence would become **silent** rather than fixed. This change should not be
 described as addressing #1462, and #1462 must be fixed on its own terms (stabilizing `block_id` vs.
 stored bytes in the OTLP path). Worth a line in the PR description so nobody closes #1462 off this.
+
+**Rollout window caveat — re-delivery can change size at rest.** `insert_block`
+(`rust/ingestion/src/web_ingestion_service.rs:164-176`) `put`s the payload blob unconditionally
+*before* the `INSERT INTO blocks … ON CONFLICT (block_id) DO NOTHING` at line 183. If a block_id
+that was first stored *before* this change is redelivered *after* the ingestion server is deployed,
+the object gets overwritten with the smaller byte-string encoding while the `blocks.payload_size`
+row keeps the old (larger) array-form size — a real size divergence, for the duration of the deploy
+window, for exactly the block_ids that happen to be re-delivered across the cutover. When the object
+cache is configured (`ingestion/src/data_lake_connection.rs:90-119` wraps the store in
+`CacheClientStore`), it snapshots the object size once via `origin.head()`
+(`object-cache/src/range_cache/mod.rs:258-294`) and treats a length mismatch on a subsequent origin
+fetch as a hard error, `"origin object changed size mid-fetch"`
+(`object-cache/src/range_cache/fetch.rs:386-401`). This plan accepts that transient failure mode
+rather than adding invalidation logic: it can only affect block_ids re-delivered within the narrow
+window around one ingestion-server deploy, the client retry path already handles ingestion errors,
+and the cache entry self-heals once it expires or is re-fetched after the overwrite. No code change
+is scoped for this; call it out explicitly in the PR description alongside the #1462 caveat above.
 
 ## Implementation Steps
 
@@ -269,11 +299,4 @@ parse — query `log_entries` / `measures` over a time range spanning the restar
 
 ## Open Questions
 
-1. **Should `telemetry-sink` ship in the same PR as the server change?** They are independent. Doing
-   the server-only change first gets the entire storage win with a single service deploy and zero
-   client-side risk; the sink change can follow. Recommend splitting unless there is a reason to
-   batch.
-2. **Is there value in a metric for legacy-form decodes?** A counter incremented in `visit_seq` would
-   tell you when the last array-form block has aged out of the lake, i.e. when the compat path could
-   in principle be retired. Cheap, but adds a `micromegas-tracing` dependency edge to a leaf module —
-   probably not worth it given the path is meant to stay permanently.
+None — both prior questions were settled from the codebase (see Design).
