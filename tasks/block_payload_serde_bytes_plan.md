@@ -51,6 +51,17 @@ the client sent. Consequences:
 - The Rust `telemetry-sink` (client) picks up the same encoding automatically, since it serializes
   the same `BlockPayload` struct — there is no separate sink-side diff. Only the *rollout* of client
   builds is independent of the server deploy; see Deployment order.
+- The shrunk `payload_size` stored in the `blocks` table is not purely cosmetic: it is a direct input
+  to ETL partition-build concurrency. `block_partition_spec.rs:106-108` sizes the number of
+  concurrent block-fetch tasks per partition build from `max(payload_size)` over the source blocks
+  (`partition_source_data.rs:76-79,113` / `:283-309`): `nb_tasks = (100 MB / max_size).clamp(1, 64)`.
+  Since `payload_size` is exactly `encoded_payload.len()` at write time
+  (`web_ingestion_service.rs:150-151`), the ~45% size drop raises `nb_tasks` by up to ~1.8x for any
+  view whose largest block payload exceeds 100 MB / 64 ≈ 1.56 MB — a threshold real payloads cross
+  (`tasks/completed/net_spans_view_plan.md` records a partition with ~1.1 MB average block payload
+  size). Decompressed per-block size is unchanged, so this raises peak concurrent memory during
+  partition builds for those views. See Open Questions for whether that increase, or the 100 MB
+  constant, needs revisiting.
 
 ## Current State
 
@@ -282,9 +293,10 @@ asymmetry is an argument for landing #1462 reasonably soon after this change shi
 - `rust/telemetry/src/block_wire_format.rs` — field attributes
 - `rust/telemetry/tests/block_wire_format_tests.rs` — **new**
 
-No changes required in `rust/telemetry-sink/`, `rust/analytics/`, `rust/ingestion/`,
+No code changes required in `rust/telemetry-sink/`, `rust/analytics/`, `rust/ingestion/`,
 `rust/otel-ingestion/`, or `unreal/` — the attributes propagate through the existing `encode_cbor` /
-`ciborium::from_reader` call sites.
+`ciborium::from_reader` call sites. This does not mean `rust/analytics/` is unaffected at runtime:
+see the `block_partition_spec.rs` concurrency consequence noted above.
 
 ## Trade-offs
 
@@ -348,9 +360,22 @@ micromegas-query "SELECT block_id, nb_objects, payload_size FROM blocks ORDER BY
 
 Expect `payload_size` for new blocks to be close to the raw compressed byte count plus a small
 constant envelope, rather than ~1.6–2x it. Also confirm blocks ingested *before* the change still
-parse — query `log_entries` / `measures` over a time range spanning the restart, which forces
-`fetch_block_payload` down the legacy path.
+parse. Querying `log_entries` / `measures` over a range spanning the restart is **not** a reliable
+check for this: those are materialized views, and if the maintenance daemon has already built
+partitions covering that range, the query is served from parquet and never calls
+`fetch_block_payload` at all — making the check nondeterministic. Instead, force the legacy decode
+path deterministically on a specific pre-cutover block via the `parse_block` table function
+(`rust/analytics/src/lakehouse/parse_block_table_function.rs:301-314`,
+`mkdocs/docs/query-guide/functions-reference.md:196`), which calls `fetch_block_payload` directly:
+
+```
+micromegas-query "SELECT * FROM parse_block('<block_id ingested before the restart>')"
+```
 
 ## Open Questions
 
-None — both prior questions were settled from the codebase (see Design).
+- Both prior questions were settled from the codebase (see Design). One new question remains: is the
+  up-to-~1.8x increase in `block_partition_spec.rs`'s `nb_tasks` (and the corresponding rise in peak
+  concurrent memory during partition builds) acceptable as a side effect of this change, or should the
+  100 MB constant be revisited alongside it? Nothing in the codebase settles this trade-off; it needs
+  a decision from whoever owns ETL memory budgets before or shortly after rollout.
