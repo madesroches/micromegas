@@ -279,14 +279,15 @@ metadata lookups stay on the DataFusion/lakehouse path.
    `BlockObjectDecoder`, `BlockObjectDecoderMap`, `TransitBlockDecoder`, and
    `default_block_object_decoders()` (transit only, for now). Register the module in
    `rust/analytics/src/lakehouse/mod.rs`.
-2. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` (made `pub`, including its
-   constructor and `skip`/`finish`, so it can be driven directly from the external integration
-   test described in Testing Strategy) implements `ObjectVisitor`; `fetch_block_metadata`
+2. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` (stays private to the crate —
+   no need to make it or its constructor `pub`) implements `ObjectVisitor`; `fetch_block_metadata`
    returns the format; `scan` dispatches through the map; `ParseBlockTableFunction::with_decoders`
    added. Behavior for transit blocks — including the early-limit path and non-Object index
-   gaps — must be identical. Add the regression test in `parse_block_tests.rs` that exercises
-   both by calling `ParseBlockRowBuilder`'s `ObjectVisitor::visit`/`skip` directly (see Testing
-   Strategy).
+   gaps — must be identical. Add the regression test in `parse_block_tests.rs` that drives
+   `TransitBlockDecoder::decode` over a real transit `BlockPayload` with a limiting test
+   `ObjectVisitor` (see Testing Strategy) to exercise the early-limit stop point through an
+   actual walk; the non-Object index-gap branch is unreachable via any in-tree transit reader
+   and is deliberately left uncovered (see Testing Strategy).
 
 ### Phase 2 — OTLP decoders
 
@@ -316,8 +317,8 @@ metadata lookups stay on the DataFusion/lakehouse path.
 - `rust/analytics/src/lakehouse/otel/attrs.rs` — extract `attrs_to_jsonb_value`
 - `rust/analytics/src/lakehouse/parse_block_table_function.rs` — registry dispatch, visitor,
   unknown-format error message
-- `rust/analytics/tests/parse_block_tests.rs` — add the `ParseBlockRowBuilder` early-limit /
-  index-gap regression test
+- `rust/analytics/tests/parse_block_tests.rs` — add the `TransitBlockDecoder` early-limit
+  regression test
 - `python/micromegas/tests/test_otlp_e2e.py` — e2e coverage
 - `mkdocs/docs/query-guide/functions-reference.md` — `parse_block` section
 - `mkdocs/docs/otlp/index.md` — remove the limitation, add a troubleshooting recipe
@@ -395,19 +396,34 @@ matches the existing `parse_block_tests.rs` style):
   `__attributes` carries a record attribute, `__resource` carries a resource attribute,
   `__scope["otel.scope.name"]` is the scope name, `timeUnixNano` is the quoted-string form,
   `traceId` is hex.
-- metrics: one Sum + one Gauge + one Summary → per-data-point rows with the right
-  `type_name`s and `__metric.name`.
+- metrics: one Sum + one Gauge + one Summary + one Histogram + one ExponentialHistogram →
+  per-data-point rows with the right `type_name`s and `__metric.name`, plus — for the
+  Histogram and ExponentialHistogram data points — `__metric.otel.metric.kind` (`histogram` /
+  `exponential_histogram`) and `__metric.otel.metric.aggregation_temporality` carried from the
+  parent `Histogram`/`ExponentialHistogram` message.
 - traces: one span with an event and a link → `otlp.Span` with `events`/`links` nested.
 - early limit: a visitor returning `false` after 2 objects stops the walk at 2 rows.
-- a truncated/garbage payload returns `Err` rather than panicking.
+- garbage bytes never panic: decoding returns `Ok` or `Err` (matching
+  `parse_corrupt_block_tests.rs`'s "never panics" contract) — `prost::Message::decode` skips
+  unrecognized tags, so arbitrary bytes frequently decode `Ok` into a message with zero scopes
+  rather than erroring.
+- a truncated *valid* `Resource*` encoding (a valid message cut short mid-field) returns `Err`.
 
 **Rust regression** — existing `parse_block_tests.rs` and `parse_corrupt_block_tests.rs` must
-pass unchanged (transit path untouched). Neither covers `ParseBlockRowBuilder` itself, so
-Phase 1 also adds a new test in `parse_block_tests.rs` that constructs a `ParseBlockRowBuilder`
-directly and drives it through `ObjectVisitor::visit`/`skip` calls (possible because
-`ParseBlockRowBuilder` is `pub`, per Phase 1 step 2): assert the early-limit stop point (`visit`
-returning `false` after N objects halts the walk at N rows) and the `object_index` gap left by
-a `skip()` call (index advances past the skipped entry without emitting a row for it).
+pass unchanged (transit path untouched). Neither drives a real early-limit stop through the
+lifted decoder loop, so Phase 1 also adds a new test in `parse_block_tests.rs` that builds a
+real transit `(StreamMetadata, BlockPayload)` (as in `parse_corrupt_block_tests.rs`) and calls
+`TransitBlockDecoder::decode` with a test `ObjectVisitor` that returns `false` after N objects:
+asserts the walk actually stops at N rows. This exercises `TransitBlockDecoder`'s lifted loop
+itself (not just the boolean return of `visit`), so it catches a regression where `local_index`
+keeps advancing past a `false` return. The non-Object `object_index` gap branch (the `skip()`
+call on a payload entry the decoder recognizes but cannot represent) has no counterpart in any
+in-tree transit reader — `parse_pod_instance` and every custom reader in
+`rust/tracing/src/parsing.rs` always return `Value::Object` — so it is defensive dead code
+against real data and is deliberately left uncovered rather than forced via a synthetic
+non-Object payload. `ParseBlockRowBuilder` and its constructor stay private; the test only
+needs the already-public `TransitBlockDecoder`, `BlockObjectDecoder`, and `ObjectVisitor`
+items.
 
 **Python e2e** — extend `python/micromegas/tests/test_otlp_e2e.py`: after
 `test_otlp_logs_e2e` posts its batch, poll (`assert_eventually`, as elsewhere in that file)
