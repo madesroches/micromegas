@@ -107,9 +107,10 @@ land in the same commit series, but they have a **rollout order** between servic
 
 #### 1a. `BlobStorage::put_if_absent` (`rust/telemetry/src/blob_storage.rs`)
 
-`put` must keep overwrite semantics — `async_parquet_writer.rs:30` (partition files, a different
-namespace) relies on it — so add a sibling rather than changing it. `replication.rs:168` moves to the
-new sibling too (see 1b). `put` returns
+`put` must keep overwrite semantics — it is public API of the published `micromegas-telemetry` crate
+and `analytics/tests/test_helpers.rs:69` still relies on it — so add a sibling rather than changing
+it. `replication.rs:168` moves to the new sibling too (see 1b); after this change, no production code
+path uses `put` — its only remaining caller is that test helper. `put` returns
 `anyhow::Result`, which erases `object_store::Error`, so the create-only variant must classify the
 collision itself and return it as a value:
 
@@ -163,8 +164,12 @@ rather than two independent warnings on the common retry path:
 `block_object_recreated` stays a genuine signal, not routine noise: retention's
 `delete_expired_blocks_batch` (`rust/analytics/src/delete.rs:12-47`) deletes the row and the object
 together inside one transaction (`DELETE ... RETURNING`, then `blob_storage.delete_batch`, then
-commit), so a row surviving without its object requires a commit failure after the blob delete — an
-anomaly, not a normal event. `warn!` is the right level for all three non-`Created`-inserted cases.
+commit), so a row surviving without its object requires either a commit failure after the blob
+delete, or a partial `delete_batch` failure — `delete_batch` propagates on the first non-`NotFound`
+error (`delete.rs:36`), so a transient object-store error mid-batch can leave some objects deleted
+and then roll back the whole transaction, restoring rows whose objects are already gone. Either way
+it's an anomaly, not a normal event. `warn!` is the right level for all three non-`Created`-inserted
+cases.
 
 All three counters follow the existing convention — `imetric!("<name>", "count", 1_u64)`, matching
 `object_warm_requested` (`rust/ingestion/src/data_lake_connection.rs:68`) and the `range_cache_*`
@@ -179,12 +184,16 @@ the request rate, which is already bounded by the body-size cap and auth. Includ
 `list_blocks()` query.
 
 `rust/analytics/src/replication.rs:168` writes into the same `blobs/{process_id}/{stream_id}/{block_id}`
-namespace via the same `BlobStorage::put`, and its block-row insert is already
-`ON CONFLICT (block_id) DO NOTHING` (`replication.rs:~207`) — i.e. dedup is already the expected
-outcome there, the same as the ingestion path. Switch it to `put_if_absent` too (fall through to the
-INSERT on both `Created` and `AlreadyExists`, same as 1b), so the write-once guarantee holds for
-every writer into this namespace, not just the ingestion path. `async_parquet_writer.rs:30` is a
-different namespace (partition files) and correctly keeps `Overwrite`.
+namespace via the same `BlobStorage::put`, inside `ingest_payloads`, which streams only the
+`payloads` table. The block-row `INSERT ... ON CONFLICT (block_id) DO NOTHING` lives in a separate
+function, `ingest_blocks` (`replication.rs:~204`), driven by an independent `bulk_ingest(..., "blocks",
+...)` stream over a different record batch — the two are not a PUT-then-INSERT pair, so there is no
+fall-through and no orphan-heal ordering concern here. Switch `ingest_payloads`'s write to
+`put_if_absent` anyway, so the write-once guarantee holds for every writer into this namespace, not
+just the ingestion path; simply ignore (or `debug!`-log) the `AlreadyExists` outcome and continue the
+stream — `ingest_blocks`'s own `ON CONFLICT DO NOTHING` INSERT already handles row-level dedup
+independently. `async_parquet_writer.rs:30` is a different namespace (partition files) and correctly
+keeps `Overwrite`.
 
 #### Configuration risk: `PutMode::Create` support
 
@@ -292,17 +301,26 @@ separate processes that can run different builds during a rolling deploy:
 
 Reversed, there is a window where new ingestion writes zero-timestamp payloads while an old
 maintenance daemon is still building partitions, and that daemon drops every such record — silently,
-aggregated into one log line (`nb_dropped_no_timestamp`). Deploying the ETL side first is inert: no
-block in the lake has zero timestamps yet, so the new substitution branch is dead code until
-ingestion catches up. Monolith mode (`micromegas-monolith --roles all`) has no window at all.
+aggregated into one log line (`nb_dropped_no_timestamp`). Deploying the ETL side first is close to
+inert for *new* writes, but not strictly so for existing ones: OTLP logs ingestion shipped in `3f1cf089e`
+(#1031) while the `observed_time_unix_nano` backfill only landed a month later in `17bb18505`
+(#1124), so blocks written in that window contain records with both timestamps at 0. Those blocks are
+only a few months old and can still be inside an operator's retention window
+(`delete_old_data(min_days_old)`), so once commit 2 deploys, any such surviving block that gets
+rebuilt starts yielding those previously-dropped rows at their arrival-time `begin_time` — a benign
+row-count increase, not a hazard (their `begin_time` is arrival time, not 1970, per the #1031
+fallback), but not a true no-op either. Monolith mode (`micromegas-monolith --roles all`) has no
+window at all.
 
 If the window is missed, it is recoverable but not self-healing: the affected records are in the
 stored payloads and only missing from already-built partitions, so
 `regenerate_partition_range` over the affected time range recovers them once the new processor is
 live. Worth knowing, not worth planning around — ordering the deploy is cheaper.
 
-Existing blocks carry backfilled timestamps and keep taking the `observed_time_unix_nano != 0`
-branch forever, so there is no migration and no mixed-state hazard beyond that deploy window.
+Existing blocks written after the #1124 backfill carry backfilled timestamps and keep taking the
+`observed_time_unix_nano != 0` branch forever. Blocks from the #1031→#1124 window are the exception
+(see above): they will start surfacing rows they previously dropped once commit 2 deploys and they
+are rebuilt. There is no migration and no other mixed-state hazard beyond that deploy window.
 
 ## Implementation Steps
 
@@ -317,11 +335,19 @@ read-side change precedes the write-side change it enables — the same ordering
    `put_duration` metric around it, fall through to the INSERT on `AlreadyExists`, and replace the
    `debug!` at `:203-205` with the four-case classification (three `imetric!` counters + one log
    line per outcome).
-2b. `rust/analytics/src/replication.rs:168`: switch the block-payload PUT to `put_if_absent`, falling
-    through to the existing `ON CONFLICT DO NOTHING` INSERT on both outcomes (same shape as item 2,
-    no new counters needed there).
+2b. `rust/analytics/src/replication.rs:168`: switch `ingest_payloads`'s block-payload PUT to
+    `put_if_absent`, ignoring (or `debug!`-logging) the `AlreadyExists` outcome and continuing the
+    stream — there is no INSERT to fall through to in this function; `ingest_blocks` is a separate
+    function with its own independent `ON CONFLICT DO NOTHING` INSERT over a different stream, and
+    needs no change.
 3. `rust/telemetry/tests/`: unit tests for `put_if_absent` over `InMemory` — create, collide,
-   original bytes preserved after a collision.
+   original bytes preserved after a collision. `rust/telemetry/Cargo.toml` has no
+   `[dev-dependencies]` section and no `tokio` anywhere today; add `tokio` (features `macros`, `rt`)
+   as a `[dev-dependencies]` entry. Either add the tests to the existing `tests/blob_storage_tests.rs`
+   (already registered via its own `[[test]]` block with `required-features = ["server"]`) or, if
+   placed in a new file, give it its own `[[test]]` block with the same `required-features =
+   ["server"]` — `object_store`/`bytes` are optional and server-gated, so a new test file without that
+   entry would fail to build under default features.
 4. `rust/ingestion/tests/insert_block_dedup_db_test.rs` (new, env-gated on
    `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` like
    `rust/analytics/tests/*_db_test.rs`): the four-case matrix, including the orphan-heal path
@@ -333,7 +359,9 @@ read-side change precedes the write-side change it enables — the same ordering
 5. `rust/analytics/src/lakehouse/otel/logs_block_processor.rs:100-111`: substitute
    `src_block.block.begin_time` for records with no timestamp; rename
    `nb_dropped_no_timestamp` → `nb_substituted_block_time` and adjust the aggregate log line at the
-   end of the loop. Inert until commit 3 — no block in the lake has zero timestamps yet.
+   end of the loop. Effectively inert for new writes until commit 3 ships, but see "Rollout order":
+   surviving blocks from the #1031→#1124 window already have zero-timestamp records and will start
+   yielding rows once this deploys and they are rebuilt.
 
 **Commit 3 — single encode (Part 2).**
 
@@ -433,6 +461,10 @@ No new metrics doc page exists to update (`put_duration`/`insert_duration` are u
 
 - `put_if_absent` over `InMemory`: `Created` on first write; `AlreadyExists` on second; the object
   still holds the *first* payload afterwards (the assertion that actually encodes the invariant).
+  Requires adding `tokio` (features `macros`, `rt`) to `rust/telemetry/Cargo.toml`'s
+  `[dev-dependencies]` (none exist today) and either landing in the existing
+  `tests/blob_storage_tests.rs` or, if a new file, registering it with its own `[[test]]` block and
+  `required-features = ["server"]` (see Commit 1, item 3).
 - `split_logs` on a timestamp-less request: `block_id_from_payload(&block.payload.objects) ==
   block.block_id`, and `begin_time`/`end_time` still land at arrival time, not 1970.
 - `split_logs` twice on the same timestamp-less request: identical `block_id` **and** identical
@@ -462,8 +494,10 @@ metrics stream exists, not a counter's value; this plan doesn't go further than 
 
 ### End-to-end against the local test env
 
-Start services (`python3 local_test_env/ai_scripts/start_services.py`), then a Python script under
-`local_test_env/ai_scripts/` that:
+New test functions in `python/micromegas/tests/test_otlp_e2e.py`, reusing its existing
+`WEBHOOK_ENDPOINT` and `log_entries` polling helpers (it already covers this exact surface, e.g.
+`test_webhook_ingestion_e2e`, `test_webhook_ingestion_block_id_folds_in_full_header_set`,
+`test_webhook_ingestion_missing_headers_tolerated`) rather than a standalone script:
 
 1. POSTs the same webhook body twice to `/ingestion/webhook` with identical headers, reads the
    stored object both times, and asserts the bytes are unchanged — this is the #1462 regression,
