@@ -141,7 +141,17 @@ Row granularity and `type_name`:
 | `otlp/v1/traces` | one per `Span` (events/links nested in the value) | `otlp.Span` |
 | `otlp/v1/metrics` | one per data point | `otlp.NumberDataPoint`, `otlp.HistogramDataPoint`, `otlp.ExponentialHistogramDataPoint`, `otlp.SummaryDataPoint` |
 
-A `Metric` with `data: None` calls `visitor.skip()`.
+Metrics are per-data-point rather than per-`Metric`: `measures` materialization already emits
+one row per data point (`otel/metrics_block_processor.rs:275,306`), and `metrics_bounds`
+counts data points as its `nb_objects` basis, so this granularity is the one already implied
+by the rest of the pipeline.
+
+A `Metric` with `data: None` emits nothing and consumes no ordinal (a `debug!` is enough):
+`metrics_bounds` (`otel-ingestion/src/block.rs:178`) already contributes zero to `nb_objects`
+for this case, and `object_index` is purely positional over emitted leaves for OTLP blocks
+(`object_offset` is always 0), so calling `visitor.skip()` here would invent a gap rather than
+preserve one. `skip()` is reserved for the transit decoder, whose payload genuinely holds an
+entry the decoder recognizes but cannot represent.
 
 ### 3. JSONB value shape
 
@@ -168,11 +178,18 @@ envelope fields — it matches the existing `__type` convention from `transit_va
 {
   // synthesized envelope
   "__type":       "otlp.LogRecord",
-  "__attributes": { "ecs.event_id": "...", "aws.region": "..." },   // flattened leaf attrs
-  "__resource":   { "service.name": "...", "host.name": "..." },    // flattened resource attrs
-  "__scope":      { "name": "...", "version": "...", "schema_url": "...", "<attr>": ... },
-  "__metric":     { "name": "...", "unit": "...", "description": "...",  // metrics only
-                    "type": "Sum", "aggregationTemporality": 2, "isMonotonic": true },
+  "__attributes": { "ecs.event_id": "...", "aws.region": "..." },        // flattened leaf attrs, bare keys
+  "__resource":   { "service.name": "...", "host.name": "..." },         // flattened resource attrs, bare keys
+  "__scope":      { "otel.scope.name": "...", "otel.scope.version": "...",
+                     "otel.scope.attr.<key>": "...", "otel.scope.schema_url": "..." },
+  "__metric":     { "name": "...", "unit": "...", "description": "...",   // parent `Metric`
+                     "otel.metric.kind": "sum", "otel.metric.aggregation_temporality": 2,
+                     "otel.metric.is_monotonic": true },   // metrics only; the `otel.metric.*`
+                                                            // keys are the per-kind `extras`
+                                                            // arrays in `metrics_block_processor.rs`,
+                                                            // verbatim; `name`/`unit`/`description`
+                                                            // are synthesized (no data point
+                                                            // carries its parent metric's identity)
 
   // faithful OTLP/JSON dump of the leaf record itself
   "timeUnixNano": "1700000000000000000",
@@ -184,12 +201,24 @@ envelope fields — it matches the existing `__type` convention from `transit_va
 }
 ```
 
-`__attributes` / `__resource` / `__scope` are flattened maps built with the *same* helpers the
-materialization processors use, so a `parse_block` row and the corresponding
-`log_entries.properties` value can be compared key-for-key. The raw `attributes` array is
-kept alongside them: the point of this tool is a faithful dump, and the flattened view is a
-lossy convenience (duplicate keys collapse). This is the shape that answers the issue's
-question directly:
+`__attributes` and `__resource` are both built with `attrs_to_jsonb_value` (extracted below,
+no extras) over the leaf's and the resource's attribute lists respectively, using bare keys —
+the same helper `log_entries.properties` uses for record attributes, so `__attributes`
+compares key-for-key with the record-attribute portion of `properties`. `__resource` has no
+`properties` counterpart to compare against: resource attrs never appear there, only in
+`process_properties` under `otel.resource.*`-prefixed keys (a separate, simpler loop in
+`otel-ingestion/src/block.rs`) — `__resource` is bare-keyed instead, matching `__attributes`'s
+convention rather than `process_properties`'s. `__scope` is `scope_extras`'s own flat
+`otel.scope.*` list, unchanged — kept verbatim rather than renamed into a nested object, so it
+compares key-for-key with the `otel.scope.*` entries inside `properties`. `__metric`'s
+`otel.metric.*` keys are the per-kind `extras` array `metrics_block_processor.rs` builds for
+Sum/Gauge, again verbatim — no renaming to camelCase, and no `properties` counterpart since
+metrics extras normally ride on `measures.properties`, not a nested object; `name`/`unit`/
+`description` are added on top because the parent `Metric` — not the leaf data point — is
+where OTLP carries them, and no properties-building helper covers that gap. The raw
+`attributes` array is kept alongside `__attributes`: the point of this tool is a faithful
+dump, and the flattened view is a lossy convenience (duplicate keys collapse). This is the
+shape that answers the issue's question directly:
 
 ```sql
 SELECT jsonb_as_string(jsonb_get(jsonb_get(value, '__attributes'), 'my.event.id'))
@@ -232,7 +261,8 @@ metadata lookups stay on the DataFusion/lakehouse path.
 
 ### Phase 1 — decoder abstraction (no behavior change)
 
-1. Add `serde_json.workspace = true` to `rust/analytics/Cargo.toml` (alphabetical order).
+1. Add `serde.workspace = true` and `serde_json.workspace = true` to `rust/analytics/Cargo.toml`
+   (alphabetical order) — `leaf_jsonb`'s `T: Serialize` bound (§3) names `serde` directly.
 2. Create `rust/analytics/src/lakehouse/block_object_decoder.rs` with `ObjectVisitor`,
    `BlockObjectDecoder`, `BlockObjectDecoderMap`, `TransitBlockDecoder`, and
    `default_block_object_decoders()` (transit only, for now). Register the module in
@@ -240,7 +270,8 @@ metadata lookups stay on the DataFusion/lakehouse path.
 3. Rework `parse_block_table_function.rs`: `ParseBlockRowBuilder` implements `ObjectVisitor`;
    `fetch_block_metadata` returns the format; `scan` dispatches through the map;
    `ParseBlockTableFunction::with_decoders` added. Behavior for transit blocks — including
-   the early-limit path and non-Object index gaps — must be identical.
+   the early-limit path and non-Object index gaps — must be identical. Add the regression
+   test in `parse_block_tests.rs` that exercises both (see Testing Strategy).
 
 ### Phase 2 — OTLP decoders
 
@@ -262,12 +293,14 @@ metadata lookups stay on the DataFusion/lakehouse path.
 - `rust/analytics/tests/parse_block_otel_tests.rs`
 
 **Modified**
-- `rust/analytics/Cargo.toml` — add `serde_json`
+- `rust/analytics/Cargo.toml` — add `serde`, `serde_json`
 - `rust/analytics/src/lakehouse/mod.rs` — register `block_object_decoder`
 - `rust/analytics/src/lakehouse/otel/mod.rs` — register `block_decoders`
 - `rust/analytics/src/lakehouse/otel/attrs.rs` — extract `attrs_to_jsonb_value`
 - `rust/analytics/src/lakehouse/parse_block_table_function.rs` — registry dispatch, visitor,
   unknown-format error message
+- `rust/analytics/tests/parse_block_tests.rs` — add the `ParseBlockRowBuilder` early-limit /
+  index-gap regression test
 - `python/micromegas/tests/test_otlp_e2e.py` — e2e coverage
 - `mkdocs/docs/query-guide/functions-reference.md` — `parse_block` section
 - `mkdocs/docs/otlp/index.md` — remove the limitation, add a troubleshooting recipe
@@ -350,8 +383,12 @@ matches the existing `parse_block_tests.rs` style):
 - early limit: a visitor returning `false` after 2 objects stops the walk at 2 rows.
 - a truncated/garbage payload returns `Err` rather than panicking.
 
-**Rust regression** — existing `parse_block_tests.rs`, `parse_corrupt_block_tests.rs`,
-`limit_pushdown_tests.rs` must pass unchanged (transit path untouched).
+**Rust regression** — existing `parse_block_tests.rs` and `parse_corrupt_block_tests.rs` must
+pass unchanged (transit path untouched). Neither covers `ParseBlockRowBuilder`/
+`parse_block_objects` itself, so Phase 1 also adds a new test driving it directly over a
+transit block: assert the early-limit stop point (a visitor-side `false` after N objects
+halts the walk at N rows) and the `object_index` gap left by a non-Object value (index
+advances past the skipped entry without emitting a row for it).
 
 **Python e2e** — extend `python/micromegas/tests/test_otlp_e2e.py`: after
 `test_otlp_logs_e2e` posts its batch, poll (`assert_eventually`, as elsewhere in that file)
@@ -365,8 +402,4 @@ One test, one assertion path — the unit tests cover the shape.
 
 ## Open Questions
 
-1. **Metrics granularity** — per data point (chosen: aligns with `measures` and `nb_objects`)
-   vs. one row per `Metric` with data points nested (fewer, fatter rows). Confirm.
-2. **Keep the raw OTLP/JSON `attributes` array alongside `__attributes`?** Keeping both is
-   faithful but roughly doubles the attribute bytes per row. Dropping the raw array would
-   make the dump lossy for duplicate keys.
+None outstanding.
