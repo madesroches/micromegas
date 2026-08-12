@@ -360,10 +360,14 @@ timestamp shape, three levels of fallback apply, in order:
 1. `timeUnixNano` — from `$.time_ns`, if the producer's template sets it (as shown above).
 2. `observedTimeUnixNano` — if the producer explicitly sets it; the template shown above
    does not.
-3. The block's ingestion arrival time (`Utc::now()` at block-split time), if both of the
-   above are absent/zero — the same arrival-time fallback the
+3. The block's `begin_time`, if both of the above are absent/zero. When every record in
+   the `ResourceLogs` lacks a timestamp, `begin_time` is the block's ingestion arrival
+   time (`Utc::now()` at block-split time) — the same arrival-time fallback the
    [Webhook ingestion](#webhook-ingestion) section documents for a different producer
-   path.
+   path, where each request always produces exactly one record. If sibling records in
+   the same resource do carry timestamps, `begin_time` is instead the earliest of those,
+   so a timestamp-less record inherits its earliest sibling's event time rather than
+   arrival time.
 
 See also [Schema mapping](#schema-mapping) for the two-level
 `time_unix_nano`/`observed_time_unix_nano` → `time` column rule that step 1 → 2 above
@@ -375,9 +379,11 @@ distinct reasons. First, it preserves the source event's original occurrence-tim
 verbatim as provenance — a record of what the producer actually sent — even when
 `timeUnixNano` is also set and used for `log_entries.time`. Second, and separately: if
 the template sets neither `timeUnixNano` nor `observedTimeUnixNano`, the record falls
-through to step 3 above and its stored `time` silently becomes the block's ingestion
-arrival time, which is unrelated to when the event actually occurred; in that case
-`aws.event.time` is the only remaining record of the event's real occurrence time.
+through to step 3 above and its stored `time` becomes the block's `begin_time` — the
+ingestion arrival time only if every record in that resource is timestamp-less, and
+otherwise a sibling record's event time — either way unrelated to when this particular
+event actually occurred; in that case `aws.event.time` is the only remaining record of
+the event's real occurrence time.
 
 ## Webhook ingestion
 
