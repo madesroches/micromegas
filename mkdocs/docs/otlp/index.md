@@ -223,6 +223,23 @@ Per the OTLP spec, error responses always carry a `google.rpc.Status` proto, **n
 
 Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`. The block's payload object is written create-only — a retried POST that hashes to the same `block_id` finds the object already present and leaves it untouched (first write wins), and the row insert still collides on `ON CONFLICT (block_id) DO NOTHING` and adds no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting or corrupting a previously stored payload. Both the object collision and the row conflict are counted (`block_object_duplicate`), so a sustained rate of duplicates is visible to operators rather than silent.
 
+!!! warning "Content-hash dedup needs a distinguishing payload, not just a distinguishing event"
+    Content-addressing dedups on the *bytes actually stored*, not on any identity the
+    source system assigns the event. A producer whose transformed payload doesn't vary
+    per event — e.g. an EventBridge `input_transformer` forwarding periodic events with
+    no per-event identity in the projected fields and a constant/null message body — can
+    produce byte-identical records for genuinely distinct events, which then collide on
+    `block_id` and get silently discarded as duplicates. This is exactly the failure mode
+    behind [issue #1462](https://github.com/madesroches/micromegas/issues/1462), where 72
+    distinct EventBridge events were lost this way. Declaring
+    [`aws.event.id`](#event-identity-awseventid-awseventtime) breaks the collision by
+    making every record's bytes depend on the source event's own identity. Once
+    [issue #1466](https://github.com/madesroches/micromegas/issues/1466) — an open design
+    proposal for dedup on a producer-declared idempotency key, rather than a content hash
+    — lands, `aws.event.id` would be a concrete example of the kind of declared key it's
+    asking for; today it only avoids the collision, since dedup is still purely
+    content-hash based.
+
 ## Client recipes
 
 ### Claude Code
@@ -308,7 +325,8 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
       "logRecords": [{
         "timeUnixNano": "<$.time_ns>",
         "severityNumber": 9,
-        "body": {"stringValue": "<$.detail.message>"}
+        "body": {"stringValue": "<$.detail.message>"},
+        "attributes": [{"key": "aws.event.id", "value": {"stringValue": "<$.id>"}}]
       }]
     }]
   }]
@@ -316,6 +334,41 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
 ```
 
 `timeUnixNano` must be a **quoted string** in the template (e.g. `"<$.time_ns>"`). EventBridge input transformers substitute variables as strings inside quotes, satisfying the OTLP/JSON spec requirement. No Lambda translation layer is needed.
+
+### Event identity: `aws.event.id` / `aws.event.time`
+
+Forward the source EventBridge event's `$.id` as a record-level attribute named
+`aws.event.id`, as shown in the template above — the same `<...>` quoted-string
+substitution used for `timeUnixNano`. This mirrors the `aws.log.event.id` convention
+already documented for [CloudWatch Logs](#how-loggrouplogstreamowner-surface): it lets
+a `log_entries` row be correlated back to the exact EventBridge event, and it's queryable
+via `properties` like any other OTel attribute.
+
+Declaring `aws.event.id` matters because when an `input_transformer` can't produce a
+per-event identity in the payload body itself, distinct events can end up with
+byte-identical stored records and collide on the content-hash `block_id` — see the note
+in [Idempotency](#idempotency) above.
+
+When an `input_transformer` can't produce nanosecond time for the event's native
+timestamp shape, three levels of fallback apply, in order:
+
+1. `timeUnixNano` — from `$.time_ns`, if the producer's template sets it (as shown above).
+2. `observedTimeUnixNano` — if the producer explicitly sets it; the template shown above
+   does not.
+3. The block's ingestion arrival time (`Utc::now()` at block-split time), if both of the
+   above are absent/zero — the same arrival-time fallback the
+   [Webhook ingestion](#webhook-ingestion) section documents for a different producer
+   path.
+
+See also [Schema mapping](#schema-mapping) for the two-level
+`time_unix_nano`/`observed_time_unix_nano` → `time` column rule that step 1 → 2 above
+maps onto before the block-level fallback in step 3 kicks in.
+
+Optionally, also forward `$.time` verbatim as a companion `aws.event.time` string
+attribute (EventBridge's `$.time` is second-resolution ISO-8601). This is useful even
+when `timeUnixNano` is set, since without it a record that hits step 3 above silently
+takes on the server's arrival time as its stored `time` with no per-row indication that
+this happened, rather than the event's actual occurrence time.
 
 ## Webhook ingestion
 
