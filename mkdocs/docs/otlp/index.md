@@ -223,6 +223,29 @@ Per the OTLP spec, error responses always carry a `google.rpc.Status` proto, **n
 
 Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`. The block's payload object is written create-only — a retried POST that hashes to the same `block_id` finds the object already present and leaves it untouched (first write wins), and the row insert still collides on `ON CONFLICT (block_id) DO NOTHING` and adds no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting or corrupting a previously stored payload. Both the object collision and the row conflict are counted (`block_object_duplicate`), so a sustained rate of duplicates is visible to operators rather than silent.
 
+!!! warning "Content-hash dedup needs a distinguishing payload, not just a distinguishing event"
+    Content-addressing dedups on the *bytes actually stored*, not on any identity the
+    source system assigns the event. A producer whose transformed payload doesn't vary
+    per event — e.g. an EventBridge `input_transformer` forwarding periodic events with
+    no per-event identity in the projected fields and a constant/null message body — can
+    produce byte-identical records for genuinely distinct events, which then collide on
+    `block_id` and get discarded as duplicates: the producer gets no error and its event
+    is simply dropped, indistinguishable from a harmless retry of the same event. As
+    described above, this is visible to operators today via the `block_object_duplicate`
+    metric and a server-side warning log — it isn't silent from that side. It was silent
+    when [issue #1462](https://github.com/madesroches/micromegas/issues/1462) hit,
+    though: at the time, the dedup-drop path only logged at `debug!` with no metric, so
+    the loss went unnoticed until traced back after the fact — 72 distinct EventBridge
+    events lost in a single measured 2-day window (the loss itself ran undetected for
+    about two months). Declaring
+    [`aws.event.id`](#event-identity-awseventid-awseventtime) breaks the collision by
+    making every record's bytes depend on the source event's own identity. Once
+    [issue #1466](https://github.com/madesroches/micromegas/issues/1466) — an open design
+    proposal for dedup on a producer-declared idempotency key, rather than a content hash
+    — lands, `aws.event.id` would be a concrete example of the kind of declared key it's
+    asking for; today it only avoids the collision, since dedup is still purely
+    content-hash based.
+
 ## Client recipes
 
 ### Claude Code
@@ -308,7 +331,8 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
       "logRecords": [{
         "timeUnixNano": "<$.time_ns>",
         "severityNumber": 9,
-        "body": {"stringValue": "<$.detail.message>"}
+        "body": {"stringValue": "<$.detail.message>"},
+        "attributes": [{"key": "aws.event.id", "value": {"stringValue": "<$.id>"}}]
       }]
     }]
   }]
@@ -316,6 +340,51 @@ AWS EventBridge API Destinations send `Content-Type: application/json; charset=u
 ```
 
 `timeUnixNano` must be a **quoted string** in the template (e.g. `"<$.time_ns>"`). EventBridge input transformers substitute variables as strings inside quotes, satisfying the OTLP/JSON spec requirement. No Lambda translation layer is needed.
+
+### Event identity: `aws.event.id` / `aws.event.time`
+
+Forward the source EventBridge event's `$.id` as a record-level attribute named
+`aws.event.id`, as shown in the template above — the same `<...>` quoted-string
+substitution used for `timeUnixNano`. This mirrors the `aws.log.event.id` convention
+already documented for [CloudWatch Logs](#how-loggrouplogstreamowner-surface): it lets
+a `log_entries` row be correlated back to the exact EventBridge event, and it's queryable
+via `properties` like any other OTel attribute.
+
+Declaring `aws.event.id` matters because when an `input_transformer` can't produce a
+per-event identity in the payload body itself, distinct events can end up with
+byte-identical stored records and collide on the content-hash `block_id` — see the note
+in [Idempotency](#idempotency) above.
+
+When an `input_transformer` can't produce nanosecond time for the event's native
+timestamp shape, three levels of fallback apply, in order:
+
+1. `timeUnixNano` — from `$.time_ns`, if the producer's template sets it (as shown above).
+2. `observedTimeUnixNano` — if the producer explicitly sets it; the template shown above
+   does not.
+3. The block's `begin_time`, if both of the above are absent/zero. When every record in
+   the `ResourceLogs` lacks a timestamp, `begin_time` is the block's ingestion arrival
+   time (`Utc::now()` at block-split time) — the same arrival-time fallback the
+   [Webhook ingestion](#webhook-ingestion) section documents for a different producer
+   path, where each request always produces exactly one record. If sibling records in
+   the same resource do carry timestamps, `begin_time` is instead the earliest of those,
+   so a timestamp-less record inherits its earliest sibling's event time rather than
+   arrival time.
+
+See also [Schema mapping](#schema-mapping) for the two-level
+`time_unix_nano`/`observed_time_unix_nano` → `time` column rule that step 1 → 2 above
+maps onto before the block-level fallback in step 3 kicks in.
+
+Optionally, also forward `$.time` verbatim as a companion `aws.event.time` string
+attribute (EventBridge's `$.time` is second-resolution ISO-8601). This is useful for two
+distinct reasons. First, it preserves the source event's original occurrence-time string
+verbatim as provenance — a record of what the producer actually sent — even when
+`timeUnixNano` is also set and used for `log_entries.time`. Second, and separately: if
+the template sets neither `timeUnixNano` nor `observedTimeUnixNano`, the record falls
+through to step 3 above and its stored `time` becomes the block's `begin_time` — the
+ingestion arrival time only if every record in that resource is timestamp-less, and
+otherwise a sibling record's event time — either way unrelated to when this particular
+event actually occurred; in that case `aws.event.time` is the only remaining record of
+the event's real occurrence time.
 
 ## Webhook ingestion
 
