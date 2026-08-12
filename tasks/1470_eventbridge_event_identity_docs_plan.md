@@ -30,10 +30,10 @@ levels of event-identity guidance:
   `ExportLogsServiceRequest`, with `timeUnixNano` mapped from `$.time_ns` (line 309) and
   a note that the value must be a quoted string (line 318). There is **no mention of
   `$.id`** anywhere in this section, and no record-level attribute is suggested for it.
-  The existing note that `input_transformer` can't produce `timeUnixNano` for arbitrary
-  EventBridge event shapes and should fall back to `observed_time_unix_nano` lives
-  elsewhere, in the webhook-ingestion section (line 344-345) — it isn't cross-referenced
-  from the EventBridge section itself.
+  When `input_transformer` can't produce `timeUnixNano` for arbitrary EventBridge event
+  shapes, the generic fallback already documented in the `## Schema mapping` table (line
+  136) applies: `time_unix_nano` (or `observed_time_unix_nano` if zero) → `time`. That rule
+  isn't cross-referenced from the EventBridge section itself.
 
 A producer following only the current EventBridge section has no documented place to put
 the source event's `$.id`. #1462 records exactly this gap causing real data loss: a
@@ -58,10 +58,10 @@ segment, since EventBridge events aren't log records. Concretely:
   surface" wording at line 587-589) stating that forwarding `$.id` this way lets a
   `log_entries` row be correlated back to the exact EventBridge event, and that it is
   queryable via `properties` like any other OTel attribute.
-- Cross-reference the existing `$.time` → `observed_time_unix_nano` fallback note
-  (currently only stated in the Webhook ingestion section, line 344-345) from the
-  EventBridge section, since it applies equally there whenever an `input_transformer`
-  can't produce nanosecond time for the event's native timestamp shape. Optionally
+- State (or link to) the generic `## Schema mapping` fallback rule (line 136:
+  `time_unix_nano` (or `observed_time_unix_nano` if zero) → `time`) from the EventBridge
+  section, since it applies whenever an `input_transformer` can't produce nanosecond time
+  for the event's native timestamp shape. Optionally
   document `aws.event.time` as a companion attribute for producers who want the original
   `$.time` preserved verbatim (as a string) even when it isn't converted to
   `timeUnixNano` — useful since EventBridge's `$.time` is second-resolution ISO-8601,
@@ -88,9 +88,11 @@ already passes through generically as any other OTel `LogRecord` attribute.
    - `aws.event.id` as the recommended record-level attribute for the source event's
      `$.id`, analogous to `aws.log.event.id` for CloudWatch Logs — link to the
      [CloudWatch Logs](#cloudwatch-logs-kinesis-firehose) section's equivalent guidance.
-   - A cross-reference to the `$.time` → `observed_time_unix_nano` fallback behavior
-     (link to the existing note in `## Webhook ingestion`, or duplicate the relevant
-     sentence locally if a same-page anchor reads better than a cross-section jump).
+   - The `$.time` → `observed_time_unix_nano` fallback behavior, stated directly (this is
+     the generic `## Schema mapping` rule at line 136 — `time_unix_nano` (or
+     `observed_time_unix_nano` if zero) → `time` — not something to quote from the Webhook
+     section, which says something unrelated). Optionally link to `#schema-mapping` rather
+     than restate the table.
    - Optionally, `aws.event.time` as a companion attribute for preserving the original
      `$.time` string when timestamp conversion isn't possible.
 3. Add a short note (in the EventBridge section and/or the `## Idempotency` section)
