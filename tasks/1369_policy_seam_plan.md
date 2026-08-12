@@ -647,14 +647,21 @@ What does need writing:
   to `test_utils.rs`'s `TestClaims`): a token with a flat `groups` array populates `AuthContext.groups`;
   a token **without** the claim still deserializes and yields `vec![]` — the backward-compatibility
   guarantee, so it deserves its own test.
-- **Threading — the assertion that actually matters**: a request whose client-supplied
-  `x-user-id`/`x-user-email` name a different principal than the authenticated `AuthContext` resolves
-  a `ReadScope` derived from the **`AuthContext`**, not from the claimed attribution. This is hole #2
-  as an executable check rather than a doc comment.
-- **Threading — prepared statements**: `do_action_create_prepared_statement` resolves the same
-  `CallerContext` as `do_get` for the same credentials. Assert equality of the resolved scope across
-  the two paths rather than merely asserting it is non-empty — the bug being prevented is
-  *divergence*.
+- **Threading — the assertion that actually matters**: since nothing in Stage 1 consumes
+  `read_scope` on the response path (step 6: stored/ignored), both threading tests below observe the
+  resolved scope through an injected **recording stub `ReadPolicy`** — the same seam the fail-closed
+  test uses — whose `resolve` captures the `AuthContext` it was called with and returns a fixed
+  `ReadScope`, rather than through any externally visible query result. A request whose client-supplied
+  `x-user-id`/`x-user-email` name a different principal than the authenticated `AuthContext` must
+  authenticate with an **API-key (delegating) credential** — `allow_delegation: true` — since an OIDC
+  caller with mismatched attribution is rejected with `permission_denied` by
+  `validate_and_resolve_user_attribution_grpc` before scope resolution runs. The stub asserts it was
+  called with the `AuthContext`, and that the resolved `ReadScope` traces to it, not to the claimed
+  attribution. This is hole #2 as an executable check rather than a doc comment.
+- **Threading — prepared statements**: using the same recording stub `ReadPolicy`,
+  `do_action_create_prepared_statement` resolves the same `CallerContext` as `do_get` for the same
+  credentials. Assert equality of the resolved scope across the two paths rather than merely asserting
+  it is non-empty — the bug being prevented is *divergence*.
 - **Threading — extension survives the stack**: an integration test through the real `AuthService`
   layer asserting the handler observes `AuthContext` (with `groups`) from `request.extensions()`.
   This one is load-bearing: the design rests on tonic propagating extensions, and a tonic upgrade
