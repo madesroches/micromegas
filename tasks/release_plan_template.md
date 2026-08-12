@@ -1,7 +1,19 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.28.0 (2026-08-02)
+Last updated: v0.29.0 (2026-08-12)
+
+---
+
+## Lessons Learned from v0.29.0
+
+### README "Recent Releases" is now a rolling 3-month window, not an ever-growing list
+
+Starting this cycle, the README doc-update step (Pre-Release Checklist §3) trims `README.md`'s "Recent Releases" section to the last 3 months of dated entries every release, not just appends the new one. This cycle that meant dropping v0.22.0 through v0.25.0 (March–May 2026) and keeping v0.26.0–v0.29.0 (June–August 2026). The "For the full history, see CHANGELOG.md" pointer stays untouched — full history was never lost, just no longer duplicated in the README. Do this trim every cycle going forward.
+
+### A fully clean cycle end-to-end
+
+No new crates/services, no test failures, no `cargo release` fallback needed, no stale version-pin greps found anything, Docker build finished in-band without a WSL-sleep interruption. Nothing new to fix in the process itself this time beyond the README change above — recorded here mainly so a future reader doesn't wonder whether this cycle was skipped.
 
 ---
 
@@ -127,7 +139,7 @@ All versions should already be at X.Y.0 from the previous post-release bump:
 - [ ] Review git log: `git log --oneline vX.Y.0..HEAD`
 - [ ] Update `CHANGELOG.md` — move Unreleased entries to `## vX.Y.0 - <date>` section
 - [ ] Update `grafana/CHANGELOG.md` with version sync entry
-- [ ] Update `README.md` roadmap for vX.Y.0
+- [ ] Update `README.md` "Recent Releases" — add the new `### vX.Y.0` block, **and trim the section to the last 3 months** (drop entries older than 3 months back from the release date). Keep the "For the full history, see CHANGELOG.md" pointer.
 
 ### 4. Grafana Plugin Preparation
 

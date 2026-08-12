@@ -84,12 +84,12 @@ Checked `git diff --name-status v0.28.0..HEAD -- rust/` for added `Cargo.toml` f
 
 All four tags must point to the same release commit (workspace at 0.29.0, before the Phase 4 bump):
 
-- [ ] Commit the changelog/doc updates ("Release v0.29.0") — **must include this plan doc itself**, since `cargo release` rejects untracked files (see template lesson from v0.28.0)
-- [ ] Create release tags:
+- [x] Commit the changelog/doc updates ("Release v0.29.0", `df2e9e73c`) — included this plan doc itself
+- [x] Create release tags:
   ```bash
   git tag v0.29.0 grafana-v0.29.0 capi-v0.29.0 blender-v0.29.0
   ```
-- [ ] Push release branch and all tags:
+- [x] Push release branch and all tags:
   ```bash
   git push origin release && git push origin v0.29.0 grafana-v0.29.0 capi-v0.29.0 blender-v0.29.0
   ```
@@ -103,6 +103,8 @@ cd /home/mad/micromegas/build
 python3 release.py
 ```
 
+- [x] All 16 crates published to crates.io, tags pushed (exit 0, no manual fallback needed)
+
 ### Phase 2: Python Library Release
 
 From `python/micromegas/`:
@@ -110,6 +112,8 @@ From `python/micromegas/`:
 poetry build
 poetry publish
 ```
+
+- [x] `micromegas-0.29.0` (sdist + wheel) published to PyPI
 
 ### Phase 3: Grafana Plugin Release
 
@@ -119,6 +123,8 @@ gh release create v0.29.0 \
   --notes "..." \
   grafana/micromegas-micromegas-datasource.zip
 ```
+
+- [x] Published: https://github.com/madesroches/micromegas/releases/tag/v0.29.0
 
 ### Phase 3.5: Docker Images (run BEFORE Phase 4)
 
@@ -132,6 +138,8 @@ Verify both platforms pushed:
 ```bash
 docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:0.29.0
 ```
+
+- [x] All 7 services × 2 arches built and pushed (14/14), verified via `imagetools inspect` on `:0.29.0` and `:0.29.0-arm64` for each
 
 ### Phase 4: Post-Release Version Bump to 0.30.0
 
@@ -148,10 +156,12 @@ docker buildx imagetools inspect marcantoinedesroches/micromegas-monolith:0.29.0
 - Lock files: `cargo update` (from `rust/`), `yarn install` (grafana + analytics-web-app), `python3 build.py --test` (from `rust/datafusion-wasm/`)
 - Commit the bump on the `release` branch
 
+- [x] Bumped all packages to 0.30.0, `cargo update --workspace` (24 micromegas packages only, 0 third-party churn), `yarn install` ×2, WASM rebuilt + 21/21 tests passed, committed (`7b9672456`) and pushed
+
 ### Phase 5: Cleanup
 
-- [ ] Move this plan from `tasks/` to `tasks/completed/release_v0.29_plan.md`
-- [ ] Update `tasks/release_plan_template.md` "Lessons Learned" with anything new this cycle
+- [x] Move this plan from `tasks/` to `tasks/completed/release_v0.29_plan.md`
+- [x] Update `tasks/release_plan_template.md` "Lessons Learned" — documented the README 3-month trim as a standing process step; noted a fully clean cycle otherwise
 
 ### Phase 6: Merge to Main
 
