@@ -229,9 +229,14 @@ Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_b
     per event — e.g. an EventBridge `input_transformer` forwarding periodic events with
     no per-event identity in the projected fields and a constant/null message body — can
     produce byte-identical records for genuinely distinct events, which then collide on
-    `block_id` and get silently discarded as duplicates. This is exactly the failure mode
-    behind [issue #1462](https://github.com/madesroches/micromegas/issues/1462), where 72
-    distinct EventBridge events were lost this way. Declaring
+    `block_id` and get discarded as duplicates: the producer gets no error and its event
+    is simply dropped, indistinguishable from a harmless retry of the same event. As
+    described above, this is visible to operators today via the `block_object_duplicate`
+    metric and a server-side warning log — it isn't silent from that side. It was silent
+    when [issue #1462](https://github.com/madesroches/micromegas/issues/1462) hit,
+    though: at the time, the dedup-drop path only logged at `debug!` with no metric, so
+    the 72 distinct EventBridge events lost this way went unnoticed until traced back
+    after the fact. Declaring
     [`aws.event.id`](#event-identity-awseventid-awseventtime) breaks the collision by
     making every record's bytes depend on the source event's own identity. Once
     [issue #1466](https://github.com/madesroches/micromegas/issues/1466) — an open design
@@ -365,10 +370,14 @@ See also [Schema mapping](#schema-mapping) for the two-level
 maps onto before the block-level fallback in step 3 kicks in.
 
 Optionally, also forward `$.time` verbatim as a companion `aws.event.time` string
-attribute (EventBridge's `$.time` is second-resolution ISO-8601). This is useful even
-when `timeUnixNano` is set, since without it a record that hits step 3 above silently
-takes on the server's arrival time as its stored `time` with no per-row indication that
-this happened, rather than the event's actual occurrence time.
+attribute (EventBridge's `$.time` is second-resolution ISO-8601). This is useful for two
+distinct reasons. First, it preserves the source event's original occurrence-time string
+verbatim as provenance — a record of what the producer actually sent — even when
+`timeUnixNano` is also set and used for `log_entries.time`. Second, and separately: if
+the template sets neither `timeUnixNano` nor `observedTimeUnixNano`, the record falls
+through to step 3 above and its stored `time` silently becomes the block's ingestion
+arrival time, which is unrelated to when the event actually occurred; in that case
+`aws.event.time` is the only remaining record of the event's real occurrence time.
 
 ## Webhook ingestion
 
