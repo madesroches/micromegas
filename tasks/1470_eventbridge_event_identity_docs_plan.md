@@ -31,9 +31,14 @@ levels of event-identity guidance:
   a note that the value must be a quoted string (line 318). There is **no mention of
   `$.id`** anywhere in this section, and no record-level attribute is suggested for it.
   When `input_transformer` can't produce `timeUnixNano` for arbitrary EventBridge event
-  shapes, the generic fallback already documented in the `## Schema mapping` table (line
-  136) applies: `time_unix_nano` (or `observed_time_unix_nano` if zero) → `time`. That rule
-  isn't cross-referenced from the EventBridge section itself.
+  shapes, the fallback isn't the two-level `time_unix_nano` → `observed_time_unix_nano`
+  rule in the `## Schema mapping` table (line 136) in isolation — the shown template never
+  sets `observedTimeUnixNano` either, so in practice both stay 0. The true chain is
+  three-level: `time_unix_nano` → `observed_time_unix_nano` → (if both are still zero) the
+  block's ingestion arrival time (`Utc::now()` at block-split time), which is the same
+  arrival-time fallback the `## Webhook ingestion` section already documents (line
+  344-347) for a different producer path. None of this is cross-referenced from the
+  EventBridge section itself.
 
 A producer following only the current EventBridge section has no documented place to put
 the source event's `$.id`. #1462 records exactly this gap causing real data loss: a
@@ -58,14 +63,19 @@ segment, since EventBridge events aren't log records. Concretely:
   surface" wording at line 587-589) stating that forwarding `$.id` this way lets a
   `log_entries` row be correlated back to the exact EventBridge event, and that it is
   queryable via `properties` like any other OTel attribute.
-- State (or link to) the generic `## Schema mapping` fallback rule (line 136:
-  `time_unix_nano` (or `observed_time_unix_nano` if zero) → `time`) from the EventBridge
-  section, since it applies whenever an `input_transformer` can't produce nanosecond time
-  for the event's native timestamp shape. Optionally
-  document `aws.event.time` as a companion attribute for producers who want the original
-  `$.time` preserved verbatim (as a string) even when it isn't converted to
-  `timeUnixNano` — useful since EventBridge's `$.time` is second-resolution ISO-8601,
-  lossy to reconstruct from a nanosecond fallback alone.
+- State the true three-level fallback that applies whenever an `input_transformer`
+  can't produce nanosecond time for the event's native timestamp shape:
+  `timeUnixNano` (from `$.time_ns`, if the producer's template sets it) →
+  `observedTimeUnixNano` (if the producer explicitly sets it — the shown example template
+  doesn't) → the block's ingestion arrival time (`Utc::now()` at block-split time) if both
+  are absent/zero. That last step is the same arrival-time mechanism already documented in
+  the `## Webhook ingestion` section (line 344-347); reference it directly rather than
+  restating it as a standalone rule. Optionally document `aws.event.time` as a companion
+  attribute for producers who want the original `$.time` preserved verbatim (as a string)
+  even when it isn't converted to `timeUnixNano` — useful since EventBridge's `$.time` is
+  second-resolution ISO-8601, lossy to reconstruct from a nanosecond fallback alone, and
+  since without it a record can silently take on the server's arrival time as its stored
+  `time` rather than the event's actual occurrence time.
 - Add a note in the `## Idempotency` section (line 222-224) or directly in the
   EventBridge section cross-linking to #1462 (the incident) and #1466 (the open design
   proposal), explaining that a producer with no declared identity in its payload can
@@ -88,11 +98,14 @@ already passes through generically as any other OTel `LogRecord` attribute.
    - `aws.event.id` as the recommended record-level attribute for the source event's
      `$.id`, analogous to `aws.log.event.id` for CloudWatch Logs — link to the
      [CloudWatch Logs](#cloudwatch-logs-kinesis-firehose) section's equivalent guidance.
-   - The `$.time` → `observed_time_unix_nano` fallback behavior, stated directly (this is
-     the generic `## Schema mapping` rule at line 136 — `time_unix_nano` (or
-     `observed_time_unix_nano` if zero) → `time` — not something to quote from the Webhook
-     section, which says something unrelated). Optionally link to `#schema-mapping` rather
-     than restate the table.
+   - The true three-level timestamp fallback, stated directly: `timeUnixNano` (from
+     `$.time_ns`, if set) → `observedTimeUnixNano` (if the producer explicitly sets it —
+     the shown template doesn't) → the block's ingestion arrival time (`Utc::now()` at
+     block-split time) if both are absent/zero. That last step is the identical
+     arrival-time mechanism the `## Webhook ingestion` section already documents (line
+     344-347) — link to it rather than restate it, instead of (incorrectly) treating it as
+     unrelated. Optionally also link to `#schema-mapping` for the two-level
+     `time_unix_nano`/`observed_time_unix_nano` → `time` column mapping.
    - Optionally, `aws.event.time` as a companion attribute for preserving the original
      `$.time` string when timestamp conversion isn't possible.
 3. Add a short note (in the EventBridge section and/or the `## Idempotency` section)
@@ -118,12 +131,19 @@ already passes through generically as any other OTel `LogRecord` attribute.
   (mirroring but not colliding with `aws.log.*`) is clearer about what produced the
   event and follows the issue's own suggested name. Chosen: `aws.event.id` /
   `aws.event.time`.
-- **Whether to document `aws.event.time` at all.** The `$.time` → `observed_time_unix_nano`
-  fallback is already documented (elsewhere) and doesn't strictly need a companion
-  attribute. Documenting `aws.event.time` as optional gives producers who care about
-  preserving the exact original timestamp string a documented place to put it, at the
-  cost of one more attribute name to explain. Included as a documented option, not a
-  requirement, since the issue's proposal explicitly calls out `$.time` handling as a gap.
+- **Whether to document `aws.event.time` at all.** The full fallback chain
+  (`timeUnixNano` → `observedTimeUnixNano` → block ingestion arrival time) is already
+  documented (partly in `## Schema mapping`, partly in `## Webhook ingestion`), so
+  `aws.event.time` isn't strictly required for the pipeline to keep working. But the real
+  risk of omitting `$.time`/`timeUnixNano` isn't just losing sub-second precision — when
+  both `timeUnixNano` and `observedTimeUnixNano` are absent, the stored `log_entries.time`
+  silently becomes an unrelated server-arrival timestamp (block-split wall-clock time)
+  rather than the event's actual occurrence time, with no indication in the row that this
+  happened. Documenting `aws.event.time` as optional gives producers who care about
+  preserving the exact original timestamp string a documented place to put it, mitigating
+  that risk, at the cost of one more attribute name to explain. Included as a documented
+  option, not a requirement, since the issue's proposal explicitly calls out `$.time`
+  handling as a gap.
 - **Where to put the #1462/#1466 cross-link.** Could go solely in the EventBridge section
   (closest to the new convention) or solely in `## Idempotency` (closest to the
   content-hash mechanism the incident is about). Chosen: a link in the EventBridge
