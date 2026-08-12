@@ -123,8 +123,15 @@ ReadableAudiences                and Stage 3 UDTF guards)       ReadScope, passe
 ```
 // rust/auth/src/policy.rs
 pub struct ReadableAudiences(Arc<[String]>);        // newtype, not a bare Vec<String>
-pub trait ReadPolicy:  Send + Sync + Debug { fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences>; }
-pub trait MintPolicy:  Send + Sync + Debug { fn resolve_audience(&self, caller: &AuthContext, requested: Option<&str>) -> Result<String>; }
+
+#[async_trait]
+pub trait ReadPolicy: Send + Sync + Debug {
+    async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences>;
+}
+#[async_trait]
+pub trait MintPolicy: Send + Sync + Debug {
+    async fn resolve_audience(&self, caller: &AuthContext, requested: Option<&str>) -> Result<String>;
+}
 pub struct AudienceReadPolicy { implicit_groups: Vec<String> }
 pub struct AudienceMintPolicy { implicit_groups: Vec<String> }
 
@@ -132,17 +139,54 @@ pub struct AudienceMintPolicy { implicit_groups: Vec<String> }
 pub enum ReadScope { All, Audiences(Arc<[String]>) }
 ```
 
+**Both traits are `async` and fallible, and both call sites deny on `Err`.** The AbAC plan specs
+`#[async_trait]` (its §1–§2) and this is not cosmetic: the recorded target state resolves grants from a
+store — nested groups plus group→audience grants — which cannot live behind a sync infallible signature
+(AbAC plan, *Long-term model*, property 1). `async_trait` is already used across this crate
+(`types.rs:139`, `multi.rs:78`) and both call sites are already async, so it costs nothing today.
+Prong B still receives a resolved `ReadScope` *value*, not the policy object, so nothing downstream
+becomes async.
+
+The fallible half needs an explicit branch, not just a `?`: a resolution failure must become
+`Status::unavailable` (store outage) or a denial, **never** an empty, defaulted, or `All` scope. Write it
+in this issue, with a test that stubs `Err` — `AudienceReadPolicy` cannot fail, so a permissive fallback
+here would stay invisible until the day a store-backed policy lands, and then be a silent fail-open.
+
 `ReadableAudiences` is a newtype so a policy result cannot be confused with any other string list on
 a security path. `ReadScope::All` is deliberately **not** a policy output — no `ReadPolicy` can
 return it. It is the marker internal (non-request) callers pass, which is what makes
 "who granted themselves `All`?" a greppable question with a small, auditable answer set.
 
-Both `Audience*` impls compute the same set per the plan's §1–§2: `{user:<email>} ∪ groups claim ∪
-MICROMEGAS_IMPLICIT_GROUPS`, every element `user:`- or `group:`-prefixed. With no groups claim and
-no implicit groups the readable set is the singleton `{user:<email>}` — the per-user case, with no
-separate `Self*` implementation. A caller with no email (an API-key-authenticated analytics query)
-resolves to implicit groups only, which is empty in a privacy deployment — fail-closed, and exactly
-the "analytics keys may be transitional" consequence the AbAC plan already records.
+Both `Audience*` impls compute the same set per the plan's §1–§2, with one addition settled during
+planning — **service-account grants**:
+
+```
+caller.read_audiences                        // grant carried by an analytics service-account key
+  ∪ {user:<email>}     if email present      // human OIDC caller
+  ∪ {group:<g>}        for g in groups claim
+  ∪ {group:<g>}        for g in MICROMEGAS_IMPLICIT_GROUPS
+```
+
+Every element is `user:`- or `group:`-prefixed. The union is **branch-free — no `auth_type` check
+anywhere**: an OIDC caller carries no `read_audiences`, and a key carries no email and no groups claim
+(`api_key.rs:116-127`, `db_api_key.rs:318-328`). With no groups claim and no implicit groups a human
+caller's readable set is the singleton `{user:<email>}` — the per-user case, with no separate `Self*`
+implementation.
+
+`AuthContext.read_audiences` is empty for every principal in Stage 1; the analytics key provider
+populates it in the AbAC plan's new **Stage 4b**, where analytics keys become service-account credentials
+with a configurable read grant. Until then a key-authenticated query resolves implicit-groups-only —
+empty in a privacy deployment, i.e. fail-closed. Carrying the field now is what keeps the formula
+branch-free and keeps Stage 4b from reshaping the policy.
+
+**`AudienceMintPolicy` needs an explicit admin arm:** `caller.is_admin` ⇒ any well-formed
+(`user:`/`group:`-prefixed) audience; otherwise the mintable-set formula. Without it the only shipped
+impl cannot express the mint flow that exists today — `mint_key` is `AdminUser`-gated
+(`analytics-web-srv/src/ingestion_keys.rs:170-172`), so `requested = "user:bob@…"` is unrepresentable and
+Stage 6 would stamp every fleet key with the minting admin's own audience. The arm grants no power the
+route's gate does not already grant. It is deliberately asymmetric to the read path — `is_admin` is never
+a read bypass (AbAC plan §5) — because mint is integrity and reads are confidentiality; say that in the
+doc comment or it reads as a contradiction.
 
 ### 2. Identity threading uses the existing extension, not a new header
 
@@ -175,6 +219,13 @@ absent header ⇒ trusted): absent `AuthContext` ⇒ `ReadScope::All`. The safet
 one `is_admin` already relies on — when a provider *is* configured, `AuthService::call` rejects the
 request before the inner service runs, so the extension is always present. Put that argument in the
 doc comment on the resolver rather than leaving it implicit.
+
+**Failure convention.** The absent-extension case is the *only* permissive branch in the resolver. A
+`ReadPolicy::resolve` that returns `Err` is a hard failure: `Status::unavailable` if the error is a
+provider/store outage, `Status::permission_denied` otherwise. No `unwrap_or_default()`, no "empty scope on
+error" — an empty `Audiences([])` would read as a legitimate fail-closed decision to Stage 2/3 and hide
+the outage, and an `All` fallback would be a fail-open bypass. The two branches (absent extension ⇒ `All`,
+`Err` ⇒ fail) look adjacent and mean opposite things, so both get a doc comment and a test.
 
 ### 3. Bundle the caller inputs instead of growing the parameter list
 
@@ -213,12 +264,26 @@ Group values from the IdP are **namespaced on ingest into the policy**, not stor
 Keeping the raw claim in `AuthContext` avoids baking an AbAC-specific convention into a general
 auth type.
 
+**Doc-comment framing matters here.** Describe the field as *IdP-asserted **leaf** membership — an input
+to policy resolution, possibly incomplete* — not as "the caller's groups". In the AbAC plan's recorded
+target state the IdP supplies direct memberships only, while nesting (group-in-group) and
+group→audience grants live in a micromegas-owned store, so the caller's *effective* groups are the
+transitive closure the policy computes, not this vector (AbAC plan, *Long-term model*, property 3). A
+future reader who takes this field for the answer will inline the flat formula somewhere the policy seam
+cannot reach.
+
 ### 5. Config factory
 
 Add `.with_policy_from_env()` to `ProviderBuilder` (`default_provider.rs`) — the builder its own doc
 comment says exists for this. Reads `MICROMEGAS_IMPLICIT_GROUPS` (comma-separated; the AbAC plan's
 Config surface table). Unset ⇒ empty implicit groups ⇒ readable set is the caller's singleton ⇒
 enforcement inactive because nothing consumes it yet.
+
+**Encoding: comma-separated, and reject entries containing a comma** (naming the offending entry). Note
+in the doc comment that this deliberately differs from `MICROMEGAS_ADMINS`, which is a JSON array — that
+variable is the precedent for *config-sourced authorization data* and for the `from_env`-when-unset
+pattern, not for an encoding. An operator copying the `MICROMEGAS_ADMINS` shape would otherwise silently
+configure one implicit group literally named `["everyone"]`.
 
 Only `MICROMEGAS_IMPLICIT_GROUPS` is parsed in Stage 1 — it is the only knob the policies
 themselves need. `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` and
@@ -259,13 +324,16 @@ side exactly: same pattern, same reasoning, one line.
 
 ### Phase 1 — types and policies (no call-site churn)
 
-1. `rust/auth/src/types.rs` — add `bound_audience: Option<String>` and `groups: Vec<String>` to
-   `AuthContext`. Update the three construction sites (`api_key.rs`, `db_api_key.rs`, `oidc.rs`) to
-   `None`/`vec![]`, plus `auth/tests/tower_tests.rs`. Document `bound_audience` as Stage 4's field,
-   populated only by the ingestion key provider.
+1. `rust/auth/src/types.rs` — add `bound_audience: Option<String>`, `read_audiences: Vec<String>` and
+   `groups: Vec<String>` to `AuthContext`. Update the three construction sites (`api_key.rs`,
+   `db_api_key.rs`, `oidc.rs`) to `None`/`vec![]`, plus `auth/tests/tower_tests.rs`. Document
+   `bound_audience` as Stage 4's field (write label, ingestion key provider only) and `read_audiences` as
+   Stage 4b's (read grant, analytics key provider only) — one field per direction, neither populated here.
 2. `rust/auth/src/policy.rs` (new) + `pub mod policy;` in `lib.rs` — `ReadableAudiences`,
-   `MintPolicy`, `ReadPolicy`, `AudienceMintPolicy`, `AudienceReadPolicy`. Doc comments state the
-   readable-set formula and that `ReadPolicy` can never return "all".
+   `MintPolicy`, `ReadPolicy`, `AudienceMintPolicy`, `AudienceReadPolicy`, both traits
+   `#[async_trait]`. Doc comments state the readable-set formula, that `ReadPolicy` can never return
+   "all", the mint admin arm and its asymmetry with the read path, and that `Err` must never be
+   softened into a scope by any caller.
 3. `rust/auth/src/oidc.rs` — `groups` claim on `Claims`; populate `AuthContext.groups` at `:536-545`.
 4. `rust/auth/src/default_provider.rs` — `with_policy_from_env()` on `ProviderBuilder`;
    `MICROMEGAS_IMPLICIT_GROUPS` parsing; startup log.
@@ -289,8 +357,9 @@ side exactly: same pattern, same reasoning, one line.
 
 8. `rust/public/src/servers/flight_sql_service_impl.rs` — add a `read_policy: Arc<dyn ReadPolicy>`
    field to `FlightSqlServiceImpl` and a resolver helper
-   (`fn caller_context(&self, ext: &http::Extensions, md: &MetadataMap) -> Result<CallerContext, Status>`)
-   implementing §2's absent-extension convention. Thread `&Extensions` into `execute_query`
+   (`async fn caller_context(&self, ext: &http::Extensions, md: &MetadataMap) -> Result<CallerContext, Status>`)
+   implementing §2's absent-extension convention **and its failure convention** — `Err` maps to
+   `Status::unavailable`/`permission_denied`, never to a scope. Thread `&Extensions` into `execute_query`
    (two callers: `:800`, `:963`) and use the helper at `:661`.
 9. Same helper at `:1149` — closes hole #1.
 10. `rust/auth/src/user_attribution.rs` — no code change; add a doc-comment warning that
@@ -303,7 +372,7 @@ side exactly: same pattern, same reasoning, one line.
 
 ## Files to Modify
 
-- `rust/auth/src/types.rs` — `bound_audience`, `groups` on `AuthContext`
+- `rust/auth/src/types.rs` — `bound_audience`, `read_audiences`, `groups` on `AuthContext`
 - `rust/auth/src/policy.rs` — **new**; traits + `Audience*` impls + `ReadableAudiences`
 - `rust/auth/src/lib.rs` — `pub mod policy;`
 - `rust/auth/src/oidc.rs` — `groups` claim (`:194-227`, `:536-545`)
@@ -347,6 +416,16 @@ side exactly: same pattern, same reasoning, one line.
 - **Groups stored raw in `AuthContext`, prefixed by the policy.** Keeps the AbAC `group:` convention
   out of a general-purpose auth type. Cost: the prefix is applied in two policies rather than once at
   the source.
+- **`async` + fallible policy traits** vs. sync infallible ones. Sync would be simpler and sufficient for
+  every v1 policy (claims + env, no I/O, cannot fail). Chosen: `async` and `Result`, because the AbAC
+  plan's recorded target state resolves nested groups and grants from a store, and retrofitting the
+  signature would migrate every call site *and* every impl at once. Cost today: `#[async_trait]` on two
+  traits and one `.await` at two call sites, plus a deny-on-`Err` branch that no v1 policy can exercise —
+  which is exactly why it ships with a stub-`Err` test.
+- **No group vocabulary in `micromegas-analytics`.** `ReadScope` carries resolved audiences only, so the
+  entire group/grant model — closure computation, nesting, caching, store outages — stays behind the
+  policy seam in `micromegas-auth`. This started as a dependency-driven split (§1) and is now also the
+  property that lets the long-term model land without touching the query planner.
 
 ## Documentation
 
@@ -354,11 +433,17 @@ Stage 1 ships no operator-visible behavior, so no mkdocs page yet (the isolation
 What does need writing:
 
 - Doc comments carrying the load-bearing arguments, since there is no behavior to observe: why
-  `UserAttribution` may not feed a `ReadScope`; why an absent `AuthContext` extension means `All`;
-  why `ReadPolicy` cannot return `All`; that `bound_audience` stays `None` until Stage 4.
-- `tasks/data_isolation/audience_based_access_control_plan.md` — record the `ReadScope` placement
-  decision and the extension-over-header decision in Stage 1 and Resolved Decisions, so Stages 2–3
-  build on the actual seam.
+  `UserAttribution` may not feed a `ReadScope`; why an absent `AuthContext` extension means `All`
+  while an `Err` from the policy must not; why `ReadPolicy` cannot return `All`; the mint admin arm and
+  its asymmetry with the read path; that `bound_audience` stays `None` until Stage 4 and
+  `read_audiences` stays empty until Stage 4b; that `groups` is IdP-asserted leaf membership.
+- `tasks/data_isolation/audience_based_access_control_plan.md` — **updated 2026-08-12** with: the
+  `ReadScope` placement and extension-over-header decisions (Stage 1); the service-account decision and
+  its new Stage 4b; the `MintPolicy` admin arm; async/fallible traits and deny-on-`Err`; the
+  `MintPolicy`-takes-`AuthContext` resolution of the third identity boundary; the knob encoding; and a
+  new *Long-term model* section for groups/nesting/grants. Stale assertions that read scope never comes
+  from a key (Stage 0 rationale, Stage 4 step 9, Security, Resolved Decisions) were rewritten rather
+  than left to contradict Stage 4b.
 - `CHANGELOG.md` — per the `pr` skill's convention.
 
 ## Testing Strategy
@@ -367,8 +452,18 @@ What does need writing:
   the groups claim and implicit groups are both empty; returns `{user:} ∪ group:claim ∪
   group:implicit` when both are present; every element carries a `user:`/`group:` prefix; a caller
   with no email and no implicit groups resolves to the **empty** set, not to something permissive.
+- **Unit — service-account grants**: a caller with `read_audiences = [a, b]` and no email/groups resolves
+  exactly `{a, b} ∪ implicit`, with **no** `user:` element; the same caller with an empty grant resolves
+  implicit-only. This is Stage 4b's data flowing through Stage 1's formula, and it is what proves the
+  union needed no `auth_type` branch.
 - **Unit — `AudienceMintPolicy`**: defaults to `user:<email>` when `requested` is `None`; permits a
-  `requested` value inside the mintable set; rejects one outside it.
+  `requested` value inside the mintable set; rejects one outside it; **admin arm** — an `is_admin` caller
+  is permitted an arbitrary well-formed audience (including another user's `user:` value) that a
+  non-admin caller is refused; a malformed, unprefixed audience is refused for both.
+- **Fail-closed resolution**: a stub `ReadPolicy` returning `Err` makes the request fail; assert the
+  status is `unavailable`/`permission_denied` and that no `CallerContext` is built — specifically that the
+  outcome is neither `Audiences([])` (which would read as a legitimate decision) nor `All`. The shipped
+  policy cannot fail, so this test is the only thing holding the convention in place.
 - **Unit — groups claim** (`rust/auth/tests/` alongside existing OIDC tests): a token with a flat
   `groups` array populates `AuthContext.groups`; a token **without** the claim still deserializes and
   yields `vec![]` — the backward-compatibility guarantee, so it deserves its own test.
@@ -391,18 +486,49 @@ What does need writing:
   result.
 - `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
 
-## Open Questions
+## Resolved Questions
 
-1. **`ReadScope` for API-key-authenticated analytics queries.** An analytics key carries no OIDC
-   claim, so `AudienceReadPolicy` resolves implicit-groups-only — empty in a privacy deployment,
-   i.e. that key can read nothing once Stage 2 lands. The AbAC plan already anticipates this
-   ("`analytics_api_keys` may be transitional") but does not decide it. Stage 1 does not have to
-   decide either — nothing enforces yet — but Stage 2 cannot ship without an answer, and the answer
-   affects whether `ReadPolicy` needs a key-specific branch. Flagging now so it is not discovered at
-   enforcement time.
-2. **Whether `MintPolicy` belongs in Stage 1 at all.** Its only consumer is Stage 6, on a service
-   (`analytics-web-srv`) whose mint route is admin-gated today — and the AbAC plan now carries an
-   open question about whether self-service minting needs a non-admin path. Defining the trait now
-   costs little and keeps the seam symmetric; deferring it would avoid designing against a call site
-   whose shape is not settled. Recommendation: define it in Stage 1 as the issue specifies, but do
-   not implement `AudienceMintPolicy`'s wiring anywhere until Stage 6.
+Both open questions closed 2026-08-12; the AbAC plan carries the decisions in its Resolved Decisions
+section.
+
+1. **`ReadScope` for key-authenticated analytics queries — resolved: analytics keys are service accounts
+   with a configurable read grant.** Research reframed the question. It is not key-specific: Grafana's
+   only two auth modes are a static analytics key and **OAuth 2.0 client credentials**
+   (`grafana/pkg/flightsql/oauth.go`), and an M2M token takes the OIDC path with no `email`
+   (`oidc.rs:535`), so it resolves to the empty set too — a key-specific `ReadPolicy` branch would have
+   fixed half the problem. And key-only flight-sql is a documented, supported deployment ("a non-empty
+   `analytics_api_keys` table counts as auth configured on its own",
+   `mkdocs/docs/grafana/authentication.md`), so attrition was never available.
+   **Decision:** `analytics_api_keys` gains a set-valued `read_audiences` grant per key (AbAC plan Stage
+   4b); Stage 1 carries the `AuthContext.read_audiences` field and the branch-free union that consumes
+   it. Blast radius until 4b lands is bounded — open deployments resolve `{group:everyone}` through
+   implicit groups, so only privacy deployments see a key with no grant, and that case is fail-closed.
+   **Rejected:** an env subject→groups map (a redeploy per new service account — the operational problem
+   Stage 0 exists to kill); delegation-derived scope (client-claimed identity, hole #2 verbatim — keys
+   carry `allow_delegation: true` and Grafana already sends `x-user-*`); deprecating analytics keys (a
+   documented mode needs a deprecation cycle, not a stage decision).
+2. **`MintPolicy` in Stage 1 — resolved: yes, and it needs the admin arm.** Defining the trait now keeps
+   the seam symmetric and costs little, as originally recommended; the wiring still waits for Stage 6. But
+   the shipped `AudienceMintPolicy` must carry the `is_admin` arm (§1), or the only impl cannot express
+   the only mint flow that exists today. That narrows Stage 6's remaining question to *who may call the
+   route* — a route-authorization decision that no longer changes the policy's shape. The trait takes
+   `&AuthContext`, which §6's one-line extension insert on `analytics-web-srv` is what makes possible: that
+   is the answer to the AbAC plan's "either carry `groups` into `ValidatedUser` or leave `MintPolicy`
+   taking an `AuthContext`".
+
+## Long-term Context
+
+The AbAC plan now records a **target state** this seam must not foreclose (its *Long-term model*
+section): users belong to groups, groups nest, and a group is granted a set of audiences it may read —
+with today's flat rule as the degenerate identity-grant case (`read_grants(G) = {group:G}`), so adopting
+it changes no caller's readable set. Four properties of this issue are what keep it reachable, all folded
+into the design above:
+
+1. `ReadPolicy` / `MintPolicy` are `async` and fallible (§1 types).
+2. The resolver denies on `Err` (§2 failure convention, step 8, and its test).
+3. `AuthContext.groups` is documented as IdP-asserted leaf membership, an input to resolution (§4).
+4. No group vocabulary crosses into `micromegas-analytics` — `ReadScope` carries resolved audiences only
+   (§1, Trade-offs).
+
+Nothing else in this issue changes for the group model; the store, closure computation, cycle handling,
+grant-latency caching and admin surface all land behind `ReadPolicy` later.
