@@ -139,6 +139,12 @@ ReadableAudiences                and Stage 3 UDTF guards)       ReadScope, passe
 ```
 // rust/auth/src/policy.rs
 pub struct ReadableAudiences(Arc<[String]>);        // newtype, not a bare Vec<String>
+impl ReadableAudiences {
+    pub fn new(audiences: Arc<[String]>) -> Self { Self(audiences) }
+    pub fn into_inner(self) -> Arc<[String]> { self.0 }  // the one conversion point the
+                                                          // rust/public bridge (§1 diagram) calls
+                                                          // to build ReadScope::Audiences
+}
 
 #[async_trait]
 pub trait ReadPolicy: Send + Sync + Debug {
@@ -359,19 +365,20 @@ the knob took effect, since there is no behavior to observe yet.
 
 **The policy does not travel through `ProviderBuilder::build()` at all.** `build(self)` keeps its
 current signature, `Result<Option<Arc<dyn AuthProvider>>>` (`default_provider.rs:114`), unchanged.
-Folding the policy into that return type would ripple well past this issue's call sites: `build()`
-backs the crate's two documented public entry points, `provider()` and `provider_with_prefix()`
-(`default_provider.rs:214,227`, the latter calling `.build()` directly at `:228`), which are called
-from `rust/telemetry-ingestion-srv/src/main.rs:59` (matching `Some(p)`/`None`) and from four sites in
-`rust/auth/tests/default_provider_tests.rs` (`:100`, `:138`, `:219`, `:284`) — none of which have
-anything to do with a read policy. A policy-carrying `build()` would force every one of those
+Folding the policy into that return type would ripple well past this issue's call sites: five
+in-tree sites call `build()` directly — `rust/telemetry-ingestion-srv/src/main.rs:59` (matching
+`Some(p)`/`None`) and four in `rust/auth/tests/default_provider_tests.rs` (`:100`, `:138`, `:219`,
+`:284`) — plus the crate's two documented public entry points, `provider()` and
+`provider_with_prefix()` (`default_provider.rs:214,227`, the latter calling `.build()` directly at
+`:228`), which have no in-tree caller today but are part of the crate's public API. None of these
+have anything to do with a read policy. A policy-carrying `build()` would force every one of those
 call sites to unpack a tuple it has no use for. Because `AudienceReadPolicy::from_env` needs neither
 `self` nor `.await`, there is no reason to route it through the builder at all: callers that want a
 policy call `AudienceReadPolicy::from_env(prefix)` directly, alongside (not through) whatever
 `ProviderBuilder` call they already make.
 
 `FlightSqlServerBuilder` gains `with_read_policy(policy: Arc<dyn ReadPolicy>)`, mirroring
-`with_auth_provider`. `flight_sql_server.rs`'s three auth branches (`:219-248`) each now have an
+`with_auth_provider`. `flight_sql_server.rs`'s three auth branches (`:227-249`) each now have an
 explicit policy source:
 - `self.auth_provider` set (the monolith's injected-provider path, `main.rs:290`): the monolith calls
   `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")` alongside its existing
@@ -464,8 +471,13 @@ side exactly: same pattern, same reasoning, one line.
      `rust/analytics/tests/lakehouse_admin_gate_test.rs:37`, `log_stats_ordering_tests.rs:189`,
      `sql_partition_spec_sort_order_tests.rs:133`, `thread_spans_ordering_db_test.rs:381` — plus three
      calling the public `query()` wrapper (`thread_spans_ordering_db_test.rs` again, at `:338,349,406,559,572,606,633`,
-     and `histo_view_test.rs:199`, `sql_view_test.rs:421,447`). No assertion or fixture changes — only
-     the literal `true`/`false` argument becomes `CallerContext::maintenance()`/`::internal()`.
+     and `histo_view_test.rs:199`, `sql_view_test.rs:421,447`). No assertion or fixture changes for
+     five of the six — only the literal `true`/`false` argument becomes
+     `CallerContext::maintenance()`/`::internal()`. The exception is
+     `lakehouse_admin_gate_test.rs`, whose `make_gated_session_context(is_admin: bool)` helper
+     (`:33-47`) forwards the parameter rather than passing a literal (`:43`): the helper's own
+     signature changes to take `is_admin: bool` and build the matching `CallerContext` internally, so
+     its two call sites keep passing a bare bool while the fixture itself is touched.
 
 ### Phase 3 — threading and hole-closing
 
@@ -478,8 +490,13 @@ side exactly: same pattern, same reasoning, one line.
    (`async fn caller_context(&self, ext: &http::Extensions, md: &MetadataMap) -> Result<CallerContext, Status>`)
    implementing §2's absent-extension convention **and its failure convention** — `Err` maps to
    `Status::unavailable` when it downcasts to `ProviderUnavailable` (mirroring `tower.rs:146`) and to
-   `Status::permission_denied` otherwise, never to a scope. Thread `&Extensions` into `execute_query`
-   (two callers: `:800`, `:963`) and use the helper at `:661`. The `read_policy` argument does not
+   `Status::permission_denied` otherwise, never to a scope. The helper's `is_admin` keeps calling
+   `is_admin(md)` unchanged — equivalent to reading `AuthContext.is_admin` off `ext` when the
+   extension is present, since the header is derived from the same `AuthContext` with client copies
+   stripped (`tower.rs:107-139`), and it is what preserves today's `--disable-auth`
+   absent-header-⇒-trusted convention (`user_attribution.rs:64-81`) when `ext` has none. Thread
+   `&Extensions` into `execute_query` (two callers: `:800`, `:963`) and use the helper at `:661`.
+   The `read_policy` argument does not
    exist yet when `flight_sql_server.rs`'s call to `FlightSqlServiceImpl::new(...)` (`:219-224`) runs
    today — see step 12, which moves the auth/policy resolution above it.
 9. Same helper at `:1149` — closes hole #1.
@@ -579,11 +596,12 @@ side exactly: same pattern, same reasoning, one line.
   any external embedder calling them directly, for the identical "required parameter forces every call
   site to state its scope" reason argued above for `new()`.
 - **`AudienceReadPolicy::from_env(prefix)` as a free-standing constructor vs. folding the policy into
-  `ProviderBuilder::build()`.** Folding it in would change `build()`'s return type, which backs the
-  public `provider()`/`provider_with_prefix()` entry points and would ripple into
-  `telemetry-ingestion-srv/src/main.rs` and four sites in `default_provider_tests.rs` that have no use
-  for a `ReadPolicy`. Chosen: a separate, synchronous constructor — the implicit-groups env var needs
-  no DB pool and no `.await`, so there was never a reason to route it through the async builder.
+  `ProviderBuilder::build()`.** Folding it in would change `build()`'s return type, which would ripple
+  into five in-tree sites that call `build()` directly (`telemetry-ingestion-srv/src/main.rs` and four
+  in `default_provider_tests.rs`) plus the public `provider()`/`provider_with_prefix()` wrappers,
+  none of which have any use for a `ReadPolicy`. Chosen: a separate, synchronous constructor — the
+  implicit-groups env var needs no DB pool and no `.await`, so there was never a reason to route it
+  through the async builder.
 - **Parsing only the implicit-groups knob now.** Parsing all four knobs would produce config
   that appears active and is not. Chosen: parse what Stage 1 consumes; the rest land with their
   consumers.
@@ -617,7 +635,10 @@ What does need writing:
   `MintPolicy`-takes-`AuthContext` resolution of the third identity boundary; the knob encoding; and a
   new *Long-term model* section for groups/nesting/grants. Stale assertions that read scope never comes
   from a key (Stage 0 rationale, Stage 4 step 9, Security, Resolved Decisions) were rewritten rather
-  than left to contradict Stage 4b.
+  than left to contradict Stage 4b. Also rename `ReadScope::Principals(Vec<String>)` to
+  `ReadScope::Audiences(Arc<[String]>)` and `ReadPolicy::readable_principals` to
+  `ReadPolicy::resolve` throughout, matching this plan's §1 — the AbAC plan's §2/§4/§5 still use the
+  old names.
 - `CHANGELOG.md` — per the `pr` skill's convention.
 
 ## Testing Strategy
@@ -670,9 +691,9 @@ What does need writing:
   extensions with `groups` populated (hole #3).
 - **No behavior change**: existing `cargo test` suites pass once the six test files that pass
   `is_admin` positionally are updated to pass an explicit `CallerContext` (Phase 2, step 7) — no
-  assertion or fixture in those tests changes, only the literal argument; explicitly assert an
-  unconfigured deployment (implicit-groups env var unset) resolves a scope and changes no query
-  result.
+  assertion changes, and no fixture changes beyond `lakehouse_admin_gate_test.rs`'s helper signature
+  (step 7's exception); explicitly assert an unconfigured deployment (implicit-groups env var unset)
+  resolves a scope and changes no query result.
 - `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
 
 ## Resolved Questions
