@@ -18,6 +18,7 @@ import os
 import time
 import uuid
 
+import pytest
 import requests
 from google.protobuf import proto
 from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
@@ -184,6 +185,62 @@ def test_otlp_logs_e2e():
         assert msg == f"e2e log {i} sev={[9, 9, 17, 17, 22][i]}", (i, msg)
     assert rows["scope_name"].iloc[0] == "e2e.logs"
     assert rows["severity_text"].iloc[0] == "INFO"
+
+
+def test_otlp_logs_parse_block_e2e():
+    """`parse_block` gives a SQL-reachable view into an OTLP block's raw payload,
+    bypassing view materialization entirely (issue #1467) — this is the only
+    place in the suite that walks `object_index`/limit bookkeeping end-to-end
+    (`ParseBlockRowBuilder` itself stays private) and that exercises the
+    missing-block error path instead of the pre-existing empty-result one."""
+    attrs, instance_id = _fresh_resource_attrs()
+    base_ns = _now_ns()
+    req = _build_logs_request(attrs, base_ns)
+
+    resp = requests.post(
+        LOGS_ENDPOINT,
+        data=req.SerializeToString(),
+        headers=PROTOBUF_HEADERS,
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+
+    begin, end = _query_window()
+    pid_str = discover_process_id(
+        client, instance_id, begin, end, timeout_s=POLL_TIMEOUT_S
+    )
+
+    def query_block():
+        sql = (
+            "SELECT block_id FROM blocks "
+            f"WHERE process_id = '{pid_str}' AND \"streams.format\" = 'otlp/v1/logs'"
+        )
+        return client.query(sql, begin, end)
+
+    blocks_df = assert_eventually(
+        query_block,
+        lambda r: not r.empty,
+        timeout_s=POLL_TIMEOUT_S,
+        msg=f"waiting for an otlp/v1/logs block for process_id={pid_str}",
+    )
+    block_id = str(blocks_df.iloc[0]["block_id"])
+
+    sql = (
+        "SELECT object_index, type_name, "
+        "  jsonb_as_string(jsonb_get(jsonb_get(value, '__attributes'), 'seq')) AS seq "
+        f"FROM parse_block('{block_id}') ORDER BY object_index"
+    )
+    rows = client.query(sql, begin, end)
+    assert len(rows) == 5, rows
+    assert list(rows["object_index"]) == [0, 1, 2, 3, 4]
+    assert all(t == "otlp.LogRecord" for t in rows["type_name"])
+    assert list(rows["seq"]) == ["0", "1", "2", "3", "4"]
+
+    # A block genuinely absent from `blocks` for the queried range must error
+    # (issue #1467 §5), not silently return zero rows like before this change.
+    missing_block_id = str(uuid.uuid4())
+    with pytest.raises(Exception):
+        client.query(f"SELECT * FROM parse_block('{missing_block_id}')", begin, end)
 
 
 # ---------------------------------------------------------------------------

@@ -195,7 +195,18 @@ ORDER BY avg_ms DESC;
 
 #### `parse_block(block_id)`
 
-Parses transit-serialized objects from a block's payload and returns each object as a row with its type name and full content as JSONB. This provides a generic block inspection tool, independent of any specific view (logs, metrics, spans).
+Parses a block's payload and returns each object as a row with its type name and full content as JSONB. This provides a generic block inspection tool, independent of any specific view (logs, metrics, spans) — useful for telling "the JIT/daemon pipeline hasn't caught up yet" from "the payload doesn't contain what we think it does" when a view looks empty.
+
+`parse_block` understands every wire format shipped in-tree, dispatching on the block's `streams.format` (visible in the `blocks` view):
+
+| `streams.format` | Payload | `type_name` values |
+|---|---|---|
+| `micromegas-transit` | Native CBOR/transit (logs, spans, metrics, images) | The transit type name, e.g. `LogStringEvent`, `BeginThreadSpanEvent` |
+| `otlp/v1/logs` | One OTLP `ResourceLogs` proto | `otlp.LogRecord` |
+| `otlp/v1/traces` | One OTLP `ResourceSpans` proto | `otlp.Span` |
+| `otlp/v1/metrics` | One OTLP `ResourceMetrics` proto | `otlp.NumberDataPoint`, `otlp.HistogramDataPoint`, `otlp.ExponentialHistogramDataPoint`, `otlp.SummaryDataPoint` |
+
+A `streams.format` with no registered decoder returns an error naming the known formats, rather than silently returning nothing.
 
 **Syntax:**
 ```sql
@@ -211,14 +222,14 @@ FROM parse_block(block_id)
 
 | Column | Type | Description |
 |--------|------|-------------|
-| object_index | Int64 | Ordinal position within the block (global, starting from the block's object_offset) |
-| type_name | Utf8 | Transit type name (e.g., `"LogStringEvent"`, `"BeginThreadSpanEvent"`) |
+| object_index | Int64 | Ordinal position within the block (global, starting from the block's object_offset for transit blocks; purely positional, `object_offset` is always 0, for OTLP blocks) |
+| type_name | Utf8 | Type name — see the format table above |
 | value | Binary | Full object content as JSONB binary data |
 
 **Examples:**
 ```sql
 -- Find a block to inspect
-SELECT block_id, nb_objects, "streams.tags"
+SELECT block_id, nb_objects, "streams.format"
 FROM blocks
 LIMIT 5;
 
@@ -231,18 +242,27 @@ SELECT object_index, jsonb_format_json(value)
 FROM parse_block('550e8400-e29b-41d4-a716-446655440000')
 WHERE type_name LIKE 'Log%';
 
--- Extract a specific field from objects
+-- Extract a specific field from a transit object
 SELECT object_index, type_name,
        jsonb_as_string(jsonb_get(value, 'msg')) as msg
 FROM parse_block('550e8400-e29b-41d4-a716-446655440000')
 WHERE type_name = 'LogStringInteropEvent'
 LIMIT 10;
+
+-- Extract one flattened attribute from an OTLP block
+SELECT jsonb_as_string(jsonb_get(jsonb_get(value, '__attributes'), 'my.event.id'))
+FROM parse_block('550e8400-e29b-41d4-a716-446655440000');
 ```
 
 **Notes:**
 
-- The `value` column contains JSONB-encoded objects. Each object includes a `__type` field with the transit type name, which is especially useful for inspecting nested objects.
-- When a `LIMIT` is used without filters, the function stops parsing early for efficiency. When filters are present, all objects are materialized first so DataFusion can apply the filter.
+- The `value` column contains JSONB-encoded objects. For transit blocks, each object includes a `__type` field with the transit type name, which is especially useful for inspecting nested objects.
+- For OTLP blocks, `value` is a faithful OTLP/JSON dump of the leaf record (log record / span / metric data point) — same field names, camelCase, 64-bit nanos as quoted strings — plus a synthesized `__`-prefixed envelope: `__type` (the `type_name` above), `__attributes` (the leaf's own attributes, flattened, bare keys — same shape as `log_entries.properties`'s record-attribute portion), `__resource` (the resource's attributes, flattened, bare keys), `__scope` (`otel.scope.name`/`otel.scope.version`/`otel.scope.attr.*`/`otel.scope.schema_url`, matching `scope_extras`), and — metrics only — `__metric` (the parent `Metric`'s `name`/`unit`/`description`, `otel.metric.kind`, and, where applicable, `otel.metric.aggregation_temporality`, `otel.metric.is_monotonic`, `otel.metric.metadata` — none of which is reachable from the data point itself).
+- For OTLP blocks, `object_index` is a positional index only and is **not** guaranteed to match `nb_objects` from `list_partitions()`/`blocks`, since Summary data points are over-counted there (`SUMMARY_MAX_ROWS_PER_POINT = 4`).
+- Non-finite `f64` values (NaN/±Infinity) in an OTLP source payload render as JSON `null` in `value`, indistinguishable from an absent field — the `serde_json` conversion path doesn't preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding.
+- `asInt` (metrics `NumberDataPoint`) and `Exemplar.as_int` render as bare JSON numbers rather than OTLP/JSON's quoted-string int64 form.
+- A block absent from `blocks` for the queried time range now errors instead of returning zero rows — widen `--begin` or pass `--all`. A `streams.format` with no registered decoder also errors, listing the known formats.
+- When a `LIMIT` is used without filters, the function stops parsing early for efficiency (for OTLP blocks, this still avoids the JSONB conversion cost even though the whole proto message is decoded up front). When filters are present, all objects are materialized first so DataFusion can apply the filter.
 - Use with JSONB functions like `jsonb_get`, `jsonb_format_json`, and `jsonb_as_string` to extract and display object contents.
 
 ### Scalar Functions

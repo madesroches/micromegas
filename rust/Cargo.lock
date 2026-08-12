@@ -3698,6 +3698,8 @@ dependencies = [
  "parquet",
  "pin-project",
  "prost 0.14.4",
+ "serde",
+ "serde_json",
  "serial_test",
  "sqlx",
  "tempfile",

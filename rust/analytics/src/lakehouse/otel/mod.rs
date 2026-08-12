@@ -1,5 +1,7 @@
 /// Helpers for OTel attribute / `AnyValue` → JSONB translation
 pub mod attrs;
+/// `BlockObjectDecoder` implementations for OTLP logs/metrics/traces, used by `parse_block`
+pub mod block_decoders;
 /// Implementation of `BlockProcessor` for OTel logs
 pub mod logs_block_processor;
 /// Implementation of `BlockProcessor` for OTel metrics (Sum / Gauge → measures)

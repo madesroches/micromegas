@@ -11,6 +11,8 @@ pub mod async_parquet_writer;
 pub mod batch_partition_merger;
 /// Materialize views on a schedule based on the time data was received from the ingestion service
 pub mod batch_update;
+/// Format → decoder registry for `parse_block`, mirroring `BlockProcessorMap`
+pub mod block_object_decoder;
 /// Specification for a view partition backed by a set of telemetry blocks which can be processed out of order
 pub mod block_partition_spec;
 /// Replicated view of the `blocks` table of the postgresql metadata database.
