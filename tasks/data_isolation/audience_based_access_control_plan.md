@@ -19,14 +19,25 @@
 > **Keys track revised 2026-07-30** (issue #1383 discussion): write and read credentials get
 > **separate tables** (`ingestion_api_keys` / `analytics_api_keys`) — one key is never valid on both
 > surfaces, because the risk is asymmetric and only ingestion keys carry an `audience`. Key
-> management is an **OIDC-authenticated HTTP API** on the ingestion service, pulled forward from
+> management is an **OIDC-authenticated HTTP API**, pulled forward from
 > Stage 6 into Stage 0 (create/revoke/list, no audience); Stage 6 now only adds audience resolution
 > to a route that already exists. Admin-gated lakehouse UDFs were considered for key management and
-> rejected — see Stage 0.
+> rejected — see Stage 0. (The API shipped on ingestion and has since moved to `analytics-web-srv`
+> — see the 2026-08-12 note below.)
 
 > **Renamed 2026-07-30** from "policy-based data isolation". The design was described as *RBAC*
 > throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
 > audience-based access control**; `Rbac*` identifiers become `Audience*`.
+
+> **Mint surface moved 2026-08-12** (#1411 / #1458, `tasks/completed/simplify_ingestion_api_key_admin_plan.md`).
+> This plan was written assuming key management lives on the **ingestion** service at
+> `POST/GET/DELETE /auth/api_keys`. Those routes shipped in Stage 0 and were then **removed**:
+> `rust/public/src/servers/api_keys.rs` is deleted and key management now lives on
+> **`analytics-web-srv`** at `{base_path}/api/ingestion-api-keys` (plus `/api/analytics-api-keys`),
+> writing both tables directly through the telemetry-DB pool it already opens. The affected
+> paragraphs below (Stage 0c/0d, Stage 4 step 10, Stage 6 step 12, Files to Modify, Testing,
+> Resolved Decisions) are updated in place; see **Appendix C** for the full drift audit. Nothing in
+> §1–§6 changes — only *where* `MintPolicy::resolve_audience` gets called.
 
 ## Overview
 
@@ -221,8 +232,11 @@ includes `group:everyone`, which is what imported keys stamp and what unstamped 
 
 ### 3. Ingestion stamps `audience`
 
-- Mint endpoint runs `MintPolicy::resolve_audience` **once** and records the resolved audience on the
-  key (env keyring: not applicable — see key-store note; DB keyring: an `audience` column).
+- The mint route runs `MintPolicy::resolve_audience` **once** and records the resolved audience on
+  the key (env keyring: not applicable — see key-store note; DB keyring: an `audience` column). That
+  route is `POST {base_path}/api/ingestion-api-keys` on `analytics-web-srv`
+  (`rust/analytics-web-srv/src/ingestion_keys.rs::mint_key`), **not** ingestion — see the 2026-08-12
+  note at the top. The import route in the same module takes the same treatment (Stage 4 step 10).
 - Key auth sets `AuthContext.bound_audience = Some(key.audience)`.
 - Ingestion handlers (native `rust/public/src/servers/ingestion.rs`, OTLP
   `rust/public/src/servers/otlp.rs`) read `AuthContext.bound_audience` (currently discarded) and
@@ -496,7 +510,10 @@ reduced to audience resolution on an existing route plus the setup script.
 
 **Landed** as #1383 — see `tasks/completed/1383_db_api_key_store_plan.md` for what actually shipped
 (this section is the design rationale, kept for the stages that hang off it). The import tool this
-section assumes was split out to #1411 and has not landed.
+section assumes was split out to #1411 and **has since landed**, along with a web admin UI; #1458
+then moved the whole key-management surface off ingestion onto `analytics-web-srv`
+(`tasks/completed/simplify_ingestion_api_key_admin_plan.md`). 0c and 0d below describe the shipped
+end state, not the original design.
 
 Split out of the original Stage 4 (revised 2026-07-30). Moving the *key store* ahead of the policy
 seam, and leaving only the *audience column* behind it, for four reasons:
@@ -576,12 +593,22 @@ Write credentials and read credentials live in **separate tables** — `ingestio
     machines, so the operational pressure that motivates this stage does not apply. If it ever does,
     the fix is a mechanism for that service specifically, not a reshaping of these tables.
 
-#### Key management is an HTTP API, not SQL (decided 2026-07-30)
+#### Key management is an HTTP API, not SQL (decided 2026-07-30; host service revised 2026-08-12)
 
-Create/revoke/list are OIDC-authenticated routes on the ingestion service (0c), pulled forward from
+Create/revoke/list are OIDC-authenticated HTTP routes (0c), pulled forward from
 Stage 6 — **the table alone does not deliver Stage 0's claimed value**, since without an endpoint an
 operator still cannot revoke anything without hand-written SQL against Postgres. Stage 6 then extends
 the create route with audience resolution rather than introducing it.
+
+**Which service hosts them changed after this plan was written.** Stage 0 shipped them on ingestion
+as designed; #1411/#1458 then moved key management to `analytics-web-srv` and deleted ingestion's
+`/auth/api_keys*` routes outright, on the grounds that ingestion should only do ingestion and that a
+server-side proxy from the web service to ingestion (with a shared privileged service credential)
+was worse than a direct write. The move **strengthens** the asymmetry argument below rather than
+weakening it: the most-exposed, fleet-facing process no longer holds `INSERT` on any key table at
+all, and every mint/revoke/import now records the acting admin's own OIDC identity in
+`created_by`/`revoked_by` instead of a shared service credential. What it costs is 0c's claim that
+"analytics keys are not mintable through this API" — see 0c.
 
 **Rejected: admin-gated lakehouse UDFs** (`revoke_api_key(...)`, `import_api_key(...)`) on the
 flight-sql path, despite the good precedent for admin-gated mutating functions (#1382,
@@ -616,7 +643,7 @@ CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 ```
 
 **`key_id` is a design change #1383 settled that this outline left implicit**: this schema originally
-put `key_hash` alone as the primary key, but `DELETE /auth/api_keys/<id>` needs a non-secret handle to
+put `key_hash` alone as the primary key, but the revoke route needs a non-secret handle to
 key on, and `GET` must never hand out `key_hash` (there is no reason to distribute the lookup value
 even though it is not reversible) — a UUID PK plus a unique index on `key_hash` gives both without
 making the secret-derived value the row identity. `name` also carries no uniqueness constraint,
@@ -643,31 +670,44 @@ rotating any legacy key that is not actually random.
     an accident: revocation takes effect within the cache TTL** — the endpoint below writes
     `revoked_at` and cannot invalidate remote caches.
 
-0c. **Key-management API** on the ingestion service (and the monolith by inheritance),
-    OIDC-authenticated and admin-gated:
-    - `POST /auth/api_keys` — generate a fresh random key, store its hash, return the cleartext
-      **once**. Writes `ingestion_api_keys`; no audience until Stage 4.
-    - `DELETE /auth/api_keys/<id>` — set `revoked_at`. This is the operation that carries the stage
-      (the 2am revoke with no redeploy).
-    - `GET /auth/api_keys` — name, created_at, last_used_at, revoked_at. **Never the hash**; there is
-      no reason to hand out the lookup value even though it is not reversible.
+0c. **Key-management API**, OIDC-authenticated and admin-gated. **Shipped end state
+    (2026-08-12), after #1411/#1458 relocated it** — this is what Stages 4 and 6 must target:
+    routes live on **`analytics-web-srv`**, gated by the `AdminUser` extractor over the browser
+    cookie session (`ValidatedUser { is_admin }`), writing the telemetry DB directly:
+    - `POST {base_path}/api/ingestion-api-keys` — generate a fresh random key, store its hash,
+      return the cleartext **once**. Writes `ingestion_api_keys`; no audience until Stage 4.
+      (`ingestion_keys.rs::mint_key` — the Stage 6 `resolve_audience` call site.)
+    - `DELETE {base_path}/api/ingestion-api-keys/{key_id}` — set `revoked_at`. This is the operation
+      that carries the stage (the 2am revoke with no redeploy).
+    - `GET {base_path}/api/ingestion-api-keys` — name, created_at, last_used_at, revoked_at.
+      **Never the hash**; there is no reason to hand out the lookup value even though it is not
+      reversible.
+    - `POST {base_path}/api/ingestion-api-keys/import` — 0d's legacy-key import, landed with #1411.
+    - `/api/analytics-api-keys[...]` — the same four operations against `analytics_api_keys`
+      (`analytics_keys.rs`, the module `ingestion_keys.rs` was modeled on).
+    - Under `--disable-auth` the real routers are **not merged at all**; a static router answers both
+      prefixes with 503, because that mode layers a hardcoded `is_admin: true` user on every request.
 
-    **Analytics keys are not mintable through this API.** They are few, manually issued (0d, or
-    direct SQL by an operator with DB access) and stay out of every HTTP write path: issuing read
-    credentials from the fleet-facing service is the wrong direction for the asymmetry, and keeping
-    them out is what confines the ingestion role's grants to one table.
+    **Superseded: "analytics keys are not mintable through this API."** The original text kept read
+    credentials out of every HTTP write path because issuing them *from the fleet-facing ingestion
+    service* is the wrong direction for the asymmetry. Once key management left ingestion, that
+    reason stopped applying to the surface that now hosts it: `analytics-web-srv` is the read-side,
+    admin-facing service, and minting a read credential there is no longer a cross-direction move.
+    Analytics keys are mintable through `/api/analytics-api-keys` today. The property that actually
+    mattered — **ingestion never issues keys, and `analytics_api_keys` never gains an `audience`
+    column** — is preserved and is what Stage 4 relies on.
 
-    The route mildly expands the surface of the most exposed process. Accepted deliberately — it is
-    where the DB grant belongs, OIDC is required, and no API key can be admin (`api_key.rs:124`), so
-    no key can mint another.
+    The route no longer expands the surface of the most exposed process at all: ingestion holds no
+    key-management route and no `INSERT` grant. API keys still cannot be admin (`api_key.rs:124`),
+    so no key can mint another; the gate is a cookie session, not a bearer key.
 
-0d. **Import tool — out of scope for this stage, tracked in #1411.** A one-shot migration for legacy
-    key strings (the one thing the mint route cannot do, since it generates fresh keys) is deferred to
-    #1411, which adds a web admin UI plus an HTTP-API-backed import tool, superseding the python/`psql`
-    tool originally planned here. Until it lands, legacy keys migrate via hand-written
-    `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key (see #1383 §4's runbook shape), **requiring
-    an explicit destination table per key with no default** — the prefixed vars still map cleanly:
-    `MICROMEGAS_INGESTION_API_KEYS` → ingestion, `MICROMEGAS_ANALYTICS_API_KEYS` → analytics.
+0d. **Import — landed with #1411** as `POST {base_path}/api/ingestion-api-keys/import` plus a python
+    CLI (`python/micromegas/micromegas/cli/import_keys.py`), superseding the python/`psql` tool
+    originally planned here. It is the one thing the mint route cannot do, since minting generates
+    fresh key strings. Destination table is explicit per key with no default — the prefixed vars map
+    cleanly: `MICROMEGAS_INGESTION_API_KEYS` → ingestion, `MICROMEGAS_ANALYTICS_API_KEYS` →
+    analytics. (The hand-written `INSERT ... ON CONFLICT (key_hash) DO NOTHING` path from #1383 §4's
+    runbook still works and stays the fallback for operators without web-app access.)
 
     **The unprefixed fallback is the one behavior change in this stage**, independent of which tool
     (or hand) does the importing. In every split deployment
@@ -691,9 +731,20 @@ rotating any legacy key that is not actually random.
    Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
 3. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs:194`) and feed
    `register_lakehouse_functions` (`query.rs:96`). Resolve scope via `ReadPolicy` in
-   `flight_sql_service_impl` and pass through both call sites (`:372`, `:842`). **Close the two
-   identity holes** (§6): resolve identity on the prepared-statement path, and never derive
-   `ReadScope` from client-claimed attribution; carry `groups` across the `AuthService` boundary.
+   `flight_sql_service_impl` and pass through both call sites (`:661`, `:1149` at 2026-08-12 HEAD;
+   were `:372`/`:842`). **Close the two identity holes** (§6): resolve identity on the
+   prepared-statement path, and never derive `ReadScope` from client-claimed attribution; carry
+   `groups` across the `AuthService` boundary.
+
+   **A third boundary drops `groups`, found 2026-08-12.** `analytics-web-srv` converts `AuthContext`
+   into its own session type via `impl From<&AuthContext> for ValidatedUser`
+   (`rust/analytics-web-srv/src/auth/claims.rs:40-48`), which keeps only
+   `subject`/`email`/`issuer`/`is_admin`. Every new `AuthContext` field is silently dropped there.
+   That does not matter for read enforcement (flight-sql resolves its own scope), but it is the
+   **mint** path's identity source now that `MintPolicy` runs in `ingestion_keys.rs` — a policy that
+   consults `groups` against a `ValidatedUser` would see an empty set and refuse every group mint.
+   Stage 1 must either carry `groups` into `ValidatedUser` or leave `MintPolicy::resolve_audience`
+   taking an `AuthContext`, and Stage 6 must not discover this late.
 4. **Config factory.** Parse the grant knobs (Config surface) next to
    `default_provider::provider_with_prefix`; `from_env` precedent
    `static_tables_configurator.rs:44-54`. Unset ⇒ enforcement inactive (transitional).
@@ -744,8 +795,13 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
    email: Some(...), allow_delegation: false, is_admin: false }`.
 10. Legacy-key imports assign an audience: existing keys land as `group:everyone` (or a per-key
     choice) — still zero client changes; this is how open deployments migrate. Keys imported before
-    this stage get the configured default on backfill. (Until #1411's import tool exists, "import"
-    here means the hand-written SQL path from 0d, with the audience set explicitly in the `INSERT`.)
+    this stage get the configured default on backfill. The import path is now a real route —
+    `POST {base_path}/api/ingestion-api-keys/import` in `ingestion_keys.rs` — so this step edits
+    that handler (and the `import_keys.py` CLI's request shape), not a runbook. The `NOT NULL`
+    column added in step 9 means **every** insert site must supply an audience: `mint_key`,
+    `import_key`, and any hand-written `INSERT` in the 0d fallback. Adding the column without
+    updating all three breaks key creation outright — that is the fail-closed behavior working,
+    but it should be a planned edit, not a surprise.
 
 ### Stage 5 — Ingestion stamping
 11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
@@ -755,10 +811,18 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
     authenticated `bound_audience` before stamping is meaningful there.
 
 ### Stage 6 — Audience resolution on mint + setup script (enables real per-user keys)
-12. Extend the Stage 0 `POST /auth/api_keys` route with `MintPolicy::resolve_audience`
-    (`AudienceMintPolicy`, §1): the request may name a `requested` audience, the policy vets it, and
-    the resolved value is written to the key's `audience` column. The route, its OIDC auth and its
-    DB grant already exist from Stage 0 — this stage adds only the policy call.
+12. Extend the mint route with `MintPolicy::resolve_audience` (`AudienceMintPolicy`, §1): the
+    request may name a `requested` audience, the policy vets it, and the resolved value is written
+    to the key's `audience` column. The route, its OIDC auth and its DB access already exist from
+    Stage 0 — this stage adds only the policy call. **The call site is
+    `rust/analytics-web-srv/src/ingestion_keys.rs::mint_key`, not a handler on ingestion** (see the
+    2026-08-12 note and 0c); the caller identity available there is `AdminUser(ValidatedUser)`, so
+    this step depends on Stage 1 having resolved the `groups`-across-`ValidatedUser` question.
+    Note the current gate is `is_admin`: a non-admin user cannot mint at all today, so the
+    "users mint their own personal keys" story in the privacy deployment below needs either a
+    non-admin mint path vetted by `MintPolicy` (the policy *is* the authorization — an admin gate on
+    top of it makes self-service minting impossible) or the setup script (step 13) running against
+    an operator-run mint. Decide which in Stage 6; it is not decided here.
 13. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
@@ -807,10 +871,15 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 - Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs` (incl.
   auth wiring; Firehose route placement), `rust/ingestion/src/sql_telemetry_db.rs` (audience
   storage).
-- Key store, key-management routes (create/revoke/list) + monolith wiring:
-  `rust/ingestion/src/sql_telemetry_db.rs` (the two tables), `rust/public/src/servers/…`,
-  `rust/monolith/src/main.rs`, import script (python, per repo scripting convention).
+- Key store (Stage 0, landed): `rust/ingestion/src/sql_telemetry_db.rs` (the two tables),
+  `rust/auth/src/db_api_key.rs`, `rust/monolith/src/main.rs`.
   **Not** `rust/object-cache-srv/` — it has no DB access and keeps the env keyring (Stage 0).
+- Key-management routes — **`rust/analytics-web-srv/src/ingestion_keys.rs`** (`audience` on
+  `mint_key` and `import_key`, Stages 4/6) and its identity source
+  `rust/analytics-web-srv/src/auth/claims.rs` (`ValidatedUser`, Stage 1 — see the third identity
+  boundary), plus `python/micromegas/micromegas/cli/import_keys.py` and the
+  `analytics-web-app` ingestion-keys page if audience becomes a mint-time input.
+  **Not** `rust/public/src/servers/api_keys.rs` — deleted by #1458.
 
 ## Trade-offs
 
@@ -900,18 +969,21 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 - **Key store + management API (Stage 0, independent of everything below):** a DB key authenticates
   and an unknown key is rejected; a revoked key stops authenticating within the cache TTL (assert the
   stated revocation-latency property, don't leave it implicit); env keyring and DB keyring compose — a
-  key in either authenticates during the transition; a hand-imported row (or, once #1411 lands, an
-  imported row) round-trips an existing key string so the *same key string* still authenticates on
-  its own surface afterwards (the zero-client-change claim, so it deserves a real test); no cleartext
-  key is stored — assert the column holds the hash.
+  key in either authenticates during the transition; an imported row (via the `/import` route or the
+  hand-written SQL fallback) round-trips an existing key string so the *same key string* still
+  authenticates on its own surface afterwards (the zero-client-change claim, so it deserves a real
+  test); no cleartext key is stored — assert the column holds the hash.
   **Surface separation (the load-bearing property of the split):** a key in `ingestion_api_keys` is
   rejected by flight-sql and a key in `analytics_api_keys` is rejected by ingestion — assert both
   directions, since a provider constructed against the wrong table is the failure mode the two-table
-  design exists to prevent. Assert the mint route writes `ingestion_api_keys` only and that no route
-  inserts into `analytics_api_keys`.
+  design exists to prevent. Assert each key-management router writes only its own table — the
+  ingestion-keys routes never touch `analytics_api_keys` and vice versa (the code-level boundary
+  that replaced "the ingestion role has no INSERT grant" once both routers moved into one process,
+  and therefore the assertion that now carries the two-table split).
   **Management routes:** create returns a key that then authenticates; the cleartext is returned once
   and never retrievable afterwards; list omits the hash column; revoke is idempotent; every route
-  rejects an API-key-authenticated caller (admin requires OIDC, `api_key.rs:124`).
+  rejects an API-key-authenticated caller (admin requires OIDC, `api_key.rs:124`); under
+  `--disable-auth` both prefixes answer 503 rather than falling through to the SPA.
 - **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set and defaults to
   `user:<email>`; `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
   singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
@@ -950,9 +1022,12 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its non-PII caveat), and the
   confidentiality/integrity properties.
 - Update any auth/deployment docs to mention the two key tables and why they are separate, the
-  key-management routes (create/revoke/list) and the revocation-latency property, the manual
-  legacy-key import procedure **including the dual-use-key split** (a proper import tool + web admin
-  UI is tracked in #1411), the setup script, and the groups-claim configuration.
+  key-management routes (create/revoke/list/import, on `analytics-web-srv`) and the
+  revocation-latency property, the legacy-key import procedure **including the dual-use-key split**,
+  the setup script, and the groups-claim configuration. Stage 0's own docs
+  (`mkdocs/docs/admin/api-keys.md`, `admin/web-app.md`, `admin/ingestion.md`) already describe the
+  single relocated surface as of #1458 — the isolation stages add `audience` to that story rather
+  than re-describing it.
 
 ## Resolved Decisions
 
@@ -1013,20 +1088,26 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Write and read keys live in separate tables** (`ingestion_api_keys` / `analytics_api_keys`,
   decided 2026-07-30, issue #1383): one key is never valid on both surfaces. The risk is asymmetric
   (write = integrity, read = confidentiality) and Stage 6 distributes ingestion keys to thousands of
-  machines, so the boundary is enforced by Postgres grants — the ingestion role never holds `INSERT`
-  on the analytics table. Only ingestion keys carry an `audience`. Consequence: a key currently used
+  machines. The boundary is enforced **in code** — each router is hardcoded to one table, each
+  provider constructed bound to one table — with per-service Postgres grants documented as an
+  operator option rather than shipped (every service shares one DB role by default, and after
+  #1458 both routers live in the same process, so a grant split cannot separate them anyway).
+  Only ingestion keys carry an `audience`. Consequence: a key currently used
   for both ingestion and queries (the unprefixed `MICROMEGAS_API_KEYS` fallback) must split into two
   at import — the one place zero-client-change does not hold.
 - **`object-cache-srv` keeps the env keyring** (decided 2026-07-30): it has no DB access, and a cache
   service does not earn a Postgres pool just to read a key table. Therefore `ApiKeyAuthProvider` /
   `parse_key_ring` are **permanent**, not transitional, and that service's keys stay
   redeploy-to-revoke — acceptable because they are service-held and never distributed.
-- **Key management is an OIDC-authenticated HTTP API on the ingestion service**, not admin-gated
+- **Key management is an OIDC-authenticated HTTP API**, not admin-gated
   lakehouse UDFs (decided 2026-07-30). Create/revoke/list move into **Stage 0**, since the table
   alone does not deliver the revoke-without-redeploy value; Stage 6 only adds audience resolution to
   the existing create route. UDFs were rejected because query text is logged into micromegas's own
   `log_entries` (`flight_sql_service_impl.rs:330`) and because a write UDF would grant the read
-  service write access to the key tables.
+  service write access to the key tables. **Host service revised 2026-08-12 (#1411/#1458):** the API
+  moved from ingestion to `analytics-web-srv` and ingestion's `/auth/api_keys*` routes were deleted;
+  Stage 6's `resolve_audience` call site moves accordingly. The UDF rejection is unaffected — the
+  logging argument was never about which service hosted the route.
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
 - **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
@@ -1040,8 +1121,11 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Identity holes are in scope for Stage 1**: prepared-statement path identity resolution and the
   client-claimed-attribution fallback (never feeds `ReadScope`).
 
-All design decisions are closed. Remaining work is implementation, staged per the Implementation
-Steps (Stage 0 and Stage 1 are both unblocked and independent of each other).
+All design decisions are closed **except one opened by the mint-surface move** (2026-08-12): the
+mint route is admin-gated today, so self-service per-user minting in the privacy profile needs a
+non-admin path vetted by `MintPolicy` — decided in Stage 6, not here (see step 12). Everything Stage
+1 needs is settled. Remaining work is implementation, staged per the Implementation Steps; Stage 0
+has landed and Stage 1 is unblocked.
 
 ## Appendix A — Research findings (2026-07-21)
 
@@ -1133,3 +1217,49 @@ listed. Nothing from the design vocabulary (`ReadScope`, `MintPolicy`, `micromeg
   `query.rs:120`, `materialize_partitions` at `query.rs:132`.
 - **Config factory precedent** for the grant knobs: `static_tables_configurator.rs:44-54`
   (`from_env` returning a no-op when unset).
+
+## Appendix C — Drift audit (2026-08-12, before Stage 1)
+
+Re-verification against HEAD `213ed3b`. Appendices A and B hold except as listed. The design
+vocabulary (`ReadScope`, `MintPolicy`, `micromegas.audience`, `bound_audience`, `AudienceReadPolicy`)
+is still **entirely unimplemented** — zero hits in `rust/`.
+
+**Stage 0 landed, and the key-management surface then moved.** #1383 shipped the two tables and
+`DbApiKeyAuthProvider`; #1411 added the web admin UI and the import route; **#1458 deleted
+ingestion's `/auth/api_keys*` routes and `rust/public/src/servers/api_keys.rs` entirely.** Key
+management now lives in `rust/analytics-web-srv/src/ingestion_keys.rs` and `analytics_keys.rs` under
+`{base_path}/api/{ingestion,analytics}-api-keys`, gated by the `AdminUser` extractor over the cookie
+session, writing the telemetry DB directly through the pool the service already opens. Consequences
+folded into the body above: 0c/0d rewritten, Stage 4 step 10 and Stage 6 step 12 re-pointed, Files
+to Modify and Testing updated, and the "not mintable through this API" property for analytics keys
+recorded as superseded.
+
+**Third identity boundary (new, Stage 1 scope).**
+`impl From<&AuthContext> for ValidatedUser` (`rust/analytics-web-srv/src/auth/claims.rs:40-48`)
+keeps only `subject`/`email`/`issuer`/`is_admin` — a new `AuthContext.groups` field is dropped
+there silently. This is now the mint path's identity source, so it joins the prepared-statement and
+client-claimed-attribution holes as something Stage 1 must decide rather than let Stage 6 discover.
+
+**The two original identity holes are unchanged.**
+- `do_action_create_prepared_statement` (`flight_sql_service_impl.rs:1142-1158`) still builds its
+  session context with no user identity and `query_range = None`. It does now pass
+  `is_admin(request.metadata())`, so the RPC reads *some* identity from metadata — but no
+  subject/email resolution, which is what `ReadScope` would need.
+- `validate_and_resolve_user_attribution_grpc` (`rust/auth/src/user_attribution.rs:127`) still falls
+  back to client-claimed identity when `x-auth-subject` is absent.
+
+**Line-ref updates** (the previous audit's numbers are stale enough to misdirect):
+- `make_session_context` is `query.rs:207` (was `:194`); `register_lakehouse_functions` is still
+  `query.rs:96`.
+- The two flight-sql call sites are `flight_sql_service_impl.rs:661` (`do_get`/execute path) and
+  `:1149` (prepared statement) — were `:372`/`:842`. #1369's issue text still cites the old pair.
+- `validate_and_resolve_user_attribution_grpc` is called at `flight_sql_service_impl.rs:573`
+  (was `:318`); its definition is `user_attribution.rs:127` (was `:108`).
+- The registry shape is unchanged from Appendix B: nine `register_udtf` calls and the
+  `get_payload` / `retire_partition_by_file` / `retire_partition_by_metadata` UDFs, several behind
+  the existing registration conditionals.
+- `make_session_context` has more callers than Appendix B's list implies — adding a `read_scope`
+  parameter touches `analytics/src/metadata.rs:182,283`,
+  `lakehouse/perfetto_trace_execution_plan.rs:254` and `lakehouse/export_log_view.rs` as well as the
+  two flight-sql sites. All are internal/maintenance contexts (`ReadScope::All`) except the
+  perfetto plan, which must inherit the caller's scope.
