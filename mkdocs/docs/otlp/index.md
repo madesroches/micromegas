@@ -235,8 +235,9 @@ Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_b
     metric and a server-side warning log — it isn't silent from that side. It was silent
     when [issue #1462](https://github.com/madesroches/micromegas/issues/1462) hit,
     though: at the time, the dedup-drop path only logged at `debug!` with no metric, so
-    the 72 distinct EventBridge events lost this way went unnoticed until traced back
-    after the fact. Declaring
+    the loss went unnoticed until traced back after the fact — 72 distinct EventBridge
+    events lost in a single measured 2-day window (the loss itself ran undetected for
+    about two months). Declaring
     [`aws.event.id`](#event-identity-awseventid-awseventtime) breaks the collision by
     making every record's bytes depend on the source event's own identity. Once
     [issue #1466](https://github.com/madesroches/micromegas/issues/1466) — an open design

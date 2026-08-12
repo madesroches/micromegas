@@ -35,10 +35,11 @@ levels of event-identity guidance:
   rule in the `## Schema mapping` table (line 136) in isolation — the shown template never
   sets `observedTimeUnixNano` either, so in practice both stay 0. The true chain is
   three-level: `time_unix_nano` → `observed_time_unix_nano` → (if both are still zero) the
-  block's ingestion arrival time (`Utc::now()` at block-split time), which is the same
-  arrival-time fallback the `## Webhook ingestion` section already documents (line
-  344-347) for a different producer path. None of this is cross-referenced from the
-  EventBridge section itself.
+  block's `begin_time` — the ingestion arrival time (`Utc::now()` at block-split time)
+  only when every record in the resource is timestamp-less, otherwise the earliest
+  sibling timestamp. The arrival-time case is the same fallback the `## Webhook
+  ingestion` section already documents (line 344-347) for a different producer path.
+  None of this is cross-referenced from the EventBridge section itself.
 
 A producer following only the current EventBridge section has no documented place to put
 the source event's `$.id`. #1462 records exactly this gap causing real data loss: a
@@ -67,15 +68,17 @@ segment, since EventBridge events aren't log records. Concretely:
   can't produce nanosecond time for the event's native timestamp shape:
   `timeUnixNano` (from `$.time_ns`, if the producer's template sets it) →
   `observedTimeUnixNano` (if the producer explicitly sets it — the shown example template
-  doesn't) → the block's ingestion arrival time (`Utc::now()` at block-split time) if both
-  are absent/zero. That last step is the same arrival-time mechanism already documented in
-  the `## Webhook ingestion` section (line 344-347); reference it directly rather than
-  restating it as a standalone rule. Optionally document `aws.event.time` as a companion
-  attribute for producers who want the original `$.time` preserved verbatim (as a string)
-  even when it isn't converted to `timeUnixNano` — useful since EventBridge's `$.time` is
-  second-resolution ISO-8601, lossy to reconstruct from a nanosecond fallback alone, and
-  since without it a record can silently take on the server's arrival time as its stored
-  `time` rather than the event's actual occurrence time.
+  doesn't) → the block's `begin_time` if both are absent/zero — the ingestion arrival
+  time (`Utc::now()` at block-split time) only when every record in the resource is
+  timestamp-less, otherwise the earliest sibling timestamp. That arrival-time case is the
+  same mechanism already documented in the `## Webhook ingestion` section (line 344-347);
+  reference it directly rather than restating it as a standalone rule. Optionally document
+  `aws.event.time` as a companion attribute for producers who want the original `$.time`
+  preserved verbatim (as a string) even when it isn't converted to `timeUnixNano` — useful
+  since EventBridge's `$.time` is second-resolution ISO-8601, lossy to reconstruct from a
+  nanosecond fallback alone, and since without it a record can silently take on the
+  block's `begin_time` — the server's arrival time, or a sibling record's event time —
+  as its stored `time` rather than its own actual occurrence time.
 - Add a note in the `## Idempotency` section (line 222-224) or directly in the
   EventBridge section cross-linking to #1462 (the incident) and #1466 (the open design
   proposal), explaining that a producer with no declared identity in its payload can
@@ -100,11 +103,12 @@ already passes through generically as any other OTel `LogRecord` attribute.
      [CloudWatch Logs](#cloudwatch-logs-kinesis-firehose) section's equivalent guidance.
    - The true three-level timestamp fallback, stated directly: `timeUnixNano` (from
      `$.time_ns`, if set) → `observedTimeUnixNano` (if the producer explicitly sets it —
-     the shown template doesn't) → the block's ingestion arrival time (`Utc::now()` at
-     block-split time) if both are absent/zero. That last step is the identical
-     arrival-time mechanism the `## Webhook ingestion` section already documents (line
-     344-347) — link to it rather than restate it, instead of (incorrectly) treating it as
-     unrelated. Optionally also link to `#schema-mapping` for the two-level
+     the shown template doesn't) → the block's `begin_time` if both are absent/zero — the
+     ingestion arrival time (`Utc::now()` at block-split time) only when every record in
+     the resource is timestamp-less, otherwise the earliest sibling timestamp. The
+     arrival-time case is the same mechanism the `## Webhook ingestion` section already
+     documents (line 344-347) — link to it rather than restate it, instead of (incorrectly)
+     treating it as unrelated. Optionally also link to `#schema-mapping` for the two-level
      `time_unix_nano`/`observed_time_unix_nano` → `time` column mapping.
    - Optionally, `aws.event.time` as a companion attribute for preserving the original
      `$.time` string when timestamp conversion isn't possible.
@@ -132,14 +136,16 @@ already passes through generically as any other OTel `LogRecord` attribute.
   event and follows the issue's own suggested name. Chosen: `aws.event.id` /
   `aws.event.time`.
 - **Whether to document `aws.event.time` at all.** The full fallback chain
-  (`timeUnixNano` → `observedTimeUnixNano` → block ingestion arrival time) is already
+  (`timeUnixNano` → `observedTimeUnixNano` → block `begin_time`) is already
   documented (partly in `## Schema mapping`, partly in `## Webhook ingestion`), so
   `aws.event.time` isn't strictly required for the pipeline to keep working. But the real
   risk of omitting `$.time`/`timeUnixNano` isn't just losing sub-second precision — when
   both `timeUnixNano` and `observedTimeUnixNano` are absent, the stored `log_entries.time`
-  silently becomes an unrelated server-arrival timestamp (block-split wall-clock time)
-  rather than the event's actual occurrence time, with no indication in the row that this
-  happened. Documenting `aws.event.time` as optional gives producers who care about
+  silently becomes the block's `begin_time` — the server-arrival wall-clock time
+  (block-split time) only if every record in that resource is timestamp-less, and
+  otherwise a sibling record's event time — either way unrelated to when this particular
+  event actually occurred, with no indication in the row that this happened. Documenting
+  `aws.event.time` as optional gives producers who care about
   preserving the exact original timestamp string a documented place to put it, mitigating
   that risk, at the cost of one more attribute name to explain. Included as a documented
   option, not a requirement, since the issue's proposal explicitly calls out `$.time`
