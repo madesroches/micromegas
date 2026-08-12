@@ -46,15 +46,28 @@ passes it through `register_functions` (`:187`) into `register_lakehouse_functio
 where it gates registration of the five mutating UDTFs/UDFs (`:150-175`). `ReadScope` follows
 exactly this path — the plumbing precedent already exists and works.
 
+`grep -rn make_session_context rust --include="*.rs"` finds **13 production call sites** (plus the
+public `query()` wrapper at `query.rs:259-280`, which itself still takes `is_admin: bool` and forwards
+it into `make_session_context` at `:269`) and **4 test files** that pass `is_admin` positionally.
+Neither the wrapper nor the test files were in the original inventory below; both need the same
+`CallerContext` change as the production sites, which is why Testing Strategy's "existing `cargo
+test` suites pass untouched" is softened in Phase 2, step 7.
+
 Call sites of `make_session_context`:
 
 | Site | `is_admin` | Needs |
 |---|---|---|
 | `flight_sql_service_impl.rs:661` (execute path) | from metadata | caller's scope |
 | `flight_sql_service_impl.rs:1149` (prepared stmt) | from metadata | caller's scope |
-| `analytics/src/metadata.rs:182`, `:283` | `false` | `All` (internal) |
-| `analytics/src/lakehouse/export_log_view.rs:118`, `:172` | `true` | `All` (internal) |
+| `analytics/src/metadata.rs:182`, `:283` (`find_stream_from_view`, `find_process_with_latest_timing`) | `false` | **caller's scope** — user-reachable via `jit_update` (`thread_spans_view.rs:343,352`, `net_spans_view.rs:326`, `async_events_view.rs:130`), itself invoked while planning a user's `view_instance(...)` query |
+| `analytics/src/lakehouse/export_log_view.rs:118`, `:172` | `true` | `All` (maintenance) |
+| `analytics/src/lakehouse/merge.rs:254` | `true` | `All` (maintenance) |
+| `analytics/src/lakehouse/batch_partition_merger.rs:133` | `true` | `All` (maintenance) |
+| `analytics/src/lakehouse/sql_batch_view.rs:106`, `:255` | `true` | `All` (maintenance) |
 | `analytics/src/lakehouse/perfetto_trace_execution_plan.rs:254` | `false` | **caller's scope** — user-reachable |
+| `analytics/src/lakehouse/parse_block_table_function.rs:82` | `false` | **caller's scope** — user-reachable (`parse_block` UDTF, registered for every caller, `query.rs:96-176`) |
+| `analytics/src/lakehouse/process_spans_table_function.rs:254` | `false` | **caller's scope** — user-reachable (`process_spans` UDTF, same registration) |
+| `analytics/src/lakehouse/query.rs:269` (inside public `query()`) | passed through | caller-supplied — `query()`'s own signature changes too |
 
 ### The three identity holes
 
@@ -157,8 +170,23 @@ a security path. `ReadScope::All` is deliberately **not** a policy output — no
 return it. It is the marker internal (non-request) callers pass, which is what makes
 "who granted themselves `All`?" a greppable question with a small, auditable answer set.
 
-Both `Audience*` impls compute the same set per the plan's §1–§2, with one addition settled during
-planning — **service-account grants**:
+`AudienceReadPolicy` and `AudienceMintPolicy` compute **related but distinct** sets — the plan's
+§1–§2 formula, plus one addition settled during planning (**service-account grants**), applied to
+*read* only. Folding the two into one shared formula would fold the Stage 4b read grant into mint
+authority the moment `read_audiences` is populated, which the AbAC plan's *Read and write finally
+separate* section calls a security regression.
+
+The **mintable** set (`AudienceMintPolicy::resolve_audience`'s non-admin arm — what a caller may
+stamp onto a newly minted key) is:
+
+```
+{user:<email>}       if email present      // human OIDC caller
+  ∪ {group:<g>}       for g in groups claim
+  ∪ {group:<g>}       for g in MICROMEGAS_IMPLICIT_GROUPS
+```
+
+The **readable** set (`AudienceReadPolicy::resolve`'s output) is the same union **plus** the
+caller's read grant:
 
 ```
 caller.read_audiences                        // grant carried by an analytics service-account key
@@ -167,10 +195,14 @@ caller.read_audiences                        // grant carried by an analytics se
   ∪ {group:<g>}        for g in MICROMEGAS_IMPLICIT_GROUPS
 ```
 
-Every element is `user:`- or `group:`-prefixed. The union is **branch-free — no `auth_type` check
-anywhere**: an OIDC caller carries no `read_audiences`, and a key carries no email and no groups claim
-(`api_key.rs:116-127`, `db_api_key.rs:318-328`). With no groups claim and no implicit groups a human
-caller's readable set is the singleton `{user:<email>}` — the per-user case, with no separate `Self*`
+`read_audiences` is deliberately absent from the mintable set: it is a Stage 4b **read** grant, and
+a service-account key's ability to *see* an audience must not imply it can *stamp new keys* with
+that audience — mint is integrity, read is confidentiality, the same distinction the admin-arm
+rationale below draws in the other direction. Every element in both formulas is `user:`- or
+`group:`-prefixed. Both unions are **branch-free — no `auth_type` check anywhere**: an OIDC caller
+carries no `read_audiences`, and a key carries no email and no groups claim (`api_key.rs:116-127`,
+`db_api_key.rs:318-328`). With no groups claim and no implicit groups a human caller's set is the
+singleton `{user:<email>}` in both formulas — the per-user case, with no separate `Self*`
 implementation.
 
 `AuthContext.read_audiences` is empty for every principal in Stage 1; the analytics key provider
@@ -245,9 +277,10 @@ impl CallerContext {
 
 This keeps the two orthogonal axes the epic deliberately separated (audience scope vs. the
 `is_admin` capability axis, #1376/#1377) in one place, makes each internal call site's intent
-readable at a glance, and means Stage 2/3 add no further parameters. It touches the same six call
-sites the `read_scope` parameter would touch anyway, so it is not extra work — just a better landing
-spot. `register_functions` / `register_lakehouse_functions` take the same struct.
+readable at a glance, and means Stage 2/3 add no further parameters. It touches the same call sites
+the `read_scope` parameter would touch anyway (the full inventory is in Current State above), so it
+is not extra work — just a better landing spot. `register_functions` / `register_lakehouse_functions`
+take the same struct.
 
 ### 4. Groups claim (OIDC)
 
@@ -275,9 +308,20 @@ cannot reach.
 ### 5. Config factory
 
 Add `.with_policy_from_env()` to `ProviderBuilder` (`default_provider.rs`) — the builder its own doc
-comment says exists for this. Reads `MICROMEGAS_IMPLICIT_GROUPS` (comma-separated; the AbAC plan's
+comment says exists for this. Reads the implicit-groups env var (comma-separated; the AbAC plan's
 Config surface table). Unset ⇒ empty implicit groups ⇒ readable set is the caller's singleton ⇒
 enforcement inactive because nothing consumes it yet.
+
+**Env var: prefix-scoped, following the existing `{prefix}_*`-with-fallback convention** —
+`{prefix}_IMPLICIT_GROUPS` (e.g. `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`) falling back to the
+unprefixed `MICROMEGAS_IMPLICIT_GROUPS`, resolved by a new `implicit_groups_var()` method mirroring
+`admin_var()` (`default_provider.rs:71-81`). `.with_policy_from_env()` is attached to a `ProviderBuilder`
+that is *already* constructed with a prefix (`MICROMEGAS_INGESTION`/`MICROMEGAS_ANALYTICS` in the
+monolith, `main.rs:204,227`) — a prefix-blind knob on a prefixed builder would be ambiguous the moment
+a second prefixed builder also calls `.with_policy_from_env()`, and `MICROMEGAS_ADMINS` is exactly the
+precedent for *config-sourced authorization data* needing this treatment. In practice only the
+analytics-facing builder calls `.with_policy_from_env()` (see below), but the resolver follows the
+convention regardless, for the same reason `admin_var()`/`api_keys_json()`/`oidc_config_var()` do.
 
 **Encoding: comma-separated, and reject entries containing a comma** (naming the offending entry). Note
 in the doc comment that this deliberately differs from `MICROMEGAS_ADMINS`, which is a JSON array — that
@@ -285,13 +329,37 @@ variable is the precedent for *config-sourced authorization data* and for the `f
 pattern, not for an encoding. An operator copying the `MICROMEGAS_ADMINS` shape would otherwise silently
 configure one implicit group literally named `["everyone"]`.
 
-Only `MICROMEGAS_IMPLICIT_GROUPS` is parsed in Stage 1 — it is the only knob the policies
-themselves need. `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` and
+Only the implicit-groups knob is parsed in Stage 1 — it is the only one the policies themselves
+need. `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` and
 `MICROMEGAS_PUBLIC_VIEW_SETS` are consumed by Stages 2/3 and are parsed there; parsing them now
 would create config that reads as active and is not.
 
 Startup log line naming the resolved implicit groups (or "none") — the operator's only feedback that
 the knob took effect, since there is no behavior to observe yet.
+
+**How the policy leaves the builder.** `ProviderBuilder::build(self)` currently returns
+`Result<Option<Arc<dyn AuthProvider>>>` (`default_provider.rs:114`), consuming `self` — there is no
+slot in that signature for a policy. Change it to
+`Result<(Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>)>`: the policy is env-derived and unrelated
+to whether a provider ended up configured (an unconfigured deployment still resolves the caller
+singleton), so it is returned unconditionally rather than folded into the same `Option`. Only the
+analytics-facing builders call `.with_policy_from_env()` — `FlightSqlServer`'s `use_default_auth`
+branch and the monolith's `MICROMEGAS_ANALYTICS` builder (`main.rs:227`) — the ingestion builder does
+not, since ingestion has no query path to attach a `ReadPolicy` to.
+
+`FlightSqlServerBuilder` gains `with_read_policy(policy: Arc<dyn ReadPolicy>)`, mirroring
+`with_auth_provider`. `flight_sql_server.rs`'s three auth branches (`:219-248`) each now have an
+explicit policy source:
+- `self.auth_provider` set (the monolith's injected-provider path, `main.rs:290`): the monolith calls
+  `ProviderBuilder::new("MICROMEGAS_ANALYTICS").with_policy_from_env().build()` once and passes both
+  halves — `.with_auth_provider(provider).with_read_policy(policy)`.
+- `use_default_auth`: `FlightSqlServer`'s own `ProviderBuilder::new("").with_policy_from_env().build()`
+  call (`flight_sql_server.rs:~226`) supplies both directly.
+- neither set (`--disable-auth`, and any caller that never calls `with_read_policy`): default to
+  `AudienceReadPolicy` with empty implicit groups — the same policy `.with_policy_from_env()` produces
+  when its env var is unset. **Not** `ReadScope::All` — the absent-`AuthContext`-extension convention
+  in §2 already supplies `All` when no provider is configured, so the policy field must not duplicate
+  that decision; it only ever resolves a scope when an `AuthContext` is present to resolve one from.
 
 ### 6. Closing hole #1 (prepared statements) and hole #3 (web-srv)
 
@@ -335,8 +403,10 @@ side exactly: same pattern, same reasoning, one line.
    "all", the mint admin arm and its asymmetry with the read path, and that `Err` must never be
    softened into a scope by any caller.
 3. `rust/auth/src/oidc.rs` — `groups` claim on `Claims`; populate `AuthContext.groups` at `:536-545`.
-4. `rust/auth/src/default_provider.rs` — `with_policy_from_env()` on `ProviderBuilder`;
-   `MICROMEGAS_IMPLICIT_GROUPS` parsing; startup log.
+4. `rust/auth/src/default_provider.rs` — `implicit_groups_var()` (prefix-with-fallback, mirroring
+   `admin_var()`); `with_policy_from_env()` on `ProviderBuilder`, reading `{prefix}_IMPLICIT_GROUPS`
+   with fallback to `MICROMEGAS_IMPLICIT_GROUPS`; startup log; `build()` returns
+   `(Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>)`.
 
 ### Phase 2 — the analytics-side scope type and signatures
 
@@ -344,14 +414,29 @@ side exactly: same pattern, same reasoning, one line.
    `CallerContext::internal()` / `::maintenance()`. Registered in `lakehouse/mod.rs`.
 6. `rust/analytics/src/lakehouse/query.rs` — replace `is_admin: bool` with
    `caller: CallerContext` on `make_session_context`, `register_functions`,
-   `register_lakehouse_functions`. Registration logic reads `caller.is_admin`; `caller.read_scope` is
-   stored/ignored for now (Stage 2/3 consume it).
-7. Update the four internal call sites: `metadata.rs:182,283` and
-   `perfetto_trace_execution_plan.rs:254` → `CallerContext::internal()`;
-   `export_log_view.rs:118,172` → `CallerContext::maintenance()`.
-   **Leave a `TODO(#1371)` on `perfetto_trace_execution_plan.rs:254`** — it is reachable from user
-   queries, so `internal()` there is a latent bypass that Stage 3 must replace with the caller's
-   inherited scope. Better a named TODO than a silent `All`.
+   `register_lakehouse_functions`, **and on the public `query()` wrapper** (`:259-280`, whose only
+   caller is `rust/analytics/tests/thread_spans_ordering_db_test.rs`), which forwards `caller` into
+   `make_session_context` at `:269` exactly as it forwards `is_admin` today. Registration logic reads
+   `caller.is_admin`; `caller.read_scope` is stored/ignored for now (Stage 2/3 consume it).
+7. Update the remaining call sites — all now require an explicit `CallerContext`:
+   - `CallerContext::maintenance()` (background/materialization paths, `is_admin: true` today, never a
+     user session): `export_log_view.rs:118,172`, `merge.rs:254`, `batch_partition_merger.rs:133`,
+     `sql_batch_view.rs:106,255`.
+   - `CallerContext::internal()` **with a named `TODO(#1371)`** on each — every one of these is
+     reachable from a live user query, so `internal()`'s `ReadScope::All` is a latent bypass that
+     Stage 3 must replace with the caller's inherited scope; a named TODO beats a silent `All`:
+     `perfetto_trace_execution_plan.rs:254`; `parse_block_table_function.rs:82` and
+     `process_spans_table_function.rs:254` (the `parse_block`/`process_spans` UDTFs, registered for
+     every caller — `query.rs:96-176`); and `metadata.rs:182,283` (`find_stream_from_view` /
+     `find_process_with_latest_timing`, called from `jit_update` at `thread_spans_view.rs:343,352`,
+     `net_spans_view.rs:326`, `async_events_view.rs:130` while planning a user's
+     `view_instance(...)` query — not maintenance, despite today's `is_admin: false` reading as
+     "internal").
+   - Four test files pass `is_admin` positionally today and must pass an explicit `CallerContext`
+     instead: `rust/analytics/tests/lakehouse_admin_gate_test.rs:37`,
+     `log_stats_ordering_tests.rs:189`, `sql_partition_spec_sort_order_tests.rs:133`,
+     `thread_spans_ordering_db_test.rs:381`. No assertion or fixture changes — only the literal
+     `true`/`false` argument becomes `CallerContext::maintenance()`/`::internal()`.
 
 ### Phase 3 — threading and hole-closing
 
@@ -367,8 +452,14 @@ side exactly: same pattern, same reasoning, one line.
     `:145-152` as the reason. Closes hole #2 by making the constraint explicit at the definition.
 11. `rust/analytics-web-srv/src/auth/handlers.rs:~509` — insert `AuthContext` into request
     extensions. Closes hole #3.
-12. Wire the policy at service construction: `flight_sql_server.rs` (~`:219-258`) and the monolith,
-    from `ProviderBuilder`. Unset config ⇒ a policy that resolves the caller singleton.
+12. Wire the policy at service construction (§5): add `with_read_policy()` to
+    `FlightSqlServerBuilder`; in `flight_sql_server.rs`'s `use_default_auth` branch (~`:219-248`),
+    call `ProviderBuilder::new("").with_policy_from_env().build()` and set both the provider and the
+    policy; in the monolith (`main.rs:227,290`), do the same on the `MICROMEGAS_ANALYTICS` builder
+    and pass the resulting policy alongside `with_auth_provider`. Neither the injected-provider branch
+    nor `--disable-auth` builds a `ProviderBuilder`, so both default `read_policy` to
+    `AudienceReadPolicy` with empty implicit groups when `with_read_policy` is never called. Unset
+    config ⇒ a policy that resolves the caller singleton.
 
 ## Files to Modify
 
@@ -376,17 +467,25 @@ side exactly: same pattern, same reasoning, one line.
 - `rust/auth/src/policy.rs` — **new**; traits + `Audience*` impls + `ReadableAudiences`
 - `rust/auth/src/lib.rs` — `pub mod policy;`
 - `rust/auth/src/oidc.rs` — `groups` claim (`:194-227`, `:536-545`)
-- `rust/auth/src/default_provider.rs` — `with_policy_from_env()`, `MICROMEGAS_IMPLICIT_GROUPS`
+- `rust/auth/src/default_provider.rs` — `implicit_groups_var()`, `with_policy_from_env()`,
+  `build()`'s new `(provider, policy)` return
 - `rust/auth/src/api_key.rs`, `rust/auth/src/db_api_key.rs` — new `AuthContext` fields
 - `rust/auth/src/user_attribution.rs` — doc-comment constraint only
 - `rust/analytics/src/lakehouse/read_scope.rs` — **new**; `ReadScope`, `CallerContext`
 - `rust/analytics/src/lakehouse/mod.rs` — register the module
-- `rust/analytics/src/lakehouse/query.rs` — `CallerContext` on the three fns
+- `rust/analytics/src/lakehouse/query.rs` — `CallerContext` on `make_session_context`,
+  `register_functions`, `register_lakehouse_functions`, and the public `query()` wrapper
 - `rust/analytics/src/metadata.rs`, `lakehouse/export_log_view.rs`,
-  `lakehouse/perfetto_trace_execution_plan.rs` — call sites
+  `lakehouse/perfetto_trace_execution_plan.rs`, `lakehouse/parse_block_table_function.rs`,
+  `lakehouse/process_spans_table_function.rs`, `lakehouse/merge.rs`,
+  `lakehouse/batch_partition_merger.rs`, `lakehouse/sql_batch_view.rs` — call sites
+- `rust/analytics/tests/lakehouse_admin_gate_test.rs`, `log_stats_ordering_tests.rs`,
+  `sql_partition_spec_sort_order_tests.rs`, `thread_spans_ordering_db_test.rs` — positional
+  `is_admin` argument becomes an explicit `CallerContext`
 - `rust/public/src/servers/flight_sql_service_impl.rs` — resolver, both call sites, struct field
-- `rust/public/src/servers/flight_sql_server.rs` — policy construction
-- `rust/monolith/src/main.rs` — same wiring
+- `rust/public/src/servers/flight_sql_server.rs` — `with_read_policy()`, policy construction on the
+  `use_default_auth` branch, default policy on the other two branches
+- `rust/monolith/src/main.rs` — same wiring on the `MICROMEGAS_ANALYTICS` builder
 - `rust/analytics-web-srv/src/auth/handlers.rs` — `AuthContext` into extensions
 - `rust/auth/tests/` — new `policy_tests.rs`; update `tower_tests.rs`
 
@@ -410,7 +509,7 @@ side exactly: same pattern, same reasoning, one line.
   forces every call site to be visited and to state its scope explicitly — a defaulting parameter
   would let a future call site inherit `All` by omission, which is the exact failure this seam
   exists to prevent.
-- **Parsing only `MICROMEGAS_IMPLICIT_GROUPS` now.** Parsing all four knobs would produce config
+- **Parsing only the implicit-groups knob now.** Parsing all four knobs would produce config
   that appears active and is not. Chosen: parse what Stage 1 consumes; the rest land with their
   consumers.
 - **Groups stored raw in `AuthContext`, prefixed by the policy.** Keeps the AbAC `group:` convention
@@ -452,14 +551,17 @@ What does need writing:
   the groups claim and implicit groups are both empty; returns `{user:} ∪ group:claim ∪
   group:implicit` when both are present; every element carries a `user:`/`group:` prefix; a caller
   with no email and no implicit groups resolves to the **empty** set, not to something permissive.
-- **Unit — service-account grants**: a caller with `read_audiences = [a, b]` and no email/groups resolves
-  exactly `{a, b} ∪ implicit`, with **no** `user:` element; the same caller with an empty grant resolves
-  implicit-only. This is Stage 4b's data flowing through Stage 1's formula, and it is what proves the
-  union needed no `auth_type` branch.
+- **Unit — service-account grants** (`AudienceReadPolicy`): a caller with `read_audiences = [a, b]`
+  and no email/groups resolves exactly `{a, b} ∪ implicit`, with **no** `user:` element; the same
+  caller with an empty grant resolves implicit-only. This is Stage 4b's data flowing through the read
+  formula, and it is what proves the union needed no `auth_type` branch.
 - **Unit — `AudienceMintPolicy`**: defaults to `user:<email>` when `requested` is `None`; permits a
-  `requested` value inside the mintable set; rejects one outside it; **admin arm** — an `is_admin` caller
-  is permitted an arbitrary well-formed audience (including another user's `user:` value) that a
-  non-admin caller is refused; a malformed, unprefixed audience is refused for both.
+  `requested` value inside the mintable set; rejects one outside it; **read grant confers no mint
+  authority** — a caller whose `read_audiences` includes an audience outside `{user:<email>} ∪
+  groups ∪ implicit` is refused that audience by a non-admin mint, proving the two formulas stay
+  separate; **admin arm** — an `is_admin` caller is permitted an arbitrary well-formed audience
+  (including another user's `user:` value) that a non-admin caller is refused; a malformed,
+  unprefixed audience is refused for both.
 - **Fail-closed resolution**: a stub `ReadPolicy` returning `Err` makes the request fail; assert the
   status is `unavailable`/`permission_denied` and that no `CallerContext` is built — specifically that the
   outcome is neither `Audiences([])` (which would read as a legitimate decision) nor `All`. The shipped
@@ -481,8 +583,10 @@ What does need writing:
   that broke it would otherwise fail silently and fail *open*.
 - **`analytics-web-srv`**: a request through `cookie_auth_middleware` leaves `AuthContext` in
   extensions with `groups` populated (hole #3).
-- **No behavior change**: existing `cargo test` suites pass untouched; explicitly assert an
-  unconfigured deployment (`MICROMEGAS_IMPLICIT_GROUPS` unset) resolves a scope and changes no query
+- **No behavior change**: existing `cargo test` suites pass once the four call sites that pass
+  `is_admin` positionally are updated to pass an explicit `CallerContext` (Phase 2, step 7) — no
+  assertion or fixture in those tests changes, only the literal argument; explicitly assert an
+  unconfigured deployment (implicit-groups env var unset) resolves a scope and changes no query
   result.
 - `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`.
 
