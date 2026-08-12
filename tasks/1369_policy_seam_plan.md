@@ -256,11 +256,14 @@ request before the inner service runs, so the extension is always present. Put t
 doc comment on the resolver rather than leaving it implicit.
 
 **Failure convention.** The absent-extension case is the *only* permissive branch in the resolver. A
-`ReadPolicy::resolve` that returns `Err` is a hard failure: `Status::unavailable` if the error is a
-provider/store outage, `Status::permission_denied` otherwise. No `unwrap_or_default()`, no "empty scope on
-error" — an empty `Audiences([])` would read as a legitimate fail-closed decision to Stage 2/3 and hide
-the outage, and an `All` fallback would be a fail-open bypass. The two branches (absent extension ⇒ `All`,
-`Err` ⇒ fail) look adjacent and mean opposite things, so both get a doc comment and a test.
+`ReadPolicy::resolve` that returns `Err` is a hard failure, and the crate already has the discriminator for
+which status to return: `e.downcast_ref::<ProviderUnavailable>()` (`auth/src/types.rs:22-24`), the same
+check `tower.rs:146` uses to pick between `Status::unavailable` and its other error status. Mirror it here
+— `Status::unavailable` when the error downcasts to `ProviderUnavailable` (a store/provider outage),
+`Status::permission_denied` otherwise. No `unwrap_or_default()`, no "empty scope on error" — an empty
+`Audiences([])` would read as a legitimate fail-closed decision to Stage 2/3 and hide the outage, and an
+`All` fallback would be a fail-open bypass. The two branches (absent extension ⇒ `All`, `Err` ⇒ fail) look
+adjacent and mean opposite things, so both get a doc comment and a test.
 
 ### 3. Bundle the caller inputs instead of growing the parameter list
 
@@ -310,12 +313,17 @@ cannot reach.
 
 ### 5. Config factory
 
-Add `AudienceReadPolicy::from_env(prefix: &str)` (`rust/auth/src/policy.rs`) — a plain, synchronous
-constructor, deliberately **not** a method on `ProviderBuilder`: reading the implicit-groups env var
-needs no DB pool, no async, and no `self`, and folding it into `ProviderBuilder::build()` would change
-that method's return type (see below for why that is the wrong trade). Reads the implicit-groups env
-var (comma-separated; the AbAC plan's Config surface table). Unset ⇒ empty implicit groups ⇒ readable
-set is the caller's singleton ⇒ enforcement inactive because nothing consumes it yet.
+Add `AudienceReadPolicy::from_env(prefix: &str) -> Result<Self>` (`rust/auth/src/policy.rs`) — a plain,
+synchronous, fallible constructor, deliberately **not** a method on `ProviderBuilder`: reading the
+implicit-groups env var needs no DB pool, no async, and no `self`, and folding it into
+`ProviderBuilder::build()` would change that method's return type (see below for why that is the wrong
+trade). Reads the implicit-groups env var (comma-separated; the AbAC plan's Config surface table). Unset
+⇒ empty implicit groups ⇒ readable set is the caller's singleton ⇒ enforcement inactive because nothing
+consumes it yet. A malformed entry (the *Encoding* rule below) is `Err`, not an empty/defaulted set —
+unlike `load_admin_users` (`oidc.rs:263-269`), which swallows a parse failure to `vec![]`. Both real call
+sites (`flight_sql_server.rs`'s `use_default_auth` branch and the monolith's `main.rs`) already return
+`Result` from their surrounding function, so surfacing `from_env`'s error with `?` is a startup failure,
+never a silently dropped knob on a security path.
 
 **Env var: prefix-scoped, following the existing `{prefix}_*`-with-fallback convention** —
 `{prefix}_IMPLICIT_GROUPS` (e.g. `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`) falling back to the
@@ -331,11 +339,15 @@ treatment. In practice only the analytics-facing call sites call `AudienceReadPo
 below), but the resolver follows the convention regardless, for the same reason
 `admin_var()`/`api_keys_json()`/`oidc_config_var()` do.
 
-**Encoding: comma-separated, and reject entries containing a comma** (naming the offending entry). Note
-in the doc comment that this deliberately differs from `MICROMEGAS_ADMINS`, which is a JSON array — that
-variable is the precedent for *config-sourced authorization data* and for the `from_env`-when-unset
-pattern, not for an encoding. An operator copying the `MICROMEGAS_ADMINS` shape would otherwise silently
-configure one implicit group literally named `["everyone"]`.
+**Encoding: comma-separated, and reject any entry containing `[`, `]`, or `"`, or that is empty after
+trimming** (naming the offending entry). A plain "reject entries containing a comma" check is vacuous —
+the value is split on commas first, so no resulting entry can ever contain one — and would not catch the
+mistake it exists to catch. Note in the doc comment that this deliberately differs from
+`MICROMEGAS_ADMINS`, which is a JSON array — that variable is the precedent for *config-sourced
+authorization data* and for the `from_env`-when-unset pattern, not for an encoding. An operator copying the
+`MICROMEGAS_ADMINS` shape (`serde_json::from_str::<Vec<String>>`, `oidc.rs:263-269`) would otherwise
+silently configure one implicit group literally named `["everyone"]` (single entry, no comma) or two
+groups `["a"` / `"b"]` (comma-free after the split) — both must be rejected by name.
 
 Only the implicit-groups knob is parsed in Stage 1 — it is the only one the policies themselves
 need. `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` and
@@ -418,9 +430,9 @@ side exactly: same pattern, same reasoning, one line.
 4. `rust/auth/src/default_provider.rs` — `implicit_groups_var(prefix: &str)` free function
    (prefix-with-fallback, mirroring `admin_var()`'s logic but taking `prefix` directly rather than
    `self.prefix`), resolving `{prefix}_IMPLICIT_GROUPS` with fallback to `MICROMEGAS_IMPLICIT_GROUPS`.
-   `rust/auth/src/policy.rs` — `AudienceReadPolicy::from_env(prefix: &str)` built on top of it, plus
-   the startup log. `ProviderBuilder::build()`'s signature is unchanged — the policy is resolved
-   separately, not returned from `build()`.
+   `rust/auth/src/policy.rs` — `AudienceReadPolicy::from_env(prefix: &str) -> Result<Self>` built on top
+   of it, plus the startup log. `ProviderBuilder::build()`'s signature is unchanged — the policy is
+   resolved separately, not returned from `build()`.
 
 ### Phase 2 — the analytics-side scope type and signatures
 
@@ -465,7 +477,8 @@ side exactly: same pattern, same reasoning, one line.
    change, called out in Trade-offs). Add a resolver helper
    (`async fn caller_context(&self, ext: &http::Extensions, md: &MetadataMap) -> Result<CallerContext, Status>`)
    implementing §2's absent-extension convention **and its failure convention** — `Err` maps to
-   `Status::unavailable`/`permission_denied`, never to a scope. Thread `&Extensions` into `execute_query`
+   `Status::unavailable` when it downcasts to `ProviderUnavailable` (mirroring `tower.rs:146`) and to
+   `Status::permission_denied` otherwise, never to a scope. Thread `&Extensions` into `execute_query`
    (two callers: `:800`, `:963`) and use the helper at `:661`. The `read_policy` argument does not
    exist yet when `flight_sql_server.rs`'s call to `FlightSqlServiceImpl::new(...)` (`:219-224`) runs
    today — see step 12, which moves the auth/policy resolution above it.
@@ -477,14 +490,16 @@ side exactly: same pattern, same reasoning, one line.
     extensions. Closes hole #3.
 12. Wire the policy at service construction (§5): add `with_read_policy()` to
     `FlightSqlServerBuilder`; in `flight_sql_server.rs`'s `use_default_auth` branch (~`:227-248`),
-    call `AudienceReadPolicy::from_env("")` alongside the existing `ProviderBuilder::new("")...build()`
+    call `AudienceReadPolicy::from_env("")?` alongside the existing `ProviderBuilder::new("")...build()`
     call and set both the provider and the policy; in the monolith (`main.rs:227,290`), do the same
-    with `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")` alongside its
+    with `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?` alongside its
     `ProviderBuilder::new("MICROMEGAS_ANALYTICS")...build()` call, and pass the resulting policy
-    alongside `with_auth_provider`. Neither the injected-provider branch nor `--disable-auth` resolves
-    a policy from env, so both default `read_policy` to `AudienceReadPolicy` with empty implicit
-    groups when `with_read_policy` is never called. Unset config ⇒ a policy that resolves the caller
-    singleton. This step must land *before* step 8's `FlightSqlServiceImpl::new(...)` call
+    alongside `with_auth_provider`. Both call sites already return `Result` from their enclosing
+    function, so a malformed knob fails startup via `?` rather than being silently dropped. Neither
+    the injected-provider branch nor `--disable-auth` resolves a policy from env, so both default
+    `read_policy` to `AudienceReadPolicy` with empty implicit groups when `with_read_policy` is never
+    called. Unset config ⇒ a policy that resolves the caller singleton. This step must land *before*
+    step 8's `FlightSqlServiceImpl::new(...)` call
     (`flight_sql_server.rs:219`) in execution order, since the constructed service now takes the
     resolved policy as a constructor argument — move the auth/policy resolution block
     (`flight_sql_server.rs:227-249`) above the `FlightServiceServer::new(FlightSqlServiceImpl::new(...))`
@@ -518,7 +533,15 @@ side exactly: same pattern, same reasoning, one line.
   resolution above the `FlightSqlServiceImpl::new(...)` call
 - `rust/monolith/src/main.rs` — same wiring on the `MICROMEGAS_ANALYTICS` builder
 - `rust/analytics-web-srv/src/auth/handlers.rs` — `AuthContext` into extensions
-- `rust/auth/tests/` — new `policy_tests.rs`; update `tower_tests.rs`
+- `rust/auth/tests/` — new `policy_tests.rs`; update `tower_tests.rs`, `test_utils.rs` (`groups`
+  field on `TestClaims` plus a token helper that sets it), and `oidc_tests.rs` (groups-claim unit
+  tests)
+- `rust/public/tests/` — new `read_policy_threading_tests.rs`, exercising `FlightSqlServiceImpl`
+  through the real `AuthService`/tonic stack: fail-closed resolution (`unavailable` /
+  `permission_denied`), the hole-#2 attribution-vs-`AuthContext` assertion, prepared-statement vs.
+  `do_get` scope equality, and the extension-survives-the-stack integration test
+- `rust/analytics-web-srv/tests/auth_integration.rs` — the `cookie_auth_middleware` test asserting
+  `AuthContext` (with `groups`) lands in extensions (hole #3)
 
 **Not** `rust/auth/src/tower.rs` — the extension it already inserts is the mechanism.
 **Not** `rust/analytics/Cargo.toml` — the whole point of §1 is that no auth dependency is added.
@@ -547,7 +570,14 @@ side exactly: same pattern, same reasoning, one line.
   unset — is exactly the "defaulting parameter" shape rejected two bullets above, for the same reason.
   The signature change also forces `flight_sql_server.rs`'s auth/policy resolution to move above the
   `FlightSqlServiceImpl::new(...)` call (step 12), which is a net simplification: the service can no
-  longer be constructed before its auth state is known.
+  longer be constructed before its auth state is known. This is not the only public-API break in this
+  plan: `micromegas-analytics` is itself a published crate (§1), re-exported wholesale as
+  `micromegas::analytics` (`rust/public/src/lib.rs:152-153`, `pub use micromegas_analytics::*;`), and
+  neither its `Cargo.toml` nor the workspace sets `publish = false`. Step 6's `CallerContext` change
+  to `make_session_context` (`query.rs:207`), the public `query()` wrapper (`:259`),
+  `register_functions` (`:187`) and `register_lakehouse_functions` (`:96`) — all four `pub` — breaks
+  any external embedder calling them directly, for the identical "required parameter forces every call
+  site to state its scope" reason argued above for `new()`.
 - **`AudienceReadPolicy::from_env(prefix)` as a free-standing constructor vs. folding the policy into
   `ProviderBuilder::build()`.** Folding it in would change `build()`'s return type, which backs the
   public `provider()`/`provider_with_prefix()` entry points and would ripple into
@@ -607,13 +637,16 @@ What does need writing:
   separate; **admin arm** — an `is_admin` caller is permitted an arbitrary well-formed audience
   (including another user's `user:` value) that a non-admin caller is refused; a malformed,
   unprefixed audience is refused for both.
-- **Fail-closed resolution**: a stub `ReadPolicy` returning `Err` makes the request fail; assert the
-  status is `unavailable`/`permission_denied` and that no `CallerContext` is built — specifically that the
-  outcome is neither `Audiences([])` (which would read as a legitimate decision) nor `All`. The shipped
-  policy cannot fail, so this test is the only thing holding the convention in place.
-- **Unit — groups claim** (`rust/auth/tests/` alongside existing OIDC tests): a token with a flat
-  `groups` array populates `AuthContext.groups`; a token **without** the claim still deserializes and
-  yields `vec![]` — the backward-compatibility guarantee, so it deserves its own test.
+- **Fail-closed resolution**: a stub `ReadPolicy` returning `Err` makes the request fail; cover both arms
+  of the `ProviderUnavailable` discriminator — an `Err(ProviderUnavailable(..))` resolves
+  `Status::unavailable`, any other `Err` resolves `Status::permission_denied` — and assert that no
+  `CallerContext` is built either way, specifically that the outcome is neither `Audiences([])` (which
+  would read as a legitimate decision) nor `All`. The shipped policy cannot fail, so this test is the only
+  thing holding the convention in place.
+- **Unit — groups claim** (`rust/auth/tests/oidc_tests.rs`, minting tokens via a `groups` field added
+  to `test_utils.rs`'s `TestClaims`): a token with a flat `groups` array populates `AuthContext.groups`;
+  a token **without** the claim still deserializes and yields `vec![]` — the backward-compatibility
+  guarantee, so it deserves its own test.
 - **Threading — the assertion that actually matters**: a request whose client-supplied
   `x-user-id`/`x-user-email` name a different principal than the authenticated `AuthContext` resolves
   a `ReadScope` derived from the **`AuthContext`**, not from the claimed attribution. This is hole #2
