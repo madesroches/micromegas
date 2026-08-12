@@ -48,10 +48,13 @@ exactly this path — the plumbing precedent already exists and works.
 
 `grep -rn make_session_context rust --include="*.rs"` finds **13 production call sites** (plus the
 public `query()` wrapper at `query.rs:259-280`, which itself still takes `is_admin: bool` and forwards
-it into `make_session_context` at `:269`) and **4 test files** that pass `is_admin` positionally.
-Neither the wrapper nor the test files were in the original inventory below; both need the same
-`CallerContext` change as the production sites, which is why Testing Strategy's "existing `cargo
-test` suites pass untouched" is softened in Phase 2, step 7.
+it into `make_session_context` at `:269`) and **4 test files** that pass `is_admin` positionally into
+`make_session_context` directly, plus **3 more test files** — `histo_view_test.rs:199`,
+`sql_view_test.rs:421,447` and `thread_spans_ordering_db_test.rs` (already among the 4) — that call
+the public `query()` wrapper with a bare positional `false`. **6 distinct test files** in total need
+the `CallerContext` change. Neither the wrapper nor the test files were in the original inventory
+below; both need the same `CallerContext` change as the production sites, which is why Testing
+Strategy's "existing `cargo test` suites pass untouched" is softened in Phase 2, step 7.
 
 Call sites of `make_session_context`:
 
@@ -307,21 +310,26 @@ cannot reach.
 
 ### 5. Config factory
 
-Add `.with_policy_from_env()` to `ProviderBuilder` (`default_provider.rs`) — the builder its own doc
-comment says exists for this. Reads the implicit-groups env var (comma-separated; the AbAC plan's
-Config surface table). Unset ⇒ empty implicit groups ⇒ readable set is the caller's singleton ⇒
-enforcement inactive because nothing consumes it yet.
+Add `AudienceReadPolicy::from_env(prefix: &str)` (`rust/auth/src/policy.rs`) — a plain, synchronous
+constructor, deliberately **not** a method on `ProviderBuilder`: reading the implicit-groups env var
+needs no DB pool, no async, and no `self`, and folding it into `ProviderBuilder::build()` would change
+that method's return type (see below for why that is the wrong trade). Reads the implicit-groups env
+var (comma-separated; the AbAC plan's Config surface table). Unset ⇒ empty implicit groups ⇒ readable
+set is the caller's singleton ⇒ enforcement inactive because nothing consumes it yet.
 
 **Env var: prefix-scoped, following the existing `{prefix}_*`-with-fallback convention** —
 `{prefix}_IMPLICIT_GROUPS` (e.g. `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`) falling back to the
-unprefixed `MICROMEGAS_IMPLICIT_GROUPS`, resolved by a new `implicit_groups_var()` method mirroring
-`admin_var()` (`default_provider.rs:71-81`). `.with_policy_from_env()` is attached to a `ProviderBuilder`
-that is *already* constructed with a prefix (`MICROMEGAS_INGESTION`/`MICROMEGAS_ANALYTICS` in the
-monolith, `main.rs:204,227`) — a prefix-blind knob on a prefixed builder would be ambiguous the moment
-a second prefixed builder also calls `.with_policy_from_env()`, and `MICROMEGAS_ADMINS` is exactly the
-precedent for *config-sourced authorization data* needing this treatment. In practice only the
-analytics-facing builder calls `.with_policy_from_env()` (see below), but the resolver follows the
-convention regardless, for the same reason `admin_var()`/`api_keys_json()`/`oidc_config_var()` do.
+unprefixed `MICROMEGAS_IMPLICIT_GROUPS`, resolved by a new `implicit_groups_var(prefix: &str)` free
+function in `default_provider.rs` mirroring `admin_var()`'s prefix-with-fallback logic
+(`default_provider.rs:71-81`), but taking `prefix` directly rather than reading `self.prefix`, so
+`AudienceReadPolicy::from_env` can call it without constructing a `ProviderBuilder`. `from_env` is
+called with the same prefix a `ProviderBuilder` for that service would use
+(`MICROMEGAS_INGESTION`/`MICROMEGAS_ANALYTICS` in the monolith, `main.rs:204,227`) — a prefix-blind
+knob would be ambiguous the moment a second prefixed caller also resolves implicit groups, and
+`MICROMEGAS_ADMINS` is exactly the precedent for *config-sourced authorization data* needing this
+treatment. In practice only the analytics-facing call sites call `AudienceReadPolicy::from_env` (see
+below), but the resolver follows the convention regardless, for the same reason
+`admin_var()`/`api_keys_json()`/`oidc_config_var()` do.
 
 **Encoding: comma-separated, and reject entries containing a comma** (naming the offending entry). Note
 in the doc comment that this deliberately differs from `MICROMEGAS_ADMINS`, which is a JSON array — that
@@ -337,27 +345,31 @@ would create config that reads as active and is not.
 Startup log line naming the resolved implicit groups (or "none") — the operator's only feedback that
 the knob took effect, since there is no behavior to observe yet.
 
-**How the policy leaves the builder.** `ProviderBuilder::build(self)` currently returns
-`Result<Option<Arc<dyn AuthProvider>>>` (`default_provider.rs:114`), consuming `self` — there is no
-slot in that signature for a policy. Change it to
-`Result<(Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>)>`: the policy is env-derived and unrelated
-to whether a provider ended up configured (an unconfigured deployment still resolves the caller
-singleton), so it is returned unconditionally rather than folded into the same `Option`. Only the
-analytics-facing builders call `.with_policy_from_env()` — `FlightSqlServer`'s `use_default_auth`
-branch and the monolith's `MICROMEGAS_ANALYTICS` builder (`main.rs:227`) — the ingestion builder does
-not, since ingestion has no query path to attach a `ReadPolicy` to.
+**The policy does not travel through `ProviderBuilder::build()` at all.** `build(self)` keeps its
+current signature, `Result<Option<Arc<dyn AuthProvider>>>` (`default_provider.rs:114`), unchanged.
+Folding the policy into that return type would ripple well past this issue's call sites: `build()`
+backs the crate's two documented public entry points, `provider()` and `provider_with_prefix()`
+(`default_provider.rs:214,227`, the latter calling `.build()` directly at `:228`), which are called
+from `rust/telemetry-ingestion-srv/src/main.rs:59` (matching `Some(p)`/`None`) and from four sites in
+`rust/auth/tests/default_provider_tests.rs` (`:100`, `:138`, `:219`, `:284`) — none of which have
+anything to do with a read policy. A policy-carrying `build()` would force every one of those
+call sites to unpack a tuple it has no use for. Because `AudienceReadPolicy::from_env` needs neither
+`self` nor `.await`, there is no reason to route it through the builder at all: callers that want a
+policy call `AudienceReadPolicy::from_env(prefix)` directly, alongside (not through) whatever
+`ProviderBuilder` call they already make.
 
 `FlightSqlServerBuilder` gains `with_read_policy(policy: Arc<dyn ReadPolicy>)`, mirroring
 `with_auth_provider`. `flight_sql_server.rs`'s three auth branches (`:219-248`) each now have an
 explicit policy source:
 - `self.auth_provider` set (the monolith's injected-provider path, `main.rs:290`): the monolith calls
-  `ProviderBuilder::new("MICROMEGAS_ANALYTICS").with_policy_from_env().build()` once and passes both
-  halves — `.with_auth_provider(provider).with_read_policy(policy)`.
-- `use_default_auth`: `FlightSqlServer`'s own `ProviderBuilder::new("").with_policy_from_env().build()`
-  call (`flight_sql_server.rs:~226`) supplies both directly.
+  `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")` alongside its existing
+  `ProviderBuilder::new("MICROMEGAS_ANALYTICS")...build()` call and passes both halves —
+  `.with_auth_provider(provider).with_read_policy(policy)`.
+- `use_default_auth`: `FlightSqlServer` calls `AudienceReadPolicy::from_env("")` alongside its own
+  `ProviderBuilder::new("").build()` call (`flight_sql_server.rs:~232-235`) and supplies both directly.
 - neither set (`--disable-auth`, and any caller that never calls `with_read_policy`): default to
-  `AudienceReadPolicy` with empty implicit groups — the same policy `.with_policy_from_env()` produces
-  when its env var is unset. **Not** `ReadScope::All` — the absent-`AuthContext`-extension convention
+  `AudienceReadPolicy` with empty implicit groups — the same policy `AudienceReadPolicy::from_env`
+  produces when its env var is unset. **Not** `ReadScope::All` — the absent-`AuthContext`-extension convention
   in §2 already supplies `All` when no provider is configured, so the policy field must not duplicate
   that decision; it only ever resolves a scope when an `AuthContext` is present to resolve one from.
 
@@ -403,10 +415,12 @@ side exactly: same pattern, same reasoning, one line.
    "all", the mint admin arm and its asymmetry with the read path, and that `Err` must never be
    softened into a scope by any caller.
 3. `rust/auth/src/oidc.rs` — `groups` claim on `Claims`; populate `AuthContext.groups` at `:536-545`.
-4. `rust/auth/src/default_provider.rs` — `implicit_groups_var()` (prefix-with-fallback, mirroring
-   `admin_var()`); `with_policy_from_env()` on `ProviderBuilder`, reading `{prefix}_IMPLICIT_GROUPS`
-   with fallback to `MICROMEGAS_IMPLICIT_GROUPS`; startup log; `build()` returns
-   `(Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>)`.
+4. `rust/auth/src/default_provider.rs` — `implicit_groups_var(prefix: &str)` free function
+   (prefix-with-fallback, mirroring `admin_var()`'s logic but taking `prefix` directly rather than
+   `self.prefix`), resolving `{prefix}_IMPLICIT_GROUPS` with fallback to `MICROMEGAS_IMPLICIT_GROUPS`.
+   `rust/auth/src/policy.rs` — `AudienceReadPolicy::from_env(prefix: &str)` built on top of it, plus
+   the startup log. `ProviderBuilder::build()`'s signature is unchanged — the policy is resolved
+   separately, not returned from `build()`.
 
 ### Phase 2 — the analytics-side scope type and signatures
 
@@ -414,10 +428,11 @@ side exactly: same pattern, same reasoning, one line.
    `CallerContext::internal()` / `::maintenance()`. Registered in `lakehouse/mod.rs`.
 6. `rust/analytics/src/lakehouse/query.rs` — replace `is_admin: bool` with
    `caller: CallerContext` on `make_session_context`, `register_functions`,
-   `register_lakehouse_functions`, **and on the public `query()` wrapper** (`:259-280`, whose only
-   caller is `rust/analytics/tests/thread_spans_ordering_db_test.rs`), which forwards `caller` into
-   `make_session_context` at `:269` exactly as it forwards `is_admin` today. Registration logic reads
-   `caller.is_admin`; `caller.read_scope` is stored/ignored for now (Stage 2/3 consume it).
+   `register_lakehouse_functions`, **and on the public `query()` wrapper** (`:259-280`, whose callers
+   are `rust/analytics/tests/thread_spans_ordering_db_test.rs`, `histo_view_test.rs` and
+   `sql_view_test.rs`), which forwards `caller` into `make_session_context` at `:269` exactly as it
+   forwards `is_admin` today. Registration logic reads `caller.is_admin`; `caller.read_scope` is
+   stored/ignored for now (Stage 2/3 consume it).
 7. Update the remaining call sites — all now require an explicit `CallerContext`:
    - `CallerContext::maintenance()` (background/materialization paths, `is_admin: true` today, never a
      user session): `export_log_view.rs:118,172`, `merge.rs:254`, `batch_partition_merger.rs:133`,
@@ -432,20 +447,28 @@ side exactly: same pattern, same reasoning, one line.
      `net_spans_view.rs:326`, `async_events_view.rs:130` while planning a user's
      `view_instance(...)` query — not maintenance, despite today's `is_admin: false` reading as
      "internal").
-   - Four test files pass `is_admin` positionally today and must pass an explicit `CallerContext`
-     instead: `rust/analytics/tests/lakehouse_admin_gate_test.rs:37`,
-     `log_stats_ordering_tests.rs:189`, `sql_partition_spec_sort_order_tests.rs:133`,
-     `thread_spans_ordering_db_test.rs:381`. No assertion or fixture changes — only the literal
-     `true`/`false` argument becomes `CallerContext::maintenance()`/`::internal()`.
+   - Six test files pass `is_admin` positionally today and must pass an explicit `CallerContext`
+     instead: four calling `make_session_context` directly —
+     `rust/analytics/tests/lakehouse_admin_gate_test.rs:37`, `log_stats_ordering_tests.rs:189`,
+     `sql_partition_spec_sort_order_tests.rs:133`, `thread_spans_ordering_db_test.rs:381` — plus three
+     calling the public `query()` wrapper (`thread_spans_ordering_db_test.rs` again, at `:338,349,406,559,572,606,633`,
+     and `histo_view_test.rs:199`, `sql_view_test.rs:421,447`). No assertion or fixture changes — only
+     the literal `true`/`false` argument becomes `CallerContext::maintenance()`/`::internal()`.
 
 ### Phase 3 — threading and hole-closing
 
 8. `rust/public/src/servers/flight_sql_service_impl.rs` — add a `read_policy: Arc<dyn ReadPolicy>`
-   field to `FlightSqlServiceImpl` and a resolver helper
+   field to `FlightSqlServiceImpl` and a matching parameter to its public constructor,
+   `FlightSqlServiceImpl::new(...)` (`:489-503`, the struct's only constructor, re-exported via
+   `pub mod flight_sql_service_impl` at `rust/public/src/servers/mod.rs:42` and reachable as
+   `micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl` — a public-API signature
+   change, called out in Trade-offs). Add a resolver helper
    (`async fn caller_context(&self, ext: &http::Extensions, md: &MetadataMap) -> Result<CallerContext, Status>`)
    implementing §2's absent-extension convention **and its failure convention** — `Err` maps to
    `Status::unavailable`/`permission_denied`, never to a scope. Thread `&Extensions` into `execute_query`
-   (two callers: `:800`, `:963`) and use the helper at `:661`.
+   (two callers: `:800`, `:963`) and use the helper at `:661`. The `read_policy` argument does not
+   exist yet when `flight_sql_server.rs`'s call to `FlightSqlServiceImpl::new(...)` (`:219-224`) runs
+   today — see step 12, which moves the auth/policy resolution above it.
 9. Same helper at `:1149` — closes hole #1.
 10. `rust/auth/src/user_attribution.rs` — no code change; add a doc-comment warning that
     `UserAttribution` is audit-only and must never feed a `ReadScope`, naming the fallback at
@@ -453,13 +476,19 @@ side exactly: same pattern, same reasoning, one line.
 11. `rust/analytics-web-srv/src/auth/handlers.rs:~509` — insert `AuthContext` into request
     extensions. Closes hole #3.
 12. Wire the policy at service construction (§5): add `with_read_policy()` to
-    `FlightSqlServerBuilder`; in `flight_sql_server.rs`'s `use_default_auth` branch (~`:219-248`),
-    call `ProviderBuilder::new("").with_policy_from_env().build()` and set both the provider and the
-    policy; in the monolith (`main.rs:227,290`), do the same on the `MICROMEGAS_ANALYTICS` builder
-    and pass the resulting policy alongside `with_auth_provider`. Neither the injected-provider branch
-    nor `--disable-auth` builds a `ProviderBuilder`, so both default `read_policy` to
-    `AudienceReadPolicy` with empty implicit groups when `with_read_policy` is never called. Unset
-    config ⇒ a policy that resolves the caller singleton.
+    `FlightSqlServerBuilder`; in `flight_sql_server.rs`'s `use_default_auth` branch (~`:227-248`),
+    call `AudienceReadPolicy::from_env("")` alongside the existing `ProviderBuilder::new("")...build()`
+    call and set both the provider and the policy; in the monolith (`main.rs:227,290`), do the same
+    with `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")` alongside its
+    `ProviderBuilder::new("MICROMEGAS_ANALYTICS")...build()` call, and pass the resulting policy
+    alongside `with_auth_provider`. Neither the injected-provider branch nor `--disable-auth` resolves
+    a policy from env, so both default `read_policy` to `AudienceReadPolicy` with empty implicit
+    groups when `with_read_policy` is never called. Unset config ⇒ a policy that resolves the caller
+    singleton. This step must land *before* step 8's `FlightSqlServiceImpl::new(...)` call
+    (`flight_sql_server.rs:219`) in execution order, since the constructed service now takes the
+    resolved policy as a constructor argument — move the auth/policy resolution block
+    (`flight_sql_server.rs:227-249`) above the `FlightServiceServer::new(FlightSqlServiceImpl::new(...))`
+    call at `:219-224`.
 
 ## Files to Modify
 
@@ -467,8 +496,8 @@ side exactly: same pattern, same reasoning, one line.
 - `rust/auth/src/policy.rs` — **new**; traits + `Audience*` impls + `ReadableAudiences`
 - `rust/auth/src/lib.rs` — `pub mod policy;`
 - `rust/auth/src/oidc.rs` — `groups` claim (`:194-227`, `:536-545`)
-- `rust/auth/src/default_provider.rs` — `implicit_groups_var()`, `with_policy_from_env()`,
-  `build()`'s new `(provider, policy)` return
+- `rust/auth/src/default_provider.rs` — `implicit_groups_var(prefix: &str)` free function;
+  `build()`'s signature is unchanged
 - `rust/auth/src/api_key.rs`, `rust/auth/src/db_api_key.rs` — new `AuthContext` fields
 - `rust/auth/src/user_attribution.rs` — doc-comment constraint only
 - `rust/analytics/src/lakehouse/read_scope.rs` — **new**; `ReadScope`, `CallerContext`
@@ -480,11 +509,13 @@ side exactly: same pattern, same reasoning, one line.
   `lakehouse/process_spans_table_function.rs`, `lakehouse/merge.rs`,
   `lakehouse/batch_partition_merger.rs`, `lakehouse/sql_batch_view.rs` — call sites
 - `rust/analytics/tests/lakehouse_admin_gate_test.rs`, `log_stats_ordering_tests.rs`,
-  `sql_partition_spec_sort_order_tests.rs`, `thread_spans_ordering_db_test.rs` — positional
-  `is_admin` argument becomes an explicit `CallerContext`
-- `rust/public/src/servers/flight_sql_service_impl.rs` — resolver, both call sites, struct field
+  `sql_partition_spec_sort_order_tests.rs`, `thread_spans_ordering_db_test.rs`, `histo_view_test.rs`,
+  `sql_view_test.rs` — positional `is_admin` argument becomes an explicit `CallerContext`
+- `rust/public/src/servers/flight_sql_service_impl.rs` — resolver, both call sites, struct field,
+  `new()`'s new `read_policy` parameter (public API)
 - `rust/public/src/servers/flight_sql_server.rs` — `with_read_policy()`, policy construction on the
-  `use_default_auth` branch, default policy on the other two branches
+  `use_default_auth` branch, default policy on the other two branches, and reordering the auth/policy
+  resolution above the `FlightSqlServiceImpl::new(...)` call
 - `rust/monolith/src/main.rs` — same wiring on the `MICROMEGAS_ANALYTICS` builder
 - `rust/analytics-web-srv/src/auth/handlers.rs` — `AuthContext` into extensions
 - `rust/auth/tests/` — new `policy_tests.rs`; update `tower_tests.rs`
@@ -509,6 +540,20 @@ side exactly: same pattern, same reasoning, one line.
   forces every call site to be visited and to state its scope explicitly — a defaulting parameter
   would let a future call site inherit `All` by omission, which is the exact failure this seam
   exists to prevent.
+- **`FlightSqlServiceImpl::new` gains a required parameter vs. threading the policy some other way.**
+  `new()` is public API (re-exported as `micromegas::servers::flight_sql_service_impl`), so this is a
+  breaking change for any external caller who constructs the service directly. Chosen anyway: the
+  struct's only other option — a `with_read_policy()` setter defaulting to a permissive policy when
+  unset — is exactly the "defaulting parameter" shape rejected two bullets above, for the same reason.
+  The signature change also forces `flight_sql_server.rs`'s auth/policy resolution to move above the
+  `FlightSqlServiceImpl::new(...)` call (step 12), which is a net simplification: the service can no
+  longer be constructed before its auth state is known.
+- **`AudienceReadPolicy::from_env(prefix)` as a free-standing constructor vs. folding the policy into
+  `ProviderBuilder::build()`.** Folding it in would change `build()`'s return type, which backs the
+  public `provider()`/`provider_with_prefix()` entry points and would ripple into
+  `telemetry-ingestion-srv/src/main.rs` and four sites in `default_provider_tests.rs` that have no use
+  for a `ReadPolicy`. Chosen: a separate, synchronous constructor — the implicit-groups env var needs
+  no DB pool and no `.await`, so there was never a reason to route it through the async builder.
 - **Parsing only the implicit-groups knob now.** Parsing all four knobs would produce config
   that appears active and is not. Chosen: parse what Stage 1 consumes; the rest land with their
   consumers.
@@ -583,7 +628,7 @@ What does need writing:
   that broke it would otherwise fail silently and fail *open*.
 - **`analytics-web-srv`**: a request through `cookie_auth_middleware` leaves `AuthContext` in
   extensions with `groups` populated (hole #3).
-- **No behavior change**: existing `cargo test` suites pass once the four call sites that pass
+- **No behavior change**: existing `cargo test` suites pass once the six test files that pass
   `is_admin` positionally are updated to pass an explicit `CallerContext` (Phase 2, step 7) — no
   assertion or fixture in those tests changes, only the literal argument; explicitly assert an
   unconfigured deployment (implicit-groups env var unset) resolves a scope and changes no query
