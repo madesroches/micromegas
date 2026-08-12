@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.0 (2026-08-12)
+
+Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence.
+
 ## 0.28.0 (2026-08-02)
 
 Version sync release. Grafana plugin SDK upgraded from 11.6.7 to 12.4.6, replacing the frozen `@grafana/experimental` with `@grafana/plugin-ui` (#848). Security fix: `google.golang.org/grpc` bumped to 1.82.1 (Dependabot alert #381, GHSA-hrxh-6v49-42gf).

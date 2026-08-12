@@ -77,6 +77,16 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.29.0 (August 2026)
+* DB-backed API key store: `ingestion_api_keys`/`analytics_api_keys` tables holding only a SHA-256 hash plus a full mint/revoke audit trail, with mint/list/revoke/import HTTP routes hosted entirely on `analytics-web-srv`
+* FlightSQL query audit hardening: failures now classify into distinct gRPC status codes instead of always `Internal`, and the audit log gains per-query peak memory/spill attribution, client attribution headers, and originating notebook/cell
+* `parse_block(block_id)` now decodes OTLP blocks (logs/metrics/traces), not just `micromegas-transit` ones
+* `thread_spans`/`net_spans` JIT partitions now cut in event-time order instead of registration order, fixing fragmented call trees for out-of-order block arrival
+* Ingestion: block payload object writes are now create-only, closing an OTLP-redelivery regression; `BlockPayload` dependencies/objects encode as CBOR byte strings, cutting stored payload size ~40-45% for new blocks
+* Python client: removed the deprecated `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch; AWS-CLI-style named connection profiles; `--version` on all console scripts
+* Web app: Pie Chart notebook cell; Arrow `Utf8View`/`BinaryView` decode fix; chart axis fixes; tab favicon execution-state indicator
+* `undici`, `cryptography`, `event-listener`, `js-yaml`, `nanoid` security bumps; `analytics-web-app` migrated ESLint 8→10 and Tailwind 3→4
+
 ### v0.28.0 (August 2026)
 * Audience-based Access Control: the five mutating lakehouse SQL functions (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are now gated on the caller's admin status via a new gRPC header, matched against `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`
 * CloudWatch Firehose ingestion: new endpoints let CloudWatch Metric Streams and CloudWatch Logs reach micromegas via Kinesis Data Firehose HTTP Endpoint Delivery with no Lambda or collector in between, partitioned per CloudWatch namespace
@@ -115,46 +125,6 @@ Building from source or contributing code? See the [Build Guide](https://microme
 * `format_value(value, unit)` template function for adaptive unit formatting in detail templates
 * Batched expiry pipeline: bounded memory and transaction sizes for partition retirement, block deletion, and temporary-file cleanup; `DELETE…RETURNING` for atomic operation
 * DataFusion 53.1; react-router 6.30.4 (CVE), esbuild 0.28.1, dompurify 3.4.11, undici ≥6.27.0 security updates
-
-### v0.25.0 (May 2026)
-* Native OTLP/HTTP ingestion for logs, metrics, and traces with `otel_spans` JIT view
-* Map notebook cell: GLB models, native UE coordinates, primitive overlays with column-bound visual channels, admin Maps management UI
-* `net_spans` JIT view with bandwidth flame chart for connection/object/property/RPC scopes
-* Color and math UDFs: `rgba`, `lerp_color`, `color_scale`, `bin_center`, `lerp`, `unlerp`
-* HTTP gateway `/gateway/health` liveness endpoint
-* Unreal net trace instrumentation
-* React 19 / R3F 9 / drei 10 / RTL 16 upgrade; Yarn 1 → Yarn 4 (Berry) migration
-* Dev-worker ephemeral runner mode with persistent build caches
-* 20+ Dependabot security updates across Rust, Python, and JS dependencies
-
-### v0.24.0 (April 2026)
-* `parse_block` table UDF for generic block inspection with transit-to-JSONB conversion
-* Unified diff output in `micromegas-screens plan`/`apply`
-* Flamechart WASD zoom fix for Chrome key-release edge cases
-* Sub-microsecond flamechart span durations in nanoseconds
-* Notebook variable URL desync and datasource revert fixes
-* DataFusion 52.5, `rand` 0.9 migration, pyarrow ^23
-* 20+ Dependabot security updates across Rust, Python, and JS dependencies
-
-### v0.23.0 (March 2026)
-* JSONB array UDFs: `jsonb_array_elements` (UDTF) and `jsonb_array_length` (scalar)
-* CSV table provider with auto-discovery via `MICROMEGAS_STATIC_TABLES_URL`
-* `FlightSqlServer` builder and `LakehouseContext::from_env()` convenience APIs
-* Screens-as-code CLI (`micromegas-screens`) with Terraform-inspired workflow
-* Object store env var credential support for S3/GCS/Azure
-* Bearer token auth for analytics-web-srv
-* Notebook cell selection macros in table column overrides
-* DataFusion 52.4.0
-
-### v0.22.0 (March 2026)
-* Flame graph cell type with Three.js WebGL rendering
-* Async span depth fixes with `SpanContextFuture`
-* Default system properties (exe, hostname, CPU, memory, OS) on process metadata
-* JSONPath UDFs (`jsonb_path_query`, `jsonb_path_query_first`) for JSONB columns
-* Interactive row selection in table cells with `$cell.selected.column` macros
-* `process_spans` table function for cross-thread and async span analysis
-* Database migration: unique indexes on processes, streams, and blocks
-* DataFusion 52.3
 
 For the full history, see [CHANGELOG.md](./CHANGELOG.md).
 
