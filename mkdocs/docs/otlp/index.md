@@ -230,13 +230,10 @@ Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_b
     no per-event identity in the projected fields and a constant/null message body — can
     produce byte-identical records for genuinely distinct events, which then collide on
     `block_id` and get discarded as duplicates: the producer gets no error and its event
-    is simply dropped, indistinguishable from a harmless retry of the same event. As
-    described above, this is visible to operators via the `block_object_duplicate` metric
-    and a server-side warning log — it isn't silent from that side. It was silent when
-    [issue #1462](https://github.com/madesroches/micromegas/issues/1462) hit, though: at
-    the time, the dedup-drop path only logged at `debug!` with no metric, so the loss went
-    unnoticed until traced back after the fact — 72 distinct EventBridge events lost in a
-    single measured 2-day window (the loss itself ran undetected for about two months).
+    is simply dropped, indistinguishable from a harmless retry of the same event. Such a
+    drop is visible server-side, via the `block_object_duplicate` metric and a warning
+    log as described above, but the producer has no way to detect it.
+
     Declaring [`aws.event.id`](#event-identity-awseventid-awseventtime) is the fix: it
     makes every record's bytes depend on the source event's own identity, so distinct
     events never collide while genuine retries still dedup exactly. Ingestion identity is
