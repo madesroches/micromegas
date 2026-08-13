@@ -13,13 +13,13 @@ span/metadata functions Prong A structurally cannot reach) is Stage 3 (#1371), a
 comes from the *absence* of an `AuthContext` extension on the request — `caller_context()` resolves
 `ReadScope::All` whenever no provider is configured, regardless of what
 `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are set to
-(`flight_sql_service_impl.rs:539-552`). In that case `OwnershipRewrite` no-ops and behavior is
+(`flight_sql_service_impl.rs:538-550`). In that case `OwnershipRewrite` no-ops and behavior is
 unchanged. **But any deployment that already runs with auth enabled — the normal production
 posture, not a hypothetical — is a live deployment this stage regresses.** Stage 1 already resolves
 `ReadScope::Audiences([...])` for every request carrying an `AuthContext`
-(`flight_sql_service_impl.rs:539-552`), and the monolith installs a read policy whenever
-`roles.flightsql && !args.disable_auth` (`monolith/src/main.rs:251`), defaulting to
-`AudienceReadPolicy::from_env("")` (`flight_sql_server.rs:271`). Since no data carries
+(`flight_sql_service_impl.rs:538-550`), and the monolith installs a read policy whenever
+`roles.flightsql && !args.disable_auth` (`monolith/src/main.rs:250-251`), defaulting to
+`AudienceReadPolicy::from_env("")` (`flight_sql_server.rs:268`). Since no data carries
 `micromegas.audience` until Stage 5 (#1373), such a deployment goes from full visibility today
 (nothing yet filters `ReadScope::Audiences` sessions) to **zero visible rows** the instant
 `OwnershipRewrite` is registered — unless the escape hatch below is configured as a **pair** before
@@ -82,11 +82,11 @@ plan with `transform_up_with_subqueries`, matches `LogicalPlan::TableScan` whose
 `view.make_time_filter(...)`. Three things `OwnershipRewrite` must do differently:
 
 1. **Registered unconditionally.** `TableScanRewrite` is added only when `query_range.is_some()`
-   (`query.rs:229`, `if let Some(range) = &query_range`) — a query with no time range gets no
+   (`query.rs:228-230`, `if let Some(range) = &query_range`) — a query with no time range gets no
    time filter, which is correct (nothing to filter on). `OwnershipRewrite` has no such escape: a
    caller with a restricted `ReadScope` must never see unfiltered rows just because their query
    carries no explicit time range. The issue text is explicit about this asymmetry, and Stage 1's
-   plan already flagged it as "the same shape of bug" (`1369_policy_seam_plan.md` §6, prepared
+   plan already flagged it as "the same shape of bug" (`completed/1369_policy_seam_plan.md` §6, prepared
    statements).
 2. **Not every `MaterializedView` gets the same predicate shape.** `TableScanRewrite`'s time filter
    is uniform across every view (`make_time_filter` is a `View` trait method every view implements
@@ -117,14 +117,14 @@ tables as a side effect of this registration shape, which is otherwise undocumen
 
 | View set | Schema has `process_id` column? | Reachable as | Scoping |
 |---|---|---|---|
-| `processes` | n/a — audience is a *property*, not a column | named global table only — **not** reachable via `view_instance` (`processes` is registered via `add_global_view`, not `add_view_set`; see the corrected Open Questions/§3 note below) | the audience source itself |
+| `processes` | yes (`Utf8`) — and the *audience* is a property, not a column | named global table only — **not** reachable via `view_instance` (`processes` is registered as a global view, never via `add_view_set`; see the corrected Open Questions/§3 note below) | the audience source itself |
 | `streams` | yes (`streams_view.rs:28`) | named global table only — **not** reachable via `view_instance`, same reason as `processes` | global (all streams) |
 | `blocks` | yes (`blocks_view.rs:241`) | named global table only — **not** reachable via `view_instance`, same reason as `processes` | global (all blocks) |
 | `log_entries` | yes (`log_entries_table.rs:27`) | named global table (`view_instance_id="global"`), `view_instance('log_entries', <process_id>)` | global **and** per-process |
 | `measures` | yes (`metrics_table.rs:21`) | same as `log_entries` | global **and** per-process |
 | `net_spans` | yes (`net_spans_table.rs:44`) | `view_instance('net_spans', <process_id>)` only — **rejects `"global"`** (`net_spans_view.rs:82-83`) | per-process only |
-| `otel_spans` | yes (`otel/spans_table.rs:12`) | `view_instance('otel_spans', <process_id>)` only, no global instance (`view_factory.rs:337` comment) | per-process only |
-| `images` | yes (`images_table.rs:16-20`) | `view_instance('images', <process_id>)` only — **rejects `"global"`** (`images_view.rs:73-75`), registered via `add_view_set` (`view_factory.rs:290-303`) | per-process only |
+| `otel_spans` | yes (`otel/spans_table.rs:12`) | `view_instance('otel_spans', <process_id>)` only, no global instance (`view_factory.rs:336` comment) | per-process only |
+| `images` | yes (`images_table.rs:16-20`) | `view_instance('images', <process_id>)` only — **rejects `"global"`** (`images_view.rs:76-78`), registered via `add_view_set` (`view_factory.rs:290-303`) | per-process only |
 | `log_stats` | yes (inherited from `log_entries`'s `process_id`, `log_stats_view.rs:35`) | named global table only, registered via `add_global_view` (`view_factory.rs:316`), not `add_view_set` | global (aggregated across processes) |
 | `async_events` | **no** (`async_events_table.rs` — "optimized for high-frequency data, excludes process info that can be joined", `:41-43`) | `view_instance('async_events', <process_id>)` only — **rejects `"global"`** (`async_events_view.rs:81-82`) | per-process only, but **no column to filter on** |
 | `thread_spans` | **no** (`span_table.rs:50-80`, shared with `process_spans`) | `view_instance('thread_spans', <stream_id>)` only — `ThreadSpansView::new` rejects anything that doesn't parse as a UUID, and per the AbAC plan §4 this is "the one view set with no process_id-scoped alternative" | per-**stream** only, no global, no `process_id` **or** `stream_id` column |
@@ -145,7 +145,8 @@ must not fall through to "skip this view"). See Design §3–4 for the two extra
 `MaterializedView::schema()` (`materialized_view.rs:53-55`) returns `self.view.get_file_schema()` —
 the real Arrow schema, checkable for a `process_id` field without hardcoding per-view-set knowledge
 for *that* decision. `MaterializedView::get_view()` (`:46-48`) exposes the wrapped `Arc<dyn View>`,
-whose `get_view_set_name()` / `get_view_instance_id()` (`view.rs:49,52`) give the branch keys the
+whose `get_view_set_name()` / `get_view_instance_id()` (`view.rs:52,55`, both returning
+`Arc<String>`) give the branch keys the
 AbAC plan's §4/§5b already call for ("Branch per view set via `MaterializedView::get_view_set_name()`").
 
 ## Design
@@ -171,7 +172,7 @@ pub struct OwnershipRewrite {
 `processes_source` / `streams_source` are needed because building the semi-join/`EXISTS` subqueries
 in §3–4 means constructing **fresh** `TableScan` nodes for `processes` (always) and `streams` (only
 for the `thread_spans` two-hop case) from inside `analyze()`, which has no `SessionContext` to look
-tables up in (`AnalyzerRule::analyze(&self, plan, options: &ConfigOptions)` — no session, no async).
+tables up in (`AnalyzerRule::analyze(&self, plan, config: &ConfigOptions)` — no session, no async).
 The rule must therefore be handed the table sources it needs at **construction** time, not resolve
 them lazily.
 
@@ -180,10 +181,12 @@ them lazily.
 Do **not** resolve the sources via `ctx.table_provider("processes"/"streams")`. Two independent
 problems with that: (a) `SessionContext::table_provider` requires the name to already be registered,
 which — per the corrected Current State landscape above — is not reachable through every in-tree
-`ViewFactory` (`SqlBatchView::new` builds its own internal `make_session_context` call with
-`ViewFactory::new(vec![blocks_view])`, `sql_batch_view.rs:107-116`; `View::merge_partitions`'s default
+`ViewFactory` (`SqlBatchView::new` makes an internal `make_session_context` call,
+`sql_batch_view.rs:107-116`, with whatever `ViewFactory` its caller passes —
+`ViewFactory::new(vec![blocks_view])` for `processes`/`streams`, `view_factory.rs:278,286`, though
+`log_stats` gets the full factory, `:315`; `View::merge_partitions`'s default
 uses `ViewFactory::new(vec![])`, `view.rs:107`/`merge.rs:255`; and the same shape appears in
-`analytics/tests/lakehouse_admin_gate_test.rs:42`, `sql_partition_spec_sort_order_tests.rs:138`, and
+`analytics/tests/lakehouse_admin_gate_test.rs:46`, `sql_partition_spec_sort_order_tests.rs:138`, and
 `log_stats_ordering_tests.rs:190`) — so an unconditional lookup would error on server startup itself;
 and (b) even where `"processes"` **is** registered, it names the `SqlBatchView` **merged** query
 result (`__processes__partitions` is the raw scan — see Current State), so every injected
@@ -213,9 +216,11 @@ if caller.read_scope != ReadScope::All {
     // because `TableScanRewrite::analyze` walks the whole plan with `transform_up_with_subqueries`
     // and wraps *any* `TableScan<MaterializedView>` it finds — including the
     // `__processes__partitions`/`__streams__partitions` scans injected below — in a `Filter` built
-    // from `view.make_time_filter(begin, end)`. Analyzer rules run strictly in registration order
-    // (`Analyzer::execute_and_check`), so if `OwnershipRewrite` ran first, `TableScanRewrite` would
-    // still find and time-bound its injected subqueries on its next pass. This is also, incidentally,
+    // from `view.make_time_filter(begin, end)`. Analyzer rules each run exactly once, in
+    // registration order (`Analyzer::execute_and_check`), so if `OwnershipRewrite` were registered
+    // first, `TableScanRewrite` — running once, after it — would descend into the injected
+    // subqueries (`transform_up_with_subqueries` maps subqueries too) and time-bound them. This is
+    // also, incidentally,
     // the raw per-partition scan (equivalent to `__processes__partitions`/`__streams__partitions`),
     // not the merged query.
     let processes_source: Arc<dyn TableSource> = Arc::new(DefaultTableSource::new(Arc::new(
@@ -246,7 +251,7 @@ if caller.read_scope != ReadScope::All {
 }
 ```
 
-`MaterializedView::new` is synchronous and does no I/O (`materialized_view.rs:29-41`), so this needs
+`MaterializedView::new` is synchronous and does no I/O (`materialized_view.rs:30-44`), so this needs
 no `.await` and adds nothing to the "no I/O in `analyze()`" property §1 already relies on. This also
 resolves the missing-table case cleanly: it is only attempted when `caller.read_scope != ReadScope::All`,
 so `ReadScope::All` callers (server startup, `SqlBatchView`'s and `View::merge_partitions`'s internal
@@ -258,7 +263,8 @@ a restricted `ReadScope` still fails fast via the `Context`-wrapped error above,
 **This is a hard startup/request failure for any non-`All`-scope caller whose `ViewFactory` lacks
 `processes`/`streams`, and it is not merely hypothetical:** `start_server` in
 `rust/public/tests/read_policy_threading_tests.rs:79` builds `Arc::new(ViewFactory::new(vec![]))`,
-and every test in that file configures an `ApiKeyAuthProvider`, so `caller_context()` resolves
+and every test in that file configures an auth provider (`ApiKeyAuthProvider` in all but one; the
+groups test uses the file's local `GroupsAuthProvider` stub), so `caller_context()` resolves
 `ReadScope::Audiences(..)`. Without a fix, `make_session_context` now fails before any SQL is
 planned for that file's tests — see Implementation Steps step 9 for the required fix.
 
@@ -273,8 +279,9 @@ rather than leaving implicit:
    (`partition_cache.rs:346-400`) — every `processes` (and, for `thread_spans`, every `streams`)
    partition ever written. The injected `property_get`-based predicate cannot prune this:
    `supports_filters_pushdown` reports `Inexact` for it. And because §3–6 inject an independent
-   subquery at every `TableScan` site the traversal visits, and DataFusion does not
-   common-subexpression-eliminate identical injected subqueries across a plan, a single query joining
+   subquery at every `TableScan` site the traversal visits, and DataFusion has no
+   rule that de-duplicates identical injected subqueries (each decorrelation gets its own
+   `__correlated_sq_N` alias), a single query joining
    `log_entries` and `measures` scans `processes`'s entire history twice, not once.
    **Decided:** compute the `processes` audience filter (§3) and the resolved-per-process
    `per_process_audience`/`resolved_predicate` subplan the §4 semi-join is built from (see below) once
@@ -286,9 +293,10 @@ rather than leaving implicit:
    `view_instance_id` literal and cannot be shared. This mitigates the cost; it does not eliminate the
    unbounded, uncached scan itself.
 2. *Materialization lag vs. Prong B.* `processes`/`streams` are `SqlBatchView`s materialized only by
-   the maintenance daemon's `materialize_all_views` pass (`public/src/servers/maintenance.rs:106-210`;
-   `SqlBatchView::jit_update` is a no-op, `sql_batch_view.rs:307-313`) — unlike the JIT per-process
-   views, nothing materializes them on demand. A restricted caller's audience is therefore resolved
+   the maintenance daemon's `materialize_all_views` pass (`public/src/servers/maintenance.rs:44-104`;
+   `SqlBatchView::jit_update` is a no-op, `sql_batch_view.rs:306-312`) — unlike the JIT per-process
+   views, nothing in the query path materializes them on demand (the admin-gated
+   `materialize_partitions`/`regenerate_partitions` UDTFs can, but only as explicit operator action). A restricted caller's audience is therefore resolved
    against however stale the daemon's last pass left `processes`, and against nothing at all if the
    daemon is down or not deployed — including for the caller's own just-ingested data. This diverges
    from Prong B, which resolves the same `process_id → audience` mapping from Postgres directly via
@@ -366,7 +374,7 @@ let audience_col = cast(
 // shared verbatim here rather than duplicated. `MAX` over the nullable, pre-coalesce `audience_col`
 // ignores NULLs, so a stamped row always wins over an unstamped one within the same process.
 let resolved_audience = match &self.unstamped_audience {
-    Some(u) => coalesce_udf.call(vec![col("resolved_audience"), lit(ScalarValue::Utf8(Some(u.clone())))]),
+    Some(u) => coalesce(vec![col("resolved_audience"), lit(ScalarValue::Utf8(Some(u.clone())))]),
     None => col("resolved_audience"),
 };
 let resolved_predicate = if audiences.is_empty() {
@@ -391,9 +399,10 @@ let predicate = in_subquery(col("process_id"), Arc::new(subquery));
 (`datafusion-expr::udf::ScalarUDF::call(&self, args: Vec<Expr>) -> Expr`) builds the `Expr` directly;
 no session lookup needed since `OwnershipRewrite` can construct its own `PropertyGet` instance the
 same way `register_extension_udfs` does (`datafusion-extensions/src/lib.rs:78`) rather than fetching
-the one already registered on `ctx`. `coalesce_udf` is `datafusion::functions::expr_fn::coalesce`
-(the built-in `coalesce` scalar function, `datafusion-functions::core::coalesce`). `property_get`
-returns `Dictionary(Int32, Utf8)` (`property_get.rs:87-92`), so every expression built here is
+the one already registered on `ctx`. `coalesce` is `datafusion::functions::expr_fn::coalesce(args:
+Vec<Expr>) -> Expr` — a plain function, not a `ScalarUDF` with a `.call` method (the UDF object, if
+one is ever needed, is `datafusion::functions::core::coalesce()`). `property_get`
+returns `Dictionary(Int32, Utf8)` (`properties/property_get.rs:87-92`), so every expression built here is
 explicitly cast/typed to `Utf8` rather than left for implicit coercion: `SessionState::add_analyzer_rule`
 appends to `analyzer.rules` (`datafusion-54.1.0/src/execution/session_state.rs:375`), and
 `Analyzer::new()`'s built-ins are `[ResolveGroupingFunction, TypeCoercion]`
@@ -464,14 +473,19 @@ let predicate = in_subquery(cast(col("process_id"), DataType::Utf8), Arc::new(su
 
 The outer `process_id` is cast to `Utf8` for the same analyzer-ordering reason as §3: it is
 `Dictionary(Int32, Utf8)` in `log_entries` (`log_entries_table.rs:27`), `measures`
-(`metrics_table.rs:21`), `net_spans` (`net_spans_table.rs:44`) and `otel_spans`
-(`otel/spans_table.rs:12`), while `processes.process_id` (the subquery's projected column) is `Utf8` —
-an uncorrelated `IN` subquery never reaches a physical subquery operator: DataFusion's
+(`metrics_table.rs:21`), `net_spans` (`net_spans_table.rs:44`), `otel_spans`
+(`otel/spans_table.rs:12`), `images`, and `log_stats` — plain `Utf8` only in `streams`/`blocks`,
+where the cast is a no-op — while `processes.process_id` (the subquery's projected column) is
+`Utf8`. An uncorrelated `IN` subquery never reaches a physical subquery operator: DataFusion's
 `DecorrelatePredicateSubquery` optimizer rule rewrites it into a `LeftSemi` join before physical
 planning (`datafusion-optimizer-54.1.0/src/decorrelate_predicate_subquery.rs:60-127`, `build_join` at
-`:357`), so it is the join keys' data types that must agree, not some subquery-specific type check —
-and since this rule runs after `TypeCoercion` (§3), that agreement is never enforced automatically, so
-the cast must be explicit here too. The scan is named
+`:357`), and nothing coerces those join keys afterwards: the only join-key coercion in DataFusion is
+the analyzer's `TypeCoercion::coerce_join`, which has already run (§3). No physical-planning check
+catches the mismatch either — the hash-join path happens to tolerate `Dictionary(Int32, Utf8)` vs
+`Utf8` keys (arrow's `cmp::eq` strips dictionary layers before comparing), but the sort-merge path
+(`prefer_hash_join = false`) fails at execution time with arrow's "Can't compare arrays of different
+types" comparator error — so the cast is explicit here, keeping the plan correct on every join path
+rather than only the one the planner happens to pick. The scan is named
 `"__processes__partitions"` (the raw per-partition `MaterializedView`, not the `SqlBatchView`-merged
 `processes` view — see Current State) purely for readability; `self.processes_source` is passed
 directly, so no session-side name lookup happens. The `per_process_audience`/`resolved_predicate`
@@ -498,14 +512,15 @@ the `MaterializedView`'s own schema decides the branch, not how it was reached.
 explicitly rejected by the view constructor) but its physical schema has no `process_id` column to
 project or join on. The **view_instance_id** for these instances *is* the process_id string
 (`AsyncEventsView::new`, `async_events_view.rs:80-89`, parses it as a `Uuid`), and it is a **literal**
-known at `analyze()` time via `mat_view.get_view().get_view_instance_id()` — the same accessor
+known at `analyze()` time via `mat_view.get_view().get_view_instance_id()` (an `Arc<String>` —
+`lit()` accepts `&str`/`String` but not `Arc<String>`, hence the `.as_str()` below) — the same accessor
 `TableScanRewrite` doesn't need but `OwnershipRewrite` does for this branch. Inject a
 whole-scan-gating `Filter` built from an `EXISTS` subquery instead of a semi-join, since there is no
 row-level column to compare against:
 
 ```rust
 let subquery = LogicalPlanBuilder::from(per_process_audience.clone()) // §4's shared aggregate, reused
-    .filter(col("process_id").eq(lit(view_instance_id)).and(resolved_predicate.clone()))?
+    .filter(col("process_id").eq(lit(view_instance_id.as_str())).and(resolved_predicate.clone()))?
     .build()?;
 let predicate = exists(Arc::new(subquery)); // datafusion_expr::expr_fn::exists
 ```
@@ -521,16 +536,28 @@ wrapped around the whole `TableScan` exactly like `TableScanRewrite`'s time filt
 Arc::new(plan.clone()))`) — every row of the scan is either entirely visible or entirely hidden,
 which is correct since every row of this instance belongs to the same one process.
 
+Uncorrelated `EXISTS` is a supported shape end-to-end, not an untested corner:
+`DecorrelatePredicateSubquery` has no requires-correlation check — with no correlated predicates it
+emits a `LeftSemi` join with filter `true` (`decorrelate_predicate_subquery.rs:405`; DataFusion's own
+`exists_subquery_with_no_correlated_cols` snapshot test asserts exactly this shape), which
+physical-plans as a `NestedLoopJoinExec`. The injected `exists(...)` sits at the top level of the
+`Filter`'s conjunction, so the rule's `Top` path applies (nested under `OR` it would take the
+mark-join path, which also works). The analyzer's post-rule invariant check
+(`check_invariants(InvariantLevel::Executable)`, run after all rules including this one) permits
+uncorrelated `IN`/`EXISTS` inside a `Filter`; its one relevant hard constraint — an `InSubquery`
+must project exactly one column — is met by §3/§4's single-column projections and does not apply to
+`Exists`, so §5/§6's two-column subqueries are fine as long as they stay `EXISTS`-shaped.
+
 ### 6. Stream-scoped, no key column at all — two-hop literal check
 
 `thread_spans` is scoped by `stream_id`, not `process_id`, and its schema (shared with
 `process_spans`'s output, `span_table.rs`) has neither column. The `view_instance_id` **is** the
 stream_id literal (`ThreadSpansView::new`, `thread_spans_view.rs:91`). Resolve it through `streams`
-(which has both `stream_id` and `process_id` — `streams_view.rs:28`) into `processes`:
+(which has both `stream_id` and `process_id` — `streams_view.rs:27-28`) into `processes`:
 
 ```rust
 let subquery = LogicalPlanBuilder::scan("__streams__partitions", self.streams_source.clone(), None)?
-    .filter(col("stream_id").eq(lit(view_instance_id)))?
+    .filter(col("stream_id").eq(lit(view_instance_id.as_str())))?
     .join(
         LogicalPlanBuilder::from(per_process_audience.clone()) // §4's shared aggregate, reused
             .filter(resolved_predicate.clone())?
@@ -568,10 +595,10 @@ plan-time literal either way, no runtime cache required.
 
 ### 7. Public view sets — skip the branch entirely
 
-Before any of §3–6 run, check `self.public_view_sets.iter().any(|s| s ==
-mat_view.get_view().get_view_set_name())` (`Vec<String>::contains` takes `&String`, so comparing
-directly against the `&str` returned by `get_view_set_name()` would not compile — the `.iter().any(|s|
-s == name)` form compares `&String` to `&str` via `String`'s `PartialEq<str>` impl instead);
+Before any of §3–6 run, check `self.public_view_sets.contains(&name)`, where `name` is the
+`Arc<String>` returned by `mat_view.get_view().get_view_set_name()` (`view.rs:52`) — `Arc<String>`
+deref-coerces to `&String`, so plain `Vec<String>::contains` works (`.iter().any(|s| s.as_str() ==
+name.as_str())` is the spelled-out equivalent);
 if true, `Transformed::no(plan)` — no predicate at all, for any view kind. This is the one part of §4
 the issue text names directly ("Branch per view set via `MaterializedView::get_view_set_name()`").
 Default empty (§8), so inert unless configured — matches the AbAC plan §5b's "off by default,
@@ -598,7 +625,7 @@ config, resolved once at server startup — the same lifetime as `session_config
 
 **(a) A new positional parameter** (`ownership_config: Arc<OwnershipRewriteConfig>`), mirroring how
 Stage 1 added `caller: CallerContext` as `make_session_context`'s 6th parameter. Costs touching every
-one of the ~13 call sites Stage 1's plan inventoried (`1369_policy_seam_plan.md`, Current State
+one of the ~13 call sites Stage 1's plan inventoried (`completed/1369_policy_seam_plan.md`, Current State
 table) a second time — all but two of them (the `do_get`/prepared-statement paths) are
 internal/maintenance sites that would pass `Arc::new(OwnershipRewriteConfig::default())` verbatim,
 since the config is inert wherever `read_scope` is already `All`.
@@ -624,7 +651,7 @@ because it already goes through `::internal()`/`::maintenance()`.
 The trade-off against (b): `OwnershipRewriteConfig` is not really a property of *the caller* the way
 `read_scope`/`is_admin` are — it is deployment config that happens to ride along. Accepted for the
 same reason Stage 1 accepted bundling `is_admin` and `read_scope` into one struct in the first place
-(`1369_policy_seam_plan.md` §3): the two are visited together at every real call site anyway, and a
+(`completed/1369_policy_seam_plan.md` §3): the two are visited together at every real call site anyway, and a
 struct with a slightly-impure field beats re-touching a parameter list that Stage 1 already grew
 once.
 
@@ -698,8 +725,8 @@ existing `read_policy` resolution); the monolith calls
    `caller.read_scope` + `caller.ownership_config`, and `ctx.add_analyzer_rule(...)`. **Must be added
    after the `query_range.is_some()` block that registers `TableScanRewrite` (`query.rs:228-230`)** —
    not merely placed anywhere independent of it — because `TableScanRewrite::analyze` traverses
-   subqueries and would time-bound the audience lookup `OwnershipRewrite` injects if it ran on a later
-   pass (Design §2). The two rules still gate on different inputs (time range vs. read scope); only
+   subqueries and would time-bound the audience lookup `OwnershipRewrite` injects if it were the
+   later rule in the once-each, registration-ordered analyzer sequence (Design §2). The two rules still gate on different inputs (time range vs. read scope); only
    their relative registration order is constrained.
 
 ### Phase 3 — wiring config through the two real servers
@@ -726,7 +753,8 @@ existing `read_policy` resolution); the monolith calls
    `analytics/tests/lakehouse_admin_gate_test.rs:38` (already covered by step 2).
    Additionally, `start_server` in `rust/public/tests/read_policy_threading_tests.rs:79` builds its
    `ViewFactory` as `Arc::new(ViewFactory::new(vec![]))`, and every test in that file configures an
-   `ApiKeyAuthProvider` — so `caller_context()` resolves a non-`All` `ReadScope::Audiences(..)` for
+   auth provider (`ApiKeyAuthProvider`, or the file's `GroupsAuthProvider` stub for the groups
+   test) — so `caller_context()` resolves a non-`All` `ReadScope::Audiences(..)` for
    all of them. Per Design §2, `make_session_context` now hard-fails on `get_global_view("processes"
    /"streams")` for such a scope, which breaks
    `read_scope_resolves_from_auth_context_not_claimed_attribution` (:290),
@@ -741,7 +769,7 @@ existing `read_policy` resolution); the monolith calls
    `SqlBatchView` at all (step 11 makes this same point about that file) — so these tests' restricted
    scopes resolve successfully; this is a required fixture change, not an optional cleanup. Both
    precedents are `async` and only *plan* the `SqlBatchView`'s transform query (`SqlBatchView::new`
-   calls `ctx.sql(...)` to plan, never to execute, `sql_batch_view.rs:107-125`), so a `connect_lazy`
+   calls `ctx.sql(...)` to plan, never to execute, `sql_batch_view.rs:107-122`), so a `connect_lazy`
    Postgres pool is sufficient for this offline fixture.
 
 ### Phase 4 — tests (issue's own acceptance criteria, step 7)
@@ -754,8 +782,9 @@ existing `read_policy` resolution); the monolith calls
     different values (since ingestion stamping doesn't exist until Stage 5) **before the `blocks`
     view's partitions are materialized** — not merely before the `processes` view's own
     materialization. `BlocksView::data_sql` snapshots `processes.properties` from Postgres into the
-    `blocks` parquet partitions at materialization time (`blocks_view.rs:59-70`, schema field
-    `processes.properties`), and the `processes` `SqlBatchView`'s transform query reads
+    `blocks` parquet partitions at materialization time (`blocks_view.rs:60-71`; the Arrow field is
+    named `processes.properties` while `data_sql` aliases the column `process_properties` — the
+    mapping is positional against `blocks_view_schema()`), and the `processes` `SqlBatchView`'s transform query reads
     `first_value("processes.properties") ... FROM blocks` — i.e. from the already-materialized
     `blocks` partitions, never from Postgres directly (`processes_view.rs:27-45`). Setting the
     audience after `blocks` materializes but before `processes` materializes would still bake in no
@@ -853,7 +882,7 @@ existing `read_policy` resolution); the monolith calls
   expose).
 - **Duplicating the comma-separated-list parser instead of depending on `micromegas-auth`.** Same
   reasoning Stage 1 gave for keeping `ReadScope` out of `micromegas-auth`'s crate boundary (§1 of
-  `1369_policy_seam_plan.md`): a few duplicated lines is cheaper than a new dependency edge for a
+  `completed/1369_policy_seam_plan.md`): a few duplicated lines is cheaper than a new dependency edge for a
   crate published without one today.
 
 ## Documentation
@@ -869,7 +898,7 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   async_events/thread_spans literal-check rationale (§5/§6) — this is exactly the kind of non-obvious
   "why" that will not survive the next contributor's skim of `view_factory.rs`
   without it written down here.
-- Update the six in-code doc-comment sites that currently assert "nothing consumes `ReadScope` yet"
+- Update the seven in-code doc-comment sites that currently assert "nothing consumes `ReadScope` yet"
   (accurate for Stage 1, falsified once `OwnershipRewrite` lands) to instead say `ReadScope` is now
   consumed by `OwnershipRewrite` (Prong A), with Prong B (the UDTF/UDF guards) still pending #1371:
   `rust/analytics/src/lakehouse/read_scope.rs:10-13` and `:44-45`, `rust/auth/src/policy.rs:5-6` and
@@ -886,11 +915,12 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   fully resolve it; the `CallerContext`-vs-new-parameter decision (§8); and that
   `OwnershipRewriteConfig`'s two knobs are parsed in `micromegas-analytics`, not `micromegas-auth`
   (mirrors Stage 1's own "parse where consumed" note about
-  `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, `1369_policy_seam_plan.md` §5).
+  `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, `completed/1369_policy_seam_plan.md` §5).
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — add
   `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_PUBLIC_VIEW_SETS`, **and `MICROMEGAS_IMPLICIT_GROUPS`**
-  rows to each page's existing `MICROMEGAS_*` environment-variable table (the same tables documenting
-  `MICROMEGAS_ADMINS`, `MICROMEGAS_STATIC_TABLES_URL`, etc. today), with a pointer to Stage 7's
+  rows to each page's existing `MICROMEGAS_*` environment-variable table (`flight-sql.md`'s table
+  documents `MICROMEGAS_ADMINS`, `MICROMEGAS_STATIC_TABLES_URL`, etc.; `monolith.md`'s table at
+  `:42-51` has neither today — its only `MICROMEGAS_ADMINS` mention is prose at `:94`), with a pointer to Stage 7's
   isolation page for the full activation story. `MICROMEGAS_IMPLICIT_GROUPS` is a pre-existing knob
   (`rust/auth/src/policy.rs`) that today is documented only in `CHANGELOG.md:31` (`grep -rn
   IMPLICIT_GROUPS mkdocs/` returns nothing) — since the Overview's required escape-hatch pair is
@@ -944,7 +974,9 @@ None — all resolved during review:
 2. ~~Covering `async_events`/`thread_spans` in Stage 2 via literal `EXISTS` subqueries (§5/§6) vs.
    deferring them to Stage 3~~ — settled: cover both now (§5/§6, Trade-offs).
 3. ~~Should `view_instance('processes', <id>)` even be reachable/tested?~~ — settled: no. `processes`
-   (and `streams`, `blocks`) are registered via `add_global_view`, never `add_view_set`, so
+   (and `streams`, `blocks`) are registered as global views (passed in `ViewFactory::new`'s
+   `global_views` list, `view_factory.rs:294-302`; `log_stats` via `add_global_view`, `:316`), never
+   `add_view_set`, so
    `ViewFactory::make_view`/`ViewInstanceTableFunction` cannot reach them
    (`view_factory.rs:259-265`); `view_instance('processes'|'streams'|'blocks', id)` is simply not a
    valid call, named-table access is the only path, and no dead code is needed for it (Current State
