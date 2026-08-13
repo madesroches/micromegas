@@ -1289,41 +1289,51 @@ pub fn resolve_up_to_date_fixpoint(
         .map(|spec| spec_is_up_to_date(view_meta, spec, block_order, &candidates))
         .collect::<Result<Vec<_>>>()?;
 
+    // Which spec(s) entirely contain each candidate row -- computed once, up front, because
+    // `ranges` are ascending and non-overlapping (documented on `SourceDataBlocksInMemory`), so a
+    // row can be contained in at most two specs' ranges (only at a shared boundary point, for a
+    // degenerate `begin == end` row), and this containment relationship never changes across
+    // rounds -- only which specs are currently stale does. Parallel to `candidates`; O(N*M) once,
+    // not O(N*M) per round.
+    let containing_specs: Vec<Vec<usize>> = candidates
+        .iter()
+        .map(|row| {
+            ranges
+                .iter()
+                .enumerate()
+                .filter(|(_, (min_i, max_i))| {
+                    row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
+                })
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+
     // Fixpoint: a spec verdicted not up to date will retire, this run, every candidate row
     // entirely contained in its insert range (`RetireMatch::Containment`); such a row must not
     // count towards a *sibling* spec's freshness, but must never be excluded from the candidate
     // set used to re-evaluate the stale spec itself (that would be a circular, self-referential
-    // justification for calling it up to date). Verdicts are made monotone (up-to-date -> stale
-    // only) by construction: each round's recomputed verdict is clamped against the previous
-    // round's (`up_to_date[k] && recomputed[k]`), so a spec once marked stale stays stale for the
-    // rest of this call. That clamp bounds the loop to at most `specs.len()` rounds, since only a
-    // newly-stale spec (never previously stale) can add rows to the drop set for other specs, and
-    // there are at most `specs.len()` specs left to newly mark stale.
+    // justification for calling it up to date). Each round, spec `j`'s filtered candidate set
+    // drops a row iff one of its (at most two) precomputed containing specs `i` satisfies
+    // `i != j && !up_to_date[i]` -- an O(1) check per row, regardless of how many specs are
+    // currently stale, so a round costs O(N*M) rather than O(N*M*S). Verdicts are made monotone
+    // (up-to-date -> stale only) by construction: each round's recomputed verdict is clamped
+    // against the previous round's (`up_to_date[k] && recomputed[k]`), so a spec once marked stale
+    // stays stale for the rest of this call. That clamp bounds the loop to at most `specs.len()`
+    // rounds, since only a newly-stale spec (never previously stale) can add rows to the drop set
+    // for other specs, and there are at most `specs.len()` specs left to newly mark stale.
     loop {
         if !up_to_date.contains(&false) {
             break;
         }
-        // Currently-stale specs, paired with their index so filtering for spec `j` can skip the
-        // entry whose index equals `j` -- i.e. exclude `j`'s own range from the rows dropped when
-        // (re-)evaluating `j`.
-        let stale_ranges: Vec<(usize, DateTime<Utc>, DateTime<Utc>)> = up_to_date
-            .iter()
-            .zip(ranges.iter())
-            .enumerate()
-            .filter(|(_, (up, _))| !**up)
-            .map(|(i, (_, r))| (i, r.0, r.1))
-            .collect();
 
         let mut next_up_to_date: Vec<bool> = Vec::with_capacity(specs.len());
         for (j, spec) in specs.iter().enumerate() {
             let filtered: Vec<PartitionFreshnessRow> = candidates
                 .iter()
-                .filter(|row| {
-                    !stale_ranges.iter().any(|(i, min_i, max_i)| {
-                        *i != j && row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
-                    })
-                })
-                .cloned()
+                .zip(containing_specs.iter())
+                .filter(|(_, containing)| !containing.iter().any(|&i| i != j && !up_to_date[i]))
+                .map(|(row, _)| row.clone())
                 .collect();
             let recomputed = spec_is_up_to_date(view_meta, spec, block_order, &filtered)?;
             // Clamp: once stale, stay stale for the rest of this call.
