@@ -20,6 +20,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, LogicalPlan};
 use datafusion::prelude::DataFrame;
+use micromegas_analytics::lakehouse::async_events_view::AsyncEventsViewMaker;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::dataframe_time_bounds::DataFrameTimeBounds;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -32,6 +33,7 @@ use micromegas_analytics::lakehouse::read_scope::{
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
+use micromegas_analytics::lakehouse::thread_spans_view::ThreadSpansViewMaker;
 use micromegas_analytics::lakehouse::view::{PartitionSpec, View};
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
@@ -138,8 +140,10 @@ impl View for NoBranchView {
 
 /// Builds a `ViewFactory` registering real `processes`/`streams` (required by Design §2 for
 /// `OwnershipRewrite` to be constructed at all under a restricted `ReadScope`), `blocks` (a
-/// process_id-**column** view, used below as the "public view set"), and [`NoBranchView`] (the
-/// "matches no branch" view set).
+/// process_id-**column** view, used below as the "public view set"), [`NoBranchView`] (the
+/// "matches no branch" view set), and the `async_events`/`thread_spans` view sets (§5/§6 -- reached
+/// only via `view_instance(...)`, never as a global table, so they are registered with
+/// `add_view_set` rather than as a global view, mirroring `view_factory.rs::default_view_factory`).
 async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory> {
     let blocks_view = Arc::new(BlocksView::new().expect("BlocksView::new"));
     let processes_view = Arc::new(
@@ -161,12 +165,25 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
         .expect("make_streams_view"),
     );
     let no_branch_view: Arc<dyn View> = Arc::new(NoBranchView::new());
-    Arc::new(ViewFactory::new(vec![
+    let mut factory = ViewFactory::new(vec![
         processes_view,
         streams_view,
-        blocks_view,
+        blocks_view.clone(),
         no_branch_view,
-    ]))
+    ]);
+    // `AsyncEventsViewMaker`/`ThreadSpansViewMaker` only consult the `ViewFactory` they're given
+    // from `jit_update` (materialization -- never reached by these plan-shape-only tests, which
+    // never `.collect()`), so a minimal `blocks`-only factory is enough here.
+    let jit_factory = Arc::new(ViewFactory::new(vec![blocks_view]));
+    factory.add_view_set(
+        String::from("async_events"),
+        Arc::new(AsyncEventsViewMaker::new(jit_factory.clone())),
+    );
+    factory.add_view_set(
+        String::from("thread_spans"),
+        Arc::new(ThreadSpansViewMaker::new(jit_factory)),
+    );
+    Arc::new(factory)
 }
 
 /// Builds a session under `read_scope`/`ownership_config`, plans `sql`, and returns the
@@ -271,5 +288,69 @@ async fn empty_audience_set_plans_a_literal_false_predicate() {
         "an empty ReadScope::Audiences must plan a lit(false) predicate (rendered as a `Filter: \
          Boolean(false)` node inside the per-process-audience subquery), not an unfiltered scan \
          or a bare IN (), got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn processes_own_scan_plans_with_an_injected_semi_join() {
+    // §3: `processes`'s own scan uses the same `process_id IN (subquery)` construction as §4,
+    // filtered against the shared `per_process_audience` aggregate built from
+    // `__processes__partitions` -- not an unfiltered scan of the audience source itself.
+    let config = OwnershipRewriteConfig::default();
+    let plan = analyzed_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
+        .await
+        .expect("processes' own scan must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("Filter") && plan_text.contains("IN"),
+        "processes' own scan (§3) must plan with an injected `IN (subquery)` Filter wrapping its \
+         TableScan, not an unfiltered scan, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn async_events_view_instance_plans_with_an_injected_exists() {
+    // §5: `async_events` is process-scoped but has no `process_id` column to join on -- the
+    // predicate is a literal-valued `EXISTS`, keyed on `get_view_instance_id()` (parsed as the
+    // process_id UUID). A syntactically valid UUID literal is enough for a plan-shape-only test --
+    // no data is scanned.
+    let config = OwnershipRewriteConfig::default();
+    let process_id = "00000000-0000-0000-0000-000000000001";
+    let plan = analyzed_plan(
+        scope(&["user:a"]),
+        config,
+        &format!("SELECT * FROM view_instance('async_events', '{process_id}')"),
+    )
+    .await
+    .expect("async_events' view_instance scan must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("Filter") && plan_text.contains("EXISTS"),
+        "async_events' view_instance scan (§5) must plan with an injected literal-valued `EXISTS` \
+         Filter, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
+    // §6: `thread_spans` is stream-scoped with no `process_id`/`stream_id` column -- the predicate
+    // is a literal `EXISTS` built from a two-hop `streams` -> `per_process_audience` join, keyed on
+    // `get_view_instance_id()` (parsed as the stream_id UUID).
+    let config = OwnershipRewriteConfig::default();
+    let stream_id = "00000000-0000-0000-0000-000000000002";
+    let plan = analyzed_plan(
+        scope(&["user:a"]),
+        config,
+        &format!("SELECT * FROM view_instance('thread_spans', '{stream_id}')"),
+    )
+    .await
+    .expect("thread_spans' view_instance scan must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("Filter")
+            && plan_text.contains("EXISTS")
+            && plan_text.contains("__streams__partitions"),
+        "thread_spans' view_instance scan (§6) must plan with an injected `EXISTS` Filter built \
+         from the two-hop streams -> processes join, got:\n{plan_text}"
     );
 }

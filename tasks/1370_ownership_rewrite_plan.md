@@ -286,12 +286,20 @@ rather than leaving implicit:
    **Decided:** compute the `processes` audience filter (§3) and the resolved-per-process
    `per_process_audience`/`resolved_predicate` subplan the §4 semi-join is built from (see below) once
    per `analyze()` call, before `transform_up_with_subqueries` runs, and reuse the same
-   `Expr`/`Arc<LogicalPlan>` at every site the traversal visits — this bounds the §4 branch (the
-   majority of the schema table below) to one
-   `processes` scan per query regardless of how many process_id-keyed tables it touches. §5/§6's
-   `EXISTS` subqueries still build one subquery per scan site, since each embeds a different
-   `view_instance_id` literal and cannot be shared. This mitigates the cost; it does not eliminate the
-   unbounded, uncached scan itself.
+   `Expr`/`Arc<LogicalPlan>` at every site the traversal visits. **This saves plan-*construction*
+   cost only — it does not bound or reduce execution cost.** DataFusion has no rule that
+   de-duplicates identical injected subqueries across `Filter` nodes: `DecorrelatePredicateSubquery::
+   rewrite` runs per `Filter` and clones the subquery, assigning it a fresh `__correlated_sq_N`
+   alias, on every invocation, regardless of whether the `Expr`/`Arc<LogicalPlan>` it was cloned from
+   is shared. So reusing the same `Arc<LogicalPlan>` at every §4 scan site still means one full,
+   time-unbounded `processes` scan (plus its `Aggregate`) executes per `MaterializedView` scan site
+   that needs it — a query joining `log_entries` and `measures` still scans `processes`'s entire
+   history twice at execution time, not once. §5/§6's `EXISTS` subqueries likewise build one
+   subquery per scan site, since each embeds a different `view_instance_id` literal and cannot be
+   shared even at construction time. What sharing the `Arc` buys is avoiding re-building the subplan
+   in Rust once per call site (fewer `LogicalPlanBuilder` allocations during `analyze()`); it does
+   not touch the per-query execution cost, which remains one full unbounded `processes` scan (or, for
+   `thread_spans`, `streams`) per touched `MaterializedView` scan site.
 2. *Materialization lag vs. Prong B.* `processes`/`streams` are `SqlBatchView`s materialized only by
    the maintenance daemon's `materialize_all_views` pass (`public/src/servers/maintenance.rs:44-104`;
    `SqlBatchView::jit_update` is a no-op, `sql_batch_view.rs:306-312`) — unlike the JIT per-process
@@ -313,8 +321,8 @@ rather than leaving implicit:
    time. Recorded here, not silently accepted: Stage 3 should evaluate having `OwnershipRewrite`
    consume Prong B's cache instead of scanning `processes`/`streams`, once that cache exists, so both
    prongs converge on one source of truth. Until then, Stage 2 ships with a documented lag window and
-   per-query scan cost (mitigated per point 1 above) rather than a silently-assumed-consistent, free
-   lookup.
+   a per-scan-site scan cost (only its plan-construction overhead mitigated per point 1 above; the
+   scan itself still executes once per site) rather than a silently-assumed-consistent, free lookup.
 
 **Any-row semantics of filtering raw partitions, and why it must be resolved per process, not per
 row.** `__processes__partitions` is the pre-merge `SqlBatchView` output: its transform query only
@@ -345,8 +353,9 @@ own `GROUP BY`/`first_value` merge, so a per-row filter on `processes`'s own sca
 way a naive raw-row filter for §4–§6 would have, keeping a process's merged row visible to the escape-hatch audience
 forever after a later, narrower stamp. This is still built from the raw, time-unbounded partitions
 (§2's `query_range: None` decision is unchanged) and still computed once per `analyze()` call and reused
-at every scan site the traversal visits (the "once per query" mitigation, point 1 above) — it adds one
-`Aggregate` node to that shared subplan, not a new per-site cost. It assumes a process is stamped with
+at every scan site the traversal visits (a construction-cost saving only, not an execution-cost
+mitigation — see §2 point 1's corrected wording above) — it adds one `Aggregate` node to that shared
+subplan, not new Rust code to build one per site. It assumes a process is stamped with
 at most one distinct audience over its lifetime (true under Stage 5's design); Stage 3/#1371 should
 revisit this if that assumption changes. `processes`'s own scan (§3) uses the same `process_id IN
 (subquery)` construction as §4, filtering the outer scan's own `process_id` column against the shared
@@ -490,8 +499,9 @@ rather than only the one the planner happens to pick. The scan is named
 `processes` view — see Current State) purely for readability; `self.processes_source` is passed
 directly, so no session-side name lookup happens. The `per_process_audience`/`resolved_predicate`
 subplan is the one built once per `analyze()` call and reused at every process_id-column scan site
-(§2's cost mitigation) — §5/§6 below reuse it too, in place of filtering `processes_predicate` over raw
-rows directly.
+(§2 point 1's construction-cost saving, not an execution-cost mitigation — reusing the `Arc` does not
+stop each site from executing its own full `processes` scan) — §5/§6 below reuse it too, in place of
+filtering `processes_predicate` over raw rows directly.
 
 `in_subquery` (`datafusion_expr::expr_fn::in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) ->
 Expr`) produces an **uncorrelated** `IN` subquery (it references no column from the outer plan) —
@@ -852,10 +862,14 @@ existing `read_policy` resolution); the monolith calls
 ## Trade-offs
 
 - **`processes`/`streams` as the audience source: an unbounded `MaterializedView` scan, not Prong
-  B's Postgres-backed cache (Design §2).** Every restricted query pays at least one full,
-  uncached, unpruned `processes` (and, for `thread_spans`, `streams`) partition scan — mitigated
-  from "once per touched table" to "once per query" by computing the §3/§4 subplans once per
-  `analyze()` call and reusing them, but not eliminated — and Prong A's visibility lags however far
+  B's Postgres-backed cache (Design §2).** Every restricted query pays one full, uncached, unpruned
+  `processes` (and, for `thread_spans`, `streams`) partition scan *per touched `MaterializedView`
+  scan site* — one per process_id-keyed table the query references, not one per query. Computing the
+  §3/§4 subplans once per `analyze()` call and reusing the same `Expr`/`Arc<LogicalPlan>` at every
+  site only saves the cost of building that subplan once in Rust rather than once per site; nothing
+  downstream de-duplicates the resulting per-site subqueries at execution time (each still gets its
+  own `__correlated_sq_N`-aliased scan), so the unbounded scan itself is not mitigated or
+  eliminated — and Prong A's visibility lags however far
   behind the maintenance daemon's last `materialize_all_views` pass the deployment is (or sees
   nothing if the daemon isn't running), diverging from Prong B's Postgres point lookup during that
   window. Accepted for Stage 2 because a shared cache is Prong B's Stage 3 (#1371) deliverable, not
