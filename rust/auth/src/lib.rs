@@ -107,3 +107,7 @@ pub mod oauth_state;
 
 /// User attribution validation (prevents impersonation attacks)
 pub mod user_attribution;
+
+/// Authorization seam: `MintPolicy`, `ReadPolicy`, and their audience-based implementations
+/// (#1369, AbAC Stage 1)
+pub mod policy;

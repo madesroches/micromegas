@@ -8,6 +8,7 @@ use super::{
     partition_cache::{NullPartitionProvider, PartitionCache},
     partitioned_execution_plan::ScanOrdering,
     query::make_session_context,
+    read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     sql_partition_spec::fetch_sql_partition_spec,
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
@@ -109,7 +110,7 @@ impl SqlBatchView {
             None,
             view_factory.clone(),
             session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await
         .with_context(|| "make_session_context")?;
@@ -258,7 +259,7 @@ impl View for SqlBatchView {
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await
         .with_context(|| "make_session_context")?;

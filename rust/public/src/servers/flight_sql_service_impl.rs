@@ -38,12 +38,15 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
+use micromegas_auth::policy::ReadPolicy;
+use micromegas_auth::types::{AuthContext, ProviderUnavailable};
 use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
@@ -484,6 +487,7 @@ pub struct FlightSqlServiceImpl {
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
+    read_policy: Arc<dyn ReadPolicy>,
 }
 
 impl FlightSqlServiceImpl {
@@ -492,13 +496,62 @@ impl FlightSqlServiceImpl {
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
+        read_policy: Arc<dyn ReadPolicy>,
     ) -> Self {
         Self {
             lakehouse,
             part_provider,
             view_factory,
             session_configurator,
+            read_policy,
         }
+    }
+
+    /// Resolves the [`CallerContext`] a request should plan under -- the seam's fail-closed
+    /// resolver (#1369, AbAC Stage 1 §2/§8).
+    ///
+    /// **Absent-extension convention.** When no `AuthContext` extension is present at all (no
+    /// auth provider configured, e.g. `--disable-auth`), the resolved scope is
+    /// [`ReadScope::All`]. This is the *only* permissive branch here: `AuthService::call`
+    /// (`rust/auth/src/tower.rs`) rejects the request before this inner service ever runs
+    /// whenever a provider *is* configured, so the extension is always present in that case --
+    /// the same safety argument `is_admin`'s absent-header-⇒-trusted convention already relies
+    /// on (`user_attribution.rs`).
+    ///
+    /// **Failure convention.** A [`ReadPolicy::resolve`] that returns `Err` is a hard failure and
+    /// must never become a scope -- not `ReadScope::Audiences(Arc::from([]))` (which would read
+    /// as a legitimate, audited fail-closed decision to Stage 2/3) and not `ReadScope::All` (a
+    /// silent fail-open bypass). Mirrors `tower.rs`'s own discriminator: `Status::unavailable`
+    /// when the error downcasts to [`ProviderUnavailable`] (a store/provider outage),
+    /// `Status::permission_denied` otherwise.
+    ///
+    /// `is_admin` is read from `md` unchanged (`is_admin(md)`), equivalent to reading
+    /// `AuthContext.is_admin` off `ext` when the extension is present, since the header is
+    /// derived from the same `AuthContext` with client-supplied copies stripped
+    /// (`tower.rs:107-139`) -- and it is what preserves today's `--disable-auth`
+    /// absent-header-⇒-trusted convention when `ext` has none.
+    async fn caller_context(
+        &self,
+        ext: &http::Extensions,
+        md: &MetadataMap,
+    ) -> Result<CallerContext, Status> {
+        let read_scope = match ext.get::<AuthContext>() {
+            Some(auth_ctx) => match self.read_policy.resolve(auth_ctx).await {
+                Ok(audiences) => ReadScope::Audiences(audiences.into_inner()),
+                Err(e) => {
+                    return Err(if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                        Status::unavailable(format!("read policy unavailable: {e:#}"))
+                    } else {
+                        Status::permission_denied(format!("read scope denied: {e:#}"))
+                    });
+                }
+            },
+            None => ReadScope::All,
+        };
+        Ok(CallerContext {
+            read_scope,
+            is_admin: is_admin(md),
+        })
     }
 
     fn should_preserve_dictionary(metadata: &MetadataMap) -> bool {
@@ -523,6 +576,7 @@ impl FlightSqlServiceImpl {
         &self,
         ticket_stmt: TicketStatementQuery,
         metadata: &MetadataMap,
+        extensions: &http::Extensions,
         client_ip: &str,
     ) -> Result<Response<FlightDataStream>, Status> {
         // Minted first, before any fallible step, so it's Always available --
@@ -658,13 +712,17 @@ impl FlightSqlServiceImpl {
         // Session context creation phase
         let session_begin = now();
         let session_begin_instant = Instant::now();
+        let caller = self
+            .caller_context(extensions, metadata)
+            .await
+            .map_err(|status| audit_state.fail(status))?;
         let ctx = make_session_context(
             lakehouse,
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            is_admin(metadata),
+            caller,
         )
         .await
         .map_err(|e| audit_state.fail(status!("error in make_session_context", e)))?;
@@ -797,8 +855,13 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
         let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
             .map_err(|e| status!("Could not read ticket", e))?;
-        self.execute_query(ticket_stmt, request.metadata(), &client_ip)
-            .await
+        self.execute_query(
+            ticket_stmt,
+            request.metadata(),
+            request.extensions(),
+            &client_ip,
+        )
+        .await
     }
 
     #[span_fn]
@@ -960,7 +1023,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let client_ip = get_client_ip(request.metadata().as_ref(), request.extensions());
-        self.execute_query(ticket, request.metadata(), &client_ip)
+        self.execute_query(ticket, request.metadata(), request.extensions(), &client_ip)
             .await
     }
 
@@ -1146,13 +1209,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
+        // Closes hole #1 (#1369): prepared statements now resolve the same CallerContext as the
+        // do_get execute path, instead of reading only is_admin and no identity at all.
+        let caller = self
+            .caller_context(request.extensions(), request.metadata())
+            .await?;
         let ctx = make_session_context(
             self.lakehouse.clone(),
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            is_admin(request.metadata()),
+            caller,
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;

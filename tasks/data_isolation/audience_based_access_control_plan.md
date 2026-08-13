@@ -19,14 +19,40 @@
 > **Keys track revised 2026-07-30** (issue #1383 discussion): write and read credentials get
 > **separate tables** (`ingestion_api_keys` / `analytics_api_keys`) — one key is never valid on both
 > surfaces, because the risk is asymmetric and only ingestion keys carry an `audience`. Key
-> management is an **OIDC-authenticated HTTP API** on the ingestion service, pulled forward from
+> management is an **OIDC-authenticated HTTP API**, pulled forward from
 > Stage 6 into Stage 0 (create/revoke/list, no audience); Stage 6 now only adds audience resolution
 > to a route that already exists. Admin-gated lakehouse UDFs were considered for key management and
-> rejected — see Stage 0.
+> rejected — see Stage 0. (The API shipped on ingestion and has since moved to `analytics-web-srv`
+> — see the 2026-08-12 note below.)
+
+> **Long-term model recorded 2026-08-12.** The grant source in v1 is flat IdP membership, where a
+> `groups` claim entry *is* the grant. The target model separates membership from grants — users
+> belong to groups, groups nest, and a group is granted a set of audiences it may read — and today's
+> rule is that model's degenerate "identity grant" case. See
+> [Long-term model](#long-term-model--groups-nested-membership-and-grants). Nothing in Stages 1–7
+> changes shape for it, provided Stage 1 keeps four properties listed there.
+
+> **Analytics keys are service accounts (decided 2026-08-12).** This plan previously asserted that
+> read scope never comes from a key and that `analytics_api_keys` never gains an audience column.
+> That is superseded: analytics keys are **service-account credentials with a configurable set of
+> readable audiences** (`read_audiences`), landing as new **Stage 4b** — the read-side mirror of
+> Stage 4. Ingestion keys still carry exactly one *write* audience; the two columns have opposite
+> meaning and cardinality. Affected paragraphs (Stage 0 two-table rationale, Stage 4 step 9,
+> Security, Resolved Decisions) are updated in place.
 
 > **Renamed 2026-07-30** from "policy-based data isolation". The design was described as *RBAC*
 > throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
 > audience-based access control**; `Rbac*` identifiers become `Audience*`.
+
+> **Mint surface moved 2026-08-12** (#1411 / #1458, `tasks/completed/simplify_ingestion_api_key_admin_plan.md`).
+> This plan was written assuming key management lives on the **ingestion** service at
+> `POST/GET/DELETE /auth/api_keys`. Those routes shipped in Stage 0 and were then **removed**:
+> `rust/public/src/servers/api_keys.rs` is deleted and key management now lives on
+> **`analytics-web-srv`** at `{base_path}/api/ingestion-api-keys` (plus `/api/analytics-api-keys`),
+> writing both tables directly through the telemetry-DB pool it already opens. The affected
+> paragraphs below (Stage 0c/0d, Stage 4 step 10, Stage 6 step 12, Files to Modify, Testing,
+> Resolved Decisions) are updated in place; see **Appendix C** for the full drift audit. Nothing in
+> §1–§6 changes — only *where* `MintPolicy::resolve_audience` gets called.
 
 ## Overview
 
@@ -53,6 +79,12 @@ Authorization decomposes into three independent relations:
 2. **`read(subject → group)`** — checked **on every query**. Grants visibility of data whose
    `audience = group`.
 3. **`audience`** — the label physically stamped on data by the key; the link between the two.
+
+In v1 both grants are read off flat IdP membership, which makes `read(subject → group)` and
+"may read audience `group:G`" the same statement. The target model splits them —
+`membership(subject → group)`, transitive, and `read_grant(group → audiences)`, many-to-many — with v1 as
+the degenerate case where each group grants exactly its own label. See
+[Long-term model](#long-term-model--groups-nested-membership-and-grants).
 
 **Per-user isolation is the restriction of this model to singleton self-groups**: every principal is
 its own group, with `write(u → u)` and `read(u → u)` the only grants, and `audience` always the
@@ -206,11 +238,22 @@ The one shipped impl (`AudienceReadPolicy`) returns the caller's **readable set*
 
 ```
 ReadScope::Principals(
-    {user:<caller email>}
+    caller.read_audiences                          // grant carried by a service-account credential
+  ∪ {user:<caller email>}   if email present       // human OIDC caller
   ∪ {group:G : G ∈ caller's IdP groups claim}
   ∪ {group:G : G ∈ MICROMEGAS_IMPLICIT_GROUPS}
 )
 ```
+
+The union is **branch-free — no `auth_type` check anywhere**: an OIDC caller carries no
+`read_audiences`, and an API key carries no email and no groups claim (`api_key.rs:116-127`,
+`db_api_key.rs:318-328`). `caller.read_audiences` is the analytics-key service-account grant
+(Stage 4b); it is empty for every OIDC principal and for any key minted without a grant, so unset
+config stays fail-closed.
+
+`resolve` is `async` and fallible because the long-term grant source is a store, not a claim — see
+[Long-term model](#long-term-model--groups-nested-membership-and-grants). Callers must **deny on
+`Err`**; a resolution failure is never an empty-or-permissive scope.
 
 `ReadScope::All` is **never** produced by this policy — it exists only for the internal maintenance
 daemon's contexts (§5). In a privacy deployment (no implicit groups, no groups claim) the readable
@@ -221,8 +264,11 @@ includes `group:everyone`, which is what imported keys stamp and what unstamped 
 
 ### 3. Ingestion stamps `audience`
 
-- Mint endpoint runs `MintPolicy::resolve_audience` **once** and records the resolved audience on the
-  key (env keyring: not applicable — see key-store note; DB keyring: an `audience` column).
+- The mint route runs `MintPolicy::resolve_audience` **once** and records the resolved audience on
+  the key (env keyring: not applicable — see key-store note; DB keyring: an `audience` column). That
+  route is `POST {base_path}/api/ingestion-api-keys` on `analytics-web-srv`
+  (`rust/analytics-web-srv/src/ingestion_keys.rs::mint_key`), **not** ingestion — see the 2026-08-12
+  note at the top. The import route in the same module takes the same treatment (Stage 4 step 10).
 - Key auth sets `AuthContext.bound_audience = Some(key.audience)`.
 - Ingestion handlers (native `rust/public/src/servers/ingestion.rs`, OTLP
   `rust/public/src/servers/otlp.rs`) read `AuthContext.bound_audience` (currently discarded) and
@@ -480,6 +526,155 @@ factory reading the env vars; `from_env` precedent: `static_tables_configurator.
 trait seam permits asymmetric policies later (e.g. group reads, self-only mint) with no code
 change.
 
+**Encoding (decided 2026-08-12).** `MICROMEGAS_IMPLICIT_GROUPS` and `MICROMEGAS_PUBLIC_VIEW_SETS` are
+**comma-separated** flat lists; group names and view-set names may not contain a comma (validate and
+reject at parse time, naming the offending entry). This deliberately differs from `MICROMEGAS_ADMINS`,
+which is a JSON array: that variable is cited throughout as the precedent for *config-sourced
+authorization data*, not for an encoding. Say which it is in the doc comment, because an operator
+copying the `MICROMEGAS_ADMINS` shape into `MICROMEGAS_IMPLICIT_GROUPS` would silently configure one
+group literally named `["everyone"]`.
+
+## Long-term model — groups, nested membership, and grants
+
+Recorded 2026-08-12. **Not** Stage 1–7 work; this section exists so the stages do not foreclose it,
+and so the four Stage 1 properties it depends on are deliberate rather than lucky.
+
+Everything above resolves a readable set from **flat, IdP-asserted membership**: the `groups` claim
+*is* the grant, because `AudienceReadPolicy` maps group `G` straight to audience `group:G`. The target
+model separates the two relations that identity collapses:
+
+```
+membership:  user → group,  group → group          (transitive)
+grant:       group → { audience, ... }             (many-to-many)
+label:       audience stamped on data              (unchanged)
+
+readable(caller) = ⋃ { read_grants(g) : g ∈ closure(caller) }  ∪  {user:<email>}
+```
+
+Users belong to groups, groups belong to groups, and a group is granted a set of audiences it may
+read. Nothing about the **stamp** changes — ingestion still writes one `micromegas.audience` per
+process from the key's `bound_audience` — and nothing about **enforcement** changes, since both prongs
+still receive a resolved audience set. This generalizes only the *resolution* side, which is the
+cheapest place in the design to grow.
+
+### Continuity: today is the degenerate case
+
+Today's rule is this model with **identity grants** — `read_grants(G) = {group:G}`, auto-seeded per
+group. The migration into the full model is therefore "seed one identity grant per existing group",
+and no caller's readable set changes on the day the store lands. Two consequences:
+
+- §2's formula is not a competing design to be replaced; it is the special case. `ReadPolicy` is the
+  seam that lets a `GroupGraphReadPolicy` land beside `AudienceReadPolicy` with **zero** change to
+  Prongs A/B.
+- **Grants are the only authority; the `user:`/`group:` value prefixes are naming convention.** Once
+  grants exist, no consumer may infer authorization from an audience's prefix — `group:studio-x` is
+  readable by whoever holds a grant for it, not by the like-named group as a matter of language. The
+  prefixes stay because they encode the *default* (identity) grant and keep emails from colliding with
+  group ids (§3, Q4).
+
+### Where authority lives
+
+The IdP is the source of **leaf membership only**; micromegas owns **composition and grants**:
+
+- IdP `groups` claim → the caller's directly asserted groups. Never editable locally.
+- Local store → group-in-group edges, and group → audience grants.
+
+The alternative — asking the IdP for transitive groups and keeping grants there too — means
+negotiating with IdP administrators for every audience-sharing change, and most IdPs cannot express
+"may read audience X" at all. This split keeps the IdP answering *who is this* and micromegas
+answering *what may they read*, the same boundary `MICROMEGAS_ADMINS` already draws.
+
+**This is the deferred local grants table, promoted to the target state**, so it carries the cost that
+deferral was avoiding: **grant editors join the TCB** (Stage 1 step 5 and Trade-offs both record this).
+Accept it explicitly — admin-gated writes plus an audit trail — rather than rediscovering it during
+implementation.
+
+Namespace caveat: IdP group names and local group names occupy one namespace. Either prefix local
+groups or give the store explicit ids and map claims onto them. A silent collision is a grant the
+operator did not intend.
+
+### Data model sketch
+
+```sql
+groups(group_id UUID PRIMARY KEY, name TEXT UNIQUE, description TEXT, created_at, created_by)
+group_members(group_id UUID, member_kind TEXT CHECK (member_kind IN ('user','group','service')),
+              member_id TEXT, PRIMARY KEY (group_id, member_kind, member_id))
+group_read_grants(group_id UUID, audience TEXT, PRIMARY KEY (group_id, audience))
+group_mint_grants(group_id UUID, audience TEXT, PRIMARY KEY (group_id, audience))
+```
+
+Four details decide whether an implementation is correct rather than merely plausible:
+
+- **Edge direction, stated once and tested.** `member_of(A, B)` means *A is a member of B*: the closure
+  walks **upward** from the caller and grants flow **downward** to members. Reversed traversal is the
+  canonical nested-group bug, so it earns a doc comment and a three-level-chain test.
+- **Cycles.** `WITH RECURSIVE` with a depth cap, or in-memory BFS with a visited set. Reject cycle
+  creation at write time **and** tolerate cycles at read time — a store kept acyclic only by the
+  goodwill of its writers will eventually contain a cycle.
+- **Caching makes grant latency a property, not an accident.** Cache the per-subject closure in a
+  bounded `moka` with a short TTL, mirroring the key-store cache: membership and grant changes then
+  take effect within the TTL, and that must be stated the way 0b states revocation latency. Unlike the
+  immutable `process_id → audience` caches (§4), this one *is* invalidatable within a single process —
+  do not design around invalidation for multi-node deployments.
+- **Store outage fails closed.** A resolution failure is a denial, or a retryable 503 via the
+  `ProviderUnavailable` precedent (`db_api_key.rs:22-24`) — never an empty-or-permissive scope. This is
+  why `ReadPolicy::resolve` is `async` and fallible from Stage 1 onward, and why Stage 1's resolver
+  call site must already deny on `Err` (Stage 1 step 3).
+
+### Service accounts in the target model
+
+Stage 4b gives an analytics key a per-key `read_audiences` grant — a **principal-level direct grant**,
+which this model keeps as a first-class case alongside group grants (that is why §2's union takes
+`caller.read_audiences` rather than branching on credential kind). The tidier end state is
+`member_kind = 'service'`: the key's principal becomes a group member and inherits grants like anyone
+else, and the column becomes either a direct-grant fast path or dead weight to drop. Either is
+coherent — Stage 4b picks the column because it needs no group store. What must **not** happen is a
+third grant mechanism appearing later; whichever survives, there are exactly two (principal-level and
+group-level).
+
+### Read and write finally separate
+
+"A group may **read** a set of audiences" breaks the collapse recorded in Stage 1 step 5, where
+membership in `G` grants both `read:G` and `write:G`. Hence **two grant tables of the same shape**
+(`group_read_grants`, `group_mint_grants`) rather than one relation consulted by both policies:
+re-collapsing them later would be a security regression relative to the read-only phrasing, and the
+split costs one table. This is also where **`role` earns its name** (see [Naming](#naming)) — `viewer`
+/ `minter` per group is a genuine permission bundle, and the term stops being reserved. `MintPolicy`
+and `ReadPolicy` staying independent traits is what makes the split a pure addition.
+
+### Enforcement scaling
+
+`readable(caller)` is no longer bounded by "groups the caller is in": one group may be granted hundreds
+of audiences, and Prong A injects `audience IN (<literals>)`. That is plan bloat, not a correctness
+problem, and it has the answer already used for process ids — resolve grants into a subquery/semi-join
+instead of a literal list once sets get large. It is cheapest once the audience is a first-class column
+(step 15), so it belongs there rather than as a pre-optimization.
+
+### Admin surface
+
+Groups / membership / grants CRUD on `analytics-web-srv` beside the key-admin pages, admin-gated, with
+`created_by` / `revoked_by` audit columns in the house style — grant edits are confidentiality changes
+and must be attributable.
+
+One rule to design in from the start: **two-sided authorization.** Adding a member requires authority
+over the *group*; granting an audience requires authority over the *audience*. With only the first
+check, anyone who can edit a group's membership can add themselves to a group that reads everything.
+Today's blanket `is_admin` gate satisfies both trivially — the rule matters the moment group ownership
+is delegated, which is the natural next request once groups exist.
+
+### What Stage 1 must keep for this to stay reachable
+
+Four properties, all folded into Stage 1's steps below:
+
+1. `ReadPolicy` / `MintPolicy` are **`async` and fallible** — a closure lookup over a store cannot live
+   behind a sync infallible signature, and retrofitting it means migrating every call site.
+2. The resolver call site **denies on `Err`**. With a claim-only policy that cannot fail, a permissive
+   fallback is easy to write and invisible; once the policy does I/O, that line is a bypass.
+3. `AuthContext.groups` is documented as **IdP-asserted leaf membership — an input to resolution,
+   possibly incomplete**, never "the caller's groups".
+4. **No group vocabulary crosses into `micromegas-analytics`.** `ReadScope` carries resolved audiences
+   only, so the entire group model stays behind the policy seam.
+
 ## Implementation Steps — staged rollout (revised 2026-07-30)
 
 Re-ordered from the original Phases 1–5 around one constraint: **every stage ships with zero
@@ -496,7 +691,10 @@ reduced to audience resolution on an existing route plus the setup script.
 
 **Landed** as #1383 — see `tasks/completed/1383_db_api_key_store_plan.md` for what actually shipped
 (this section is the design rationale, kept for the stages that hang off it). The import tool this
-section assumes was split out to #1411 and has not landed.
+section assumes was split out to #1411 and **has since landed**, along with a web admin UI; #1458
+then moved the whole key-management surface off ingestion onto `analytics-web-srv`
+(`tasks/completed/simplify_ingestion_api_key_admin_plan.md`). 0c and 0d below describe the shipped
+end state, not the original design.
 
 Split out of the original Stage 4 (revised 2026-07-30). Moving the *key store* ahead of the policy
 seam, and leaving only the *audience column* behind it, for four reasons:
@@ -531,10 +729,12 @@ Write credentials and read credentials live in **separate tables** — `ingestio
   credential too, which is the wrong blast radius. API keys also carry `allow_delegation: true`
   (`api_key.rs:126`), so a leaked key can attribute traffic to arbitrary users
   (`user_attribution.rs:154-174`).
-- **The columns genuinely differ.** Only ingestion keys carry an `audience` (Stage 4); read scope is
-  resolved from the caller's OIDC identity and never from a key. In one table `audience` would be
-  meaningful for exactly one discriminant value — a discriminated union in nullable columns, where
-  the discriminant carries no information the table name doesn't.
+- **The columns genuinely differ** — and the 2026-08-12 service-account decision makes this argument
+  *stronger*, not weaker. Ingestion keys carry `audience TEXT` (Stage 4): exactly one **write** label,
+  immutable, `NOT NULL`. Analytics keys carry `read_audiences TEXT[]` (Stage 4b): a **read** grant,
+  set-valued, defaulting to empty. One table would need both columns, each meaningful for exactly one
+  discriminant value — a discriminated union in nullable columns, where the discriminant carries no
+  information the table name doesn't.
 - **The split is enforced in code today, with Postgres grants as a documented option, not a
   guarantee already in place.** #1383's implementation settled this: every service in a deployment
   as shipped shares one DB role via `MICROMEGAS_SQL_CONNECTION_STRING`, and the schema migration runs
@@ -556,12 +756,26 @@ Write credentials and read credentials live in **separate tables** — `ingestio
   (`MICROMEGAS_INGESTION_API_KEYS` vs `MICROMEGAS_ANALYTICS_API_KEYS`, `default_provider.rs:53-59`),
   so the split preserves an existing capability rather than inventing one — but see 0d for the one
   property it deliberately breaks.
-- **Consequence worth noting: `analytics_api_keys` may be transitional.** Read grants derive from the
-  IdP `groups` claim (Stage 1, step 5) and an API key carries no claim, so a key-authenticated
-  query's readable set is implicit-groups-only — empty in a privacy deployment. Analytics keys are
-  therefore either a migration artifact or exist purely for the delegation path. Separate tables make
-  that outcome cheap: the read table can be deprecated or dropped without touching the ingestion hot
-  path.
+- **Superseded 2026-08-12: `analytics_api_keys` is *not* transitional — it is the service-account
+  table.** The original text reasoned that read grants derive from the IdP `groups` claim, an API key
+  carries no claim, so a key-authenticated query would resolve implicit-groups-only (empty in a privacy
+  deployment) and analytics keys would be a migration artifact. Two facts make that the wrong
+  conclusion. **(1)** Key-only flight-sql is a documented, supported deployment — "a non-empty
+  `analytics_api_keys` table counts as auth configured on its own, so this key-only deployment (no
+  OIDC) is fully supported" (`mkdocs/docs/grafana/authentication.md`) — so attrition inside Stage 2 was
+  never available. **(2)** The problem was never key-specific: Grafana's *other* auth mode is OAuth 2.0
+  **client credentials** (`grafana/pkg/flightsql/oauth.go`), whose token takes the OIDC path with no
+  `email` claim (`oidc.rs` `get_email` chain) and therefore resolves to the empty set too. A
+  key-specific branch would have fixed half the problem.
+  **Decided: analytics keys are service-account credentials with a configurable set of readable
+  audiences** (`read_audiences`, Stage 4b). Separate tables remain the right shape — the two columns
+  are opposites (one immutable write label vs. a set-valued read grant), and the read table's schema
+  can evolve without touching the ingestion hot path.
+  **Not chosen:** deriving scope from delegation headers. Keys carry `allow_delegation: true`
+  (`api_key.rs:126`, `db_api_key.rs:326`) and Grafana already sends `x-user-id`/`x-user-email`
+  (`grafana/pkg/flightsql/query_data.go`), so this is the tempting option — and it is hole #2 verbatim
+  (§6): client-claimed identity must never widen (or narrow) a `ReadScope`. A service account's scope is
+  its own grant; the delegation headers stay attribution-only.
 - **`object-cache-srv` stays on env vars (decided 2026-07-30).** It is a fourth key-validating
   surface (`cli.rs:59`, same `parse_key_ring`) but it has **no database access at all** — no
   connection string in its CLI, so it cannot reach the key tables — and giving a cache service a
@@ -576,12 +790,22 @@ Write credentials and read credentials live in **separate tables** — `ingestio
     machines, so the operational pressure that motivates this stage does not apply. If it ever does,
     the fix is a mechanism for that service specifically, not a reshaping of these tables.
 
-#### Key management is an HTTP API, not SQL (decided 2026-07-30)
+#### Key management is an HTTP API, not SQL (decided 2026-07-30; host service revised 2026-08-12)
 
-Create/revoke/list are OIDC-authenticated routes on the ingestion service (0c), pulled forward from
+Create/revoke/list are OIDC-authenticated HTTP routes (0c), pulled forward from
 Stage 6 — **the table alone does not deliver Stage 0's claimed value**, since without an endpoint an
 operator still cannot revoke anything without hand-written SQL against Postgres. Stage 6 then extends
 the create route with audience resolution rather than introducing it.
+
+**Which service hosts them changed after this plan was written.** Stage 0 shipped them on ingestion
+as designed; #1411/#1458 then moved key management to `analytics-web-srv` and deleted ingestion's
+`/auth/api_keys*` routes outright, on the grounds that ingestion should only do ingestion and that a
+server-side proxy from the web service to ingestion (with a shared privileged service credential)
+was worse than a direct write. The move **strengthens** the asymmetry argument below rather than
+weakening it: the most-exposed, fleet-facing process no longer holds `INSERT` on any key table at
+all, and every mint/revoke/import now records the acting admin's own OIDC identity in
+`created_by`/`revoked_by` instead of a shared service credential. What it costs is 0c's claim that
+"analytics keys are not mintable through this API" — see 0c.
 
 **Rejected: admin-gated lakehouse UDFs** (`revoke_api_key(...)`, `import_api_key(...)`) on the
 flight-sql path, despite the good precedent for admin-gated mutating functions (#1382,
@@ -612,11 +836,12 @@ CREATE TABLE ingestion_api_keys (
   revoked_by   VARCHAR(255)
 );
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
--- analytics_api_keys: identical, and it never gains the Stage 4 audience column
+-- analytics_api_keys: identical. It never gains Stage 4's single-valued *write* `audience`;
+-- it gains a set-valued *read* grant instead (`read_audiences TEXT[]`, Stage 4b).
 ```
 
 **`key_id` is a design change #1383 settled that this outline left implicit**: this schema originally
-put `key_hash` alone as the primary key, but `DELETE /auth/api_keys/<id>` needs a non-secret handle to
+put `key_hash` alone as the primary key, but the revoke route needs a non-secret handle to
 key on, and `GET` must never hand out `key_hash` (there is no reason to distribute the lookup value
 even though it is not reversible) — a UUID PK plus a unique index on `key_hash` gives both without
 making the secret-derived value the row identity. `name` also carries no uniqueness constraint,
@@ -643,31 +868,46 @@ rotating any legacy key that is not actually random.
     an accident: revocation takes effect within the cache TTL** — the endpoint below writes
     `revoked_at` and cannot invalidate remote caches.
 
-0c. **Key-management API** on the ingestion service (and the monolith by inheritance),
-    OIDC-authenticated and admin-gated:
-    - `POST /auth/api_keys` — generate a fresh random key, store its hash, return the cleartext
-      **once**. Writes `ingestion_api_keys`; no audience until Stage 4.
-    - `DELETE /auth/api_keys/<id>` — set `revoked_at`. This is the operation that carries the stage
-      (the 2am revoke with no redeploy).
-    - `GET /auth/api_keys` — name, created_at, last_used_at, revoked_at. **Never the hash**; there is
-      no reason to hand out the lookup value even though it is not reversible.
+0c. **Key-management API**, OIDC-authenticated and admin-gated. **Shipped end state
+    (2026-08-12), after #1411/#1458 relocated it** — this is what Stages 4 and 6 must target:
+    routes live on **`analytics-web-srv`**, gated by the `AdminUser` extractor over the browser
+    cookie session (`ValidatedUser { is_admin }`), writing the telemetry DB directly:
+    - `POST {base_path}/api/ingestion-api-keys` — generate a fresh random key, store its hash,
+      return the cleartext **once**. Writes `ingestion_api_keys`; no audience until Stage 4.
+      (`ingestion_keys.rs::mint_key` — the Stage 6 `resolve_audience` call site.)
+    - `DELETE {base_path}/api/ingestion-api-keys/{key_id}` — set `revoked_at`. This is the operation
+      that carries the stage (the 2am revoke with no redeploy).
+    - `GET {base_path}/api/ingestion-api-keys` — name, created_at, last_used_at, revoked_at.
+      **Never the hash**; there is no reason to hand out the lookup value even though it is not
+      reversible.
+    - `POST {base_path}/api/ingestion-api-keys/import` — 0d's legacy-key import, landed with #1411.
+    - `/api/analytics-api-keys[...]` — the same four operations against `analytics_api_keys`
+      (`analytics_keys.rs`, the module `ingestion_keys.rs` was modeled on).
+    - Under `--disable-auth` the real routers are **not merged at all**; a static router answers both
+      prefixes with 503, because that mode layers a hardcoded `is_admin: true` user on every request.
 
-    **Analytics keys are not mintable through this API.** They are few, manually issued (0d, or
-    direct SQL by an operator with DB access) and stay out of every HTTP write path: issuing read
-    credentials from the fleet-facing service is the wrong direction for the asymmetry, and keeping
-    them out is what confines the ingestion role's grants to one table.
+    **Superseded: "analytics keys are not mintable through this API."** The original text kept read
+    credentials out of every HTTP write path because issuing them *from the fleet-facing ingestion
+    service* is the wrong direction for the asymmetry. Once key management left ingestion, that
+    reason stopped applying to the surface that now hosts it: `analytics-web-srv` is the read-side,
+    admin-facing service, and minting a read credential there is no longer a cross-direction move.
+    Analytics keys are mintable through `/api/analytics-api-keys` today. The property that actually
+    mattered — **ingestion never issues keys, and `analytics_api_keys` never gains Stage 4's write
+    `audience` column** — is preserved and is what Stage 4 relies on. (It does gain a *read* grant in
+    Stage 4b, which is a different column with the opposite direction; minting one is consequently a
+    confidentiality grant, see 9e.)
 
-    The route mildly expands the surface of the most exposed process. Accepted deliberately — it is
-    where the DB grant belongs, OIDC is required, and no API key can be admin (`api_key.rs:124`), so
-    no key can mint another.
+    The route no longer expands the surface of the most exposed process at all: ingestion holds no
+    key-management route and no `INSERT` grant. API keys still cannot be admin (`api_key.rs:124`),
+    so no key can mint another; the gate is a cookie session, not a bearer key.
 
-0d. **Import tool — out of scope for this stage, tracked in #1411.** A one-shot migration for legacy
-    key strings (the one thing the mint route cannot do, since it generates fresh keys) is deferred to
-    #1411, which adds a web admin UI plus an HTTP-API-backed import tool, superseding the python/`psql`
-    tool originally planned here. Until it lands, legacy keys migrate via hand-written
-    `INSERT ... ON CONFLICT (key_hash) DO NOTHING` per key (see #1383 §4's runbook shape), **requiring
-    an explicit destination table per key with no default** — the prefixed vars still map cleanly:
-    `MICROMEGAS_INGESTION_API_KEYS` → ingestion, `MICROMEGAS_ANALYTICS_API_KEYS` → analytics.
+0d. **Import — landed with #1411** as `POST {base_path}/api/ingestion-api-keys/import` plus a python
+    CLI (`python/micromegas/micromegas/cli/import_keys.py`), superseding the python/`psql` tool
+    originally planned here. It is the one thing the mint route cannot do, since minting generates
+    fresh key strings. Destination table is explicit per key with no default — the prefixed vars map
+    cleanly: `MICROMEGAS_INGESTION_API_KEYS` → ingestion, `MICROMEGAS_ANALYTICS_API_KEYS` →
+    analytics. (The hand-written `INSERT ... ON CONFLICT (key_hash) DO NOTHING` path from #1383 §4's
+    runbook still works and stays the fallback for operators without web-app access.)
 
     **The unprefixed fallback is the one behavior change in this stage**, independent of which tool
     (or hand) does the importing. In every split deployment
@@ -679,21 +919,58 @@ rotating any legacy key that is not actually random.
     rather than leaving operators to discover it.
 
 ### Stage 1 — Policy seam + identity threading (no enforcement yet)
+
+Detailed implementation plan: `tasks/1369_policy_seam_plan.md` (issue #1369). Where the two disagree,
+that plan wins on placement/mechanism detail (notably: `ReadScope` lives in `micromegas-analytics`, not
+`micromegas-auth`, and identity crosses the tower boundary via the existing `AuthContext` request
+extension rather than a new header).
+
 1. **Policy traits + AbAC impls.** Add `MintPolicy`, `ReadPolicy`, `ReadScope` in `rust/auth/src/`
    (e.g. `policy.rs`); add `AudienceMintPolicy` / `AudienceReadPolicy` (§1–2). No `Self*` impls — per-user
-   is the AbAC engine with empty grants.
-2. **AuthContext fields.** Add `bound_audience: Option<String>` and `groups: Vec<String>` to
-   `AuthContext` (`rust/auth/src/types.rs`); populate `None`/`[]` everywhere except the key path
-   (Stage 4) and OIDC. **Groups claim (low effort, confirmed):** add `groups: Option<Vec<String>>`
+   is the AbAC engine with empty grants. **Both traits are `#[async_trait]` and fallible** — required by
+   the long-term store-backed grant source, and free today since both call sites are already async.
+   `AudienceMintPolicy` needs an explicit **admin arm**: `caller.is_admin` ⇒ any well-formed
+   (`user:`/`group:`-prefixed) audience; otherwise the mintable-set formula of §1. Without it the only
+   shipped impl cannot express the mint flow that exists today — the route is admin-gated
+   (`ingestion_keys.rs::mint_key`), so `requested = user:bob@…` is unrepresentable and every minted key
+   would be stamped with the minting admin's own audience. The arm grants no power the route's gate does
+   not already grant, and it is deliberately asymmetric to the read path (§5: `is_admin` is never a read
+   bypass) — mint is integrity, reads are confidentiality. Say so in the doc comment.
+2. **AuthContext fields.** Add `bound_audience: Option<String>`, `read_audiences: Vec<String>` and
+   `groups: Vec<String>` to `AuthContext` (`rust/auth/src/types.rs`); populate `None`/`[]` everywhere
+   except the key paths (Stage 4 for `bound_audience`, Stage 4b for `read_audiences`) and OIDC.
+   Document `groups` as **IdP-asserted leaf membership — an input to resolution, possibly incomplete**,
+   never "the caller's groups" (long-term model, property 3).
+   **Groups claim (low effort, confirmed):** add `groups: Option<Vec<String>>`
    to the `Claims` struct (`oidc.rs:193-227`) — no `#[serde(deny_unknown_fields)]`, so it is
    backward-compatible and absent-claim-safe; populate at the OIDC construction site
    (`oidc.rs:536-545`). Flat top-level array covers Auth0/Azure AD/Google (the confirmed targets);
    Keycloak's nested `realm_access.roles` is not a current target and would need a nested helper.
 3. **Thread identity.** Add `read_scope` param to `make_session_context` (`query.rs:194`) and feed
    `register_lakehouse_functions` (`query.rs:96`). Resolve scope via `ReadPolicy` in
-   `flight_sql_service_impl` and pass through both call sites (`:372`, `:842`). **Close the two
-   identity holes** (§6): resolve identity on the prepared-statement path, and never derive
-   `ReadScope` from client-claimed attribution; carry `groups` across the `AuthService` boundary.
+   `flight_sql_service_impl` and pass through both call sites (`:661`, `:1149` at 2026-08-12 HEAD;
+   were `:372`/`:842`). **Close the two identity holes** (§6): resolve identity on the
+   prepared-statement path, and never derive `ReadScope` from client-claimed attribution; carry
+   `groups` across the `AuthService` boundary.
+   **The resolver denies on `Err`** (long-term model, property 2): a `ReadPolicy` failure becomes
+   `Status::unavailable`/`permission_denied`, never a default or empty scope. Write that branch now,
+   while the call site is being authored, and test it with a stub policy that returns `Err` — a
+   claim-only policy cannot fail, so nothing else would catch a permissive fallback until the day the
+   policy starts doing I/O.
+
+   **A third boundary drops `groups`, found 2026-08-12.** `analytics-web-srv` converts `AuthContext`
+   into its own session type via `impl From<&AuthContext> for ValidatedUser`
+   (`rust/analytics-web-srv/src/auth/claims.rs:40-48`), which keeps only
+   `subject`/`email`/`issuer`/`is_admin`. Every new `AuthContext` field is silently dropped there.
+   That does not matter for read enforcement (flight-sql resolves its own scope), but it is the
+   **mint** path's identity source now that `MintPolicy` runs in `ingestion_keys.rs` — a policy that
+   consults `groups` against a `ValidatedUser` would see an empty set and refuse every group mint.
+   **Decided 2026-08-12: `MintPolicy::resolve_audience` takes `&AuthContext`, and the web service
+   inserts the `AuthContext` into request extensions** beside the `AuthToken` and `ValidatedUser` it
+   already inserts (`auth/handlers.rs`, one line). `ValidatedUser` stays as-is — it is the browser-session
+   view and needs no groups. This mirrors the gRPC side, where `AuthService` already inserts the whole
+   `AuthContext` (`tower.rs:141`), and it means every future `AuthContext` field reaches the mint path for
+   free. Stage 6 reaches for `Extension<AuthContext>`; nothing to discover late.
 4. **Config factory.** Parse the grant knobs (Config surface) next to
    `default_provider::provider_with_prefix`; `from_env` precedent
    `static_tables_configurator.rs:44-54`. Unset ⇒ enforcement inactive (transitional).
@@ -703,7 +980,9 @@ rotating any legacy key that is not actually random.
    **Consequence — write/read collapse to membership:** membership in `G` grants *both* `read:G`
    and `write:G`. Separately grantable write-only/read-only needs a richer source (a second role
    claim, or a Postgres grants table putting its editors in the TCB) and stays a **pure addition**
-   behind the same seams.
+   behind the same seams — that addition is now specified as the target state in
+   [Long-term model](#long-term-model--groups-nested-membership-and-grants), including nested groups,
+   two grant tables, and the TCB consequence this step defers.
 
 ### Stage 2 — Enforcement Prong A (inactive until configured)
 6. Add `OwnershipRewrite` in `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from
@@ -739,13 +1018,62 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
    whereas a 1:1 side table would add a join to the hot auth path and admit a key-with-no-audience
    state that ingestion must remember to reject. A separate table only becomes the right shape if
    audiences gain their own metadata/grants or a key can bind more than one. `analytics_api_keys`
-   gets **no** audience column — read scope comes from the caller's OIDC identity, never from a key.
+   gets **no** `audience` column: nothing stamps data on the read side. It gets a set-valued *read
+   grant* instead — Stage 4b, a different column in the opposite direction.
    The ingestion `DbApiKeyAuthProvider` now produces `AuthContext { bound_audience: Some(audience),
    email: Some(...), allow_delegation: false, is_admin: false }`.
 10. Legacy-key imports assign an audience: existing keys land as `group:everyone` (or a per-key
     choice) — still zero client changes; this is how open deployments migrate. Keys imported before
-    this stage get the configured default on backfill. (Until #1411's import tool exists, "import"
-    here means the hand-written SQL path from 0d, with the audience set explicitly in the `INSERT`.)
+    this stage get the configured default on backfill. The import path is now a real route —
+    `POST {base_path}/api/ingestion-api-keys/import` in `ingestion_keys.rs` — so this step edits
+    that handler (and the `import_keys.py` CLI's request shape), not a runbook. The `NOT NULL`
+    column added in step 9 means **every** insert site must supply an audience: `mint_key`,
+    `import_key`, and any hand-written `INSERT` in the 0d fallback. Adding the column without
+    updating all three breaks key creation outright — that is the fail-closed behavior working,
+    but it should be a planned edit, not a surprise.
+
+### Stage 4b — Read grants on analytics keys (service accounts)
+
+New 2026-08-12, the read-side mirror of Stage 4. Analytics API keys are **service-account credentials**
+and their readable audiences are configurable per key. Depends on Stage 0 (the table) and Stage 1
+(`AuthContext.read_audiences` plus §2's union). It does **not** block Stage 2: pre-existing rows default
+to no grant, which is fail-closed, so enforcement can land first and grants can be filled in before
+Stage 7 activation. Needs its own epic issue.
+
+9b. **The column.** `read_audiences TEXT[] NOT NULL DEFAULT '{}'` on `analytics_api_keys` (array
+    precedent: `processes.tags`, `lakehouse_partitions.sort_order`; read back via
+    `sql_arrow_bridge.rs:350`). The analytics `DbApiKeyAuthProvider` selects it into its cached `KeyRow`
+    (`db_api_key.rs:160-164`) and produces `AuthContext { read_audiences: <grant>, email: None,
+    is_admin: false, allow_delegation: true }`. `DEFAULT '{}'` means an omitted grant is a key that reads
+    **nothing**, never one that reads everything.
+
+9c. **Immutable at mint; rotate to change (decided).** This mirrors the ingestion `audience` model and
+    avoids a mutable-grant cache story: `KeyRow` is cached in a `moka` with a TTL, so an editable grant
+    would take effect only within that TTL — the same latency property 0b documents for revocation, but
+    far more surprising when the change *widens* access. If a PATCH route is ever added, state the TTL
+    bound as loudly as the revoke docs do.
+
+9d. **Route/UI/client plumbing.** `POST {base_path}/api/analytics-api-keys` accepts `read_audiences`;
+    `/import` accepts it too; `GET` returns it (a grant is not secret — unlike `key_hash`, listing it is
+    the point); the Admin → Analytics API Keys page gains the input; `import_analytics_api_key` in
+    `python/micromegas/micromegas/web_client.py` and `cli/import_keys.py` pass it through. Audiences are
+    shape-checked (`user:`/`group:` prefix) at the route.
+
+9e. **Grant vetting — minting an analytics key *is* a read grant.** So this route's authorization is a
+    confidentiality control, not just an admin convenience. Admin-only (today's `AdminUser` gate) is
+    sufficient and needs no policy call. **If a non-admin mint path is ever added** (cf. Stage 6's open
+    question for ingestion keys), the requested `read_audiences` must be **⊆ the minter's own resolved
+    readable set**, i.e. vetted by `ReadPolicy` on the minter — otherwise self-service minting is
+    arbitrary read escalation. That gives `ReadPolicy` a second consumer at mint time, which is the one
+    structural fact this stage adds to the seam.
+
+9f. **Residual for Stage 7 docs, not code:** OIDC **client-credentials** tokens still resolve to the
+    empty set — they have no key row, no `email`, and usually no `groups` claim. Grafana's OAuth mode is
+    exactly this (`grafana/pkg/flightsql/oauth.go`), so a privacy deployment either decorates M2M tokens
+    with a `groups` claim at the IdP or points service dashboards at analytics keys. Also document the
+    limitation that **Grafana cannot be per-user** in a privacy deployment: the plugin forwards no
+    end-user token, so its dashboards read the service account's audiences and its `x-user-*` headers
+    remain attribution-only.
 
 ### Stage 5 — Ingestion stamping
 11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
@@ -755,10 +1083,23 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
     authenticated `bound_audience` before stamping is meaningful there.
 
 ### Stage 6 — Audience resolution on mint + setup script (enables real per-user keys)
-12. Extend the Stage 0 `POST /auth/api_keys` route with `MintPolicy::resolve_audience`
-    (`AudienceMintPolicy`, §1): the request may name a `requested` audience, the policy vets it, and
-    the resolved value is written to the key's `audience` column. The route, its OIDC auth and its
-    DB grant already exist from Stage 0 — this stage adds only the policy call.
+12. Extend the mint route with `MintPolicy::resolve_audience` (`AudienceMintPolicy`, §1): the
+    request may name a `requested` audience, the policy vets it, and the resolved value is written
+    to the key's `audience` column. The route, its OIDC auth and its DB access already exist from
+    Stage 0 — this stage adds only the policy call. **The call site is
+    `rust/analytics-web-srv/src/ingestion_keys.rs::mint_key`, not a handler on ingestion** (see the
+    2026-08-12 note and 0c); the caller identity available there is `AdminUser(ValidatedUser)`, so
+    the caller identity is available as `Extension<AuthContext>` per Stage 1's resolution of the
+    `groups`-across-`ValidatedUser` question (step 3).
+    **Narrowed 2026-08-12.** What remains open here is only **who may call the route**, not the policy's
+    shape: Stage 1's admin arm (step 1) makes both stories expressible — an operator minting on behalf of
+    a user (`requested = user:bob@…`, permitted because the caller is admin) and a user self-minting
+    (`requested = None` ⇒ `user:<own email>`, permitted by the mintable-set formula). So the decision is
+    a route-authorization one: keep `AdminUser` and have the setup script (step 13) drive an operator-run
+    mint, or add a non-admin path where `MintPolicy` *is* the authorization (an admin gate on top of it
+    makes self-service minting impossible). Either can land without touching `AudienceMintPolicy`.
+    If the non-admin path is chosen, apply Stage 4b/9e's rule on the read side too: a non-admin may never
+    mint a credential granting more than they themselves hold.
 13. Setup script: OIDC device-code/loopback flow → mint → write OTLP exporter env
     (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <key>`).
 
@@ -775,8 +1116,10 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   → identical behavior forever; no flip, no backfill, nothing disappears.
 - *Privacy*: key store + management API (Stage 0) → audience on ingestion keys (Stage 4) → audience
   resolution on mint (Stage 6) → users mint personal ingestion keys (data stamped `user:<email>`) →
-  set restrictive config (no implicit groups, no unstamped audience) → per-user isolation; team
-  sharing via the IdP groups claim.
+  grant read audiences to service-account analytics keys (Stage 4b — Grafana and any other
+  non-human reader, or they see nothing) → set restrictive config (no implicit groups, no unstamped
+  audience) → per-user isolation; team sharing via the IdP groups claim, and later via nested groups
+  and grants ([Long-term model](#long-term-model--groups-nested-membership-and-grants)).
 
 ### Later — (optional) physical boundary
 15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
@@ -807,10 +1150,20 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 - Ingestion: `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/otlp.rs` (incl.
   auth wiring; Firehose route placement), `rust/ingestion/src/sql_telemetry_db.rs` (audience
   storage).
-- Key store, key-management routes (create/revoke/list) + monolith wiring:
-  `rust/ingestion/src/sql_telemetry_db.rs` (the two tables), `rust/public/src/servers/…`,
-  `rust/monolith/src/main.rs`, import script (python, per repo scripting convention).
+- Key store (Stage 0, landed): `rust/ingestion/src/sql_telemetry_db.rs` (the two tables),
+  `rust/auth/src/db_api_key.rs`, `rust/monolith/src/main.rs`.
   **Not** `rust/object-cache-srv/` — it has no DB access and keeps the env keyring (Stage 0).
+- Analytics-key read grants (Stage 4b): `rust/ingestion/src/sql_telemetry_db.rs` (the
+  `read_audiences TEXT[]` migration), `rust/auth/src/db_api_key.rs` (`KeyRow` + `AuthContext`
+  population), `rust/analytics-web-srv/src/analytics_keys.rs` (mint/import/list),
+  `analytics-web-app`'s Analytics API Keys page, `python/micromegas/micromegas/web_client.py` and
+  `cli/import_keys.py`.
+- Key-management routes — **`rust/analytics-web-srv/src/ingestion_keys.rs`** (`audience` on
+  `mint_key` and `import_key`, Stages 4/6) and its identity source
+  `rust/analytics-web-srv/src/auth/claims.rs` (`ValidatedUser`, Stage 1 — see the third identity
+  boundary), plus `python/micromegas/micromegas/cli/import_keys.py` and the
+  `analytics-web-app` ingestion-keys page if audience becomes a mint-time input.
+  **Not** `rust/public/src/servers/api_keys.rs` — deleted by #1458.
 
 ## Trade-offs
 
@@ -852,7 +1205,16 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   confidentiality resting on OIDC plus operator config; no TCB additions. Trade-off accepted:
   membership grants both read and write for a group (no independent write-only/read-only). A local
   grants table (more expressive, but its editors join the TCB) is a deferred pure addition, not
-  part of v1.
+  part of v1 — and is the recorded target state, with nested groups and separate read/mint grant
+  tables, in [Long-term model](#long-term-model--groups-nested-membership-and-grants). The v1 rule is
+  that model's degenerate identity-grant case, so adopting it later changes no caller's readable set.
+- **Analytics keys as service accounts with per-key read grants** (decided 2026-08-12) vs. an env
+  subject→groups map vs. deprecating them. Chosen: per-key `read_audiences` (Stage 4b). The env map
+  would require a redeploy per new service account, which is the operational problem Stage 0 exists to
+  eliminate; deprecation is unavailable because key-only flight-sql is a documented supported mode. Cost:
+  minting an analytics key becomes a confidentiality grant, so that route's authorization is now a
+  security control (9e), and "confidentiality rests solely on OIDC" weakens to "on the caller's
+  authenticated principal".
 - **Reserved property vs. first-class column** for the audience (v1 vs the later physical
   boundary): row-level filter now with zero migration, physical pruning later.
 - **Public views opt-in (§5b)** vs. keeping every aggregate private. Chosen: opt-in allowlist,
@@ -862,7 +1224,12 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 
 ## Security
 
-- Confidentiality = OIDC + `ReadPolicy` per query; write-key theft is integrity-only.
+- Confidentiality = **the caller's authenticated principal** + `ReadPolicy` per query; write-key theft is
+  integrity-only. For human callers the principal is OIDC identity; for **service accounts** it is an
+  analytics key whose `read_audiences` grant is the credential's own scope (Stage 4b). So a stolen
+  *analytics* key does grant reads — of exactly its granted audiences, which is why minting one is a
+  confidentiality grant (9e) and why the two key tables stay separate. A stolen *ingestion* key still
+  grants zero reads.
 - No write→read escalation (audience label ≠ read grant).
 - Metadata tables/functions **must** be covered by **both** prongs or they leak process names,
   machine names, and `otel.resource.*` properties even while log bodies are hidden. Prong A covers the
@@ -889,7 +1256,13 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   principal reads for operators are an out-of-band capability (direct object-store/parquet access),
   intentionally outside the query path. API keys can never be admin.
 - Group grants add a single trust dependency: the IdP's `groups` claim (plus operator-set implicit
-  groups). No local policy store, so the TCB gains no new members.
+  groups). No local policy store **in v1**, so the TCB gains no new members; per Stage 4b, whoever may
+  mint analytics keys can grant read access, and per the long-term model, a group/grant store adds its
+  editors to the TCB when it lands.
+- **Delegation never affects `ReadScope`.** API keys carry `allow_delegation: true` and clients (Grafana,
+  python services) send `x-user-id`/`x-user-email`; those headers are audit attribution only. A service
+  account's readable set is its own grant, and a delegated user's claimed identity neither widens nor
+  narrows it — the same rule as hole #2, applied to the credential kind that makes it tempting.
 - Public views (§5b) are an explicit, opt-in confidentiality relaxation: a listed view set is
   readable by every authenticated caller, so only genuinely aggregated / non-PII view sets may be
   listed. The default allowlist is empty (fail-closed); the raw global `log_entries` / `measures`
@@ -900,21 +1273,37 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
 - **Key store + management API (Stage 0, independent of everything below):** a DB key authenticates
   and an unknown key is rejected; a revoked key stops authenticating within the cache TTL (assert the
   stated revocation-latency property, don't leave it implicit); env keyring and DB keyring compose — a
-  key in either authenticates during the transition; a hand-imported row (or, once #1411 lands, an
-  imported row) round-trips an existing key string so the *same key string* still authenticates on
-  its own surface afterwards (the zero-client-change claim, so it deserves a real test); no cleartext
-  key is stored — assert the column holds the hash.
+  key in either authenticates during the transition; an imported row (via the `/import` route or the
+  hand-written SQL fallback) round-trips an existing key string so the *same key string* still
+  authenticates on its own surface afterwards (the zero-client-change claim, so it deserves a real
+  test); no cleartext key is stored — assert the column holds the hash.
   **Surface separation (the load-bearing property of the split):** a key in `ingestion_api_keys` is
   rejected by flight-sql and a key in `analytics_api_keys` is rejected by ingestion — assert both
   directions, since a provider constructed against the wrong table is the failure mode the two-table
-  design exists to prevent. Assert the mint route writes `ingestion_api_keys` only and that no route
-  inserts into `analytics_api_keys`.
+  design exists to prevent. Assert each key-management router writes only its own table — the
+  ingestion-keys routes never touch `analytics_api_keys` and vice versa (the code-level boundary
+  that replaced "the ingestion role has no INSERT grant" once both routers moved into one process,
+  and therefore the assertion that now carries the two-table split).
   **Management routes:** create returns a key that then authenticates; the cleartext is returned once
   and never retrievable afterwards; list omits the hash column; revoke is idempotent; every route
-  rejects an API-key-authenticated caller (admin requires OIDC, `api_key.rs:124`).
-- **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set and defaults to
-  `user:<email>`; `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the
-  singleton when both group sources are empty. Prong A: `OwnershipRewrite` injects the expected
+  rejects an API-key-authenticated caller (admin requires OIDC, `api_key.rs:124`); under
+  `--disable-auth` both prefixes answer 503 rather than falling through to the SPA.
+- **Unit:** `AudienceMintPolicy` rejects `requested` outside the mintable set, defaults to
+  `user:<email>`, and — the admin arm — accepts an arbitrary well-formed audience for an `is_admin`
+  caller while rejecting that same value for a non-admin, and rejects a malformed (unprefixed) audience
+  for both. `AudienceReadPolicy` returns `{user:} ∪ claim groups ∪ implicit groups` and the singleton
+  when both group sources are empty.
+- **Unit — service-account scope (Stage 1 shape, Stage 4b data):** a caller with
+  `read_audiences = [a, b]` and no email/groups resolves exactly `{a, b} ∪ implicit` with **no** `user:`
+  element; the same caller with an empty grant resolves implicit-only (∅ in a privacy deployment). Assert
+  a request carrying `x-user-id`/`x-user-email` for a *different* principal resolves the identical scope —
+  delegation must not move it either way.
+- **Fail-closed resolution:** a `ReadPolicy` stub returning `Err` makes the request fail
+  (`unavailable`/`permission_denied`); assert it does **not** produce an empty, default, or `All` scope.
+  This is the test that keeps property 2 of the long-term model true once the policy starts doing I/O.
+- **Stage 4b:** a key minted with a grant authenticates and carries it into `AuthContext`; a key minted
+  without one carries `[]`; `GET` returns `read_audiences` and still omits `key_hash`; a grant change is
+  visible within the cache TTL (or, per 9c, is not possible at all — assert whichever shipped). Prong A: `OwnershipRewrite` injects the expected
   predicate per table kind (snapshot the rewritten logical plan), including `view_instance` and the
   `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
   (incl. `get_payload`) rejects an unowned `process_id`/`block_id` and `list_partitions`
@@ -950,9 +1339,20 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
   `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist (§5b, with its non-PII caveat), and the
   confidentiality/integrity properties.
 - Update any auth/deployment docs to mention the two key tables and why they are separate, the
-  key-management routes (create/revoke/list) and the revocation-latency property, the manual
-  legacy-key import procedure **including the dual-use-key split** (a proper import tool + web admin
-  UI is tracked in #1411), the setup script, and the groups-claim configuration.
+  key-management routes (create/revoke/list/import, on `analytics-web-srv`) and the
+  revocation-latency property, the legacy-key import procedure **including the dual-use-key split**,
+  the setup script, and the groups-claim configuration. Stage 0's own docs
+  (`mkdocs/docs/admin/api-keys.md`, `admin/web-app.md`, `admin/ingestion.md`) already describe the
+  single relocated surface as of #1458 — the isolation stages add `audience` to that story rather
+  than re-describing it.
+- **Service accounts (Stage 4b):** `admin/api-keys.md` gains the `read_audiences` grant on analytics keys
+  and the statement that minting one grants read access; `grafana/authentication.md` gains the two
+  consequences from 9f — an M2M OAuth token resolves to nothing unless the IdP decorates it with a
+  `groups` claim, and Grafana dashboards in a privacy deployment are scoped to the service account, not to
+  the viewing user.
+- **Groups (long-term, not v1):** when the group/grant store lands it needs its own page — the membership
+  vs. grant distinction, edge direction, grant-latency (cache TTL) property, and the two-sided
+  authorization rule for the admin surface.
 
 ## Resolved Decisions
 
@@ -970,10 +1370,12 @@ Resolved by research (kept here for the record; details in Appendix A):
   a column in the later physical-boundary stage.
 - ~~**Groups-claim feasibility.**~~ **Resolved:** one-line additive `Claims`/`AuthContext` change,
   backward-compatible; Auth0/Azure AD/Google flat arrays; `MICROMEGAS_ADMINS` is the config precedent.
-- ~~**Grant source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** (no
-  local grants table in v1). Keeps confidentiality on OIDC and the TCB unchanged; accepted
+- ~~**Grant source.**~~ **Decided: IdP `groups` claim (+ implicit-groups config) only** for v1 (no
+  local grants table). Keeps confidentiality on OIDC and the TCB unchanged; accepted
   trade-off is that membership grants both read and write for a group. A grants table (or a second
-  write-role claim) is a deferred pure addition. See Stage 1 step 5.
+  write-role claim) is a deferred pure addition — and, as of 2026-08-12, the **intended end state**
+  rather than a mere option: see Stage 1 step 5 and
+  [Long-term model](#long-term-model--groups-nested-membership-and-grants).
 - ~~**Admin read bypass.**~~ **Decided: no query-path bypass.** `is_admin` does not map to
   `ReadScope::All`; admin sessions are filtered like any other. Operators needing cross-principal
   reads use direct object-store/parquet access, which they already have — a query bypass would add
@@ -1013,20 +1415,26 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Write and read keys live in separate tables** (`ingestion_api_keys` / `analytics_api_keys`,
   decided 2026-07-30, issue #1383): one key is never valid on both surfaces. The risk is asymmetric
   (write = integrity, read = confidentiality) and Stage 6 distributes ingestion keys to thousands of
-  machines, so the boundary is enforced by Postgres grants — the ingestion role never holds `INSERT`
-  on the analytics table. Only ingestion keys carry an `audience`. Consequence: a key currently used
+  machines. The boundary is enforced **in code** — each router is hardcoded to one table, each
+  provider constructed bound to one table — with per-service Postgres grants documented as an
+  operator option rather than shipped (every service shares one DB role by default, and after
+  #1458 both routers live in the same process, so a grant split cannot separate them anyway).
+  Only ingestion keys carry an `audience`. Consequence: a key currently used
   for both ingestion and queries (the unprefixed `MICROMEGAS_API_KEYS` fallback) must split into two
   at import — the one place zero-client-change does not hold.
 - **`object-cache-srv` keeps the env keyring** (decided 2026-07-30): it has no DB access, and a cache
   service does not earn a Postgres pool just to read a key table. Therefore `ApiKeyAuthProvider` /
   `parse_key_ring` are **permanent**, not transitional, and that service's keys stay
   redeploy-to-revoke — acceptable because they are service-held and never distributed.
-- **Key management is an OIDC-authenticated HTTP API on the ingestion service**, not admin-gated
+- **Key management is an OIDC-authenticated HTTP API**, not admin-gated
   lakehouse UDFs (decided 2026-07-30). Create/revoke/list move into **Stage 0**, since the table
   alone does not deliver the revoke-without-redeploy value; Stage 6 only adds audience resolution to
   the existing create route. UDFs were rejected because query text is logged into micromegas's own
   `log_entries` (`flight_sql_service_impl.rs:330`) and because a write UDF would grant the read
-  service write access to the key tables.
+  service write access to the key tables. **Host service revised 2026-08-12 (#1411/#1458):** the API
+  moved from ingestion to `analytics-web-srv` and ingestion's `/auth/api_keys*` routes were deleted;
+  Stage 6's `resolve_audience` call site moves accordingly. The UDF rejection is unaffected — the
+  logging argument was never about which service hosted the route.
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
 - **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
@@ -1040,8 +1448,40 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Identity holes are in scope for Stage 1**: prepared-statement path identity resolution and the
   client-claimed-attribution fallback (never feeds `ReadScope`).
 
-All design decisions are closed. Remaining work is implementation, staged per the Implementation
-Steps (Stage 0 and Stage 1 are both unblocked and independent of each other).
+Decided 2026-08-12 (from the #1369 planning review):
+- **Analytics keys are service accounts with configurable read grants** (`read_audiences TEXT[]`, new
+  Stage 4b), superseding "read scope never comes from a key" and "`analytics_api_keys` may be
+  transitional". Reasons: key-only flight-sql is a documented supported deployment, and the empty-scope
+  problem was never key-specific (OIDC client-credentials tokens have no email either), so a
+  key-specific `ReadPolicy` branch would have fixed half of it. **Rejected:** an env
+  subject→groups map (every new service account would need a redeploy — the operational problem Stage 0
+  exists to kill); delegation-derived scope (client-claimed identity, hole #2); deprecating analytics keys
+  (a documented mode needs a deprecation cycle, not a stage decision).
+- **`AudienceReadPolicy`'s union is branch-free** — `caller.read_audiences ∪ {user:email} ∪ claim groups
+  ∪ implicit` — because the grant rides on `AuthContext` rather than being resolved by credential kind. No
+  `auth_type` check exists anywhere in the policy.
+- **`AudienceMintPolicy` has an admin arm** (`is_admin` ⇒ any well-formed audience). Without it the
+  admin-gated mint route can only ever produce `user:<admin email>`, so Stage 6 would stamp every fleet
+  key with the minting admin's audience. This narrows Stage 6's open question to *who may call the route*,
+  which no longer changes the policy's shape.
+- **Both policy traits are `async` and fallible, and resolution failures deny.** Required by the
+  long-term store-backed grant source; free today. The deny-on-`Err` branch is written in Stage 1, with a
+  test, because a claim-only policy cannot fail and a permissive fallback would stay invisible until it
+  matters.
+- **`MintPolicy` takes `&AuthContext`**, and `analytics-web-srv` inserts the `AuthContext` into request
+  extensions (one line) rather than growing `ValidatedUser` — resolving the third identity boundary in
+  Stage 1 as the plan required.
+- **Target state recorded:** users belong to groups, groups nest, and a group is granted a set of
+  audiences it may read — with today's rule as the degenerate identity-grant case. See
+  [Long-term model](#long-term-model--groups-nested-membership-and-grants). This promotes the deferred
+  grants table from "possible addition" to "the intended end state", and accepts its TCB cost.
+
+All design decisions are closed **except one, narrowed** (2026-08-12): the mint route is admin-gated
+today, so per-user key issuance in the privacy profile is either an operator-run mint driven by the setup
+script or a non-admin route where `MintPolicy` is the authorization — a route-authorization choice made in
+Stage 6 (step 12), with both options already expressible by the shipped policy. Everything Stage 1 needs
+is settled. Remaining work is implementation, staged per the Implementation Steps; Stage 0 has landed and
+Stage 1 is unblocked.
 
 ## Appendix A — Research findings (2026-07-21)
 
@@ -1133,3 +1573,49 @@ listed. Nothing from the design vocabulary (`ReadScope`, `MintPolicy`, `micromeg
   `query.rs:120`, `materialize_partitions` at `query.rs:132`.
 - **Config factory precedent** for the grant knobs: `static_tables_configurator.rs:44-54`
   (`from_env` returning a no-op when unset).
+
+## Appendix C — Drift audit (2026-08-12, before Stage 1)
+
+Re-verification against HEAD `213ed3b`. Appendices A and B hold except as listed. The design
+vocabulary (`ReadScope`, `MintPolicy`, `micromegas.audience`, `bound_audience`, `AudienceReadPolicy`)
+is still **entirely unimplemented** — zero hits in `rust/`.
+
+**Stage 0 landed, and the key-management surface then moved.** #1383 shipped the two tables and
+`DbApiKeyAuthProvider`; #1411 added the web admin UI and the import route; **#1458 deleted
+ingestion's `/auth/api_keys*` routes and `rust/public/src/servers/api_keys.rs` entirely.** Key
+management now lives in `rust/analytics-web-srv/src/ingestion_keys.rs` and `analytics_keys.rs` under
+`{base_path}/api/{ingestion,analytics}-api-keys`, gated by the `AdminUser` extractor over the cookie
+session, writing the telemetry DB directly through the pool the service already opens. Consequences
+folded into the body above: 0c/0d rewritten, Stage 4 step 10 and Stage 6 step 12 re-pointed, Files
+to Modify and Testing updated, and the "not mintable through this API" property for analytics keys
+recorded as superseded.
+
+**Third identity boundary (new, Stage 1 scope).**
+`impl From<&AuthContext> for ValidatedUser` (`rust/analytics-web-srv/src/auth/claims.rs:40-48`)
+keeps only `subject`/`email`/`issuer`/`is_admin` — a new `AuthContext.groups` field is dropped
+there silently. This is now the mint path's identity source, so it joins the prepared-statement and
+client-claimed-attribution holes as something Stage 1 must decide rather than let Stage 6 discover.
+
+**The two original identity holes are unchanged.**
+- `do_action_create_prepared_statement` (`flight_sql_service_impl.rs:1142-1158`) still builds its
+  session context with no user identity and `query_range = None`. It does now pass
+  `is_admin(request.metadata())`, so the RPC reads *some* identity from metadata — but no
+  subject/email resolution, which is what `ReadScope` would need.
+- `validate_and_resolve_user_attribution_grpc` (`rust/auth/src/user_attribution.rs:127`) still falls
+  back to client-claimed identity when `x-auth-subject` is absent.
+
+**Line-ref updates** (the previous audit's numbers are stale enough to misdirect):
+- `make_session_context` is `query.rs:207` (was `:194`); `register_lakehouse_functions` is still
+  `query.rs:96`.
+- The two flight-sql call sites are `flight_sql_service_impl.rs:661` (`do_get`/execute path) and
+  `:1149` (prepared statement) — were `:372`/`:842`. #1369's issue text still cites the old pair.
+- `validate_and_resolve_user_attribution_grpc` is called at `flight_sql_service_impl.rs:573`
+  (was `:318`); its definition is `user_attribution.rs:127` (was `:108`).
+- The registry shape is unchanged from Appendix B: nine `register_udtf` calls and the
+  `get_payload` / `retire_partition_by_file` / `retire_partition_by_metadata` UDFs, several behind
+  the existing registration conditionals.
+- `make_session_context` has more callers than Appendix B's list implies — adding a `read_scope`
+  parameter touches `analytics/src/metadata.rs:182,283`,
+  `lakehouse/perfetto_trace_execution_plan.rs:254` and `lakehouse/export_log_view.rs` as well as the
+  two flight-sql sites. All are internal/maintenance contexts (`ReadScope::All`) except the
+  perfetto plan, which must inherit the caller's scope.

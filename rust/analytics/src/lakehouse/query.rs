@@ -15,7 +15,8 @@ use super::{
 };
 use crate::{
     lakehouse::{
-        materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
+        materialized_view::MaterializedView, read_scope::CallerContext,
+        table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
     properties::{
@@ -99,7 +100,7 @@ pub fn register_lakehouse_functions(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
-    is_admin: bool,
+    caller: &CallerContext,
 ) {
     ctx.register_udtf(
         "view_instance",
@@ -147,7 +148,7 @@ pub fn register_lakehouse_functions(
     ctx.register_udf(
         AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake().clone()))).into_scalar_udf(),
     );
-    if is_admin {
+    if caller.is_admin {
         ctx.register_udtf(
             "retire_partitions",
             Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
@@ -190,7 +191,7 @@ pub fn register_functions(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
-    is_admin: bool,
+    caller: &CallerContext,
 ) {
     register_lakehouse_functions(
         ctx,
@@ -198,7 +199,7 @@ pub fn register_functions(
         part_provider,
         query_range,
         view_factory,
-        is_admin,
+        caller,
     );
     register_extension_functions(ctx);
 }
@@ -210,7 +211,7 @@ pub async fn make_session_context(
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
-    is_admin: bool,
+    caller: CallerContext,
 ) -> Result<SessionContext> {
     // Disable page index reading for backward compatibility with legacy Parquet files
     // Legacy files may have incomplete ColumnIndex metadata (missing null_pages field)
@@ -237,7 +238,7 @@ pub async fn make_session_context(
         part_provider.clone(),
         query_range,
         view_factory.clone(),
-        is_admin,
+        &caller,
     );
     for view in view_factory.get_global_views() {
         register_table(
@@ -263,7 +264,7 @@ pub async fn query(
     sql: &str,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
-    is_admin: bool,
+    caller: CallerContext,
 ) -> Result<Answer> {
     info!("query sql={sql}");
     let ctx = make_session_context(
@@ -272,7 +273,7 @@ pub async fn query(
         query_range,
         view_factory,
         configurator,
-        is_admin,
+        caller,
     )
     .await
     .with_context(|| "make_session_context")?;

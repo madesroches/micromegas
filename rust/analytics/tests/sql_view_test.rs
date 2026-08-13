@@ -15,6 +15,7 @@ use micromegas_analytics::lakehouse::merge::{MergeQueryResult, PartitionMerger};
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
+use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
@@ -437,7 +438,7 @@ async fn test_log_summary_view(
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let pretty_results_view =
@@ -474,7 +475,7 @@ async fn test_log_summary_view(
         ORDER BY time_bin, process_id;",
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let pretty_results_ref =

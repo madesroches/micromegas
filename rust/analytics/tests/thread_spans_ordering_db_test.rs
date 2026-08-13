@@ -23,6 +23,7 @@ use micromegas_analytics::lakehouse::partition_source_data::{
 };
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::query;
+use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
@@ -342,7 +343,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         &format!(r#"SELECT "begin", "end" FROM view_instance('thread_spans', '{stream_id_str}');"#),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
 
@@ -356,7 +357,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         ),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let partition_count = get_single_row_primitive_value_by_name::<
@@ -384,7 +385,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         Some(query_range),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let df = ctx
@@ -410,7 +411,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         &format!(r#"SELECT "begin" FROM view_instance('thread_spans', '{stream_id_str}') ORDER BY "begin";"#),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
 
@@ -563,7 +564,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         &format!(r#"SELECT "begin", "end" FROM view_instance('thread_spans', '{stream_id_str}');"#),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await
     .with_context(|| "jit_update via thread_spans scan must not trip the exclusion constraint")?;
@@ -578,7 +579,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         ),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let mut previous: Option<i64> = None;
@@ -615,7 +616,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         ),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await
     .with_context(|| "perfetto_trace_chunks must not fail with 'thread spans out of order'")?;
@@ -642,7 +643,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         ),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let mut prev_end_insert: Option<i64> = None;

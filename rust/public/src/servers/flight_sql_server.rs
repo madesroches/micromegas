@@ -6,6 +6,7 @@ use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesCon
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas_auth::default_provider::ProviderBuilder;
+use micromegas_auth::policy::{AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -66,6 +67,7 @@ pub struct FlightSqlServerBuilder {
     view_factory_fn: Option<ViewFactoryFn>,
     session_configurator: Option<Arc<dyn SessionConfigurator>>,
     auth_provider: Option<Arc<dyn AuthProvider>>,
+    read_policy: Option<Arc<dyn ReadPolicy>>,
     use_default_auth: bool,
     max_decoding_message_size: usize,
     listen_addr: SocketAddr,
@@ -81,6 +83,7 @@ impl Default for FlightSqlServerBuilder {
             view_factory_fn: None,
             session_configurator: None,
             auth_provider: None,
+            read_policy: None,
             use_default_auth: false,
             max_decoding_message_size: 100 * 1024 * 1024,
             listen_addr: "0.0.0.0:50051"
@@ -120,6 +123,20 @@ impl FlightSqlServerBuilder {
     pub fn with_auth_provider(mut self, provider: Arc<dyn AuthProvider>) -> Self {
         self.auth_provider = Some(provider);
         self.use_default_auth = false;
+        self
+    }
+
+    /// Set an explicit `ReadPolicy`, resolved once per request against the caller's
+    /// `AuthContext` (#1369, AbAC Stage 1). This policy wins on every `build_and_serve` branch,
+    /// overriding that branch's own default. When never called, the default depends on how auth
+    /// is configured: with `with_default_auth()`, `AudienceReadPolicy::from_env("")`; with
+    /// `with_auth_provider(..)` or with auth left disabled, `AudienceReadPolicy` with empty
+    /// implicit groups. **Not** `ReadScope::All`: the absent-`AuthContext`-extension convention
+    /// already supplies `All` when no provider is configured, so this default must not duplicate
+    /// that decision -- it only ever resolves a scope when an `AuthContext` is present to resolve
+    /// one from.
+    pub fn with_read_policy(mut self, policy: Arc<dyn ReadPolicy>) -> Self {
+        self.read_policy = Some(policy);
         self
     }
 
@@ -216,25 +233,30 @@ impl FlightSqlServerBuilder {
                 .await?
             };
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
-            lakehouse,
-            partition_provider,
-            view_factory,
-            session_configurator,
-        ))
-        .max_decoding_message_size(self.max_decoding_message_size);
-
-        let auth_provider: Option<Arc<dyn AuthProvider>> =
+        // Auth/policy resolution moved above `FlightSqlServiceImpl::new` (#1369, AbAC Stage 1
+        // step 12): the service now takes the resolved `ReadPolicy` as a constructor argument, so
+        // it can no longer be constructed before its auth state is known.
+        //
+        // `self.read_policy` (set via `with_read_policy`) must win on every branch below --
+        // each branch only computes its own *default*, used solely when the caller never set an
+        // explicit policy. This keeps `with_read_policy` order-independent with respect to
+        // `with_auth_provider` / `with_default_auth`, unlike an earlier version that resolved the
+        // override inside the `auth_provider` arm only and silently dropped it on the other two.
+        let (auth_provider, default_policy): (Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>) =
             if let Some(provider) = self.auth_provider {
-                Some(provider)
+                // Injected-provider path (the monolith's `with_auth_provider` call): resolves no
+                // policy from env on its own -- the caller is expected to pair
+                // `with_auth_provider` with its own `with_read_policy` call. Falls back to the
+                // same empty-implicit-groups default as the other branches when it didn't.
+                (Some(provider), Arc::new(AudienceReadPolicy::new(vec![])))
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
-                match ProviderBuilder::new("")
+                let provider = match ProviderBuilder::new("")
                     .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
                     .build()
                     .await?
                 {
-                    Some(provider) => Some(provider),
+                    Some(provider) => provider,
                     None => {
                         anyhow::bail!(
                             "Authentication required but no auth providers configured. Set \
@@ -242,11 +264,28 @@ impl FlightSqlServerBuilder {
                          analytics_api_keys DB table"
                         );
                     }
-                }
+                };
+                let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::from_env("")?);
+                (Some(provider), policy)
             } else {
                 info!("Authentication disabled");
-                None
+                // No `AuthContext` extension is ever inserted on this path (no `AuthService`
+                // provider configured), so the absent-extension convention already supplies
+                // `ReadScope::All` -- this default policy is never actually resolved against a
+                // real caller, but must still exist since `FlightSqlServiceImpl::new` requires
+                // one.
+                (None, Arc::new(AudienceReadPolicy::new(vec![])))
             };
+        let read_policy = self.read_policy.unwrap_or(default_policy);
+
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
+            lakehouse,
+            partition_provider,
+            view_factory,
+            session_configurator,
+            read_policy,
+        ))
+        .max_decoding_message_size(self.max_decoding_message_size);
 
         let layer = ServiceBuilder::new()
             .layer(layer_fn(GrpcHealthService::new))

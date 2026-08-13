@@ -24,6 +24,7 @@ use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::partitioned_execution_plan::make_lex_ordering;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -192,7 +193,7 @@ async fn log_stats_extract_query_satisfies_its_declared_sort_order() {
         None,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        true,
+        CallerContext::maintenance(),
     )
     .await
     .expect("make_session_context");

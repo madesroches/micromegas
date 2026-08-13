@@ -18,8 +18,8 @@ use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
-        query::make_session_context, session_configurator::NoOpSessionConfigurator,
-        view_factory::ViewFactory,
+        query::make_session_context, read_scope::CallerContext,
+        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
@@ -179,13 +179,16 @@ pub async fn find_stream_from_view(
 ) -> Result<StreamMetadata> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
+    // TODO(#1371): reachable from a live user query (jit_update, thread_spans_view.rs:343,352 /
+    // net_spans_view.rs:326 / async_events_view.rs:130), so `internal()`'s `ReadScope::All` is a
+    // latent bypass -- Stage 3 must replace this with the caller's inherited scope.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await
     .with_context(|| "creating DataFusion session context")?;
@@ -280,13 +283,16 @@ pub async fn find_process_with_latest_timing(
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
+    // TODO(#1371): reachable from a live user query (jit_update, thread_spans_view.rs:343,352 /
+    // net_spans_view.rs:326 / async_events_view.rs:130), so `internal()`'s `ReadScope::All` is a
+    // latent bypass -- Stage 3 must replace this with the caller's inherited scope.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await
     .with_context(|| "creating DataFusion session context")?;
