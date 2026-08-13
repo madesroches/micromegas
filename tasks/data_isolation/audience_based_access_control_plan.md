@@ -327,6 +327,39 @@ text). Constructed with the resolved `ReadScope`.
   - **Public view sets (opt-in):** if the scanned view set is on the public allowlist, inject **no**
     predicate — see §5b. Default allowlist is empty, so this branch is inert unless configured.
 
+**Implemented (Stage 2, #1370) — corrections to the sketch above, recorded here now that Prong A has
+landed as `OwnershipRewrite` (`rust/analytics/src/lakehouse/ownership_rewrite.rs`):**
+- **One audience per process, not per row.** The `process_id IN (SELECT process_id FROM processes
+  WHERE <predicate>)` construction above re-admits a process via *any one* of its historical
+  (possibly pre-stamping, unstamped) partition rows — including its own `processes` scan, since a
+  per-row filter there leaks the same way. The shipped construction instead first collapses
+  `__processes__partitions` to one row per `process_id` via `Aggregate(GROUP BY process_id,
+  MAX(audience) AS resolved_audience)` (`MAX` over a nullable column ignores `NULL`s, so a stamped
+  row always outranks an unstamped one), then filters *that* — uniformly, including `processes`'s
+  own scan, which gets no separate per-row branch. This assumes a process is stamped with at most
+  one distinct audience over its lifetime; Stage 3 (#1371) should revisit if that assumption
+  changes.
+- **`async_events`/`thread_spans` are covered by Prong A, not deferred to Prong B's caches.** Both
+  are process/stream-scoped but carry no `process_id` (`async_events`) or `process_id`/`stream_id`
+  (`thread_spans`) column to semi-join on. Rather than leaving them unfiltered until Prong B's
+  caches land, `OwnershipRewrite` covers both now via a literal-valued, uncorrelated `EXISTS`
+  keyed on `MaterializedView::get_view().get_view_instance_id()` (the process_id string for
+  `async_events`; the stream_id string for `thread_spans`, resolved through `streams` into its
+  owning process) — a plan-time literal either way, costing no runtime cache.
+- **`OwnershipRewriteConfig` (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`) rides on
+  a new `CallerContext.ownership_config: Arc<OwnershipRewriteConfig>` field**
+  (`rust/analytics/src/lakehouse/read_scope.rs`), not a new `make_session_context` parameter — the
+  same shape §6 below already settled for `ReadScope`/`is_admin`: per-request resolved values ride
+  the context, per-service objects live on the service.
+  Both knobs are **parsed in `micromegas-analytics`, not `micromegas-auth`**
+  (`OwnershipRewriteConfig::from_env`), mirroring Stage 1's own "parse where consumed" reasoning for
+  keeping `ReadScope` out of the `micromegas-auth` crate boundary.
+- **Fail-loud fallback.** A view set matching none of the branches above (not `processes`, no
+  `process_id` column, not `async_events`/`thread_spans`, not on the public allowlist) makes
+  `analyze()` return `Err` naming the unhandled view set, rather than silently planning an
+  unfiltered scan — the next added view set is caught at development/test time, not as a silent
+  confidentiality gap.
+
 **Prong B — construction-time guard inside each UDTF `call_with_args`** (for the span/metadata
 functions Prong A can't reach). The owner id literal is available there via `exp_to_string` before
 the provider is built (`process_spans_table_function.rs:110`, `perfetto_trace_table_function.rs:71`).

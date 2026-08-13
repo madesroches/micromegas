@@ -7,10 +7,11 @@
 //! no group vocabulary, no policy trait, nothing that requires a store. The `rust/public` bridge
 //! is the only place a `ReadableAudiences` (from `micromegas-auth`) becomes a `ReadScope`.
 //!
-//! **Stage 1 ships no enforcement.** Nothing in this crate consumes `ReadScope` yet -- Stage 2's
-//! `OwnershipRewrite` and Stage 3's UDTF guards are the first consumers. Today `ReadScope` is
-//! threaded down to `make_session_context` and dropped -- Stage 2/3 must additionally arrange for
-//! it to reach the planner.
+//! **Stage 2 (#1370) consumes `ReadScope`.** [`super::ownership_rewrite::OwnershipRewrite`] --
+//! Prong A of the two-pronged enforcement design -- reads it out of [`CallerContext`] inside
+//! `query.rs::make_session_context` and injects an audience predicate into every
+//! `MaterializedView`-backed scan. Prong B (the UDTF/UDF guards for the span/metadata functions
+//! Prong A structurally cannot reach) is still pending, Stage 3 (#1371).
 
 use std::sync::Arc;
 
@@ -41,12 +42,19 @@ pub enum ReadScope {
 /// constructors below or a resolved value from a `ReadPolicy`.
 #[derive(Debug, Clone)]
 pub struct CallerContext {
-    /// The audience scope to plan queries under. Accepted and dropped by `make_session_context`
-    /// in Stage 1 -- Stage 2/3 must additionally arrange for it to reach the planner.
+    /// The audience scope to plan queries under. Consumed by
+    /// [`super::ownership_rewrite::OwnershipRewrite`] (#1370, AbAC Stage 2) inside
+    /// `query.rs::make_session_context`.
     pub read_scope: ReadScope,
     /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs (unchanged from
     /// today's `is_admin: bool` parameter).
     pub is_admin: bool,
+    /// Per-service `OwnershipRewrite` deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
+    /// `MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved once at server startup, not per request, but
+    /// bundled here rather than as a new `make_session_context` parameter (#1370 Design §8):
+    /// per-request resolved values ride the context, per-service objects live on the service,
+    /// and this rides along with `read_scope` at every real call site anyway.
+    pub ownership_config: Arc<OwnershipRewriteConfig>,
 }
 
 impl CallerContext {
@@ -58,6 +66,7 @@ impl CallerContext {
         Self {
             read_scope: ReadScope::All,
             is_admin: false,
+            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
         }
     }
 
@@ -67,6 +76,127 @@ impl CallerContext {
         Self {
             read_scope: ReadScope::All,
             is_admin: true,
+            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
         }
+    }
+}
+
+/// Deployment config for [`super::ownership_rewrite::OwnershipRewrite`] (#1370, AbAC Stage 2).
+/// Per-service, resolved once at server startup from environment variables -- see
+/// [`OwnershipRewriteConfig::from_env`].
+#[derive(Debug, Clone, Default)]
+pub struct OwnershipRewriteConfig {
+    /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
+    /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"group:everyone"`. `None`
+    /// (the default) means unstamped processes stay invisible to every `ReadScope::Audiences`
+    /// caller. Parsed from `{prefix}_UNSTAMPED_AUDIENCE`, falling back to
+    /// `MICROMEGAS_UNSTAMPED_AUDIENCE`.
+    pub unstamped_audience: Option<String>,
+    /// View-set names `OwnershipRewrite` skips entirely -- no predicate injected at all,
+    /// regardless of scope. Off (empty) by default, matching the AbAC plan's "off by default,
+    /// fail-closed" framing for this operator-responsibility allowlist. Parsed from
+    /// `{prefix}_PUBLIC_VIEW_SETS`, falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`.
+    pub public_view_sets: Vec<String>,
+}
+
+/// `true` if `aud` is a well-formed `user:`/`group:`-prefixed audience (non-empty after the
+/// prefix). An unprefixed `MICROMEGAS_UNSTAMPED_AUDIENCE` value would silently never match any
+/// `ReadScope::Audiences` element (every one of those is prefixed), so `from_env` rejects it at
+/// parse time rather than shipping a configured-but-inert knob.
+fn is_well_formed_audience(aud: &str) -> bool {
+    ["user:", "group:"]
+        .iter()
+        .any(|prefix| aud.len() > prefix.len() && aud.starts_with(prefix))
+}
+
+/// Comma-separated list parser for `{prefix}_PUBLIC_VIEW_SETS` / `MICROMEGAS_PUBLIC_VIEW_SETS`.
+///
+/// Deliberately the same encoding as `micromegas_auth::policy`'s `MICROMEGAS_IMPLICIT_GROUPS`
+/// parser (comma-separated, rejecting `[`, `]`, `"`) rather than the `MICROMEGAS_ADMINS`
+/// JSON-array shape -- duplicated here rather than depending on `micromegas-auth` for it, since
+/// `micromegas-analytics` does not depend on that crate (the same crate-boundary reasoning
+/// `read_scope.rs`'s own module doc comment gives for keeping `ReadScope` here).
+fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
+    let raw = match std::env::var(var) {
+        Ok(raw) => raw,
+        Err(_) => return Ok(vec![]),
+    };
+    if raw.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let mut values = Vec::new();
+    for entry in raw.split(',') {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("{var}: empty entry (entry {entry:?} in {raw:?})");
+        }
+        if trimmed.contains(['[', ']', '"']) {
+            anyhow::bail!(
+                "{var}: entry {trimmed:?} contains '[', ']', or '\"' -- this variable is \
+                 comma-separated, not a JSON array like MICROMEGAS_ADMINS"
+            );
+        }
+        values.push(trimmed.to_string());
+    }
+    Ok(values)
+}
+
+/// Resolves `{prefix}_UNSTAMPED_AUDIENCE` (falling back to `MICROMEGAS_UNSTAMPED_AUDIENCE`), or
+/// `None` if neither is set.
+fn unstamped_audience_var(prefix: &str) -> String {
+    if prefix.is_empty() {
+        "MICROMEGAS_UNSTAMPED_AUDIENCE".to_string()
+    } else {
+        let prefixed = format!("{prefix}_UNSTAMPED_AUDIENCE");
+        if std::env::var(&prefixed).is_ok() {
+            prefixed
+        } else {
+            "MICROMEGAS_UNSTAMPED_AUDIENCE".to_string()
+        }
+    }
+}
+
+/// Resolves `{prefix}_PUBLIC_VIEW_SETS` (falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`).
+fn public_view_sets_var(prefix: &str) -> String {
+    if prefix.is_empty() {
+        "MICROMEGAS_PUBLIC_VIEW_SETS".to_string()
+    } else {
+        let prefixed = format!("{prefix}_PUBLIC_VIEW_SETS");
+        if std::env::var(&prefixed).is_ok() {
+            prefixed
+        } else {
+            "MICROMEGAS_PUBLIC_VIEW_SETS".to_string()
+        }
+    }
+}
+
+impl OwnershipRewriteConfig {
+    /// Resolves both knobs from the environment. Unset ⇒ `OwnershipRewriteConfig::default()`
+    /// (unstamped processes stay invisible, no public view sets). A malformed
+    /// `{prefix}_UNSTAMPED_AUDIENCE` (missing the `user:`/`group:` prefix) or a malformed
+    /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
+    /// typo into a fail-fast instead of a silently-inert knob.
+    pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
+        let unstamped_var = unstamped_audience_var(prefix);
+        let unstamped_audience = match std::env::var(&unstamped_var) {
+            Ok(raw) if raw.trim().is_empty() => None,
+            Ok(raw) => {
+                let raw = raw.trim().to_string();
+                if !is_well_formed_audience(&raw) {
+                    anyhow::bail!(
+                        "{unstamped_var}: {raw:?} is not a well-formed audience -- must be \
+                         'user:<id>' or 'group:<id>'"
+                    );
+                }
+                Some(raw)
+            }
+            Err(_) => None,
+        };
+        let public_view_sets_var = public_view_sets_var(prefix);
+        let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;
+        Ok(Self {
+            unstamped_audience,
+            public_view_sets,
+        })
     }
 }
