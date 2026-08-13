@@ -73,6 +73,7 @@ fn config(max_nb_objects: i64, block_order: BlockOrder) -> JitPartitionConfig {
         max_nb_objects,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order,
+        target_rows_per_query: 250_000,
     }
 }
 

@@ -14,7 +14,8 @@ use micromegas_analytics::dfext::typed_column::{
 use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, JitPartitionConfig, generate_stream_jit_partitions_segment,
+    BlockOrder, JitPartitionConfig, generate_stream_jit_partitions,
+    generate_stream_jit_partitions_segment,
 };
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
@@ -814,6 +815,7 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1027,6 +1029,7 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1242,6 +1245,7 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
         max_nb_objects: 4,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1509,6 +1513,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
         max_nb_objects: 4,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
 
     // Run 1: only blocks 0-3 exist yet.
@@ -1765,6 +1770,7 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
 
     // Run 1: only block 0 exists yet -- a single-block, degenerate [t0, t0] partition.
@@ -2032,6 +2038,7 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -2096,6 +2103,193 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         let e: DateTime<Utc> = row.try_get("end_insert_time")?;
         assert_eq!(b, t0, "every sibling should start at t0");
         assert_eq!(e, t0, "every sibling should be degenerate at t0");
+    }
+
+    Ok(())
+}
+
+/// Batched stream path equivalence (jit_batched_block_queries_plan.md, Testing Strategy): the
+/// outer `generate_stream_jit_partitions` batches its block queries and then splits each batch
+/// back into per-bucket runs (`BlockOrder::EventTime` uses this path for `net_spans` too, so this
+/// is the riskiest new logic under that ordering). With `target_rows_per_query` lowered to force
+/// more than one batch over a 4-bucket range (one block per bucket, so a batch of 2 covers 2
+/// buckets), asserts the emitted specs are identical -- same block ids, in the same order, same
+/// `block_ids_hash` -- to running `generate_stream_jit_partitions_segment` once per bucket
+/// directly.
+#[ignore]
+#[tokio::test]
+async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
+    ensure_telemetry_guard();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, None, HashMap::new());
+    let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    ingestion
+        .insert_process(process_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let stream_info = make_stream_info(&stream);
+    let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
+    ingestion
+        .insert_stream(stream_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
+
+    // One block per hour bucket, 4 buckets, well in the past so this run's data cannot collide
+    // with another concurrently-running test's (each test uses its own random process/stream id
+    // regardless, but a round hour boundary keeps the math simple).
+    let base_hour = (Utc::now() - TimeDelta::hours(10)).duration_trunc(TimeDelta::hours(1))?;
+    for name in ["span_0", "span_1", "span_2", "span_3"] {
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+    }
+    for (i, (object_offset, begin_ticks, end_ticks)) in [
+        (0i64, 0i64, 1000i64),
+        (2, 1000, 2000),
+        (4, 2000, 3000),
+        (6, 3000, 4000),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bucket_time = base_hour + TimeDelta::hours(i as i64) + TimeDelta::minutes(30);
+        sqlx::query(
+            "UPDATE blocks SET begin_ticks = $1, end_ticks = $2, insert_time = $3, \
+                                begin_time = $3, end_time = $3 \
+             WHERE stream_id = $4 AND object_offset = $5",
+        )
+        .bind(begin_ticks)
+        .bind(end_ticks)
+        .bind(bucket_time)
+        .bind(stream_id)
+        .bind(object_offset)
+        .execute(&lake.db_pool)
+        .await
+        .with_context(|| format!("overriding block at object_offset {object_offset}"))?;
+    }
+
+    let lake = Arc::new(lake);
+    let runtime = Arc::new(make_runtime_env()?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    let materialize_range = TimeRange::new(base_hour, base_hour + TimeDelta::hours(4));
+    let blocks_view = Arc::new(BlocksView::new()?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        blocks_view.clone(),
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let blocks_only_factory = Arc::new(ViewFactory::new(vec![blocks_view.clone()]));
+    let processes_view = Arc::new(
+        make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
+    );
+    regenerate_global_view(
+        lakehouse.clone(),
+        processes_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let streams_view =
+        Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        streams_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+
+    let full_range = TimeRange::new(
+        base_hour - TimeDelta::seconds(10),
+        base_hour + TimeDelta::hours(4) + TimeDelta::seconds(10),
+    );
+
+    let stream_meta = Arc::new(
+        find_stream_from_view(lakehouse.clone(), view_factory.clone(), &stream_id, None).await?,
+    );
+    let (process_meta, _last_block_end_ticks, _last_block_end_time) =
+        find_process_with_latest_timing(lakehouse.clone(), view_factory.clone(), &process_id, None)
+            .await?;
+    let process_meta = Arc::new(process_meta);
+
+    // Force more than one batch (one block/bucket, target_rows_per_query=2 packs pairs of
+    // adjacent buckets into one batch) while never forcing a cut *within* a bucket
+    // (max_nb_objects large).
+    let config = JitPartitionConfig {
+        max_nb_objects: 1000,
+        max_insert_time_slice: TimeDelta::hours(1),
+        block_order: BlockOrder::EventTime,
+        target_rows_per_query: 2,
+    };
+
+    let batched_specs = generate_stream_jit_partitions(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &full_range,
+        stream_meta.clone(),
+        process_meta.clone(),
+    )
+    .await
+    .with_context(|| "generate_stream_jit_partitions")?;
+
+    // Expected: run the per-segment function once per hour bucket directly, and concatenate.
+    let segment_source_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        TimeRange::new(base_hour, base_hour + TimeDelta::hours(4)),
+    )
+    .await?;
+    let mut expected_specs = vec![];
+    for i in 0..4i64 {
+        let bucket_range = TimeRange::new(
+            base_hour + TimeDelta::hours(i),
+            base_hour + TimeDelta::hours(i + 1),
+        );
+        let mut segment_specs = generate_stream_jit_partitions_segment(
+            &config,
+            lakehouse.clone(),
+            &blocks_view,
+            &segment_source_partitions,
+            &bucket_range,
+            stream_meta.clone(),
+            process_meta.clone(),
+        )
+        .await
+        .with_context(|| format!("generate_stream_jit_partitions_segment bucket {i}"))?;
+        expected_specs.append(&mut segment_specs);
+    }
+
+    assert_eq!(
+        batched_specs.len(),
+        expected_specs.len(),
+        "batched and per-segment generation must emit the same number of specs"
+    );
+    for (batched, expected) in batched_specs.iter().zip(expected_specs.iter()) {
+        assert_eq!(
+            batched.block_ids_hash, expected.block_ids_hash,
+            "block_ids_hash must match"
+        );
+        let batched_ids: Vec<_> = batched.blocks.iter().map(|b| b.block.block_id).collect();
+        let expected_ids: Vec<_> = expected.blocks.iter().map(|b| b.block.block_id).collect();
+        assert_eq!(
+            batched_ids, expected_ids,
+            "block ids and order must match between the batched and per-segment paths"
+        );
     }
 
     Ok(())

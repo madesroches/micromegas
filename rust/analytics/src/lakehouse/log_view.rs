@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     lakehouse::jit_partitions::{
-        BlockOrder, generate_process_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, find_up_to_date_partitions, generate_process_jit_partitions,
     },
     log_entries_table::log_table_schema,
     metadata::find_process,
@@ -186,15 +186,16 @@ impl View for LogView {
         };
         let block_processors = log_processors();
 
-        for part in all_partitions {
-            if !is_jit_partition_up_to_date(
-                &lakehouse.lake().db_pool,
-                view_meta.clone(),
-                &part,
-                BlockOrder::InsertTime,
-            )
-            .await?
-            {
+        let up_to_date = find_up_to_date_partitions(
+            &lakehouse.lake().db_pool,
+            view_meta.clone(),
+            BlockOrder::InsertTime,
+            &all_partitions,
+        )
+        .await
+        .with_context(|| "find_up_to_date_partitions")?;
+        for (part, up_to_date) in all_partitions.into_iter().zip(up_to_date) {
+            if !up_to_date {
                 write_partition_from_blocks(
                     lakehouse.lake().clone(),
                     view_meta.clone(),

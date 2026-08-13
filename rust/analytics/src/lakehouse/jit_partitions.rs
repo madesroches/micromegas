@@ -39,28 +39,31 @@ use crate::{
         partition_cache::PartitionCache, partition_source_data::hash_to_object_count,
         query::query_partitions, view::PartitionSpec,
     },
-    metadata::{ProcessMetadata, StreamMetadata, block_from_batch_row},
-    properties::properties_column_accessor::properties_column_by_name,
+    metadata::{
+        ProcessMetadata, StreamMetadata, block_from_batch_row, stream_metadata_from_batch_row,
+    },
     response_writer::ResponseWriter,
     time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
+use datafusion::arrow::array::{Int64Array, TimestampNanosecondArray};
 use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 /// How source blocks are ordered before being cut into JIT partitions.
 ///
-/// The choice matters because `generate_stream_jit_partitions_segment` /
-/// `generate_process_jit_partitions_segment` query blocks with `ORDER BY insert_time, block_id`,
-/// and that SQL order is what `group_blocks_into_partitions` starts from.
+/// The choice matters because `generate_stream_jit_partitions_segment` and the batched block
+/// queries driven by `generate_stream_jit_partitions` / `generate_process_jit_partitions` fetch
+/// blocks with `ORDER BY insert_time, block_id`, and that SQL order is what
+/// `group_blocks_into_partitions` starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockOrder {
     /// Registration order (`insert_time`, `block_id`), i.e. the SQL order is kept as-is. Correct
@@ -82,6 +85,12 @@ pub struct JitPartitionConfig {
     pub max_nb_objects: i64,
     pub max_insert_time_slice: TimeDelta,
     pub block_order: BlockOrder,
+    /// Soft row-count target for a single batched block query (see `batch_windows`). Consecutive
+    /// insert-time buckets are packed into one query up to this many blocks, derived from a
+    /// per-bucket `COUNT(*)` run before the batch queries themselves -- see the module's Adaptive
+    /// batch width design notes. A config field rather than a bare constant so DB-gated tests can
+    /// lower it to force a run to split into more than one batch.
+    pub target_rows_per_query: i64,
 }
 
 impl Default for JitPartitionConfig {
@@ -90,6 +99,7 @@ impl Default for JitPartitionConfig {
             max_nb_objects: 20 * 1024 * 1024,
             max_insert_time_slice: TimeDelta::hours(1),
             block_order: BlockOrder::InsertTime,
+            target_rows_per_query: 250_000,
         }
     }
 }
@@ -174,8 +184,8 @@ fn emit_partition(
         return;
     }
     if grown_past_limit > 0 {
-        // process_id only: under the process-level path (`generate_process_jit_partitions_segment`)
-        // a partition can span several streams, and after the event-time sort `blocks[start]` is an
+        // process_id only: under the process-level path (`generate_process_jit_partitions`) a
+        // partition can span several streams, and after the event-time sort `blocks[start]` is an
         // arbitrary one of them.
         //
         // debug!, not warn!: grouping re-runs on every query over the view (jit_update is called
@@ -350,6 +360,284 @@ pub fn group_blocks_into_partitions(
     out
 }
 
+/// Packs consecutive insert-time buckets of `[insert_range.begin, insert_range.end)` (stepping by
+/// `slice`, so every bucket edge is `slice`-aligned to `insert_range.begin`) into batch query
+/// windows, greedily closing a window just before it would exceed `target_rows_per_query`.
+///
+/// `bucket_counts` holds one `(bucket_start, nb_blocks)` pair per *non-empty* bucket, ascending;
+/// any bucket missing from it is treated as holding zero blocks (and so never forces a close on
+/// its own). See the module's Adaptive batch width design notes for the derivation and the
+/// single-oversized-bucket residual case (a bucket whose own count already exceeds
+/// `target_rows_per_query` still forms one batch on its own -- the loop never splits a bucket).
+///
+/// Batch edges are always bucket-aligned and batches tile `insert_range` with no gaps or overlaps,
+/// so which width is picked cannot change the specs `group_blocks_into_partitions` later emits
+/// per bucket -- only how many SQL queries it takes to gather them.
+pub fn batch_windows(
+    insert_range: TimeRange,
+    slice: TimeDelta,
+    bucket_counts: &[(DateTime<Utc>, i64)],
+    target_rows_per_query: i64,
+) -> impl Iterator<Item = TimeRange> {
+    let mut windows = Vec::new();
+    let mut running: i64 = 0;
+    let mut batch_begin = insert_range.begin;
+    let mut bucket_begin = insert_range.begin;
+    let mut counts_idx = 0usize;
+    while bucket_begin < insert_range.end {
+        // bucket_counts is ascending and every bucket we walk here is >= the previous one, so a
+        // single forward-moving index suffices (no need to search backwards).
+        while counts_idx < bucket_counts.len() && bucket_counts[counts_idx].0 < bucket_begin {
+            counts_idx += 1;
+        }
+        let nb_blocks =
+            if counts_idx < bucket_counts.len() && bucket_counts[counts_idx].0 == bucket_begin {
+                let n = bucket_counts[counts_idx].1;
+                counts_idx += 1;
+                n
+            } else {
+                0
+            };
+        if running > 0 && running + nb_blocks > target_rows_per_query {
+            windows.push(TimeRange::new(batch_begin, bucket_begin));
+            running = 0;
+            batch_begin = bucket_begin;
+        }
+        running += nb_blocks;
+        bucket_begin += slice;
+    }
+    windows.push(TimeRange::new(batch_begin, insert_range.end));
+    windows.into_iter()
+}
+
+/// Renders a `TimeDelta` as arrow-parsable interval text (e.g. `"3600 seconds"`) for use with
+/// DataFusion's `date_bin`. `TimeDelta`'s own `Display` yields ISO-8601 (`PT3600S`), which
+/// `date_bin` cannot parse -- see the module's Adaptive batch width design notes.
+fn interval_literal(slice: TimeDelta) -> String {
+    format!("{} seconds", slice.num_seconds())
+}
+
+/// Splits an insert-time-sorted block list into consecutive runs sharing the same
+/// `insert_time.duration_trunc(slice)` bucket. The SQL feeding this is `ORDER BY insert_time,
+/// block_id`, so buckets are contiguous runs in the list -- no sorting or grouping by key needed,
+/// just a scan that closes a run whenever the bucket changes.
+fn split_into_buckets(
+    blocks: Vec<Arc<PartitionSourceBlock>>,
+    slice: TimeDelta,
+) -> Result<Vec<Vec<Arc<PartitionSourceBlock>>>> {
+    let mut buckets = vec![];
+    let mut current: Vec<Arc<PartitionSourceBlock>> = vec![];
+    let mut current_bucket: Option<DateTime<Utc>> = None;
+    for block in blocks {
+        let bucket = block.block.insert_time.duration_trunc(slice)?;
+        if current_bucket != Some(bucket) {
+            if !current.is_empty() {
+                buckets.push(std::mem::take(&mut current));
+            }
+            current_bucket = Some(bucket);
+        }
+        current.push(block);
+    }
+    if !current.is_empty() {
+        buckets.push(current);
+    }
+    Ok(buckets)
+}
+
+/// Runs the per-bucket `COUNT(*) ... GROUP BY date_bin(slice, insert_time)` query over
+/// `insert_range`, under `identity_predicate` (the batch queries' own identity filter -- process +
+/// stream-tag, or stream id) so the returned counts match what the batch queries themselves will
+/// return; see the module's Adaptive batch width design notes for why the event-time predicate of
+/// the MIN/MAX pre-query would not do. Returns one `(bucket_start, nb_blocks)` pair per non-empty
+/// bucket, ascending.
+async fn fetch_bucket_counts(
+    lakehouse: Arc<LakehouseContext>,
+    blocks_view: &BlocksView,
+    partitions: &PartitionCache,
+    insert_range: TimeRange,
+    slice: TimeDelta,
+    identity_predicate: &str,
+) -> Result<Vec<(DateTime<Utc>, i64)>> {
+    let slice_literal = interval_literal(slice);
+    let begin_iso = insert_range.begin.to_rfc3339();
+    let end_iso = insert_range.end.to_rfc3339();
+    let sql = format!(
+        r#"SELECT date_bin('{slice_literal}', insert_time) as bucket, COUNT(*) as nb_blocks
+             FROM source
+             WHERE {identity_predicate}
+             AND insert_time >= '{begin_iso}'
+             AND insert_time < '{end_iso}'
+             GROUP BY bucket
+             ORDER BY bucket;"#
+    );
+    let filtered = partitions.filter_insert_range(insert_range).partitions;
+    let reader_factory = lakehouse.reader_factory().clone();
+    let df = instrument_named!(
+        query_partitions(
+            lakehouse.runtime().clone(),
+            reader_factory,
+            lakehouse.lake().blob_storage.inner(),
+            blocks_view.get_file_schema(),
+            Arc::new(filtered),
+            &sql,
+        ),
+        "query_partitions"
+    )
+    .await?;
+    let rbs = instrument_named!(df.collect(), "collect_bucket_counts").await?;
+    let mut counts = vec![];
+    for rb in &rbs {
+        let bucket_column: &TimestampNanosecondArray = typed_column_by_name(rb, "bucket")?;
+        let nb_blocks_column: &Int64Array = typed_column_by_name(rb, "nb_blocks")?;
+        for i in 0..rb.num_rows() {
+            counts.push((
+                DateTime::from_timestamp_nanos(bucket_column.value(i)),
+                nb_blocks_column.value(i),
+            ));
+        }
+    }
+    Ok(counts)
+}
+
+/// The process-variant batch query: block columns plus `stream_id` only -- **no stream-level
+/// column** (`streams.dependencies_metadata`/`objects_metadata`/`tags`/`properties`/`format`) may
+/// be added to the `SELECT` list. Re-adding one would reintroduce the per-row stream-blob-copy
+/// memory hazard the lean projection removes, with no test failing except the projection guard in
+/// `analytics/tests/jit_batch_windows_tests.rs` -- see the module's "Why the lean projection is in
+/// scope" design notes. `array_has("streams.tags", ...)` stays in the `WHERE` clause: filtering
+/// needs no projection.
+pub fn process_batch_sql(process_id: &Uuid, stream_tag: &str, range: &TimeRange) -> String {
+    let begin_iso = range.begin.to_rfc3339();
+    let end_iso = range.end.to_rfc3339();
+    format!(
+        r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
+             FROM source
+             WHERE process_id = '{process_id}'
+             AND array_has( "streams.tags", '{stream_tag}' )
+             AND insert_time >= '{begin_iso}'
+             AND insert_time < '{end_iso}'
+             ORDER BY insert_time, block_id;"#
+    )
+}
+
+/// Fetches and parses one batch window's worth of process-scoped blocks (`process_batch_sql`),
+/// looking up each block's stream metadata in `stream_metadata` (built once per call to
+/// `generate_process_jit_partitions` by `fetch_stream_metadata_map`) rather than rebuilding it per
+/// row -- this is the lean projection's fetch-and-parse half; see the module's "Why the lean
+/// projection is in scope" design notes.
+///
+/// A `stream_id` missing from `stream_metadata` is a hard error: the metadata pre-query and this
+/// query share the same identity predicate and insert range, so it cannot happen unless something
+/// is wrong.
+pub async fn fetch_process_blocks(
+    lakehouse: Arc<LakehouseContext>,
+    blocks_view: &BlocksView,
+    partitions: &PartitionCache,
+    range: &TimeRange,
+    process: Arc<ProcessMetadata>,
+    stream_tag: &str,
+    stream_metadata: &HashMap<Uuid, (Arc<StreamMetadata>, String)>,
+) -> Result<Vec<Arc<PartitionSourceBlock>>> {
+    let filtered = partitions.filter_insert_range(*range).partitions;
+    let sql = process_batch_sql(&process.process_id, stream_tag, range);
+    let reader_factory = lakehouse.reader_factory().clone();
+    let df = instrument_named!(
+        query_partitions(
+            lakehouse.runtime().clone(),
+            reader_factory,
+            lakehouse.lake().blob_storage.inner(),
+            blocks_view.get_file_schema(),
+            Arc::new(filtered),
+            &sql,
+        ),
+        "query_partitions"
+    )
+    .await?;
+    let rbs = instrument_named!(df.collect(), "collect_partition_blocks").await?;
+    let mut blocks = vec![];
+    for rb in &rbs {
+        let stream_id_column = string_column_by_name(rb, "stream_id")?;
+        for ir in 0..rb.num_rows() {
+            let block = block_from_batch_row(rb, ir).with_context(|| "block_from_batch_row")?;
+            let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)
+                .with_context(|| "parsing stream_id")?;
+            let (stream, format) = stream_metadata.get(&stream_id).with_context(|| {
+                format!(
+                    "fetch_process_blocks: missing stream metadata for stream {stream_id} \
+                     (same predicate, same range as the metadata pre-query -- this should not \
+                     happen)"
+                )
+            })?;
+            blocks.push(Arc::new(PartitionSourceBlock {
+                block,
+                stream: stream.clone(),
+                process: process.clone(),
+                format: format.clone(),
+            }));
+        }
+    }
+    Ok(blocks)
+}
+
+/// Pre-query 3 (process variant only): fetches every stream's metadata once for the whole insert
+/// range (stream metadata is immutable after registration), so the batched block queries can look
+/// it up per block instead of rebuilding it. Mirrors `streams_view.rs`'s transform query, and
+/// reads the result with the shared `stream_metadata_from_batch_row` helper -- `format` is kept
+/// alongside in the map since it is not part of `StreamMetadata`.
+async fn fetch_stream_metadata_map(
+    lakehouse: Arc<LakehouseContext>,
+    blocks_view: &BlocksView,
+    partitions: &PartitionCache,
+    insert_range: TimeRange,
+    process: &ProcessMetadata,
+    stream_tag: &str,
+) -> Result<HashMap<Uuid, (Arc<StreamMetadata>, String)>> {
+    let process_id = &process.process_id;
+    let begin_iso = insert_range.begin.to_rfc3339();
+    let end_iso = insert_range.end.to_rfc3339();
+    let sql = format!(
+        r#"SELECT stream_id,
+               first_value("process_id")                    as process_id,
+               first_value("streams.dependencies_metadata") as dependencies_metadata,
+               first_value("streams.objects_metadata")      as objects_metadata,
+               first_value("streams.tags")                  as tags,
+               first_value("streams.properties")            as properties,
+               first_value("streams.format")                as format
+        FROM source
+        WHERE process_id = '{process_id}'
+        AND array_has( "streams.tags", '{stream_tag}' )
+        AND insert_time >= '{begin_iso}'
+        AND insert_time < '{end_iso}'
+        GROUP BY stream_id;"#
+    );
+    let filtered = partitions.filter_insert_range(insert_range).partitions;
+    let reader_factory = lakehouse.reader_factory().clone();
+    let df = instrument_named!(
+        query_partitions(
+            lakehouse.runtime().clone(),
+            reader_factory,
+            lakehouse.lake().blob_storage.inner(),
+            blocks_view.get_file_schema(),
+            Arc::new(filtered),
+            &sql,
+        ),
+        "query_partitions"
+    )
+    .await?;
+    let rbs = instrument_named!(df.collect(), "collect_stream_metadata").await?;
+    let mut map = HashMap::new();
+    for rb in &rbs {
+        let format_column = string_column_by_name(rb, "format")?;
+        for ir in 0..rb.num_rows() {
+            let stream = stream_metadata_from_batch_row(rb, ir)
+                .with_context(|| "stream_metadata_from_batch_row")?;
+            let format = format_column.value(ir)?.to_string();
+            map.insert(stream.stream_id, (Arc::new(stream), format));
+        }
+    }
+    Ok(map)
+}
+
 async fn get_insert_time_range(
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
@@ -462,6 +750,15 @@ pub async fn generate_stream_jit_partitions_segment(
 /// generate_stream_jit_partitions lists the partitiions that are needed to cover a time span
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range.
+///
+/// Batches its block queries (see the module's Design notes): `batch_windows`, derived from a
+/// per-bucket `COUNT(*)`, picks how many insert-time buckets one query covers, and each batch's
+/// rows are then split back into per-bucket runs (`split_into_buckets`) and grouped independently
+/// -- byte-identical to running `generate_stream_jit_partitions_segment` once per bucket, just
+/// fewer, wider queries to get there. `generate_stream_jit_partitions_segment` itself is kept, not
+/// called from here anymore -- see the module's "Keeping (and dropping) the segment functions"
+/// notes.
+#[span_fn]
 pub async fn generate_stream_jit_partitions(
     config: &JitPartitionConfig,
     lakehouse: Arc<LakehouseContext>,
@@ -490,7 +787,7 @@ pub async fn generate_stream_jit_partitions(
             .duration_trunc(config.max_insert_time_slice)?
             + config.max_insert_time_slice,
     );
-    let segment_source_partitions = instrument_named!(
+    let source_partitions = instrument_named!(
         PartitionCache::fetch_overlapping_insert_range_for_view(
             &lakehouse.lake().db_pool,
             blocks_view.get_view_set_name(),
@@ -501,136 +798,98 @@ pub async fn generate_stream_jit_partitions(
     )
     .await?;
 
-    let mut begin_segment = insert_time_range.begin;
-    let mut end_segment = begin_segment + config.max_insert_time_slice;
-    let mut partitions = vec![];
-    while end_segment <= insert_time_range.end {
-        let insert_time_range = TimeRange::new(begin_segment, end_segment);
-        let mut segment_partitions = generate_stream_jit_partitions_segment(
-            config,
-            lakehouse.clone(),
-            blocks_view,
-            &segment_source_partitions,
-            &insert_time_range,
-            stream.clone(),
-            process.clone(),
-        )
-        .await?;
-        partitions.append(&mut segment_partitions);
-        begin_segment = end_segment;
-        end_segment = begin_segment + config.max_insert_time_slice;
-    }
-    Ok(partitions)
-}
-
-/// Generates a segment of JIT partitions filtered by process.
-#[span_fn]
-pub async fn generate_process_jit_partitions_segment(
-    config: &JitPartitionConfig,
-    lakehouse: Arc<LakehouseContext>,
-    blocks_view: &BlocksView,
-    partitions: &PartitionCache,
-    insert_time_range: &TimeRange,
-    process: Arc<ProcessMetadata>,
-    stream_tag: &str,
-) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let partitions = partitions
-        .filter_insert_range(*insert_time_range)
-        .partitions;
-
-    let process_id = &process.process_id;
-    let begin_range_iso = insert_time_range.begin.to_rfc3339();
-    let end_range_iso = insert_time_range.end.to_rfc3339();
-    let sql = format!(
-        r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time,
-             "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties", "streams.format"
-             FROM source
-             WHERE process_id = '{process_id}'
-             AND array_has( "streams.tags", '{stream_tag}' )
-             AND insert_time >= '{begin_range_iso}'
-             AND insert_time < '{end_range_iso}'
-             ORDER BY insert_time, block_id;"#
-    );
-
-    let reader_factory = lakehouse.reader_factory().clone();
-    let df = instrument_named!(
-        query_partitions(
-            lakehouse.runtime().clone(),
-            reader_factory,
-            lakehouse.lake().blob_storage.inner(),
-            blocks_view.get_file_schema(),
-            Arc::new(partitions),
-            &sql,
-        ),
-        "query_partitions"
+    let stream_id = stream.stream_id;
+    let identity_predicate = format!("stream_id = '{stream_id}'");
+    let bucket_counts = fetch_bucket_counts(
+        lakehouse.clone(),
+        blocks_view,
+        &source_partitions,
+        insert_time_range,
+        config.max_insert_time_slice,
+        &identity_predicate,
     )
     .await?;
-    let rbs = instrument_named!(df.collect(), "collect_partition_blocks").await?;
 
-    let mut blocks = vec![];
+    let windows: Vec<TimeRange> = batch_windows(
+        insert_time_range,
+        config.max_insert_time_slice,
+        &bucket_counts,
+        config.target_rows_per_query,
+    )
+    .collect();
+    debug!(
+        "generate_stream_jit_partitions: stream={stream_id}: derived {} batch window(s) from {} \
+         non-empty bucket(s) (~{} row(s) total, target_rows_per_query={})",
+        windows.len(),
+        bucket_counts.len(),
+        bucket_counts.iter().map(|(_, n)| n).sum::<i64>(),
+        config.target_rows_per_query
+    );
 
-    for rb in rbs {
-        for ir in 0..rb.num_rows() {
-            let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
+    let mut partitions = vec![];
+    for batch_range in windows {
+        let filtered = source_partitions
+            .filter_insert_range(batch_range)
+            .partitions;
+        let begin_iso = batch_range.begin.to_rfc3339();
+        let end_iso = batch_range.end.to_rfc3339();
+        let sql = format!(
+            r#"SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time, "streams.format"
+                 FROM source
+                 WHERE stream_id = '{stream_id}'
+                 AND insert_time >= '{begin_iso}'
+                 AND insert_time < '{end_iso}'
+                 ORDER BY insert_time, block_id;"#
+        );
+        let reader_factory = lakehouse.reader_factory().clone();
+        let df = instrument_named!(
+            query_partitions(
+                lakehouse.runtime().clone(),
+                reader_factory,
+                lakehouse.lake().blob_storage.inner(),
+                blocks_view.get_file_schema(),
+                Arc::new(filtered),
+                &sql,
+            ),
+            "query_partitions"
+        )
+        .await?;
+        let rbs = instrument_named!(df.collect(), "collect_partition_blocks").await?;
 
-            // Build StreamMetadata from the query results
-            let stream_id_column = string_column_by_name(&rb, "stream_id")?;
-            let stream_process_id_column = string_column_by_name(&rb, "process_id")?;
-            let dependencies_metadata_column: &BinaryArray =
-                typed_column_by_name(&rb, "streams.dependencies_metadata")?;
-            let objects_metadata_column: &BinaryArray =
-                typed_column_by_name(&rb, "streams.objects_metadata")?;
-            let stream_tags_column: &GenericListArray<i32> =
-                typed_column_by_name(&rb, "streams.tags")?;
-            let stream_properties_accessor = properties_column_by_name(&rb, "streams.properties")?;
-            let stream_format_column = string_column_by_name(&rb, "streams.format")?;
-
-            let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)
-                .with_context(|| "parsing stream_id")?;
-            let stream_process_id = Uuid::parse_str(stream_process_id_column.value(ir)?)
-                .with_context(|| "parsing stream process_id")?;
-
-            let dependencies_metadata = dependencies_metadata_column.value(ir);
-            let objects_metadata = objects_metadata_column.value(ir);
-            let stream_tags = stream_tags_column
-                .value(ir)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .with_context(|| "casting stream_tags")?
-                .iter()
-                .map(|item| String::from(item.unwrap_or_default()))
-                .collect();
-
-            // Get pre-serialized JSONB properties directly from accessor
-            let stream_properties_jsonb = stream_properties_accessor.jsonb_value(ir)?;
-
-            let stream = Arc::new(StreamMetadata {
-                stream_id,
-                process_id: stream_process_id,
-                dependencies_metadata: ciborium::from_reader(dependencies_metadata)
-                    .with_context(|| "decoding dependencies_metadata")?,
-                objects_metadata: ciborium::from_reader(objects_metadata)
-                    .with_context(|| "decoding objects_metadata")?,
-                tags: stream_tags,
-                properties: Arc::new(stream_properties_jsonb),
-            });
-
-            let format = stream_format_column.value(ir)?.to_string();
-
-            blocks.push(Arc::new(PartitionSourceBlock {
-                block,
-                stream: stream.clone(),
-                process: process.clone(),
-                format,
-            }));
+        let mut blocks = vec![];
+        for rb in rbs {
+            let format_column = string_column_by_name(&rb, "streams.format")?;
+            for ir in 0..rb.num_rows() {
+                let block =
+                    block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
+                let format = format_column.value(ir)?.to_string();
+                blocks.push(Arc::new(PartitionSourceBlock {
+                    block,
+                    stream: stream.clone(),
+                    process: process.clone(),
+                    format,
+                }));
+            }
+        }
+        for bucket_blocks in split_into_buckets(blocks, config.max_insert_time_slice)? {
+            partitions.append(&mut group_blocks_into_partitions(config, bucket_blocks));
         }
     }
-    Ok(group_blocks_into_partitions(config, blocks))
+    Ok(partitions)
 }
 
 /// generate_process_jit_partitions lists the partitions that are needed to cover a time span for a specific process
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range filtered by process.
+///
+/// Batches its block queries the same way `generate_stream_jit_partitions` does, and additionally
+/// applies the lean projection (see the module's "Why the lean projection is in scope" notes):
+/// `fetch_stream_metadata_map` fetches every stream's metadata once for the whole insert range,
+/// and each batch's `fetch_process_blocks` call looks it up per block instead of projecting stream
+/// blobs onto every row and rebuilding `StreamMetadata` per row.
+/// `generate_process_jit_partitions_segment` has been deleted -- its only caller was this function
+/// -- and its grouping call is now inlined into the batch loop below; see the module's "Keeping
+/// (and dropping) the segment functions" notes.
 #[span_fn]
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
@@ -701,7 +960,7 @@ pub async fn generate_process_jit_partitions(
             + config.max_insert_time_slice,
     );
 
-    let segment_source_partitions = instrument_named!(
+    let source_partitions = instrument_named!(
         PartitionCache::fetch_overlapping_insert_range_for_view(
             &lakehouse.lake().db_pool,
             blocks_view.get_view_set_name(),
@@ -712,33 +971,120 @@ pub async fn generate_process_jit_partitions(
     )
     .await?;
 
-    let mut begin_segment = insert_time_range.begin;
-    let mut end_segment = begin_segment + config.max_insert_time_slice;
-    let mut partitions = vec![];
+    let identity_predicate =
+        format!(r#"process_id = '{process_id}' AND array_has( "streams.tags", '{stream_tag}' )"#);
+    let bucket_counts = fetch_bucket_counts(
+        lakehouse.clone(),
+        blocks_view,
+        &source_partitions,
+        insert_time_range,
+        config.max_insert_time_slice,
+        &identity_predicate,
+    )
+    .await?;
 
-    while end_segment <= insert_time_range.end {
-        let insert_time_range = TimeRange::new(begin_segment, end_segment);
-        let mut segment_partitions = generate_process_jit_partitions_segment(
-            config,
+    let stream_metadata = fetch_stream_metadata_map(
+        lakehouse.clone(),
+        blocks_view,
+        &source_partitions,
+        insert_time_range,
+        &process,
+        stream_tag,
+    )
+    .await?;
+
+    let windows: Vec<TimeRange> = batch_windows(
+        insert_time_range,
+        config.max_insert_time_slice,
+        &bucket_counts,
+        config.target_rows_per_query,
+    )
+    .collect();
+    debug!(
+        "generate_process_jit_partitions: process={process_id} stream_tag={stream_tag}: derived \
+         {} batch window(s) from {} non-empty bucket(s) (~{} row(s) total, \
+         target_rows_per_query={})",
+        windows.len(),
+        bucket_counts.len(),
+        bucket_counts.iter().map(|(_, n)| n).sum::<i64>(),
+        config.target_rows_per_query
+    );
+
+    let mut partitions = vec![];
+    for batch_range in windows {
+        let blocks = fetch_process_blocks(
             lakehouse.clone(),
             blocks_view,
-            &segment_source_partitions,
-            &insert_time_range,
+            &source_partitions,
+            &batch_range,
             process.clone(),
             stream_tag,
+            &stream_metadata,
         )
         .await?;
-        partitions.append(&mut segment_partitions);
-        begin_segment = end_segment;
-        end_segment = begin_segment + config.max_insert_time_slice;
+        for bucket_blocks in split_into_buckets(blocks, config.max_insert_time_slice)? {
+            partitions.append(&mut group_blocks_into_partitions(config, bucket_blocks));
+        }
     }
     Ok(partitions)
 }
 
-/// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
-/// Checks if a JIT partition is up to date.
+/// One `lakehouse_partitions` candidate row, as fetched by `fetch_freshness_candidates`:
+/// `(begin_insert_time, end_insert_time, file_schema_hash, source_data_hash)`. Fields are `pub` so
+/// `analytics/tests/jit_freshness_tests.rs` can build rows directly, without a live database.
+#[derive(Debug, Clone)]
+pub struct PartitionFreshnessRow {
+    pub begin_insert_time: DateTime<Utc>,
+    pub end_insert_time: DateTime<Utc>,
+    pub file_schema_hash: Vec<u8>,
+    pub source_data_hash: Vec<u8>,
+}
+
+/// Fetches every `lakehouse_partitions` row for `view_meta` whose insert range *inclusively
+/// overlaps* `range` (`begin_insert_time <= range.end AND end_insert_time >= range.begin`) -- a
+/// superset of what any of the three `BlockOrder`-dependent per-spec queries used to return (an
+/// exact-equality row necessarily overlaps the spec's own range), with the variant-specific
+/// narrowing applied in Rust by `spec_is_up_to_date`. Used both by `is_jit_partition_up_to_date`
+/// (one spec's own range) and `find_up_to_date_partitions` (one range spanning many specs).
+async fn fetch_freshness_candidates(
+    pool: &sqlx::PgPool,
+    view_meta: &ViewMetadata,
+    range: TimeRange,
+) -> Result<Vec<PartitionFreshnessRow>> {
+    let rows = sqlx::query(
+        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
+         FROM lakehouse_partitions
+         WHERE view_set_name = $1
+         AND view_instance_id = $2
+         AND begin_insert_time <= $3
+         AND end_insert_time >= $4
+         ;",
+    )
+    .bind(&*view_meta.view_set_name)
+    .bind(&*view_meta.view_instance_id)
+    .bind(range.end)
+    .bind(range.begin)
+    .fetch_all(pool)
+    .await
+    .with_context(|| "fetching freshness candidates")?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(PartitionFreshnessRow {
+                begin_insert_time: r.try_get("begin_insert_time")?,
+                end_insert_time: r.try_get("end_insert_time")?,
+                file_schema_hash: r.try_get("file_schema_hash")?,
+                source_data_hash: r.try_get("source_data_hash")?,
+            })
+        })
+        .collect()
+}
+
+/// Filters `candidates` down to the rows the per-spec SQL used to return (exact range equality for
+/// `BlockOrder::EventTime`, exact match for a degenerate `BlockOrder::InsertTime` range, inclusive
+/// overlap otherwise), then applies the same `rows.len() == 1` / `file_schema_hash` /
+/// object-count checks `is_jit_partition_up_to_date` always has.
 ///
-/// `block_order` selects which query/comparison applies (see `BlockOrder`):
+/// `block_order` selects which comparison applies (see `BlockOrder`):
 /// - `BlockOrder::EventTime` (`thread_spans`/`net_spans` only) requires exact insert-range and
 ///   exact count equality. Their cut points can move between `jit_update` runs, so a later run's
 ///   spec can be narrower than an already-written partition that still overlaps it; the overlap/`>=`
@@ -752,12 +1098,11 @@ pub async fn generate_process_jit_partitions(
 ///   no-op here: `RetireMatch::Containment` cannot retire a merely-overlapping partition, so
 ///   calling such a spec "not up to date" would make the subsequent insert trip the
 ///   `lakehouse_partitions_no_overlap` exclusion constraint.
-#[span_fn]
-pub async fn is_jit_partition_up_to_date(
-    pool: &sqlx::PgPool,
-    view_meta: ViewMetadata,
+pub fn spec_is_up_to_date(
+    view_meta: &ViewMetadata,
     spec: &SourceDataBlocksInMemory,
     block_order: BlockOrder,
+    candidates: &[PartitionFreshnessRow],
 ) -> Result<bool> {
     let (min_insert_time, max_insert_time) =
         get_part_insert_time_range(spec).with_context(|| "get_event_time_range")?;
@@ -770,101 +1115,47 @@ pub async fn is_jit_partition_up_to_date(
     );
 
     // See: https://github.com/madesroches/micromegas/issues/488
-    let rows = match block_order {
-        BlockOrder::EventTime => {
+    let matches: Vec<&PartitionFreshnessRow> = candidates
+        .iter()
+        .filter(|r| match block_order {
             // Exact insert-range equality (see this function's docs for why).
-            instrument_named!(
-                sqlx::query(
-                    "SELECT file_schema_hash, source_data_hash
-             FROM lakehouse_partitions
-             WHERE view_set_name = $1
-             AND view_instance_id = $2
-             AND begin_insert_time = $3
-             AND end_insert_time = $4
-             ;",
-                )
-                .bind(&*view_meta.view_set_name)
-                .bind(&*view_meta.view_instance_id)
-                .bind(min_insert_time)
-                .bind(max_insert_time)
-                .fetch_all(pool),
-                "sql_select_matching_partitions"
-            )
-            .await
-            .with_context(|| "fetching matching partitions")?
-        }
-        BlockOrder::InsertTime if min_insert_time == max_insert_time => {
+            BlockOrder::EventTime => {
+                r.begin_insert_time == min_insert_time && r.end_insert_time == max_insert_time
+            }
             // Degenerate range: exact-match on the single insert time, to avoid matching
             // multiple/wider overlapping rows (see this function's docs).
-            instrument_named!(
-                sqlx::query(
-                    "SELECT file_schema_hash, source_data_hash
-             FROM lakehouse_partitions
-             WHERE view_set_name = $1
-             AND view_instance_id = $2
-             AND begin_insert_time = $3
-             AND end_insert_time = $3
-             ;",
-                )
-                .bind(&*view_meta.view_set_name)
-                .bind(&*view_meta.view_instance_id)
-                .bind(min_insert_time)
-                .fetch_all(pool),
-                "sql_select_matching_partitions"
-            )
-            .await
-            .with_context(|| "fetching matching partitions")?
-        }
-        BlockOrder::InsertTime => {
+            BlockOrder::InsertTime if min_insert_time == max_insert_time => {
+                r.begin_insert_time == min_insert_time && r.end_insert_time == min_insert_time
+            }
             // Overlap test, using inclusive inequalities (<=, >=) to prevent race conditions: with
             // exclusive inequalities (<, >), identical time ranges never match, causing partitions
             // to be unnecessarily recreated on every query (see this function's docs and
             // https://github.com/madesroches/micromegas/issues/488).
-            instrument_named!(
-                sqlx::query(
-                    "SELECT file_schema_hash, source_data_hash
-             FROM lakehouse_partitions
-             WHERE view_set_name = $1
-             AND view_instance_id = $2
-             AND begin_insert_time <= $3
-             AND end_insert_time >= $4
-             ;",
-                )
-                .bind(&*view_meta.view_set_name)
-                .bind(&*view_meta.view_instance_id)
-                .bind(max_insert_time)
-                .bind(min_insert_time)
-                .fetch_all(pool),
-                "sql_select_matching_partitions"
-            )
-            .await
-            .with_context(|| "fetching matching partitions")?
-        }
-    };
-    if rows.len() != 1 {
-        debug!("{desc}: found {} partitions (expected 1)", rows.len());
-        for (i, row) in rows.iter().enumerate() {
-            let part_file_schema: Vec<u8> = row.try_get("file_schema_hash")?;
-            let part_source_data: Vec<u8> = row.try_get("source_data_hash")?;
-            let source_row_count = hash_to_object_count(&part_source_data)?;
+            BlockOrder::InsertTime => {
+                r.begin_insert_time <= max_insert_time && r.end_insert_time >= min_insert_time
+            }
+        })
+        .collect();
+    if matches.len() != 1 {
+        debug!("{desc}: found {} partitions (expected 1)", matches.len());
+        for (i, r) in matches.iter().enumerate() {
+            let source_row_count = hash_to_object_count(&r.source_data_hash)?;
             debug!(
                 "{desc}: partition {}: file_schema_hash={:?}, source_rows={}",
-                i, part_file_schema, source_row_count
+                i, r.file_schema_hash, source_row_count
             );
         }
-        info!("{desc}: found {} partitions", rows.len());
+        info!("{desc}: found {} partitions", matches.len());
         return Ok(false);
     }
-    let r = &rows[0];
-    let part_file_schema: Vec<u8> = r.try_get("file_schema_hash")?;
-    if part_file_schema != view_meta.file_schema_hash {
+    let r = matches[0];
+    if r.file_schema_hash != view_meta.file_schema_hash {
         // this is dangerous because we could be creating a new partition smaller than the old one, which is not supported.
         // let's make sure there is no old data loitering
         warn!("{desc}: found matching partition with different file schema");
         return Ok(false);
     }
-    let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
-    let existing_count = hash_to_object_count(&part_source_data)?;
+    let existing_count = hash_to_object_count(&r.source_data_hash)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
     let up_to_date = match block_order {
         // Exact count equality: see this function's docs.
@@ -882,6 +1173,129 @@ pub async fn is_jit_partition_up_to_date(
     }
     info!("{desc}: partition up to date");
     Ok(true)
+}
+
+/// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
+/// Checks if a JIT partition is up to date.
+///
+/// Fetches the spec's own candidate range (`fetch_freshness_candidates`) and runs the shared
+/// matcher (`spec_is_up_to_date`) against it -- see that function's docs for the per-`BlockOrder`
+/// semantics. Kept for the `BlockOrder::EventTime` callers (`net_spans`/`thread_spans`), whose
+/// checks stay per-spec, interleaved with retire logic inside their own `update_partition`. The
+/// five `BlockOrder::InsertTime` callers instead batch through `find_up_to_date_partitions`.
+#[span_fn]
+pub async fn is_jit_partition_up_to_date(
+    pool: &sqlx::PgPool,
+    view_meta: ViewMetadata,
+    spec: &SourceDataBlocksInMemory,
+    block_order: BlockOrder,
+) -> Result<bool> {
+    let (min_insert_time, max_insert_time) =
+        get_part_insert_time_range(spec).with_context(|| "get_event_time_range")?;
+    let candidates = instrument_named!(
+        fetch_freshness_candidates(
+            pool,
+            &view_meta,
+            TimeRange::new(min_insert_time, max_insert_time),
+        ),
+        "sql_select_matching_partitions"
+    )
+    .await?;
+    spec_is_up_to_date(&view_meta, spec, block_order, &candidates)
+}
+
+/// One candidates fetch over `[specs.first().min, specs.last().max]` (specs have ascending,
+/// non-overlapping insert ranges), then the matcher per spec, run to a fixpoint. An empty `specs`
+/// returns `Ok(vec![])` without issuing any fetch -- reachable at every call site, since
+/// `generate_*_jit_partitions` returns no specs when the range holds no blocks.
+///
+/// Round 1 runs `spec_is_up_to_date` for every spec against the full candidate set. Each later
+/// round: for any spec `i` newly verdicted **not** up to date this round, drop from every other
+/// spec `j`'s candidate set any row entirely contained in `i`'s insert range, and re-run the
+/// matcher for those affected `j`s (see the module's "Verdicts reflect pre-run state" design
+/// notes) -- such a row is a `RetireMatch::Containment` match for spec `i` and will be gone once
+/// `i`'s write runs this call, so it must not count towards `j`'s freshness. Repeat until a round
+/// flips no verdict: dropping a row can only turn a spec from up-to-date to stale, never the
+/// reverse, so verdicts are monotone and the loop terminates in at most `specs.len()` rounds (one,
+/// in the common case). A row is dropped only when its containing spec is itself stale; specs
+/// whose containing spec is up to date (hence not rewritten) are unaffected. Returns up-to-date
+/// flags parallel to `specs`.
+#[span_fn]
+pub async fn find_up_to_date_partitions(
+    pool: &sqlx::PgPool,
+    view_meta: ViewMetadata,
+    block_order: BlockOrder,
+    specs: &[SourceDataBlocksInMemory],
+) -> Result<Vec<bool>> {
+    if specs.is_empty() {
+        return Ok(vec![]);
+    }
+    let ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = specs
+        .iter()
+        .map(get_part_insert_time_range)
+        .collect::<Result<Vec<_>>>()?;
+    let outer_range = TimeRange::new(
+        ranges
+            .first()
+            .with_context(|| "find_up_to_date_partitions: empty ranges")?
+            .0,
+        ranges
+            .last()
+            .with_context(|| "find_up_to_date_partitions: empty ranges")?
+            .1,
+    );
+    debug!(
+        "find_up_to_date_partitions: fetching freshness candidates for {} spec(s) over [{}, {}]",
+        specs.len(),
+        outer_range.begin.to_rfc3339(),
+        outer_range.end.to_rfc3339(),
+    );
+    let mut candidates = instrument_named!(
+        fetch_freshness_candidates(pool, &view_meta, outer_range),
+        "sql_select_freshness_candidates"
+    )
+    .await?;
+
+    let mut up_to_date: Vec<bool> = specs
+        .iter()
+        .map(|spec| spec_is_up_to_date(&view_meta, spec, block_order, &candidates))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Fixpoint: a spec verdicted not up to date will retire, this run, every candidate row
+    // entirely contained in its insert range (`RetireMatch::Containment`); such a row must not
+    // count towards a sibling spec's freshness. Verdicts are monotone (up-to-date -> stale only),
+    // so this loop drops no more rows, and flips no more verdicts, than there are specs.
+    loop {
+        if !up_to_date.contains(&false) {
+            break;
+        }
+        let stale_ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = up_to_date
+            .iter()
+            .zip(ranges.iter())
+            .filter(|(up, _)| !**up)
+            .map(|(_, r)| *r)
+            .collect();
+        let next_candidates: Vec<PartitionFreshnessRow> = candidates
+            .iter()
+            .filter(|row| {
+                !stale_ranges.iter().any(|(min_i, max_i)| {
+                    row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
+                })
+            })
+            .cloned()
+            .collect();
+        let next_up_to_date: Vec<bool> = specs
+            .iter()
+            .map(|spec| spec_is_up_to_date(&view_meta, spec, block_order, &next_candidates))
+            .collect::<Result<Vec<_>>>()?;
+        if next_up_to_date == up_to_date {
+            break;
+        }
+        candidates = next_candidates;
+        up_to_date = next_up_to_date;
+    }
+
+    Ok(up_to_date)
 }
 
 /// get_event_time_range returns the time range covered by a partition spec
