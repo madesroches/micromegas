@@ -266,9 +266,12 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
   `rust/analytics/tests/write_partition_tests.rs:34`; widen its return type to a small struct and
   fix that test.
 - Thread through `PartitionWriteResult` (`:617-623`; three construction sites at `:712-717`,
-  `:727-732`, `:765-770`) into the `Partition` literal (`:884-894`) and the INSERT. While touching
-  the INSERT (`:531`), convert it to an **explicit column list** — the bare positional `VALUES`
-  with a hardcoded `2` mis-binds silently if a column is ever added anywhere but last.
+  `:727-732`, `:765-770`) into the `Partition` literal (`:884-894`) and the INSERT. The two
+  empty-partition branches (`:712-717`'s zero-row-file case and `:765-770`'s no-`event_time_range`
+  case) must set `max_sort_key_time: None` alongside their existing `event_time_range: None`, so an
+  empty partition can never carry a non-NULL bound. While touching the INSERT (`:531`), convert it
+  to an **explicit column list** — the bare positional `VALUES` with a hardcoded `2` mis-binds
+  silently if a column is ever added anywhere but last.
 
 ### 3. Populate it in `thread_spans_view`
 
@@ -294,7 +297,9 @@ with no admin `retire_partitions` call required (see Trade-offs).
   (`list_partitions_table_function.rs:52-89`, `:113`, `:131`) — its `rows_to_record_batch` is
   generic, so schema and SELECT must stay in lockstep.
 - Extend `Partition::validate` (`partition.rs:90-117`) with the cheap invariant: when both are
-  present, `min_event_time <= max_sort_key_time <= max_event_time`.
+  present, `min_event_time <= max_sort_key_time <= max_event_time`; also reject a non-NULL
+  `max_sort_key_time` when `min_event_time`/`max_event_time` are NULL (an empty partition has no
+  sort-key bound to record).
 
 ### 5. Change what the check compares
 
@@ -385,7 +390,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    + widened return struct (fix `rust/analytics/tests/write_partition_tests.rs`, adding a case that
    feeds several out-of-order `PartitionRowSet`s — some `Some`, one `None` — through the existing
    hand-built channel and asserts both the running max and the `None`-poisoning rule);
-   `PartitionWriteResult`; explicit-column-list INSERT with the new bind.
+   `PartitionWriteResult`, with both empty-partition branches of `finalize_partition_write` setting
+   `max_sort_key_time: None`; explicit-column-list INSERT with the new bind.
 5. **Populate**: `thread_spans_view.rs::write_partition` sets `max_sort_key_time` from the last
    row's `begin` after `ensure_begin_non_decreasing`, or `None` when `rows.num_rows() == 0`. Bump
    `SCHEMA_VERSION` 2 → 3 in the same file so every pre-existing `thread_spans` partition self-heals
