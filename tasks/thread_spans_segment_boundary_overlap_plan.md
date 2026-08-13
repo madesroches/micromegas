@@ -306,6 +306,16 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
   `async_events_block_processor.rs:157`,
   `log_block_processor.rs:68`, and `image_block_processor.rs:81` (or have them switch to
   `PartitionRowSet::new`).
+
+  Keeping `new()` at two arguments is a deliberate trade, and the implementer should know which way
+  it cuts: the seven `::new` sites keep compiling and silently receive `None`. That is exactly right
+  semantically — none of those views declares a `Concatenated` event-time ordering, so `None` (fall
+  back to `max_event_time`) is the correct value for all of them — but it means the compiler will
+  **not** force a review of those seven sites, and a future view that does need the bound could be
+  added through `::new` and get `None` without any signal. The five struct literals are the only
+  sites that break the build. If a second view ever declares `Concatenated` + `OrderingBounds::
+  EventTime`, converting `new()` to take the field explicitly (and letting the compiler enumerate
+  the callers) is the safer shape at that point.
 - `write_rows_and_track_times` (`:626-675`) folds a running value alongside the existing min/max
   fold. Soundness rule: the partition-level value is `Some(max)` **only if every** received row
   set carried `Some`; any `None` poisons the whole partition to `None`. It must be a running
@@ -579,7 +589,13 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    untouched by this plan, and mid-bucket cuts are already covered by
    `thread_spans_interrupted_run_reconverges` (`:1125`) and
    `thread_spans_cross_run_regrouping_replaces_stale_partition` (`:1378`), both `max_nb_objects: 4`.)
-10. **Sanity**: run `thread_spans_batched_generation_matches_per_segment` (`#[ignore]`d) — grouping
+10. **Sanity**: run the new hour-seam DB regression test from Step 9 explicitly
+   (`cargo test --test thread_spans_ordering_db_test -- --ignored`, with a local stack up). It is
+   `#[ignore]`d per the file's convention, so it does **not** run in `cargo test` or in
+   `build/rust_ci.py` — and it is the only test in the plan that proves `update_partition` actually
+   persists `max_sort_key_time` and that the scan path reads it back. Everything else in the change
+   can be green while that link is broken. Run
+   `thread_spans_batched_generation_matches_per_segment` (`#[ignore]`d) too — grouping
    is untouched so it must pass unmodified; run
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
    and confirm the cross-hour query succeeds; confirm
@@ -727,7 +743,9 @@ in the same pass: add `partition_format_version` (`Int32`) and `max_sort_key_tim
 - **DB regression test**: the hour-seam repro (Implementation Step 9), asserting the live
   `view_instance` query succeeds and rows are complete — the end-to-end contract, and the only
   place that proves `update_partition` persists the new column and the scan path reads it back.
-  One DB test is enough: see Step 9 for why a second, forced-cut DB test is not included.
+  One DB test is enough: see Step 9 for why a second, forced-cut DB test is not included. Because
+  it is `#[ignore]`d it runs neither in `cargo test` nor in `build/rust_ci.py`, so Step 10 calls it
+  out as an explicit, must-run step rather than leaving it to whoever remembers.
 - **Running-max / `None`-poisoning fold** (`write_partition_tests.rs`): feed
   `write_rows_and_track_times` several out-of-order `PartitionRowSet`s — some `Some`, one `None` —
   over its hand-built channel (widen it past `channel(1)`, or spawn the sender, so the second send
