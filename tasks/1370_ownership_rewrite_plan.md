@@ -64,12 +64,12 @@ Verified against `d0364c950` (`main`, tip after Stage 1 merged). Stage 1 landed:
   / `Status::permission_denied`) on `Err` — never a scope. `FlightSqlServiceImpl` carries
   `read_policy: Arc<dyn ReadPolicy>` as a per-service field, set once at construction
   (`flight_sql_server.rs:279-287`, monolith `main.rs:251,304`).
-- The three `TODO(#1371)` call sites (`metadata.rs:182,286`, `perfetto_trace_execution_plan.rs:254`,
+- The five `TODO(#1371)` call sites (`metadata.rs:182,286`, `perfetto_trace_execution_plan.rs:254`,
   `parse_block_table_function.rs:83`, `process_spans_table_function.rs:254`) still pass
   `CallerContext::internal()` (`ReadScope::All`) even though they are reachable from a user query.
   **This is a known, already-tracked gap explicitly deferred to Stage 3/#1371, not something Stage 2
   introduces or is expected to fix.** Since `OwnershipRewrite` no-ops entirely under `ReadScope::All`
-  (§4 below), these three sites stay unfiltered by Prong A until #1371 lands — exactly the exposure
+  (§4 below), these five sites stay unfiltered by Prong A until #1371 lands — exactly the exposure
   the TODO already documents, now via a second mechanism (Prong A) instead of none.
 - No `micromegas.audience` property exists anywhere yet — ingestion stamping is Stage 5 (#1373).
   Stage 2's own tests must stamp it manually (issue text, step 7 below).
@@ -466,9 +466,12 @@ The outer `process_id` is cast to `Utf8` for the same analyzer-ordering reason a
 `Dictionary(Int32, Utf8)` in `log_entries` (`log_entries_table.rs:27`), `measures`
 (`metrics_table.rs:21`), `net_spans` (`net_spans_table.rs:44`) and `otel_spans`
 (`otel/spans_table.rs:12`), while `processes.process_id` (the subquery's projected column) is `Utf8` —
-`InListExpr`/`InSubqueryExec` assert the two sides' data types match rather than coercing them
-(`datafusion-physical-expr-54.1.0/src/expressions/in_list.rs:234-239`), and this rule runs after
-`TypeCoercion` (§3), so the cast must be explicit here too. The scan is named
+an uncorrelated `IN` subquery never reaches a physical subquery operator: DataFusion's
+`DecorrelatePredicateSubquery` optimizer rule rewrites it into a `LeftSemi` join before physical
+planning (`datafusion-optimizer-54.1.0/src/decorrelate_predicate_subquery.rs:60-127`, `build_join` at
+`:357`), so it is the join keys' data types that must agree, not some subquery-specific type check —
+and since this rule runs after `TypeCoercion` (§3), that agreement is never enforced automatically, so
+the cast must be explicit here too. The scan is named
 `"__processes__partitions"` (the raw per-partition `MaterializedView`, not the `SqlBatchView`-merged
 `processes` view — see Current State) purely for readability; `self.processes_source` is passed
 directly, so no session-side name lookup happens. The `per_process_audience`/`resolved_predicate`
@@ -565,7 +568,10 @@ plan-time literal either way, no runtime cache required.
 
 ### 7. Public view sets — skip the branch entirely
 
-Before any of §3–6 run, check `self.public_view_sets.contains(mat_view.get_view().get_view_set_name().as_str())`;
+Before any of §3–6 run, check `self.public_view_sets.iter().any(|s| s ==
+mat_view.get_view().get_view_set_name())` (`Vec<String>::contains` takes `&String`, so comparing
+directly against the `&str` returned by `get_view_set_name()` would not compile — the `.iter().any(|s|
+s == name)` form compares `&String` to `&str` via `String`'s `PartialEq<str>` impl instead);
 if true, `Transformed::no(plan)` — no predicate at all, for any view kind. This is the one part of §4
 the issue text names directly ("Branch per view set via `MaterializedView::get_view_set_name()`").
 Default empty (§8), so inert unless configured — matches the AbAC plan §5b's "off by default,
@@ -836,7 +842,7 @@ existing `read_policy` resolution); the monolith calls
   unfiltered until Stage 3's caches land. Decided: cover them now, because leaving two named,
   queryable view sets completely unfiltered — reachable by any caller who knows a `view_instance(...)`
   call, with no gate at all — is a bigger, more surprising hole than the `TODO(#1371)` sites (which
-  are at least documented and bounded to three specific internal recursive contexts), costs no
+  are at least documented and bounded to five specific internal recursive contexts), costs no
   runtime machinery to close (the key is a plan-time literal either way), and the AbAC plan's Prong B
   caches solve a different problem entirely (`list_partitions` row filtering, not plan-time literals)
   — so deferring would not actually be "waiting for the caches."
@@ -869,12 +875,18 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   `rust/analytics/src/lakehouse/read_scope.rs:10-13` and `:44-45`, `rust/auth/src/policy.rs:5-6` and
   `:187`, `rust/monolith/src/main.rs:249`, and `rust/public/tests/read_policy_threading_tests.rs:7-9`
   and `:399`.
-- `tasks/data_isolation/audience_based_access_control_plan.md` — record, once implemented: the exact
-  `async_events`/`thread_spans` treatment (§5/§6), since the plan's own §4 doesn't fully resolve it;
-  the `CallerContext`-vs-new-parameter decision (§8); and that `OwnershipRewriteConfig`'s two knobs
-  are parsed in `micromegas-analytics`, not `micromegas-auth` (mirrors Stage 1's own "parse where
-  consumed" note about `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`,
-  `1369_policy_seam_plan.md` §5).
+- `tasks/data_isolation/audience_based_access_control_plan.md` — record, once implemented: that
+  enforcement resolves one audience **per process**, not per row — replacing the parent plan's
+  `process_id IN (SELECT process_id FROM processes WHERE <predicate>)` (`:320-323`) with a
+  `GROUP BY process_id, MAX(audience_col)` pre-aggregation over the raw partitions (§2's "any-row
+  semantics" note, §3/§4), because the parent's own construction re-admits a process via any one of
+  its historical (possibly pre-stamping, unstamped) rows; this assumes a process is stamped with at
+  most one distinct audience over its lifetime, which Stage 3/#1371 should revisit if that assumption
+  changes; the exact `async_events`/`thread_spans` treatment (§5/§6), since the plan's own §4 doesn't
+  fully resolve it; the `CallerContext`-vs-new-parameter decision (§8); and that
+  `OwnershipRewriteConfig`'s two knobs are parsed in `micromegas-analytics`, not `micromegas-auth`
+  (mirrors Stage 1's own "parse where consumed" note about
+  `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, `1369_policy_seam_plan.md` §5).
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — add
   `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_PUBLIC_VIEW_SETS`, **and `MICROMEGAS_IMPLICIT_GROUPS`**
   rows to each page's existing `MICROMEGAS_*` environment-variable table (the same tables documenting
