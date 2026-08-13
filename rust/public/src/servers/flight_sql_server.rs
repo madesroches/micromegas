@@ -127,12 +127,14 @@ impl FlightSqlServerBuilder {
     }
 
     /// Set an explicit `ReadPolicy`, resolved once per request against the caller's
-    /// `AuthContext` (#1369, AbAC Stage 1). When never called, `build_and_serve` defaults to
-    /// `AudienceReadPolicy` with empty implicit groups -- the same policy
-    /// `AudienceReadPolicy::from_env` produces when its env var is unset. **Not**
-    /// `ReadScope::All`: the absent-`AuthContext`-extension convention already supplies `All`
-    /// when no provider is configured, so this default must not duplicate that decision -- it
-    /// only ever resolves a scope when an `AuthContext` is present to resolve one from.
+    /// `AuthContext` (#1369, AbAC Stage 1). This policy wins on every `build_and_serve` branch,
+    /// overriding that branch's own default. When never called, the default depends on how auth
+    /// is configured: with `with_default_auth()`, `AudienceReadPolicy::from_env("")`; with
+    /// `with_auth_provider(..)` or with auth left disabled, `AudienceReadPolicy` with empty
+    /// implicit groups. **Not** `ReadScope::All`: the absent-`AuthContext`-extension convention
+    /// already supplies `All` when no provider is configured, so this default must not duplicate
+    /// that decision -- it only ever resolves a scope when an `AuthContext` is present to resolve
+    /// one from.
     pub fn with_read_policy(mut self, policy: Arc<dyn ReadPolicy>) -> Self {
         self.read_policy = Some(policy);
         self
@@ -234,16 +236,19 @@ impl FlightSqlServerBuilder {
         // Auth/policy resolution moved above `FlightSqlServiceImpl::new` (#1369, AbAC Stage 1
         // step 12): the service now takes the resolved `ReadPolicy` as a constructor argument, so
         // it can no longer be constructed before its auth state is known.
-        let (auth_provider, read_policy): (Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>) =
+        //
+        // `self.read_policy` (set via `with_read_policy`) must win on every branch below --
+        // each branch only computes its own *default*, used solely when the caller never set an
+        // explicit policy. This keeps `with_read_policy` order-independent with respect to
+        // `with_auth_provider` / `with_default_auth`, unlike an earlier version that resolved the
+        // override inside the `auth_provider` arm only and silently dropped it on the other two.
+        let (auth_provider, default_policy): (Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>) =
             if let Some(provider) = self.auth_provider {
                 // Injected-provider path (the monolith's `with_auth_provider` call): resolves no
                 // policy from env on its own -- the caller is expected to pair
                 // `with_auth_provider` with its own `with_read_policy` call. Falls back to the
                 // same empty-implicit-groups default as the other branches when it didn't.
-                let policy = self
-                    .read_policy
-                    .unwrap_or_else(|| Arc::new(AudienceReadPolicy::new(vec![])));
-                (Some(provider), policy)
+                (Some(provider), Arc::new(AudienceReadPolicy::new(vec![])))
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
                 let provider = match ProviderBuilder::new("")
@@ -271,6 +276,7 @@ impl FlightSqlServerBuilder {
                 // one.
                 (None, Arc::new(AudienceReadPolicy::new(vec![])))
             };
+        let read_policy = self.read_policy.unwrap_or(default_policy);
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
