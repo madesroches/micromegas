@@ -216,7 +216,13 @@ block with the same value. Mechanically:
 - `TracingBlock::new` / `EventBlock::new` (`block.rs:33-38, 55-69`) gain a `begin: DualTime`
   parameter instead of stamping internally. The ripple is mechanical: the four dispatch flush
   sites, initial block creation in `EventStream::new` (`event/stream.rs:52`, which keeps stamping
-  its own now — a stream's first block has no predecessor), and test/bench constructors.
+  its own now — a stream's first block has no predecessor), and test/bench constructors — concretely
+  `ThreadBlock::new`/`LogBlock::new`/`MetricsBlock::new`/`ImageBlock::new` call sites in
+  `rust/analytics/benches/parse_block.rs`; nine files under `rust/analytics/tests/` (`span_tests.rs`,
+  `parse_block_tests.rs`, `parse_corrupt_block_tests.rs`, `parse_alloc_test.rs`, `log_tests.rs`,
+  `metrics_test.rs`, `image_tests.rs`, `jit_process_batch_db_test.rs`,
+  `thread_spans_ordering_db_test.rs`); and `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs`
+  (which also calls `block.close()` at `:169, :176, :183` and needs the `close_at`/`close` update).
 - Only the thread path affects `thread_spans` ordering, but all four paths get the same treatment
   for consistency — the log/metrics/images views are `InsertTime`-bounded and indifferent.
 
@@ -244,8 +250,11 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
 
 - `PartitionRowSet` (`write_partition.rs:53-66`) gains
   `max_sort_key_time: Option<DateTime<Utc>>`. Keep `new()` two-argument (sets `None`) so the nine
-  `::new` call sites are untouched; `thread_spans_view.rs:221-224` builds the struct literally and
-  sets it.
+  `::new` call sites are untouched. Five sites build the struct as a literal instead: it's set at
+  `thread_spans_view.rs:221-224`, and `..None`/`max_sort_key_time: None` must be added at the four
+  mechanical sites in `net_spans_view.rs:208`, `async_events_block_processor.rs:157`,
+  `log_block_processor.rs:68`, and `image_block_processor.rs:81` (or have them switch to
+  `PartitionRowSet::new`).
 - `write_rows_and_track_times` (`:626-675`) folds a running value alongside the existing min/max
   fold. Soundness rule: the partition-level value is `Some(max)` **only if every** received row
   set carried `Some`; any `None` poisons the whole partition to `None`. (It must be a running
@@ -406,11 +415,19 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    - **Forced cut**: same stream, blocks overlapping pairwise within ONE hour bucket, driven
      through `generate_stream_jit_partitions` + `update_partition` with a custom
      `JitPartitionConfig { max_nb_objects: <small>, .. }` (the file already does this for the
-     batched-equivalence test) so the cut lands inside the bucket — assert the query still
-     succeeds. This pins the second reachable instance of the bug, which the previous draft left
-     open. (Both tests build the *legacy* strictly-overlapping geometry via direct `UPDATE blocks`
-     — exactly right, since after Part A only legacy producers emit it and Part B must keep
-     handling it.)
+     batched-equivalence test) so the cut lands inside the bucket. This test cannot assert through
+     a live `view_instance('thread_spans', ...)` query: `ThreadSpansView::jit_update`
+     (`thread_spans_view.rs:371-374`) always runs `JitPartitionConfig::default()`
+     (`max_nb_objects = 20 * 1024 * 1024`) ahead of any scan, so it would see the small-`max_nb_objects`
+     partitions as stale by source hash and rewrite them as one partition before the query ever
+     ran the `Concatenated` check — passing vacuously without exercising the intra-bucket cut.
+     Instead, read the written partitions back from `PartitionCache` and assert directly against
+     `make_partitioned_execution_plan`'s `ScanOrdering::Concatenated` arm (the pattern
+     `thread_spans_ordering_tests.rs` already uses), confirming it accepts the small partitions
+     produced by the forced cut. This pins the second reachable instance of the bug, which the
+     previous draft left open. (The test builds the *legacy* strictly-overlapping geometry via
+     direct `UPDATE blocks` — exactly right, since after Part A only legacy producers emit it and
+     Part B must keep handling it.)
 10. **Sanity**: run `thread_spans_batched_generation_matches_per_segment` (`#[ignore]`d) — grouping
    is untouched so it must pass unmodified; run
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
@@ -420,7 +437,13 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
     `python3 build/python_ci.py`.
 12. Add `CHANGELOG.md` entries under `## Unreleased`: `**Analytics:**` (schema migration + scan
     check fix) and `**Tracing:**` (block boundary timestamps now shared, matching the Unreal
-    producer), following the repo's established convention.
+    producer), following the repo's established convention. Neither `rust/tracing/Cargo.toml` nor
+    `rust/analytics/Cargo.toml` sets `publish = false`, so both entries need a **Minor breaking
+    change** clause, matching every comparable entry already in the file (e.g. `## Unreleased` line
+    8, v0.29.0 lines 13-20/24/26): the `**Tracing:**` entry must name `TracingBlock::new` and
+    `EventBlock::close` (now `close_at`) and what call sites must change; the `**Analytics:**` entry
+    must name `PartitionRowSet` and `Partition` (both all-public-field structs, so downstream struct
+    literals break) plus `write_rows_and_track_times`'s widened return type.
 
 ## Files to Modify
 
@@ -429,19 +452,23 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/tracing/src/dispatch.rs` | One `DualTime::now()` per flush (4 sites); close outgoing block with the same stamp |
 | `rust/tracing/src/event/block.rs` | `close_at`/`begin`-parameter plumbing on `EventBlock`/`TracingBlock` |
 | `rust/tracing/src/event/stream.rs` + tracing tests | Mechanical constructor ripple; new boundary-stamp unit test |
+| `rust/analytics/benches/parse_block.rs` | Mechanical `TracingBlock::new`/`EventBlock::close` constructor ripple |
+| `rust/analytics/tests/{span_tests,parse_block_tests,parse_corrupt_block_tests,parse_alloc_test,log_tests,metrics_test,image_tests,jit_process_batch_db_test}.rs` | Mechanical `TracingBlock::new`/`EventBlock::close` constructor ripple |
+| `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs` | Mechanical constructor ripple + `block.close()` → `close_at` update (`:169, :176, :183`) |
 | `rust/analytics/src/lakehouse/migration.rs` | v7→v8: nullable `max_sort_key_time TIMESTAMPTZ`; bump version constant |
 | `rust/analytics/src/lakehouse/partition.rs` | New field + accessor; `validate` invariant |
 | `rust/analytics/src/lakehouse/partition_cache.rs` | Add column to 4 SELECTs / 3 struct builds (`sort_order` read pattern, not `file_path`'s) |
 | `rust/analytics/src/lakehouse/list_partitions_table_function.rs` | Arrow schema + both SELECTs |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `PartitionRowSet` field; all-Some running-max fold in `write_rows_and_track_times`; `PartitionWriteResult`; explicit-column-list INSERT |
 | `rust/analytics/src/lakehouse/thread_spans_view.rs` | Set `max_sort_key_time` from last row's `begin` |
+| `rust/analytics/src/lakehouse/{net_spans_view,async_events_block_processor,log_block_processor,image_block_processor}.rs` | Mechanical `max_sort_key_time: None` addition to each `PartitionRowSet` literal |
 | `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | `partition_bounds` EventTime arm; rustdoc + error string |
 | `rust/analytics/src/lakehouse/view.rs` | Rewrite `Concatenated` residual-caveats note (`:166-187`) |
 | `rust/analytics/src/lakehouse/jit_partitions.rs` | Module-doc amendment only (`:17-23`) — **no code change** |
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | New no-DB check tests; helper gains field |
 | `rust/analytics/tests/{per_file_scan_ordering,blocks_view_merge_ordering,sql_batch_view_merge_ordering,log_stats_ordering}_tests.rs` | One-line helper updates for the new field |
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
-| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Two new DB regression tests (hour-seam, forced cut) |
+| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Mechanical constructor ripple; two new DB regression tests (hour-seam, forced cut) |
 | `CHANGELOG.md` | Entry under `## Unreleased` → `**Analytics:**` |
 
 ## Trade-offs
@@ -494,9 +521,12 @@ semantics at the schema level.
   block's `end` equals the replacement's `begin` (one shared `DualTime`).
 - **No-DB check tests** (`thread_spans_ordering_tests.rs`): recorded-bound accepted / NULL
   fallback rejected / genuine overlap rejected — the check-level contract.
-- **DB regression tests**: hour-seam repro and forced-cut repro (Implementation Step 8), both
-  asserting the live query succeeds and rows are complete — the end-to-end contract, including
-  that `update_partition` actually persists the new column.
+- **DB regression tests**: hour-seam repro and forced-cut repro (Implementation Step 9). Hour-seam
+  asserts the live `view_instance` query succeeds and rows are complete — the end-to-end contract,
+  including that `update_partition` actually persists the new column. Forced-cut cannot go through
+  a live query (`jit_update` would rewrite the small forced-cut partitions before the scan ran), so
+  it asserts directly against the written partitions via `PartitionCache` and
+  `make_partitioned_execution_plan`'s `Concatenated` arm instead.
 - **Existing suites**: `thread_spans_batched_generation_matches_per_segment` unmodified (grouping
   untouched); `write_partition_tests.rs` adapted; the four `Partition`-literal helpers updated
   mechanically.
