@@ -3,9 +3,11 @@
 #include "Containers/Map.h"
 #include "HAL/IConsoleManager.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
+#include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTelemetrySink/LogInterop.h"
 #include "MicromegasTelemetrySink/MetricPublisher.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
+#include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "Misc/CoreDelegates.h"
 #include "SamplingController.h"
@@ -20,6 +22,65 @@
 #else
 	#define MICROMEGAS_CRASH_REPORTING 0
 #endif
+
+namespace {
+
+void TelemetryGlobalContextPrint()
+{
+	MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext();
+	if (!Ctx)
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("telemetry.global_context_print: no global context available"));
+		return;
+	}
+
+	TMap<FName, FName> Properties;
+	Ctx->Copy(Properties);
+	UE_LOG(LogMicromegasTelemetrySink, Display, TEXT("telemetry.global_context_print: %d entries"), Properties.Num());
+	for (const TPair<FName, FName>& Entry : Properties)
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Display, TEXT("  %s=%s"), *Entry.Key.ToString(), *Entry.Value.ToString());
+	}
+}
+
+void TelemetryGlobalContextSetProperty(const TArray<FString>& InArgs)
+{
+	MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext();
+	if (!Ctx)
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("telemetry.global_context_set_property: no global context available"));
+		return;
+	}
+
+	if (InArgs.Num() > 1)
+	{
+		Ctx->Set(FName{ *InArgs[0] }, FName{ *InArgs[1] });
+		UE_LOG(LogMicromegasTelemetrySink, Display, TEXT("telemetry.global_context_set_property: %s=%s"), *InArgs[0], *InArgs[1]);
+	}
+	else if (InArgs.Num() > 0)
+	{
+		Ctx->Unset(FName{ *InArgs[0] });
+		UE_LOG(LogMicromegasTelemetrySink, Display, TEXT("telemetry.global_context_set_property: unset %s"), *InArgs[0]);
+	}
+	else
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("telemetry.global_context_set_property: missing property name, usage: <name> [value]"));
+	}
+}
+
+FAutoConsoleCommand GCmdTelemetryGlobalContextPrint(
+	TEXT("telemetry.global_context_print"),
+	TEXT("Prints the telemetry global context key-value pairs"),
+	FConsoleCommandDelegate::CreateStatic(&TelemetryGlobalContextPrint)
+);
+
+FAutoConsoleCommand GCmdTelemetryGlobalContextSetProperty(
+	TEXT("telemetry.global_context_set_property"),
+	TEXT("Sets or unsets a property in the telemetry global context: telemetry.global_context_set_property <name> [value] (omit value to unset)"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&TelemetryGlobalContextSetProperty)
+);
+
+} // namespace
 
 //================================================================================
 class FMicromegasTelemetrySinkModule : public IMicromegasTelemetrySinkModule

@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Unreal:**
+  * Add external-profiler bridge (`MicromegasExternalProfiler`): when Unreal's external profiler is set to Micromegas, scoped profiler events are forwarded as named spans instead of going through the regular thread-span queue
+  * Add `telemetry.global_context_print` and `telemetry.global_context_set_property` console commands to inspect and modify the telemetry global context at runtime
+
 ## v0.29.0 - 2026-08-12
 
 * **Analytics:**
