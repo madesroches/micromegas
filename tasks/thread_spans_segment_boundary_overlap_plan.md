@@ -271,7 +271,9 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
 
 In `write_partition`, after `ensure_begin_non_decreasing` passes, the max `begin` is simply the
 last row's value (rows are verified non-decreasing) — read it from the `begin` column and set it
-on the emitted `PartitionRowSet`. An empty batch emits no row set, so the empty case never arises.
+on the emitted `PartitionRowSet`. `write_partition` sends its `PartitionRowSet` unconditionally, so
+guard the read: when `rows.num_rows() == 0` (e.g. an empty call-tree chain), set
+`max_sort_key_time` to `None` instead of indexing the `begin` column.
 
 ### 4. Read it back
 
@@ -372,10 +374,12 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    column to the four SELECTs and three struct builds in `partition_cache.rs`; extend
    `list_partitions_table_function.rs` (Arrow schema + both SELECTs).
 4. **Write path**: `PartitionRowSet` field; `write_rows_and_track_times` all-Some running-max fold
-   + widened return struct (fix `rust/analytics/tests/write_partition_tests.rs`);
+   + widened return struct (fix `rust/analytics/tests/write_partition_tests.rs`, adding a case that
+   feeds several out-of-order `PartitionRowSet`s — some `Some`, one `None` — through the existing
+   hand-built channel and asserts both the running max and the `None`-poisoning rule);
    `PartitionWriteResult`; explicit-column-list INSERT with the new bind.
 5. **Populate**: `thread_spans_view.rs::write_partition` sets `max_sort_key_time` from the last
-   row's `begin` after `ensure_begin_non_decreasing`.
+   row's `begin` after `ensure_begin_non_decreasing`, or `None` when `rows.num_rows() == 0`.
 6. **Check**: change `partition_bounds`'s `EventTime` arm per Design Part B §5.
 7. **Docs**:
    - `view.rs:166-187` (`Concatenated` contract): rewrite the residual-caveats paragraph — the
@@ -404,7 +408,9 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    `max_sort_key_time` → rejected. Update the other four test files with `Partition` literals
    (`per_file_scan_ordering_tests.rs`, `blocks_view_merge_ordering_tests.rs`,
    `sql_batch_view_merge_ordering_tests.rs`, `log_stats_ordering_tests.rs` — one helper each) for
-   the new field.
+   the new field. Also add the running-max/`None`-poisoning fold test to
+   `write_partition_tests.rs` (see Testing Strategy) — a no-DB test too, just against
+   `write_rows_and_track_times` directly rather than the check.
 9. **DB regression tests** (new `#[ignore]`d `#[tokio::test]`s in
    `thread_spans_ordering_db_test.rs`, following `thread_spans_degenerate_range_retires_stale_partition`'s
    `push_and_insert_block` + `UPDATE blocks` pattern):
@@ -527,9 +533,15 @@ semantics at the schema level.
   a live query (`jit_update` would rewrite the small forced-cut partitions before the scan ran), so
   it asserts directly against the written partitions via `PartitionCache` and
   `make_partitioned_execution_plan`'s `Concatenated` arm instead.
+- **Running-max / `None`-poisoning fold** (`write_partition_tests.rs`): feed
+  `write_rows_and_track_times` several out-of-order `PartitionRowSet`s — some `Some`, one `None` —
+  over its existing hand-built channel and assert the result is a running `max` (not "last row set
+  wins") and that the single `None` poisons the partition-level value to `None`. This is the only
+  genuinely new logic in the write path and the only place it is exercised, since
+  `thread_spans_view` sends exactly one row set.
 - **Existing suites**: `thread_spans_batched_generation_matches_per_segment` unmodified (grouping
-  untouched); `write_partition_tests.rs` adapted; the four `Partition`-literal helpers updated
-  mechanically.
+  untouched); `write_partition_tests.rs` adapted (plus the new fold test above); the four
+  `Partition`-literal helpers updated mechanically.
 - **Manual verification against a live stack**: re-run this plan's Repro Steps (generator +
   cross-hour query) and `python/micromegas/tests/test_queries.py::test_spans`; verify the
   migration runs cleanly on an existing local database (v7 → v8) and that pre-existing partitions
