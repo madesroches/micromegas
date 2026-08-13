@@ -248,6 +248,12 @@ case is unreachable in-tree was wrong for the general case but is exactly right 
 scoped to non-`All` scopes. A caller-supplied `ViewFactory`
 (`FlightSqlServerBuilder::with_view_factory_fn`) that omits `processes`/`streams` **and** is used under
 a restricted `ReadScope` still fails fast via the `Context`-wrapped error above, rather than a panic.
+**This is a hard startup/request failure for any non-`All`-scope caller whose `ViewFactory` lacks
+`processes`/`streams`, and it is not merely hypothetical:** `start_server` in
+`rust/public/tests/read_policy_threading_tests.rs:79` builds `Arc::new(ViewFactory::new(vec![]))`,
+and every test in that file configures an `ApiKeyAuthProvider`, so `caller_context()` resolves
+`ReadScope::Audiences(..)`. Without a fix, `make_session_context` now fails before any SQL is
+planned for that file's tests — see Implementation Steps step 9 for the required fix.
 
 **Cost of `query_range: None`, and the choice of `processes`/`streams` as the audience source.**
 Building `processes_source`/`streams_source` this way — a `MaterializedView` over
@@ -263,10 +269,11 @@ rather than leaving implicit:
    subquery at every `TableScan` site the traversal visits, and DataFusion does not
    common-subexpression-eliminate identical injected subqueries across a plan, a single query joining
    `log_entries` and `measures` scans `processes`'s entire history twice, not once.
-   **Decided:** compute the `processes` audience filter (§3) and the process_id-column semi-join
-   subquery (§4's `SELECT process_id FROM processes WHERE ...`) once per `analyze()` call, before
-   `transform_up_with_subqueries` runs, and reuse the same `Expr`/`Arc<LogicalPlan>` at every site the
-   traversal visits — this bounds the §4 branch (the majority of the schema table below) to one
+   **Decided:** compute the `processes` audience filter (§3) and the resolved-per-process
+   `per_process_audience`/`resolved_predicate` subplan the §4 semi-join is built from (see below) once
+   per `analyze()` call, before `transform_up_with_subqueries` runs, and reuse the same
+   `Expr`/`Arc<LogicalPlan>` at every site the traversal visits — this bounds the §4 branch (the
+   majority of the schema table below) to one
    `processes` scan per query regardless of how many process_id-keyed tables it touches. §5/§6's
    `EXISTS` subqueries still build one subquery per scan site, since each embeds a different
    `view_instance_id` literal and cannot be shared. This mitigates the cost; it does not eliminate the
@@ -293,6 +300,39 @@ rather than leaving implicit:
    prongs converge on one source of truth. Until then, Stage 2 ships with a documented lag window and
    per-query scan cost (mitigated per point 1 above) rather than a silently-assumed-consistent, free
    lookup.
+
+**Any-row semantics of filtering raw partitions, and why it must be resolved per process, not per
+row.** `__processes__partitions` is the pre-merge `SqlBatchView` output: its transform query only
+`GROUP BY process_id` *within* each source partition (`max_partition_delta_from_source:
+TimeDelta::days(1)`, `processes_view.rs:74-88`), so a long-lived process still accumulates multiple
+`__processes__partitions` rows across partitions over time — collapsing those into one row per
+process is exactly what the separate `merge_query` (the `processes` named table, deliberately bypassed
+by §2's `query_range: None` decision above) exists to do. Filtering the raw partitions directly, the
+way §4's `process_id IN (SELECT process_id FROM __processes__partitions WHERE <pred>)` and §5/§6's
+`EXISTS` subqueries do below, therefore means "does *any* row for this `process_id` pass the
+predicate," not "does this process's (current) audience pass the predicate" — a fail-open divergence
+from the AbAC parent plan's post-merge `SELECT process_id FROM processes`
+(`audience_based_access_control_plan.md:317-319`) that matters concretely: with
+`MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` configured (the Overview's mandated escape hatch) plus
+Stage 5 stamping, a process's *pre-stamping* partition rows (unstamped, coalesced to the escape-hatch
+audience) would keep making that process visible to `group:everyone` forever after it is stamped with
+a real, narrower audience, because an `IN`/`EXISTS` check admits a process the moment any one of its
+historical rows matches.
+
+**Decided: resolve one audience per process before filtering (§4–§6), not per row — the fail-closed
+option.** The semi-join/`EXISTS` subqueries built in §4–§6 do not filter `__processes__partitions` rows
+directly; they first collapse it to one row per `process_id` via `Aggregate(GROUP BY process_id,
+MAX(audience_col) AS resolved_audience)`. `MAX` over a nullable column ignores `NULL`s, so a process
+with any stamped (non-null) partition row resolves to that stamped value rather than to an unstamped
+default, closing the leak above. This is still built from the raw, time-unbounded partitions (§2's
+`query_range: None` decision is unchanged) and still computed once per `analyze()` call and reused at
+every scan site the traversal visits (the "once per query" mitigation, point 1 above) — it adds one
+`Aggregate` node to that shared subplan, not a new per-site cost. It assumes a process is stamped with
+at most one distinct audience over its lifetime (true under Stage 5's design); Stage 3/#1371 should
+revisit this if that assumption changes. `processes`'s own direct filter (§3) is unaffected by this and
+keeps its per-row semantics deliberately: it filters the `processes` table's *own* visible rows against
+their own row-level audience state ("was this partition row's audience visible then"), a different
+question from "is this other resource's owning process visible now," which is what §4–§6 answer.
 
 ### 3. `processes`'s own scan — direct filter, no subquery
 
@@ -359,14 +399,36 @@ For every other view whose `mat_view.schema()` contains a field named `process_i
 see the table in Current State), inject:
 
 ```
-process_id IN (SELECT process_id FROM processes WHERE <processes predicate from §3>)
+process_id IN (
+    SELECT process_id FROM (
+        SELECT process_id, MAX(<audience_col>) AS resolved_audience
+        FROM __processes__partitions GROUP BY process_id
+    ) WHERE <coalesce+IN predicate from §3, applied to resolved_audience>
+)
 ```
 
-built with `LogicalPlanBuilder`:
+per §2's "resolve one audience per process, not per row" decision — **not** a bare
+`WHERE <processes predicate from §3>` filter over the raw per-row scan, which would admit a process
+via any one of its historical (possibly pre-stamping, unstamped) partition rows. Built with
+`LogicalPlanBuilder`:
 
 ```rust
-let subquery = LogicalPlanBuilder::scan("__processes__partitions", self.processes_source.clone(), None)?
-    .filter(processes_predicate)?
+let per_process_audience = LogicalPlanBuilder::scan(
+    "__processes__partitions",
+    self.processes_source.clone(),
+    None,
+)?
+.aggregate(
+    vec![col("process_id")],
+    vec![max(audience_col.clone()).alias("resolved_audience")],
+)?
+.build()?; // audience_col is the same property_get(properties, "micromegas.audience") expr as §3,
+           // reused here as the aggregate's input rather than as a row-level filter
+let resolved_predicate = /* same coalesce(..., unstamped_audience) + IN(audiences) shape as §3's
+                             `effective`/`predicate`, built over col("resolved_audience") (already
+                             Utf8, no property_get/cast needed at this layer) instead of audience_col */;
+let subquery = LogicalPlanBuilder::from(per_process_audience)
+    .filter(resolved_predicate)?
     .project(vec![col("process_id")])?
     .build()?;
 let predicate = in_subquery(cast(col("process_id"), DataType::Utf8), Arc::new(subquery));
@@ -381,7 +443,10 @@ The outer `process_id` is cast to `Utf8` for the same analyzer-ordering reason a
 `TypeCoercion` (§3), so the cast must be explicit here too. The scan is named
 `"__processes__partitions"` (the raw per-partition `MaterializedView`, not the `SqlBatchView`-merged
 `processes` view — see Current State) purely for readability; `self.processes_source` is passed
-directly, so no session-side name lookup happens.
+directly, so no session-side name lookup happens. The `per_process_audience`/`resolved_predicate`
+subplan is the one built once per `analyze()` call and reused at every process_id-column scan site
+(§2's cost mitigation) — §5/§6 below reuse it too, in place of filtering `processes_predicate` over raw
+rows directly.
 
 `in_subquery` (`datafusion_expr::expr_fn::in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) ->
 Expr`) produces an **uncorrelated** `IN` subquery (it references no column from the outer plan) —
@@ -408,11 +473,18 @@ whole-scan-gating `Filter` built from an `EXISTS` subquery instead of a semi-joi
 row-level column to compare against:
 
 ```rust
-let subquery = LogicalPlanBuilder::scan("__processes__partitions", self.processes_source.clone(), None)?
-    .filter(col("process_id").eq(lit(view_instance_id)).and(processes_predicate))?
+let subquery = LogicalPlanBuilder::from(per_process_audience.clone()) // §4's shared aggregate, reused
+    .filter(col("process_id").eq(lit(view_instance_id)).and(resolved_predicate.clone()))?
     .build()?;
 let predicate = exists(Arc::new(subquery)); // datafusion_expr::expr_fn::exists
 ```
+
+Filtering `col("process_id").eq(lit(view_instance_id))` against `per_process_audience` (already
+one row per process) rather than against raw `__processes__partitions` rows directly matters for the
+same reason as §4: a literal-`process_id` filter over the raw partitions would still exhibit the
+any-row leak §2 describes (an unstamped historical row for this process would independently satisfy
+`processes_predicate` even after the process is stamped). Reusing the aggregate here costs nothing
+extra since §4 already builds it once per `analyze()` call.
 
 wrapped around the whole `TableScan` exactly like `TableScanRewrite`'s time filter (`Filter::try_new(pred,
 Arc::new(plan.clone()))`) — every row of the scan is either entirely visible or entirely hidden,
@@ -429,8 +501,8 @@ stream_id literal (`ThreadSpansView::new`, `thread_spans_view.rs:91`). Resolve i
 let subquery = LogicalPlanBuilder::scan("__streams__partitions", self.streams_source.clone(), None)?
     .filter(col("stream_id").eq(lit(view_instance_id)))?
     .join(
-        LogicalPlanBuilder::scan("__processes__partitions", self.processes_source.clone(), None)?
-            .filter(processes_predicate)?
+        LogicalPlanBuilder::from(per_process_audience.clone()) // §4's shared aggregate, reused
+            .filter(resolved_predicate.clone())?
             .build()?,
         JoinType::Inner,
         (vec!["process_id"], vec!["process_id"]),
@@ -439,6 +511,10 @@ let subquery = LogicalPlanBuilder::scan("__streams__partitions", self.streams_so
     .build()?;
 let predicate = exists(Arc::new(subquery));
 ```
+
+Joining through `per_process_audience` here instead of a raw, per-row `processes_predicate` filter
+closes the same any-row leak §2/§4 describe: the stream's owning process resolves to one audience
+value, not to whichever of its historical partition rows happens to satisfy the predicate.
 
 This is the one construction this issue's own scope statement doesn't spell out (it only says
 "semi-join on `process_id`-keyed views"), and it is the one place the AbAC plan's §4 and §5's Prong B
@@ -610,6 +686,19 @@ existing `read_policy` resolution); the monolith calls
    fixture that needs an `ownership_config` argument added). Struct-literal `CallerContext { .. }`
    outside `read_scope.rs` exists only at `flight_sql_service_impl.rs:551` and
    `analytics/tests/lakehouse_admin_gate_test.rs:38` (already covered by step 2).
+   Additionally, `start_server` in `rust/public/tests/read_policy_threading_tests.rs:79` builds its
+   `ViewFactory` as `Arc::new(ViewFactory::new(vec![]))`, and every test in that file configures an
+   `ApiKeyAuthProvider` — so `caller_context()` resolves a non-`All` `ReadScope::Audiences(..)` for
+   all of them. Per Design §2, `make_session_context` now hard-fails on `get_global_view("processes"
+   /"streams")` for such a scope, which breaks
+   `read_scope_resolves_from_auth_context_not_claimed_attribution` (:290),
+   `prepared_statement_resolves_the_same_scope_as_do_get` (:328),
+   `auth_context_with_groups_survives_the_real_tonic_stack` (:363), and
+   `unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected` (:402) before any SQL
+   is planned. Fix `start_server` to build its `ViewFactory` with real `processes`/`streams` global
+   views registered (mirroring the minimal `SqlBatchView` setup used elsewhere in-tree, e.g.
+   `analytics/tests/lakehouse_admin_gate_test.rs`'s pattern) so these tests' restricted scopes resolve
+   successfully; this is a required fixture change, not an optional cleanup.
 
 ### Phase 4 — tests (issue's own acceptance criteria, step 7)
 
@@ -617,9 +706,16 @@ existing `read_policy` resolution); the monolith calls
     `net_spans_retire_overlap_db_test.rs`'s "requires a live `MICROMEGAS_SQL_CONNECTION_STRING`" /
     `MICROMEGAS_OBJECT_STORE_URI` convention): seed two processes via the real ingestion pipeline
     (or direct `processes`/`blocks` SQL inserts, matching how `sql_telemetry_db.rs`'s tables are
-    shaped), manually set `micromegas.audience` in each process's `properties` (**before** the
-    processes-view batch materialization runs, since ingestion stamping doesn't exist until Stage 5)
-    to two different values; assert, through `make_session_context` with different `CallerContext`s:
+    shaped), manually set `micromegas.audience` in each process's Postgres `properties` row to two
+    different values (since ingestion stamping doesn't exist until Stage 5) **before the `blocks`
+    view's partitions are materialized** — not merely before the `processes` view's own
+    materialization. `BlocksView::data_sql` snapshots `processes.properties` from Postgres into the
+    `blocks` parquet partitions at materialization time (`blocks_view.rs:59-70`, schema field
+    `processes.properties`), and the `processes` `SqlBatchView`'s transform query reads
+    `first_value("processes.properties") ... FROM blocks` — i.e. from the already-materialized
+    `blocks` partitions, never from Postgres directly (`processes_view.rs:27-45`). Setting the
+    audience after `blocks` materializes but before `processes` materializes would still bake in no
+    audience at all; assert, through `make_session_context` with different `CallerContext`s:
     - a `ReadScope::Audiences(["user:a"])` session sees only process A's rows (from `processes`
       directly and via a `process_id`-keyed view, e.g. `log_entries`);
     - a `ReadScope::Audiences(["user:b"])` session sees only process B's rows;
@@ -643,19 +739,28 @@ existing `read_policy` resolution); the monolith calls
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` — **new**; the rule
-- `rust/analytics/src/lakehouse/read_scope.rs` — `OwnershipRewriteConfig`, `CallerContext` field
+- `rust/analytics/src/lakehouse/read_scope.rs` — `OwnershipRewriteConfig`, `CallerContext` field;
+  update the stale "`ReadScope` is dropped" doc comments at `:10-13` and `:44-45` to say it is now
+  consumed by `OwnershipRewrite` (Prong A)
 - `rust/analytics/src/lakehouse/mod.rs` — register the module
 - `rust/analytics/src/lakehouse/query.rs` — construct + register `OwnershipRewrite` when
   `caller.read_scope != ReadScope::All`
 - `rust/public/src/servers/flight_sql_server.rs` — `with_ownership_config()`, default resolution
 - `rust/public/src/servers/flight_sql_service_impl.rs` — new field, constructor param,
   `caller_context()`
-- `rust/monolith/src/main.rs` — resolve + wire `OwnershipRewriteConfig::from_env("MICROMEGAS_ANALYTICS")`
+- `rust/monolith/src/main.rs` — resolve + wire `OwnershipRewriteConfig::from_env("MICROMEGAS_ANALYTICS")`;
+  update the stale doc comment at `:249`
+- `rust/auth/src/policy.rs` — update the stale "nothing consumes `ReadScope` yet" doc comments at
+  `:5-6` and `:187`
 - `rust/analytics/tests/lakehouse_admin_gate_test.rs` — one `CallerContext` literal
+- `rust/public/tests/read_policy_threading_tests.rs` — `ownership_config` argument (step 9),
+  `ViewFactory` fixture fix (Design §2/Issue 1), and update the stale doc comments at `:7-9` and
+  `:399`
 - `rust/analytics/tests/ownership_rewrite_db_test.rs` — **new**
 - `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs` — **new** (offline, planning-only)
-- `mkdocs/docs/admin/flight-sql.md` — `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS` rows
-- `mkdocs/docs/admin/monolith.md` — same two rows
+- `mkdocs/docs/admin/flight-sql.md` — `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`/
+  `MICROMEGAS_IMPLICIT_GROUPS` rows
+- `mkdocs/docs/admin/monolith.md` — same three rows
 
 ## Trade-offs
 
@@ -705,6 +810,12 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   subquery, and the async_events/thread_spans literal-check rationale (§5/§6) — this is exactly the
   kind of non-obvious "why" that will not survive the next contributor's skim of `view_factory.rs`
   without it written down here.
+- Update the six in-code doc-comment sites that currently assert "nothing consumes `ReadScope` yet"
+  (accurate for Stage 1, falsified once `OwnershipRewrite` lands) to instead say `ReadScope` is now
+  consumed by `OwnershipRewrite` (Prong A), with Prong B (the UDTF/UDF guards) still pending #1371:
+  `rust/analytics/src/lakehouse/read_scope.rs:10-13` and `:44-45`, `rust/auth/src/policy.rs:5-6` and
+  `:187`, `rust/monolith/src/main.rs:249`, and `rust/public/tests/read_policy_threading_tests.rs:7-9`
+  and `:399`.
 - `tasks/data_isolation/audience_based_access_control_plan.md` — record, once implemented: the exact
   `async_events`/`thread_spans` treatment (§5/§6), since the plan's own §4 doesn't fully resolve it;
   the `CallerContext`-vs-new-parameter decision (§8); and that `OwnershipRewriteConfig`'s two knobs
@@ -712,14 +823,19 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   consumed" note about `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`,
   `1369_policy_seam_plan.md` §5).
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — add
-  `MICROMEGAS_UNSTAMPED_AUDIENCE` and `MICROMEGAS_PUBLIC_VIEW_SETS` rows to each page's existing
-  `MICROMEGAS_*` environment-variable table (the same tables documenting `MICROMEGAS_ADMINS`,
-  `MICROMEGAS_STATIC_TABLES_URL`, etc. today), with a pointer to Stage 7's isolation page for the
-  full activation story. These pages, not the CHANGELOG, are the operator-facing reference for
-  `MICROMEGAS_*` knobs — Stage 1's "no doc page yet" precedent was safe because Stage 1 was inert,
-  but Stage 2 silently empties every query result for auth-enabled deployments unless this pair is
-  configured (Overview), so it must be discoverable from the admin pages an operator actually reads,
-  not only from the CHANGELOG.
+  `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_PUBLIC_VIEW_SETS`, **and `MICROMEGAS_IMPLICIT_GROUPS`**
+  rows to each page's existing `MICROMEGAS_*` environment-variable table (the same tables documenting
+  `MICROMEGAS_ADMINS`, `MICROMEGAS_STATIC_TABLES_URL`, etc. today), with a pointer to Stage 7's
+  isolation page for the full activation story. `MICROMEGAS_IMPLICIT_GROUPS` is a pre-existing knob
+  (`rust/auth/src/policy.rs`) that today is documented only in `CHANGELOG.md:31` (`grep -rn
+  IMPLICIT_GROUPS mkdocs/` returns nothing) — since the Overview's required escape-hatch pair is
+  `MICROMEGAS_IMPLICIT_GROUPS=everyone` **and** `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`, adding
+  only the two new knobs would leave half that pair undiscoverable from these pages. Cross-reference
+  the pair from the CHANGELOG upgrade note below. These pages, not the CHANGELOG, are the
+  operator-facing reference for `MICROMEGAS_*` knobs — Stage 1's "no doc page yet" precedent was safe
+  because Stage 1 was inert, but Stage 2 silently empties every query result for auth-enabled
+  deployments unless this pair is configured (Overview), so it must be discoverable from the admin
+  pages an operator actually reads, not only from the CHANGELOG.
 - `CHANGELOG.md` per the `pr` skill's convention — must include an explicit upgrade note: any
   deployment running with auth enabled must set **both** `MICROMEGAS_IMPLICIT_GROUPS=everyone` and
   `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`, in the same deploy that ships `OwnershipRewrite` —
