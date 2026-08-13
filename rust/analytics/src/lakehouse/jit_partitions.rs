@@ -1212,17 +1212,19 @@ pub async fn is_jit_partition_up_to_date(
 /// `generate_*_jit_partitions` returns no specs when the range holds no blocks.
 ///
 /// Round 1 runs `spec_is_up_to_date` for every spec against the full candidate set. Each later
-/// round: for any spec `i` newly verdicted **not** up to date this round, drop from every other
-/// spec `j`'s candidate set any row entirely contained in `i`'s insert range, and re-run the
-/// matcher for those affected `j`s (see `tasks/jit_batched_block_queries_plan.md` § Batched
-/// freshness checks (`InsertTime` callers), "Verdicts reflect pre-run state") -- such a row is a
-/// `RetireMatch::Containment` match for spec `i` and will be gone once
-/// `i`'s write runs this call, so it must not count towards `j`'s freshness. Repeat until a round
-/// flips no verdict: dropping a row can only turn a spec from up-to-date to stale, never the
-/// reverse, so verdicts are monotone and the loop terminates in at most `specs.len()` rounds (one,
-/// in the common case). A row is dropped only when its containing spec is itself stale; specs
-/// whose containing spec is up to date (hence not rewritten) are unaffected. Returns up-to-date
-/// flags parallel to `specs`.
+/// round re-runs the matcher for every spec `j`, but against a candidate set that drops any row
+/// entirely contained in the insert range of some *other* spec `i` (`i != j`) currently verdicted
+/// not up to date (see `tasks/jit_batched_block_queries_plan.md` § Batched freshness checks
+/// (`InsertTime` callers), "Verdicts reflect pre-run state") -- such a row is a
+/// `RetireMatch::Containment` match for spec `i` and will be gone once `i`'s write runs this
+/// call, so it must not count towards `j`'s freshness. Spec `j`'s own range is always excluded
+/// from that drop: a row `j` itself would retire is not evidence about whether `j`'s *own* data
+/// is current, so it must stay in the set used to (re-)evaluate `j`. Each round's recomputed
+/// verdicts are then clamped against the previous round's (`up_to_date && recomputed`), so a spec
+/// already verdicted not up to date can never flip back within this call. Repeat until a round
+/// changes no verdict: only newly-stale specs can add rows to the drop set, and there are at most
+/// `specs.len()` specs to newly mark stale, so the loop terminates in at most `specs.len()` rounds
+/// (one, in the common case). Returns up-to-date flags parallel to `specs`.
 #[span_fn]
 pub async fn find_up_to_date_partitions(
     pool: &sqlx::PgPool,
@@ -1264,15 +1266,18 @@ pub async fn find_up_to_date_partitions(
 
 /// The pure fixpoint at the heart of `find_up_to_date_partitions` (see that function's docs for
 /// the derivation): runs `spec_is_up_to_date` for every spec against `candidates`, then repeatedly
-/// drops, from every other spec's candidate set, any row entirely contained in a spec newly
-/// verdicted not up to date, re-running the matcher for the affected specs, until a round flips no
-/// verdict. Takes an already-fetched `candidates` and does no I/O, so
-/// `analytics/tests/jit_freshness_tests.rs` can drive it directly without a live `PgPool`.
+/// re-evaluates every spec `j` against a candidate set that drops rows entirely contained in some
+/// *other*, currently-stale spec's insert range (never `j`'s own range -- a row `j` would itself
+/// retire is not evidence about `j`'s own freshness), clamping each round's recomputed verdict
+/// against the previous round's so a spec already verdicted not up to date can never flip back to
+/// up to date within this call. Repeats until a round changes no verdict. Takes an already-fetched
+/// `candidates` and does no I/O, so `analytics/tests/jit_freshness_tests.rs` can drive it directly
+/// without a live `PgPool`.
 pub fn resolve_up_to_date_fixpoint(
     specs: &[SourceDataBlocksInMemory],
     view_meta: &ViewMetadata,
     block_order: BlockOrder,
-    mut candidates: Vec<PartitionFreshnessRow>,
+    candidates: Vec<PartitionFreshnessRow>,
 ) -> Result<Vec<bool>> {
     let ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = specs
         .iter()
@@ -1286,35 +1291,48 @@ pub fn resolve_up_to_date_fixpoint(
 
     // Fixpoint: a spec verdicted not up to date will retire, this run, every candidate row
     // entirely contained in its insert range (`RetireMatch::Containment`); such a row must not
-    // count towards a sibling spec's freshness. Verdicts are monotone (up-to-date -> stale only),
-    // so this loop drops no more rows, and flips no more verdicts, than there are specs.
+    // count towards a *sibling* spec's freshness, but must never be excluded from the candidate
+    // set used to re-evaluate the stale spec itself (that would be a circular, self-referential
+    // justification for calling it up to date). Verdicts are made monotone (up-to-date -> stale
+    // only) by construction: each round's recomputed verdict is clamped against the previous
+    // round's (`up_to_date[k] && recomputed[k]`), so a spec once marked stale stays stale for the
+    // rest of this call. That clamp bounds the loop to at most `specs.len()` rounds, since only a
+    // newly-stale spec (never previously stale) can add rows to the drop set for other specs, and
+    // there are at most `specs.len()` specs left to newly mark stale.
     loop {
         if !up_to_date.contains(&false) {
             break;
         }
-        let stale_ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = up_to_date
+        // Currently-stale specs, paired with their index so filtering for spec `j` can skip the
+        // entry whose index equals `j` -- i.e. exclude `j`'s own range from the rows dropped when
+        // (re-)evaluating `j`.
+        let stale_ranges: Vec<(usize, DateTime<Utc>, DateTime<Utc>)> = up_to_date
             .iter()
             .zip(ranges.iter())
-            .filter(|(up, _)| !**up)
-            .map(|(_, r)| *r)
+            .enumerate()
+            .filter(|(_, (up, _))| !**up)
+            .map(|(i, (_, r))| (i, r.0, r.1))
             .collect();
-        let next_candidates: Vec<PartitionFreshnessRow> = candidates
-            .iter()
-            .filter(|row| {
-                !stale_ranges.iter().any(|(min_i, max_i)| {
-                    row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
+
+        let mut next_up_to_date: Vec<bool> = Vec::with_capacity(specs.len());
+        for (j, spec) in specs.iter().enumerate() {
+            let filtered: Vec<PartitionFreshnessRow> = candidates
+                .iter()
+                .filter(|row| {
+                    !stale_ranges.iter().any(|(i, min_i, max_i)| {
+                        *i != j && row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
+                    })
                 })
-            })
-            .cloned()
-            .collect();
-        let next_up_to_date: Vec<bool> = specs
-            .iter()
-            .map(|spec| spec_is_up_to_date(view_meta, spec, block_order, &next_candidates))
-            .collect::<Result<Vec<_>>>()?;
+                .cloned()
+                .collect();
+            let recomputed = spec_is_up_to_date(view_meta, spec, block_order, &filtered)?;
+            // Clamp: once stale, stay stale for the rest of this call.
+            next_up_to_date.push(up_to_date[j] && recomputed);
+        }
+
         if next_up_to_date == up_to_date {
             break;
         }
-        candidates = next_candidates;
         up_to_date = next_up_to_date;
     }
 

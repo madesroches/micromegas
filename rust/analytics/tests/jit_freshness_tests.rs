@@ -412,3 +412,47 @@ fn row_nested_in_an_up_to_date_spec_is_not_dropped() {
          drop (triggered by Z's unrelated staleness) must leave X and Y alone"
     );
 }
+
+/// A spec that is already stale for an unrelated reason (two ambiguous matches) must never use
+/// dropping one of its *own* self-contained matching rows to flip back to up to date: containment
+/// drops only ever apply to *other* specs' stale ranges, never a spec's own range.
+#[test]
+fn self_containment_never_makes_a_spec_up_to_date() {
+    let vm = view_meta();
+    let t0 = base_time();
+    let t1 = t0 + TimeDelta::seconds(10);
+    let required = 20i64;
+
+    // A: ranged [t0, t1], requiring 20 objects.
+    let spec_a = make_ranged_spec(t0, t1, required);
+
+    // Two candidate rows both match A's overlap test, making A ambiguous (2 matches -> stale)
+    // from round 1:
+    // - `inner`: entirely contained within A's own range -- if self-containment were allowed to
+    //   drop this row when re-evaluating A, only `wider` would remain, and A would wrongly flip
+    //   to up to date (its count matches `required` exactly).
+    // - `wider`: overlaps A's range but is not contained in it.
+    let inner = row(
+        t0 + TimeDelta::seconds(2),
+        t0 + TimeDelta::seconds(2),
+        vm.file_schema_hash.clone(),
+        required,
+    );
+    let wider = row(
+        t0 - TimeDelta::seconds(5),
+        t0 + TimeDelta::seconds(15),
+        vm.file_schema_hash.clone(),
+        required,
+    );
+
+    let result =
+        resolve_up_to_date_fixpoint(&[spec_a], &vm, BlockOrder::InsertTime, vec![inner, wider])
+            .unwrap();
+
+    assert_eq!(
+        result,
+        vec![false],
+        "A must stay stale: `inner` is entirely contained in A's own range, so it must never be \
+         dropped when re-evaluating A itself, even though A is currently stale"
+    );
+}

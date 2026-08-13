@@ -7,6 +7,8 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Unreal:**
   * Add external-profiler bridge (`MicromegasExternalProfiler`): when Unreal's external profiler is set to Micromegas, scoped profiler events are forwarded as named spans instead of going through the regular thread-span queue
   * Add `telemetry.global_context_print` and `telemetry.global_context_set_property` console commands to inspect and modify the telemetry global context at runtime
+* **Analytics:**
+  * Batch JIT partition generation's block queries by observed data density instead of one query per hour, and batch its freshness checks into one query per `generate_*` call instead of one per emitted partition spec (#1474). The old per-hour loop paid a fixed per-query round-trip cost regardless of how little data an hour held, which dominated for sparse view instances queried over long ranges (e.g. OTLP metrics from a single process). Emitted partition specs, and the partitions written from them, are unchanged (byte-identical). **Minor breaking change**: `generate_process_jit_partitions_segment` (published API, `micromegas_analytics::lakehouse::jit_partitions`) is removed, and `JitPartitionConfig` (published API) gains a new field, `target_rows_per_query`; any downstream code calling the former or constructing the latter via a full struct literal needs updating.
 
 ## v0.29.0 - 2026-08-12
 
