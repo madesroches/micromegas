@@ -16,6 +16,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{NullPartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::partitioned_execution_plan::make_lex_ordering;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::sql_batch_view::SqlBatchView;
@@ -136,7 +137,7 @@ async fn extract_query_matching_order_by_passes_the_ordering_check() {
         None,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
-        true,
+        CallerContext::maintenance(),
     )
     .await
     .expect("make_session_context");

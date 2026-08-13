@@ -124,6 +124,10 @@ impl AuthProvider for ApiKeyAuthProvider {
                     is_admin: false,
                     // SECURITY: API keys CAN delegate (act on behalf of users)
                     allow_delegation: true,
+                    // Env-configured keys carry no Stage 4/4b grant.
+                    bound_audience: None,
+                    read_audiences: vec![],
+                    groups: vec![],
                 });
             }
             // Note: We do NOT break or return early - we continue checking all keys

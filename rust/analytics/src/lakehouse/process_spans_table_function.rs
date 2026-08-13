@@ -1,7 +1,7 @@
 use super::{
     lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    process_streams::get_process_thread_list, session_configurator::NoOpSessionConfigurator,
-    view_factory::ViewFactory,
+    process_streams::get_process_thread_list, read_scope::CallerContext,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, span_table::get_spans_schema, time::TimeRange};
 use async_stream::try_stream;
@@ -251,13 +251,16 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
 
         let record_batch_stream = try_stream! {
             let schema = stream_schema;
+            // TODO(#1371): user-reachable (process_spans UDTF, registered for every caller,
+            // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must
+            // replace with the caller's inherited scope.
             let ctx = super::query::make_session_context(
                 lakehouse,
                 part_provider,
                 query_range,
                 view_factory,
                 Arc::new(NoOpSessionConfigurator),
-                false,
+                CallerContext::internal(),
             )
             .await
             .map_err(|e| datafusion::error::DataFusionError::Internal(

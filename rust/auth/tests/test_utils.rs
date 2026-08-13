@@ -1,3 +1,9 @@
+//! Shared test helpers, included via `mod test_utils;` from several independently-compiled
+//! integration test binaries -- not every binary uses every item, so dead-code warnings here
+//! are expected rather than a signal of unused code (mirrors
+//! `rust/otel-ingestion/tests/fixtures.rs`).
+#![allow(dead_code)]
+
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rsa::RsaPrivateKey;
@@ -20,6 +26,10 @@ pub struct TestClaims {
     pub exp: i64,
     /// Issued at (seconds since Unix epoch)
     pub iat: i64,
+    /// Flat groups claim -- omitted entirely (not even `null`) when absent, so a token minted
+    /// before this field existed still round-trips through `create_valid_token`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
 }
 
 /// Test key pair for signing/verifying tokens
@@ -89,6 +99,29 @@ pub fn create_valid_token(
         email: email.map(String::from),
         exp: (now + Duration::hours(1)).timestamp(),
         iat: now.timestamp(),
+        groups: None,
+    };
+    keypair.create_token(claims)
+}
+
+/// Create a valid test token carrying a flat `groups` claim (#1369, AbAC Stage 1).
+pub fn create_token_with_groups(
+    keypair: &TestKeyPair,
+    issuer: &str,
+    audience: &str,
+    subject: &str,
+    email: Option<&str>,
+    groups: Vec<String>,
+) -> String {
+    let now = Utc::now();
+    let claims = TestClaims {
+        sub: subject.to_string(),
+        iss: issuer.to_string(),
+        aud: audience.to_string(),
+        email: email.map(String::from),
+        exp: (now + Duration::hours(1)).timestamp(),
+        iat: now.timestamp(),
+        groups: Some(groups),
     };
     keypair.create_token(claims)
 }
@@ -108,6 +141,7 @@ pub fn create_expired_token(
         email: None,
         exp: (now - Duration::hours(1)).timestamp(), // Expired 1 hour ago
         iat: (now - Duration::hours(2)).timestamp(),
+        groups: None,
     };
     keypair.create_token(claims)
 }

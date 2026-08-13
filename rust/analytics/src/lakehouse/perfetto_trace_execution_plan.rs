@@ -1,7 +1,7 @@
 use super::{
     lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    process_streams::get_process_thread_list, session_configurator::NoOpSessionConfigurator,
-    view_factory::ViewFactory,
+    process_streams::get_process_thread_list, read_scope::CallerContext,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
@@ -251,6 +251,9 @@ async fn generate_streaming_perfetto_trace(
     );
 
     // Create a context for making queries
+    // TODO(#1371): user-reachable (perfetto_trace_chunks UDTF, registered for every caller,
+    // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must replace
+    // with the caller's inherited scope.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
@@ -260,7 +263,7 @@ async fn generate_streaming_perfetto_trace(
         }),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
 

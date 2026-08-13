@@ -509,6 +509,11 @@ pub async fn cookie_auth_middleware(
     req.extensions_mut().insert(AuthToken(id_token));
     req.extensions_mut()
         .insert(ValidatedUser::from(&auth_context));
+    // Closes hole #3 (#1369): analytics-web-srv is the mint path's identity source since #1458
+    // moved key management onto this service, so Stage 6's `mint_key` needs `AuthContext`
+    // (groups included) to consult a `MintPolicy` -- `ValidatedUser` deliberately stays a
+    // browser-session view without groups.
+    req.extensions_mut().insert(auth_context);
 
     // Continue to next middleware/handler
     Ok(next.run(req).await)

@@ -9,6 +9,7 @@ use super::{
 use crate::{
     lakehouse::{
         partitioned_table_provider::PartitionedTableProvider, query::make_session_context,
+        read_scope::CallerContext,
     },
     time::{TimeRange, datetime_to_scalar},
 };
@@ -136,7 +137,7 @@ impl PartitionMerger for BatchPartitionMerger {
             Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await?;
         let src_table =

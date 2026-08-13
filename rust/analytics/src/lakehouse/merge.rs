@@ -8,6 +8,7 @@ use super::{
     },
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
+    read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     view::{ScanSortColumn, View},
     view_factory::ViewFactory,
@@ -257,7 +258,7 @@ impl PartitionMerger for QueryMerger {
             Some(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await?;
         let src_table = PartitionedTableProvider::with_scan_ordering(

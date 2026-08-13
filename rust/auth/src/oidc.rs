@@ -224,6 +224,13 @@ struct Claims {
     #[serde(rename = "https://micromegas.io/name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     namespaced_name: Option<String>,
+    /// Flat, top-level group-membership claim (Auth0 / Azure AD / Google shape). IdP-asserted
+    /// **leaf** membership only — see `AuthContext.groups`'s doc comment. Keycloak's nested
+    /// `realm_access.roles` shape is deliberately out of scope for this issue, not an oversight.
+    /// Absent on any token that predates this claim; deserializes to `None` (no
+    /// `#[serde(deny_unknown_fields)]` on this struct, so this addition is backward-compatible).
+    #[serde(default)]
+    groups: Option<Vec<String>>,
 }
 
 impl Claims {
@@ -532,6 +539,7 @@ impl OidcAuthProvider {
 
                 let email = claims.get_email();
                 let is_admin = self.is_admin(&claims.sub, email.as_deref());
+                let groups = claims.groups.unwrap_or_default();
 
                 return Ok(AuthContext {
                     subject: claims.sub,
@@ -542,6 +550,11 @@ impl OidcAuthProvider {
                     auth_type: AuthType::Oidc,
                     is_admin,
                     allow_delegation: false,
+                    // OIDC tokens never carry Stage 4's write-side bound_audience or Stage 4b's
+                    // read_audiences grant -- those are key-provider fields.
+                    bound_audience: None,
+                    read_audiences: vec![],
+                    groups,
                 });
             } else {
                 // Provide detailed error with configured vs actual audiences

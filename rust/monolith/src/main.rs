@@ -25,6 +25,7 @@ use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::default_provider::ProviderBuilder;
+use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
@@ -243,6 +244,15 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12): unset
+    // `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`/`MICROMEGAS_IMPLICIT_GROUPS` -> empty implicit
+    // groups -> enforcement stays inactive since nothing consumes the resolved scope yet.
+    let analytics_read_policy = if roles.flightsql && !args.disable_auth {
+        Some(Arc::new(AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?) as Arc<dyn ReadPolicy>)
+    } else {
+        None
+    };
+
     // Resolve the analytics admin var once (web and FlightSQL share the same source)
     let analytics_admin_var = if std::env::var("MICROMEGAS_ANALYTICS_ADMINS").is_ok() {
         "MICROMEGAS_ANALYTICS_ADMINS".to_string()
@@ -281,6 +291,7 @@ async fn main() -> Result<()> {
         let shutdown = fanout.subscribe();
         let grace_c = grace;
         let auth = analytics_auth;
+        let read_policy = analytics_read_policy;
         join_set.spawn(async move {
             let mut builder = FlightSqlServer::builder()
                 .with_lakehouse(lh)
@@ -288,6 +299,9 @@ async fn main() -> Result<()> {
                 .with_shutdown_grace(grace_c);
             if let Some(provider) = auth {
                 builder = builder.with_auth_provider(provider);
+            }
+            if let Some(policy) = read_policy {
+                builder = builder.with_read_policy(policy);
             }
             builder.build_and_serve().await
         });

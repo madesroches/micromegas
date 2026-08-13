@@ -83,6 +83,9 @@ impl AuthProvider for MockAdminAuthProvider {
             auth_type: AuthType::Oidc,
             is_admin: self.is_admin,
             allow_delegation: false,
+            bound_audience: None,
+            read_audiences: vec![],
+            groups: vec![],
         })
     }
 }

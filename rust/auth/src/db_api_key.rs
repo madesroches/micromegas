@@ -324,6 +324,11 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     // SECURITY: API keys can NEVER be admins.
                     is_admin: false,
                     allow_delegation: true,
+                    // DB-backed keys carry no Stage 4/4b grant until those stages populate the
+                    // table with a bound_audience / read_audiences column.
+                    bound_audience: None,
+                    read_audiences: vec![],
+                    groups: vec![],
                 })
             }
             // A DB *error* is propagated and cached in neither map: caching an

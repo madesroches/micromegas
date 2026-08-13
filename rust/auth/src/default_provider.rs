@@ -16,6 +16,24 @@ use micromegas_tracing::{info, warn};
 use sqlx::PgPool;
 use std::sync::Arc;
 
+/// Resolves the implicit-groups env var name for `prefix`, with fallback to the unprefixed
+/// name — the same `{prefix}_*`-with-fallback convention as `ProviderBuilder::admin_var()`, but a
+/// free function taking `prefix` directly rather than `self.prefix` so
+/// [`crate::policy::AudienceReadPolicy::from_env`] can call it without constructing a
+/// `ProviderBuilder` (the implicit-groups knob needs no DB pool and no `.await`).
+pub fn implicit_groups_var(prefix: &str) -> String {
+    if prefix.is_empty() {
+        "MICROMEGAS_IMPLICIT_GROUPS".to_string()
+    } else {
+        let prefixed = format!("{prefix}_IMPLICIT_GROUPS");
+        if std::env::var(&prefixed).is_ok() {
+            prefixed
+        } else {
+            "MICROMEGAS_IMPLICIT_GROUPS".to_string()
+        }
+    }
+}
+
 /// Builder for the default (env-driven) authentication provider stack, plus an
 /// optional DB-backed API key store.
 ///

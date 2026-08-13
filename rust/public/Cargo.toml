@@ -132,6 +132,11 @@ path = "tests/flight_sql_error_classification_tests.rs"
 required-features = ["server"]
 
 [[test]]
+name = "read_policy_threading_tests"
+path = "tests/read_policy_threading_tests.rs"
+required-features = ["server"]
+
+[[test]]
 name = "firehose_tests"
 path = "tests/firehose_tests.rs"
 required-features = ["server"]

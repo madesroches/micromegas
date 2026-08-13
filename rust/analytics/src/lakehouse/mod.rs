@@ -89,6 +89,9 @@ pub mod processes_view;
 /// property_get function support from SQL
 /// Datafusion integration
 pub mod query;
+/// Authorization seam input: `ReadScope` and the `CallerContext` bundle threaded into
+/// `make_session_context` (#1369, AbAC Stage 1)
+pub mod read_scope;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData, reading footers from the
 /// ObjectStore through a cache-backed reader
 pub mod reader_factory;

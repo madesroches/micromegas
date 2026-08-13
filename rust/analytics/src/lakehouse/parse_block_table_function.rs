@@ -2,6 +2,7 @@ use super::{
     block_object_decoder::{BlockObjectDecoderMap, ObjectVisitor, default_block_object_decoders},
     lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
+    read_scope::CallerContext,
     session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
 };
@@ -79,13 +80,16 @@ async fn fetch_block_metadata(
     view_factory: Arc<ViewFactory>,
     block_id: Uuid,
 ) -> anyhow::Result<Option<(i64, String, StreamMetadata)>> {
+    // TODO(#1371): user-reachable (parse_block UDTF, registered for every caller,
+    // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must replace
+    // with the caller's inherited scope.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
 

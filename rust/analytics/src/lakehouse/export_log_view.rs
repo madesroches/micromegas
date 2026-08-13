@@ -4,6 +4,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
+    read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     view::{PartitionSpec, View},
     view_factory::ViewFactory,
@@ -121,7 +122,7 @@ impl ExportLogView {
             None,
             view_factory.clone(),
             session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await
         .with_context(|| "make_session_context")?;
@@ -175,7 +176,7 @@ impl View for ExportLogView {
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
-            true,
+            CallerContext::maintenance(),
         )
         .await
         .with_context(|| "make_session_context")?;

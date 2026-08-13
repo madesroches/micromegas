@@ -8,6 +8,7 @@ use micromegas_analytics::{
         lakehouse_context::LakehouseContext,
         partition_cache::{LivePartitionProvider, PartitionCache},
         query::query,
+        read_scope::CallerContext,
         runtime::make_runtime_env,
         session_configurator::NoOpSessionConfigurator,
         sql_batch_view::SqlBatchView,
@@ -208,7 +209,7 @@ async fn test_cpu_usage_view(
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let pretty_results_view =

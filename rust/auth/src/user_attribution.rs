@@ -11,6 +11,15 @@ use percent_encoding::percent_decode_str;
 use tonic::{Status, metadata::MetadataMap};
 
 /// Resolved user attribution from gRPC metadata
+///
+/// **Audit-only. Must never feed a `ReadPolicy`/`ReadScope` resolution.** When
+/// `allow_delegation` is true and no `x-user-id`/`x-user-email` is present, or when no
+/// `AuthService` ran at all (`:145-152` below), this struct's fields fall back to
+/// client-supplied or "unknown" values -- that fallback is correct for its purpose (crediting a
+/// query to a human on whose behalf a service account is acting) and would be a client-controlled
+/// impersonation vector if it were ever used to decide what data a query may read. `ReadScope`
+/// resolution must read `AuthContext` from the request extension instead (see
+/// `tasks/1369_policy_seam_plan.md` §2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserAttribution {
     /// The resolved user identifier (from x-user-id or auth token)
