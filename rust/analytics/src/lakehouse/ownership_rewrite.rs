@@ -77,7 +77,7 @@
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{
     arrow::datatypes::DataType,
-    common::tree_node::Transformed,
+    common::{Column, tree_node::Transformed},
     config::ConfigOptions,
     datasource::DefaultTableSource,
     error::DataFusionError,
@@ -86,6 +86,7 @@ use datafusion::{
     optimizer::AnalyzerRule,
     prelude::*,
     scalar::ScalarValue,
+    sql::TableReference,
 };
 use micromegas_datafusion_extensions::properties::property_get::PropertyGet;
 use std::sync::Arc;
@@ -267,6 +268,7 @@ impl OwnershipRewrite {
     /// branches -- see the module doc comment's branch table.
     fn predicate_for(
         &self,
+        table_name: &TableReference,
         mat_view: &MaterializedView,
         per_process_audience: &LogicalPlan,
         resolved_predicate: &Expr,
@@ -281,12 +283,18 @@ impl OwnershipRewrite {
         {
             return Ok(None);
         }
+        // Qualified with the outer scan's own table name: once `DecorrelatePredicateSubquery`
+        // joins this scan with `in_subquery_plan`'s subquery, the combined schema holds a
+        // `process_id` column from both sides (for §3, the *same* underlying table on both
+        // sides of a self-referential join), so a bare, unqualified `col("process_id")` is
+        // ambiguous and `into_optimized_plan()` fails.
+        let outer_process_id = Expr::Column(Column::new(Some(table_name.clone()), "process_id"));
         if view_set_name.as_str() == "processes" {
             // §3: the audience source's own scan -- same `process_id IN (subquery)` shape as §4.
             // No cast needed: `processes.process_id` (the outer scan's own column) is already
             // `Utf8`, unlike most of §4's outer views.
             return Ok(Some(in_subquery(
-                col("process_id"),
+                outer_process_id,
                 in_subquery_plan.clone(),
             )));
         }
@@ -294,7 +302,7 @@ impl OwnershipRewrite {
             // §4: process_id-**column** views (streams, blocks, log_entries, measures, net_spans,
             // otel_spans, images, log_stats).
             return Ok(Some(in_subquery(
-                cast(col("process_id"), DataType::Utf8),
+                cast(outer_process_id, DataType::Utf8),
                 in_subquery_plan.clone(),
             )));
         }
@@ -343,6 +351,7 @@ impl OwnershipRewrite {
             return Ok(Transformed::no(plan));
         };
         let Some(predicate) = self.predicate_for(
+            &ts.table_name,
             mat_view,
             per_process_audience,
             resolved_predicate,

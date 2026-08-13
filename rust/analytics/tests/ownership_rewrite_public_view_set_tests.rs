@@ -1,8 +1,13 @@
 //! Offline (no live DB) plan-shape tests for `OwnershipRewrite` (#1370, AbAC Stage 2): asserts on
-//! the *analyzed* `LogicalPlan` text only -- no query execution, no seeded row data (contrast
-//! `ownership_rewrite_db_test.rs`). Covers the public-view-set allowlist (§7) plus two fail-closed
-//! guards that would otherwise ship with no coverage: an unhandled view set (§7's fallback) and an
-//! empty `ReadScope::Audiences(Arc::from([]))` (§3's empty-audience-set short-circuit).
+//! the *optimized* `LogicalPlan` text only -- no query execution, no seeded row data (contrast
+//! `ownership_rewrite_db_test.rs`). Planning through `into_optimized_plan()` (rather than stopping
+//! at the analyzed-but-unoptimized plan) runs `DecorrelatePredicateSubquery`, the optimizer rule
+//! that turns `OwnershipRewrite`'s injected `InSubquery`/`Exists` into a join -- and that join is
+//! what previously surfaced an ambiguous-column error for an unqualified outer `process_id`
+//! reference (#1370 issue 1), which analysis alone never caught. Covers the public-view-set
+//! allowlist (§7) plus two fail-closed guards that would otherwise ship with no coverage: an
+//! unhandled view set (§7's fallback) and an empty `ReadScope::Audiences(Arc::from([]))` (§3's
+//! empty-audience-set short-circuit).
 //!
 //! Unlike `lakehouse_admin_gate_test.rs`'s `ViewFactory::new(vec![])`, the `ViewFactory` here
 //! registers real `processes`/`streams` global views (Design §2 of
@@ -187,10 +192,12 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
 }
 
 /// Builds a session under `read_scope`/`ownership_config`, plans `sql`, and returns the
-/// **analyzed** (not optimizer-passed) `LogicalPlan` -- i.e. exactly what `OwnershipRewrite`
-/// produced, before `DecorrelatePredicateSubquery` (an optimizer, not analyzer, rule) rewrites the
-/// injected `InSubquery`/`Exists` into a join.
-async fn analyzed_plan(
+/// **optimized** `LogicalPlan` -- i.e. what actually executes, after `DecorrelatePredicateSubquery`
+/// (an optimizer, not analyzer, rule) has rewritten `OwnershipRewrite`'s injected
+/// `InSubquery`/`Exists` into a join. Stopping at the analyzed-but-unoptimized plan would miss
+/// ambiguous-column errors that only `DecorrelatePredicateSubquery`'s join surfaces (#1370 issue
+/// 1: an unqualified outer `process_id` reference).
+async fn optimized_plan(
     read_scope: ReadScope,
     ownership_config: OwnershipRewriteConfig,
     sql: &str,
@@ -212,11 +219,7 @@ async fn analyzed_plan(
     )
     .await
     .expect("make_session_context");
-    let unoptimized = ctx.sql(sql).await?.into_unoptimized_plan();
-    let state = ctx.state();
-    state
-        .analyzer()
-        .execute_and_check(unoptimized, state.config_options(), |_, _| {})
+    ctx.sql(sql).await?.into_optimized_plan()
 }
 
 fn scope(audiences: &[&str]) -> ReadScope {
@@ -235,7 +238,7 @@ async fn public_view_set_plans_with_no_injected_predicate() {
         unstamped_audience: None,
         public_view_sets: vec!["blocks".to_string()],
     };
-    let plan = analyzed_plan(scope(&["user:a"]), config, "SELECT * FROM blocks")
+    let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM blocks")
         .await
         .expect("a public view set must plan without error");
     let plan_text = format!("{plan}");
@@ -248,21 +251,23 @@ async fn public_view_set_plans_with_no_injected_predicate() {
 #[tokio::test]
 async fn non_public_process_id_column_view_plans_with_an_injected_semi_join() {
     let config = OwnershipRewriteConfig::default();
-    let plan = analyzed_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
+    let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
         .await
         .expect("a non-public process_id-column view must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("Filter") && plan_text.contains("IN"),
-        "a non-public process_id-column view must plan with an injected `IN (subquery)` Filter, \
-         got:\n{plan_text}"
+        plan_text.contains("LeftSemi Join")
+            && plan_text.contains("CAST(__streams__partitions.process_id AS Utf8)"),
+        "a non-public process_id-column view must plan with `DecorrelatePredicateSubquery` \
+         turning the injected `IN (subquery)` into a `LeftSemi Join` on the outer scan's own \
+         qualified, cast `process_id` column, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
 async fn unhandled_view_set_fails_analysis_loudly() {
     let config = OwnershipRewriteConfig::default();
-    let err = analyzed_plan(scope(&["user:a"]), config, "SELECT * FROM test_no_branch")
+    let err = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM test_no_branch")
         .await
         .expect_err("a view set matching no branch must fail analysis, not plan unfiltered");
     let msg = err.to_string();
@@ -275,7 +280,7 @@ async fn unhandled_view_set_fails_analysis_loudly() {
 #[tokio::test]
 async fn empty_audience_set_plans_a_literal_false_predicate() {
     let config = OwnershipRewriteConfig::default();
-    let plan = analyzed_plan(
+    let plan = optimized_plan(
         ReadScope::Audiences(Arc::from([])),
         config,
         "SELECT * FROM streams",
@@ -284,10 +289,11 @@ async fn empty_audience_set_plans_a_literal_false_predicate() {
     .expect("an empty audience set must still plan (fail closed, not fail to plan)");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("Filter: Boolean(false)"),
-        "an empty ReadScope::Audiences must plan a lit(false) predicate (rendered as a `Filter: \
-         Boolean(false)` node inside the per-process-audience subquery), not an unfiltered scan \
-         or a bare IN (), got:\n{plan_text}"
+        plan_text.contains("EmptyRelation"),
+        "an empty ReadScope::Audiences must plan a lit(false) predicate over the \
+         per-process-audience subquery; the optimizer folds that constant-false filter, plus the \
+         resulting empty `LeftSemi Join` right side, all the way down to an `EmptyRelation` -- not \
+         an unfiltered scan, got:\n{plan_text}"
     );
 }
 
@@ -297,14 +303,17 @@ async fn processes_own_scan_plans_with_an_injected_semi_join() {
     // filtered against the shared `per_process_audience` aggregate built from
     // `__processes__partitions` -- not an unfiltered scan of the audience source itself.
     let config = OwnershipRewriteConfig::default();
-    let plan = analyzed_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
+    let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
         .await
         .expect("processes' own scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("Filter") && plan_text.contains("IN"),
-        "processes' own scan (§3) must plan with an injected `IN (subquery)` Filter wrapping its \
-         TableScan, not an unfiltered scan, got:\n{plan_text}"
+        plan_text.contains("LeftSemi Join")
+            && plan_text
+                .contains("__processes__partitions.process_id = __correlated_sq_1.process_id"),
+        "processes' own scan (§3) must plan with `DecorrelatePredicateSubquery` turning the \
+         injected `IN (subquery)` into a self-referential `LeftSemi Join` on the outer scan's own \
+         qualified `process_id` column, not an unfiltered scan, got:\n{plan_text}"
     );
 }
 
@@ -316,7 +325,7 @@ async fn async_events_view_instance_plans_with_an_injected_exists() {
     // no data is scanned.
     let config = OwnershipRewriteConfig::default();
     let process_id = "00000000-0000-0000-0000-000000000001";
-    let plan = analyzed_plan(
+    let plan = optimized_plan(
         scope(&["user:a"]),
         config,
         &format!("SELECT * FROM view_instance('async_events', '{process_id}')"),
@@ -325,9 +334,13 @@ async fn async_events_view_instance_plans_with_an_injected_exists() {
     .expect("async_events' view_instance scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("Filter") && plan_text.contains("EXISTS"),
-        "async_events' view_instance scan (§5) must plan with an injected literal-valued `EXISTS` \
-         Filter, got:\n{plan_text}"
+        plan_text.contains("LeftSemi Join")
+            && plan_text.contains(&format!(
+                "Filter: __processes__partitions.process_id = Utf8(\"{process_id}\")"
+            )),
+        "async_events' view_instance scan (§5) must plan with `DecorrelatePredicateSubquery` \
+         turning the injected literal-valued `EXISTS` into a `LeftSemi Join` against the process \
+         named by its view_instance_id, got:\n{plan_text}"
     );
 }
 
@@ -338,7 +351,7 @@ async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
     // `get_view_instance_id()` (parsed as the stream_id UUID).
     let config = OwnershipRewriteConfig::default();
     let stream_id = "00000000-0000-0000-0000-000000000002";
-    let plan = analyzed_plan(
+    let plan = optimized_plan(
         scope(&["user:a"]),
         config,
         &format!("SELECT * FROM view_instance('thread_spans', '{stream_id}')"),
@@ -347,10 +360,15 @@ async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
     .expect("thread_spans' view_instance scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("Filter")
-            && plan_text.contains("EXISTS")
-            && plan_text.contains("__streams__partitions"),
-        "thread_spans' view_instance scan (§6) must plan with an injected `EXISTS` Filter built \
-         from the two-hop streams -> processes join, got:\n{plan_text}"
+        plan_text.contains("LeftSemi Join")
+            && plan_text.contains(
+                "Inner Join: __streams__partitions.process_id = __processes__partitions.process_id"
+            )
+            && plan_text.contains(&format!(
+                "Filter: __streams__partitions.stream_id = Utf8(\"{stream_id}\")"
+            )),
+        "thread_spans' view_instance scan (§6) must plan with `DecorrelatePredicateSubquery` \
+         turning the injected two-hop `EXISTS` into a `LeftSemi Join` whose right side inner-joins \
+         `streams` (resolved by its view_instance_id) to `per_process_audience`, got:\n{plan_text}"
     );
 }
