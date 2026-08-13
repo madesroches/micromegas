@@ -157,13 +157,14 @@ This distinction is load-bearing and easy to get wrong:
 The three-step shape survives; only step 3 changes:
 
 ```
-pre-queries (unchanged position):
+pre-queries (unchanged position, one new step):
   1. MIN/MAX insert-time query               -> [trunc(min), trunc(max) + slice)
-  1b. COUNT over that insert range, batch predicate -> row count (see Adaptive batch width)
   2. fetch_overlapping_insert_range_for_view -> PartitionCache
+  2b. COUNT over that insert range, batch predicate, against (2)'s cache -> row count
+      (see Adaptive batch width)
   3. per-stream metadata query (process variant only, see below)
 
-batch width: derived from (1)'s count, slice-aligned  (see Adaptive batch width)
+batch width: derived from (2b)'s count, slice-aligned  (see Adaptive batch width)
 
 for each batch window (sequential, ascending):
     filter cache to the batch window
@@ -183,16 +184,27 @@ call-site edits at all.
 
 ### Adaptive batch width
 
-Pre-query 1 (MIN/MAX, unchanged predicate) determines `insert_time_range`. A second, new query then
-counts blocks over **that same insert range with the batch queries' own predicate**
-(`insert_time >= trunc(min) AND insert_time < trunc(max) + slice`), not the event-time predicate of
-pre-query 1:
+Pre-query 1 (MIN/MAX, unchanged predicate) determines `insert_time_range`. Pre-query 2
+(`fetch_overlapping_insert_range_for_view`) then fetches the `PartitionCache` covering that insert
+range — the count query below can only be answered from that cache (pre-query 1's own partition set
+is selected by *event*-time overlap against the query range, a different axis; see *Design → Batched
+block queries*), so it must run after, not before, pre-query 2. A third, new query then counts
+blocks over **that same insert range, under the full batch-query predicate** — the identity
+filter (`process_id = ... AND array_has("streams.tags", ...)` for the process variant, `stream_id =
+...` for the stream variant) *and* `insert_time >= trunc(min) AND insert_time < trunc(max) + slice` —
+not the event-time predicate of pre-query 1:
 
 ```sql
 SELECT COUNT(*) as nb_blocks
 FROM source
-WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+WHERE process_id = '{process_id}' AND array_has("streams.tags", '{stream_tag}')
+  AND insert_time >= '{begin}' AND insert_time < '{end}'
 ```
+
+(stream variant: `WHERE stream_id = '{stream_id}' AND insert_time >= '{begin}' AND insert_time <
+'{end}'`). Omitting the identity filter would count every block in the shared `blocks` view for that
+window, not just this view instance's — on a shared lake, `nb_blocks` would then reflect every
+process/stream, not the sparse instance actually being queried.
 
 This is an extra round trip (unlike piggybacking on pre-query 1, it cannot reuse that scan), but it
 is cheap — a count-only aggregate over the same blocks-view slice the batch queries themselves will
@@ -219,8 +231,9 @@ batch_width      = buckets_per_batch * slice
 - A dense `cpu`-tagged process → `rows_per_bucket` in the thousands → hour- to few-hour-scale
   batches, i.e. roughly today's behavior, with no memory regression.
 
-`nb_blocks` is counted with the same `insert_time` predicate the batch queries use, so it is an
-accurate count of the rows the batches will return, not merely a lower bound. It still only tunes
+`nb_blocks` is counted under the batch queries' own full predicate (identity filter and
+`insert_time` range alike), so it is an accurate count of the rows the batches will return, not
+merely a lower bound. It still only tunes
 overhead, never correctness: buffered memory per batch is the row count times a predictable
 per-row width (~150 B after the lean projection, so ~37 MB at target), and output does not depend
 on batch width.
@@ -228,7 +241,8 @@ on batch width.
 ### Why the lean projection is in scope
 
 A row *count* target only bounds memory if rows have a predictable width — which is also why
-`nb_blocks` must be counted under the batch queries' own predicate (see *Adaptive batch width*): an
+`nb_blocks` must be counted under the batch queries' own full predicate (see *Adaptive batch
+width*): an
 accurate count times an unpredictable row width still doesn't bound memory. With stream blobs in the
 projection they vary 150 B → 3.5 KB, so a 250k-row target means anywhere from 37 MB to 875 MB — and
 `make_runtime_env` installs an `UnboundedMemoryPool` unless
@@ -307,14 +321,17 @@ retire logic inside their own `update_partition`, and they are not the motivatin
 
 ```rust
 /// One candidates fetch over [specs.first().min, specs.last().max] (specs have ascending,
-/// non-overlapping insert ranges), then the matcher per spec, in two passes. Pass 1: run
-/// `spec_is_up_to_date` for every spec against the full candidate set. Pass 2: for any spec `i`
-/// verdicted **not** up to date, drop from every other spec `j`'s candidate set any row entirely
-/// contained in `i`'s insert range, and re-run the matcher for those affected `j`s (see *Verdicts
-/// reflect pre-run state* below) -- such a row is a `RetireMatch::Containment` match for spec `i`
-/// and will be gone once `i`'s write runs this call, so it must not count towards `j`'s freshness.
-/// A row is dropped only when its containing spec is itself stale; specs whose containing spec is
-/// up to date (hence not rewritten) are unaffected. Returns up-to-date flags parallel to `specs`.
+/// non-overlapping insert ranges), then the matcher per spec, run to a fixpoint. Round 1: run
+/// `spec_is_up_to_date` for every spec against the full candidate set. Each later round: for any
+/// spec `i` newly verdicted **not** up to date this round, drop from every other spec `j`'s
+/// candidate set any row entirely contained in `i`'s insert range, and re-run the matcher for those
+/// affected `j`s (see *Verdicts reflect pre-run state* below) -- such a row is a
+/// `RetireMatch::Containment` match for spec `i` and will be gone once `i`'s write runs this call,
+/// so it must not count towards `j`'s freshness. Repeat until a round flips no verdict: dropping a
+/// row can only turn a spec from up-to-date to stale, never the reverse, so verdicts are monotone
+/// and the loop terminates in at most `specs.len()` rounds (one, in the common case). A row is
+/// dropped only when its containing spec is itself stale; specs whose containing spec is up to date
+/// (hence not rewritten) are unaffected. Returns up-to-date flags parallel to `specs`.
 pub async fn find_up_to_date_partitions(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
@@ -348,12 +365,18 @@ straddling a cut between specs *i* and *j*) has two directions, and only one is 
   (`min == max`) and sits on a boundary — and if *i* is already up to date, nothing retires the row,
   so dropping it from *j*'s candidate set unconditionally would report *j* stale for no reason, on
   every run. `find_up_to_date_partitions` therefore computes verdicts once against the full candidate
-  set, then for any spec *i* verdicted **not** up to date, drops from every other spec's candidate
-  set any row entirely contained in *i*'s range and re-evaluates those specs (see its rustdoc above)
-  — such a row is guaranteed to be retired this run precisely because *i* is being rewritten, so it
-  must not count towards a sibling spec's freshness, while a row contained in an already-up-to-date
-  spec is left alone. The cost is a handful of unnecessary rewrites in this corner, never a missed
-  one, and never a permanent rewrite loop.
+  set, then for any spec *i* newly verdicted **not** up to date, drops from every other spec's
+  candidate set any row entirely contained in *i*'s range and re-evaluates those specs (see its
+  rustdoc above) — such a row is guaranteed to be retired this run precisely because *i* is being
+  rewritten, so it must not count towards a sibling spec's freshness, while a row contained in an
+  already-up-to-date spec is left alone. A drop can itself flip a sibling spec *j* from up to date
+  to stale — and *j*'s write would then retire rows a third spec *k*'s verdict depended on — so the
+  drop-and-re-evaluate step repeats until a round changes no verdict; verdicts are monotone
+  (up-to-date → stale only), so this fixpoint terminates in at most `specs.len()` rounds, one in the
+  common case. "Never a missed one" holds only at that fixpoint: stopping after a single pass would
+  let *k* be reported up to date while its supporting partition is retired in the same run. The cost
+  is a handful of unnecessary rewrites in this corner, never a missed one, and never a permanent
+  rewrite loop.
 
 **Race window.** The check→write pair was never atomic: a concurrent `jit_update` of the same view
 instance can commit a partition between one spec's check and its write today. Checking up front
@@ -387,8 +410,11 @@ There is no one-time regeneration cost.
 `generate_stream_jit_partitions_segment` (`:406`) is **kept, not deleted**:
 `rust/analytics/tests/thread_spans_ordering_db_test.rs` drives it directly from ~10 sites (single
 query range, no bucket subdivision, asserting on returned specs). Deleting it would mean rewriting a
-2000-line DB test suite for no benefit. It keeps its current `collect()`-based body and its current
-(fat) projection; only the batched path gets the lean one.
+2000-line DB test suite for no benefit. It keeps its current `collect()`-based body as-is; its
+projection is already lean (block columns plus `"streams.format"` only, `:422-429`) — there is no
+lean/fat distinction on the stream side, so the batched stream path (`generate_stream_jit_partitions`,
+rewritten below) uses the same projection, not a divergent one. The lean-projection work is
+process-variant only (see *Why the lean projection is in scope*).
 
 `generate_stream_jit_partitions` (the outer, `:465`, called from `thread_spans_view.rs`) is rewritten
 to batch, same as the process variant — after the rewrite it no longer calls the `_segment` function
@@ -414,8 +440,9 @@ span with the spec count.
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/jit_partitions.rs`:
-   - Add a `COUNT(*)` query over the insert range (once the MIN/MAX pre-query resolves it), using the
-     same predicate as the batch queries (see *Adaptive batch width*); add `pub const
+   - Add a `COUNT(*)` query over the insert range, run after `fetch_overlapping_insert_range_for_view`
+     resolves the `PartitionCache` (it can only be answered from that cache — see *Adaptive batch
+     width*), using the same full predicate as the batch queries; add `pub const
      TARGET_ROWS_PER_QUERY` and
      `pub fn batch_windows(insert_range, slice, nb_blocks) -> impl Iterator<Item = TimeRange>`
      (slice-aligned, last window clamped to the range end) — `pub` so
@@ -456,7 +483,9 @@ span with the spec count.
 - `rust/analytics/tests/jit_batch_windows_tests.rs`, `rust/analytics/tests/jit_freshness_tests.rs`
   — new, pure logic.
 - `rust/analytics/tests/jit_process_batch_db_test.rs` — new, DB-gated (`#[ignore]`d) test driving
-  `generate_process_jit_partitions`, covering the batched process path and the lean projection.
+  `generate_process_jit_partitions` over a multi-bucket range under both `BlockOrder` variants,
+  covering the batched process path (including the `EventTime` batch-then-split path used in
+  production by `net_spans`) and the lean projection.
 - `rust/analytics/tests/thread_spans_ordering_db_test.rs` — gains one new DB-gated test driving the
   outer `generate_stream_jit_partitions` over a multi-bucket range, asserting equivalence against the
   per-segment path (see Testing Strategy); existing per-segment tests are otherwise unchanged
@@ -579,8 +608,18 @@ data volume.
   test in `thread_spans_ordering_db_test.rs` is `#[ignore]`d and needs a live
   `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`; run explicitly with
   `cargo test -- --ignored`. Add `jit_process_batch_db_test.rs`, a DB-gated test (same `#[ignore]`
-  gating) driving `generate_process_jit_partitions` — or a `view_instance('log_entries', <process>)`
-  query through it — so the batched process path and the lean projection get automated coverage.
+  gating) driving `generate_process_jit_partitions` directly over a multi-bucket range, under
+  **both** `BlockOrder` variants (`InsertTime` and `EventTime`) — e.g. a `view_instance('log_entries',
+  <process>)` query for `InsertTime`, plus a second run with `block_order: BlockOrder::EventTime` in
+  the `JitPartitionConfig` — so the batched process path and the lean projection get automated
+  coverage under both orderings. `BlockOrder::EventTime` is production-reachable for the process
+  variant too (`net_spans_view.rs:351-364` builds `JitPartitionConfig { block_order:
+  BlockOrder::EventTime, .. }` and passes it to `generate_process_jit_partitions`), so the
+  client-side `duration_trunc` batch-then-split path under `EventTime` is the same
+  riskiest-new-logic case as the stream side and needs the same coverage; unlike the stream side,
+  `generate_process_jit_partitions_segment` is deleted by this plan, so equivalence is asserted
+  against expected specs computed from the fetched blocks directly (e.g. via
+  `group_blocks_into_partitions` per bucket), not against a kept segment function.
   Additionally, add a DB-gated test driving `generate_stream_jit_partitions` (not the `_segment`
   function) over a multi-bucket range under `BlockOrder::EventTime`, asserting its emitted specs are
   identical to running `generate_stream_jit_partitions_segment` once per bucket — this is the only
