@@ -17,10 +17,10 @@ trip per emitted spec, on **every** query over the view, not just the first.
 Two coupled changes, plus one enabling cleanup:
 
 1. **Block-query count scales with data, not with time** — replace the per-hour loop with batched
-   queries whose width is derived from observed block density (a `COUNT(*)` over the insert range,
-   under the same predicate the batch queries use). A sparse instance collapses a month into one
-   query; a dense one falls back to hour-scale batches. Hour bucketing is recovered client-side from
-   each row's `insert_time`.
+   queries whose width is derived from observed block density (a per-bucket `COUNT(*) ... GROUP BY`
+   over the insert range, under the same predicate the batch queries use). A sparse instance
+   collapses a month into one query; a dense one falls back to hour-scale batches. Hour bucketing is
+   recovered client-side from each row's `insert_time`.
 2. **Freshness-check count scales the same way** — the five `BlockOrder::InsertTime` callers stop
    issuing one `is_jit_partition_up_to_date` round trip per spec; one candidates query per
    `generate_*` call feeds the same matching logic, refactored into a pure function.
@@ -29,7 +29,9 @@ Two coupled changes, plus one enabling cleanup:
    target a real memory bound rather than a guess, and it deletes a per-row CBOR decode plus a
    hand-inlined copy of an existing helper.
 
-**The grouping algorithm is not touched, and no public signature changes.** Each hour bucket's
+**The grouping algorithm is not touched, and no function signature changes.** (The one public-API
+change is additive: a new `pub` field, `JitPartitionConfig::target_rows_per_query` — see
+*Implementation Steps* for the existing test-literal updates it requires.) Each hour bucket's
 blocks are still handed to the existing `group_blocks_into_partitions` (`jit_partitions.rs:227`)
 exactly as today, so emitted specs are byte-identical and every cached JIT partition stays valid.
 All the risk in this area lives in the bucketing/cut-point rules, and this plan changes neither.
@@ -160,11 +162,12 @@ The three-step shape survives; only step 3 changes:
 pre-queries (unchanged position, one new step):
   1. MIN/MAX insert-time query               -> [trunc(min), trunc(max) + slice)
   2. fetch_overlapping_insert_range_for_view -> PartitionCache
-  2b. COUNT over that insert range, batch predicate, against (2)'s cache -> row count
-      (see Adaptive batch width)
+  2b. per-bucket COUNT over that insert range, batch predicate, against (2)'s cache -> one
+      (bucket_start, nb_blocks) row per non-empty bucket (see Adaptive batch width)
   3. per-stream metadata query (process variant only, see below)
 
-batch width: derived from (2b)'s count, slice-aligned  (see Adaptive batch width)
+batch windows: (2b)'s per-bucket counts packed greedily up to target_rows_per_query, slice-aligned
+               (see Adaptive batch width)
 
 for each batch window (sequential, ascending):
     filter cache to the batch window
@@ -189,67 +192,80 @@ Pre-query 1 (MIN/MAX, unchanged predicate) determines `insert_time_range`. Pre-q
 range — the count query below can only be answered from that cache (pre-query 1's own partition set
 is selected by *event*-time overlap against the query range, a different axis; see *Design → Batched
 block queries*), so it must run after, not before, pre-query 2. A third, new query then counts
-blocks over **that same insert range, under the full batch-query predicate** — the identity
-filter (`process_id = ... AND array_has("streams.tags", ...)` for the process variant, `stream_id =
-...` for the stream variant) *and* `insert_time >= trunc(min) AND insert_time < trunc(max) + slice` —
-not the event-time predicate of pre-query 1:
+blocks **per bucket** over that same insert range, under the full batch-query predicate — the
+identity filter (`process_id = ... AND array_has("streams.tags", ...)` for the process variant,
+`stream_id = ...` for the stream variant) *and* `insert_time >= trunc(min) AND insert_time <
+trunc(max) + slice` — not the event-time predicate of pre-query 1:
 
 ```sql
-SELECT COUNT(*) as nb_blocks
+SELECT date_bin('{slice}', insert_time) as bucket, COUNT(*) as nb_blocks
 FROM source
 WHERE process_id = '{process_id}' AND array_has("streams.tags", '{stream_tag}')
   AND insert_time >= '{begin}' AND insert_time < '{end}'
+GROUP BY bucket
 ```
 
 (stream variant: `WHERE stream_id = '{stream_id}' AND insert_time >= '{begin}' AND insert_time <
 '{end}'`). Omitting the identity filter would count every block in the shared `blocks` view for that
-window, not just this view instance's — on a shared lake, `nb_blocks` would then reflect every
-process/stream, not the sparse instance actually being queried.
+window, not just this view instance's — on a shared lake, the counts would then reflect every
+process/stream, not the sparse instance actually being queried. Grouping by bucket costs nothing
+extra over a scalar `COUNT(*)`: still one round trip, returning one small row per *non-empty*
+bucket (a sparse month is at most a few hundred rows) — but it replaces an average-density estimate
+with per-bucket ground truth.
 
 This is an extra round trip (unlike piggybacking on pre-query 1, it cannot reuse that scan), but it
 is cheap — a count-only aggregate over the same blocks-view slice the batch queries themselves will
-read — and it is the only predicate that makes the resulting density estimate match what the batches
-actually return. Counting under pre-query 1's event-time predicate instead would make `nb_blocks` an
-unbounded lower bound: a block's `insert_time` is independent of its event span, so a single
-long-lived, late-flushed block can pin `max_insert_time` far from a narrow query range while nothing
-else in that range matches the event-time filter, collapsing `rows_per_bucket` to 1 and clamping
-`buckets_per_batch` to `total_buckets` — one query then collects every block of that process/tag over
-the whole insert range, regardless of size.
+read — and it is the only predicate that makes the resulting per-bucket counts match what the
+batches actually return. Counting under pre-query 1's event-time predicate instead would make every
+bucket's count an unbounded lower bound: a block's `insert_time` is independent of its event span,
+so a single long-lived, late-flushed block can pin `max_insert_time` far from a narrow query range
+while nothing else in that range matches the event-time filter, collapsing every counted bucket to
+(at most) 1 row — the packing below would then merge the whole range into one batch, which then
+collects every block of that process/tag over the whole insert range, regardless of size.
 
 Then, with `JitPartitionConfig::target_rows_per_query` (a new `i64` field alongside `max_nb_objects`,
 defaulting to `250_000` and rustdoc'd — a config field rather than a bare const precisely so
 DB-gated tests can lower it to force a multi-batch run, the same way `thread_spans_ordering_db_test.rs`
-already drives a lowered `max_nb_objects`; see *Testing Strategy*):
+already drives a lowered `max_nb_objects`; see *Testing Strategy*), `batch_windows` packs consecutive
+buckets greedily, closing a batch just before it would exceed the target:
 
 ```
-total_buckets    = insert_range / slice
-rows_per_bucket  = max(1, ceil(nb_blocks / total_buckets))
-buckets_per_batch= clamp(target_rows_per_query / rows_per_bucket, 1, total_buckets)
-batch_width      = buckets_per_batch * slice
+running = 0
+batch_begin = first bucket's begin
+for each bucket in ascending order (empty buckets count as 0, so they never trigger a close):
+    if running > 0 && running + bucket.nb_blocks > target_rows_per_query:
+        close batch [batch_begin, bucket.begin);  running = 0;  batch_begin = bucket.begin
+    running += bucket.nb_blocks
+close the final batch [batch_begin, insert_range.end)
 ```
 
-- Sparse OTLP metrics, 30 days, ~43k blocks → `rows_per_bucket ≈ 60`, `buckets_per_batch` clamps to
-  `total_buckets` → **one query for the whole month**.
-- A dense `cpu`-tagged process with `rows_per_bucket` at or above `target_rows_per_query`
-  (roughly 60k–250k+ blocks/bucket) → `buckets_per_batch` clamps to 1 → hour-scale batches, matching
-  today's per-hour query shape. Below that density — `rows_per_bucket` in the thousands to tens of
-  thousands, still "dense" relative to the sparse OTLP case — `buckets_per_batch` is several to a
-  few dozen, so one query now buffers up to `target_rows_per_query` rows at once: a real per-query
-  memory increase over today's per-hour loop (which buffers only that hour's rows), traded for far
-  fewer queries.
+- Sparse OTLP metrics, 30 days, ~43k blocks spread evenly → every bucket's count is far below the
+  target, so the running total never forces a close → **one query for the whole month**.
+- A dense, evenly busy `cpu`-tagged process packs several to a few dozen buckets per batch before
+  the running total reaches `target_rows_per_query`, buffering up to that many rows at once: a real
+  per-batch memory increase over today's per-hour loop (which buffers only that hour's rows), traded
+  for far fewer queries.
+- A burst concentrated in a handful of buckets amid many near-empty ones is *not* diluted by the
+  buckets around it: the batch containing the burst closes as soon as its own running total would
+  exceed `target_rows_per_query`, regardless of how many empty buckets happen to be adjacent. This is
+  what makes the bound hold under skewed density, not just on average (see *Trade-offs*).
+- The one case the packing cannot bound further: a single bucket whose own count already exceeds
+  `target_rows_per_query`. The loop never splits a bucket, so it still forms one batch on its own and
+  that query returns the bucket's full count — the same per-bucket behavior as today's per-hour loop,
+  not a new hazard.
 
-`nb_blocks` is counted under the batch queries' own full predicate (identity filter and
-`insert_time` range alike), so it is an accurate count of the rows the batches will return, not
-merely a lower bound. It still only tunes overhead, never correctness: buffered memory per batch is
-bounded by `target_rows_per_query` rows, each a predictable width — ~150 B of Arrow columns after
-the lean projection, plus ~200 B for the parsed `Arc<PartitionSourceBlock>` (`BlockMetadata` + the
-`format` `String` + two `Arc`s) held simultaneously — so ~350 B/row, ~90 MB at the default target of
-250k. Output does not depend on batch width.
+Because counts are per bucket rather than a range-wide average, each batch's row count is bounded by
+`target_rows_per_query` — except the single-oversized-bucket case above, where the bound is that
+bucket's own count instead. Buffered memory per batch is therefore bounded by that same row count,
+each row a predictable width — ~150 B of Arrow columns after the lean projection, plus ~200 B for the
+parsed `Arc<PartitionSourceBlock>` (`BlockMetadata` + the `format` `String` + two `Arc`s) held
+simultaneously — so ~350 B/row, ~90 MB at the default target of 250k in the common case. Output does
+not depend on batch width.
 
 ### Why the lean projection is in scope
 
-A row *count* target only bounds memory if rows have a predictable width — which is also why
-`nb_blocks` must be counted under the batch queries' own full predicate (see *Adaptive batch
+A row *count* target only bounds memory if rows have a predictable width — which is also why the
+per-bucket counts must be taken under the batch queries' own full predicate (see *Adaptive batch
 width*): an
 accurate count times an unpredictable row width still doesn't bound memory. With stream blobs in the
 projection they vary 150 B → 3.5 KB, so a 250k-row target means anywhere from 37 MB to 875 MB — and
@@ -281,7 +297,7 @@ today, having a hand-inlined copy at `:577-616` written against the `streams.`-p
 copy is deleted; `format` (not part of `StreamMetadata`) is kept alongside in the map:
 
 ```rust
-HashMap<Uuid, (Arc<StreamMetadata>, Arc<String> /* format */)>
+HashMap<Uuid, (Arc<StreamMetadata>, String /* format */)>
 ```
 
 The batch query then keeps `array_has("streams.tags", ...)` in its `WHERE` (filtering needs no
@@ -454,18 +470,29 @@ span with the spec count.
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/jit_partitions.rs`:
-   - Add a `COUNT(*)` query over the insert range, run after `fetch_overlapping_insert_range_for_view`
-     resolves the `PartitionCache` (it can only be answered from that cache — see *Adaptive batch
-     width*), using the same full predicate as the batch queries; add `target_rows_per_query: i64`
-     to `JitPartitionConfig` (default `250_000`, rustdoc'd) and
-     `pub fn batch_windows(insert_range, slice, nb_blocks, target_rows_per_query) -> impl
-     Iterator<Item = TimeRange>` (slice-aligned, last window clamped to the range end) — `pub` so
-     `analytics/tests/jit_batch_windows_tests.rs` can call it directly, and `target_rows_per_query`
-     threaded through `JitPartitionConfig` so DB-gated tests can lower it to force a multi-batch run
-     (see *Testing Strategy*).
+   - Add a per-bucket `COUNT(*) ... GROUP BY date_bin(slice, insert_time)` query over the
+     insert range, run after `fetch_overlapping_insert_range_for_view` resolves the `PartitionCache`
+     (it can only be answered from that cache — see *Adaptive batch width*), using the same full
+     predicate as the batch queries; add `target_rows_per_query: i64` to `JitPartitionConfig`
+     (default `250_000`, rustdoc'd) and
+     `pub fn batch_windows(insert_range, slice, bucket_counts: &[(DateTime<Utc>, i64)],
+     target_rows_per_query) -> impl Iterator<Item = TimeRange>` (`bucket_counts` holds one
+     `(bucket_start, nb_blocks)` pair per *non-empty* bucket from the `GROUP BY` query, ascending,
+     empty buckets implicitly zero; greedily packs consecutive buckets up to
+     `target_rows_per_query`, slice-aligned, last window clamped to the range end — see *Adaptive
+     batch width*) — `pub` so `analytics/tests/jit_batch_windows_tests.rs` can call it directly, and
+     `target_rows_per_query` threaded through `JitPartitionConfig` so DB-gated tests can lower it to
+     force a multi-batch run (see *Testing Strategy*). Adding this field is technically a public-API
+     change (any out-of-repo full struct literal for this `pub` struct breaks), and it breaks the 7
+     existing exhaustive `JitPartitionConfig` literals in-repo: the `config()` helper in
+     `analytics/tests/jit_partition_grouping_tests.rs` (`:72-76`) and the 6 literals in
+     `analytics/tests/thread_spans_ordering_db_test.rs` (`:812, 1025, 1240, 1507, 1763, 2030`) — add
+     the field (or switch each to `..Default::default()`) so the test crate keeps compiling.
    - Add the per-stream metadata pre-query for the process variant, decoded via
      `metadata::stream_metadata_from_batch_row`, into
-     `HashMap<Uuid, (Arc<StreamMetadata>, Arc<String>)>`.
+     `HashMap<Uuid, (Arc<StreamMetadata>, String)>` (the `format` `String` is cloned per block off
+     this map — `PartitionSourceBlock::format` is a plain `String`, so an `Arc<String>` here would
+     only add an indirection, not save a clone).
    - Extract the process-variant batch SQL construction into
      `pub fn process_batch_sql(process_id, stream_tag, range) -> String` so the projection guard
      test can call it directly instead of reaching into a private `format!`.
@@ -517,12 +544,18 @@ span with the spec count.
   makes query count scale with data volume instead of wall-clock range. Costs one extra round trip
   (it cannot piggyback on pre-query 1, whose predicate differs — see *Adaptive batch width*). No
   pin/override knob: if the derivation is wrong, fix the derivation.
-- **Estimate vs. hard bound.** The derived width is a heuristic in the sense that density can vary
-  within the counted range (some buckets denser than others), but `nb_blocks` itself is an accurate
-  count of the rows the batches will return, not a lower bound. Acceptable: the buffered unit is
-  bounded by `target_rows_per_query` (~90 MB at the default target, see *Adaptive batch width*) —
-  higher than today's per-hour peak for a mid-density instance, but a fixed, predictable ceiling —
-  and width cannot affect output.
+- **Per-batch bound vs. an average-density estimate.** An earlier version of this design derived one
+  width from a single range-wide `COUNT(*)`, which is only a *mean* density and does not hold under a
+  skewed one: a burst concentrated inside a wide, mean-derived window can return far more than
+  `target_rows_per_query`. Counting per bucket and packing greedily (see *Adaptive batch width*)
+  bounds each batch's row count directly, by construction, regardless of how unevenly blocks are
+  distributed within the counted range — a burst closes its own batch as soon as its running count
+  would exceed the target, rather than being diluted by the empty buckets around it. The one residual
+  case is a single bucket whose own count exceeds the target: it still forms its own batch, matching
+  today's per-bucket behavior rather than introducing a new hazard. The buffered unit is bounded by
+  `target_rows_per_query` (~90 MB at the default target, see *Adaptive batch width*) — higher than
+  today's per-hour peak for a mid-density instance, but a fixed, predictable ceiling — and width
+  cannot affect output.
 - **Vec return vs. streaming specs.** The previous revision of this plan changed both generators to
   return a `BoxStream` of specs. Cut: it rippled owned/`Arc` captures through seven views, replaced
   a simple loop with a bucket-flush state machine inside `async_stream`, and held a DataFusion /
@@ -555,8 +588,9 @@ span with the spec count.
 
 Two earlier drafts; do not resurrect either:
 
-- **Streaming `JitPartitionAccumulator`** (`tasks/jit_single_query_plan.md`, the original draft):
-  predated #1429/#1440, which replaced the inline chunking it targeted with
+- **Streaming `JitPartitionAccumulator`** (the original draft, removed by commit `878836979` when
+  this plan was rewritten against current code): predated #1429/#1440, which replaced the inline
+  chunking it targeted with
   `group_blocks_into_partitions` (`jit_partitions.rs:227`). Under `BlockOrder::EventTime`, grouping
   stable-sorts a whole segment and uses a suffix-minimum over the entire list, so cut decisions
   cannot be made from a per-block streaming `push()`; its accepted one-time cache-regeneration cost
@@ -616,7 +650,10 @@ data volume.
 - **Projection guard**: call the `pub fn process_batch_sql` builder (added in Implementation Steps)
   and assert its `SELECT` list contains no `streams.` column (the `WHERE` clause still may). One
   small string assertion — it guards the exact regression the rustdoc warns about.
-- **Existing suites**: `cargo test` from `rust/` must pass unchanged. `thread_spans_ordering_db_test.rs`
+- **Existing suites**: `cargo test` from `rust/` must pass, once the 7 existing exhaustive
+  `JitPartitionConfig` struct literals are updated for the new field (see *Implementation Steps*) —
+  that update is required for the test crate to compile at all, not merely for behavior. No test's
+  *assertions* change. `thread_spans_ordering_db_test.rs`
   drives only `generate_stream_jit_partitions_segment` directly (single-segment, no bucket
   subdivision) — grep confirms nothing in `rust/analytics/tests/` calls the outer
   `generate_stream_jit_partitions` or `generate_process_jit_partitions`. After this plan's rewrite,
@@ -662,12 +699,14 @@ data volume.
   end-to-end wall clock before/after.
 - **Memory check — the dense case**: an `async_events` (tag `"cpu"`) query on a many-threaded
   process over a long range, watching process RSS (system_monitor gauges, #1330). Expected: peak
-  buffered memory per query bounded by `target_rows_per_query` (~90 MB at the default target, see
-  *Adaptive batch width*). This matches (or improves on, from the shared per-stream `Arc`s) today's
-  per-hour peak only when the instance is dense enough that `buckets_per_batch` clamps to one bucket
-  (`rows_per_bucket` at or above `target_rows_per_query`); for a mid-density instance below that, the
-  batched path buffers more per query than today's per-hour loop — an accepted, bounded trade for far
-  fewer queries, not a regression to chase down.
+  buffered memory per batch bounded by `target_rows_per_query` (~90 MB at the default target, see
+  *Adaptive batch width*), except the residual single-oversized-bucket case, which still buffers that
+  bucket's full count in one query — today's per-bucket behavior, not a new hazard. This matches (or
+  improves on, from the shared per-stream `Arc`s) today's per-hour peak only when the instance is
+  dense enough that most individual buckets' own counts are at or above `target_rows_per_query` (so
+  batches collapse to one bucket each); for a mid-density instance below that, the batched path
+  buffers more per query than today's per-hour loop — an accepted, bounded trade for far fewer
+  queries, not a regression to chase down.
 
 ## Documentation
 
