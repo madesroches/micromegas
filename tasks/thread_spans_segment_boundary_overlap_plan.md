@@ -67,8 +67,11 @@ block's `begin_ticks` — the concatenation is already correct; only the declare
   `[min_event_time, max_event_time]` pair keeps its `[min begin, max end]` semantics for partition
   pruning, untouched. The JIT grouping layer (`jit_partitions.rs`) is not modified at all: hourly
   buckets, `max_nb_objects` cuts, and freshness behavior stay exactly as they are — this fixes
-  hour-seam cuts *and* forced intra-bucket cuts uniformly, and after a retire, rebuilt partitions
-  genuinely stop failing (unlike today).
+  hour-seam cuts *and* forced intra-bucket cuts uniformly. `ThreadSpansView::SCHEMA_VERSION` also
+  bumps 2 → 3 (the same lever `1429`'s v0.29.0 entry used on this exact view), so every existing
+  `thread_spans` JIT partition is stale by schema hash after deploy and rebuilds automatically —
+  carrying `max_sort_key_time` — on its first query, with no admin `retire_partitions` call
+  required (see Trade-offs).
 
 Part A alone is not enough: every block already ingested keeps its overlapping tick geometry until
 it ages out of retention (rebuilding partitions from it reproduces the failure identically), and
@@ -275,6 +278,11 @@ on the emitted `PartitionRowSet`. `write_partition` sends its `PartitionRowSet` 
 guard the read: when `rows.num_rows() == 0` (e.g. an empty call-tree chain), set
 `max_sort_key_time` to `None` instead of indexing the `begin` column.
 
+Also bump `SCHEMA_VERSION` (`:38`) 2 → 3 in the same file — the lever `1429` used on this exact
+view. `get_file_schema_hash` changes, so every pre-existing `thread_spans` JIT partition becomes
+stale by schema hash and rebuilds automatically on its next query, carrying `max_sort_key_time`,
+with no admin `retire_partitions` call required (see Trade-offs).
+
 ### 4. Read it back
 
 - `Partition` (`partition.rs:8-30`) gains `max_sort_key_time: Option<DateTime<Utc>>` with an
@@ -379,17 +387,21 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    hand-built channel and asserts both the running max and the `None`-poisoning rule);
    `PartitionWriteResult`; explicit-column-list INSERT with the new bind.
 5. **Populate**: `thread_spans_view.rs::write_partition` sets `max_sort_key_time` from the last
-   row's `begin` after `ensure_begin_non_decreasing`, or `None` when `rows.num_rows() == 0`.
+   row's `begin` after `ensure_begin_non_decreasing`, or `None` when `rows.num_rows() == 0`. Bump
+   `SCHEMA_VERSION` 2 → 3 in the same file so every pre-existing `thread_spans` partition self-heals
+   on its next query instead of requiring an admin `retire_partitions` call (see Trade-offs).
 6. **Check**: change `partition_bounds`'s `EventTime` arm per Design Part B §5.
 7. **Docs**:
    - `view.rs:166-187` (`Concatenated` contract): rewrite the residual-caveats paragraph — the
      block-boundary tick overlap (old caveat 1) no longer trips the check for partitions carrying
-     `max_sort_key_time`; remaining residuals are legacy-NULL partitions (retire to fix), the
-     insert-time inversion (2), and TSC drift (3).
+     `max_sort_key_time`; note that the `SCHEMA_VERSION` 2 → 3 bump self-heals every pre-existing
+     `thread_spans` partition on its next query, so legacy-NULL partitions are only a residual until
+     first query, not an admin-retire dependency; remaining residuals are the insert-time inversion
+     (2) and TSC drift (3).
    - `partitioned_execution_plan.rs`: `sort_and_check_non_overlapping` rustdoc + runtime error
-     string (`:52-59`, `:82-88`) — the "retire to fix" advice becomes accurate for all remaining
-     causes; drop the buffer-swap cause except as a legacy-partition note. `partition_bounds` and
-     `attach_ordering_statistics` doc updates.
+     string (`:52-59`, `:82-88`) — the "retire to fix" advice becomes a "this heals itself on next
+     query" note for the buffer-swap cause, accurate for the remaining causes as-is. `partition_bounds`
+     and `attach_ordering_statistics` doc updates.
    - `jit_partitions.rs` module doc (`:17-23`): amend the "says nothing about event-time ranges"
      note to point at `max_sort_key_time` as the mechanism that makes block-tick overlap harmless
      to the scan check.
@@ -401,6 +413,9 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
      pre-fix `micromegas-tracing` versions.
    - `partition.rs` / `write_partition.rs`: field and fold-rule rustdoc (including why any-None
      poisons the partition value).
+   - `doc/how_to_query/README.md`'s `#### list_partitions` Returns table (`:475-486`): add
+     `max_sort_key_time`, and, while there, the three columns it's already missing (`num_rows`,
+     `partition_format_version`, `sort_order`) — see Documentation.
 8. **Unit tests (no DB)**: extend `rust/analytics/tests/thread_spans_ordering_tests.rs`
    (`make_partition` helper at `:36-51`): (a) two partitions whose `[min,max_event_time]` overlap
    but whose `max_sort_key_time` clears the next `min_event_time` → accepted; (b) same shape with
@@ -438,7 +453,9 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    is untouched so it must pass unmodified; run
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
    and confirm the cross-hour query succeeds; check whether any Python test asserts
-   `list_partitions()`'s column list (the new column appears there).
+   `list_partitions()`'s column list (the new column appears there); confirm
+   `doc/how_to_query/README.md`'s `list_partitions` Returns table (Step 7) matches the Arrow schema
+   column-for-column.
 11. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`,
     `python3 build/python_ci.py`.
 12. Add `CHANGELOG.md` entries under `## Unreleased`: `**Analytics:**` (schema migration + scan
@@ -449,7 +466,11 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
     8, v0.29.0 lines 13-20/24/26): the `**Tracing:**` entry must name `TracingBlock::new` and
     `EventBlock::close` (now `close_at`) and what call sites must change; the `**Analytics:**` entry
     must name `PartitionRowSet` and `Partition` (both all-public-field structs, so downstream struct
-    literals break) plus `write_rows_and_track_times`'s widened return type.
+    literals break) plus `write_rows_and_track_times`'s widened return type. The `**Analytics:**`
+    entry also needs an **Operational note**, following `1429`'s v0.29.0 entry verbatim:
+    `ThreadSpansView::SCHEMA_VERSION` bumps 2 → 3, so every existing `thread_spans` JIT partition is
+    stale after deploy and rebuilds automatically on first query — no admin action, but expect a
+    one-off latency bump on the first query per stream.
 
 ## Files to Modify
 
@@ -466,7 +487,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/src/lakehouse/partition_cache.rs` | Add column to 4 SELECTs / 3 struct builds (`sort_order` read pattern, not `file_path`'s) |
 | `rust/analytics/src/lakehouse/list_partitions_table_function.rs` | Arrow schema + both SELECTs |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `PartitionRowSet` field; all-Some running-max fold in `write_rows_and_track_times`; `PartitionWriteResult`; explicit-column-list INSERT |
-| `rust/analytics/src/lakehouse/thread_spans_view.rs` | Set `max_sort_key_time` from last row's `begin` |
+| `rust/analytics/src/lakehouse/thread_spans_view.rs` | Set `max_sort_key_time` from last row's `begin`; bump `SCHEMA_VERSION` 2 → 3 for self-healing rebuild |
 | `rust/analytics/src/lakehouse/{net_spans_view,async_events_block_processor,log_block_processor,image_block_processor}.rs` | Mechanical `max_sort_key_time: None` addition to each `PartitionRowSet` literal |
 | `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | `partition_bounds` EventTime arm; rustdoc + error string |
 | `rust/analytics/src/lakehouse/view.rs` | Rewrite `Concatenated` residual-caveats note (`:166-187`) |
@@ -475,6 +496,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/tests/{per_file_scan_ordering,blocks_view_merge_ordering,sql_batch_view_merge_ordering,log_stats_ordering}_tests.rs` | One-line helper updates for the new field |
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
 | `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Mechanical constructor ripple; two new DB regression tests (hour-seam, forced cut) |
+| `doc/how_to_query/README.md` | Add `max_sort_key_time` (and the already-missing `num_rows`, `partition_format_version`, `sort_order`) to the `list_partitions` Returns table |
 | `CHANGELOG.md` | Entry under `## Unreleased` → `**Analytics:**` |
 
 ## Trade-offs
@@ -499,10 +521,20 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
   thread_spans partitions); parquet footer statistics are not available to the planner's
   partition-metadata check. A dedicated nullable column is the smallest honest carrier, and the
   v6→v7 migration is exact precedent for the nullable/no-backfill shape.
-- **Nullable, no backfill.** Legacy partitions keep today's (over-conservative) check and can
-  still fail at a seam — but retiring them now genuinely fixes the failure, which the updated
-  error message states. Backfilling would require reading every parquet file; not worth it for a
-  self-healing path.
+- **Nullable, no backfill for the column — but self-healing via a `SCHEMA_VERSION` bump.** The new
+  `lakehouse_partitions.max_sort_key_time` column is itself nullable with no backfill: reading
+  every existing parquet file just to populate it would be wasteful when the view can simply
+  rebuild. Left at only that, every partition written before v8 would carry NULL forever and could
+  still fail at a seam until an admin explicitly ran `retire_partitions` (`is_admin`-gated) — not
+  a fix for the reported production failure by deploy alone. Instead, `ThreadSpansView::SCHEMA_VERSION`
+  bumps 2 → 3 alongside the migration, exactly the lever `1429`'s v0.29.0 entry used on this same
+  view: `get_file_schema_hash` changes, so every existing `thread_spans` JIT partition is stale
+  after deploy and rebuilds automatically — carrying `max_sort_key_time` — on its first query, no
+  admin action needed. Cost: a one-off rebuild-latency spike on the first query per stream,
+  identical in kind to `1429`'s. That cost is worth paying here because the plan's stated goal is
+  fixing a *production* failure that otherwise stays broken until an operator notices and manually
+  retires — a bump that heals itself on deploy serves that goal; a fix that ships inert until an
+  admin acts does not. (`net_spans` needs no equivalent bump: it never reads `max_sort_key_time`.)
 - **Asymmetric comparison.** Only the *previous* side of the pair gets the exact bound; the next
   side keeps block-derived `min_event_time` (≤ its actual min row `begin`). That is the
   conservative direction — it can only reject more than a fully-exact comparison would — and it is
@@ -517,9 +549,17 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 
 ## Documentation
 
-Rustdoc only (no `doc/` page describes these internals, matching `1429`'s precedent): the items
-listed in Implementation Step 6. The migration comment documents the column's meaning and NULL
-semantics at the schema level.
+Rustdoc: the items listed in Implementation Step 7. The migration comment documents the column's
+meaning and NULL semantics at the schema level.
+
+`doc/how_to_query/README.md`'s `#### list_partitions` section (`:467-486`) *does* describe these
+internals, user-facing: it has a "Returns" table of `list_partitions()`'s columns. That table is
+already stale — it's missing `num_rows`, `partition_format_version`, and `sort_order`, all three of
+which `list_partitions_table_function.rs`'s Arrow schema already carries (`:52-92`) — and this
+plan's new `max_sort_key_time` column would make it stale in one more way if left alone. Fix the
+whole table in the same pass: add all four missing rows (`num_rows Int64`, `partition_format_version
+Int32`, `sort_order List<Utf8>`, `max_sort_key_time Timestamp(Nanosecond)`) so the doc matches the
+schema exactly.
 
 ## Testing Strategy
 
