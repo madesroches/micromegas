@@ -21,6 +21,8 @@
 
 namespace MicromegasTracing
 {
+	std::atomic<bool> Dispatch::bProfilerEnabled = false;
+
 	Dispatch* GDispatch = nullptr;
 
 	Dispatch::Dispatch(NewGuid InAllocNewGuid,
@@ -412,22 +414,50 @@ namespace MicromegasTracing
 
 	void Dispatch::BeginScope(const BeginThreadSpanEvent& Event)
 	{
-		QueueThreadEvent(Event);
+		if (!bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
 	}
 
 	void Dispatch::EndScope(const EndThreadSpanEvent& Event)
 	{
-		QueueThreadEvent(Event);
+		if (!bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
 	}
 
 	void Dispatch::BeginNamedSpan(const BeginThreadNamedSpanEvent& Event)
 	{
-		QueueThreadEvent(Event);
+		if (!bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
+	}
+
+	void Dispatch::BeginNamedSpan(const BeginThreadNamedSpanEvent& Event, FProfilerNamedSpanTag)
+	{
+		if (bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
 	}
 
 	void Dispatch::EndNamedSpan(const EndThreadNamedSpanEvent& Event)
 	{
-		QueueThreadEvent(Event);
+		if (!bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
+	}
+
+	void Dispatch::EndNamedSpan(const EndThreadNamedSpanEvent& Event, FProfilerNamedSpanTag)
+	{
+		if (bProfilerEnabled.load(std::memory_order_relaxed))
+		{
+			QueueThreadEvent(Event);
+		}
 	}
 
 	void Dispatch::ForEachThreadStream(ThreadStreamCallback Callback)

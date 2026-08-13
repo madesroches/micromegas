@@ -88,6 +88,15 @@ namespace MicromegasTracing
 		static ProcessInfoConstPtr GetCurrentProcessInfo();
 
 	private:
+		//~ Begin FMicromegasExternalProfiler
+		friend class FMicromegasExternalProfiler;
+		static std::atomic<bool> bProfilerEnabled;
+
+		struct FProfilerNamedSpanTag {};
+		static void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event, FProfilerNamedSpanTag);
+		static void EndNamedSpan(const EndThreadNamedSpanEvent& Event, FProfilerNamedSpanTag);
+		//~ End FMicromegasExternalProfiler
+
 		Dispatch(NewGuid AllocNewGuid,
 			const ProcessInfoPtr& ProcessInfo,
 			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
