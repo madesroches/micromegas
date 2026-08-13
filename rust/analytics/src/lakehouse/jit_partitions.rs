@@ -87,8 +87,9 @@ pub struct JitPartitionConfig {
     pub block_order: BlockOrder,
     /// Soft row-count target for a single batched block query (see `batch_windows`). Consecutive
     /// insert-time buckets are packed into one query up to this many blocks, derived from a
-    /// per-bucket `COUNT(*)` run before the batch queries themselves -- see the module's Adaptive
-    /// batch width design notes. A config field rather than a bare constant so DB-gated tests can
+    /// per-bucket `COUNT(*)` run before the batch queries themselves -- see
+    /// `tasks/jit_batched_block_queries_plan.md` § Adaptive batch width. A config field rather
+    /// than a bare constant so DB-gated tests can
     /// lower it to force a run to split into more than one batch.
     pub target_rows_per_query: i64,
 }
@@ -366,7 +367,7 @@ pub fn group_blocks_into_partitions(
 ///
 /// `bucket_counts` holds one `(bucket_start, nb_blocks)` pair per *non-empty* bucket, ascending;
 /// any bucket missing from it is treated as holding zero blocks (and so never forces a close on
-/// its own). See the module's Adaptive batch width design notes for the derivation and the
+/// its own). See `tasks/jit_batched_block_queries_plan.md` § Adaptive batch width for the derivation and the
 /// single-oversized-bucket residual case (a bucket whose own count already exceeds
 /// `target_rows_per_query` still forms one batch on its own -- the loop never splits a bucket).
 ///
@@ -412,7 +413,7 @@ pub fn batch_windows(
 
 /// Renders a `TimeDelta` as arrow-parsable interval text (e.g. `"3600 seconds"`) for use with
 /// DataFusion's `date_bin`. `TimeDelta`'s own `Display` yields ISO-8601 (`PT3600S`), which
-/// `date_bin` cannot parse -- see the module's Adaptive batch width design notes.
+/// `date_bin` cannot parse -- see `tasks/jit_batched_block_queries_plan.md` § Adaptive batch width.
 fn interval_literal(slice: TimeDelta) -> String {
     format!("{} seconds", slice.num_seconds())
 }
@@ -447,7 +448,7 @@ fn split_into_buckets(
 /// Runs the per-bucket `COUNT(*) ... GROUP BY date_bin(slice, insert_time)` query over
 /// `insert_range`, under `identity_predicate` (the batch queries' own identity filter -- process +
 /// stream-tag, or stream id) so the returned counts match what the batch queries themselves will
-/// return; see the module's Adaptive batch width design notes for why the event-time predicate of
+/// return; see `tasks/jit_batched_block_queries_plan.md` § Adaptive batch width for why the event-time predicate of
 /// the MIN/MAX pre-query would not do. Returns one `(bucket_start, nb_blocks)` pair per non-empty
 /// bucket, ascending.
 async fn fetch_bucket_counts(
@@ -503,8 +504,8 @@ async fn fetch_bucket_counts(
 /// column** (`streams.dependencies_metadata`/`objects_metadata`/`tags`/`properties`/`format`) may
 /// be added to the `SELECT` list. Re-adding one would reintroduce the per-row stream-blob-copy
 /// memory hazard the lean projection removes, with no test failing except the projection guard in
-/// `analytics/tests/jit_batch_windows_tests.rs` -- see the module's "Why the lean projection is in
-/// scope" design notes. `array_has("streams.tags", ...)` stays in the `WHERE` clause: filtering
+/// `analytics/tests/jit_batch_windows_tests.rs` -- see `tasks/jit_batched_block_queries_plan.md`
+/// § Why the lean projection is in scope. `array_has("streams.tags", ...)` stays in the `WHERE` clause: filtering
 /// needs no projection.
 pub fn process_batch_sql(process_id: &Uuid, stream_tag: &str, range: &TimeRange) -> String {
     let begin_iso = range.begin.to_rfc3339();
@@ -523,8 +524,8 @@ pub fn process_batch_sql(process_id: &Uuid, stream_tag: &str, range: &TimeRange)
 /// Fetches and parses one batch window's worth of process-scoped blocks (`process_batch_sql`),
 /// looking up each block's stream metadata in `stream_metadata` (built once per call to
 /// `generate_process_jit_partitions` by `fetch_stream_metadata_map`) rather than rebuilding it per
-/// row -- this is the lean projection's fetch-and-parse half; see the module's "Why the lean
-/// projection is in scope" design notes.
+/// row -- this is the lean projection's fetch-and-parse half; see
+/// `tasks/jit_batched_block_queries_plan.md` § Why the lean projection is in scope.
 ///
 /// A `stream_id` missing from `stream_metadata` is a hard error: the metadata pre-query and this
 /// query share the same identity predicate and insert range, so it cannot happen unless something
@@ -751,13 +752,13 @@ pub async fn generate_stream_jit_partitions_segment(
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range.
 ///
-/// Batches its block queries (see the module's Design notes): `batch_windows`, derived from a
+/// Batches its block queries (see `tasks/jit_batched_block_queries_plan.md` § Design): `batch_windows`, derived from a
 /// per-bucket `COUNT(*)`, picks how many insert-time buckets one query covers, and each batch's
 /// rows are then split back into per-bucket runs (`split_into_buckets`) and grouped independently
 /// -- byte-identical to running `generate_stream_jit_partitions_segment` once per bucket, just
 /// fewer, wider queries to get there. `generate_stream_jit_partitions_segment` itself is kept, not
-/// called from here anymore -- see the module's "Keeping (and dropping) the segment functions"
-/// notes.
+/// called from here anymore -- see `tasks/jit_batched_block_queries_plan.md` § Keeping (and
+/// dropping) the segment functions.
 #[span_fn]
 pub async fn generate_stream_jit_partitions(
     config: &JitPartitionConfig,
@@ -883,13 +884,14 @@ pub async fn generate_stream_jit_partitions(
 /// Generates JIT partitions for a given time range filtered by process.
 ///
 /// Batches its block queries the same way `generate_stream_jit_partitions` does, and additionally
-/// applies the lean projection (see the module's "Why the lean projection is in scope" notes):
+/// applies the lean projection (see `tasks/jit_batched_block_queries_plan.md` § Why the lean
+/// projection is in scope):
 /// `fetch_stream_metadata_map` fetches every stream's metadata once for the whole insert range,
 /// and each batch's `fetch_process_blocks` call looks it up per block instead of projecting stream
 /// blobs onto every row and rebuilding `StreamMetadata` per row.
 /// `generate_process_jit_partitions_segment` has been deleted -- its only caller was this function
-/// -- and its grouping call is now inlined into the batch loop below; see the module's "Keeping
-/// (and dropping) the segment functions" notes.
+/// -- and its grouping call is now inlined into the batch loop below; see
+/// `tasks/jit_batched_block_queries_plan.md` § Keeping (and dropping) the segment functions.
 #[span_fn]
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
@@ -1212,8 +1214,9 @@ pub async fn is_jit_partition_up_to_date(
 /// Round 1 runs `spec_is_up_to_date` for every spec against the full candidate set. Each later
 /// round: for any spec `i` newly verdicted **not** up to date this round, drop from every other
 /// spec `j`'s candidate set any row entirely contained in `i`'s insert range, and re-run the
-/// matcher for those affected `j`s (see the module's "Verdicts reflect pre-run state" design
-/// notes) -- such a row is a `RetireMatch::Containment` match for spec `i` and will be gone once
+/// matcher for those affected `j`s (see `tasks/jit_batched_block_queries_plan.md` § Batched
+/// freshness checks (`InsertTime` callers), "Verdicts reflect pre-run state") -- such a row is a
+/// `RetireMatch::Containment` match for spec `i` and will be gone once
 /// `i`'s write runs this call, so it must not count towards `j`'s freshness. Repeat until a round
 /// flips no verdict: dropping a row can only turn a spec from up-to-date to stale, never the
 /// reverse, so verdicts are monotone and the loop terminates in at most `specs.len()` rounds (one,
@@ -1250,15 +1253,35 @@ pub async fn find_up_to_date_partitions(
         outer_range.begin.to_rfc3339(),
         outer_range.end.to_rfc3339(),
     );
-    let mut candidates = instrument_named!(
+    let candidates = instrument_named!(
         fetch_freshness_candidates(pool, &view_meta, outer_range),
         "sql_select_freshness_candidates"
     )
     .await?;
 
+    resolve_up_to_date_fixpoint(specs, &view_meta, block_order, candidates)
+}
+
+/// The pure fixpoint at the heart of `find_up_to_date_partitions` (see that function's docs for
+/// the derivation): runs `spec_is_up_to_date` for every spec against `candidates`, then repeatedly
+/// drops, from every other spec's candidate set, any row entirely contained in a spec newly
+/// verdicted not up to date, re-running the matcher for the affected specs, until a round flips no
+/// verdict. Takes an already-fetched `candidates` and does no I/O, so
+/// `analytics/tests/jit_freshness_tests.rs` can drive it directly without a live `PgPool`.
+pub fn resolve_up_to_date_fixpoint(
+    specs: &[SourceDataBlocksInMemory],
+    view_meta: &ViewMetadata,
+    block_order: BlockOrder,
+    mut candidates: Vec<PartitionFreshnessRow>,
+) -> Result<Vec<bool>> {
+    let ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = specs
+        .iter()
+        .map(get_part_insert_time_range)
+        .collect::<Result<Vec<_>>>()?;
+
     let mut up_to_date: Vec<bool> = specs
         .iter()
-        .map(|spec| spec_is_up_to_date(&view_meta, spec, block_order, &candidates))
+        .map(|spec| spec_is_up_to_date(view_meta, spec, block_order, &candidates))
         .collect::<Result<Vec<_>>>()?;
 
     // Fixpoint: a spec verdicted not up to date will retire, this run, every candidate row
@@ -1286,7 +1309,7 @@ pub async fn find_up_to_date_partitions(
             .collect();
         let next_up_to_date: Vec<bool> = specs
             .iter()
-            .map(|spec| spec_is_up_to_date(&view_meta, spec, block_order, &next_candidates))
+            .map(|spec| spec_is_up_to_date(view_meta, spec, block_order, &next_candidates))
             .collect::<Result<Vec<_>>>()?;
         if next_up_to_date == up_to_date {
             break;

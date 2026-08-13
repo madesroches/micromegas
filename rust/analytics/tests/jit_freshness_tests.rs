@@ -6,7 +6,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, PartitionFreshnessRow, spec_is_up_to_date,
+    BlockOrder, PartitionFreshnessRow, resolve_up_to_date_fixpoint, spec_is_up_to_date,
 };
 use micromegas_analytics::lakehouse::partition_source_data::{
     PartitionSourceBlock, SourceDataBlocksInMemory,
@@ -270,4 +270,145 @@ fn object_count_boundary_cases() {
             "EventTime: existing={existing}, required={required}"
         );
     }
+}
+
+// -- `resolve_up_to_date_fixpoint` (the pure core of `find_up_to_date_partitions`) --------------
+//
+// These exercise the containment fixpoint itself (tasks/jit_batched_block_queries_plan.md §
+// Batched freshness checks (`InsertTime` callers), "Verdicts reflect pre-run state"), with a
+// `candidates` set built directly rather than fetched from a `PgPool`.
+
+/// A stale, ranged spec's containment drop must remove a candidate row a sibling (boundary) spec
+/// was relying on, and the sibling must be re-evaluated as stale once that row is gone.
+#[test]
+fn containment_drop_removes_a_sibling_boundary_row() {
+    let vm = view_meta();
+    let t0 = base_time();
+    let t1 = t0 + TimeDelta::seconds(10);
+
+    // Spec A: ranged [t0, t1], requiring more objects than any candidate below provides --
+    // always stale under InsertTime's `>=` count check.
+    let spec_a = make_ranged_spec(t0, t1, 100);
+    // Spec B: degenerate, sitting exactly at A's right boundary.
+    let spec_b = make_degenerate_spec(t1, 5);
+
+    // One row, sitting on the shared boundary: A's only match (5 < 100 required -> stale) and,
+    // via the degenerate exact-point rule, B's only match (5 >= 5 required -> initially up to
+    // date). It is entirely contained in A's insert range.
+    let boundary_row = row(t1, t1, vm.file_schema_hash.clone(), 5);
+
+    let result = resolve_up_to_date_fixpoint(
+        &[spec_a, spec_b],
+        &vm,
+        BlockOrder::InsertTime,
+        vec![boundary_row],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        vec![false, false],
+        "A must be stale (insufficient count), and B's boundary row -- entirely contained in \
+         A's insert range, hence due to be retired by A's own write this run -- must be dropped \
+         from B's candidate set, re-evaluating B as stale too"
+    );
+}
+
+/// A nested chain: A's containment drop clears the row a boundary-sharing spec B relies on
+/// (b's own range also happens to overlap a row nested well inside it), and only once B is
+/// known stale does the fixpoint discover that a third spec C's sole supporting row -- entirely
+/// contained in B's range but outside A's -- must also be dropped. Requires the loop to run more
+/// than one round: after round 1, C still reads as up to date, and only round 2 corrects it. A
+/// single-pass implementation (drop using only the initial verdicts, never re-iterate) would
+/// leave C wrongly reported up to date.
+#[test]
+fn containment_drop_cascades_through_a_nested_chain() {
+    let vm = view_meta();
+    let t0 = base_time();
+    let t_a1 = t0 + TimeDelta::seconds(10);
+    let t_b1 = t0 + TimeDelta::seconds(30);
+    let t_c = t0 + TimeDelta::seconds(20);
+
+    // A: [t0, t_a1], requires more objects than the boundary row below provides -- stale.
+    let spec_a = make_ranged_spec(t0, t_a1, 100);
+    // B: [t_a1, t_b1] -- touches A's right boundary, extends well past it.
+    let spec_b = make_ranged_spec(t_a1, t_b1, 5);
+    // C: degenerate, strictly inside B's range but outside A's.
+    let spec_c = make_degenerate_spec(t_c, 7);
+
+    // Sits on the A/B boundary: A's only match (insufficient count) and one of B's two matches.
+    let boundary_row = row(t_a1, t_a1, vm.file_schema_hash.clone(), 5);
+    // Strictly inside B's range (outside A's): C's only match, and B's other match -- two
+    // matches makes B ambiguous (not up to date) from the very first pass.
+    let nested_row = row(t_c, t_c, vm.file_schema_hash.clone(), 7);
+
+    let result = resolve_up_to_date_fixpoint(
+        &[spec_a, spec_b, spec_c],
+        &vm,
+        BlockOrder::InsertTime,
+        vec![boundary_row, nested_row],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        vec![false, false, false],
+        "A and B start stale; C starts up to date but its sole supporting row is entirely \
+         contained in B's (stale) range, so C must flip to stale once the fixpoint reaches it"
+    );
+}
+
+/// A row contained only within a spec that is itself up to date must never be dropped, even
+/// while the loop is actively iterating (triggered by an unrelated stale spec).
+#[test]
+fn row_nested_in_an_up_to_date_spec_is_not_dropped() {
+    let vm = view_meta();
+    let t0 = base_time();
+
+    // X: [t0, t0+10s], up to date (exact EventTime count match).
+    let spec_x = make_ranged_spec(t0, t0 + TimeDelta::seconds(10), 20);
+    // Y: degenerate, strictly inside X's range, also up to date.
+    let spec_y = make_degenerate_spec(t0 + TimeDelta::seconds(5), 7);
+    // Z: a wholly unrelated spec, forced stale by an exact-range match with the wrong count --
+    // exists only to make the loop iterate at all.
+    let spec_z = make_ranged_spec(
+        t0 + TimeDelta::seconds(100),
+        t0 + TimeDelta::seconds(110),
+        30,
+    );
+
+    let row_x = row(
+        t0,
+        t0 + TimeDelta::seconds(10),
+        vm.file_schema_hash.clone(),
+        20,
+    );
+    let row_y = row(
+        t0 + TimeDelta::seconds(5),
+        t0 + TimeDelta::seconds(5),
+        vm.file_schema_hash.clone(),
+        7,
+    );
+    // Wrong count (30 required, 99 existing): EventTime requires exact equality, so Z is stale.
+    let row_z = row(
+        t0 + TimeDelta::seconds(100),
+        t0 + TimeDelta::seconds(110),
+        vm.file_schema_hash.clone(),
+        99,
+    );
+
+    let result = resolve_up_to_date_fixpoint(
+        &[spec_x, spec_y, spec_z],
+        &vm,
+        BlockOrder::EventTime,
+        vec![row_x, row_y, row_z],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        vec![true, true, false],
+        "Y's row is entirely contained in X's range, but X is up to date, so the containment \
+         drop (triggered by Z's unrelated staleness) must leave X and Y alone"
+    );
 }
