@@ -483,33 +483,45 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    each) for the new field. Also add the running-max/`None`-poisoning fold test to
    `write_partition_tests.rs` (see Testing Strategy) — a no-DB test too, just against
    `write_rows_and_track_times` directly rather than the check.
-9. **DB regression tests** (new `#[ignore]`d `#[tokio::test]`s in
+
+   Also add a **cut-position test** to `rust/analytics/tests/call_tree_tests.rs`, pinning the
+   "Why this is sound" claim directly and with no DB. That file already drives `CallTreeBuilder`
+   through the `ThreadBlockProcessor` trait with synthetic events, and already models the
+   overlapping-seam shape (`:6-40`). Everything else needed is public too: `SpanRecordBuilder`
+   (`span_table.rs:35`, `with_capacity` `:87`, `append_call_tree` `:126`, `finish` `:150`, already
+   used no-DB by `dictionary_key_overflow_tests.rs`), `ensure_begin_non_decreasing`, and
+   `ConvertTicks::from_meta_data`. No new `pub` surface is required. Shape: build two
+   `CallTreeBuilder`s over the two sides of a cut between strictly-overlapping adjacent blocks
+   (P's range ends at block `k-1`'s `end_ticks`, Q's begins at block `k`'s smaller `begin_ticks`),
+   run each through a `SpanRecordBuilder`, and assert P's last row `begin` — its
+   `max_sort_key_time` — is strictly below Q's `min_event_time`. Parameterize the cut position so
+   one test covers the hour-seam cut and the mid-bucket forced cut identically, which is exactly
+   the plan's claim that the cut *cause* is irrelevant.
+9. **DB regression test** (a new `#[ignore]`d `#[tokio::test]` in
    `thread_spans_ordering_db_test.rs`, following `thread_spans_degenerate_range_retires_stale_partition`'s
-   `push_and_insert_block` + `UPDATE blocks` pattern):
-   - **Hour-seam**: the two-block deterministic repro above; assert two partitions are emitted,
-     each row's stored `max_sort_key_time` is non-NULL, and a live
-     `view_instance('thread_spans', ...)` query across the boundary succeeds; also assert row
-     completeness (union of partition rows covers both blocks' spans).
-   - **Forced cut**: same stream, blocks overlapping pairwise within ONE hour bucket, driven
-     through `generate_stream_jit_partitions` + `update_partition` with a custom
-     `JitPartitionConfig { max_nb_objects: <small>, block_order: BlockOrder::EventTime, .. }` — the
-     `EventTime` override matters, since `Default` is `InsertTime` and would not reproduce
-     production grouping. `thread_spans_interrupted_run_reconverges` (`:1244`) and
-     `thread_spans_cross_run_regrouping_replaces_stale_partition` (`:1512`) are the existing
-     precedents for a small `max_nb_objects` (both use `4`). This test cannot assert through
-     a live `view_instance('thread_spans', ...)` query: `ThreadSpansView::jit_update`
-     (`thread_spans_view.rs:371-374`) always runs with the default `max_nb_objects`
-     (`JitPartitionConfig { block_order: EventTime, ..Default::default() }`, so
-     `20 * 1024 * 1024`) ahead of any scan, so it would see the small-`max_nb_objects`
-     partitions as stale by source hash and rewrite them as one partition before the query ever
-     ran the `Concatenated` check — passing vacuously without exercising the intra-bucket cut.
-     Instead, read the written partitions back from `PartitionCache` and assert directly against
-     `make_partitioned_execution_plan`'s `ScanOrdering::Concatenated` arm (the pattern
-     `thread_spans_ordering_tests.rs` already uses), confirming it accepts the small partitions
-     produced by the forced cut. This pins the second reachable instance of the bug, which the
-     previous draft left open. (The test builds the *legacy* strictly-overlapping geometry via
-     direct `UPDATE blocks` — exactly right, since after Part A only legacy producers emit it and
-     Part B must keep handling it.)
+   `push_and_insert_block` + `UPDATE blocks` pattern) — **hour-seam**: the two-block deterministic
+   repro above; assert two partitions are emitted, each row's stored `max_sort_key_time` is
+   non-NULL, and a live `view_instance('thread_spans', ...)` query across the boundary succeeds;
+   also assert row completeness (union of partition rows covers both blocks' spans). This is the
+   only DB test the change needs: it is what proves `update_partition` persists the new column and
+   that the whole scan path reads it back. The test builds the *legacy* strictly-overlapping
+   geometry via direct `UPDATE blocks` — exactly right, since after Part A only legacy producers
+   emit it and Part B must keep handling it.
+
+   A *second* DB test for the forced intra-bucket cut is deliberately **not** included. It would
+   re-exercise the same write-and-check path the hour-seam test already covers, differing only in
+   why the cut happened — which the soundness argument says is irrelevant, and which Step 8's
+   parameterized cut-position test now pins directly. It could not even assert through a live query:
+   `ThreadSpansView::jit_update` (`thread_spans_view.rs:371-374`) runs with the default
+   `max_nb_objects` (`JitPartitionConfig { block_order: EventTime, ..Default::default() }`, so
+   `20 * 1024 * 1024`) ahead of any scan, and would see small-`max_nb_objects` partitions as stale
+   by source hash and rewrite them as one partition before the `Concatenated` check ever ran.
+   Working around that needs a bespoke `PartitionCache` + `make_partitioned_execution_plan`
+   assertion path, in an `#[ignore]`d test that only runs when someone remembers — a lot of
+   machinery for coverage that a plain `cargo test` unit test delivers better. (Grouping itself is
+   untouched by this plan, and mid-bucket cuts are already covered by
+   `thread_spans_interrupted_run_reconverges` (`:1244`) and
+   `thread_spans_cross_run_regrouping_replaces_stale_partition` (`:1512`), both `max_nb_objects: 4`.)
 10. **Sanity**: run `thread_spans_batched_generation_matches_per_segment` (`#[ignore]`d) — grouping
    is untouched so it must pass unmodified; run
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
@@ -557,7 +569,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/tests/thread_spans_ordering_tests.rs` | New no-DB check tests; helper gains field |
 | `rust/analytics/tests/{per_file_scan_ordering,blocks_view_merge_ordering,sql_batch_view_merge_ordering,log_stats_ordering}_tests.rs` | One-line helper updates for the new field |
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
-| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Two new DB regression tests (hour-seam, forced cut) |
+| `rust/analytics/tests/call_tree_tests.rs` | New no-DB cut-position test (P's last row `begin` < Q's `min_event_time`), parameterized over the cut |
+| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | One new DB regression test (hour-seam, end-to-end) |
 | `doc/how_to_query/README.md` | Add `max_sort_key_time` (and the already-missing `num_rows`, `partition_format_version`, `sort_order`) to the `list_partitions` Returns table |
 | `mkdocs/docs/admin/functions-reference.md` | Add `max_sort_key_time` (and the already-missing `partition_format_version`) to the `list_partitions()` Returns table |
 | `CHANGELOG.md` | Entry under `## Unreleased` → `**Analytics:**` |
@@ -642,12 +655,14 @@ in the same pass: add `partition_format_version` (`Int32`) and `max_sort_key_tim
   only ever sees closed blocks, so the live replacement is unreachable from it.
 - **No-DB check tests** (`thread_spans_ordering_tests.rs`): recorded-bound accepted / NULL
   fallback rejected / genuine overlap rejected — the check-level contract.
-- **DB regression tests**: hour-seam repro and forced-cut repro (Implementation Step 9). Hour-seam
-  asserts the live `view_instance` query succeeds and rows are complete — the end-to-end contract,
-  including that `update_partition` actually persists the new column. Forced-cut cannot go through
-  a live query (`jit_update` would rewrite the small forced-cut partitions before the scan ran), so
-  it asserts directly against the written partitions via `PartitionCache` and
-  `make_partitioned_execution_plan`'s `Concatenated` arm instead.
+- **No-DB cut-position test** (`call_tree_tests.rs`, Implementation Step 8): P's last row `begin`
+  is strictly below Q's `min_event_time` for a cut between strictly-overlapping adjacent blocks,
+  parameterized over the cut position — the soundness claim itself, covering the hour-seam and the
+  forced intra-bucket cut in one place, in plain `cargo test`.
+- **DB regression test**: the hour-seam repro (Implementation Step 9), asserting the live
+  `view_instance` query succeeds and rows are complete — the end-to-end contract, and the only
+  place that proves `update_partition` persists the new column and the scan path reads it back.
+  One DB test is enough: see Step 9 for why a second, forced-cut DB test is not included.
 - **Running-max / `None`-poisoning fold** (`write_partition_tests.rs`): feed
   `write_rows_and_track_times` several out-of-order `PartitionRowSet`s — some `Some`, one `None` —
   over its hand-built channel (widen it past `channel(1)`, or spawn the sender, so the second send
