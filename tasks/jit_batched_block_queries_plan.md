@@ -29,9 +29,14 @@ Two coupled changes, plus one enabling cleanup:
    target a real memory bound rather than a guess, and it deletes a per-row CBOR decode plus a
    hand-inlined copy of an existing helper.
 
-**The grouping algorithm is not touched, and no function signature changes.** (The one public-API
-change is additive: a new `pub` field, `JitPartitionConfig::target_rows_per_query` — see
-*Implementation Steps* for the existing test-literal updates it requires.) Each hour bucket's
+**The grouping algorithm is not touched, and no surviving function's signature changes.** (The
+crate's public surface does change: it gains a new `pub` field,
+`JitPartitionConfig::target_rows_per_query` — see *Implementation Steps* for the existing
+test-literal updates it requires — plus the new `pub` helpers introduced below (`batch_windows`,
+`fetch_process_blocks`, `process_batch_sql`, `spec_is_up_to_date`, `PartitionFreshnessRow`,
+`find_up_to_date_partitions`), and loses one `pub` fn, `generate_process_jit_partitions_segment`
+(no re-export, no callers outside its own module — see *Keeping (and dropping) the segment
+functions*).) Each hour bucket's
 blocks are still handed to the existing `group_blocks_into_partitions` (`jit_partitions.rs:227`)
 exactly as today, so emitted specs are byte-identical and every cached JIT partition stays valid.
 All the risk in this area lives in the bucketing/cut-point rules, and this plan changes neither.
@@ -104,7 +109,7 @@ query-independent. That must be preserved.
   against ~150 B of actual block columns — 12–23× the useful payload, sorted and buffered on every
   row, decoded once per block instead of once per stream. OTLP-ingested streams are exempt: they
   store the 1-byte empty-CBOR sentinel for both blobs and empty properties
-  (`web_ingestion_service.rs:19-32`, `:310-322`), so the motivating workload never sees this. It
+  (`web_ingestion_service.rs:19-32`, `:310-341`), so the motivating workload never sees this. It
   bites the dense case — see *Why the lean projection is in scope*.
 
 ### What this plan does not fix
@@ -135,7 +140,7 @@ query-independent. That must be preserved.
   keeps `ORDER BY insert_time, block_id` verbatim. (This is also why the sort-elision follow-up is
   not free.)
 - **Grouping stays per hour bucket, never per batch.** `View::get_scan_output_ordering`'s docs
-  (`view.rs:186`) list "an insert-time inversion straddling a JIT *segment* boundary (segments are
+  (`view.rs:184-186`) list "an insert-time inversion straddling a JIT *segment* boundary (segments are
   still grouped independently)" as a known, loudly-backstopped residual caveat. Widening the
   *query* window does not touch that; widening the *grouping* window would change which inversions
   `group_blocks_into_partitions` sees.
@@ -206,8 +211,13 @@ GROUP BY bucket
 ```
 
 (stream variant: `WHERE stream_id = '{stream_id}' AND insert_time >= '{begin}' AND insert_time <
-'{end}'`). Omitting the identity filter would count every block in the shared `blocks` view for that
-window, not just this view instance's — on a shared lake, the counts would then reflect every
+'{end}'`). The `'{slice}'` interval literal must be rendered as arrow-parsable interval text (e.g.
+`'3600 seconds'` or `'1 hour'`, the form `log_stats_view.rs:34` already uses with `date_bin`), not
+via `TimeDelta`'s `Display`, which yields ISO-8601 `PT3600S` and fails to parse; DataFusion's two-arg
+`date_bin` bins from the Unix epoch, matching `duration_trunc`'s alignment.
+
+Omitting the identity filter would count every block in the shared `blocks` view for that window,
+not just this view instance's — on a shared lake, the counts would then reflect every
 process/stream, not the sparse instance actually being queried. Grouping by bucket costs nothing
 extra over a scalar `COUNT(*)`: still one round trip, returning one small row per *non-empty*
 bucket (a sparse month is at most a few hundred rows) — but it replaces an average-density estimate
@@ -345,7 +355,9 @@ retire logic inside their own `update_partition`, and they are not the motivatin
 
 ```rust
 /// One candidates fetch over [specs.first().min, specs.last().max] (specs have ascending,
-/// non-overlapping insert ranges), then the matcher per spec, run to a fixpoint. Round 1: run
+/// non-overlapping insert ranges), then the matcher per spec, run to a fixpoint. An empty `specs`
+/// returns `Ok(vec![])` without issuing any fetch -- reachable at every call site, since
+/// `generate_*_jit_partitions` returns no specs when the range holds no blocks. Round 1: run
 /// `spec_is_up_to_date` for every spec against the full candidate set. Each later round: for any
 /// spec `i` newly verdicted **not** up to date this round, drop from every other spec `j`'s
 /// candidate set any row entirely contained in `i`'s insert range, and re-run the matcher for those
@@ -501,7 +513,10 @@ span with the spec count.
      Signatures unchanged. Extract the process variant's fetch-and-parse logic into a new `pub
      async fn fetch_process_blocks`, delete `generate_process_jit_partitions_segment` (dead after
      the rewrite, its grouping call now inlined; see *Keeping (and dropping) the segment
-     functions*); `generate_stream_jit_partitions_segment` is left in place for the DB test.
+     functions*); update the two doc comments that name the deleted function so they don't
+     reference a nonexistent function — the `BlockOrder` doc at `jit_partitions.rs:62` and the
+     `emit_partition` comment at `:177`; `generate_stream_jit_partitions_segment` is left in place
+     for the DB test.
    - Split `is_jit_partition_up_to_date` into a candidates fetch (inclusive insert-range overlap)
      plus the pure matcher `pub fn spec_is_up_to_date` operating on `pub struct
      PartitionFreshnessRow`; keep `is_jit_partition_up_to_date`'s public signature and behavior.
@@ -672,7 +687,7 @@ data volume.
   for `InsertTime`, plus a second run with `block_order: BlockOrder::EventTime` in the
   `JitPartitionConfig` — so the batched process path and the lean projection get automated coverage
   under both orderings. `BlockOrder::EventTime` is production-reachable for the process variant too
-  (`net_spans_view.rs:351-364` builds `JitPartitionConfig { block_order: BlockOrder::EventTime, .. }`
+  (`net_spans_view.rs:352-365` builds `JitPartitionConfig { block_order: BlockOrder::EventTime, .. }`
   and passes it to `generate_process_jit_partitions`), so the client-side `duration_trunc`
   batch-then-split path under `EventTime` is the same riskiest-new-logic case as the stream side and
   needs the same coverage; unlike the stream side, `generate_process_jit_partitions_segment` is
