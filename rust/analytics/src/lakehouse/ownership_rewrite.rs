@@ -55,6 +55,24 @@
 //! come from `MaterializedView::new(..., query_range: None)`, which is synchronous and does no I/O
 //! -- the actual `processes`/`streams` scans happen during normal execution, exactly like
 //! `TableScanRewrite`'s injected time filter.
+//!
+//! ## `micromegas.audience` is client-asserted, not authenticated (known Stage 2 limitation)
+//!
+//! [`Self::audience_col`] reads `micromegas.audience` via `property_get` off the `processes`
+//! view's `properties` column, which is a verbatim snapshot of whatever `ProcessInfo.properties`
+//! the instrumented client sent at ingestion -- there is no reserved-key filtering and no
+//! server-side validation of this property today. The intended trust anchor for this value is
+//! the *ingestion API key*, not the client payload: each ingestion key is assigned exactly one
+//! write audience (Stage 4), carried authenticated into `AuthContext.bound_audience`, and Stage 5
+//! (#1373) stamps `micromegas.audience` server-side from that authenticated `bound_audience`
+//! rather than trusting whatever the client sent. Neither stage has landed yet. Until Stage 5
+//! lands, any instrumented process can set `micromegas.audience` to an arbitrary value, including
+//! one that hides all of that process's data from every legitimate caller, or one that spoofs
+//! another principal's audience to gain read access it should not have. This is a known, tracked
+//! gap in Stage 2's enforcement (this rule trusts the property as-is) -- not a bug to fix within
+//! this
+//! stage's scope, and not something ingestion-side changes here should attempt to close; see
+//! #1373 for the actual fix.
 
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{
