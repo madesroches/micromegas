@@ -149,6 +149,37 @@ telemetry-ingestion-srv --disable-auth
 !!! danger "Security Warning"
     Never disable authentication in production environments. This flag is intended only for local development and testing.
 
+### Audience Filtering Activation
+
+!!! danger "Enabling auth can silently zero out every query result"
+    Configuring any authentication method above — OIDC, API keys, or both — does more than gate
+    access to the server: it flips every session from the internal `ReadScope::All` marker to
+    `ReadScope::Audiences`, which activates `OwnershipRewrite`'s query-time audience filtering
+    (AbAC Stage 2). From that point on, every query plan gets an audience predicate injected into
+    it, and a caller only sees processes whose (client-asserted) `micromegas.audience` property
+    resolves to one of their own audiences.
+
+    **Required in the same deploy:** set `MICROMEGAS_IMPLICIT_GROUPS=everyone` and
+    `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` (the monolith's `MICROMEGAS_ANALYTICS_`-prefixed
+    equivalents for a monolith deployment) to keep pre-existing, never-stamped data visible — see
+    the matching env-var rows and upgrade note on the
+    [FlightSQL](flight-sql.md#environment-variables) and
+    [Monolith](monolith.md#environment-variables) admin pages, and the CHANGELOG's AbAC Stage 2
+    upgrade note, for the full mechanism.
+
+    **API keys and no-`email`-claim OIDC tokens need the `MICROMEGAS_IMPLICIT_GROUPS` half
+    specifically.** An API-key caller, or an OIDC token with no `email` claim (a
+    client-credentials/service-account token, for example), carries no `user:<email>` term of its
+    own — its entire resolved audience set comes from the `groups` claim and implicit groups
+    alone. Without `MICROMEGAS_IMPLICIT_GROUPS` naming a group these callers belong to, that set
+    is empty, and `OwnershipRewrite` treats an empty caller audience set as fail-closed — zero
+    rows for every query — *before* it ever looks at `MICROMEGAS_UNSTAMPED_AUDIENCE`; that knob by
+    itself never rescues these callers. `MICROMEGAS_IMPLICIT_GROUPS` applies to every
+    authenticated caller, not only ones with an `email` claim, so setting it (as part of the pair
+    above) also restores these callers' visibility; until it's set, they see nothing, regardless
+    of `MICROMEGAS_UNSTAMPED_AUDIENCE` — a future per-key/read grant is planned to allow a
+    narrower, non-blanket alternative.
+
 ## Client Configuration
 
 ### Python Client with OIDC

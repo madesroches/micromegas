@@ -40,8 +40,8 @@
 //! |---|---|---|
 //! | `processes` | yes (and *is* the audience source) | §3: `process_id IN (subquery)` against its own resolved-per-process aggregate |
 //! | `streams`, `blocks`, `log_entries`, `measures`, `net_spans`, `otel_spans`, `images`, `log_stats` | yes | §4: semi-join, `process_id IN (subquery)` (outer `process_id` cast to `Utf8`: it is `Dictionary(Int32, Utf8)` in most of these, and nothing coerces an uncorrelated `IN` subquery's join keys once `DecorrelatePredicateSubquery` turns it into a `LeftSemi` join -- the analyzer's own `TypeCoercion` has already run by the time this rule executes) |
-//! | `async_events` | no -- process-scoped, but no column to join on | §5: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string) |
-//! | `thread_spans` | no -- stream-scoped, no `process_id` **or** `stream_id` column | §6: two-hop literal `EXISTS`, through `streams` (`get_view_instance_id()` is the stream_id string) |
+//! | `async_events` | no -- process-scoped, but no column to join on | §5: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string, canonicalized -- see `canonical_view_instance_id`) |
+//! | `thread_spans` | no -- stream-scoped, no `process_id` **or** `stream_id` column | §6: two-hop literal `EXISTS`, through `streams` (`get_view_instance_id()` is the stream_id string, canonicalized the same way) |
 //! | anything in `public_view_sets` | (any) | §7: no predicate at all -- checked before any of the above |
 //! | anything else | (any) | `analyze()` returns `Err` (`DataFusionError::Plan`) rather than silently leaving the scan unfiltered -- a future view set must add itself to this table, not fall through |
 //!
@@ -90,6 +90,7 @@ use datafusion::{
 };
 use micromegas_datafusion_extensions::properties::property_get::PropertyGet;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Injects an audience predicate into every `MaterializedView` scan (see the module doc comment).
 pub struct OwnershipRewrite {
@@ -263,6 +264,30 @@ impl OwnershipRewrite {
         Ok(exists(Arc::new(subquery)))
     }
 
+    /// Parses `view.get_view_instance_id()` as a `Uuid` and returns its canonical
+    /// lowercase-hyphenated string form -- the form actually stored in `process_id`/`stream_id`
+    /// columns (see the module doc comment's bug note on §5/§6). `Uuid::parse_str` accepts
+    /// several equivalent textual spellings (uppercase, hyphen-less, braced) of the same UUID, but
+    /// only this canonical form round-trips through the data; using the raw, caller-supplied
+    /// spelling directly in a literal comparison would silently fail to match for any other
+    /// spelling of a legitimately materialized instance id. Defensive `Err` on parse failure --
+    /// the view constructors (`AsyncEventsView::new`/`ThreadSpansView::new`) already validate this
+    /// as a UUID at construction time, so this should not happen in practice.
+    fn canonical_view_instance_id(
+        view_set_name: &Arc<String>,
+        view: &Arc<dyn super::view::View>,
+    ) -> datafusion::error::Result<String> {
+        let raw = view.get_view_instance_id();
+        Uuid::parse_str(raw.as_str())
+            .map(|uuid| uuid.hyphenated().to_string())
+            .map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "OwnershipRewrite: view set '{view_set_name}' view_instance_id '{raw}' is \
+                     not a valid UUID: {e}"
+                ))
+            })
+    }
+
     /// Builds the predicate to wrap `mat_view`'s scan in. `Ok(None)` means "no predicate at all"
     /// (§7's public-view-set skip); `Err` is §7's fallback for a view set matching none of the
     /// branches -- see the module doc comment's branch table.
@@ -308,8 +333,12 @@ impl OwnershipRewrite {
         }
         if view_set_name.as_str() == "async_events" {
             // §5: process-scoped, no process_id column -- the view_instance_id *is* the
-            // process_id string (`AsyncEventsView::new` parses it as a `Uuid`).
-            let process_id_literal = view.get_view_instance_id();
+            // process_id string (`AsyncEventsView::new` parses it as a `Uuid`). Canonicalize
+            // before building the literal: `get_view_instance_id()` returns the caller's original
+            // spelling verbatim (e.g. uppercase, hyphen-less, or braced are all valid `Uuid`
+            // spellings), but `process_id` columns only ever hold the canonical
+            // lowercase-hyphenated form -- see `canonical_view_instance_id`.
+            let process_id_literal = Self::canonical_view_instance_id(&view_set_name, &view)?;
             return Ok(Some(Self::exists_for_process(
                 per_process_audience,
                 resolved_predicate,
@@ -318,7 +347,8 @@ impl OwnershipRewrite {
         }
         if view_set_name.as_str() == "thread_spans" {
             // §6: stream-scoped, no process_id or stream_id column -- resolve through `streams`.
-            let stream_id_literal = view.get_view_instance_id();
+            // Same canonicalization as §5, keyed on `stream_id` instead of `process_id`.
+            let stream_id_literal = Self::canonical_view_instance_id(&view_set_name, &view)?;
             return Ok(Some(self.exists_for_stream(
                 per_process_audience,
                 resolved_predicate,

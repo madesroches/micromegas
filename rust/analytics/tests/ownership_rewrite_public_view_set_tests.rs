@@ -40,7 +40,7 @@ use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurat
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
 use micromegas_analytics::lakehouse::thread_spans_view::ThreadSpansViewMaker;
 use micromegas_analytics::lakehouse::view::{PartitionSpec, View};
-use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -222,6 +222,40 @@ async fn optimized_plan(
     ctx.sql(sql).await?.into_optimized_plan()
 }
 
+/// Same purpose as `optimized_plan`, but against the **real** `default_view_factory()` -- the
+/// production view inventory -- instead of this file's synthetic `make_test_view_factory`. See
+/// `real_view_factory_covers_every_registered_view_set` below for why: `predicate_for`'s branch
+/// table needs coverage against the actual set of view sets it must handle, not only a hand-built
+/// stand-in.
+async fn optimized_plan_against_real_view_factory(
+    read_scope: ReadScope,
+    ownership_config: OwnershipRewriteConfig,
+    sql: &str,
+) -> datafusion::error::Result<LogicalPlan> {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let view_factory = Arc::new(
+        default_view_factory(lakehouse.runtime().clone(), lakehouse.lake().clone())
+            .await
+            .expect("default_view_factory"),
+    );
+    let caller = CallerContext {
+        read_scope,
+        is_admin: false,
+        ownership_config: Arc::new(ownership_config),
+    };
+    let ctx: SessionContext = make_session_context(
+        lakehouse,
+        Arc::new(NullPartitionProvider {}),
+        None,
+        view_factory,
+        Arc::new(NoOpSessionConfigurator),
+        caller,
+    )
+    .await
+    .expect("make_session_context");
+    ctx.sql(sql).await?.into_optimized_plan()
+}
+
 fn scope(audiences: &[&str]) -> ReadScope {
     ReadScope::Audiences(
         audiences
@@ -371,4 +405,62 @@ async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
          turning the injected two-hop `EXISTS` into a `LeftSemi Join` whose right side inner-joins \
          `streams` (resolved by its view_instance_id) to `per_process_audience`, got:\n{plan_text}"
     );
+}
+
+#[tokio::test]
+async fn real_view_factory_covers_every_registered_view_set() {
+    // Regression coverage for #1370 review issue 3: every test above plans against this file's
+    // own synthetic `make_test_view_factory`, so nothing actually exercises `predicate_for`'s
+    // branch table against `default_view_factory()` -- the real, production view-set inventory.
+    // A future view set registered there with no matching branch in `ownership_rewrite.rs` would
+    // compile and pass CI cleanly today, then fail every restricted-caller query in production
+    // with the §7 fallback `DataFusionError::Plan`. This test iterates every global view and
+    // view-set entry `default_view_factory` actually registers -- through both the global and
+    // `view_instance(...)` access paths, where a given view set offers both -- and asserts each
+    // one plans successfully with an injected audience filter, not an error and not an unfiltered
+    // scan. (Every branch's injected `InSubquery`/`Exists` gets turned into a `LeftSemi Join` by
+    // `DecorrelatePredicateSubquery`, per the per-branch tests above, so a single shared
+    // assertion suffices here.)
+    // A syntactically valid UUID literal is enough for a plan-shape-only test -- no data is
+    // scanned (same rationale as the §5/§6 tests above).
+    let process_id = "00000000-0000-0000-0000-000000000003";
+    let stream_id = "00000000-0000-0000-0000-000000000004";
+    let queries: Vec<String> = vec![
+        // Global instances (§3/§4), implicitly available with no view_instance(...) call.
+        "SELECT * FROM log_entries".to_string(),
+        "SELECT * FROM measures".to_string(),
+        "SELECT * FROM log_stats".to_string(),
+        "SELECT * FROM processes".to_string(),
+        "SELECT * FROM streams".to_string(),
+        "SELECT * FROM blocks".to_string(),
+        // log_entries/measures are also registered as view sets -- reachable per-process too.
+        format!("SELECT * FROM view_instance('log_entries', '{process_id}')"),
+        format!("SELECT * FROM view_instance('measures', '{process_id}')"),
+        // view_instance(...)-only view sets (§4, no global instance).
+        format!("SELECT * FROM view_instance('images', '{process_id}')"),
+        format!("SELECT * FROM view_instance('net_spans', '{process_id}')"),
+        format!("SELECT * FROM view_instance('otel_spans', '{process_id}')"),
+        // view_instance(...)-only view sets with no process_id/stream_id column (§5/§6).
+        format!("SELECT * FROM view_instance('async_events', '{process_id}')"),
+        format!("SELECT * FROM view_instance('thread_spans', '{stream_id}')"),
+    ];
+    for sql in &queries {
+        let config = OwnershipRewriteConfig::default();
+        let plan = optimized_plan_against_real_view_factory(scope(&["user:a"]), config, sql)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "real default_view_factory() query `{sql}` must plan under a restricted \
+                     ReadScope -- if this fails, a view set is missing a branch in \
+                     OwnershipRewrite::predicate_for; got error: {e}"
+                )
+            });
+        let plan_text = format!("{plan}");
+        assert!(
+            plan_text.contains("LeftSemi Join"),
+            "real default_view_factory() query `{sql}` must plan with an injected audience \
+             filter (LeftSemi Join after DecorrelatePredicateSubquery), not an unfiltered scan, \
+             got:\n{plan_text}"
+        );
+    }
 }
