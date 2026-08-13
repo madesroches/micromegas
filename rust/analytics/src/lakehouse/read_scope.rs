@@ -9,7 +9,8 @@
 //!
 //! **Stage 1 ships no enforcement.** Nothing in this crate consumes `ReadScope` yet -- Stage 2's
 //! `OwnershipRewrite` and Stage 3's UDTF guards are the first consumers. Today `ReadScope` is
-//! threaded down to `make_session_context` and stored, unread.
+//! threaded down to `make_session_context` and dropped -- Stage 2/3 must additionally arrange for
+//! it to reach the planner.
 
 use std::sync::Arc;
 
@@ -40,8 +41,8 @@ pub enum ReadScope {
 /// constructors below or a resolved value from a `ReadPolicy`.
 #[derive(Debug, Clone)]
 pub struct CallerContext {
-    /// The audience scope to plan queries under. Stored/ignored by `make_session_context` in
-    /// Stage 1 -- Stage 2/3 are the first consumers.
+    /// The audience scope to plan queries under. Accepted and dropped by `make_session_context`
+    /// in Stage 1 -- Stage 2/3 must additionally arrange for it to reach the planner.
     pub read_scope: ReadScope,
     /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs (unchanged from
     /// today's `is_admin: bool` parameter).

@@ -359,6 +359,37 @@ async fn prepared_statement_resolves_the_same_scope_as_do_get() {
 // Extension survives the stack (load-bearing: tonic must propagate request extensions)
 // ---------------------------------------------------------------------------
 
+#[tokio::test]
+async fn auth_context_with_groups_survives_the_real_tonic_stack() {
+    let auth_provider: Arc<dyn AuthProvider> = Arc::new(GroupsAuthProvider {
+        groups: vec!["team-a".to_string(), "team-b".to_string()],
+    });
+    let policy = Arc::new(RecordingReadPolicy::default());
+    let addr = start_server(Some(auth_provider), policy.clone()).await;
+    let mut client = connect(addr).await;
+    // GroupsAuthProvider ignores the bearer token's content, but AuthService still requires the
+    // header to be present to invoke validate_request at all.
+    client.set_token("irrelevant".to_string());
+
+    let info = client
+        .execute("SELECT 1".to_string(), None)
+        .await
+        .expect("execute");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    client.do_get(ticket).await.expect("do_get");
+
+    let calls = policy.calls();
+    assert_eq!(calls.len(), 1);
+    let (auth_ctx, _) = &calls[0];
+    assert_eq!(
+        auth_ctx.groups,
+        vec!["team-a".to_string(), "team-b".to_string()],
+        "the AuthContext observed by the handler, via request.extensions(), must be the one \
+         AuthService inserted -- including the groups field -- proving tonic propagated the \
+         extension all the way from the tower layer to the FlightSqlServiceImpl handler"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // No behavior change: an unconfigured deployment still resolves a scope
 // ---------------------------------------------------------------------------
@@ -392,35 +423,4 @@ async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffect
         .expect("collecting batches");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 1, "SELECT 1 must still return exactly one row");
-}
-
-#[tokio::test]
-async fn auth_context_with_groups_survives_the_real_tonic_stack() {
-    let auth_provider: Arc<dyn AuthProvider> = Arc::new(GroupsAuthProvider {
-        groups: vec!["team-a".to_string(), "team-b".to_string()],
-    });
-    let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone()).await;
-    let mut client = connect(addr).await;
-    // GroupsAuthProvider ignores the bearer token's content, but AuthService still requires the
-    // header to be present to invoke validate_request at all.
-    client.set_token("irrelevant".to_string());
-
-    let info = client
-        .execute("SELECT 1".to_string(), None)
-        .await
-        .expect("execute");
-    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
-    client.do_get(ticket).await.expect("do_get");
-
-    let calls = policy.calls();
-    assert_eq!(calls.len(), 1);
-    let (auth_ctx, _) = &calls[0];
-    assert_eq!(
-        auth_ctx.groups,
-        vec!["team-a".to_string(), "team-b".to_string()],
-        "the AuthContext observed by the handler, via request.extensions(), must be the one \
-         AuthService inserted -- including the groups field -- proving tonic propagated the \
-         extension all the way from the tower layer to the FlightSqlServiceImpl handler"
-    );
 }
