@@ -216,27 +216,35 @@ else in that range matches the event-time filter, collapsing `rows_per_bucket` t
 `buckets_per_batch` to `total_buckets` — one query then collects every block of that process/tag over
 the whole insert range, regardless of size.
 
-Then, with `TARGET_ROWS_PER_QUERY: i64 = 250_000` (a rustdoc'd const — promote to config only if a
-real need appears):
+Then, with `JitPartitionConfig::target_rows_per_query` (a new `i64` field alongside `max_nb_objects`,
+defaulting to `250_000` and rustdoc'd — a config field rather than a bare const precisely so
+DB-gated tests can lower it to force a multi-batch run, the same way `thread_spans_ordering_db_test.rs`
+already drives a lowered `max_nb_objects`; see *Testing Strategy*):
 
 ```
 total_buckets    = insert_range / slice
 rows_per_bucket  = max(1, ceil(nb_blocks / total_buckets))
-buckets_per_batch= clamp(TARGET_ROWS_PER_QUERY / rows_per_bucket, 1, total_buckets)
+buckets_per_batch= clamp(target_rows_per_query / rows_per_bucket, 1, total_buckets)
 batch_width      = buckets_per_batch * slice
 ```
 
 - Sparse OTLP metrics, 30 days, ~43k blocks → `rows_per_bucket ≈ 60`, `buckets_per_batch` clamps to
   `total_buckets` → **one query for the whole month**.
-- A dense `cpu`-tagged process → `rows_per_bucket` in the thousands → hour- to few-hour-scale
-  batches, i.e. roughly today's behavior, with no memory regression.
+- A dense `cpu`-tagged process with `rows_per_bucket` at or above `target_rows_per_query`
+  (roughly 60k–250k+ blocks/bucket) → `buckets_per_batch` clamps to 1 → hour-scale batches, matching
+  today's per-hour query shape. Below that density — `rows_per_bucket` in the thousands to tens of
+  thousands, still "dense" relative to the sparse OTLP case — `buckets_per_batch` is several to a
+  few dozen, so one query now buffers up to `target_rows_per_query` rows at once: a real per-query
+  memory increase over today's per-hour loop (which buffers only that hour's rows), traded for far
+  fewer queries.
 
 `nb_blocks` is counted under the batch queries' own full predicate (identity filter and
 `insert_time` range alike), so it is an accurate count of the rows the batches will return, not
-merely a lower bound. It still only tunes
-overhead, never correctness: buffered memory per batch is the row count times a predictable
-per-row width (~150 B after the lean projection, so ~37 MB at target), and output does not depend
-on batch width.
+merely a lower bound. It still only tunes overhead, never correctness: buffered memory per batch is
+bounded by `target_rows_per_query` rows, each a predictable width — ~150 B of Arrow columns after
+the lean projection, plus ~200 B for the parsed `Arc<PartitionSourceBlock>` (`BlockMetadata` + the
+`format` `String` + two `Arc`s) held simultaneously — so ~350 B/row, ~90 MB at the default target of
+250k. Output does not depend on batch width.
 
 ### Why the lean projection is in scope
 
@@ -425,10 +433,16 @@ suite. See Testing Strategy for the added DB-gated test that drives the outer fu
 asserts equivalence against the per-segment path.
 
 `generate_process_jit_partitions_segment` (`:528`) has exactly one caller —
-`generate_process_jit_partitions`, which this plan rewrites to batch inline — so it is **deleted**,
-taking its hand-inlined `StreamMetadata` copy (`:577-616`) and per-row CBOR decode with it. Nothing
-in the test suite calls it directly (the DB test only drives the stream variant), so deleting it
-requires no test changes.
+`generate_process_jit_partitions`, which this plan rewrites to batch inline — so its grouping call is
+inlined into the batch loop and the function itself is **deleted**, taking its hand-inlined
+`StreamMetadata` copy (`:577-616`) and per-row CBOR decode with it. Its fetch-and-parse half (SQL,
+`block_from_batch_row`, the per-stream metadata lookup) survives as a new `pub async fn
+fetch_process_blocks(...) -> Result<Vec<Arc<PartitionSourceBlock>>>`: the rewritten generator's
+per-batch-window loop calls it once per window before `group_blocks_into_partitions`, and
+`jit_process_batch_db_test.rs` calls it once over the whole test range to compute expected specs
+without re-implementing the batch SQL and parsing under test (see *Testing Strategy*). Nothing in the
+existing test suite calls the deleted segment function directly (the current DB test only drives the
+stream variant), so deleting it requires no changes to existing tests.
 
 ### Instrumentation
 
@@ -442,11 +456,13 @@ span with the spec count.
 1. `rust/analytics/src/lakehouse/jit_partitions.rs`:
    - Add a `COUNT(*)` query over the insert range, run after `fetch_overlapping_insert_range_for_view`
      resolves the `PartitionCache` (it can only be answered from that cache — see *Adaptive batch
-     width*), using the same full predicate as the batch queries; add `pub const
-     TARGET_ROWS_PER_QUERY` and
-     `pub fn batch_windows(insert_range, slice, nb_blocks) -> impl Iterator<Item = TimeRange>`
-     (slice-aligned, last window clamped to the range end) — `pub` so
-     `analytics/tests/jit_batch_windows_tests.rs` can call them directly.
+     width*), using the same full predicate as the batch queries; add `target_rows_per_query: i64`
+     to `JitPartitionConfig` (default `250_000`, rustdoc'd) and
+     `pub fn batch_windows(insert_range, slice, nb_blocks, target_rows_per_query) -> impl
+     Iterator<Item = TimeRange>` (slice-aligned, last window clamped to the range end) — `pub` so
+     `analytics/tests/jit_batch_windows_tests.rs` can call it directly, and `target_rows_per_query`
+     threaded through `JitPartitionConfig` so DB-gated tests can lower it to force a multi-batch run
+     (see *Testing Strategy*).
    - Add the per-stream metadata pre-query for the process variant, decoded via
      `metadata::stream_metadata_from_batch_row`, into
      `HashMap<Uuid, (Arc<StreamMetadata>, Arc<String>)>`.
@@ -455,9 +471,10 @@ span with the spec count.
      test can call it directly instead of reaching into a private `format!`.
    - Rewrite the two generators' step-3 loops: iterate `batch_windows`, collect each batch, split
      rows into buckets on `duration_trunc` change, `group_blocks_into_partitions` per bucket.
-     Signatures unchanged. Delete `generate_process_jit_partitions_segment` (dead after the
-     rewrite, see *Keeping (and dropping) the segment functions*); `generate_stream_jit_partitions_segment`
-     is left in place for the DB test.
+     Signatures unchanged. Extract the process variant's fetch-and-parse logic into a new `pub
+     async fn fetch_process_blocks`, delete `generate_process_jit_partitions_segment` (dead after
+     the rewrite, its grouping call now inlined; see *Keeping (and dropping) the segment
+     functions*); `generate_stream_jit_partitions_segment` is left in place for the DB test.
    - Split `is_jit_partition_up_to_date` into a candidates fetch (inclusive insert-range overlap)
      plus the pure matcher `pub fn spec_is_up_to_date` operating on `pub struct
      PartitionFreshnessRow`; keep `is_jit_partition_up_to_date`'s public signature and behavior.
@@ -469,7 +486,8 @@ span with the spec count.
 3. Add `rust/analytics/tests/jit_batch_windows_tests.rs` and
    `rust/analytics/tests/jit_freshness_tests.rs`, and add DB-gated, `#[ignore]`d tests covering
    `generate_process_jit_partitions` and the outer `generate_stream_jit_partitions` (see Testing
-   Strategy).
+   Strategy), constructing `JitPartitionConfig` with a lowered `target_rows_per_query` so those runs
+   are forced to split into more than one batch, not just more than one bucket within a single batch.
 4. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
    `cargo test -- --ignored` with `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`
    set, to actually run the DB-gated suite (see Testing Strategy).
@@ -501,8 +519,10 @@ span with the spec count.
   pin/override knob: if the derivation is wrong, fix the derivation.
 - **Estimate vs. hard bound.** The derived width is a heuristic in the sense that density can vary
   within the counted range (some buckets denser than others), but `nb_blocks` itself is an accurate
-  count of the rows the batches will return, not a lower bound. Acceptable: the buffered unit is one
-  batch's lean rows (~37 MB at target), and width cannot affect output.
+  count of the rows the batches will return, not a lower bound. Acceptable: the buffered unit is
+  bounded by `target_rows_per_query` (~90 MB at the default target, see *Adaptive batch width*) —
+  higher than today's per-hour peak for a mid-density instance, but a fixed, predictable ceiling —
+  and width cannot affect output.
 - **Vec return vs. streaming specs.** The previous revision of this plan changed both generators to
   return a `BoxStream` of specs. Cut: it rippled owned/`Arc` captures through seven views, replaced
   a simple loop with a bucket-flush state machine inside `async_stream`, and held a DataFusion /
@@ -608,23 +628,28 @@ data volume.
   test in `thread_spans_ordering_db_test.rs` is `#[ignore]`d and needs a live
   `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`; run explicitly with
   `cargo test -- --ignored`. Add `jit_process_batch_db_test.rs`, a DB-gated test (same `#[ignore]`
-  gating) driving `generate_process_jit_partitions` directly over a multi-bucket range, under
-  **both** `BlockOrder` variants (`InsertTime` and `EventTime`) — e.g. a `view_instance('log_entries',
-  <process>)` query for `InsertTime`, plus a second run with `block_order: BlockOrder::EventTime` in
-  the `JitPartitionConfig` — so the batched process path and the lean projection get automated
-  coverage under both orderings. `BlockOrder::EventTime` is production-reachable for the process
-  variant too (`net_spans_view.rs:351-364` builds `JitPartitionConfig { block_order:
-  BlockOrder::EventTime, .. }` and passes it to `generate_process_jit_partitions`), so the
-  client-side `duration_trunc` batch-then-split path under `EventTime` is the same
-  riskiest-new-logic case as the stream side and needs the same coverage; unlike the stream side,
-  `generate_process_jit_partitions_segment` is deleted by this plan, so equivalence is asserted
-  against expected specs computed from the fetched blocks directly (e.g. via
-  `group_blocks_into_partitions` per bucket), not against a kept segment function.
+  gating) driving `generate_process_jit_partitions` directly over a multi-bucket range, using a
+  `JitPartitionConfig` with a lowered `target_rows_per_query` so the run is forced to span more than
+  one batch (not just more than one bucket within a single batch), under **both** `BlockOrder`
+  variants (`InsertTime` and `EventTime`) — e.g. a `view_instance('log_entries', <process>)` query
+  for `InsertTime`, plus a second run with `block_order: BlockOrder::EventTime` in the
+  `JitPartitionConfig` — so the batched process path and the lean projection get automated coverage
+  under both orderings. `BlockOrder::EventTime` is production-reachable for the process variant too
+  (`net_spans_view.rs:351-364` builds `JitPartitionConfig { block_order: BlockOrder::EventTime, .. }`
+  and passes it to `generate_process_jit_partitions`), so the client-side `duration_trunc`
+  batch-then-split path under `EventTime` is the same riskiest-new-logic case as the stream side and
+  needs the same coverage; unlike the stream side, `generate_process_jit_partitions_segment` is
+  deleted by this plan (see *Keeping (and dropping) the segment functions*), so the test instead
+  calls the new `pub fetch_process_blocks` helper — the same fetch/parse code the rewritten
+  generator's per-batch loop calls — once over the whole test range, and computes expected specs by
+  running `group_blocks_into_partitions` per bucket over its result. This shares the fetch/parse SQL
+  path with the code under test instead of duplicating it, so the assertion is not circular.
   Additionally, add a DB-gated test driving `generate_stream_jit_partitions` (not the `_segment`
-  function) over a multi-bucket range under `BlockOrder::EventTime`, asserting its emitted specs are
-  identical to running `generate_stream_jit_partitions_segment` once per bucket — this is the only
-  coverage of the new batch-then-split path for the `EventTime` variant, and it can live alongside
-  the existing per-segment tests in `thread_spans_ordering_db_test.rs`.
+  function) over a multi-bucket range under `BlockOrder::EventTime`, again with a lowered
+  `target_rows_per_query` to force more than one batch, asserting its emitted specs are identical to
+  running `generate_stream_jit_partitions_segment` once per bucket — this is the only coverage of
+  the new batch-then-split path for the `EventTime` variant, and it can live alongside the existing
+  per-segment tests in `thread_spans_ordering_db_test.rs`.
 - **Manual cache-stability check** (the load-bearing regression test): start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), run a JIT query against the
   **old** binary, then the **new** one. Because the design is output-identical, the new binary must
@@ -636,11 +661,17 @@ data volume.
   per-spec `sql_select_matching_partitions` chain collapses to one candidates fetch, and measure
   end-to-end wall clock before/after.
 - **Memory check — the dense case**: an `async_events` (tag `"cpu"`) query on a many-threaded
-  process over a long range, watching process RSS (system_monitor gauges, #1330). No regression
-  versus the per-hour code (expected: slightly lighter, from the shared per-stream `Arc`s).
+  process over a long range, watching process RSS (system_monitor gauges, #1330). Expected: peak
+  buffered memory per query bounded by `target_rows_per_query` (~90 MB at the default target, see
+  *Adaptive batch width*). This matches (or improves on, from the shared per-stream `Arc`s) today's
+  per-hour peak only when the instance is dense enough that `buckets_per_batch` clamps to one bucket
+  (`rows_per_bucket` at or above `target_rows_per_query`); for a mid-density instance below that, the
+  batched path buffers more per query than today's per-hour loop — an accepted, bounded trade for far
+  fewer queries, not a regression to chase down.
 
 ## Documentation
 
-No mkdocs page covers JIT partition internals (verified by grep). Rustdoc on `TARGET_ROWS_PER_QUERY`
-and the batch-window derivation, the per-stream metadata pre-query, the lean-projection invariant,
-the freshness matcher split, and the rewritten loop bodies suffices.
+No mkdocs page covers JIT partition internals (verified by grep). Rustdoc on
+`JitPartitionConfig::target_rows_per_query` and the batch-window derivation, the per-stream metadata
+pre-query, the lean-projection invariant, the freshness matcher split, and the rewritten loop bodies
+suffices.
