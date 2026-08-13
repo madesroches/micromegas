@@ -271,12 +271,15 @@ With the block queries batched, the next serial cost is the caller loop: one
 ```rust
 /// One lakehouse_partitions candidate row:
 /// (begin_insert_time, end_insert_time, file_schema_hash, source_data_hash).
-struct PartitionFreshnessRow { ... }
+pub struct PartitionFreshnessRow { ... }
 
 /// Filters `candidates` down to the rows the per-spec SQL returns today (exact range equality for
 /// EventTime, exact match for a degenerate InsertTime range, inclusive overlap otherwise), then
 /// applies today's rows.len() == 1 / file_schema_hash / object-count checks verbatim.
-fn spec_is_up_to_date(view_meta, spec, block_order, candidates: &[PartitionFreshnessRow]) -> Result<bool>
+///
+/// `pub`, with `PartitionFreshnessRow`'s fields `pub` too (or a `pub` constructor), so
+/// `analytics/tests/jit_freshness_tests.rs` can build rows and call this directly.
+pub fn spec_is_up_to_date(view_meta, spec, block_order, candidates: &[PartitionFreshnessRow]) -> Result<bool>
 ```
 
 Candidates are fetched by **inclusive insert-range overlap**
@@ -291,8 +294,11 @@ retire logic inside their own `update_partition`, and they are not the motivatin
 
 ```rust
 /// One candidates fetch over [specs.first().min, specs.last().max] (specs have ascending,
-/// non-overlapping insert ranges), then the matcher per spec. Returns up-to-date flags parallel
-/// to `specs`.
+/// non-overlapping insert ranges), then the matcher per spec. Before matching spec `j`, candidate
+/// rows whose `[begin, end]` falls entirely inside a *different* spec `i`'s insert range are
+/// dropped from `j`'s candidate set (see *Verdicts reflect pre-run state* below): such a row is a
+/// `RetireMatch::Containment` match for spec `i` and will be gone once `i`'s write runs, so it must
+/// not count towards `j`'s freshness. Returns up-to-date flags parallel to `specs`.
 pub async fn find_up_to_date_partitions(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
@@ -307,11 +313,24 @@ flagged specs — a sparse month becomes 1 freshness query instead of ~720. For 
 candidate set is ~720 small rows, well under any concern.
 
 **Verdicts reflect pre-run state.** Today spec *i*'s check runs after specs `0..i`'s writes;
-batched, all verdicts are computed first. A this-run write can only match a later spec's overlap
-predicate when two specs' ranges *touch* (equal boundary insert-times straddling a cut) — a corner
-where today's interleaved check misbehaves in both directions (it can double-match or wrongly adopt
-the neighbor). Deciding from pre-run state only is the saner semantics and changes nothing outside
-that corner.
+batched, all verdicts are computed first. The touching-ranges corner (equal boundary insert-times
+straddling a cut between specs *i* and *j*) has two directions, and only one is benign:
+
+- *A this-run write matching a later spec.* Spec *i*'s write can satisfy spec *j*'s overlap
+  predicate — a corner where today's interleaved check already misbehaves (it can double-match or
+  wrongly adopt the neighbor). Deciding from pre-run state only is the saner semantics here.
+- *A this-run retirement removing a row an earlier verdict depended on.* `RetireMatch::Containment`
+  (all five `InsertTime` callers, `write_partition.rs:219-240`) deletes every partition contained in
+  spec *i*'s range when *i* is written. If an existing partition touches spec *j*'s boundary and is
+  also contained in spec *i*'s range, a pre-run verdict can judge spec *j* up to date against that
+  partition, and later in the same run spec *i*'s write retires it — leaving spec *j*'s rows missing
+  until the next `jit_update`. Today's interleaved order avoids this because spec *j*'s check runs
+  after spec *i*'s write/retire and observes the removal. This direction is *not* benign, so
+  `find_up_to_date_partitions` drops any candidate row entirely contained in a different spec's
+  range from that spec's own candidate set before matching (see its rustdoc above) — such a row is
+  guaranteed to be retired this run if the containing spec is written, so it must never count
+  towards a sibling spec's freshness. The cost is a handful of unnecessary rewrites in this corner,
+  never a missed one.
 
 **Race window.** The check→write pair was never atomic: a concurrent `jit_update` of the same view
 instance can commit a partition between one spec's check and its write today. Checking up front
@@ -340,14 +359,19 @@ consumers treat it as read-only. Emitted specs — `block_ids_hash` and every cu
 `BlockOrder` variants — are byte-identical, and every cached JIT partition still reports up to date.
 There is no one-time regeneration cost.
 
-### Keeping the segment functions
+### Keeping (and dropping) the segment functions
 
-`generate_stream_jit_partitions_segment` (`:406`) and `generate_process_jit_partitions_segment`
-(`:528`) are **kept, not deleted**: `rust/analytics/tests/thread_spans_ordering_db_test.rs` drives
-`generate_stream_jit_partitions_segment` from ~10 sites (single query range, no bucket subdivision,
-asserting on returned specs). Deleting them would mean rewriting a 2000-line DB test suite for no
-benefit. They keep their current `collect()`-based bodies and their current (fat) projection; only
-the batched path gets the lean one.
+`generate_stream_jit_partitions_segment` (`:406`) is **kept, not deleted**:
+`rust/analytics/tests/thread_spans_ordering_db_test.rs` drives it directly from ~10 sites (single
+query range, no bucket subdivision, asserting on returned specs). Deleting it would mean rewriting a
+2000-line DB test suite for no benefit. It keeps its current `collect()`-based body and its current
+(fat) projection; only the batched path gets the lean one.
+
+`generate_process_jit_partitions_segment` (`:528`) has exactly one caller —
+`generate_process_jit_partitions`, which this plan rewrites to batch inline — so it is **deleted**,
+taking its hand-inlined `StreamMetadata` copy (`:577-616`) and per-row CBOR decode with it. Nothing
+in the test suite calls it directly (the DB test only drives the stream variant), so deleting it
+requires no test changes.
 
 ### Instrumentation
 
@@ -359,24 +383,35 @@ span with the spec count.
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/jit_partitions.rs`:
-   - Add `COUNT(*)` to both MIN/MAX pre-queries; add `TARGET_ROWS_PER_QUERY` and
-     `fn batch_windows(insert_range, slice, nb_blocks) -> impl Iterator<Item = TimeRange>`
-     (slice-aligned, last window clamped to the range end).
+   - Add `COUNT(*)` to both MIN/MAX pre-queries; add `pub const TARGET_ROWS_PER_QUERY` and
+     `pub fn batch_windows(insert_range, slice, nb_blocks) -> impl Iterator<Item = TimeRange>`
+     (slice-aligned, last window clamped to the range end) — `pub` so
+     `analytics/tests/jit_batch_windows_tests.rs` can call them directly.
    - Add the per-stream metadata pre-query for the process variant, decoded via
      `metadata::stream_metadata_from_batch_row`, into
      `HashMap<Uuid, (Arc<StreamMetadata>, Arc<String>)>`.
+   - Extract the process-variant batch SQL construction into
+     `pub fn process_batch_sql(process_id, stream_tag, range) -> String` so the projection guard
+     test can call it directly instead of reaching into a private `format!`.
    - Rewrite the two generators' step-3 loops: iterate `batch_windows`, collect each batch, split
      rows into buckets on `duration_trunc` change, `group_blocks_into_partitions` per bucket.
-     Signatures unchanged; both `*_segment` functions left in place.
+     Signatures unchanged. Delete `generate_process_jit_partitions_segment` (dead after the
+     rewrite, see *Keeping (and dropping) the segment functions*); `generate_stream_jit_partitions_segment`
+     is left in place for the DB test.
    - Split `is_jit_partition_up_to_date` into a candidates fetch (inclusive insert-range overlap)
-     plus the pure matcher `spec_is_up_to_date`; keep its public signature and behavior. Add
+     plus the pure matcher `pub fn spec_is_up_to_date` operating on `pub struct
+     PartitionFreshnessRow`; keep `is_jit_partition_up_to_date`'s public signature and behavior.
+     Both are `pub` so `analytics/tests/jit_freshness_tests.rs` can call them directly. Add
      `find_up_to_date_partitions`.
 2. Update the five `InsertTime` call sites (`log_view.rs`, `metrics_view.rs`, `images_view.rs`,
    `async_events_view.rs`, `otel/spans_view.rs`) to call `find_up_to_date_partitions` once and skip
    flagged specs. `net_spans_view.rs` / `thread_spans_view.rs` are untouched.
 3. Add `rust/analytics/tests/jit_batch_windows_tests.rs` and
-   `rust/analytics/tests/jit_freshness_tests.rs` (see Testing Strategy).
-4. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`.
+   `rust/analytics/tests/jit_freshness_tests.rs`, and add a DB-gated, `#[ignore]`d test covering
+   `generate_process_jit_partitions` (see Testing Strategy).
+4. From `rust/`: `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test`, then
+   `cargo test -- --ignored` with `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI`
+   set, to actually run the DB-gated suite (see Testing Strategy).
 5. Manual verification — see Testing Strategy.
 
 ## Files to Modify
@@ -386,7 +421,10 @@ span with the spec count.
   `rust/analytics/src/lakehouse/otel/spans_view.rs` — one `find_up_to_date_partitions` call each.
 - `rust/analytics/tests/jit_batch_windows_tests.rs`, `rust/analytics/tests/jit_freshness_tests.rs`
   — new, pure logic.
-- `rust/analytics/tests/thread_spans_ordering_db_test.rs` — unchanged (segment functions kept).
+- `rust/analytics/tests/jit_process_batch_db_test.rs` — new, DB-gated (`#[ignore]`d) test driving
+  `generate_process_jit_partitions`, covering the batched process path and the lean projection.
+- `rust/analytics/tests/thread_spans_ordering_db_test.rs` — unchanged
+  (`generate_stream_jit_partitions_segment` kept for this suite).
 
 ## Trade-offs
 
@@ -488,12 +526,18 @@ data volume.
   table-driven over the three variants — no candidates, exact match, wider overlapping row,
   multiple rows, degenerate range, schema-hash mismatch, object count below/equal/above — asserting
   `spec_is_up_to_date` reproduces the per-variant SQL semantics at `:773-843`.
-- **Projection guard**: assert the process-variant batch SQL builder emits no `streams.` column in
-  its `SELECT` list (the `WHERE` clause still may). One small string assertion — it guards the exact
-  regression the rustdoc warns about.
-- **Existing suites**: `cargo test` from `rust/` must pass unchanged — notably
-  `thread_spans_ordering_db_test.rs`, which pins `BlockOrder::EventTime` cut-point behavior through
-  the retained segment functions.
+- **Projection guard**: call the `pub fn process_batch_sql` builder (added in Implementation Steps)
+  and assert its `SELECT` list contains no `streams.` column (the `WHERE` clause still may). One
+  small string assertion — it guards the exact regression the rustdoc warns about.
+- **Existing suites**: `cargo test` from `rust/` must pass unchanged. `thread_spans_ordering_db_test.rs`
+  pins `BlockOrder::EventTime` cut-point behavior through the retained
+  `generate_stream_jit_partitions_segment`, but every test in that file is `#[ignore]`d and needs a
+  live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` — it must be run
+  explicitly (`cargo test -- --ignored`) to cover anything; a plain `cargo test` touches neither JIT
+  generator. Add `jit_process_batch_db_test.rs`, a DB-gated test (same `#[ignore]` gating) driving
+  `generate_process_jit_partitions` — or a `view_instance('log_entries', <process>)` query through
+  it — so the rewritten batched process path and the lean projection get automated coverage; today
+  nothing does.
 - **Manual cache-stability check** (the load-bearing regression test): start services
   (`python3 local_test_env/ai_scripts/start_services.py` or monolith), run a JIT query against the
   **old** binary, then the **new** one. Because the design is output-identical, the new binary must
