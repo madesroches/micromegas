@@ -9,23 +9,39 @@ into every `MaterializedView`-backed logical plan, using the `ReadScope` Stage 1
 of the two-pronged enforcement design (§4 of the AbAC plan) — Prong B (UDTF/UDF guards for the
 span/metadata functions Prong A structurally cannot reach) is Stage 3 (#1371), a separate issue.
 
-**Inactive only when auth is not configured — not universally inactive.** With
-`MICROMEGAS_IMPLICIT_GROUPS` and `MICROMEGAS_UNSTAMPED_AUDIENCE` both unset and no
-`AudienceReadPolicy` provider configured (today's default for a from-scratch deployment), every
-caller's resolved `ReadScope` is `All`, `OwnershipRewrite` no-ops, and behavior is unchanged. **But
-any deployment that already runs with auth enabled — the normal production posture, not a
-hypothetical — is a live deployment this stage regresses.** Stage 1 already resolves
+**Inactive only when no auth provider is configured — not universally inactive.** `ReadScope::All`
+comes from the *absence* of an `AuthContext` extension on the request — `caller_context()` resolves
+`ReadScope::All` whenever no provider is configured, regardless of what
+`MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are set to
+(`flight_sql_service_impl.rs:539-552`). In that case `OwnershipRewrite` no-ops and behavior is
+unchanged. **But any deployment that already runs with auth enabled — the normal production
+posture, not a hypothetical — is a live deployment this stage regresses.** Stage 1 already resolves
 `ReadScope::Audiences([...])` for every request carrying an `AuthContext`
 (`flight_sql_service_impl.rs:539-552`), and the monolith installs a read policy whenever
 `roles.flightsql && !args.disable_auth` (`monolith/src/main.rs:251`), defaulting to
 `AudienceReadPolicy::from_env("")` (`flight_sql_server.rs:271`). Since no data carries
 `micromegas.audience` until Stage 5 (#1373), such a deployment goes from full visibility today
 (nothing yet filters `ReadScope::Audiences` sessions) to **zero visible rows** the instant
-`OwnershipRewrite` is registered — unless `MICROMEGAS_UNSTAMPED_AUDIENCE` is set before the upgrade.
-This is a breaking change for every auth-enabled deployment, gated by an existing config knob rather
-than a new one; treated accordingly under Trade-offs, Testing Strategy (an auth-enabled smoke/upgrade
-check, not just the auth-unset path), and Documentation (a CHANGELOG upgrade note), and re-flagged for
-Stage 7's activation docs.
+`OwnershipRewrite` is registered — unless the escape hatch below is configured as a **pair** before
+the upgrade. Setting `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` alone does not restore
+visibility: `AudienceReadPolicy::resolve` (`auth/src/policy.rs:203-211`) builds each caller's
+resolved audience set from `identity_and_group_audiences` (`:88-103` — `user:<email>` ∪ groups claim
+∪ implicit groups) plus `caller.read_audiences`, so with `MICROMEGAS_IMPLICIT_GROUPS` left unset a
+human caller's set is just `{user:<email>}`; the coalesced `group:everyone` default then fails the
+`IN` check and the deployment still goes to zero rows. The required pair is
+**`MICROMEGAS_IMPLICIT_GROUPS=everyone` and `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`**, and
+(per the "existing knob" correction below) both must be set in the same deploy that introduces
+`OwnershipRewrite`, not on the old binary beforehand. This is a breaking change for every
+auth-enabled deployment; treated accordingly under Trade-offs, Testing Strategy (an auth-enabled
+smoke/upgrade check exercising the pair, not just the auth-unset path), and Documentation (a
+CHANGELOG upgrade note stating the pair), and re-flagged for Stage 7's activation docs.
+
+**`MICROMEGAS_UNSTAMPED_AUDIENCE` is a new knob shipped by this stage, not a pre-existing one.**
+`grep -rn "UNSTAMPED_AUDIENCE" --include="*.rs"` across the repo returns zero hits today — nothing
+reads it before Design §8's `OwnershipRewriteConfig::from_env` lands, so it cannot be "set on the old
+binary before upgrading" the way a genuinely pre-existing knob could. It becomes live only in the
+same deploy that registers `OwnershipRewrite`, so the escape-hatch pair above is config-then-rollout
+ordering *within* this stage's own deploy, not a step performable against today's `main`.
 
 ## Current State
 
@@ -108,8 +124,15 @@ tables as a side effect of this registration shape, which is otherwise undocumen
 | `measures` | yes (`metrics_table.rs:21`) | same as `log_entries` | global **and** per-process |
 | `net_spans` | yes (`net_spans_table.rs:44`) | `view_instance('net_spans', <process_id>)` only — **rejects `"global"`** (`net_spans_view.rs:82-83`) | per-process only |
 | `otel_spans` | yes (`otel/spans_table.rs:12`) | `view_instance('otel_spans', <process_id>)` only, no global instance (`view_factory.rs:337` comment) | per-process only |
+| `images` | yes (`images_table.rs:16-20`) | `view_instance('images', <process_id>)` only — **rejects `"global"`** (`images_view.rs:73-75`), registered via `add_view_set` (`view_factory.rs:290-303`) | per-process only |
+| `log_stats` | yes (inherited from `log_entries`'s `process_id`, `log_stats_view.rs:35`) | named global table only, registered via `add_global_view` (`view_factory.rs:316`), not `add_view_set` | global (aggregated across processes) |
 | `async_events` | **no** (`async_events_table.rs` — "optimized for high-frequency data, excludes process info that can be joined", `:41-43`) | `view_instance('async_events', <process_id>)` only — **rejects `"global"`** (`async_events_view.rs:81-82`) | per-process only, but **no column to filter on** |
 | `thread_spans` | **no** (`span_table.rs:50-80`, shared with `process_spans`) | `view_instance('thread_spans', <stream_id>)` only — `ThreadSpansView::new` rejects anything that doesn't parse as a UUID, and per the AbAC plan §4 this is "the one view set with no process_id-scoped alternative" | per-**stream** only, no global, no `process_id` **or** `stream_id` column |
+
+`log_stats` is a `SqlBatchView` like `processes`/`streams` (Current State's earlier paragraph already
+covers this), so it registers the same two-table shape: `__log_stats__partitions` (raw
+`MaterializedView`) plus the merged `log_stats` view — both are process_id-column views for §4's
+purposes, since `process_id` survives the `SqlBatchView`'s `GROUP BY`.
 
 This matters because a naive implementation that only knows "semi-join on `process_id` when the view
 set name is in a hardcoded list" will compile, plan, and pass a smoke test, then silently return
@@ -226,6 +249,51 @@ scoped to non-`All` scopes. A caller-supplied `ViewFactory`
 (`FlightSqlServerBuilder::with_view_factory_fn`) that omits `processes`/`streams` **and** is used under
 a restricted `ReadScope` still fails fast via the `Context`-wrapped error above, rather than a panic.
 
+**Cost of `query_range: None`, and the choice of `processes`/`streams` as the audience source.**
+Building `processes_source`/`streams_source` this way — a `MaterializedView` over
+`LivePartitionProvider` with `query_range: None` — has two consequences worth stating as decisions
+rather than leaving implicit:
+
+1. *Unbounded, uncached, per-`TableScan` cost.* `MaterializedView::scan` passes `query_range` straight
+   to `part_provider.fetch(...)` (`materialized_view.rs:61-84`), and `None` makes
+   `LivePartitionProvider` issue the partition-metadata query with no time predicate at all
+   (`partition_cache.rs:346-400`) — every `processes` (and, for `thread_spans`, every `streams`)
+   partition ever written. The injected `property_get`-based predicate cannot prune this:
+   `supports_filters_pushdown` reports `Inexact` for it. And because §3–6 inject an independent
+   subquery at every `TableScan` site the traversal visits, and DataFusion does not
+   common-subexpression-eliminate identical injected subqueries across a plan, a single query joining
+   `log_entries` and `measures` scans `processes`'s entire history twice, not once.
+   **Decided:** compute the `processes` audience filter (§3) and the process_id-column semi-join
+   subquery (§4's `SELECT process_id FROM processes WHERE ...`) once per `analyze()` call, before
+   `transform_up_with_subqueries` runs, and reuse the same `Expr`/`Arc<LogicalPlan>` at every site the
+   traversal visits — this bounds the §4 branch (the majority of the schema table below) to one
+   `processes` scan per query regardless of how many process_id-keyed tables it touches. §5/§6's
+   `EXISTS` subqueries still build one subquery per scan site, since each embeds a different
+   `view_instance_id` literal and cannot be shared. This mitigates the cost; it does not eliminate the
+   unbounded, uncached scan itself.
+2. *Materialization lag vs. Prong B.* `processes`/`streams` are `SqlBatchView`s materialized only by
+   the maintenance daemon's `materialize_all_views` pass (`public/src/servers/maintenance.rs:106-210`;
+   `SqlBatchView::jit_update` is a no-op, `sql_batch_view.rs:307-313`) — unlike the JIT per-process
+   views, nothing materializes them on demand. A restricted caller's audience is therefore resolved
+   against however stale the daemon's last pass left `processes`, and against nothing at all if the
+   daemon is down or not deployed — including for the caller's own just-ingested data. This diverges
+   from Prong B, which resolves the same `process_id → audience` mapping from Postgres directly via
+   `find_process` plus an invalidation-free cache
+   (`audience_based_access_control_plan.md` §4, "Prong B performance"), so during that lag window the
+   two prongs can disagree about the same process's audience.
+
+   Both costs share one root cause: Prong A reads the mapping through a `MaterializedView` scan
+   instead of through the Postgres-backed, cached point lookup Prong B already builds. **Decided:**
+   accept both for Stage 2 rather than build a shared cache now — consuming Prong B's cache from
+   `OwnershipRewrite` would need `analyze()` (synchronous, no session, no I/O — §1) to read a cache
+   whose population is driven from outside the query path, and that cache is Prong B's own Stage 3
+   (#1371) deliverable, not something this issue's scope (a pure `AnalyzerRule`) should build a second
+   time. Recorded here, not silently accepted: Stage 3 should evaluate having `OwnershipRewrite`
+   consume Prong B's cache instead of scanning `processes`/`streams`, once that cache exists, so both
+   prongs converge on one source of truth. Until then, Stage 2 ships with a documented lag window and
+   per-query scan cost (mitigated per point 1 above) rather than a silently-assumed-consistent, free
+   lookup.
+
 ### 3. `processes`'s own scan — direct filter, no subquery
 
 The `processes` view carries the audience as a property, so its own `TableScan` gets the direct
@@ -287,8 +355,8 @@ corrected Current State landscape table and the resolved Open Questions.
 ### 4. Process_id-**column** views — semi-join, one shared helper
 
 For every other view whose `mat_view.schema()` contains a field named `process_id`
-(`streams`, `blocks`, `log_entries`, `measures`, `net_spans`, `otel_spans` — see the table in Current
-State), inject:
+(`streams`, `blocks`, `log_entries`, `measures`, `net_spans`, `otel_spans`, `images`, `log_stats` —
+see the table in Current State), inject:
 
 ```
 process_id IN (SELECT process_id FROM processes WHERE <processes predicate from §3>)
@@ -324,9 +392,9 @@ the join execute later, during normal query execution, exactly like the existing
 subplan does.
 
 This same construction works regardless of how the outer view is reached: as the named global table
-(`streams`, `blocks` — global only, no `view_instance` access, per the corrected Current State table)
-or via `view_instance('log_entries'|'measures'|'net_spans'|'otel_spans', id)` — the `MaterializedView`'s
-own schema decides the branch, not how it was reached.
+(`streams`, `blocks`, `log_stats` — global only, no `view_instance` access, per the corrected Current
+State table) or via `view_instance('log_entries'|'measures'|'net_spans'|'otel_spans'|'images', id)` —
+the `MaterializedView`'s own schema decides the branch, not how it was reached.
 
 ### 5. Process-scoped, no `process_id` column — literal check via `view_instance_id`
 
@@ -586,9 +654,21 @@ existing `read_policy` resolution); the monolith calls
 - `rust/analytics/tests/lakehouse_admin_gate_test.rs` — one `CallerContext` literal
 - `rust/analytics/tests/ownership_rewrite_db_test.rs` — **new**
 - `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs` — **new** (offline, planning-only)
+- `mkdocs/docs/admin/flight-sql.md` — `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS` rows
+- `mkdocs/docs/admin/monolith.md` — same two rows
 
 ## Trade-offs
 
+- **`processes`/`streams` as the audience source: an unbounded `MaterializedView` scan, not Prong
+  B's Postgres-backed cache (Design §2).** Every restricted query pays at least one full,
+  uncached, unpruned `processes` (and, for `thread_spans`, `streams`) partition scan — mitigated
+  from "once per touched table" to "once per query" by computing the §3/§4 subplans once per
+  `analyze()` call and reusing them, but not eliminated — and Prong A's visibility lags however far
+  behind the maintenance daemon's last `materialize_all_views` pass the deployment is (or sees
+  nothing if the daemon isn't running), diverging from Prong B's Postgres point lookup during that
+  window. Accepted for Stage 2 because a shared cache is Prong B's Stage 3 (#1371) deliverable, not
+  new machinery this issue should build a second copy of; flagged for Stage 3 to have
+  `OwnershipRewrite` consume that cache once it exists, so both prongs agree on one source of truth.
 - **`CallerContext` field vs. a new `make_session_context` parameter** for `OwnershipRewriteConfig`
   — see Design §8. Decided: the `CallerContext` field (option (b)), settled by the AbAC plan's §5b/§6
   (per-request resolved values ride the context; per-service objects live on the service) and by
@@ -631,9 +711,20 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   are parsed in `micromegas-analytics`, not `micromegas-auth` (mirrors Stage 1's own "parse where
   consumed" note about `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`,
   `1369_policy_seam_plan.md` §5).
+- `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — add
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` and `MICROMEGAS_PUBLIC_VIEW_SETS` rows to each page's existing
+  `MICROMEGAS_*` environment-variable table (the same tables documenting `MICROMEGAS_ADMINS`,
+  `MICROMEGAS_STATIC_TABLES_URL`, etc. today), with a pointer to Stage 7's isolation page for the
+  full activation story. These pages, not the CHANGELOG, are the operator-facing reference for
+  `MICROMEGAS_*` knobs — Stage 1's "no doc page yet" precedent was safe because Stage 1 was inert,
+  but Stage 2 silently empties every query result for auth-enabled deployments unless this pair is
+  configured (Overview), so it must be discoverable from the admin pages an operator actually reads,
+  not only from the CHANGELOG.
 - `CHANGELOG.md` per the `pr` skill's convention — must include an explicit upgrade note: any
-  deployment running with auth enabled must set `MICROMEGAS_UNSTAMPED_AUDIENCE` **before** upgrading,
-  or every `ReadScope::Audiences` caller goes to zero visible rows the moment this ships (Overview).
+  deployment running with auth enabled must set **both** `MICROMEGAS_IMPLICIT_GROUPS=everyone` and
+  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`, in the same deploy that ships `OwnershipRewrite` —
+  setting `MICROMEGAS_UNSTAMPED_AUDIENCE` alone does not restore visibility (Overview) — or every
+  `ReadScope::Audiences` caller goes to zero visible rows the moment this ships.
 
 ## Testing Strategy
 
@@ -650,10 +741,11 @@ No mkdocs page yet (Stage 7 owns the isolation page). What needs writing:
   `MICROMEGAS_UNSTAMPED_AUDIENCE` left unset (today's default) and confirm existing queries against
   real ingested data are byte-for-byte unaffected.
 - Manual smoke, auth-enabled path (the one the auth-unset check above cannot exercise): run with an
-  `AudienceReadPolicy` active (auth on, `MICROMEGAS_UNSTAMPED_AUDIENCE` set per the upgrade note in
-  Documentation) and confirm a caller under `ReadScope::Audiences` still sees their own legacy,
-  never-stamped data — this is the regression Overview now flags as a breaking change for every
-  auth-enabled deployment, not a hypothetical.
+  `AudienceReadPolicy` active (auth on, **both** `MICROMEGAS_IMPLICIT_GROUPS=everyone` and
+  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` set per the upgrade note in Documentation —
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` alone is not sufficient, Overview) and confirm a caller under
+  `ReadScope::Audiences` still sees their own legacy, never-stamped data — this is the regression
+  Overview now flags as a breaking change for every auth-enabled deployment, not a hypothetical.
 
 ## Open Questions
 
