@@ -211,11 +211,22 @@ test (`thread_spans_batched_generation_matches_per_segment`,
 Mirror Unreal's `FlushThreadStream` shape in the four Rust flush paths (`dispatch.rs` —
 thread `:820-835`, log `:800-817`, metrics `:~703`, image `:~561`): take `let now =
 DualTime::now();` once, pass it to the replacement block's constructor, and close the outgoing
-block with the same value. Mechanically:
+block with the same value. For the log/metrics/image paths this stamp **must be taken after the
+stream mutex is acquired** — mirroring `FlushLogStreamImpl`/`FlushMetricStreamImpl`, which are
+entered with the lock already held and take `DualTime::Now()` inside it
+(`unreal/MicromegasTracing/Private/Dispatch.cpp:105-123, 125-…, 252-272`) — i.e. `now` is taken
+right where the current code's `is_empty()` early return sits in `flush_log_buffer` (`:800-817`),
+`flush_metrics_buffer` (`:695-712`), and `flush_image_buffer` (`:553-572`), not at function entry:
+a stamp taken before the lock would let another thread push an event through `log()`/`metrics()`
+(which take the same mutex) between the stamp and the acquisition, producing `block.end_ticks`
+before that event's own tick. The thread path is unaffected by this ordering concern — it is
+lock-free and runs only on the owning thread. Mechanically:
 
-- `EventBlock::close` (`rust/tracing/src/event/block.rs:18-20`) gains a time parameter (e.g.
-  `close_at(&mut self, end: DualTime)`, keeping a self-stamping `close()` for the
-  shutdown/no-replacement paths if convenient).
+- `EventBlock::close` (`rust/tracing/src/event/block.rs:18-20`) gains a sibling
+  `close_at(&mut self, end: DualTime)` used by the four flush paths; the existing self-stamping
+  `close()` is **retained** (not removed) for the shutdown/no-replacement paths and for any
+  existing caller that has no shared timestamp to pass — so no caller of today's `close()` needs
+  to change.
 - `TracingBlock::new` / `EventBlock::new` (`block.rs:33-38, 55-69`) gain a `begin: DualTime`
   parameter instead of stamping internally. The ripple is mechanical: the four dispatch flush
   sites, initial block creation in `EventStream::new` (`event/stream.rs:52`, which keeps stamping
@@ -224,8 +235,10 @@ block with the same value. Mechanically:
   `rust/analytics/benches/parse_block.rs`; nine files under `rust/analytics/tests/` (`span_tests.rs`,
   `parse_block_tests.rs`, `parse_corrupt_block_tests.rs`, `parse_alloc_test.rs`, `log_tests.rs`,
   `metrics_test.rs`, `image_tests.rs`, `jit_process_batch_db_test.rs`,
-  `thread_spans_ordering_db_test.rs`); and `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs`
-  (which also calls `block.close()` at `:169, :176, :183` and needs the `close_at`/`close` update).
+  `thread_spans_ordering_db_test.rs`); and `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs`.
+  Since `close()` is retained, that file's `block.close()` calls at `:169, :176, :183` need no
+  change — only its `TracingBlock::new`/`EventBlock::new` constructor call sites need the mechanical
+  `begin` ripple.
 - Only the thread path affects `thread_spans` ordering, but all four paths get the same treatment
   for consistency — the log/metrics/images views are `InsertTime`-bounded and indifferent.
 
@@ -252,10 +265,13 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
 ### 2. Carry it through the write path
 
 - `PartitionRowSet` (`write_partition.rs:53-66`) gains
-  `max_sort_key_time: Option<DateTime<Utc>>`. Keep `new()` two-argument (sets `None`) so the nine
-  `::new` call sites are untouched. Five sites build the struct as a literal instead: it's set at
-  `thread_spans_view.rs:221-224`, and `..None`/`max_sort_key_time: None` must be added at the four
-  mechanical sites in `net_spans_view.rs:208`, `async_events_block_processor.rs:157`,
+  `max_sort_key_time: Option<DateTime<Utc>>`. Keep `new()` two-argument (sets `None`) so the seven
+  `::new` call sites (`sql_partition_spec.rs:169`, `merge.rs:409`, `metrics_block_processor.rs:68`,
+  `metadata_partition_spec.rs:105`, `otel/spans_block_processor.rs:318`,
+  `otel/logs_block_processor.rs:243`, `otel/metrics_block_processor.rs:399`) are untouched. Five
+  sites build the struct as a literal instead: it's set at `thread_spans_view.rs:221-224`, and
+  `max_sort_key_time: None` must be added at the four mechanical sites in `net_spans_view.rs:208`,
+  `async_events_block_processor.rs:157`,
   `log_block_processor.rs:68`, and `image_block_processor.rs:81` (or have them switch to
   `PartitionRowSet::new`).
 - `write_rows_and_track_times` (`:626-675`) folds a running value alongside the existing min/max
@@ -377,9 +393,11 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 ## Implementation Steps
 
 1. **Producer fix (Part A)**: single `DualTime::now()` per flush in the four `dispatch.rs` flush
-   paths; `close_at`/`begin` parameter plumbing in `event/block.rs` (+ the mechanical ripple in
-   `event/stream.rs` and test/bench block constructors); new `rust/tracing` unit test asserting
-   closed `end` == replacement `begin`.
+   paths, taken after the stream mutex is acquired (log/metrics/image — at the current `is_empty()`
+   early-return point) or at function entry (thread path only, which is lock-free); `close_at`/
+   `begin` parameter plumbing in `event/block.rs` (+ the mechanical ripple in `event/stream.rs` and
+   test/bench block constructors); new `rust/tracing` unit test asserting closed `end` == replacement
+   `begin`.
 2. **Migration**: add `upgrade_v7_to_v8` in `rust/analytics/src/lakehouse/migration.rs` (nullable
    `max_sort_key_time TIMESTAMPTZ`, no backfill, comment stating NULL = "not recorded", modeled on
    `upgrade_v6_to_v7`'s column-add); bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
@@ -422,14 +440,16 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    - `doc/how_to_query/README.md`'s `#### list_partitions` Returns table (`:475-486`): add
      `max_sort_key_time`, and, while there, the three columns it's already missing (`num_rows`,
      `partition_format_version`, `sort_order`) — see Documentation.
+   - `mkdocs/docs/admin/functions-reference.md`'s `list_partitions()` Returns table (`:52-67`): add
+     `max_sort_key_time`, and the already-missing `partition_format_version` — see Documentation.
 8. **Unit tests (no DB)**: extend `rust/analytics/tests/thread_spans_ordering_tests.rs`
    (`make_partition` helper at `:36-51`): (a) two partitions whose `[min,max_event_time]` overlap
    but whose `max_sort_key_time` clears the next `min_event_time` → accepted; (b) same shape with
    NULL `max_sort_key_time` → still rejected (legacy fallback preserved); (c) genuine overlap in
    `max_sort_key_time` → rejected. Update the other four test files with `Partition` literals
    (`per_file_scan_ordering_tests.rs`, `blocks_view_merge_ordering_tests.rs`,
-   `sql_batch_view_merge_ordering_tests.rs`, `log_stats_ordering_tests.rs` — one helper each) for
-   the new field. Also add the running-max/`None`-poisoning fold test to
+   `sql_batch_view_merge_ordering_tests.rs`, `log_stats_ordering_tests.rs` — one or two helpers
+   each) for the new field. Also add the running-max/`None`-poisoning fold test to
    `write_partition_tests.rs` (see Testing Strategy) — a no-DB test too, just against
    `write_rows_and_track_times` directly rather than the check.
 9. **DB regression tests** (new `#[ignore]`d `#[tokio::test]`s in
@@ -460,8 +480,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
    and confirm the cross-hour query succeeds; check whether any Python test asserts
    `list_partitions()`'s column list (the new column appears there); confirm
-   `doc/how_to_query/README.md`'s `list_partitions` Returns table (Step 7) matches the Arrow schema
-   column-for-column.
+   `doc/how_to_query/README.md`'s and `mkdocs/docs/admin/functions-reference.md`'s `list_partitions`
+   Returns tables (Step 7) match the Arrow schema column-for-column.
 11. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `python3 build/rust_ci.py`,
     `python3 build/python_ci.py`.
 12. Add `CHANGELOG.md` entries under `## Unreleased`: `**Analytics:**` (schema migration + scan
@@ -469,8 +489,9 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
     producer), following the repo's established convention. Neither `rust/tracing/Cargo.toml` nor
     `rust/analytics/Cargo.toml` sets `publish = false`, so both entries need a **Minor breaking
     change** clause, matching every comparable entry already in the file (e.g. `## Unreleased` line
-    8, v0.29.0 lines 13-20/24/26): the `**Tracing:**` entry must name `TracingBlock::new` and
-    `EventBlock::close` (now `close_at`) and what call sites must change; the `**Analytics:**` entry
+    8, v0.29.0 lines 13-20/24/26): the `**Tracing:**` entry must name `TracingBlock::new` (now takes a `begin: DualTime` parameter)
+    and the new `EventBlock::close_at` sibling to the retained `close()`, and what call sites must
+    change; the `**Analytics:**` entry
     must name `PartitionRowSet` and `Partition` (both all-public-field structs, so downstream struct
     literals break) plus `write_rows_and_track_times`'s widened return type. The `**Analytics:**`
     entry also needs an **Operational note**, following `1429`'s v0.29.0 entry verbatim:
@@ -487,7 +508,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/tracing/src/event/stream.rs` + tracing tests | Mechanical constructor ripple; new boundary-stamp unit test |
 | `rust/analytics/benches/parse_block.rs` | Mechanical `TracingBlock::new`/`EventBlock::close` constructor ripple |
 | `rust/analytics/tests/{span_tests,parse_block_tests,parse_corrupt_block_tests,parse_alloc_test,log_tests,metrics_test,image_tests,jit_process_batch_db_test}.rs` | Mechanical `TracingBlock::new`/`EventBlock::close` constructor ripple |
-| `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs` | Mechanical constructor ripple + `block.close()` → `close_at` update (`:169, :176, :183`) |
+| `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs` | Mechanical `TracingBlock::new`/`EventBlock::new` constructor ripple only — `block.close()` at `:169, :176, :183` is unchanged since `close()` is retained |
 | `rust/analytics/src/lakehouse/migration.rs` | v7→v8: nullable `max_sort_key_time TIMESTAMPTZ`; bump version constant |
 | `rust/analytics/src/lakehouse/partition.rs` | New field + accessor; `validate` invariant |
 | `rust/analytics/src/lakehouse/partition_cache.rs` | Add column to 4 SELECTs / 3 struct builds (`sort_order` read pattern, not `file_path`'s) |
@@ -503,6 +524,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
 | `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Mechanical constructor ripple; two new DB regression tests (hour-seam, forced cut) |
 | `doc/how_to_query/README.md` | Add `max_sort_key_time` (and the already-missing `num_rows`, `partition_format_version`, `sort_order`) to the `list_partitions` Returns table |
+| `mkdocs/docs/admin/functions-reference.md` | Add `max_sort_key_time` (and the already-missing `partition_format_version`) to the `list_partitions()` Returns table |
 | `CHANGELOG.md` | Entry under `## Unreleased` → `**Analytics:**` |
 
 ## Trade-offs
@@ -566,6 +588,12 @@ plan's new `max_sort_key_time` column would make it stale in one more way if lef
 whole table in the same pass: add all four missing rows (`num_rows Int64`, `partition_format_version
 Int32`, `sort_order List<Utf8>`, `max_sort_key_time Timestamp(Nanosecond)`) so the doc matches the
 schema exactly.
+
+`mkdocs/docs/admin/functions-reference.md`'s `list_partitions()` Returns table (`:52-67`) is the
+published docs-site equivalent and has its own copy of the same column list — already missing
+`partition_format_version`, and about to go stale on `max_sort_key_time` too if left alone. Fix it
+in the same pass: add `partition_format_version` (`Int32`) and `max_sort_key_time`
+(`Timestamp(Nanosecond)`) so it matches the schema exactly, same as the `doc/how_to_query` table.
 
 ## Testing Strategy
 
