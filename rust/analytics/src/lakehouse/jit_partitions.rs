@@ -801,15 +801,23 @@ pub async fn generate_stream_jit_partitions(
 
     let stream_id = stream.stream_id;
     let identity_predicate = format!("stream_id = '{stream_id}'");
-    let bucket_counts = fetch_bucket_counts(
-        lakehouse.clone(),
-        blocks_view,
-        &source_partitions,
-        insert_time_range,
-        config.max_insert_time_slice,
-        &identity_predicate,
-    )
-    .await?;
+    // A single-bucket insert_time_range can only ever produce one batch window (see
+    // `batch_windows`'s doc comment), regardless of bucket_counts, so skip the COUNT(*) round
+    // trip entirely in that case.
+    let bucket_counts =
+        if insert_time_range.end - insert_time_range.begin <= config.max_insert_time_slice {
+            vec![]
+        } else {
+            fetch_bucket_counts(
+                lakehouse.clone(),
+                blocks_view,
+                &source_partitions,
+                insert_time_range,
+                config.max_insert_time_slice,
+                &identity_predicate,
+            )
+            .await?
+        };
 
     let windows: Vec<TimeRange> = batch_windows(
         insert_time_range,
@@ -975,15 +983,23 @@ pub async fn generate_process_jit_partitions(
 
     let identity_predicate =
         format!(r#"process_id = '{process_id}' AND array_has( "streams.tags", '{stream_tag}' )"#);
-    let bucket_counts = fetch_bucket_counts(
-        lakehouse.clone(),
-        blocks_view,
-        &source_partitions,
-        insert_time_range,
-        config.max_insert_time_slice,
-        &identity_predicate,
-    )
-    .await?;
+    // A single-bucket insert_time_range can only ever produce one batch window (see
+    // `batch_windows`'s doc comment), regardless of bucket_counts, so skip the COUNT(*) round
+    // trip entirely in that case.
+    let bucket_counts =
+        if insert_time_range.end - insert_time_range.begin <= config.max_insert_time_slice {
+            vec![]
+        } else {
+            fetch_bucket_counts(
+                lakehouse.clone(),
+                blocks_view,
+                &source_partitions,
+                insert_time_range,
+                config.max_insert_time_slice,
+                &identity_predicate,
+            )
+            .await?
+        };
 
     let stream_metadata = fetch_stream_metadata_map(
         lakehouse.clone(),
