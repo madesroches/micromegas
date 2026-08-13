@@ -1,5 +1,7 @@
 # Faster JIT Partition Generation: Adaptive Batched Block Queries + Streaming Specs
 
+Issue: [#1474](https://github.com/madesroches/micromegas/issues/1474)
+
 ## Overview
 
 The driving workload is **sparse view instances queried over long ranges** — for example OTLP
@@ -430,8 +432,6 @@ partitions have `sort_order` NULL and never certify, and one uncertified file di
 declaration for the whole scan (`SELECT count(*) FROM list_partitions() WHERE view_set_name =
 'blocks' AND sort_order IS NULL AND file_size > 0`). Low marginal value once query count scales with
 data volume.
-
-**Open an issue** for traceability before implementation (repo convention links plans to issues).
 
 ## Testing Strategy
 
