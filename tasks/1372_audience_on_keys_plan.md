@@ -42,9 +42,18 @@ literal reading of #1372, and it is deliberate:
 - **#1372 is the first stage that makes an audience value durable.** It lands in a `NOT NULL` column
   that is immutable by design, and #1373 stamps it onto processes days later. Persisting values in a
   vocabulary we intend to abandon means a data migration instead of a config edit.
-- **The change is inert.** `OwnershipRewrite` filters on whatever `ReadPolicy::resolve` returns and
-  never inspects an audience's shape; no knob that activates AbAC is set in any deployment
-  (activation is Stage 7). Nothing observable changes for anyone running today's builds.
+- **Enforcement itself is unaffected, but the shipped escape hatch breaks.** `OwnershipRewrite`
+  filters on whatever `ReadPolicy::resolve` returns and never inspects an audience's shape, so that
+  part is genuinely inert; no knob that activates AbAC is set in any deployment (activation is Stage
+  7). But Stage 2 ships an escape-hatch pair — `MICROMEGAS_IMPLICIT_GROUPS=everyone` plus
+  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` — that every auth-enabled deployment is documented
+  to set to avoid zero visible rows (`CHANGELOG.md`, `tasks/completed/1370_ownership_rewrite_plan.md`).
+  This plan deletes `MICROMEGAS_IMPLICIT_GROUPS` outright, and the relaxed `[A-Za-z0-9_-]` validator
+  makes the surviving `group:everyone` value hard-fail startup (`OwnershipRewriteConfig::from_env` is
+  invoked with `?` in both `flight_sql_server.rs` and `monolith/src/main.rs`). So this is an
+  operator-facing break, not a no-op: every deployment relying on that pair must re-set
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` to an opaque name (e.g. `public`) in the same deploy that picks up
+  this change, which is exactly what the upgrade note and CHANGELOG entry below call out.
 - The cost is roughly 150 lines of policy code plus its tests, and a `group:everyone`/prefix sweep
   through docs and comments.
 
@@ -427,11 +436,19 @@ supply an audience").
   - `--audience AUD`, valid only with `--table ingestion` (`parser.error` otherwise —
     `analytics_api_keys` has no such column).
   - Per-key choice: a keyring entry may carry an optional `"audience"` field, which wins over
-    `--audience`. `read_keyring` returns `(name, key, audience)` triples; a non-string `audience` is
-    a `parser.error` like the other field validations. The new triple arity ripples through every
-    other function that destructures `read_keyring`'s output: `select_entries` (`--only`/`--exclude`
-    filtering), `import_one` (passes `audience` through to
-    `WebClient.import_ingestion_api_key(name, key, audience)`), and `run_import`'s per-key loop.
+    `--audience`. `read_keyring` returns `(name, key, audience)` triples unconditionally — the field
+    is read regardless of `--table` — and a non-string `audience` is a `parser.error` like the other
+    field validations. The new triple arity ripples through every other function that destructures
+    `read_keyring`'s output: `select_entries` (`--only`/`--exclude` filtering), `import_one`, and
+    `run_import`'s per-key loop.
+  - **A per-entry `"audience"` combined with `--table analytics` is a `parser.error`, same as the
+    `--audience` flag form** — one entry-level check in `run_import`'s per-key loop, right after
+    `read_keyring`, so a keyring built for ingestion isn't silently reused against the analytics
+    table with its audience dropped. `import_one` reflects this split: it passes `audience` to
+    `WebClient.import_ingestion_api_key(name, key, audience)` only on the ingestion branch, and calls
+    `import_analytics_api_key(name, key)` (no `audience` parameter) on the analytics branch, since
+    that call is only ever reached once the per-entry check above has already rejected a non-`None`
+    audience for that table.
   - Neither given ⇒ the field is omitted and the server applies `public` — the zero-decision path.
   - `run_import`'s per-key line gains the audience the server reports.
 
@@ -511,11 +528,12 @@ ingestion request: Bearer <key> ────────────────
 | `analytics-web-app/src/lib/{api-keys-shared,ingestion-api-keys-api}.ts` | types + `mint(name, audience?)` |
 | `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | `showAudience` column + input |
 | `analytics-web-app/src/routes/IngestionApiKeysPage.tsx` | `showAudience: true` |
-| `rust/auth/tests/{policy,db_api_key}_tests.rs`, `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `rust/analytics/tests/*ownership_rewrite*`, `analytics-web-app/src/**/__tests__/*`, `python/**/tests` | per Testing Strategy |
+| `rust/auth/tests/{policy,db_api_key}_tests.rs`, `rust/analytics-web-srv/tests/{ingestion_keys,routing}_tests.rs`, `rust/analytics/tests/*ownership_rewrite*`, `analytics-web-app/src/**/__tests__/*`, `python/**/tests` | per Testing Strategy; `routing_tests.rs:405`'s `IngestionKeysState { pool: None }` literal needs the new `default_audience` field |
 | `rust/public/tests/read_policy_threading_tests.rs` | update `AudienceReadPolicy::from_env("MICROMEGAS_1369_THREADING_TESTS_UNSET")` call/assertions for the grant-map constructor |
 | `rust/ingestion/tests/sql_migration_test.rs` (new) | live-DB, `#[ignore]`d migration v6 coverage — see Testing Strategy |
 | `mkdocs/docs/admin/{api-keys,authentication}.md` | audiences + grants + DDL + CLI |
-| `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` rows, restate `UNSTAMPED_AUDIENCE`'s format as an opaque label (not `user:<id>`/`group:<id>`), add `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE` rows, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset |
+| `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` rows, restate `UNSTAMPED_AUDIENCE`'s format as an opaque label (not `user:<id>`/`group:<id>`), add a `{prefix}_AUDIENCE_GRANTS` row, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset; `monolith.md` additionally gets the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row (its `web` role reads the knob) — `flight-sql.md` does not, since `flight-sql-srv` never reads it |
+| `mkdocs/docs/admin/web-app.md` | add the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row to the Environment Variables → Optional table (`:55-61`) — this is the service that actually resolves the knob for `IngestionKeysState` |
 | `CHANGELOG.md` | new Unreleased entry; amend the Unreleased Stage 2 (#1370) entry only — the Stage 1 (#1369) entry is in the released `v0.29.0` section and stays untouched |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | model change recorded; Stage 4 landed |
 
@@ -568,7 +586,13 @@ ingestion request: Bearer <key> ────────────────
   edit. The grant recipe (`:304-318`) needs no change.
 - **Migration ordering**, same page: `analytics-web-srv` writes these rows but never runs the
   telemetry-DB migration — mint/import return 500 until ingestion or the monolith has taken the
-  schema to v6. Same wording as the v5 note in `default_provider.rs:169-174`.
+  schema to v6. Same wording as the v5 note in `default_provider.rs:169-174`. This also corrects two
+  existing pages that currently pin **v5** as the precondition for these same routes and go stale
+  once the `NOT NULL` `audience` column lands: `mkdocs/docs/admin/monolith.md:42` ("a `--roles
+  web`-only monolith never runs the v5 migration itself…") and `mkdocs/docs/admin/web-app.md:59`
+  ("point at a telemetry DB where the v5 migration has already run") both need "v5" restated as
+  "v6" — a v5-only schema now makes mint/import fail with a 500 on the missing column, not just a
+  missing table.
 - **New page or section: audiences and grants** — the model (label vs. grant), the
   `{prefix}_AUDIENCE_GRANTS` shape and its unprefixed fallback, the two built-in rules, worked open
   and privacy profiles, and
@@ -580,10 +604,16 @@ ingestion request: Bearer <key> ────────────────
   this plan deletes and a value format the new validator rejects, so both need the same sweep:
   drop the `MICROMEGAS_IMPLICIT_GROUPS` / `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` env-table rows;
   restate `MICROMEGAS_UNSTAMPED_AUDIENCE` / `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE`'s description
-  as an opaque audience name rather than `user:<id>`/`group:<id>`; add rows for
-  `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; and add an upgrade note that a
-  previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup (`:` is
-  outside `[A-Za-z0-9_-]`).
+  as an opaque audience name rather than `user:<id>`/`group:<id>`; add a `{prefix}_AUDIENCE_GRANTS`
+  row; and add an upgrade note that a previously-recommended
+  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup (`:` is outside
+  `[A-Za-z0-9_-]`). `MICROMEGAS_DEFAULT_KEY_AUDIENCE` is **not** added to `flight-sql.md`:
+  `flight-sql-srv` builds with `ProviderBuilder::new("")` + `ApiKeyTable::Analytics`
+  (`flight_sql_server.rs:279-280`) and hosts no mint/import route, so it never reads the knob.
+  `monolith.md` does gain the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row, since its `web` role does.
+- `mkdocs/docs/admin/web-app.md` — the knob is read only by `analytics-web-srv`, which this page
+  documents; add a `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row to its Environment Variables → Optional
+  table (`:55-61`), alongside `MICROMEGAS_SQL_CONNECTION_STRING`.
 - `CHANGELOG.md` under Unreleased — schema v6; the audience-model change **including amending the
   Unreleased Stage 2 (#1370) entry**, which currently documents `MICROMEGAS_IMPLICIT_GROUPS=everyone`
   as part of the escape-hatch pair (that entry hasn't shipped in any release, so it is safe to edit in
@@ -652,7 +682,9 @@ than staying NULL"), and a hand-written `INSERT` of `''` is rejected by the `CHE
 latter would have been rejected before) and produce the same coalesce predicate.
 
 **Python** — `read_keyring` triples with and without a per-entry audience; the `--audience` +
-`--table analytics` guard; per-entry precedence over `--audience`.
+`--table analytics` guard; the per-entry `"audience"` + `--table analytics` guard (same rejection,
+entry-level); per-entry precedence over `--audience`; `import_one` calls
+`import_analytics_api_key(name, key)` with no `audience` argument on the analytics branch.
 
 **Web app** — `mint` omits `audience` when unset and includes it when set; the Audience column
 renders on the ingestion page and the analytics page does not regress.
