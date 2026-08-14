@@ -414,36 +414,49 @@ async fn real_view_factory_covers_every_registered_view_set() {
     // branch table against `default_view_factory()` -- the real, production view-set inventory.
     // A future view set registered there with no matching branch in `ownership_rewrite.rs` would
     // compile and pass CI cleanly today, then fail every restricted-caller query in production
-    // with the §7 fallback `DataFusionError::Plan`. This test iterates every global view and
-    // view-set entry `default_view_factory` actually registers -- through both the global and
-    // `view_instance(...)` access paths, where a given view set offers both -- and asserts each
-    // one plans successfully with an injected audience filter, not an error and not an unfiltered
-    // scan. (Every branch's injected `InSubquery`/`Exists` gets turned into a `LeftSemi Join` by
-    // `DecorrelatePredicateSubquery`, per the per-branch tests above, so a single shared
-    // assertion suffices here.)
+    // with the §7 fallback `DataFusionError::Plan`. This test *enumerates* `default_view_factory`'s
+    // actual registrations via the public `get_global_views()`/`get_view_sets()` accessors --
+    // rather than hardcoding a parallel list that could silently drift out of sync -- through both
+    // the global and `view_instance(...)` access paths, where a given view set offers both -- and
+    // asserts each one plans successfully with an injected audience filter, not an error and not
+    // an unfiltered scan. (Every branch's injected `InSubquery`/`Exists` gets turned into a
+    // `LeftSemi Join` by `DecorrelatePredicateSubquery`, per the per-branch tests above, so a
+    // single shared assertion suffices here.) A view set added tomorrow with no branch in
+    // `OwnershipRewrite::predicate_for` will now automatically show up here and fail via the §7
+    // fallback, instead of staying green because a hand-maintained list never mentioned it.
+    //
     // A syntactically valid UUID literal is enough for a plan-shape-only test -- no data is
     // scanned (same rationale as the §5/§6 tests above).
     let process_id = "00000000-0000-0000-0000-000000000003";
     let stream_id = "00000000-0000-0000-0000-000000000004";
-    let queries: Vec<String> = vec![
-        // Global instances (§3/§4), implicitly available with no view_instance(...) call.
-        "SELECT * FROM log_entries".to_string(),
-        "SELECT * FROM measures".to_string(),
-        "SELECT * FROM log_stats".to_string(),
-        "SELECT * FROM processes".to_string(),
-        "SELECT * FROM streams".to_string(),
-        "SELECT * FROM blocks".to_string(),
-        // log_entries/measures are also registered as view sets -- reachable per-process too.
-        format!("SELECT * FROM view_instance('log_entries', '{process_id}')"),
-        format!("SELECT * FROM view_instance('measures', '{process_id}')"),
-        // view_instance(...)-only view sets (§4, no global instance).
-        format!("SELECT * FROM view_instance('images', '{process_id}')"),
-        format!("SELECT * FROM view_instance('net_spans', '{process_id}')"),
-        format!("SELECT * FROM view_instance('otel_spans', '{process_id}')"),
-        // view_instance(...)-only view sets with no process_id/stream_id column (§5/§6).
-        format!("SELECT * FROM view_instance('async_events', '{process_id}')"),
-        format!("SELECT * FROM view_instance('thread_spans', '{stream_id}')"),
-    ];
+
+    let lakehouse = make_offline_lakehouse_context().await;
+    let inventory_view_factory = Arc::new(
+        default_view_factory(lakehouse.runtime().clone(), lakehouse.lake().clone())
+            .await
+            .expect("default_view_factory"),
+    );
+
+    // Global instances (§3/§4), implicitly available with no view_instance(...) call.
+    let mut queries: Vec<String> = inventory_view_factory
+        .get_global_views()
+        .iter()
+        .map(|view| format!("SELECT * FROM {}", view.get_view_set_name()))
+        .collect();
+    // view_instance(...)-reachable view sets, keyed on either process_id or stream_id. Only
+    // `thread_spans` is stream-scoped (§6); every other view set here is process-scoped (§3-§5),
+    // matching the distinction the per-branch tests above already draw.
+    for view_set_name in inventory_view_factory.get_view_sets().keys() {
+        let instance_id = if view_set_name.as_str() == "thread_spans" {
+            stream_id
+        } else {
+            process_id
+        };
+        queries.push(format!(
+            "SELECT * FROM view_instance('{view_set_name}', '{instance_id}')"
+        ));
+    }
+
     for sql in &queries {
         let config = OwnershipRewriteConfig::default();
         let plan = optimized_plan_against_real_view_factory(scope(&["user:a"]), config, sql)
