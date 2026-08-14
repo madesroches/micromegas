@@ -35,7 +35,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
-const SCHEMA_VERSION: u8 = 2;
+const SCHEMA_VERSION: u8 = 3;
 lazy_static::lazy_static! {
     static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
@@ -218,9 +218,24 @@ async fn write_partition(
         ensure_begin_non_decreasing(&stream_id, &rows)
             .with_context(|| "ensure_begin_non_decreasing")?;
         info!("writing {} rows", rows.num_rows());
+        // The true max `begin` is simply the last row's value: rows are verified
+        // non-decreasing on `begin` above, and one SpanRecordBuilder accumulates every chain
+        // into exactly one RecordBatch (see SpanRecordBuilder::finish), so "the last row" is the
+        // partition-global max with no per-chain scoping hole. Zero rows is reachable in
+        // practice (e.g. every event filtered out by the chain range, or a block carrying only
+        // async events), not just theoretically -- guard it rather than indexing an empty column.
+        let max_sort_key_time = if rows.num_rows() == 0 {
+            None
+        } else {
+            let begins: &TimestampNanosecondArray = typed_column_by_name(&rows, "begin")?;
+            Some(DateTime::from_timestamp_nanos(
+                begins.value(begins.len() - 1),
+            ))
+        };
         Ok(PartitionRowSet {
             rows_time_range: TimeRange::new(min_time_row, max_time_row),
             rows,
+            max_sort_key_time,
         })
     }
     .await;

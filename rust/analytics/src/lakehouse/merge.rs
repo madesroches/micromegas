@@ -407,7 +407,7 @@ pub async fn create_merged_partition(
             let event_time_range = compute_time_bounds
                 .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
                 .await?;
-            tx.send(Ok(PartitionRowSet::new(event_time_range, rb)))
+            tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None)))
                 .await
                 .with_context(|| "sending partition row set")?;
         }

@@ -558,16 +558,18 @@ impl Dispatch {
         let stream_id = image_stream.stream_id();
         let next_offset = image_stream.get_block_ref().object_offset()
             + image_stream.get_block_ref().nb_objects();
-        let mut old_event_block = image_stream.replace_block(Arc::new(ImageBlock::new(
+        let new_block = Arc::new(ImageBlock::new(
             IMAGE_BUFFER_SIZE,
             self.process_id,
             stream_id,
             next_offset,
-        )));
+        ));
+        let begin = new_block.begin;
+        let mut old_event_block = image_stream.replace_block(new_block);
         assert!(!image_stream.is_full());
         Arc::get_mut(&mut old_event_block)
             .expect("image block exclusive ref")
-            .close();
+            .close_at(begin);
         drop(image_stream);
         self.get_sink().on_process_image_block(old_event_block);
     }
@@ -700,14 +702,16 @@ impl Dispatch {
         let stream_id = metrics_stream.stream_id();
         let next_offset = metrics_stream.get_block_ref().object_offset()
             + metrics_stream.get_block_ref().nb_objects();
-        let mut old_event_block = metrics_stream.replace_block(Arc::new(MetricsBlock::new(
+        let new_block = Arc::new(MetricsBlock::new(
             self.metrics_buffer_size,
             self.process_id,
             stream_id,
             next_offset,
-        )));
+        ));
+        let begin = new_block.begin;
+        let mut old_event_block = metrics_stream.replace_block(new_block);
         assert!(!metrics_stream.is_full());
-        Arc::get_mut(&mut old_event_block).unwrap().close();
+        Arc::get_mut(&mut old_event_block).unwrap().close_at(begin);
         self.get_sink().on_process_metrics_block(old_event_block);
     }
 
@@ -805,14 +809,16 @@ impl Dispatch {
         let stream_id = log_stream.stream_id();
         let next_offset =
             log_stream.get_block_ref().object_offset() + log_stream.get_block_ref().nb_objects();
-        let mut old_event_block = log_stream.replace_block(Arc::new(LogBlock::new(
+        let new_block = Arc::new(LogBlock::new(
             self.logs_buffer_size,
             self.process_id,
             stream_id,
             next_offset,
-        )));
+        ));
+        let begin = new_block.begin;
+        let mut old_event_block = log_stream.replace_block(new_block);
         assert!(!log_stream.is_full());
-        Arc::get_mut(&mut old_event_block).unwrap().close();
+        Arc::get_mut(&mut old_event_block).unwrap().close_at(begin);
         self.get_sink().on_process_log_block(old_event_block);
     }
 
@@ -823,14 +829,16 @@ impl Dispatch {
         }
         let next_offset =
             stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
-        let mut old_block = stream.replace_block(Arc::new(ThreadBlock::new(
+        let new_block = Arc::new(ThreadBlock::new(
             self.threads_buffer_size,
             self.process_id,
             stream.stream_id(),
             next_offset,
-        )));
+        ));
+        let begin = new_block.begin;
+        let mut old_block = stream.replace_block(new_block);
         assert!(!stream.is_full());
-        Arc::get_mut(&mut old_block).unwrap().close();
+        Arc::get_mut(&mut old_block).unwrap().close_at(begin);
         self.get_sink().on_process_thread_block(old_block);
     }
 }

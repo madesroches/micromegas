@@ -73,6 +73,7 @@ fn make_certifying_partition(file_path: &str, index: i64) -> Partition {
             "level".to_owned(),
             "target".to_owned(),
         ]),
+        max_sort_key_time: None,
     }
 }
 

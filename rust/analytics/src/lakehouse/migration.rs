@@ -5,7 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 7;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 8;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -98,6 +98,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v7");
         let mut tr = pool.begin().await?;
         upgrade_v6_to_v7(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 7 == current_version {
+        info!("upgrade lakehouse schema to v8");
+        let mut tr = pool.begin().await?;
+        upgrade_v7_to_v8(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -513,5 +520,20 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("UPDATE lakehouse_migration SET version=7;")
         .await
         .with_context(|| "Updating lakehouse schema version to 7")?;
+    Ok(())
+}
+
+async fn upgrade_v7_to_v8(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Nullable, no backfill: NULL means "not recorded" -- either the partition was written
+    // before this column existed, or its view never declares a `Concatenated` event-time
+    // ordering (see tasks/completed/thread_spans_segment_boundary_overlap_plan.md, Part B §1). This is
+    // the same nullable/no-backfill shape as upgrade_v6_to_v7's sort_order column; unlike that
+    // migration, this one adds no constraint.
+    tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN max_sort_key_time TIMESTAMPTZ;")
+        .await
+        .with_context(|| "adding max_sort_key_time column to lakehouse_partitions")?;
+    tr.execute("UPDATE lakehouse_migration SET version=8;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 8")?;
     Ok(())
 }

@@ -14,7 +14,8 @@ use micromegas_analytics::dfext::typed_column::{
 use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, JitPartitionConfig, generate_stream_jit_partitions_segment,
+    BlockOrder, JitPartitionConfig, generate_stream_jit_partitions,
+    generate_stream_jit_partitions_segment,
 };
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
@@ -236,24 +237,16 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // Block 1: earlier in real (event) time.
     push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a").await?;
 
-    // `replace_block` captures the *new* (next) block's begin timestamp before the *old* block's
-    // `.close()` runs (same order as `dispatch.rs::flush_thread_buffer`), so the block installed
-    // immediately after block 1 begins microseconds *before* block 1's own end is recorded -- a
-    // hairline overlap that (with tsc_frequency == 0 in this environment, forcing estimated tick
-    // conversion) is enough to trip the §3 non-overlap guard on two otherwise-correctly-ordered
-    // blocks. Sleep, then discard one throwaway "spacer" block so the block that actually holds
-    // block 2's spans gets a begin timestamp captured well after block 1's end, giving a real gap.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let spacer_offset =
-        stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
-    let _spacer = stream.replace_block(Arc::new(ThreadBlock::new(
-        1024,
-        stream.process_id(),
-        stream.stream_id(),
-        spacer_offset,
-    )));
-
-    // Block 2: later in real (event) time.
+    // Block 2: later in real (event) time. No manufactured gap here -- `replace_block` (called
+    // inside `push_and_insert_block`) captures the *new* (next) block's begin timestamp before
+    // the *old* block's `.close()` runs, exactly the legacy overlap this plan's Part A fixes for
+    // the production `dispatch.rs` flush paths (though not for this test's own direct
+    // `ThreadStream`/`replace_block` usage, which deliberately keeps exercising the legacy
+    // strictly-overlapping shape -- see the module doc). An earlier version of this test slept
+    // 200ms and discarded a throwaway "spacer" block here to manufacture a real gap between block
+    // 1's end and block 2's begin; deleting that workaround is this test's regression signal for
+    // Part B's `max_sort_key_time`, which is what makes a real block-boundary overlap safe for the
+    // `Concatenated` scan check without needing the gap at all.
     push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b").await?;
 
     // Force the two blocks into different 1-hour JIT insert-time segments -- rather than waiting
@@ -264,10 +257,11 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // `begin_time`/`end_time` (not just `insert_time`) must move back together: `BlocksView`'s
     // own event-time bounds are `[min(begin_time), max(insert_time)]` (a documented rough edge --
     // see `blocks_view.rs`'s "todo: make more robust" note), so shifting `insert_time` alone would
-    // invert that range and make the partition match no query. `begin_ticks`/`end_ticks` are left
-    // untouched: those (not `begin_time`/`end_time`) are what `ThreadSpansView` converts into the
-    // actual exported span `begin`/`end` values, and this test wants those to stay "now" so the
-    // final query -- and its own non-decreasing-`begin` assertion -- can use a narrow time window.
+    // invert that range and make the partition match no query. Block 1's `begin_ticks`/`end_ticks`
+    // are left untouched: those (not `begin_time`/`end_time`) are what `ThreadSpansView` converts
+    // into the actual exported span `begin`/`end` values, and this test wants those to stay "now"
+    // so the final query -- and its own non-decreasing-`begin` assertion -- can use a narrow time
+    // window.
     sqlx::query(
         "UPDATE blocks SET insert_time = insert_time - INTERVAL '2 hours', \
                             begin_time = begin_time - INTERVAL '2 hours', \
@@ -278,6 +272,51 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     .execute(&lake.db_pool)
     .await
     .with_context(|| "pushing block 1's insert_time/begin_time/end_time back")?;
+
+    // Make the *legacy* (`max_event_time`-only) comparison's overlap deterministic rather than
+    // inheriting the buffer-swap's hairline (and possibly microsecond-truncated) width, so that a
+    // future revert of Part B's fix is guaranteed to be caught by this test rather than passing by
+    // accident. Widen block 1's `end_ticks` forward by a few milliseconds' worth of ticks, computed
+    // from this process's own observed tick rate (real tsc frequency if available, otherwise the
+    // same wall-clock-elapsed estimate `make_time_converter_from_latest_timing` falls back to).
+    //
+    // This targets `end_ticks`, not `begin_ticks`, and block 1, not block 2 -- unlike the
+    // wholesale tick-fabrication pattern the module doc warns against, but also deliberately unlike
+    // widening block 2's `begin_ticks` backward, which looks equally plausible but is unsound here:
+    // block 2's `begin_ticks` and block 1's row's own `begin` (`max_sort_key_time`, read from the
+    // real, un-fabricated event payload) are both stamped from the *same* real-time neighborhood
+    // (block 2's replacement is created immediately after span_a's events are pushed, before block
+    // 1 is closed), so pushing block 2's `begin_ticks` back by milliseconds risks dragging it below
+    // `max_sort_key_time`, breaking the very check this test means to exercise. Block 1's
+    // `end_ticks`, by contrast, feeds only the legacy `max_event_time` bound -- `max_sort_key_time`
+    // is computed from the row data alone and never reads it -- so widening it forward is inert to
+    // the fixed check and free to be as large as needed to make the legacy comparison's failure
+    // reliable. It is safe by the same two properties the module doc calls out for the
+    // begin_ticks-lowering pattern: no real event is filtered out (growing `end_range_ns` only
+    // widens the chain's `[begin_range_ns, end_range_ns]` window), and the block cannot invert
+    // (`end_ticks` only increases here, and it already exceeds `begin_ticks`).
+    let now_ticks = now();
+    let now_time = Utc::now();
+    let elapsed_ticks = now_ticks - process_info.start_ticks;
+    let elapsed_ns = (now_time - process_info.start_time)
+        .num_nanoseconds()
+        .filter(|&ns| ns > 0)
+        .with_context(|| "process elapsed wall time must be positive")?;
+    #[allow(clippy::cast_precision_loss)]
+    let delta_ticks = ((elapsed_ticks as f64) * (5_000_000.0 / elapsed_ns as f64)).round() as i64;
+    anyhow::ensure!(
+        delta_ticks > 0,
+        "computed a non-positive tick delta ({delta_ticks}); the block-boundary overlap would not \
+         be widened"
+    );
+    sqlx::query(
+        "UPDATE blocks SET end_ticks = end_ticks + $1 WHERE stream_id = $2 AND object_offset = 0;",
+    )
+    .bind(delta_ticks)
+    .bind(stream_id)
+    .execute(&lake.db_pool)
+    .await
+    .with_context(|| "widening block 1's end_ticks to make the legacy overlap deterministic")?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
@@ -366,6 +405,34 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     assert!(
         partition_count >= 2,
         "expected the two blocks (2h apart in insert_time) to materialize into >= 2 partitions, got {partition_count}"
+    );
+
+    // The regression assertion this test exists to prove: every partition the query scanned
+    // actually persisted a non-NULL `max_sort_key_time` -- the only thing that makes the
+    // block-boundary overlap harmless to the `Concatenated` non-overlap check without the
+    // sleep/spacer workaround this test used to need. This is what proves `update_partition`
+    // actually persists the new column and that the write path populated it, not just that the
+    // scan happened to succeed.
+    let null_sort_key_time_answer = query(
+        lakehouse.clone(),
+        part_provider.clone(),
+        None,
+        &format!(
+            "SELECT count(*) as c FROM list_partitions() \
+             WHERE view_set_name = 'thread_spans' AND view_instance_id = '{stream_id_str}' \
+             AND max_sort_key_time IS NULL;"
+        ),
+        view_factory.clone(),
+        Arc::new(NoOpSessionConfigurator),
+        CallerContext::internal(),
+    )
+    .await?;
+    let null_sort_key_time_count = get_single_row_primitive_value_by_name::<
+        datafusion::arrow::datatypes::Int64Type,
+    >(&null_sort_key_time_answer.record_batches, "c")?;
+    assert_eq!(
+        null_sort_key_time_count, 0,
+        "every thread_spans partition written by this test must carry a non-NULL max_sort_key_time"
     );
 
     // Plan-shape check against the real, multi-partition, DB-backed scan: the production query
@@ -814,6 +881,7 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1027,6 +1095,7 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1242,6 +1311,7 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
         max_nb_objects: 4,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -1509,6 +1579,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
         max_nb_objects: 4,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
 
     // Run 1: only blocks 0-3 exist yet.
@@ -1765,6 +1836,7 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
 
     // Run 1: only block 0 exists yet -- a single-block, degenerate [t0, t0] partition.
@@ -2032,6 +2104,7 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         max_nb_objects: 1000,
         max_insert_time_slice: TimeDelta::hours(1),
         block_order: BlockOrder::EventTime,
+        target_rows_per_query: 250_000,
     };
     let segment_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -2096,6 +2169,193 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         let e: DateTime<Utc> = row.try_get("end_insert_time")?;
         assert_eq!(b, t0, "every sibling should start at t0");
         assert_eq!(e, t0, "every sibling should be degenerate at t0");
+    }
+
+    Ok(())
+}
+
+/// Batched stream path equivalence (jit_batched_block_queries_plan.md, Testing Strategy): the
+/// outer `generate_stream_jit_partitions` batches its block queries and then splits each batch
+/// back into per-bucket runs (`BlockOrder::EventTime` uses this path for `net_spans` too, so this
+/// is the riskiest new logic under that ordering). With `target_rows_per_query` lowered to force
+/// more than one batch over a 4-bucket range (one block per bucket, so a batch of 2 covers 2
+/// buckets), asserts the emitted specs are identical -- same block ids, in the same order, same
+/// `block_ids_hash` -- to running `generate_stream_jit_partitions_segment` once per bucket
+/// directly.
+#[ignore]
+#[tokio::test]
+async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
+    ensure_telemetry_guard();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, None, HashMap::new());
+    let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    ingestion
+        .insert_process(process_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let stream_info = make_stream_info(&stream);
+    let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
+    ingestion
+        .insert_stream(stream_body)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
+
+    // One block per hour bucket, 4 buckets, well in the past so this run's data cannot collide
+    // with another concurrently-running test's (each test uses its own random process/stream id
+    // regardless, but a round hour boundary keeps the math simple).
+    let base_hour = (Utc::now() - TimeDelta::hours(10)).duration_trunc(TimeDelta::hours(1))?;
+    for name in ["span_0", "span_1", "span_2", "span_3"] {
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+    }
+    for (i, (object_offset, begin_ticks, end_ticks)) in [
+        (0i64, 0i64, 1000i64),
+        (2, 1000, 2000),
+        (4, 2000, 3000),
+        (6, 3000, 4000),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bucket_time = base_hour + TimeDelta::hours(i as i64) + TimeDelta::minutes(30);
+        sqlx::query(
+            "UPDATE blocks SET begin_ticks = $1, end_ticks = $2, insert_time = $3, \
+                                begin_time = $3, end_time = $3 \
+             WHERE stream_id = $4 AND object_offset = $5",
+        )
+        .bind(begin_ticks)
+        .bind(end_ticks)
+        .bind(bucket_time)
+        .bind(stream_id)
+        .bind(object_offset)
+        .execute(&lake.db_pool)
+        .await
+        .with_context(|| format!("overriding block at object_offset {object_offset}"))?;
+    }
+
+    let lake = Arc::new(lake);
+    let runtime = Arc::new(make_runtime_env()?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+
+    let materialize_range = TimeRange::new(base_hour, base_hour + TimeDelta::hours(4));
+    let blocks_view = Arc::new(BlocksView::new()?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        blocks_view.clone(),
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let blocks_only_factory = Arc::new(ViewFactory::new(vec![blocks_view.clone()]));
+    let processes_view = Arc::new(
+        make_processes_view(runtime.clone(), lake.clone(), blocks_only_factory.clone()).await?,
+    );
+    regenerate_global_view(
+        lakehouse.clone(),
+        processes_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+    let streams_view =
+        Arc::new(make_streams_view(runtime.clone(), lake.clone(), blocks_only_factory).await?);
+    regenerate_global_view(
+        lakehouse.clone(),
+        streams_view,
+        materialize_range,
+        null_response_writer.clone(),
+    )
+    .await?;
+
+    let full_range = TimeRange::new(
+        base_hour - TimeDelta::seconds(10),
+        base_hour + TimeDelta::hours(4) + TimeDelta::seconds(10),
+    );
+
+    let stream_meta = Arc::new(
+        find_stream_from_view(lakehouse.clone(), view_factory.clone(), &stream_id, None).await?,
+    );
+    let (process_meta, _last_block_end_ticks, _last_block_end_time) =
+        find_process_with_latest_timing(lakehouse.clone(), view_factory.clone(), &process_id, None)
+            .await?;
+    let process_meta = Arc::new(process_meta);
+
+    // Force more than one batch (one block/bucket, target_rows_per_query=2 packs pairs of
+    // adjacent buckets into one batch) while never forcing a cut *within* a bucket
+    // (max_nb_objects large).
+    let config = JitPartitionConfig {
+        max_nb_objects: 1000,
+        max_insert_time_slice: TimeDelta::hours(1),
+        block_order: BlockOrder::EventTime,
+        target_rows_per_query: 2,
+    };
+
+    let batched_specs = generate_stream_jit_partitions(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &full_range,
+        stream_meta.clone(),
+        process_meta.clone(),
+    )
+    .await
+    .with_context(|| "generate_stream_jit_partitions")?;
+
+    // Expected: run the per-segment function once per hour bucket directly, and concatenate.
+    let segment_source_partitions = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        TimeRange::new(base_hour, base_hour + TimeDelta::hours(4)),
+    )
+    .await?;
+    let mut expected_specs = vec![];
+    for i in 0..4i64 {
+        let bucket_range = TimeRange::new(
+            base_hour + TimeDelta::hours(i),
+            base_hour + TimeDelta::hours(i + 1),
+        );
+        let mut segment_specs = generate_stream_jit_partitions_segment(
+            &config,
+            lakehouse.clone(),
+            &blocks_view,
+            &segment_source_partitions,
+            &bucket_range,
+            stream_meta.clone(),
+            process_meta.clone(),
+        )
+        .await
+        .with_context(|| format!("generate_stream_jit_partitions_segment bucket {i}"))?;
+        expected_specs.append(&mut segment_specs);
+    }
+
+    assert_eq!(
+        batched_specs.len(),
+        expected_specs.len(),
+        "batched and per-segment generation must emit the same number of specs"
+    );
+    for (batched, expected) in batched_specs.iter().zip(expected_specs.iter()) {
+        assert_eq!(
+            batched.block_ids_hash, expected.block_ids_hash,
+            "block_ids_hash must match"
+        );
+        let batched_ids: Vec<_> = batched.blocks.iter().map(|b| b.block.block_id).collect();
+        let expected_ids: Vec<_> = expected.blocks.iter().map(|b| b.block.block_id).collect();
+        assert_eq!(
+            batched_ids, expected_ids,
+            "block ids and order must match between the batched and per-segment paths"
+        );
     }
 
     Ok(())

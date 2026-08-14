@@ -50,6 +50,7 @@ fn make_insert_time_partition(
         source_data_hash: vec![0],
         num_rows: 10,
         sort_order,
+        max_sort_key_time: None,
     }
 }
 
@@ -68,6 +69,7 @@ fn make_empty_partition(begin_insert: DateTime<Utc>, end_insert: DateTime<Utc>) 
         source_data_hash: vec![0],
         num_rows: 0,
         sort_order: None,
+        max_sort_key_time: None,
     }
 }
 

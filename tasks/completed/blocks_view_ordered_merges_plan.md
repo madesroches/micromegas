@@ -28,13 +28,13 @@ Four coupled changes:
    partition cache, without a footer fetch.
 
 Declaring a *trusted* `insert_time` scan ordering for blocks-view consumers (the JIT partition
-generators, per `tasks/jit_single_query_plan.md`) — so they could drop their own `SortExec` — is
-explicitly **out of scope** here: it only becomes safe after every active merged partition has been
-regenerated under (1), which is an operational rollout step, not a code change. Note the JIT
-consumer does **not** need a trusted `(insert_time, block_id)` *total* order: it owns its bucketing
-determinism via tie-atomic, soft-cap segmentation (a pure function of `insert_time`; see
-`tasks/jit_single_query_plan.md`), so single-column `insert_time` is all this plan ever records or
-declares. See Trade-offs.
+generators, per `tasks/completed/jit_batched_block_queries_plan.md`'s *Sort elision* follow-up) — so they
+could drop their own `SortExec` — is explicitly **out of scope** here: it only becomes safe after
+every active merged partition has been regenerated under (1), which is an operational rollout
+step, not a code change. Note the JIT consumer does **not** need a trusted `(insert_time,
+block_id)` *total* order: it owns its bucketing determinism via tie-atomic, soft-cap segmentation
+(a pure function of `insert_time`; see `tasks/completed/jit_batched_block_queries_plan.md`), so single-column
+`insert_time` is all this plan ever records or declares. See Trade-offs.
 
 ## Current State
 
@@ -835,8 +835,8 @@ knowing about blocks-view specifics.
 
 With this in place, which merged blocks partitions still need regeneration becomes a SQL query
 rather than tribal knowledge (see Rollout), and the
-deferred JIT-consumer-trust follow-up (`tasks/jit_single_query_plan.md`) has a concrete,
-footer-free way to check per-partition sort status before it declares an
+deferred JIT-consumer-trust follow-up (`tasks/completed/jit_batched_block_queries_plan.md`'s *Sort elision*
+follow-up) has a concrete, footer-free way to check per-partition sort status before it declares an
 `insert_time` scan ordering trusted (see Trade-offs).
 
 ## Implementation Steps
@@ -1103,7 +1103,7 @@ footer-free way to check per-partition sort status before it declares an
 
 - **`ORDER BY` + declared scan ordering vs. `ORDER BY` alone.** An `ORDER BY` with no declared
   source ordering would still produce correct output but pay a full buffering `SortExec` on
-  every merge — the exact problem `tasks/jit_single_query_plan.md` was written to avoid on the
+  every merge — the exact problem `tasks/completed/jit_batched_block_queries_plan.md` was written to avoid on the
   query side. Declaring the `insert_time` ordering lets DataFusion elide the sort node entirely
   instead (the merge source scan is a single sequential file group, so there is no second stream
   requiring a `SortPreservingMergeExec`), so the merge itself gains the same memory bound this
@@ -1228,9 +1228,9 @@ footer-free way to check per-partition sort status before it declares an
   scope, instead of trusting it globally once every partition happens to have been regenerated.
   Note the JIT consumer needs only single-column `insert_time` here — it does **not** require a
   trusted `(insert_time, block_id)` *total* order, because it owns its own bucketing determinism via
-  tie-atomic, soft-cap segmentation (`tasks/jit_single_query_plan.md`). This deferral is tracked as
-  its own open item in `tasks/jit_single_query_plan.md`'s Open Questions, gated on the Rollout
-  section below, not on any further design decision in this plan.
+  tie-atomic, soft-cap segmentation (`tasks/completed/jit_batched_block_queries_plan.md`). This deferral is
+  tracked as its own open item in `tasks/completed/jit_batched_block_queries_plan.md`'s Follow-ups (see *Sort
+  elision*), gated on the Rollout section below, not on any further design decision in this plan.
 - **A `sort_order TEXT[]` column vs. re-deriving the guarantee from data.** Re-checking whether a
   partition happens to be sorted (e.g. re-running the Testing Strategy's `lag()`-based query
   against every partition on every planning decision) would be correct but is exactly the kind of
@@ -1266,7 +1266,7 @@ footer-free way to check per-partition sort status before it declares an
   order because the merge output *happens* to stay `block_id`-sorted within each `insert_time`, but
   recording it would create a promise the merge does not actually need to keep and would have to
   thread through every path. The one consumer that cares about intra-`insert_time` determinism — the
-  JIT segmenter in `tasks/jit_single_query_plan.md` — no longer relies on a stored total order:
+  JIT segmenter in `tasks/completed/jit_batched_block_queries_plan.md` — no longer relies on a stored total order:
   rather than a greedy per-row `max_nb_objects` cut (which was position-sensitive and could split a
   run of equal-`insert_time` blocks differently across runs), it now packs **tie-atomically** with a
   **soft** cap — flushing only at `insert_time` transitions and tolerating a small overshoot — so its
@@ -1506,4 +1506,4 @@ determinism, the JIT segmenter, owns it locally by packing **tie-atomically with
 `max_nb_objects` cap** — flushing only at `insert_time` transitions — so its bucketing is a pure
 function of the `(insert_time, nb_objects)` multiset, reproducible without any total order. See the
 Trade-offs bullet "Why the recorded `sort_order` is single-column `[insert_time]`" and
-`tasks/jit_single_query_plan.md`'s segmenter design.)
+`tasks/completed/jit_batched_block_queries_plan.md`'s segmenter design.)

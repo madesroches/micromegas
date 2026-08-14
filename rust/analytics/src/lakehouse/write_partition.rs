@@ -54,13 +54,30 @@ pub async fn add_file_for_cleanup(
 pub struct PartitionRowSet {
     pub rows_time_range: TimeRange,
     pub rows: RecordBatch,
+    /// The true maximum value of the view's declared `Concatenated` leading sort column across
+    /// this row set (`begin`, for `thread_spans`). `None` for every sender except
+    /// `thread_spans_view.rs`, the only view that declares that ordering today; see
+    /// `Partition::max_sort_key_time`'s docs for the field it eventually feeds.
+    pub max_sort_key_time: Option<DateTime<Utc>>,
 }
 
 impl PartitionRowSet {
-    pub fn new(rows_time_range: TimeRange, rows: RecordBatch) -> Self {
+    /// Takes `max_sort_key_time` as a required third argument (rather than defaulting it to
+    /// `None`) so every future caller has to make an explicit choice. `None` happens to be
+    /// correct for every caller today -- none of them declares a `Concatenated` event-time
+    /// ordering -- but a defaulted `new()` would hand that `None` out silently, and a future view
+    /// that does declare the ordering could be wired through `::new` and get a wrong bound with
+    /// no signal at all. The failure mode of a silent default here is a scan check that trusts a
+    /// bound nobody computed.
+    pub fn new(
+        rows_time_range: TimeRange,
+        rows: RecordBatch,
+        max_sort_key_time: Option<DateTime<Utc>>,
+    ) -> Self {
         Self {
             rows_time_range,
             rows,
+            max_sort_key_time,
         }
     }
 }
@@ -412,7 +429,15 @@ async fn delete_if_orphan(lake: &DataLakeConnection, file_path: &str) -> Result<
     Ok(())
 }
 
-async fn insert_partition(
+/// Inserts a partition into `lakehouse_partitions`, retiring whatever `retire_match` says it
+/// replaces first.
+///
+/// Not intended as a general-purpose API: `write_partition_from_rows` is the production entry
+/// point that builds the `Partition` this function inserts. This is `pub` only so
+/// `rust/analytics/tests/` (an external crate) can drive the SQL plumbing directly in a
+/// persistence round-trip test, mirroring `thread_spans_view::update_partition`'s reason for
+/// being `pub`.
+pub async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
     retire_match: RetireMatch,
@@ -525,10 +550,32 @@ async fn insert_partition_transaction(
         partition.file_path
     );
 
-    // Insert the new partition with format version 2 (Arrow 57.0)
+    // Insert the new partition with format version 2 (Arrow 57.0). Explicit column list (rather
+    // than a bare positional VALUES(...)) so the statement's dependency on the table's shape is
+    // visible at the call site: Postgres's ALTER TABLE ... ADD COLUMN always appends, so a bare
+    // positional list cannot mis-bind from an ordinary migration, but it also can't catch a
+    // *missing* bind -- adding column 15 without touching this statement would compile, run, and
+    // silently store NULL forever. Naming every column (and partition_format_version's literal
+    // `2` by name rather than by ordinal) is what makes that omission catchable in review.
     let insert_result = instrument_named!(
         sqlx::query(
-            "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2, $13);",
+            "INSERT INTO lakehouse_partitions (
+                 view_set_name,
+                 view_instance_id,
+                 begin_insert_time,
+                 end_insert_time,
+                 min_event_time,
+                 max_event_time,
+                 updated,
+                 file_path,
+                 file_size,
+                 file_schema_hash,
+                 source_data_hash,
+                 num_rows,
+                 partition_format_version,
+                 sort_order,
+                 max_sort_key_time
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2, $13, $14);",
         )
         .bind(&*partition.view_metadata.view_set_name)
         .bind(&*partition.view_metadata.view_instance_id)
@@ -543,6 +590,7 @@ async fn insert_partition_transaction(
         .bind(&partition.source_data_hash)
         .bind(partition.num_rows)
         .bind(&partition.sort_order)
+        .bind(partition.max_sort_key_time)
         .execute(&mut *transaction),
         "sql_insert_partition"
     )
@@ -620,21 +668,44 @@ struct PartitionWriteResult {
     file_path: Option<String>,
     file_size: i64,
     event_time_range: Option<TimeRange>,
+    max_sort_key_time: Option<DateTime<Utc>>,
+}
+
+/// Result of `write_rows_and_track_times`: the partition's event time range, alongside the
+/// folded `max_sort_key_time`. `pub` because `write_rows_and_track_times` is itself `pub` and is
+/// called from `rust/analytics/tests/`, which compiles as an external crate.
+#[derive(Debug)]
+pub struct RowSetTrackingResult {
+    pub event_time_range: Option<TimeRange>,
+    pub max_sort_key_time: Option<DateTime<Utc>>,
 }
 
 /// Writes rows from the stream and tracks event time ranges.
+///
+/// Also folds a running `max_sort_key_time` across every received `PartitionRowSet`: the
+/// partition-level value is `Some(max)` only if *every* received row set carried `Some` -- a
+/// single `None` poisons the whole partition to `None`. This must be a running `max`, never
+/// "last row set wins": this function is shared by four multi-row-set senders, and
+/// `BlockPartitionSpec` in particular streams row sets *out of order* via `buffer_unordered`
+/// (`block_partition_spec.rs`), where "last wins" would be actively wrong. `thread_spans_view.rs`
+/// sends exactly one row set today, so the distinction is invisible there, but do not let that
+/// fact simplify this fold away.
 pub async fn write_rows_and_track_times(
     rb_stream: &mut Receiver<Result<PartitionRowSet, anyhow::Error>>,
     arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
     logger: &Arc<dyn Logger>,
     desc: &str,
-) -> Result<Option<TimeRange>> {
+) -> Result<RowSetTrackingResult> {
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;
+    let mut max_sort_key_time: Option<DateTime<Utc>> = None;
+    let mut any_row_set = false;
+    let mut all_some_sort_key_time = true;
     let mut write_progression = 0;
 
     while let Some(msg) = rb_stream.recv().await {
         let row_set = msg?;
+        any_row_set = true;
         min_event_time = Some(
             min_event_time
                 .unwrap_or(row_set.rows_time_range.begin)
@@ -645,6 +716,14 @@ pub async fn write_rows_and_track_times(
                 .unwrap_or(row_set.rows_time_range.end)
                 .max(row_set.rows_time_range.end),
         );
+        match row_set.max_sort_key_time {
+            Some(t) => {
+                max_sort_key_time = Some(max_sort_key_time.map_or(t, |running| running.max(t)));
+            }
+            None => {
+                all_some_sort_key_time = false;
+            }
+        }
         arrow_writer
             .write(&row_set.rows)
             .await
@@ -668,15 +747,26 @@ pub async fn write_rows_and_track_times(
         }
     }
 
-    Ok(match (min_event_time, max_event_time) {
+    let event_time_range = match (min_event_time, max_event_time) {
         (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
         _ => None,
+    };
+    let max_sort_key_time = if any_row_set && all_some_sort_key_time {
+        max_sort_key_time
+    } else {
+        None
+    };
+    Ok(RowSetTrackingResult {
+        event_time_range,
+        max_sort_key_time,
     })
 }
 
 /// Finalizes the partition write, closing the file and creating metadata.
+#[expect(clippy::too_many_arguments)]
 async fn finalize_partition_write(
     event_time_range: Option<TimeRange>,
+    max_sort_key_time: Option<DateTime<Utc>>,
     arrow_writer: AsyncArrowWriter<AsyncParquetWriter>,
     file_path: String,
     byte_counter: &Arc<AtomicI64>,
@@ -714,6 +804,7 @@ async fn finalize_partition_write(
                         file_path: None,
                         file_size: 0,
                         event_time_range: None,
+                        max_sort_key_time: None,
                     });
                 }
 
@@ -729,6 +820,7 @@ async fn finalize_partition_write(
                     file_path: Some(file_path),
                     file_size,
                     event_time_range: Some(event_time_range),
+                    max_sort_key_time,
                 })
             }
             Err(e) => {
@@ -767,6 +859,7 @@ async fn finalize_partition_write(
             file_path: None,
             file_size: 0,
             event_time_range: None,
+            max_sort_key_time: None,
         })
     }
 }
@@ -842,32 +935,35 @@ pub async fn write_partition_from_rows(
     );
 
     // Write rows and track event time ranges
-    let event_time_range =
-        match write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await {
-            Ok(range) => range,
-            Err(e) => {
-                // The writer is dropped without close/abort on this error path, which can
-                // leave already-uploaded multipart data orphaned in object storage. Delete
-                // any partial file before propagating the error (mirror finalize cleanup).
-                drop(arrow_writer);
+    let RowSetTrackingResult {
+        event_time_range,
+        max_sort_key_time,
+    } = match write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await {
+        Ok(result) => result,
+        Err(e) => {
+            // The writer is dropped without close/abort on this error path, which can
+            // leave already-uploaded multipart data orphaned in object storage. Delete
+            // any partial file before propagating the error (mirror finalize cleanup).
+            drop(arrow_writer);
+            warn!(
+                "write_rows_and_track_times failed, attempting to delete partial file: {}",
+                file_path
+            );
+            let path = object_store::path::Path::from(file_path.as_str());
+            if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
                 warn!(
-                    "write_rows_and_track_times failed, attempting to delete partial file: {}",
-                    file_path
+                    "failed to delete partial file {}: {}",
+                    file_path, delete_err
                 );
-                let path = object_store::path::Path::from(file_path.as_str());
-                if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
-                    warn!(
-                        "failed to delete partial file {}: {}",
-                        file_path, delete_err
-                    );
-                }
-                return Err(e).with_context(|| "write_rows_and_track_times");
             }
-        };
+            return Err(e).with_context(|| "write_rows_and_track_times");
+        }
+    };
 
     // Finalize the write (close file or create empty metadata)
     let result = finalize_partition_write(
         event_time_range,
+        max_sort_key_time,
         arrow_writer,
         file_path,
         &byte_counter,
@@ -891,6 +987,7 @@ pub async fn write_partition_from_rows(
             source_data_hash,
             num_rows: result.num_rows,
             sort_order,
+            max_sort_key_time: result.max_sort_key_time,
         },
         retire_match,
         &same_run_ranges,

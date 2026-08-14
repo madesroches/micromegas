@@ -18,6 +18,16 @@ where
     pub fn close(&mut self) {
         self.end = Some(DualTime::now());
     }
+
+    /// Close this block with an already-stamped `DualTime`, so that it can be
+    /// the same value used as the replacement block's `begin` — making
+    /// `block[k].end == block[k+1].begin` true by construction. Used by the
+    /// four `dispatch.rs` flush paths; `close()` is retained for standalone
+    /// callers (benches/tests) that swap no stream and so have no shared
+    /// timestamp to pass.
+    pub fn close_at(&mut self, end: DualTime) {
+        self.end = Some(end);
+    }
 }
 
 /// Serialize the dependencies of the events in the primary queue

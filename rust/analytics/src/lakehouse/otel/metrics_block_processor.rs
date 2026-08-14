@@ -402,6 +402,7 @@ impl MeasuresRowBuilder {
                 DateTime::from_timestamp_nanos(self.max_time),
             ),
             batch,
+            None,
         )))
     }
 }

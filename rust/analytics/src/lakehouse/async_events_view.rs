@@ -12,7 +12,7 @@ use super::{
 use crate::{
     async_events_table::async_events_table_schema,
     lakehouse::jit_partitions::{
-        BlockOrder, generate_process_jit_partitions, is_jit_partition_up_to_date,
+        BlockOrder, find_up_to_date_partitions, generate_process_jit_partitions,
     },
     metadata::find_process_with_latest_timing,
     time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
@@ -180,15 +180,16 @@ impl View for AsyncEventsView {
         );
         let block_processors = Arc::new(block_processors);
 
-        for part in all_partitions {
-            if !is_jit_partition_up_to_date(
-                &lakehouse.lake().db_pool,
-                view_meta.clone(),
-                &part,
-                BlockOrder::InsertTime,
-            )
-            .await?
-            {
+        let up_to_date = find_up_to_date_partitions(
+            &lakehouse.lake().db_pool,
+            view_meta.clone(),
+            BlockOrder::InsertTime,
+            &all_partitions,
+        )
+        .await
+        .with_context(|| "find_up_to_date_partitions")?;
+        for (part, up_to_date) in all_partitions.into_iter().zip(up_to_date) {
+            if !up_to_date {
                 write_partition_from_blocks(
                     lakehouse.lake().clone(),
                     view_meta.clone(),
