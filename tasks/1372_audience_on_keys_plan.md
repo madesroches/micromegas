@@ -22,9 +22,11 @@ currency this system cannot refund: **immutable history**. Once a process is sta
 `user:alice@example.com`, that data can never be shared with her team, because sharing would mean
 restamping already-ingested processes. Under a grant model the same data stays stamped `alice` and
 an operator edits one line of config. The umbrella plan's own long-term schema is already
-`group_read_grants(group_id, audience TEXT)` — opaque audience, grants in a separate relation — so
-this converges on the recorded end state rather than diverging from it; it just gets there before
-any audience value becomes durable.
+`group_read_grants(group_id, audience TEXT)` **and** `group_mint_grants(group_id, audience TEXT)` —
+opaque audience, read and mint grants kept in two separate relations, deliberately never collapsed
+into one — so this converges on the recorded end state rather than diverging from it, carrying the
+same read/mint split as one env map rather than two tables (§2); it just gets there before any
+audience value becomes durable.
 
 Scope beyond that is narrow: one schema migration, one column read on the auth hot path, an audience
 on the two insert routes (mint + import), and the CLI/UI surface that makes the column visible and
@@ -144,12 +146,23 @@ months later her team needs it. Under the shipped model that is impossible witho
 history. Under this one it is a grant edit, and every already-ingested process becomes visible
 immediately, because the *data* never encoded who could see it.
 
-### 2. Access is a grant map — `{prefix}_AUDIENCE_GRANTS`
+### 2. Access is a grant map, with a read/mint axis — `{prefix}_AUDIENCE_GRANTS`
 
 A JSON object, **keyed by audience**, reading as "who can access this audience" — it is a map, and
 JSON is this codebase's encoding for structured config (`MICROMEGAS_ADMINS`,
 `MICROMEGAS_OIDC_CONFIG`). Its keys are unique by construction, which is where audience uniqueness
 is enforced today.
+
+Each value carries an explicit **intent axis**, not one list consulted by both policies: a bare
+array is shorthand for **read-only** selectors (the common case, and the only thing most audiences
+need), and an object form, `{"read": [...], "mint": [...]}`, adds an explicit mint list when one is
+needed. This makes the map a 1:1 stand-in for the umbrella plan's two grant relations,
+`group_read_grants(group_id, audience)` and `group_mint_grants(group_id, audience)`
+(`audience_based_access_control_plan.md`, "Read and write finally separate") — one relation per
+axis, kept in a single env map for now only because there is no store yet to split them across two
+tables. That section calls re-collapsing the two relations into one "a security regression relative
+to the read-only phrasing"; the shorthand form here can't become that regression, which is why an
+omitted `"mint"` list is always empty, never defaulted from `"read"`.
 
 Resolved as `{prefix}_AUDIENCE_GRANTS`, falling back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`
 when the prefixed name is unset — the same convention as every peer knob `AudienceReadPolicy::
@@ -161,12 +174,18 @@ a new `audience_grants_var(prefix: &str)` helper of the same shape:
 {
   "public":       ["*"],
   "team-alpha":   ["group:eng", "user:alice@example.com"],
-  "alice-laptop": ["user:alice@example.com", "group:leads"]
+  "alice-laptop": {
+    "read": ["user:alice@example.com", "group:leads"],
+    "mint": ["user:alice@example.com"]
+  }
 }
 ```
 
+`public` and `team-alpha` above use the bare-array shorthand: read-only grants, no mint authority.
+`alice-laptop` needs alice herself to be able to mint into it, so it spells out both lists.
+
 Principal selectors **keep their prefixes**, and that is where prefixes belong — they say which
-identity axis to match:
+identity axis to match, on either list:
 
 | Selector | Matches |
 |---|---|
@@ -195,23 +214,27 @@ that Stage 6 (#1374) already mints a personal key per user through a route, and 
 that same flow is a natural extension of it rather than new machinery. See
 [Open Questions](#open-questions).
 
-`AudienceReadPolicy::resolve(caller)` is therefore a pure lookup, with no derivation anywhere:
+`AudienceReadPolicy::resolve(caller)` is therefore a pure lookup over each audience's **read** list
+(the whole array for the bare-array shorthand, the `"read"` field for the object form), with no
+derivation anywhere:
 
 ```text
 { PUBLIC_AUDIENCE }
-∪ { a : "*"            ∈ grants[a] }
-∪ { a : "user:<email>" ∈ grants[a] }                    if email present
-∪ { a : "group:<g>"    ∈ grants[a] for some g ∈ caller.groups }
+∪ { a : "*"            ∈ grants[a].read }
+∪ { a : "user:<email>" ∈ grants[a].read }               if email present
+∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.groups }
 ∪ caller.read_audiences                                 (Stage 4b per-key direct grant)
 ```
 
-`AudienceMintPolicy` resolves against the same union **minus `read_audiences` and minus
-`PUBLIC_AUDIENCE`** (a read grant confers no mint authority — the existing asymmetry, unchanged;
-and being able to *read* `public`, which every authenticated principal is, must not imply being
-able to *mint into* it — the built-in-readability rule is a read-side convenience, not a blanket
-publish grant); `is_admin` callers may mint any valid audience name, `public` included.
-`read_audiences` needs no rework: it is already a principal-level direct grant, which the target
-model keeps as a first-class case.
+`AudienceMintPolicy` resolves over the **separate** `grants[a].mint` list instead — never derived
+from `.read`, which is what keeps the two axes independent rather than re-collapsing them: a
+bare-array audience has an empty mint list by construction, so a read grant confers no mint
+authority (the existing asymmetry, unchanged), and being able to *read* `public`, which every
+authenticated principal is, does not imply being able to *mint into* it unless some grant names
+`public` in a `"mint"` list — the built-in-readability rule is a read-side convenience, not a
+blanket publish grant. `read_audiences` never enters the mintable set; `is_admin` callers may mint
+any valid audience name, `public` included. `read_audiences` needs no rework: it is already a
+principal-level direct grant, which the target model keeps as a first-class case.
 
 **`MintPolicy::resolve_audience(caller, requested: None)` now returns `Err`** ("no audience
 requested and none can be defaulted"), for every caller, admin or not. The shipped trait doc
@@ -466,8 +489,9 @@ ingestion request: Bearer <key> ────────────────
    `IngestionApiKeysPage.tsx`.
 8. **Vocabulary sweep.** `group:everyone` / `user:`-prefixed examples out of
    `monolith/src/main.rs:252`, `policy.rs` doc comments, `ownership_rewrite.rs` module docs, the
-   Stage 1 and Stage 2 CHANGELOG entries, the umbrella plan, and `mkdocs/docs/admin/{flight-sql,
-   monolith}.md`'s env-var tables (see [Documentation](#documentation)).
+   Unreleased Stage 2 CHANGELOG entry (the Stage 1 entry is released and stays untouched), the
+   umbrella plan, and `mkdocs/docs/admin/{flight-sql, monolith}.md`'s env-var tables (see
+   [Documentation](#documentation)).
 9. **Tests**, then **docs + CHANGELOG**, per the sections below.
 
 ## Files to Modify
@@ -492,7 +516,7 @@ ingestion request: Bearer <key> ────────────────
 | `rust/ingestion/tests/sql_migration_test.rs` (new) | live-DB, `#[ignore]`d migration v6 coverage — see Testing Strategy |
 | `mkdocs/docs/admin/{api-keys,authentication}.md` | audiences + grants + DDL + CLI |
 | `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` rows, restate `UNSTAMPED_AUDIENCE`'s format as an opaque label (not `user:<id>`/`group:<id>`), add `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE` rows, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset |
-| `CHANGELOG.md` | Unreleased entry, incl. amending the Stage 1/2 entries |
+| `CHANGELOG.md` | new Unreleased entry; amend the Unreleased Stage 2 (#1370) entry only — the Stage 1 (#1369) entry is in the released `v0.29.0` section and stays untouched |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | model change recorded; Stage 4 landed |
 
 ## Trade-offs
@@ -503,12 +527,15 @@ ingestion request: Bearer <key> ────────────────
   changing now: ~150 lines of shipped policy code, its tests, and a docs sweep. Cost of changing
   after #1373 ships: a restamping migration over already-ingested processes, which the plan
   elsewhere rules out as impractical (§"Query-time coalesce ... vs. a backfill script").
-- **Grant map in env vs. going straight to the `group_read_grants` store.** The store is the recorded
-  end state and needs nested-group closure, cycle handling, cached resolution with a stated latency,
-  and an admin CRUD surface — a stage of its own. An env map has the same *shape* (audience →
-  principals) so the store replaces one function body. What matters is that no third grant mechanism
-  appears later; this is mechanism #2 of the two the umbrella plan permits (principal-level and
-  group-level).
+- **Grant map in env vs. going straight to the `group_read_grants`/`group_mint_grants` store.** The
+  store is the recorded end state and needs nested-group closure, cycle handling, cached resolution
+  with a stated latency, and an admin CRUD surface — a stage of its own. The env map keeps the same
+  read/mint split as the two tables (§2's bare-array shorthand is the read axis; an explicit `"mint"`
+  list is the mint axis) rather than collapsing back to one relation consulted by both policies, which
+  the umbrella plan calls a security regression relative to the read-only phrasing — so the store
+  replaces one function body per axis, not the whole map. What matters is that no third grant
+  mechanism appears later; this is mechanism #2 of the two the umbrella plan permits (principal-level
+  and group-level).
 - **`[A-Za-z0-9_-]` vs. length-only.** Length-only is the minimal rule for an opaque label, and the
   enforcement path is already escape-safe (`ScalarValue` literals). The charset is chosen anyway so
   that no *future* consumer — a URL segment, a CLI flag, a comma-separated knob, a filesystem or
@@ -557,13 +584,17 @@ ingestion request: Bearer <key> ────────────────
   `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; and add an upgrade note that a
   previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup (`:` is
   outside `[A-Za-z0-9_-]`).
-- `CHANGELOG.md` under Unreleased — schema v6; the audience-model change **including amendments to
-  the shipped Stage 1 and Stage 2 entries**, which currently document `user:`/`group:` audiences and
-  tell operators to set `MICROMEGAS_IMPLICIT_GROUPS=everyone`; the removal of that knob (an
-  operator-facing config break, pre-GA); the new knobs; the new request/response fields; the
-  `allow_delegation` change; and the **Minor breaking change** clause for `micromegas-auth`'s policy
-  surface (including its two production `AudienceReadPolicy::new(vec![])` call sites in
-  `flight_sql_server.rs`), `KeyRow`/`ApiKeyTable`, and `IngestionKeysState`.
+- `CHANGELOG.md` under Unreleased — schema v6; the audience-model change **including amending the
+  Unreleased Stage 2 (#1370) entry**, which currently documents `MICROMEGAS_IMPLICIT_GROUPS=everyone`
+  as part of the escape-hatch pair (that entry hasn't shipped in any release, so it is safe to edit in
+  place). The Stage 1 (#1369) entry lives in the already-released `v0.29.0` section and is **left
+  untouched** — it accurately documents what that release shipped (`user:`/`group:` audiences,
+  `{prefix}_IMPLICIT_GROUPS`); instead, add a new Unreleased entry recording the model change, the
+  removal of `MICROMEGAS_IMPLICIT_GROUPS` (an operator-facing config break, pre-GA, noting it was
+  introduced in v0.29.0), the new knobs, the new request/response fields, the `allow_delegation`
+  change, and the **Minor breaking change** clause for `micromegas-auth`'s policy surface (including
+  its two production `AudienceReadPolicy::new(vec![])` call sites in `flight_sql_server.rs`),
+  `KeyRow`/`ApiKeyTable`, and `IngestionKeysState`.
 - `tasks/data_isolation/audience_based_access_control_plan.md` — replace the prefixed-audience model
   in §1, §2, §3, the config table and both deployment stories; note that the long-term grant-store
   section is now the direct continuation of what ships here; mark Stage 4 landed.
@@ -584,16 +615,26 @@ ingestion request: Bearer <key> ────────────────
   `{"alice-laptop": ["group:leads"]}` with bob in `leads` ⇒ present. *No data changed.*
 - Mint: `read_audiences` never enters the mintable set; `PUBLIC_AUDIENCE` never enters a non-admin's
   mintable set even though it is always in their readable set; admins may mint any valid audience,
-  `public` included; non-admins may not mint an audience they hold no grant for.
-- Malformed `{prefix}_AUDIENCE_GRANTS` / `MICROMEGAS_AUDIENCE_GRANTS` (not an object, non-array
-  value, non-string selector) ⇒ `Err`, so a typo fails startup rather than shipping an inert knob.
-  The prefixed-falls-back-to-unprefixed resolution itself gets the same test coverage as
+  `public` included; non-admins may not mint an audience they hold no **mint** grant for — including
+  one they hold a bare-array (read-only) grant for, testing explicitly that a read grant never
+  confers mint authority; a `"mint"` entry does grant it, independent of `"read"`.
+- Malformed `{prefix}_AUDIENCE_GRANTS` / `MICROMEGAS_AUDIENCE_GRANTS` (not an object; a per-audience
+  value that is neither a bare array nor a `{"read": [...], "mint": [...]}` object; a non-array
+  `read`/`mint` field; non-string selector) ⇒ `Err`, so a typo fails startup rather than shipping an
+  inert knob. The prefixed-falls-back-to-unprefixed resolution itself gets the same test coverage as
   `implicit_groups_var`.
 
 **`rust/auth/tests/db_api_key_tests.rs`** (live-Postgres cases `#[ignore]`d, per the file's
-convention): the audience reaches `bound_audience` unchanged (the issue's first test); ingestion keys
-give `allow_delegation: false` while analytics keys still give `true` and `bound_audience: None`; the
-audience survives a cache hit; the unreachable-pool cases still yield `ProviderUnavailable`.
+convention): its `insert_live_key` helper (`:229-249`) currently inserts into `ingestion_api_keys`
+with no `audience`, which every existing live test using it (`:268`, `:323`, `:355`, `:382`, `:409`,
+`:422`, `:435`) would fail at runtime against a v6-migrated schema, since the column is `NOT NULL`
+with no default — a failure the compiler cannot catch. `insert_live_key` gains an `audience: &str`
+parameter (every ingestion-table call site passes a literal, e.g. `PUBLIC_AUDIENCE`), threaded into
+the `INSERT`'s column list; analytics-table call sites are unaffected since that table has no such
+column. New coverage: the audience reaches `bound_audience` unchanged (the issue's first test);
+ingestion keys give `allow_delegation: false` while analytics keys still give `true` and
+`bound_audience: None`; the audience survives a cache hit; the unreachable-pool cases still yield
+`ProviderUnavailable`.
 
 **`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**: `mint` with no audience and no knob ⇒
 400 naming the knob; with the knob ⇒ that value; explicit ⇒ that value (the issue's per-key
