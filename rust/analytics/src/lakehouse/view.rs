@@ -178,7 +178,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     ///     view records `max_sort_key_time` (the true max leading-sort-column value, exact per
     ///     partition), and `partitioned_execution_plan::partition_bounds` reads that in preference
     ///     to `max_event_time` for the non-overlap check, which the swap-window argument in
-    ///     `tasks/thread_spans_segment_boundary_overlap_plan.md` shows can never trip for cuts at
+    ///     `tasks/completed/thread_spans_segment_boundary_overlap_plan.md` shows can never trip for cuts at
     ///     block boundaries of either producer. Partitions written before that column existed (or by
     ///     a view that never populates it) fall back to the old, looser `max_event_time` bound, which
     ///     is self-healing rather than a permanent gap: `ThreadSpansView::SCHEMA_VERSION`'s bump makes

@@ -33,7 +33,7 @@ pub struct Partition {
     /// means "not recorded": every partition written before this field existed, and every
     /// partition from a view that doesn't declare a `Concatenated` event-time ordering (only
     /// `ThreadSpansView` populates it today). See
-    /// `tasks/thread_spans_segment_boundary_overlap_plan.md`, Part B.
+    /// `tasks/completed/thread_spans_segment_boundary_overlap_plan.md`, Part B.
     pub max_sort_key_time: Option<DateTime<Utc>>,
 }
 

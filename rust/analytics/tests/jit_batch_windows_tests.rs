@@ -1,5 +1,5 @@
 //! Pure, no-DB unit tests for `batch_windows` and `process_batch_sql`
-//! (tasks/jit_batched_block_queries_plan.md, Testing Strategy): the adaptive batch-width packing
+//! (tasks/completed/jit_batched_block_queries_plan.md, Testing Strategy): the adaptive batch-width packing
 //! and the lean-projection guard.
 
 use chrono::{DateTime, TimeDelta, Utc};

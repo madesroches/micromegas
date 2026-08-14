@@ -1,5 +1,5 @@
 //! Regression test for the producer half of the segment-boundary overlap fix
-//! (see `tasks/thread_spans_segment_boundary_overlap_plan.md`, Part A):
+//! (see `tasks/completed/thread_spans_segment_boundary_overlap_plan.md`, Part A):
 //! consecutive blocks of a flushed stream must touch exactly, i.e.
 //! `block[k].end == block[k+1].begin`, because the flush paths now derive
 //! both stamps from a single `DualTime`.

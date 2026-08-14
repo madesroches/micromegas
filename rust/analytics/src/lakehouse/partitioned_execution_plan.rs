@@ -42,7 +42,7 @@ pub enum OrderingBounds {
 /// `partition_bounds` coherently: the sort key stays `min_event_time`; the non-overlap check below
 /// compares the previous partition's *true* max `begin` against the next's block-derived min
 /// (which can never strictly overlap for cuts at block boundaries of a producer using a shared
-/// flush timestamp -- see `tasks/thread_spans_segment_boundary_overlap_plan.md`); and
+/// flush timestamp -- see `tasks/completed/thread_spans_segment_boundary_overlap_plan.md`); and
 /// `attach_ordering_statistics` attaches a tighter, exact `begin` max statistic. The fallback
 /// preserves today's behavior bit-for-bit for legacy partitions.
 fn partition_bounds(

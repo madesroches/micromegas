@@ -1,5 +1,5 @@
 //! DB-gated test for the batched process-scoped JIT path
-//! (tasks/jit_batched_block_queries_plan.md, Testing Strategy): drives
+//! (tasks/completed/jit_batched_block_queries_plan.md, Testing Strategy): drives
 //! `generate_process_jit_partitions` directly over a multi-bucket range with a lowered
 //! `target_rows_per_query`, forcing the run to span more than one batch (not just more than one
 //! bucket within a single batch), under **both** `BlockOrder` variants -- covering the batched

@@ -1,5 +1,5 @@
 //! Persistence round-trip DB test for `max_sort_key_time`
-//! (`tasks/thread_spans_segment_boundary_overlap_plan.md`, Part B): isolates the SQL plumbing --
+//! (`tasks/completed/thread_spans_segment_boundary_overlap_plan.md`, Part B): isolates the SQL plumbing --
 //! the INSERT's explicit column/bind list and the `SELECT`s that decode it back into a
 //! `Partition` -- from the ingestion/parquet/query-engine machinery the end-to-end
 //! `thread_spans_ordering_db_test.rs` exercises. In the style of

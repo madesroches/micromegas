@@ -1,5 +1,5 @@
 //! Pure, no-DB unit tests for `spec_is_up_to_date` and `PartitionFreshnessRow`
-//! (tasks/jit_batched_block_queries_plan.md, Testing Strategy): table-driven over the three
+//! (tasks/completed/jit_batched_block_queries_plan.md, Testing Strategy): table-driven over the three
 //! `BlockOrder`/range-shape variants the original per-spec SQL used to express
 //! (`jit_partitions.rs`'s `is_jit_partition_up_to_date` docs), asserting `spec_is_up_to_date`
 //! reproduces that per-variant semantics from a candidate set built directly (no live database).
@@ -274,7 +274,7 @@ fn object_count_boundary_cases() {
 
 // -- `resolve_up_to_date_fixpoint` (the pure core of `find_up_to_date_partitions`) --------------
 //
-// These exercise the containment fixpoint itself (tasks/jit_batched_block_queries_plan.md §
+// These exercise the containment fixpoint itself (tasks/completed/jit_batched_block_queries_plan.md §
 // Batched freshness checks (`InsertTime` callers), "Verdicts reflect pre-run state"), with a
 // `candidates` set built directly rather than fetched from a `PgPool`.
 

@@ -84,7 +84,7 @@ fn test_crossing_spans_returns_err() {
 }
 
 /// Pins one of the two properties `max_sort_key_time` (the segment-boundary overlap fix,
-/// `tasks/thread_spans_segment_boundary_overlap_plan.md`) rests on: an event outside the chain's
+/// `tasks/completed/thread_spans_segment_boundary_overlap_plan.md`) rests on: an event outside the chain's
 /// `[begin_range_ns, end_range_ns]` is **dropped, not clamped in** (`call_tree.rs`'s
 /// `on_begin_thread_scope`/`on_end_thread_scope`), so no row's `begin` can ever escape its
 /// partition's declared range.

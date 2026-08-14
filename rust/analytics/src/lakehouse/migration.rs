@@ -526,7 +526,7 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
 async fn upgrade_v7_to_v8(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     // Nullable, no backfill: NULL means "not recorded" -- either the partition was written
     // before this column existed, or its view never declares a `Concatenated` event-time
-    // ordering (see tasks/thread_spans_segment_boundary_overlap_plan.md, Part B §1). This is
+    // ordering (see tasks/completed/thread_spans_segment_boundary_overlap_plan.md, Part B §1). This is
     // the same nullable/no-backfill shape as upgrade_v6_to_v7's sort_order column; unlike that
     // migration, this one adds no constraint.
     tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN max_sort_key_time TIMESTAMPTZ;")

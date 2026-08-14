@@ -355,7 +355,7 @@ impl View for NetSpansView {
         // ensure_begin_non_decreasing -- and its PartitionRowSet always carries
         // max_sort_key_time: None. If it ever does declare that ordering, it must first add an
         // ensure_begin_non_decreasing equivalent and populate max_sort_key_time, per
-        // tasks/thread_spans_segment_boundary_overlap_plan.md.)
+        // tasks/completed/thread_spans_segment_boundary_overlap_plan.md.)
         let config = JitPartitionConfig {
             block_order: BlockOrder::EventTime,
             ..Default::default()
