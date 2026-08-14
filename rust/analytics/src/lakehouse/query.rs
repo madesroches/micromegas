@@ -15,7 +15,9 @@ use super::{
 };
 use crate::{
     lakehouse::{
-        materialized_view::MaterializedView, read_scope::CallerContext,
+        materialized_view::MaterializedView,
+        ownership_rewrite::OwnershipRewrite,
+        read_scope::{CallerContext, ReadScope},
         table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
@@ -27,8 +29,9 @@ use crate::{
 use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
+    datasource::DefaultTableSource,
     execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
-    logical_expr::{ScalarUDF, async_udf::AsyncScalarUDF},
+    logical_expr::{ScalarUDF, TableSource, async_udf::AsyncScalarUDF},
     prelude::*,
     sql::TableReference,
 };
@@ -250,6 +253,47 @@ pub async fn make_session_context(
             view.clone(),
         )
         .await?;
+    }
+    if caller.read_scope != ReadScope::All {
+        // ReadScope::All is the internal/maintenance marker (Current State §3 of
+        // tasks/1370_ownership_rewrite_plan.md) -- OwnershipRewrite would no-op for it anyway, so
+        // skip resolving `processes`/`streams` sources and registering the rule entirely rather
+        // than requiring every ReadScope::All caller's ViewFactory to carry them.
+        //
+        // Must be registered *after* the TableScanRewrite registration above (`query_range.is_some()`
+        // block): TableScanRewrite::analyze walks the whole plan with transform_up_with_subqueries
+        // and would time-bound the audience lookup's own processes/streams scans if it ran after
+        // OwnershipRewrite injected them (analyzer rules each run exactly once, in registration
+        // order). The audience lookup must stay time-unbounded (query_range: None below).
+        let processes_view = view_factory.get_global_view("processes").with_context(
+            || "OwnershipRewrite requires the `processes` global view to be registered",
+        )?;
+        let streams_view = view_factory.get_global_view("streams").with_context(
+            || "OwnershipRewrite requires the `streams` global view to be registered",
+        )?;
+        let processes_source: Arc<dyn TableSource> =
+            Arc::new(DefaultTableSource::new(Arc::new(MaterializedView::new(
+                lakehouse.clone(),
+                reader_factory.clone(),
+                processes_view,
+                part_provider.clone(),
+                None,
+            ))));
+        let streams_source: Arc<dyn TableSource> =
+            Arc::new(DefaultTableSource::new(Arc::new(MaterializedView::new(
+                lakehouse.clone(),
+                reader_factory.clone(),
+                streams_view,
+                part_provider.clone(),
+                None,
+            ))));
+        ctx.add_analyzer_rule(Arc::new(OwnershipRewrite::new(
+            caller.read_scope.clone(),
+            caller.ownership_config.unstamped_audience.clone(),
+            caller.ownership_config.public_view_sets.clone(),
+            processes_source,
+            streams_source,
+        )));
     }
     // Apply custom configuration
     configurator.configure(&ctx).await?;

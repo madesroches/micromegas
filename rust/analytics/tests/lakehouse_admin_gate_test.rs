@@ -9,7 +9,7 @@
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::CallerContext;
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, OwnershipRewriteConfig};
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
@@ -38,6 +38,7 @@ async fn make_gated_session_context(
     let caller = CallerContext {
         read_scope: micromegas_analytics::lakehouse::read_scope::ReadScope::All,
         is_admin,
+        ownership_config: Arc::new(OwnershipRewriteConfig::default()),
     };
     make_session_context(
         lakehouse,

@@ -2,11 +2,12 @@
 //! audience-based implementations that resolve them from a caller's `AuthContext` and a
 //! comma-separated implicit-groups env var.
 //!
-//! **No enforcement lands with this module.** Nothing downstream consumes a resolved
-//! `ReadableAudiences`/`ReadScope` yet -- see `rust/analytics/src/lakehouse/read_scope.rs` and
-//! `tasks/1369_policy_seam_plan.md`. What this module fixes today is the *shape* of
-//! authorization: every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
-//! express "grant everything" at all.
+//! **No enforcement lands with this module itself.** This module fixes the *shape* of
+//! authorization -- every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
+//! express "grant everything" at all -- while the resolved `ReadableAudiences`/`ReadScope` is
+//! consumed downstream by `OwnershipRewrite` (#1370, AbAC Stage 2; Prong A) and, still pending
+//! (#1371, Stage 3), Prong B's UDTF/UDF guards. See `rust/analytics/src/lakehouse/read_scope.rs`
+//! and `tasks/1369_policy_seam_plan.md`.
 
 use crate::default_provider::implicit_groups_var;
 use crate::types::AuthContext;
@@ -183,8 +184,11 @@ impl AudienceReadPolicy {
 
     /// Resolves implicit groups from `{prefix}_IMPLICIT_GROUPS` (falling back to
     /// `MICROMEGAS_IMPLICIT_GROUPS`) via [`implicit_groups_var`]. Unset ⇒ empty implicit
-    /// groups ⇒ the readable set degenerates to the caller's own singleton -- enforcement stays
-    /// inactive because nothing consumes the resolved scope yet (Stage 1). A malformed entry
+    /// groups ⇒ the readable set degenerates to the caller's own singleton, which
+    /// `OwnershipRewrite` (#1370, AbAC Stage 2) enforces -- see that stage's CHANGELOG upgrade
+    /// note for the `MICROMEGAS_IMPLICIT_GROUPS=everyone` +
+    /// `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` pair required to keep legacy,
+    /// never-stamped data visible to every caller once enforcement is live. A malformed entry
     /// (see [`parse_implicit_groups`]) is `Err`, not a silently-emptied set, so a startup `?`
     /// turns a typo into a fail-fast instead of a silently-inactive knob.
     pub fn from_env(prefix: &str) -> Result<Self> {

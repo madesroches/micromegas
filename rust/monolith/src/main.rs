@@ -22,6 +22,7 @@ use analytics_web_srv::web_server::{WebCliArgs, WebServerConfig, run_web_server}
 use anyhow::{Context, Result};
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas::analytics::lakehouse::read_scope::OwnershipRewriteConfig;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::default_provider::ProviderBuilder;
@@ -246,9 +247,23 @@ async fn main() -> Result<()> {
 
     // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12): unset
     // `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`/`MICROMEGAS_IMPLICIT_GROUPS` -> empty implicit
-    // groups -> enforcement stays inactive since nothing consumes the resolved scope yet.
+    // groups -> a real caller's resolved scope is just their own identity, filtered by
+    // `OwnershipRewrite` (#1370, AbAC Stage 2) -- see the CHANGELOG upgrade note for the
+    // `MICROMEGAS_IMPLICIT_GROUPS=everyone` + `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`
+    // pair required to keep legacy, never-stamped data visible once this ships.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         Some(Arc::new(AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?) as Arc<dyn ReadPolicy>)
+    } else {
+        None
+    };
+
+    // Resolved alongside `analytics_read_policy` (#1370, AbAC Stage 2): the
+    // `OwnershipRewrite` deployment knobs, parsed in `micromegas-analytics` (the crate that
+    // consumes them) rather than `micromegas-auth`.
+    let analytics_ownership_config = if roles.flightsql && !args.disable_auth {
+        Some(Arc::new(OwnershipRewriteConfig::from_env(
+            "MICROMEGAS_ANALYTICS",
+        )?))
     } else {
         None
     };
@@ -292,6 +307,7 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let auth = analytics_auth;
         let read_policy = analytics_read_policy;
+        let ownership_config = analytics_ownership_config;
         join_set.spawn(async move {
             let mut builder = FlightSqlServer::builder()
                 .with_lakehouse(lh)
@@ -302,6 +318,9 @@ async fn main() -> Result<()> {
             }
             if let Some(policy) = read_policy {
                 builder = builder.with_read_policy(policy);
+            }
+            if let Some(config) = ownership_config {
+                builder = builder.with_ownership_config(config);
             }
             builder.build_and_serve().await
         });

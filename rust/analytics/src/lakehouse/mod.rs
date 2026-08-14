@@ -62,6 +62,9 @@ pub mod migration;
 pub mod net_spans_view;
 /// OTLP reader path: attribute helpers, block processors, and the otel_spans view.
 pub mod otel;
+/// Query Enforcement Prong A (#1370, AbAC Stage 2): injects an audience predicate into every
+/// `MaterializedView` scan based on the caller's `ReadScope`.
+pub mod ownership_rewrite;
 /// Table function to parse all transit objects in a block and return them as JSONB
 pub mod parse_block_table_function;
 /// Write & delete sections of views

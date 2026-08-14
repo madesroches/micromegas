@@ -4,9 +4,13 @@
 //! handler methods directly, so that a regression in tonic's request-extension propagation --
 //! the mechanism this whole seam rests on -- fails loudly instead of silently.
 //!
-//! No enforcement exists yet (Stage 1 ships none), so none of these tests observe a resolved
-//! `ReadScope` through a query result. Instead they inject a recording stub `ReadPolicy` -- the
-//! same seam a store-backed policy will occupy later -- and assert on what it was called with.
+//! `OwnershipRewrite` (#1370, AbAC Stage 2) now consumes the resolved `ReadScope`, but every
+//! query here is a trivial `SELECT 1`/`SELECT 1 AS one` that never scans a `MaterializedView`, so
+//! none of these tests observe a filtered query result either way -- they inject a recording stub
+//! `ReadPolicy` -- the same seam a store-backed policy will occupy later -- and assert on what it
+//! was called with. `start_server`'s `ViewFactory` still registers `processes`/`streams`
+//! (Design §2 of `tasks/1370_ownership_rewrite_plan.md`), which `make_session_context` now
+//! requires for every resolved `ReadScope::Audiences` caller regardless of what the query touches.
 
 use anyhow::{Result, anyhow};
 use arrow_flight::error::FlightError;
@@ -16,10 +20,14 @@ use arrow_flight::sql::client::FlightSqlServiceClient;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
+use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
+use micromegas_analytics::lakehouse::processes_view::make_processes_view;
+use micromegas_analytics::lakehouse::read_scope::OwnershipRewriteConfig;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas_analytics::lakehouse::streams_view::make_streams_view;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::policy::{AudienceReadPolicy, ReadPolicy, ReadableAudiences};
@@ -54,6 +62,45 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     Arc::new(LakehouseContext::new(lake, runtime))
 }
 
+/// Builds a `ViewFactory` registering real `processes`/`streams` global views (mirroring
+/// `default_view_factory`'s construction of them, and the same pattern
+/// `analytics/tests/thread_spans_ordering_db_test.rs` uses), rather than
+/// `lakehouse_admin_gate_test.rs`'s `ViewFactory::new(vec![])`. `OwnershipRewrite` (#1370, AbAC
+/// Stage 2) requires `processes`/`streams` to be registered for every `ReadScope::Audiences`
+/// caller (Design §2 of `tasks/1370_ownership_rewrite_plan.md`) -- every test in this file
+/// resolves that scope via an auth provider, so without this fixture `make_session_context` would
+/// fail before any SQL is planned. `SqlBatchView::new` only *plans* its transform query
+/// (`ctx.sql(...)`, never executed), so the offline, `connect_lazy` lakehouse this file already
+/// uses is sufficient.
+async fn make_view_factory_with_processes_and_streams(
+    lakehouse: &LakehouseContext,
+) -> Arc<ViewFactory> {
+    let blocks_view = Arc::new(BlocksView::new().expect("BlocksView::new"));
+    let processes_view = Arc::new(
+        make_processes_view(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
+        )
+        .await
+        .expect("make_processes_view"),
+    );
+    let streams_view = Arc::new(
+        make_streams_view(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
+        )
+        .await
+        .expect("make_streams_view"),
+    );
+    Arc::new(ViewFactory::new(vec![
+        processes_view,
+        streams_view,
+        blocks_view,
+    ]))
+}
+
 /// Poll the given address until a TCP connection succeeds or the timeout elapses.
 async fn wait_for_server_ready(addr: SocketAddr, timeout: Duration) {
     let start = std::time::Instant::now();
@@ -76,7 +123,7 @@ async fn start_server(
 ) -> SocketAddr {
     let lakehouse = make_offline_lakehouse_context().await;
     let part_provider = Arc::new(NullPartitionProvider {});
-    let view_factory = Arc::new(ViewFactory::new(vec![]));
+    let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
     let session_configurator = Arc::new(NoOpSessionConfigurator);
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
@@ -84,6 +131,7 @@ async fn start_server(
         view_factory,
         session_configurator,
         read_policy,
+        Arc::new(OwnershipRewriteConfig::default()),
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -396,8 +444,10 @@ async fn auth_context_with_groups_survives_the_real_tonic_stack() {
 
 /// An unconfigured deployment (implicit-groups env var unset) resolves a scope through the real
 /// `AudienceReadPolicy::from_env` -- not an error, not a crash -- and a query's results are
-/// unaffected: Stage 1 ships no enforcement, so `do_get` must succeed and return the same rows
-/// it would without this seam at all.
+/// unaffected: `SELECT 1 AS one` never scans a `MaterializedView`, so `OwnershipRewrite` (#1370,
+/// AbAC Stage 2) has nothing to filter here even though it is now registered and active for this
+/// resolved `ReadScope::Audiences` caller; `do_get` must still succeed and return the same row it
+/// would without this seam at all.
 #[tokio::test]
 async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
