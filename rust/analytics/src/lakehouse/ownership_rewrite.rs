@@ -266,8 +266,8 @@ impl OwnershipRewrite {
 
     /// Parses `view.get_view_instance_id()` as a `Uuid` and returns its canonical
     /// lowercase-hyphenated string form -- the form actually stored in `process_id`/`stream_id`
-    /// columns (see the module doc comment's bug note on §5/§6). `Uuid::parse_str` accepts
-    /// several equivalent textual spellings (uppercase, hyphen-less, braced) of the same UUID, but
+    /// columns. `Uuid::parse_str` accepts several equivalent textual spellings (uppercase,
+    /// hyphen-less, braced) of the same UUID, but
     /// only this canonical form round-trips through the data; using the raw, caller-supplied
     /// spelling directly in a literal comparison would silently fail to match for any other
     /// spelling of a legitimately materialized instance id. Defensive `Err` on parse failure --
@@ -333,11 +333,8 @@ impl OwnershipRewrite {
         }
         if view_set_name.as_str() == "async_events" {
             // §5: process-scoped, no process_id column -- the view_instance_id *is* the
-            // process_id string (`AsyncEventsView::new` parses it as a `Uuid`). Canonicalize
-            // before building the literal: `get_view_instance_id()` returns the caller's original
-            // spelling verbatim (e.g. uppercase, hyphen-less, or braced are all valid `Uuid`
-            // spellings), but `process_id` columns only ever hold the canonical
-            // lowercase-hyphenated form -- see `canonical_view_instance_id`.
+            // process_id string (`AsyncEventsView::new` parses it as a `Uuid`). Canonicalized
+            // before building the literal -- see `canonical_view_instance_id`'s doc comment for why.
             let process_id_literal = Self::canonical_view_instance_id(&view_set_name, &view)?;
             return Ok(Some(Self::exists_for_process(
                 per_process_audience,

@@ -191,19 +191,20 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
     Arc::new(factory)
 }
 
-/// Builds a session under `read_scope`/`ownership_config`, plans `sql`, and returns the
-/// **optimized** `LogicalPlan` -- i.e. what actually executes, after `DecorrelatePredicateSubquery`
-/// (an optimizer, not analyzer, rule) has rewritten `OwnershipRewrite`'s injected
-/// `InSubquery`/`Exists` into a join. Stopping at the analyzed-but-unoptimized plan would miss
-/// ambiguous-column errors that only `DecorrelatePredicateSubquery`'s join surfaces (#1370 issue
-/// 1: an unqualified outer `process_id` reference).
-async fn optimized_plan(
+/// Builds a session under `read_scope`/`ownership_config` against the given `view_factory`, plans
+/// `sql`, and returns the **optimized** `LogicalPlan` -- i.e. what actually executes, after
+/// `DecorrelatePredicateSubquery` (an optimizer, not analyzer, rule) has rewritten
+/// `OwnershipRewrite`'s injected `InSubquery`/`Exists` into a join. Stopping at the
+/// analyzed-but-unoptimized plan would miss ambiguous-column errors that only
+/// `DecorrelatePredicateSubquery`'s join surfaces (#1370 issue 1: an unqualified outer
+/// `process_id` reference).
+async fn optimized_plan_with_factory(
+    lakehouse: Arc<LakehouseContext>,
+    view_factory: Arc<ViewFactory>,
     read_scope: ReadScope,
     ownership_config: OwnershipRewriteConfig,
     sql: &str,
 ) -> datafusion::error::Result<LogicalPlan> {
-    let lakehouse = make_offline_lakehouse_context().await;
-    let view_factory = make_test_view_factory(&lakehouse).await;
     let caller = CallerContext {
         read_scope,
         is_admin: false,
@@ -222,38 +223,16 @@ async fn optimized_plan(
     ctx.sql(sql).await?.into_optimized_plan()
 }
 
-/// Same purpose as `optimized_plan`, but against the **real** `default_view_factory()` -- the
-/// production view inventory -- instead of this file's synthetic `make_test_view_factory`. See
-/// `real_view_factory_covers_every_registered_view_set` below for why: `predicate_for`'s branch
-/// table needs coverage against the actual set of view sets it must handle, not only a hand-built
-/// stand-in.
-async fn optimized_plan_against_real_view_factory(
+/// Thin wrapper over `optimized_plan_with_factory` against this file's synthetic
+/// `make_test_view_factory`.
+async fn optimized_plan(
     read_scope: ReadScope,
     ownership_config: OwnershipRewriteConfig,
     sql: &str,
 ) -> datafusion::error::Result<LogicalPlan> {
     let lakehouse = make_offline_lakehouse_context().await;
-    let view_factory = Arc::new(
-        default_view_factory(lakehouse.runtime().clone(), lakehouse.lake().clone())
-            .await
-            .expect("default_view_factory"),
-    );
-    let caller = CallerContext {
-        read_scope,
-        is_admin: false,
-        ownership_config: Arc::new(ownership_config),
-    };
-    let ctx: SessionContext = make_session_context(
-        lakehouse,
-        Arc::new(NullPartitionProvider {}),
-        None,
-        view_factory,
-        Arc::new(NoOpSessionConfigurator),
-        caller,
-    )
-    .await
-    .expect("make_session_context");
-    ctx.sql(sql).await?.into_optimized_plan()
+    let view_factory = make_test_view_factory(&lakehouse).await;
+    optimized_plan_with_factory(lakehouse, view_factory, read_scope, ownership_config, sql).await
 }
 
 fn scope(audiences: &[&str]) -> ReadScope {
@@ -459,15 +438,21 @@ async fn real_view_factory_covers_every_registered_view_set() {
 
     for sql in &queries {
         let config = OwnershipRewriteConfig::default();
-        let plan = optimized_plan_against_real_view_factory(scope(&["user:a"]), config, sql)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "real default_view_factory() query `{sql}` must plan under a restricted \
+        let plan = optimized_plan_with_factory(
+            lakehouse.clone(),
+            inventory_view_factory.clone(),
+            scope(&["user:a"]),
+            config,
+            sql,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "real default_view_factory() query `{sql}` must plan under a restricted \
                      ReadScope -- if this fails, a view set is missing a branch in \
                      OwnershipRewrite::predicate_for; got error: {e}"
-                )
-            });
+            )
+        });
         let plan_text = format!("{plan}");
         assert!(
             plan_text.contains("LeftSemi Join"),

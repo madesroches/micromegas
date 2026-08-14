@@ -141,31 +141,18 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     Ok(values)
 }
 
-/// Resolves `{prefix}_UNSTAMPED_AUDIENCE` (falling back to `MICROMEGAS_UNSTAMPED_AUDIENCE`), or
-/// `None` if neither is set.
-fn unstamped_audience_var(prefix: &str) -> String {
+/// Resolves `{prefix}_{suffix}` (falling back to `MICROMEGAS_{suffix}` if unset, or always if
+/// `prefix` is empty). Shared by both `OwnershipRewriteConfig::from_env` knobs
+/// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`).
+fn resolved_var(prefix: &str, suffix: &str) -> String {
     if prefix.is_empty() {
-        "MICROMEGAS_UNSTAMPED_AUDIENCE".to_string()
+        format!("MICROMEGAS_{suffix}")
     } else {
-        let prefixed = format!("{prefix}_UNSTAMPED_AUDIENCE");
+        let prefixed = format!("{prefix}_{suffix}");
         if std::env::var(&prefixed).is_ok() {
             prefixed
         } else {
-            "MICROMEGAS_UNSTAMPED_AUDIENCE".to_string()
-        }
-    }
-}
-
-/// Resolves `{prefix}_PUBLIC_VIEW_SETS` (falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`).
-fn public_view_sets_var(prefix: &str) -> String {
-    if prefix.is_empty() {
-        "MICROMEGAS_PUBLIC_VIEW_SETS".to_string()
-    } else {
-        let prefixed = format!("{prefix}_PUBLIC_VIEW_SETS");
-        if std::env::var(&prefixed).is_ok() {
-            prefixed
-        } else {
-            "MICROMEGAS_PUBLIC_VIEW_SETS".to_string()
+            format!("MICROMEGAS_{suffix}")
         }
     }
 }
@@ -177,7 +164,7 @@ impl OwnershipRewriteConfig {
     /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
     /// typo into a fail-fast instead of a silently-inert knob.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
-        let unstamped_var = unstamped_audience_var(prefix);
+        let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
         let unstamped_audience = match std::env::var(&unstamped_var) {
             Ok(raw) if raw.trim().is_empty() => None,
             Ok(raw) => {
@@ -192,7 +179,7 @@ impl OwnershipRewriteConfig {
             }
             Err(_) => None,
         };
-        let public_view_sets_var = public_view_sets_var(prefix);
+        let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");
         let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;
         Ok(Self {
             unstamped_audience,
