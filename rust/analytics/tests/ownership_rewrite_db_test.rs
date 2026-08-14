@@ -254,17 +254,23 @@ async fn seed_process(
 /// Plans and executes `sql` under `caller`'s scope, returning the total row count across every
 /// returned batch. A fresh `SessionContext` per call, matching how a real request-scoped session
 /// works -- `OwnershipRewrite` is constructed once per `make_session_context` call.
+///
+/// `query_range` is threaded straight through to `make_session_context`: most view sets don't
+/// need one (`None` is correct there), but `ThreadSpansView::jit_update` hard-requires a bounded
+/// range to know what to materialize on demand (`thread_spans_view.rs`) -- callers hitting
+/// `thread_spans` must pass `Some(...)`, mirroring `thread_spans_ordering_db_test.rs`.
 async fn row_count(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     caller: CallerContext,
+    query_range: Option<TimeRange>,
     sql: &str,
 ) -> Result<usize> {
     let part_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
     let ctx = make_session_context(
         lakehouse,
         part_provider,
-        None,
+        query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         caller,
@@ -384,6 +390,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:a"])),
+            None,
             &processes_a_sql,
         )
         .await?,
@@ -395,6 +402,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:b"])),
+            None,
             &processes_a_sql,
         )
         .await?,
@@ -406,6 +414,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:a"])),
+            None,
             &processes_b_sql,
         )
         .await?,
@@ -417,6 +426,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:someone-else"])),
+            None,
             &processes_a_sql,
         )
         .await?,
@@ -428,6 +438,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(ReadScope::All),
+            None,
             &processes_a_sql,
         )
         .await?,
@@ -439,6 +450,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(ReadScope::All),
+            None,
             &processes_b_sql,
         )
         .await?,
@@ -456,6 +468,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:a"])),
+            None,
             &log_entries_a_sql,
         )
         .await?,
@@ -467,6 +480,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:b"])),
+            None,
             &log_entries_a_sql,
         )
         .await?,
@@ -478,6 +492,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(ReadScope::All),
+            None,
             &log_entries_a_sql,
         )
         .await?,
@@ -494,6 +509,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         lakehouse.clone(),
         view_factory.clone(),
         caller_with_scope(audiences_scope(&["user:a"])),
+        None,
         &async_events_a_sql,
     )
     .await?;
@@ -506,6 +522,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:b"])),
+            None,
             &async_events_a_sql,
         )
         .await?,
@@ -519,6 +536,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(ReadScope::All),
+            None,
             &async_events_a_sql,
         )
         .await?,
@@ -535,6 +553,11 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         lakehouse.clone(),
         view_factory.clone(),
         caller_with_scope(audiences_scope(&["user:a"])),
+        // `ThreadSpansView::jit_update` hard-requires a bounded range (thread_spans_view.rs);
+        // `insert_range` already covers the real-clock `now()` these spans were stamped with
+        // (see `seed_process`), so it doubles as the query range here without inventing a new
+        // one.
+        Some(insert_range),
         &thread_spans_a_sql,
     )
     .await?;
@@ -547,6 +570,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:b"])),
+            Some(insert_range),
             &thread_spans_a_sql,
         )
         .await?,
@@ -558,6 +582,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(ReadScope::All),
+            Some(insert_range),
             &thread_spans_a_sql,
         )
         .await?,
@@ -575,6 +600,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_scope(audiences_scope(&["user:a"])),
+            None,
             &processes_c_sql,
         )
         .await?,
@@ -587,6 +613,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_unstamped_audience(audiences_scope(&["group:everyone"]), "group:everyone",),
+            None,
             &processes_c_sql,
         )
         .await?,
@@ -599,6 +626,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             lakehouse.clone(),
             view_factory.clone(),
             caller_with_unstamped_audience(audiences_scope(&["user:a"]), "group:everyone"),
+            None,
             &processes_c_sql,
         )
         .await?,
