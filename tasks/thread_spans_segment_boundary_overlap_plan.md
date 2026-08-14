@@ -124,13 +124,13 @@ fell inside a strict tick overlap. Review showed that approach degenerates for t
 ### Deterministic, no live generator needed (basis for the regression test)
 
 `rust/analytics/tests/thread_spans_ordering_db_test.rs` already contains this exact scenario:
-`thread_spans_ordering_across_partitions` (`:210-448`) ingests two real thread blocks into one
+`thread_spans_ordering_across_partitions` (`:208-437`) ingests two real thread blocks into one
 `ThreadStream` via `push_and_insert_block` (`:73`), forces them into different 1-hour JIT
 insert-time segments by pushing block 1's `insert_time`/`begin_time`/`end_time` back two hours
 (`:271-280`), and then queries `view_instance('thread_spans', ...)` across the boundary,
 asserting no `SortExec` and non-decreasing `begin` across the scan (`:400-433`).
 
-Crucially, **that test already documents this plan's bug and works around it** (`:239-253`):
+Crucially, **that test already documents this plan's bug and works around it** (`:239-254`):
 `replace_block` captures the replacement block's `begin` before the outgoing block's `close()`
 runs, "a hairline overlap that … is enough to trip the §3 non-overlap guard", so the test sleeps
 200 ms and then discards a throwaway "spacer" block to manufacture a real gap between block 1's
@@ -145,7 +145,7 @@ strict `>` check trips either way.)
 Note what does **not** work, since it is the obvious-looking approach and it silently produces a
 vacuous test: fabricating block ticks with `UPDATE blocks SET begin_ticks = $1, end_ticks = $2, …`
 (the pattern used by `thread_spans_degenerate_range_retires_stale_partition` (`:697`, SQL at
-`:738`) and five other tests in that file). Event ticks are stamped from a real `now()` relative to
+`:738`) and six other tests in that file). Event ticks are stamped from a real `now()` relative to
 `process.start_ticks` (`:95-104`), while `make_call_tree`'s chain range comes from the *rewritten*
 `begin_ticks`/`end_ticks` (`thread_spans_view.rs:107-113`). Fabricated ticks therefore put every
 event outside `[begin_range_ns, end_range_ns]`, where `call_tree.rs:142-144` drops them: the
@@ -153,7 +153,8 @@ partition ends up with zero rows, `finalize_partition_write` writes `event_time_
 (`write_partition.rs:711-717`), and `make_partitioned_execution_plan` filters the empty partition
 out (`partitioned_execution_plan.rs:260-261`) *before* the non-overlap check ever runs. This is
 precisely why every tick-rewriting test in that file asserts on partition **metadata** only, never
-on rows, and why `:443-448` documents deliberately leaving `begin_ticks`/`end_ticks` alone.
+on rows, and why the test's own note at `:267-270` documents deliberately leaving
+`begin_ticks`/`end_ticks` alone.
 
 ## Current State
 
@@ -205,7 +206,7 @@ column existed" (`:436-438`, with the `ALTER` at `:439`).
 (`partition_cache.rs:66-83`, `:148-165`, `:359-379`, `:394-412`; struct builds at `:116-126`,
 `:200-210`, `:446-456`) and written in one production INSERT (`write_partition.rs:529-546` — a bare
 positional `VALUES($1,...,$12, 2, $13)` with the literal `2` being `partition_format_version`). The
-only other INSERT anywhere is in a test, `net_spans_retire_overlap_db_test.rs:51-57`, which already
+only other INSERT anywhere is in a test, `net_spans_retire_overlap_db_test.rs:53-57`, which already
 uses an explicit 12-column list and therefore needs no edit — and which is the precedent for making
 the production one explicit too.
 `list_partitions()` additionally mirrors the table to SQL with its own Arrow schema
@@ -232,19 +233,38 @@ test (`thread_spans_batched_generation_matches_per_segment`,
 ### Part A — producer: one timestamp per flush (micromegas_tracing)
 
 Mirror Unreal's `FlushThreadStream` shape in the four Rust flush paths (`dispatch.rs` —
-thread `:820-835`, log `:800-817`, metrics `:~703`, image `:~561`): take `let now =
-DualTime::now();` once, pass it to the replacement block's constructor, and close the outgoing
-block with the same value. For the log/metrics/image paths this stamp **must be taken after the
-stream mutex is acquired** — mirroring `FlushLogStreamImpl`/`FlushMetricStreamImpl`, which are
-entered with the lock already held and take `DualTime::Now()` inside it
-(`unreal/MicromegasTracing/Private/Dispatch.cpp:105-123, 125-…, 252-272`) — i.e. `now` is taken
-right where the current code's `is_empty()` early return sits in `flush_log_buffer` (`:800-817`),
-`flush_metrics_buffer` (`:695-712`), and `flush_image_buffer` (`:553-573`), not at function entry:
-a stamp taken before the lock would let another thread push an event through `log()`/`metrics()`
-(which take the same mutex — `dispatch.rs:725/758/776` vs `:801`, `:621/635/654/678` vs `:696`,
-`:540` vs `:554`) between the stamp and the acquisition, producing `block.end_ticks` before that
-event's own tick. The thread path is unaffected by this ordering concern — it is lock-free and runs
-only on the owning thread.
+thread `:820-835`, log `:800-817`, metrics `:695-712`, image `:553-573`): use **one** timestamp for
+both the replacement block's `begin` and the outgoing block's close, instead of today's two separate
+`DualTime::now()` stamps.
+
+No new stamp needs to be taken at all. Each flush path already builds the replacement block — and
+therefore already stamps its `begin` — *before* closing the outgoing one (`dispatch.rs:561`, `:703`,
+`:808`, `:826`, then `:570`, `:710`, `:815`, `:833`). So the shared value is simply the replacement
+block's own `begin`, read back off it:
+
+```rust
+let new_block = Arc::new(ThreadBlock::new(buffer_size, self.process_id, stream_id, next_offset));
+let begin = new_block.begin;                    // Copy: must be read before the Arc moves
+let mut old_block = stream.replace_block(new_block);
+assert!(!stream.is_full());
+Arc::get_mut(&mut old_block).unwrap().close_at(begin);
+```
+
+That makes `block[k].end == block[k+1].begin` true *by construction* rather than by passing one
+value to two places, and it needs no new constructor (see below).
+
+It also satisfies, for free, the ordering constraint this design would otherwise have to arrange by
+hand. For the log/metrics/image paths the stamp **must be taken after the stream mutex is
+acquired** — mirroring `FlushLogStreamImpl`/`FlushMetricStreamImpl`, which are entered with the lock
+already held and take `DualTime::Now()` inside it
+(`unreal/MicromegasTracing/Private/Dispatch.cpp:105-123, 125-143`; the wrappers that take the lock
+are `:252-272`). A stamp taken before the lock would let another thread push an event through
+`log()`/`metrics()` (which take the same mutex — `dispatch.rs:725/758/776` vs `:801`,
+`:621/635/654/678` vs `:696`, `:540` vs `:554`) between the stamp and the acquisition, producing
+`block.end_ticks` before that event's own tick. Because the replacement block is already constructed
+inside the flush's mutex guard in all three lock-held paths, its `begin` is already stamped under
+the lock and **no code motion is required**. The thread path is unaffected by this concern either
+way — it is lock-free and runs only on the owning thread.
 
 Scope that claim precisely, because it is easy to over-read: taking the stamp under the lock closes
 the **close side** of the window (no event already in the outgoing block can post-date its `end`).
@@ -258,10 +278,10 @@ those blocks' event-time geometry. The thread path is immune to this half too (s
 lock-free), which is why `thread_spans` — the only view that *does* declare the ordering — is fully
 covered. Mechanically:
 
-- `DualTime` (`rust/tracing/src/time.rs:4-8`) currently derives only `Debug`. Handing one stamp to
-  two places, and asserting equality in the new test, both need more: add
-  `#[derive(Debug, Clone, Copy, PartialEq, Eq)]`. Both fields (`i64`, `DateTime<Utc>`) are `Copy`,
-  and adding derives is purely additive for downstream crates.
+- `DualTime` (`rust/tracing/src/time.rs:4-8`) currently derives only `Debug`. Reading `begin` back
+  out of an `Arc<Block>` needs `Copy`, and asserting equality in the new test needs `PartialEq`: add
+  `#[derive(Debug, Clone, Copy, PartialEq, Eq)]`. Both fields (`i64`, `DateTime<Utc>`) are `Copy` and
+  `Eq`, and adding derives is purely additive for downstream crates.
 - `EventBlock::close` (`rust/tracing/src/event/block.rs:18-20`) gains a sibling
   `close_at(&mut self, end: DualTime)` used by the four flush paths. The existing self-stamping
   `close()` is **retained** (not removed) because it stays the right call for the standalone-block
@@ -270,34 +290,25 @@ covered. Mechanically:
   **zero** callers inside `micromegas_tracing` itself — all four flush paths move to `close_at` —
   and survives entirely for those out-of-crate callers, 23
   call sites across `rust/analytics/benches/parse_block.rs`, the nine `rust/analytics/tests/`
-  files below, and `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs:169, 176, 183`. Note
-  there is no *shutdown* path that needs it — `shutdown_telemetry` (`guards.rs:66-70`) goes through
-  the ordinary flush paths and `Dispatch::shutdown` (`dispatch.rs:488-496`) never touches a block.
-- `EventBlock<Q>` gains an **inherent** associated function
-  `new_at(buffer_size, process_id, stream_id, event_offset, begin: DualTime) -> Self`, declared in
-  the same `impl<Q> EventBlock<Q> where Q: micromegas_transit::HeterogeneousQueue` block that
-  already holds `close` (`block.rs:14-21`). That bound is all `new_at`'s body needs
-  (`Q::new(buffer_size)`, as today's `new` at `:65` shows) and is *weaker* than the trait impl's
-  `HeterogeneousQueue + ExtractDeps`. `TracingBlock::new`'s existing impl (`block.rs:55-69`) becomes
-  a one-line delegation to `Self::new_at(.., DualTime::now())`.
-
-  **The `TracingBlock` trait itself is not touched**: no new required method, no provided default,
-  no `where Self: Sized`, and nothing breaks for out-of-tree implementors. This works because all
-  four flush sites name *concrete* aliases of `EventBlock<Q>` — `ThreadBlock`
-  (`spans/block.rs:166`), `LogBlock` (`logs/block.rs:122`), `MetricsBlock` (`metrics/block.rs:112`),
-  `ImageBlock` (`images/block.rs:20`) — so `ThreadBlock::new_at(..)` resolves to the inherent fn
-  with no trait involvement, and inherent items win resolution anyway. Everything else keeps calling
-  `new(..)` unchanged: `EventStream::new` (`event/stream.rs:52`, whose first block has no
-  predecessor), `rust/analytics/benches/parse_block.rs`, the nine `rust/analytics/tests/` files that
-  build blocks directly (`span_tests.rs`, `parse_block_tests.rs`, `parse_corrupt_block_tests.rs`,
+  files (`span_tests.rs`, `parse_block_tests.rs`, `parse_corrupt_block_tests.rs`,
   `parse_alloc_test.rs`, `log_tests.rs`, `metrics_test.rs`, `image_tests.rs`,
-  `jit_process_batch_db_test.rs`, `thread_spans_ordering_db_test.rs`) and
-  `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs:168, 175, 182`. Together with the
-  retained `close()`, that leaves 25 `new` and 23 `close` call sites across twelve files untouched
-  that a plain signature change would have had to edit by hand for no behavioral gain — worth
-  avoiding in code this subtle. Name the new parameter `event_offset`, matching `EventBlock`'s own
-  field (`block.rs:11`) and its `new` impl (`:59`); only the trait's *declaration* spells it
-  `object_offset`.
+  `jit_process_batch_db_test.rs`, `thread_spans_ordering_db_test.rs`), and
+  `rust/telemetry-sink/tests/http_event_sink_transport_tests.rs:169, 176, 183`. Note
+  there is no *shutdown* path that needs it: `Dispatch::shutdown` (`dispatch.rs:488-496`) only swaps
+  the sink and never touches a block, and `shutdown_telemetry` (`guards.rs:66-70`) calls the
+  ordinary `flush_log_buffer`/`flush_metrics_buffer` (thread buffers are flushed by
+  `TracingThreadGuard::drop`, `guards.rs:85-89`; images are not flushed at shutdown at all, which is
+  pre-existing and out of scope here).
+- **No new constructor is needed, and `TracingBlock` is not touched.** `EventBlock`'s `begin` is
+  already a public field (`block.rs:8`), so the flush paths read the shared stamp off the
+  replacement block they already build. `TracingBlock::new` keeps its signature and its
+  self-stamping body (`block.rs:55-69`), the trait gains no method, and all 24 of `new`'s
+  out-of-crate call sites across 11 files — plus `EventStream::new` (`event/stream.rs:52`, whose
+  first block has no predecessor) — stay untouched. An earlier draft of this plan added an inherent
+  `EventBlock::new_at` taking the stamp as a parameter; that is strictly more API surface for the
+  same result, and it makes `end == next.begin` a property of two call sites agreeing rather than a
+  property of the code's shape. Dropping it also removes any need to reason about inherent-vs-trait
+  method resolution or about which impl block carries which `Q` bound.
 - Only the thread path affects `thread_spans` ordering, but all four paths get the same treatment
   for consistency — the log/metrics/images views are `InsertTime`-bounded and indifferent.
 
@@ -308,8 +319,10 @@ analytics-side equivalence test's synthetic data already touches exactly, matchi
 producer behavior.
 
 Add a `rust/tracing/tests/` unit test (crate convention: tests live under `tests/`, never inline),
-modelled on `rust/tracing/tests/image_tests.rs:9-42` — `init_in_memory_tracing()` (which enables CPU
-tracing, `test_utils.rs:29`), then read the blocks out of `InMemorySink`'s `MemSinkState`,
+modelled on `rust/tracing/tests/image_tests.rs:9-42` — `init_in_memory_tracing()` (defined in
+`rust/tracing/src/test_utils.rs:63`, and enabling CPU tracing via the final `true` argument at
+`:29`), then read the blocks out of `InMemorySink`'s `MemSinkState`
+(`rust/tracing/src/event/in_memory_sink.rs:15-34`),
 `#[serial]` because the dispatch is process-wide. The sink only ever receives *closed* blocks, so
 the sequence must be **emit → flush → emit → flush**, then assert
 `blocks[0].end == Some(blocks[1].begin)` (ticks and wall-clock both — they come from one
@@ -318,7 +331,7 @@ the sequence must be **emit → flush → emit → flush**, then assert
 Two traps worth stating, because both silently produce a broken test:
 
 - **Flushing twice with no second emit yields only one block.** All four flush paths early-return
-  on `is_empty()` (`dispatch.rs:555`, `:697`, `:802`, `:822`), so `emit → flush → flush` leaves the
+  on `is_empty()` (`dispatch.rs:555`, `:697`, `:802`, `:821`), so `emit → flush → flush` leaves the
   sink holding a single block and `blocks[1]` panics on an out-of-bounds index.
 - The live replacement block is unreachable from the sink in every case, but it lives in the
   *thread-local* stream only for the thread path; the log/metrics/image replacements live in
@@ -371,7 +384,10 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
   first and merely accidental for the rest. Say so in the rustdoc so the rule is not
   later "simplified" away on the grounds that the thread_spans path is single-shot. It returns
   `Result<Option<TimeRange>>` today (`:631`); widen that to a small struct carrying both the range
-  and the folded `max_sort_key_time`. Two call sites follow: the load-bearing one is internal —
+  and the folded `max_sort_key_time`. That struct must be `pub`: `write_rows_and_track_times` is
+  itself `pub` and is called from `rust/analytics/tests/`, which compiles as an external crate
+  (unlike the private `PartitionWriteResult`, which is only ever internal). Two call sites follow:
+  the load-bearing one is internal —
   `write_partition.rs:846`, whose `Ok(range) => range` arm and `Err` arm (`:847-866`) destructure
   the return value and whose `finalize_partition_write(event_time_range, …)` call (`:869-878`) must
   now also forward the new value. The other is `rust/analytics/tests/write_partition_tests.rs:34`,
@@ -381,8 +397,14 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
   empty-partition branches (`:712-717`'s zero-row-file case and `:765-770`'s no-`event_time_range`
   case) must set `max_sort_key_time: None` alongside their existing `event_time_range: None`, so an
   empty partition can never carry a non-NULL bound. While touching the INSERT (`:531`), convert it
-  to an **explicit column list** — the bare positional `VALUES` with a hardcoded `2` mis-binds
-  silently if a column is ever added anywhere but last.
+  to an **explicit column list**. Note precisely what this does and does not buy: Postgres's
+  `ALTER TABLE ... ADD COLUMN` always appends, so the current bare positional
+  `VALUES($1,…,$12, 2, $13)` cannot mis-bind from an ordinary migration — and *that* is the real
+  hazard here, since adding column 15 without touching this statement compiles, runs, and silently
+  stores NULL forever. The explicit list makes the statement's dependency on the table's shape
+  visible at the call site (and pins the hardcoded `2` to `partition_format_version` by name rather
+  than by ordinal), which is what makes the omission catchable in review. The persistence
+  round-trip test in Step 9 is what actually catches it mechanically.
 
 ### 3. Populate it in `thread_spans_view`
 
@@ -410,7 +432,7 @@ with no admin `retire_partitions` call required (see Trade-offs).
 
 Note this is **not** a SQL-visible change: `SCHEMA_VERSION` feeds only the partition file-schema
 hash (`get_file_schema_hash` returns `vec![SCHEMA_VERSION]`, `:325-327`). The Arrow schema users
-actually query is built in `span_table.rs:52-82` and is untouched by this plan, so every existing
+actually query is built in `span_table.rs:50-84` and is untouched by this plan, so every existing
 `thread_spans` dashboard keeps working unchanged — the rebuild is invisible apart from a one-off
 first-query latency bump.
 
@@ -436,35 +458,65 @@ first-query latency bump.
   Inserting it mid-list (say, next to `max_event_time`, where it reads more naturally) would break
   both the bridge and those dashboards. Don't. No `sql_arrow_bridge.rs` change is needed: `TIMESTAMPTZ` already maps to a nullable
   `TimestampColumnReader` (`:330-337`, `:165-194`), the same path `min_event_time` uses.
-- Extend `Partition::validate` (`partition.rs:90-117`) with the cheap invariant: when both are
-  present, `min_event_time <= max_sort_key_time <= max_event_time`; also reject a non-NULL
-  `max_sort_key_time` when the event-time range is absent (an empty partition has no sort-key bound
-  to record). Note the struct holds a single `event_time_range: Option<TimeRange>` (`partition.rs:14`),
-  not two independently-nullable fields, so the second clause is just
-  `event_time_range.is_none() && max_sort_key_time.is_some()` and only ever bites the `num_rows == 0`
-  branch; the "only one of min/max is NULL" case is already caught at SQL decode
-  (`partition_cache.rs:110-114`).
+- **Leave the pruning predicate alone.** `LivePartitionProvider::fetch`'s query-range branch prunes
+  with `min_event_time <= $3 AND max_event_time >= $4` (`partition_cache.rs:375-376`). That must keep
+  reading `max_event_time`: it is the max span *end*, so it is the only bound that conservatively
+  covers a span whose `begin` precedes the query range but whose `end` reaches into it. Narrowing it
+  to `max_sort_key_time` would silently prune partitions that hold matching rows. Worth a comment at
+  the predicate, since the new column will look like a tempting tightening.
+- Extend `Partition::validate` (`partition.rs:90-117`) with **one** structural invariant: reject a
+  non-NULL `max_sort_key_time` when the event-time range is absent (an empty partition has no
+  sort-key bound to record). The struct holds a single `event_time_range: Option<TimeRange>`
+  (`partition.rs:14`), not two independently-nullable fields, so the clause is just
+  `event_time_range.is_none() && max_sort_key_time.is_some()`; it only ever bites the `num_rows == 0`
+  branch, and the "only one of min/max is NULL" case is already caught when the row is decoded
+  (`partition_cache.rs:110-114`). This mirrors `validate`'s existing empty-partition clauses exactly
+  in kind — presence, not value — and is guaranteed by construction, because both empty-partition
+  branches of `finalize_partition_write` set `max_sort_key_time: None` alongside
+  `event_time_range: None` (Part B §2).
 
-  Two properties of `validate` constrain what may safely go in it, and both belong in its rustdoc.
-  First, **it is enforced on the read path only**: its three callers are all in `partition_cache.rs`
-  (`:128`, `:212`, `:458`), each propagating with `?`; nothing in `insert_partition` calls it. A
-  violating partition is therefore written and committed silently and then hard-fails *reads* — and
-  since `fetch_overlapping_insert_range` (`:60-91`) is not view-scoped, one bad row fails
-  materialization for **every** view, not just the offending one. So the invariant must assert only
-  what the writer guarantees by construction, never a hopeful expectation. Both clauses clear that
-  bar for `thread_spans`: every emitted row's `begin` is either a real event time already filtered
-  to `>= begin_range_ns` (`call_tree.rs:139-141`, assigned `:150`) or `begin_range_ns` itself
-  (`:201`, `:109`), with `begin_range_ns`/`end_range_ns` derived from the chain's first/last block
-  ticks (`thread_spans_view.rs:105-113`) through the same `ConvertTicks` instance and the same
-  monotone formula (`time.rs:120-129`) that produces `min_event_time`/`max_event_time`
-  (`:207-214`) — so the row `begin`s are bracketed by the partition's block-tick bounds by
-  construction, and Postgres's microsecond truncation floors both sides identically.
+  **Do not also assert `min_event_time <= max_sort_key_time <= max_event_time`**, even though it is
+  true for every partition this plan's writer produces. Two properties of `validate` rule it out,
+  and both belong in its rustdoc.
+
+  First, **`validate` is enforced on the read path only**: its three callers are all in
+  `partition_cache.rs` (`:128`, `:212`, `:458`), each propagating with `?`; nothing in
+  `insert_partition` calls it. A violating partition is therefore written and committed silently and
+  then hard-fails *reads* — and since `fetch_overlapping_insert_range` (`:60-91`) is not
+  view-scoped, one bad row fails materialization for **every** view, not just the offending one. So
+  the invariant must assert only what the writer guarantees by construction, never a hopeful
+  expectation.
+
+  An ordering clause does not clear that bar, because it depends on data the writer does not
+  control. `min_event_time`/`max_event_time` are derived from `block.begin_ticks`/`end_ticks`
+  (`thread_spans_view.rs:201-214`), which are bound straight from the client's payload
+  (`rust/ingestion/src/web_ingestion_service.rs:192`) with no validation in ingestion, in analytics,
+  or as a CHECK constraint. A block with `begin_ticks > end_ticks` yields an inverted
+  `event_time_range` — today that is merely a silently odd row; under an ordering clause it becomes
+  an unsatisfiable invariant and therefore a lakehouse-wide read outage triggerable by one
+  malformed client. The row-level property the plan actually relies on is asserted where it is
+  cheap and safe instead: `ensure_begin_non_decreasing` at write time, plus the no-DB
+  `call_tree_tests.rs` bounds test (Step 8).
+
   Second, the invariant applies to **every** view's partitions, not just `thread_spans`'. Any future
-  view populating `max_sort_key_time` must re-verify both clauses first. `BlocksView` in particular
-  would not clear the lower one as written: its `Concatenated` sort key is `insert_time` while its
-  `event_time_range` is `[min begin_time, max insert_time]` (`blocks_view.rs:177-183`, itself
-  carrying a `//todo: make more robust`), so a client clock skewed ahead of the server could put a
-  block's `begin_time` above its `insert_time` and break `min_event_time <= max_sort_key_time`.
+  view populating `max_sort_key_time` must re-check the structural clause against its own writer.
+  `BlocksView` illustrates why an ordering clause would have been the wrong shape here too: its
+  `Concatenated` sort key is `insert_time` while its `event_time_range` is
+  `[min begin_time, max insert_time]` (`blocks_view.rs:177-183`, itself carrying a
+  `//todo: make more robust`), so a client clock skewed ahead of the server could put a block's
+  `begin_time` above its `insert_time`.
+
+  For the record, the ordering property *does* hold by construction for `thread_spans` — it is the
+  basis of the soundness argument below, just not of a runtime assertion. Every emitted row's
+  `begin` is either a real event time already filtered to `>= begin_range_ns`
+  (`call_tree.rs:139-141`, assigned `:150`) or `begin_range_ns` itself (`:201`, `:109`), with
+  `begin_range_ns`/`end_range_ns` derived from the chain's first/last block ticks
+  (`thread_spans_view.rs:105-113`) through the same `ConvertTicks` instance and the same monotone
+  formula — `delta_ticks_to_ns` and `delta_ticks_to_time` are the identical expression
+  (`time.rs:120-129`) — that produces `min_event_time`/`max_event_time` (`:201-214`). Blocks are
+  sorted ascending by `(begin_ticks, end_ticks)` (`jit_partitions.rs:243-248`), so each chain's
+  range nests inside the partition's. Postgres's microsecond truncation is monotone and applied by
+  the same encoder to all three values, so the non-strict inequalities survive it.
 
 ### 5. Change what the check compares
 
@@ -545,12 +597,12 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 ## Implementation Steps
 
 1. **Producer fix (Part A)**: derive `Clone, Copy, PartialEq, Eq` on `DualTime` (`tracing/src/time.rs`);
-   add the inherent `EventBlock::close_at` and `EventBlock::new_at`, with `TracingBlock::new`'s impl
-   delegating to `new_at(.., DualTime::now())` and the trait itself unchanged (`event/block.rs`) —
-   no other constructor call site changes; then a
-   single `DualTime::now()` per flush in the four `dispatch.rs` flush paths, taken after the stream
-   mutex is acquired (log/metrics/image — at the current `is_empty()` early-return point) or at
-   function entry (thread path only, which is lock-free). New `rust/tracing/tests/` test following
+   add the inherent `EventBlock::close_at(&mut self, end: DualTime)` alongside the retained
+   self-stamping `close()` (`event/block.rs`) — `TracingBlock` and `TracingBlock::new` are unchanged,
+   and no constructor call site moves; then, in each of the four `dispatch.rs` flush paths, read the
+   replacement block's `begin` before handing the `Arc` to `replace_block` and pass it to
+   `close_at` instead of calling `close()`. No new `DualTime::now()` is introduced, so the
+   under-the-lock requirement is met without moving any code. New `rust/tracing/tests/` test following
    **emit → flush → emit → flush** (a second emit is required — the flush paths early-return on
    `is_empty()`, so flushing twice in a row yields only one block) that asserts the first closed
    block's `end` == the second's `begin`.
@@ -562,7 +614,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    `if 7 == current_version { … }` block. The bump without the ladder entry is not a no-op: the
    `assert_eq!(current_version, LATEST_LAKEHOUSE_SCHEMA_VERSION)` at `:104` (and `:48`) panics on
    every service start.
-3. **`Partition` + reads**: new field/accessor + `validate` invariant (`partition.rs`); add the
+3. **`Partition` + reads**: new field/accessor + the single structural `validate` clause
+   (`partition.rs` — *not* an ordering clause, see Part B §4); add the
    column to the four SELECTs and three struct builds in `partition_cache.rs`; extend
    `list_partitions_table_function.rs` (Arrow schema + both SELECTs).
 4. **Write path**: `PartitionRowSet` field; `write_rows_and_track_times` all-Some running-max fold
@@ -599,7 +652,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
      exist), the producer comparison in `view.rs:170-179`, and the `jit_partitions.rs` module doc.
      After Part A, both producers touch exactly by design; strict overlap identifies data from
      pre-fix `micromegas-tracing` versions. `view.rs:171` names `TracingBlock::new -> DualTime::now()`
-     as the mechanism and goes stale on both counts once `new_at` carries the shared stamp.
+     as the mechanism and goes stale on both counts once the outgoing block is closed with the
+     replacement's own `begin`.
    - `partition.rs` / `write_partition.rs`: field and fold-rule rustdoc (including why any-None
      poisons the partition value).
    - `doc/how_to_query/README.md`'s `#### list_partitions` Returns table (`:475-488`): add
@@ -647,18 +701,34 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    is carried by the soundness argument (single-writer producer, "Why this is sound"), which no
    unit test at this layer can pin; what (a) and (b) pin is the part that is actually code.
 9. **DB regression test** in `thread_spans_ordering_db_test.rs` — **hour-seam**, built from the
-   existing `thread_spans_ordering_across_partitions` (`:210-448`) per the Repro Steps, *not* from
+   existing `thread_spans_ordering_across_partitions` (`:208-437`) per the Repro Steps, *not* from
    the tick-rewriting pattern (see there for why fabricated ticks yield an empty, vacuous test).
    Two options, and the first is preferred:
    - **Preferred — delete the workaround in place.** Remove the 200 ms sleep and the throwaway
-     "spacer" block (`:239-253`) from `thread_spans_ordering_across_partitions`, and replace that
+     "spacer" block (`:239-254`) from `thread_spans_ordering_across_partitions`, and replace that
      comment with one explaining that the shared flush stamp (Part A) and `max_sort_key_time`
      (Part B) make the seam safe without a manufactured gap. Its existing assertions (two-plus
-     partitions, no `SortExec`, non-decreasing `begin`, `total_rows >= 2`) then *become* the
+     partitions `:366-369`, no `SortExec` `:400-403`, non-decreasing `begin` `:425`,
+     `total_rows >= 2` `:431-434`) then *become* the
      regression assertions, and add one more: every partition the query scanned has a non-NULL
      stored `max_sort_key_time`. This is strictly better than a new test — the workaround's
      removal is itself the regression signal, and leaving it in place would leave a test that
-     actively hides the bug this plan fixes.
+     actively hides the bug this plan fixes. (The test already runs raw `sqlx` against
+     `lake.db_pool` at `:271` and already queries `list_partitions()` at `:350-362` filtered to this
+     `view_instance_id`, so either route reaches the new column with no extra scaffolding.)
+
+     **Make the overlap deterministic rather than inheriting the buffer-swap width.** Removing the
+     sleep and spacer leaves a real overlap, but only one buffer swap wide, and the stored bounds
+     are Postgres `TIMESTAMPTZ` (microseconds) compared with a strict `>`. On a fast machine that
+     overlap can truncate to *equality*, in which case the guard does not trip and the test passes
+     even with the fix reverted — a regression test that silently stops biting. Fix it in the UPDATE
+     the test already runs at `:271-280`: also push block 2's `begin_ticks` back by a fixed delta
+     (a few milliseconds' worth of ticks) so the overlap is large and reproducible. This is safe
+     precisely where the wholesale tick-fabrication pattern is not — lowering only `begin_ticks`
+     *widens* the chain's `[begin_range_ns, end_range_ns]` window, so no event is filtered out by
+     `call_tree.rs:139-143` and the partition still carries rows. It also cannot invert the block
+     (`begin_ticks` only decreases), so it stays clear of the degenerate shape discussed under
+     `validate` in Part B §4.
    - **Alternative**, if keeping the existing test untouched is preferred: add a sibling
      `#[ignore]`d `#[tokio::test]` that is a copy without the sleep/spacer. Costs a near-duplicate
      ~200-line test and leaves the misleading workaround in the original.
@@ -669,12 +739,30 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    Part B must tolerate forever.
 
    **Plus a persistence round-trip test**, in the style of `net_spans_retire_overlap_db_test.rs`
-   (which inserts synthetic `lakehouse_partitions` rows with no ingestion, no object store, no
-   parquet and no query engine). Build a `Partition` literal with `max_sort_key_time: Some(t)`,
+   (which inserts synthetic `lakehouse_partitions` rows with no ingestion, no parquet and no query
+   engine). Build a `Partition` literal with `max_sort_key_time: Some(t)`,
    run it through the production `insert_partition` (`write_partition.rs:415` — make it `pub` for
-   test reachability, the same lever `1429` used on `update_partition`), then read it back through
-   `partition_cache` and assert the value survives; add a sibling row with `None` to pin the legacy
-   path. Use a fresh `view_instance_id` per test so the retire predicate is a no-op and no
+   test reachability, the same lever `1429` used on `update_partition`; mirror the explanatory
+   "not intended as API" rustdoc already on `thread_spans_view::update_partition` at `:255-265`),
+   then read it back through `PartitionCache::fetch_overlapping_insert_range` (`partition_cache.rs:60`,
+   which needs only a `&PgPool`) and assert the value survives; add a sibling row with `None` to pin
+   the legacy path.
+
+   Four concrete constraints, all of which cost an hour each to rediscover:
+   - `insert_partition`'s signature is
+     `(&DataLakeConnection, &Partition, RetireMatch, &[TimeRange], Arc<dyn Logger>)` — no
+     transaction and no `source_row_count` parameter.
+   - It derives the source row count via `hash_to_object_count(&partition.source_data_hash)`, an
+     `i64::from_le_bytes`, so the test's `source_data_hash` must be **exactly 8 bytes**. The
+     `vec![0]` used by the ordering tests' helpers errors here.
+   - The `Some(t)` and `None` rows need **disjoint insert ranges**, or the second insert's
+     `RetireMatch` step (or the `lakehouse_partitions_no_overlap` exclusion constraint) removes or
+     rejects the first.
+   - `num_rows > 0` literals must carry `Some(file_path)` and `Some(event_time_range)` or
+     `Partition::validate` rejects them on read. No object-store *file* is needed, but the test
+     harness's `connect()` still requires `MICROMEGAS_OBJECT_STORE_URI` to be set.
+
+   Use a fresh `view_instance_id` per test so the retire predicate is a no-op and no
    object-store file is ever referenced.
 
    This is deliberately separate from the end-to-end test rather than folded into it, because the
@@ -726,8 +814,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
     change** clause, matching every comparable entry already in the file (e.g. `## Unreleased` line
     8, v0.29.0 lines 13-15/18-20/24/26). The `**Tracing:**` entry needs **none**: the `TracingBlock`
     trait is untouched, `TracingBlock::new` and `EventBlock::close` keep their signatures and
-    behavior, and `EventBlock::new_at`/`close_at` are pure inherent additions — mention them as
-    additions and stop. The `**Analytics:**` entry
+    behavior, and `EventBlock::close_at` is a pure inherent addition — mention it as an
+    addition and stop. The `**Analytics:**` entry
     must name `PartitionRowSet` and `Partition` (both all-public-field structs, so downstream struct
     literals break), `PartitionRowSet::new`'s new third argument, and
     `write_rows_and_track_times`'s widened return type. It should also state what is *not* broken,
@@ -744,12 +832,12 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 
 | File | Change |
 |---|---|
-| `rust/tracing/src/time.rs` | Derive `Clone, Copy, PartialEq, Eq` on `DualTime` (one stamp must reach two places; the new test compares them) |
-| `rust/tracing/src/dispatch.rs` | One `DualTime::now()` per flush (4 sites); construct the replacement with it and close the outgoing block with the same stamp |
-| `rust/tracing/src/event/block.rs` | Inherent `EventBlock::close_at` and `EventBlock::new_at`; `TracingBlock::new`'s impl delegates to `new_at` — the trait is unchanged |
+| `rust/tracing/src/time.rs` | Derive `Clone, Copy, PartialEq, Eq` on `DualTime` (`Copy` to read `begin` out of an `Arc`; `PartialEq` for the new test) |
+| `rust/tracing/src/dispatch.rs` | 4 flush sites: read the replacement block's `begin`, then `close_at(begin)` instead of `close()` |
+| `rust/tracing/src/event/block.rs` | Inherent `EventBlock::close_at`, alongside the retained `close()` — `TracingBlock` and `TracingBlock::new` are unchanged |
 | `rust/tracing/tests/` | New boundary-stamp unit test (emit → flush → emit → flush, compare `end`/`begin` via `InMemorySink`) |
 | `rust/analytics/src/lakehouse/migration.rs` | v7→v8: nullable `max_sort_key_time TIMESTAMPTZ`; bump version constant; **wire the step into the ladder** |
-| `rust/analytics/src/lakehouse/partition.rs` | New field + accessor; `validate` invariant |
+| `rust/analytics/src/lakehouse/partition.rs` | New field + accessor; one structural `validate` clause (no ordering assertion — see Part B §4) |
 | `rust/analytics/src/lakehouse/partition_cache.rs` | Add column to 4 SELECTs / 3 struct builds (`sort_order` read pattern, not `file_path`'s) |
 | `rust/analytics/src/lakehouse/list_partitions_table_function.rs` | Arrow schema + both SELECTs |
 | `rust/analytics/src/lakehouse/write_partition.rs` | `PartitionRowSet` field; all-Some running-max fold in `write_rows_and_track_times`; `PartitionWriteResult`; explicit-column-list INSERT; `insert_partition` made `pub` (test reachability) |
@@ -762,7 +850,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/tests/{per_file_scan_ordering,blocks_view_merge_ordering,sql_batch_view_merge_ordering,log_stats_ordering}_tests.rs` | One-line helper updates for the new field |
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
 | `rust/analytics/tests/call_tree_tests.rs` | New no-DB row-bound test: out-of-range events dropped not clamped; last preorder row is the max `begin` |
-| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Drop the sleep/spacer workaround in `thread_spans_ordering_across_partitions` (`:239-253`) and assert non-NULL `max_sort_key_time` — its removal *is* the regression test |
+| `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Drop the sleep/spacer workaround in `thread_spans_ordering_across_partitions` (`:239-254`), widen the seam deterministically via block 2's `begin_ticks`, and assert non-NULL `max_sort_key_time` — the workaround's removal *is* the regression test |
 | `rust/analytics/tests/` (new file) | Persistence round-trip DB test: `Partition` → `insert_partition` → `partition_cache`, `Some(t)` and `None` rows (net_spans_retire_overlap style — no ingestion/object store/parquet) |
 | `doc/how_to_query/README.md` | Add `max_sort_key_time` (and the already-missing `num_rows`, `partition_format_version`, `sort_order`) to the `list_partitions` Returns table |
 | `mkdocs/docs/admin/functions-reference.md` | Add `max_sort_key_time` (and the already-missing `partition_format_version`) to the `list_partitions()` Returns table |
@@ -869,7 +957,8 @@ thirteen, not in the `doc/how_to_query` table's style.
 ## Testing Strategy
 
 - **Producer boundary test** (`rust/tracing/tests/`): emit → flush → emit → flush, then assert the
-  first closed block's `end` equals the second's `begin` (one shared `DualTime`). The second emit is
+  first closed block's `end` equals the second's `begin` — they are literally the same `DualTime`,
+  since the flush closes the outgoing block with the replacement's own `begin`. The second emit is
   mandatory, not stylistic: the flush paths early-return on `is_empty()`, so back-to-back flushes
   leave the sink with a single block. The sink only ever sees closed blocks, so the live replacement
   is unreachable from it either way.
@@ -881,11 +970,14 @@ thirteen, not in the `doc/how_to_query` table's style.
   that the cut *cause* is irrelevant — is a producer argument, not something testable at this
   layer; see Step 8.)
 - **DB regression test**: `thread_spans_ordering_across_partitions` with its sleep/spacer
-  workaround removed (Implementation Step 9), asserting the live `view_instance` query succeeds,
+  workaround removed and the seam widened deterministically via block 2's `begin_ticks`
+  (Implementation Step 9), asserting the live `view_instance` query succeeds,
   `begin` is non-decreasing across the scan, and every scanned partition has a non-NULL
   `max_sort_key_time` — the end-to-end contract, and the only place that proves `update_partition`
   persists the new column and the scan path reads it back. That workaround exists today precisely
-  because of this bug, so deleting it is the sharpest available regression signal. See Step 9 for
+  because of this bug, so deleting it is the sharpest available regression signal; the deliberate
+  widening is what keeps that signal from being lost to microsecond truncation of a
+  buffer-swap-sized overlap. See Step 9 for
   why a second, *forced-cut* DB test is not included. Because it is `#[ignore]`d it runs neither in
   `cargo test` nor in `build/rust_ci.py`, so Step 10 calls it out as an explicit, must-run step
   rather than leaving it to whoever remembers.
