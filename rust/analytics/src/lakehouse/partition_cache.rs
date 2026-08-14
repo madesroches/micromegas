@@ -75,7 +75,8 @@ impl PartitionCache {
                     file_schema_hash,
                     source_data_hash,
                     num_rows,
-                    sort_order
+                    sort_order,
+                    max_sort_key_time
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -123,6 +124,7 @@ impl PartitionCache {
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
                 sort_order: r.try_get("sort_order")?,
+                max_sort_key_time: r.try_get("max_sort_key_time")?,
             };
             partition
                 .validate()
@@ -155,7 +157,8 @@ impl PartitionCache {
                     file_schema_hash,
                     source_data_hash,
                     num_rows,
-                    sort_order
+                    sort_order,
+                    max_sort_key_time
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -207,6 +210,7 @@ impl PartitionCache {
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
                 sort_order: r.try_get("sort_order")?,
+                max_sort_key_time: r.try_get("max_sort_key_time")?,
             };
             partition
                 .validate()
@@ -368,10 +372,15 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_schema_hash,
                     source_data_hash,
                     num_rows,
-                    sort_order
+                    sort_order,
+                    max_sort_key_time
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
+             -- Pruning must keep comparing max_event_time here, not max_sort_key_time: it's the
+             -- max span *end*, the only bound that conservatively covers a span whose `begin`
+             -- precedes the query range but whose `end` reaches into it. Narrowing this to
+             -- max_sort_key_time would silently prune partitions that hold matching rows.
              AND min_event_time <= $3
              AND max_event_time >= $4
              AND file_schema_hash = $5
@@ -403,7 +412,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_schema_hash,
                     source_data_hash,
                     num_rows,
-                    sort_order
+                    sort_order,
+                    max_sort_key_time
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
@@ -453,6 +463,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
                 sort_order: r.try_get("sort_order")?,
+                max_sort_key_time: r.try_get("max_sort_key_time")?,
             };
             partition
                 .validate()

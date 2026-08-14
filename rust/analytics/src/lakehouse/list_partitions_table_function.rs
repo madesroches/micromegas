@@ -89,6 +89,11 @@ impl TableProvider for ListPartitionsTableProvider {
                 DataType::List(Arc::new(Field::new("tag", DataType::Utf8, false))),
                 true,
             ),
+            Field::new(
+                "max_sort_key_time",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+                true,
+            ),
         ]))
     }
 
@@ -124,7 +129,8 @@ impl TableProvider for ListPartitionsTableProvider {
                         source_data_hash,
                         num_rows,
                         partition_format_version,
-                        sort_order
+                        sort_order,
+                        max_sort_key_time
                  FROM lakehouse_partitions
                  LIMIT {n};"
             )
@@ -142,7 +148,8 @@ impl TableProvider for ListPartitionsTableProvider {
                     source_data_hash,
                     num_rows,
                     partition_format_version,
-                    sort_order
+                    sort_order,
+                    max_sort_key_time
              FROM lakehouse_partitions;"
                 .to_string()
         };

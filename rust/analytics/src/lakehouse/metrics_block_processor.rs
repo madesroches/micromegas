@@ -65,7 +65,7 @@ impl BlockProcessor for MetricsBlockProcessor {
 
         if let Some(time_range) = record_builder.get_time_range() {
             let record_batch = record_builder.finish()?;
-            Ok(Some(PartitionRowSet::new(time_range, record_batch)))
+            Ok(Some(PartitionRowSet::new(time_range, record_batch, None)))
         } else {
             Ok(None)
         }

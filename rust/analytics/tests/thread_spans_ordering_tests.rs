@@ -33,6 +33,18 @@ use micromegas_perfetto::streaming_writer::PerfettoWriter;
 use std::sync::Arc;
 
 fn make_partition(file_path: &str, min_time: DateTime<Utc>, max_time: DateTime<Utc>) -> Partition {
+    make_partition_with_sort_key_time(file_path, min_time, max_time, None)
+}
+
+/// Like `make_partition`, but with per-call control of `max_sort_key_time` -- needed by the tests
+/// below that pin the `partition_bounds` `EventTime` arm's preference for the recorded true bound
+/// over the `[min,max]_event_time` fallback.
+fn make_partition_with_sort_key_time(
+    file_path: &str,
+    min_time: DateTime<Utc>,
+    max_time: DateTime<Utc>,
+    max_sort_key_time: Option<DateTime<Utc>>,
+) -> Partition {
     Partition {
         view_metadata: ViewMetadata {
             view_set_name: Arc::new("thread_spans".to_owned()),
@@ -47,6 +59,7 @@ fn make_partition(file_path: &str, min_time: DateTime<Utc>, max_time: DateTime<U
         source_data_hash: vec![0],
         num_rows: 10,
         sort_order: None,
+        max_sort_key_time,
     }
 }
 
@@ -259,6 +272,131 @@ async fn monotonic_begin_is_accepted() {
     assert!(
         result.is_ok(),
         "non-decreasing begin should be accepted: {result:?}"
+    );
+}
+
+/// (a) [min,max_event_time] overlap, but max_sort_key_time clears the next partition's
+/// min_event_time: the check must accept, since partition_bounds prefers the recorded exact
+/// bound over the looser max_event_time fallback.
+#[tokio::test]
+async fn recorded_sort_key_time_clearing_next_min_is_accepted() {
+    let schema = Arc::new(get_spans_schema());
+    let t0 = Utc::now();
+    // part_a's max_event_time (t0+10s) is after part_b's min_event_time (t0+5s): looks like an
+    // overlap under the old [min,max]_event_time comparison alone.
+    let part_a = make_partition_with_sort_key_time(
+        "a.parquet",
+        t0,
+        t0 + TimeDelta::seconds(10),
+        // But its true max_sort_key_time (t0+4s) clears part_b's min_event_time (t0+5s).
+        Some(t0 + TimeDelta::seconds(4)),
+    );
+    let part_b = make_partition_with_sort_key_time(
+        "b.parquet",
+        t0 + TimeDelta::seconds(5),
+        t0 + TimeDelta::seconds(20),
+        Some(t0 + TimeDelta::seconds(15)),
+    );
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let result = make_partitioned_execution_plan(
+        schema,
+        make_reader_factory(),
+        &state,
+        None,
+        &[],
+        None,
+        Arc::new(vec![part_a, part_b]),
+        &ScanOrdering::Concatenated {
+            columns: begin_ascending(),
+            bounds: OrderingBounds::EventTime,
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "a recorded max_sort_key_time that clears the next partition's min_event_time must be \
+         accepted even though [min,max]_event_time alone would look like an overlap: {result:?}"
+    );
+}
+
+/// (b) Same shape as (a), but with NULL max_sort_key_time on the previous partition: the legacy
+/// fallback to max_event_time must still reject it -- the fix must not weaken the check for
+/// partitions that never recorded the new column.
+#[tokio::test]
+async fn null_sort_key_time_falls_back_to_rejecting_legacy_overlap() {
+    let schema = Arc::new(get_spans_schema());
+    let t0 = Utc::now();
+    let part_a = make_partition_with_sort_key_time(
+        "a.parquet",
+        t0,
+        t0 + TimeDelta::seconds(10),
+        None, // legacy partition: never recorded
+    );
+    let part_b = make_partition_with_sort_key_time(
+        "b.parquet",
+        t0 + TimeDelta::seconds(5),
+        t0 + TimeDelta::seconds(20),
+        None,
+    );
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let result = make_partitioned_execution_plan(
+        schema,
+        make_reader_factory(),
+        &state,
+        None,
+        &[],
+        None,
+        Arc::new(vec![part_a, part_b]),
+        &ScanOrdering::Concatenated {
+            columns: begin_ascending(),
+            bounds: OrderingBounds::EventTime,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "NULL max_sort_key_time must fall back to the old max_event_time comparison and still \
+         reject a genuine overlap"
+    );
+}
+
+/// (c) A genuine overlap in max_sort_key_time itself must still be rejected: the new bound is not
+/// a blanket escape hatch, only a tighter, more accurate one.
+#[tokio::test]
+async fn genuine_overlap_in_recorded_sort_key_time_is_rejected() {
+    let schema = Arc::new(get_spans_schema());
+    let t0 = Utc::now();
+    let part_a = make_partition_with_sort_key_time(
+        "a.parquet",
+        t0,
+        t0 + TimeDelta::seconds(10),
+        Some(t0 + TimeDelta::seconds(8)),
+    );
+    let part_b = make_partition_with_sort_key_time(
+        "b.parquet",
+        t0 + TimeDelta::seconds(5),
+        t0 + TimeDelta::seconds(20),
+        // part_a's recorded max (t0+8s) is after part_b's min_event_time (t0+5s): a real overlap.
+        Some(t0 + TimeDelta::seconds(15)),
+    );
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let result = make_partitioned_execution_plan(
+        schema,
+        make_reader_factory(),
+        &state,
+        None,
+        &[],
+        None,
+        Arc::new(vec![part_a, part_b]),
+        &ScanOrdering::Concatenated {
+            columns: begin_ascending(),
+            bounds: OrderingBounds::EventTime,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a genuine overlap in the recorded max_sort_key_time values must still be rejected"
     );
 }
 

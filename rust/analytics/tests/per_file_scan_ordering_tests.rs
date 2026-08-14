@@ -53,6 +53,7 @@ fn make_partition(file_path: &str, index: i64, sort_order: Option<Vec<String>>) 
         source_data_hash: vec![0],
         num_rows: 10,
         sort_order,
+        max_sort_key_time: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn make_empty_partition(index: i64) -> Partition {
         source_data_hash: vec![0],
         num_rows: 0,
         sort_order: None,
+        max_sort_key_time: None,
     }
 }
 

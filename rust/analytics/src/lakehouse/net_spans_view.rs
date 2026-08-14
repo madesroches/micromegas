@@ -205,7 +205,11 @@ async fn write_partition(
             .with_context(|| "record_builder.finish()")?;
         info!("writing {nb_rows} rows");
         if nb_rows > 0 {
-            Ok(Some(PartitionRowSet { rows_time_range, rows }))
+            Ok(Some(PartitionRowSet {
+                rows_time_range,
+                rows,
+                max_sort_key_time: None,
+            }))
         } else {
             Ok(None)
         }
@@ -348,7 +352,10 @@ impl View for NetSpansView {
         // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs. (Unlike
         // ThreadSpansView, NetSpansView declares no ScanOrdering::Concatenated today, so it does
         // not also need a monotonicity check -- see thread_spans_view.rs's
-        // ensure_begin_non_decreasing.)
+        // ensure_begin_non_decreasing -- and its PartitionRowSet always carries
+        // max_sort_key_time: None. If it ever does declare that ordering, it must first add an
+        // ensure_begin_non_decreasing equivalent and populate max_sort_key_time, per
+        // tasks/thread_spans_segment_boundary_overlap_plan.md.)
         let config = JitPartitionConfig {
             block_order: BlockOrder::EventTime,
             ..Default::default()

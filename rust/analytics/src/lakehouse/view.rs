@@ -163,28 +163,37 @@ pub trait View: std::fmt::Debug + Send + Sync {
     ///   `thread_spans_view::ensure_begin_non_decreasing` checks the resulting batch at write
     ///   time.
     ///
-    ///   The *partition-ranges-don't-overlap* half is **not** established by that grouping, and is
-    ///   not fully guaranteed. A partition's declared event-time bounds come from its blocks'
-    ///   `begin_ticks`/`end_ticks`, not from the rows, and whether two adjacent blocks' ticks
-    ///   overlap depends on the producer:
-    ///   - `micromegas_tracing::dispatch`'s flush paths stamp the replacement block's `begin`
-    ///     (`TracingBlock::new` -> `DualTime::now()`) *before* closing the outgoing block
-    ///     (`close()` -> `DualTime::now()`), so `block[k].end_ticks > block[k+1].begin_ticks` by the
-    ///     cost of the buffer swap. Any cut between two adjacent blocks then yields a previous
-    ///     partition whose `max_event_time` slightly exceeds the next partition's `min_event_time`,
-    ///     if the gap survives the microsecond resolution of the stored bounds.
-    ///   - The Unreal producer (`MicromegasTracing/Private/Dispatch.cpp`,
-    ///     `NetTraceWriter.cpp`) takes a single `DualTime::Now()` and uses it for both the new
-    ///     block's `begin` and the outgoing block's `Close`, so consecutive blocks *touch* exactly
-    ///     and no overlap arises.
+    ///   The *partition-ranges-don't-overlap* half is **not** established by that grouping alone --
+    ///   a partition's declared event-time bounds come from its blocks' `begin_ticks`/`end_ticks`,
+    ///   not from the rows -- but by design both producers' consecutive blocks now *touch* exactly:
+    ///   - Both `micromegas_tracing::dispatch`'s four flush paths and the Unreal producer
+    ///     (`MicromegasTracing/Private/Dispatch.cpp`) take a single shared timestamp per flush and
+    ///     use it for both the outgoing block's close and the replacement block's `begin`, so
+    ///     `block[k].end_ticks == block[k+1].begin_ticks` by construction. This is the design intent
+    ///     the shared boundary stamp exists for: it lets call trees merge seamlessly across the cut
+    ///     (`group_contiguous_block_chains` treats touching blocks as chain-connected).
+    ///   - Data from `micromegas_tracing` versions predating that fix (or any other producer that
+    ///     stamps two separate timestamps) can still strictly overlap at block boundaries -- this is
+    ///     a legacy producer bug, not a supported producer shape, but the server tolerates it: the
+    ///     view records `max_sort_key_time` (the true max leading-sort-column value, exact per
+    ///     partition), and `partitioned_execution_plan::partition_bounds` reads that in preference
+    ///     to `max_event_time` for the non-overlap check, which the swap-window argument in
+    ///     `tasks/thread_spans_segment_boundary_overlap_plan.md` shows can never trip for cuts at
+    ///     block boundaries of either producer. Partitions written before that column existed (or by
+    ///     a view that never populates it) fall back to the old, looser `max_event_time` bound, which
+    ///     is self-healing rather than a permanent gap: `ThreadSpansView::SCHEMA_VERSION`'s bump makes
+    ///     every pre-existing partition stale by schema hash, so it rebuilds -- carrying
+    ///     `max_sort_key_time` -- automatically on its next query, no admin `retire_partitions` call
+    ///     required.
     ///
-    ///   Three residual caveats therefore remain, all backstopped by
+    ///   Two residual caveats therefore remain, both backstopped by
     ///   `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs`) failing the query
-    ///   loudly rather than returning wrong rows: the block-boundary tick overlap just described
-    ///   (`micromegas_tracing`-produced streams only), an insert-time inversion straddling a JIT
+    ///   loudly rather than returning wrong rows: an insert-time inversion straddling a JIT
     ///   *segment* boundary (segments are still grouped independently, see
-    ///   `generate_stream_jit_partitions`), and TSC-frequency re-estimation drift across
-    ///   materialization epochs for `tsc_frequency == 0` processes.
+    ///   `generate_stream_jit_partitions`), which produces a genuine row-level overlap that the
+    ///   check correctly rejects; and TSC-frequency re-estimation drift across materialization
+    ///   epochs for `tsc_frequency == 0` processes, which can skew bounds written under different
+    ///   converters.
     /// - `PerFile { columns }`: rows within each partition file are already sorted, ascending, by
     ///   `columns`, but partitions may overlap each other arbitrarily on those columns. A false
     ///   declaration here is not merely mis-ordered rows but, under order-aware aggregation, wrong

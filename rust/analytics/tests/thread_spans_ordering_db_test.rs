@@ -237,24 +237,16 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // Block 1: earlier in real (event) time.
     push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a").await?;
 
-    // `replace_block` captures the *new* (next) block's begin timestamp before the *old* block's
-    // `.close()` runs (same order as `dispatch.rs::flush_thread_buffer`), so the block installed
-    // immediately after block 1 begins microseconds *before* block 1's own end is recorded -- a
-    // hairline overlap that (with tsc_frequency == 0 in this environment, forcing estimated tick
-    // conversion) is enough to trip the §3 non-overlap guard on two otherwise-correctly-ordered
-    // blocks. Sleep, then discard one throwaway "spacer" block so the block that actually holds
-    // block 2's spans gets a begin timestamp captured well after block 1's end, giving a real gap.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let spacer_offset =
-        stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
-    let _spacer = stream.replace_block(Arc::new(ThreadBlock::new(
-        1024,
-        stream.process_id(),
-        stream.stream_id(),
-        spacer_offset,
-    )));
-
-    // Block 2: later in real (event) time.
+    // Block 2: later in real (event) time. No manufactured gap here -- `replace_block` (called
+    // inside `push_and_insert_block`) captures the *new* (next) block's begin timestamp before
+    // the *old* block's `.close()` runs, exactly the legacy overlap this plan's Part A fixes for
+    // the production `dispatch.rs` flush paths (though not for this test's own direct
+    // `ThreadStream`/`replace_block` usage, which deliberately keeps exercising the legacy
+    // strictly-overlapping shape -- see the module doc). An earlier version of this test slept
+    // 200ms and discarded a throwaway "spacer" block here to manufacture a real gap between block
+    // 1's end and block 2's begin; deleting that workaround is this test's regression signal for
+    // Part B's `max_sort_key_time`, which is what makes a real block-boundary overlap safe for the
+    // `Concatenated` scan check without needing the gap at all.
     push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b").await?;
 
     // Force the two blocks into different 1-hour JIT insert-time segments -- rather than waiting
@@ -265,10 +257,11 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // `begin_time`/`end_time` (not just `insert_time`) must move back together: `BlocksView`'s
     // own event-time bounds are `[min(begin_time), max(insert_time)]` (a documented rough edge --
     // see `blocks_view.rs`'s "todo: make more robust" note), so shifting `insert_time` alone would
-    // invert that range and make the partition match no query. `begin_ticks`/`end_ticks` are left
-    // untouched: those (not `begin_time`/`end_time`) are what `ThreadSpansView` converts into the
-    // actual exported span `begin`/`end` values, and this test wants those to stay "now" so the
-    // final query -- and its own non-decreasing-`begin` assertion -- can use a narrow time window.
+    // invert that range and make the partition match no query. Block 1's `begin_ticks`/`end_ticks`
+    // are left untouched: those (not `begin_time`/`end_time`) are what `ThreadSpansView` converts
+    // into the actual exported span `begin`/`end` values, and this test wants those to stay "now"
+    // so the final query -- and its own non-decreasing-`begin` assertion -- can use a narrow time
+    // window.
     sqlx::query(
         "UPDATE blocks SET insert_time = insert_time - INTERVAL '2 hours', \
                             begin_time = begin_time - INTERVAL '2 hours', \
@@ -279,6 +272,51 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     .execute(&lake.db_pool)
     .await
     .with_context(|| "pushing block 1's insert_time/begin_time/end_time back")?;
+
+    // Make the *legacy* (`max_event_time`-only) comparison's overlap deterministic rather than
+    // inheriting the buffer-swap's hairline (and possibly microsecond-truncated) width, so that a
+    // future revert of Part B's fix is guaranteed to be caught by this test rather than passing by
+    // accident. Widen block 1's `end_ticks` forward by a few milliseconds' worth of ticks, computed
+    // from this process's own observed tick rate (real tsc frequency if available, otherwise the
+    // same wall-clock-elapsed estimate `make_time_converter_from_latest_timing` falls back to).
+    //
+    // This targets `end_ticks`, not `begin_ticks`, and block 1, not block 2 -- unlike the
+    // wholesale tick-fabrication pattern the module doc warns against, but also deliberately unlike
+    // widening block 2's `begin_ticks` backward, which looks equally plausible but is unsound here:
+    // block 2's `begin_ticks` and block 1's row's own `begin` (`max_sort_key_time`, read from the
+    // real, un-fabricated event payload) are both stamped from the *same* real-time neighborhood
+    // (block 2's replacement is created immediately after span_a's events are pushed, before block
+    // 1 is closed), so pushing block 2's `begin_ticks` back by milliseconds risks dragging it below
+    // `max_sort_key_time`, breaking the very check this test means to exercise. Block 1's
+    // `end_ticks`, by contrast, feeds only the legacy `max_event_time` bound -- `max_sort_key_time`
+    // is computed from the row data alone and never reads it -- so widening it forward is inert to
+    // the fixed check and free to be as large as needed to make the legacy comparison's failure
+    // reliable. It is safe by the same two properties the module doc calls out for the
+    // begin_ticks-lowering pattern: no real event is filtered out (growing `end_range_ns` only
+    // widens the chain's `[begin_range_ns, end_range_ns]` window), and the block cannot invert
+    // (`end_ticks` only increases here, and it already exceeds `begin_ticks`).
+    let now_ticks = now();
+    let now_time = Utc::now();
+    let elapsed_ticks = now_ticks - process_info.start_ticks;
+    let elapsed_ns = (now_time - process_info.start_time)
+        .num_nanoseconds()
+        .filter(|&ns| ns > 0)
+        .with_context(|| "process elapsed wall time must be positive")?;
+    #[allow(clippy::cast_precision_loss)]
+    let delta_ticks = ((elapsed_ticks as f64) * (5_000_000.0 / elapsed_ns as f64)).round() as i64;
+    anyhow::ensure!(
+        delta_ticks > 0,
+        "computed a non-positive tick delta ({delta_ticks}); the block-boundary overlap would not \
+         be widened"
+    );
+    sqlx::query(
+        "UPDATE blocks SET end_ticks = end_ticks + $1 WHERE stream_id = $2 AND object_offset = 0;",
+    )
+    .bind(delta_ticks)
+    .bind(stream_id)
+    .execute(&lake.db_pool)
+    .await
+    .with_context(|| "widening block 1's end_ticks to make the legacy overlap deterministic")?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
@@ -367,6 +405,34 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     assert!(
         partition_count >= 2,
         "expected the two blocks (2h apart in insert_time) to materialize into >= 2 partitions, got {partition_count}"
+    );
+
+    // The regression assertion this test exists to prove: every partition the query scanned
+    // actually persisted a non-NULL `max_sort_key_time` -- the only thing that makes the
+    // block-boundary overlap harmless to the `Concatenated` non-overlap check without the
+    // sleep/spacer workaround this test used to need. This is what proves `update_partition`
+    // actually persists the new column and that the write path populated it, not just that the
+    // scan happened to succeed.
+    let null_sort_key_time_answer = query(
+        lakehouse.clone(),
+        part_provider.clone(),
+        None,
+        &format!(
+            "SELECT count(*) as c FROM list_partitions() \
+             WHERE view_set_name = 'thread_spans' AND view_instance_id = '{stream_id_str}' \
+             AND max_sort_key_time IS NULL;"
+        ),
+        view_factory.clone(),
+        Arc::new(NoOpSessionConfigurator),
+        false,
+    )
+    .await?;
+    let null_sort_key_time_count = get_single_row_primitive_value_by_name::<
+        datafusion::arrow::datatypes::Int64Type,
+    >(&null_sort_key_time_answer.record_batches, "c")?;
+    assert_eq!(
+        null_sort_key_time_count, 0,
+        "every thread_spans partition written by this test must carry a non-NULL max_sort_key_time"
     );
 
     // Plan-shape check against the real, multi-partition, DB-backed scan: the production query

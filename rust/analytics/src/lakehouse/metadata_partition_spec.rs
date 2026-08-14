@@ -102,9 +102,13 @@ async fn flush_chunk(
                 .with_context(|| "read_batch")?,
         )
         .await?;
-    tx.send(Ok(PartitionRowSet::new(event_time_range, record_batch)))
-        .await
-        .with_context(|| "sending partition row set")?;
+    tx.send(Ok(PartitionRowSet::new(
+        event_time_range,
+        record_batch,
+        None,
+    )))
+    .await
+    .with_context(|| "sending partition row set")?;
     Ok(())
 }
 

@@ -33,12 +33,26 @@ pub enum OrderingBounds {
 /// Reads the pair of bounds a declared ordering's leading column is checked against, per
 /// `OrderingBounds`. `InsertTime` bounds are always present; `EventTime` bounds are `None` for
 /// empty partitions (callers are expected to have already filtered those out).
+///
+/// The `EventTime` upper bound prefers `max_sort_key_time` (the partition's true recorded max of
+/// the leading sort column, e.g. `begin` for `thread_spans`) and falls back to `max_event_time`
+/// (the max span *end*, a merely conservative stand-in) when it is `None` -- true for every
+/// partition written before that column existed, and for any view that never declares a
+/// `Concatenated` event-time ordering. This single change point upgrades all three consumers of
+/// `partition_bounds` coherently: the sort key stays `min_event_time`; the non-overlap check below
+/// compares the previous partition's *true* max `begin` against the next's block-derived min
+/// (which can never strictly overlap for cuts at block boundaries of a producer using a shared
+/// flush timestamp -- see `tasks/thread_spans_segment_boundary_overlap_plan.md`); and
+/// `attach_ordering_statistics` attaches a tighter, exact `begin` max statistic. The fallback
+/// preserves today's behavior bit-for-bit for legacy partitions.
 fn partition_bounds(
     p: &Partition,
     bounds: OrderingBounds,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     match bounds {
-        OrderingBounds::EventTime => p.min_event_time().zip(p.max_event_time()),
+        OrderingBounds::EventTime => p
+            .min_event_time()
+            .zip(p.max_sort_key_time().or(p.max_event_time())),
         OrderingBounds::InsertTime => Some((p.begin_insert_time(), p.end_insert_time())),
     }
 }
@@ -49,17 +63,23 @@ fn partition_bounds(
 /// independent of the order the partition cache returned.
 ///
 /// Returns an error if any adjacent pair overlaps: the declared ordering cannot be honored, so we
-/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime` the
-/// causes are: an insert-time inversion straddling a JIT segment boundary; TSC-frequency estimation
-/// drift across materialization epochs (for `tsc_frequency == 0` processes whose blocks were
-/// materialized under different clock estimates); and, for `micromegas_tracing`-produced streams
-/// only, block-boundary tick overlap (a partition's event bounds come from block ticks, and that
-/// producer's consecutive blocks overlap by the cost of the buffer swap -- the Unreal producer
-/// stamps one timestamp for both sides, so its blocks touch exactly). See the ordering-invariant
-/// notes on `View::get_scan_output_ordering`. The first two are fixed by retiring the affected
-/// stream's partitions so they rebuild with a single, consistent converter. For
-/// `OrderingBounds::InsertTime` an overlap indicates a genuine partitioning bug -- input
-/// partitions are expected to be non-overlapping in insert_time by construction.
+/// fail loudly instead of silently emitting a mis-ordered scan. For `OrderingBounds::EventTime`,
+/// block-boundary tick overlap no longer trips this check for partitions carrying
+/// `max_sort_key_time` (`partition_bounds` reads it in preference to `max_event_time`): the
+/// producer now stamps one shared timestamp per flush (matching the Unreal producer), so
+/// consecutive blocks touch exactly, and the recorded bound reflects that. Legacy partitions
+/// written before that column existed fall back to the old, looser `max_event_time` bound and so
+/// remain a residual until they are rebuilt -- which happens automatically on their next query,
+/// since `ThreadSpansView::SCHEMA_VERSION`'s bump makes every pre-existing partition stale by
+/// schema hash; this is a self-healing residual, not an admin-retire dependency. The two remaining
+/// residual causes are: an insert-time inversion straddling a JIT segment boundary (a genuine
+/// row-level overlap, correctly rejected); and TSC-frequency estimation drift across
+/// materialization epochs (for `tsc_frequency == 0` processes whose blocks were materialized under
+/// different clock estimates) -- fixed the same way, by retiring the affected stream's partitions
+/// so they rebuild with a single, consistent converter. See the ordering-invariant notes on
+/// `View::get_scan_output_ordering`. For `OrderingBounds::InsertTime` an overlap indicates a
+/// genuine partitioning bug -- input partitions are expected to be non-overlapping in insert_time
+/// by construction.
 fn sort_and_check_non_overlapping(
     mut partitions: Vec<&Partition>,
     bounds: OrderingBounds,
@@ -80,9 +100,11 @@ fn sort_and_check_non_overlapping(
         {
             return Err(datafusion::error::DataFusionError::Internal(format!(
                 "declared scan ordering violated: partition {:?} (range ending {prev_max}) overlaps partition {:?} (range starting {next_min}). \
-                 For event-time ordering the usual causes are an insert-time inversion straddling a JIT segment boundary, or -- for tsc_frequency == 0 processes -- TSC-frequency \
-                 re-estimation drift across materialization epochs spanning a clock adjustment. Both are fixed by retiring the affected stream's partitions so they rebuild with a \
-                 single, consistent time converter. See the rustdoc on sort_and_check_non_overlapping (partitioned_execution_plan.rs) and the ordering-invariant notes on \
+                 If either partition predates max_sort_key_time (schema v8), this heals itself on its next query: a schema-hash bump makes it stale and it \
+                 rebuilds automatically, carrying the exact bound, with no admin action needed. Otherwise, for event-time ordering the remaining causes are an \
+                 insert-time inversion straddling a JIT segment boundary, or -- for tsc_frequency == 0 processes -- TSC-frequency re-estimation drift across \
+                 materialization epochs spanning a clock adjustment; both are fixed by retiring the affected stream's partitions so they rebuild with a single, \
+                 consistent time converter. See the rustdoc on sort_and_check_non_overlapping (partitioned_execution_plan.rs) and the ordering-invariant notes on \
                  View::get_scan_output_ordering in view.rs for the full cause list.",
                 prev.file_path, next.file_path
             )));
@@ -93,9 +115,12 @@ fn sort_and_check_non_overlapping(
 
 /// Attaches the leading `output_ordering` column's min/max statistics to a `PartitionedFile`,
 /// using `Precision::Inexact` since the bounds read from `Partition` (per `OrderingBounds`) are
-/// not necessarily the column's exact min/max. DataFusion's multi-file-group ordering validation
-/// (`is_ordering_valid_for_file_groups`) requires these statistics to be present -- without them
-/// the declared ordering is silently dropped for any file group with more than one file.
+/// not necessarily the column's exact min/max -- though for `EventTime` bounds when
+/// `max_sort_key_time` is recorded, the attached max happens to be exact; `Precision::Inexact` is
+/// still correct to declare, since an exact statistic is a legal special case of an inexact one.
+/// DataFusion's multi-file-group ordering validation (`is_ordering_valid_for_file_groups`)
+/// requires these statistics to be present -- without them the declared ordering is silently
+/// dropped for any file group with more than one file.
 fn attach_ordering_statistics(
     mut file: PartitionedFile,
     schema: &SchemaRef,

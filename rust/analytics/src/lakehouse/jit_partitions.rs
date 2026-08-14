@@ -16,11 +16,15 @@
 //!
 //! Note that this is an *insert-time* invariant only. It says nothing about partitions'
 //! *event-time* ranges, which for the block-derived views are computed from block
-//! `begin_ticks`/`end_ticks`. Whether those can overlap slightly at a cut point depends on the
-//! producer: `micromegas_tracing`-produced streams stamp the replacement block's `begin` before
-//! closing the outgoing block, so consecutive blocks overlap; the Unreal producer stamps a single
-//! timestamp for both, so they touch exactly. See the ordering-invariant notes on
-//! `View::get_scan_output_ordering`.
+//! `begin_ticks`/`end_ticks`. By design both `micromegas_tracing` and the Unreal producer now stamp
+//! a single shared timestamp per flush, used for both the outgoing block's close and the
+//! replacement block's `begin`, so consecutive blocks touch exactly and adjacent partitions' event
+//! bounds do not overlap by construction. Data from producer versions predating that fix can still
+//! carry strictly-overlapping block ticks; `ThreadSpansView`'s recorded `max_sort_key_time` is what
+//! makes that harmless to the `Concatenated` scan check (`partitioned_execution_plan::partition_bounds`
+//! prefers it over the looser `max_event_time`) rather than requiring every source block to be
+//! re-ingested. See the ordering-invariant notes on `View::get_scan_output_ordering` and
+//! `tasks/thread_spans_segment_boundary_overlap_plan.md`.
 
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessorMap},
@@ -131,11 +135,13 @@ pub fn blocks_insert_time_range(blocks: &[Arc<PartitionSourceBlock>]) -> Result<
 /// A chain breaks only on a *gap* -- `begin_ticks` strictly after the running `end_ticks`, meaning
 /// blocks are missing in between and a tree built across the seam would be nonsense. An *overlap*
 /// (`begin_ticks` at or before the running end) still means unbroken coverage and keeps the chain
-/// open. That distinction matters because it is producer-dependent:
-/// `micromegas_tracing::dispatch`'s flush paths stamp the replacement block's `begin` before closing
-/// the outgoing block, so consecutive blocks always overlap by the cost of the buffer swap, whereas
-/// the Unreal producer stamps a single timestamp for both sides and its blocks touch exactly. An
-/// equality test would break the chain on every seam for the former.
+/// open. The chain rule stays tolerant of overlap (not just equality) deliberately: by design both
+/// `micromegas_tracing::dispatch`'s flush paths and the Unreal producer now stamp one shared
+/// timestamp per flush, so consecutive blocks from a healthy producer touch exactly
+/// (`begin_ticks == running end_ticks`) -- but blocks from producer versions predating that fix
+/// (or any other producer stamping two separate timestamps) can still carry a real, small overlap,
+/// and those legacy blocks are exactly the ones this function must keep chaining correctly. An
+/// equality-only test would incorrectly break the chain on every such legacy seam.
 ///
 /// The running end is a max, not just the previous block's `end_ticks`: a chain must not be broken
 /// by a short block fully contained in an earlier, longer one.

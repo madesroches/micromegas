@@ -64,7 +64,9 @@ SELECT * FROM list_partitions();
 | `file_schema_hash` | Binary | Schema version when partition was created |
 | `source_data_hash` | Binary | Hash of the source data |
 | `num_rows` | Integer | Number of rows in the partition |
+| `partition_format_version` | Integer | Parquet/Arrow format version the partition file was written with |
 | `sort_order` | List(String) | Recorded sort guarantee (e.g. `["insert_time"]`), or `NULL` if none is guaranteed |
+| `max_sort_key_time` | Timestamp | Recorded true maximum of the view's leading sort column across the partition's rows (e.g. `begin` for `thread_spans`), or `NULL` if not recorded |
 
 **Example**:
 ```sql

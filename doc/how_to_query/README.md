@@ -486,6 +486,10 @@ SELECT * FROM list_partitions()
 | `file_size` | `Int64` | File size in bytes |
 | `file_schema_hash` | `Binary` | Schema hash |
 | `source_data_hash` | `Binary` | Source data hash |
+| `num_rows` | `Int64` | Number of rows in the partition |
+| `partition_format_version` | `Int32` | Parquet/Arrow format version the partition file was written with |
+| `sort_order` | `List<Utf8>` | Column names the partition's rows are guaranteed sorted by, if any (`NULL` if no ordering is recorded) |
+| `max_sort_key_time` | `Timestamp(Nanosecond)` | Recorded true maximum of the view's leading sort column across the partition's rows (e.g. `begin` for `thread_spans`); `NULL` if not recorded |
 
 #### `retire_partitions`
 

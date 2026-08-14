@@ -1,7 +1,7 @@
 //! System & monotonic tick count
 use chrono::{DateTime, Utc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DualTime {
     pub ticks: i64,
     pub time: DateTime<Utc>,

@@ -157,6 +157,7 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
             Ok(Some(PartitionRowSet {
                 rows_time_range: time_range,
                 rows: record_batch,
+                max_sort_key_time: None,
             }))
         } else {
             Ok(None)

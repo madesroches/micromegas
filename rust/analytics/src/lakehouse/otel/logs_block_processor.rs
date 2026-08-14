@@ -246,6 +246,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 DateTime::from_timestamp_nanos(max_time),
             ),
             batch,
+            None,
         )))
     }
 }

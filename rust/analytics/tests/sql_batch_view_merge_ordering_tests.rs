@@ -199,6 +199,7 @@ fn make_partition(
         source_data_hash: vec![0],
         num_rows: if is_empty { 0 } else { 10 },
         sort_order,
+        max_sort_key_time: None,
     }
 }
 
