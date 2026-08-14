@@ -424,7 +424,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         ),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
-        false,
+        CallerContext::internal(),
     )
     .await?;
     let null_sort_key_time_count = get_single_row_primitive_value_by_name::<
