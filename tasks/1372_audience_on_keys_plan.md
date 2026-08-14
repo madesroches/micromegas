@@ -144,12 +144,18 @@ months later her team needs it. Under the shipped model that is impossible witho
 history. Under this one it is a grant edit, and every already-ingested process becomes visible
 immediately, because the *data* never encoded who could see it.
 
-### 2. Access is a grant map — `MICROMEGAS_AUDIENCE_GRANTS`
+### 2. Access is a grant map — `{prefix}_AUDIENCE_GRANTS`
 
 A JSON object, **keyed by audience**, reading as "who can access this audience" — it is a map, and
 JSON is this codebase's encoding for structured config (`MICROMEGAS_ADMINS`,
 `MICROMEGAS_OIDC_CONFIG`). Its keys are unique by construction, which is where audience uniqueness
-is enforced today:
+is enforced today.
+
+Resolved as `{prefix}_AUDIENCE_GRANTS`, falling back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`
+when the prefixed name is unset — the same convention as every peer knob `AudienceReadPolicy::
+from_env(prefix)` already resolves (`implicit_groups_var`, `resolved_var` for
+`UNSTAMPED_AUDIENCE`/`PUBLIC_VIEW_SETS`, `DbApiKeyConfig::from_env_with_prefix`, `admin_var`), via
+a new `audience_grants_var(prefix: &str)` helper of the same shape:
 
 ```json
 {
@@ -199,10 +205,24 @@ that same flow is a natural extension of it rather than new machinery. See
 ∪ caller.read_audiences                                 (Stage 4b per-key direct grant)
 ```
 
-`AudienceMintPolicy` resolves against the same union **minus `read_audiences`** (a read grant confers
-no mint authority — the existing asymmetry, unchanged); `is_admin` callers may mint any valid
-audience name. `read_audiences` needs no rework: it is already a principal-level direct grant, which
-the target model keeps as a first-class case.
+`AudienceMintPolicy` resolves against the same union **minus `read_audiences` and minus
+`PUBLIC_AUDIENCE`** (a read grant confers no mint authority — the existing asymmetry, unchanged;
+and being able to *read* `public`, which every authenticated principal is, must not imply being
+able to *mint into* it — the built-in-readability rule is a read-side convenience, not a blanket
+publish grant); `is_admin` callers may mint any valid audience name, `public` included.
+`read_audiences` needs no rework: it is already a principal-level direct grant, which the target
+model keeps as a first-class case.
+
+**`MintPolicy::resolve_audience(caller, requested: None)` now returns `Err`** ("no audience
+requested and none can be defaulted"), for every caller, admin or not. The shipped trait doc
+comment reads `None` as "mint a key scoped to myself" and both policy arms implement that via
+`default_self_audience`, an email derivation (`policy.rs:115-121`) that §2 removes along with every
+other identity-derived audience; there is no replacement derivation, because under an opaque-label
+model there is no "myself" audience to default to. The trait doc comment is updated to say so. This
+is consistent with, not new work on top of, §5's route-level `resolve_audience` helper, which
+already treats an absent audience for `mint` as `state.default_audience` then a `400` — Stage 6
+(#1374) wires the route helper to call the trait method instead of duplicating its logic, and both
+now agree that an unresolvable `None` is an error, not a silent default.
 
 **`MICROMEGAS_IMPLICIT_GROUPS` is removed**, subsumed by `{"<name>": ["*"]}`. It shipped one release
 ago, is inert without activation, and keeping two knobs that both mean "everyone reads this" is the
@@ -280,11 +300,14 @@ The produced `AuthContext` changes twice:
   ingestion key can never reach — it lives in the other table. An ingestion write credential is not a
   delegating service account.
 
-**`email` stays `None`** — a deliberate deviation from the umbrella plan's step-9 sketch
-(`AuthContext { …, email: Some(…), … }`). Under §2, `email` is what `user:` grant selectors match
-on; populating it from `created_by` would hand an ingestion key every audience granted to the
-minting admin. Nothing consumes an ingestion key's email. See
-[Open Questions](#open-questions).
+**`email` stays `None`** (it already is: `db_api_key.rs:319`) — a deliberate deviation from the
+umbrella plan's step-9 sketch (`AuthContext { …, email: Some(…), … }`), settled rather than left
+open. Under §2, `email` is what `user:` grant selectors match on; populating it from `created_by`
+would hand an ingestion key every audience granted to the minting admin. The only other consumer of
+a principal's email is `OidcAuthProvider::is_admin` (`oidc.rs:397-400`), which is OIDC-only and
+never sees an API-key `AuthContext`. If a key's *owner* is ever needed (e.g. for attribution or UI
+display), that is Stage 6 (#1374) territory and wants its own `ingestion_api_keys` column rather
+than reusing `created_by` as an email.
 
 The audience is cached with the row; since it is immutable that is free. A hand edit takes effect
 within `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` — the same stated property as revocation.
@@ -294,15 +317,18 @@ within `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` — the same stated property as re
 New in `policy.rs`, resolved **once at startup** so a typo fails fast:
 
 ```rust
-/// Resolves `MICROMEGAS_DEFAULT_KEY_AUDIENCE`. `None` when unset. Invalid ⇒ `Err`.
-pub fn default_key_audience_from_env() -> Result<Option<String>>;
+/// Resolves `{prefix}_DEFAULT_KEY_AUDIENCE`, falling back to unprefixed
+/// `MICROMEGAS_DEFAULT_KEY_AUDIENCE` when the prefixed name is unset -- the same
+/// `implicit_groups_var`-style convention as every other knob `AudienceReadPolicy::from_env`
+/// resolves. `None` when neither is set. Invalid ⇒ `Err`.
+pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>>;
 ```
 
 ```rust
 // web_server.rs
 let ingestion_keys_state = ingestion_keys::IngestionKeysState {
     pool: analytics_keys_pool,
-    default_audience: micromegas::auth::policy::default_key_audience_from_env()?,
+    default_audience: micromegas::auth::policy::default_key_audience_from_env("")?,
 };
 ```
 
@@ -318,8 +344,16 @@ The two insert routes differ **only when the knob is unset**, and that asymmetry
   fail-open default, and exactly the failure a universally-readable audience invites. Requiring an
   explicit choice matches the umbrella plan's activation story ("every operator makes a conscious
   choice").
-- `import`'s subject is a key whose data is *already* universally visible and whose rows the v6
-  backfill just set to `public`. Anything else splits one key's history across two audiences.
+- `import` defaults to `public`, but that default is only a *default* — an explicit `audience`
+  field or the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` knob both still override it, exactly as for
+  `mint`. `public` earns the fallback slot because continuity is the safe assumption for a legacy
+  key: for a key imported at migration time, its already-ingested history is what the v6 backfill
+  just set to `public`, so defaulting the *new* rows to the same value keeps one key's data under
+  one audience rather than splitting its history in two. For a key imported well after the
+  migration, there is no prior history to preserve, but `public` is still the least-surprising
+  no-decision default for "a pre-existing key with no configured audience" — the same shape of
+  default `mint` deliberately refuses to make for a *new* credential's *entire future*, but here the
+  data may already be flowing unstamped.
 
 An open deployment therefore sets `MICROMEGAS_UNSTAMPED_AUDIENCE=public` and
 `MICROMEGAS_DEFAULT_KEY_AUDIENCE=public` and is done — no grant map needed at all, since `public` is
@@ -349,7 +383,13 @@ supply an audience").
   with `is_valid_audience`. Both routes are
   `AdminUser`-gated, and `AudienceMintPolicy`'s admin arm accepts any valid audience — so this is the
   same decision Stage 6 will make through the policy, and Stage 6 replaces the helper body with
-  `MintPolicy::resolve_audience` without changing either request shape.
+  `MintPolicy::resolve_audience` without changing either request shape. The optional `audience` on
+  `mint` is in scope now, not deferred to #1374: `mint_key`'s `INSERT` must supply the `NOT NULL`
+  column regardless (`ingestion_keys.rs:186-189`), the Testing Strategy already requires an
+  explicit per-key override to work end to end, and without a request field a per-key audience
+  would mean restarting `analytics-web-srv` with a different `MICROMEGAS_DEFAULT_KEY_AUDIENCE` for
+  every mint — defeating §1's motivating scenario. Keeping the field now is what lets Stage 6 change
+  only the helper's *body*.
 - `MintResponse` / `ImportResponse` / `KeyListEntry` each gain `audience`. On import's already-present
   (`imported: false`) path the response reports the **existing** row's audience — the audience is
   immutable, so an import never rewrites it; both branches already share `ImportedRow`, which gains
@@ -365,7 +405,10 @@ supply an audience").
     `analytics_api_keys` has no such column).
   - Per-key choice: a keyring entry may carry an optional `"audience"` field, which wins over
     `--audience`. `read_keyring` returns `(name, key, audience)` triples; a non-string `audience` is
-    a `parser.error` like the other field validations.
+    a `parser.error` like the other field validations. The new triple arity ripples through every
+    other function that destructures `read_keyring`'s output: `select_entries` (`--only`/`--exclude`
+    filtering), `import_one` (passes `audience` through to
+    `WebClient.import_ingestion_api_key(name, key, audience)`), and `run_import`'s per-key loop.
   - Neither given ⇒ the field is omitted and the server applies `public` — the zero-decision path.
   - `run_import`'s per-key line gains the audience the server reports.
 
@@ -383,7 +426,7 @@ supply an audience").
 ### Flow after this stage
 
 ```
-config:  MICROMEGAS_AUDIENCE_GRANTS = {"team-alpha": ["group:eng"]}   ← editable, after the fact
+config:  {prefix}_AUDIENCE_GRANTS = {"team-alpha": ["group:eng"]}   ← editable, after the fact
                                                     │
 mint   (AdminUser)  audience? ─yes→ is_valid_audience ─→ INSERT audience ('team-alpha')
                               └no─→ MICROMEGAS_DEFAULT_KEY_AUDIENCE  └→ unset: 400
@@ -404,9 +447,10 @@ ingestion request: Bearer <key> ────────────────
 
 1. **Opaque audiences.** `policy.rs`: `is_valid_audience` replacing `is_well_formed_audience`,
    `PUBLIC_AUDIENCE`. `read_scope.rs`: the same relaxation in its copy.
-2. **Grant map.** `policy.rs`: `AudienceGrants` (parse + lookup for `MICROMEGAS_AUDIENCE_GRANTS`),
-   rewrite `AudienceReadPolicy::resolve` and `AudienceMintPolicy::resolve_audience` around it,
-   delete `identity_and_group_audiences`, `parse_implicit_groups`, and
+2. **Grant map.** `policy.rs`: `AudienceGrants` (parse + lookup for `{prefix}_AUDIENCE_GRANTS`,
+   via a new `audience_grants_var(prefix)` helper), rewrite `AudienceReadPolicy::resolve` and
+   `AudienceMintPolicy::resolve_audience` around it, delete `identity_and_group_audiences`,
+   `parse_implicit_groups`, `default_self_audience`, `is_well_formed_audience`, and
    `default_provider::implicit_groups_var`.
 3. **Migration v6.** `sql_migration.rs`: `upgrade_data_lake_schema_v6`, bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION`, add the `if 5 == current_version` arm.
@@ -416,12 +460,14 @@ ingestion request: Bearer <key> ────────────────
 5. **Routes.** `ingestion_keys.rs`: `default_audience` on the state, `resolve_audience`, `audience`
    on both requests, both `INSERT`s, `ImportedRow`, `KeyListEntry`, all three responses.
    `web_server.rs:643`: resolve the knob at startup.
-6. **Python.** `web_client.py`, `cli/import_keys.py`.
+6. **Python.** `web_client.py`; `cli/import_keys.py`: `read_keyring`'s new `(name, key, audience)`
+   triple and every site that destructures it — `select_entries`, `import_one`, `run_import`.
 7. **Web app.** `api-keys-shared.ts`, `ingestion-api-keys-api.ts`, `ApiKeysAdminPage.tsx`,
    `IngestionApiKeysPage.tsx`.
 8. **Vocabulary sweep.** `group:everyone` / `user:`-prefixed examples out of
    `monolith/src/main.rs:252`, `policy.rs` doc comments, `ownership_rewrite.rs` module docs, the
-   Stage 1 and Stage 2 CHANGELOG entries, and the umbrella plan.
+   Stage 1 and Stage 2 CHANGELOG entries, the umbrella plan, and `mkdocs/docs/admin/{flight-sql,
+   monolith}.md`'s env-var tables (see [Documentation](#documentation)).
 9. **Tests**, then **docs + CHANGELOG**, per the sections below.
 
 ## Files to Modify
@@ -436,12 +482,16 @@ ingestion request: Bearer <key> ────────────────
 | `rust/auth/src/types.rs` | doc comments on `bound_audience` / `groups` |
 | `rust/analytics-web-srv/src/{ingestion_keys,web_server}.rs` | audience on mint/import/list; knob at startup |
 | `rust/monolith/src/main.rs` | config comment |
+| `rust/public/src/servers/flight_sql_server.rs` | update both `AudienceReadPolicy::new(vec![])` call sites (injected-provider and disabled-auth default-policy branches) and their doc comments (`:143`, `:270`) for the grant-map constructor |
 | `python/micromegas/micromegas/{web_client.py,cli/import_keys.py}` | `audience` param, `--audience` |
 | `analytics-web-app/src/lib/{api-keys-shared,ingestion-api-keys-api}.ts` | types + `mint(name, audience?)` |
 | `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | `showAudience` column + input |
 | `analytics-web-app/src/routes/IngestionApiKeysPage.tsx` | `showAudience: true` |
 | `rust/auth/tests/{policy,db_api_key}_tests.rs`, `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `rust/analytics/tests/*ownership_rewrite*`, `analytics-web-app/src/**/__tests__/*`, `python/**/tests` | per Testing Strategy |
+| `rust/public/tests/read_policy_threading_tests.rs` | update `AudienceReadPolicy::from_env("MICROMEGAS_1369_THREADING_TESTS_UNSET")` call/assertions for the grant-map constructor |
+| `rust/ingestion/tests/sql_migration_test.rs` (new) | live-DB, `#[ignore]`d migration v6 coverage — see Testing Strategy |
 | `mkdocs/docs/admin/{api-keys,authentication}.md` | audiences + grants + DDL + CLI |
+| `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` rows, restate `UNSTAMPED_AUDIENCE`'s format as an opaque label (not `user:<id>`/`group:<id>`), add `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE` rows, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset |
 | `CHANGELOG.md` | Unreleased entry, incl. amending the Stage 1/2 entries |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | model change recorded; Stage 4 landed |
 
@@ -470,8 +520,10 @@ ingestion request: Bearer <key> ────────────────
   admin mint read access by naming a key after an audience. Cost: per-user isolation needs a grant
   per user rather than zero config. See [Open Questions](#open-questions).
 - **`mint` requires a choice, `import` defaults to `public`** — different subjects: a new credential
-  has no prior visibility to preserve (defaulting it would publish), while a legacy key's history was
-  just stamped `public` by the migration.
+  has no prior visibility to preserve (defaulting it would publish), while `import`'s default is a
+  continuity assumption for a pre-existing key, overridable like any other default; for a key
+  imported at migration time it also matches what the v6 backfill just stamped its existing rows
+  with, though that specific coincidence doesn't hold for an import performed later.
 - **Backfill literal vs. reading the knob in the migration.** Reading env inside a migration makes
   stored content depend on which process ran it, and would duplicate the resolver into
   `micromegas-ingestion`, which does not (and should not) depend on `micromegas-auth`.
@@ -491,16 +543,27 @@ ingestion request: Bearer <key> ────────────────
   telemetry-DB migration — mint/import return 500 until ingestion or the monolith has taken the
   schema to v6. Same wording as the v5 note in `default_provider.rs:169-174`.
 - **New page or section: audiences and grants** — the model (label vs. grant), the
-  `MICROMEGAS_AUDIENCE_GRANTS` shape, the two built-in rules, worked open and privacy profiles, and
+  `{prefix}_AUDIENCE_GRANTS` shape and its unprefixed fallback, the two built-in rules, worked open
+  and privacy profiles, and
   the "re-share after the fact by editing grants, never by restamping" property that motivates it.
 - `mkdocs/docs/admin/authentication.md` — ingestion keys carry an audience and are no longer
-  delegating service accounts.
+  delegating service accounts. Its `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` recipe (`:162-180`)
+  is restated using an opaque audience name instead.
+- `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — both document the knob
+  this plan deletes and a value format the new validator rejects, so both need the same sweep:
+  drop the `MICROMEGAS_IMPLICIT_GROUPS` / `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` env-table rows;
+  restate `MICROMEGAS_UNSTAMPED_AUDIENCE` / `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE`'s description
+  as an opaque audience name rather than `user:<id>`/`group:<id>`; add rows for
+  `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; and add an upgrade note that a
+  previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup (`:` is
+  outside `[A-Za-z0-9_-]`).
 - `CHANGELOG.md` under Unreleased — schema v6; the audience-model change **including amendments to
   the shipped Stage 1 and Stage 2 entries**, which currently document `user:`/`group:` audiences and
   tell operators to set `MICROMEGAS_IMPLICIT_GROUPS=everyone`; the removal of that knob (an
   operator-facing config break, pre-GA); the new knobs; the new request/response fields; the
   `allow_delegation` change; and the **Minor breaking change** clause for `micromegas-auth`'s policy
-  surface, `KeyRow`/`ApiKeyTable`, and `IngestionKeysState`.
+  surface (including its two production `AudienceReadPolicy::new(vec![])` call sites in
+  `flight_sql_server.rs`), `KeyRow`/`ApiKeyTable`, and `IngestionKeysState`.
 - `tasks/data_isolation/audience_based_access_control_plan.md` — replace the prefixed-audience model
   in §1, §2, §3, the config table and both deployment stories; note that the long-term grant-store
   section is now the direct continuation of what ships here; mark Stage 4 landed.
@@ -519,10 +582,13 @@ ingestion request: Bearer <key> ────────────────
   explicitly — including an API key named `team-alpha`, which must not read `team-alpha`).
 - **The motivating case, end to end in one test**: resolve `alice-laptop` for bob ⇒ absent; add
   `{"alice-laptop": ["group:leads"]}` with bob in `leads` ⇒ present. *No data changed.*
-- Mint: `read_audiences` never enters the mintable set; admins may mint any valid audience;
-  non-admins may not mint an audience they hold no grant for.
-- Malformed `MICROMEGAS_AUDIENCE_GRANTS` (not an object, non-array value, non-string selector) ⇒
-  `Err`, so a typo fails startup rather than shipping an inert knob.
+- Mint: `read_audiences` never enters the mintable set; `PUBLIC_AUDIENCE` never enters a non-admin's
+  mintable set even though it is always in their readable set; admins may mint any valid audience,
+  `public` included; non-admins may not mint an audience they hold no grant for.
+- Malformed `{prefix}_AUDIENCE_GRANTS` / `MICROMEGAS_AUDIENCE_GRANTS` (not an object, non-array
+  value, non-string selector) ⇒ `Err`, so a typo fails startup rather than shipping an inert knob.
+  The prefixed-falls-back-to-unprefixed resolution itself gets the same test coverage as
+  `implicit_groups_var`.
 
 **`rust/auth/tests/db_api_key_tests.rs`** (live-Postgres cases `#[ignore]`d, per the file's
 convention): the audience reaches `bound_audience` unchanged (the issue's first test); ingestion keys
@@ -534,9 +600,12 @@ audience survives a cache hit; the unreachable-pool cases still yield `ProviderU
 override). `import` with neither ⇒ `public`. An invalid audience ⇒ 400 before any DB access.
 `#[ignore]`d live-DB: importing an already-present hash reports the **existing** audience.
 
-**Migration** — mirroring `analytics-web-srv/tests/migration_test.rs`: against a live DB seeded with
-a v5-era row, `execute_migration` leaves the row's audience `public`, not NULL (the issue's "backfills
-… rather than staying NULL"), and a hand-written `INSERT` of `''` is rejected by the `CHECK`.
+**Migration** — new `rust/ingestion/tests/sql_migration_test.rs` (this crate has no migration test
+today; `analytics-web-srv/tests/migration_test.rs` covers the unrelated **app_db** v3→v4 chain and
+is a *style* reference only — same live-DB, `#[ignore]`d convention, different database and
+different `execute_migration`): against a live data-lake DB seeded with a v5-era row,
+`execute_migration` leaves the row's audience `public`, not NULL (the issue's "backfills … rather
+than staying NULL"), and a hand-written `INSERT` of `''` is rejected by the `CHECK`.
 
 **`OwnershipRewrite`** — `MICROMEGAS_UNSTAMPED_AUDIENCE=public` and `=team-alpha` both parse (the
 latter would have been rejected before) and produce the same coalesce predicate.
@@ -570,7 +639,3 @@ yarn test`.
    for a deployment that wants "no `public`, ever" would be a startup check rejecting it in
    `MICROMEGAS_DEFAULT_KEY_AUDIENCE` plus a mint-time refusal — not a read-side switch, which would
    hide already-ingested data rather than prevent publication.
-4. **`email` on an ingestion key's `AuthContext`** — left `None` here; the umbrella plan's step 9
-   sketches `Some(…)`. If the intent was "the key's owner", that is Stage 6 territory and wants its
-   own column rather than reusing `created_by`.
-5. **Optional `audience` on `mint` in this stage**, or defer the whole mint-side surface to #1374?
