@@ -652,12 +652,30 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
      `#[ignore]`d `#[tokio::test]` that is a copy without the sleep/spacer. Costs a near-duplicate
      ~200-line test and leaves the misleading workaround in the original.
 
-   Either way this is the only DB test the change needs: it is what proves `update_partition`
-   persists the new column and that the whole scan path reads it back. Note the geometry it
-   exercises is the *legacy* strictly-overlapping one — the blocks are ingested through the
-   unfixed in-repo producer path (`ThreadStream` + `replace_block` directly, not the `dispatch.rs`
-   flush that Part A changes), so the test keeps covering exactly the case Part B must tolerate
-   forever.
+   Note the geometry it exercises is the *legacy* strictly-overlapping one — the blocks are
+   ingested through the unfixed in-repo producer path (`ThreadStream` + `replace_block` directly,
+   not the `dispatch.rs` flush that Part A changes), so the test keeps covering exactly the case
+   Part B must tolerate forever.
+
+   **Plus a persistence round-trip test**, in the style of `net_spans_retire_overlap_db_test.rs`
+   (which inserts synthetic `lakehouse_partitions` rows with no ingestion, no object store, no
+   parquet and no query engine). Build a `Partition` literal with `max_sort_key_time: Some(t)`,
+   run it through the production `insert_partition` (`write_partition.rs:415` — make it `pub` for
+   test reachability, the same lever `1429` used on `update_partition`), then read it back through
+   `partition_cache` and assert the value survives; add a sibling row with `None` to pin the legacy
+   path. Use a fresh `view_instance_id` per test so the retire predicate is a no-op and no
+   object-store file is ever referenced.
+
+   This is deliberately separate from the end-to-end test rather than folded into it, because the
+   two cover different risks. This change's plumbing failure modes — a missed bind in the
+   positional `VALUES($1,…,$12, 2, $13)`, a column absent from one of the four SELECTs, a
+   misordered append in the strictly-positional `list_partitions` schema — are all SQL-shaped, and
+   no unit test can reach them (the persistence layer is Postgres-specific: `TIMESTAMPTZ`, the
+   `tstzrange`/gist exclusion constraint, the migration ladder; there is no testcontainers or
+   embedded-Postgres harness in this repo). A ~50-line test that exercises exactly the INSERT and
+   the SELECTs pins them directly, in seconds, instead of incidentally behind ~200 lines of
+   ingestion and query machinery. The end-to-end test then has one job — proving the scan path —
+   and this one has the other: proving the columns.
 
    A *second* DB test for the forced intra-bucket cut is deliberately **not** included. It would
    re-exercise the same write-and-check path the hour-seam test already covers, differing only in
@@ -679,7 +697,8 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
    `build/rust_ci.py` — and it is the only test in the plan that proves `update_partition` actually
    persists `max_sort_key_time` and that the scan path reads it back. Everything else in the change
    can be green while that link is broken. Confirm it fails first with the sleep/spacer removed but
-   the fix reverted, so the test is known to bite. Run
+   the fix reverted, so the test is known to bite. Run the new persistence round-trip test from
+   Step 9 in the same pass (also `#[ignore]`d, also CI-invisible). Run
    `thread_spans_batched_generation_matches_per_segment` (`#[ignore]`d) too — grouping
    is untouched so it must pass unmodified; run
    `python/micromegas/tests/test_queries.py::test_spans` against a live stack per the Repro Steps
@@ -718,7 +737,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/src/lakehouse/partition.rs` | New field + accessor; `validate` invariant |
 | `rust/analytics/src/lakehouse/partition_cache.rs` | Add column to 4 SELECTs / 3 struct builds (`sort_order` read pattern, not `file_path`'s) |
 | `rust/analytics/src/lakehouse/list_partitions_table_function.rs` | Arrow schema + both SELECTs |
-| `rust/analytics/src/lakehouse/write_partition.rs` | `PartitionRowSet` field; all-Some running-max fold in `write_rows_and_track_times`; `PartitionWriteResult`; explicit-column-list INSERT |
+| `rust/analytics/src/lakehouse/write_partition.rs` | `PartitionRowSet` field; all-Some running-max fold in `write_rows_and_track_times`; `PartitionWriteResult`; explicit-column-list INSERT; `insert_partition` made `pub` (test reachability) |
 | `rust/analytics/src/lakehouse/thread_spans_view.rs` | Set `max_sort_key_time` from last row's `begin`; bump `SCHEMA_VERSION` 2 → 3 for self-healing rebuild |
 | `rust/analytics/src/lakehouse/{net_spans_view,async_events_block_processor,log_block_processor,image_block_processor}.rs` | Mechanical `max_sort_key_time: None` addition to each `PartitionRowSet` literal |
 | `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` | `partition_bounds` EventTime arm; rustdoc + error string |
@@ -729,6 +748,7 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
 | `rust/analytics/tests/write_partition_tests.rs` | Adapt to `write_rows_and_track_times`'s widened return |
 | `rust/analytics/tests/call_tree_tests.rs` | New no-DB row-bound test: out-of-range events dropped not clamped; last preorder row is the max `begin` |
 | `rust/analytics/tests/thread_spans_ordering_db_test.rs` | Drop the sleep/spacer workaround in `thread_spans_ordering_across_partitions` (`:239-253`) and assert non-NULL `max_sort_key_time` — its removal *is* the regression test |
+| `rust/analytics/tests/` (new file) | Persistence round-trip DB test: `Partition` → `insert_partition` → `partition_cache`, `Some(t)` and `None` rows (net_spans_retire_overlap style — no ingestion/object store/parquet) |
 | `doc/how_to_query/README.md` | Add `max_sort_key_time` (and the already-missing `num_rows`, `partition_format_version`, `sort_order`) to the `list_partitions` Returns table |
 | `mkdocs/docs/admin/functions-reference.md` | Add `max_sort_key_time` (and the already-missing `partition_format_version`) to the `list_partitions()` Returns table |
 | `CHANGELOG.md` | Two entries under `## Unreleased`: `**Analytics:**` (breaking + operational note) and a new `**Tracing:**` subsection (additive) — see Step 12 |
@@ -850,10 +870,16 @@ thirteen, not in the `doc/how_to_query` table's style.
   `begin` is non-decreasing across the scan, and every scanned partition has a non-NULL
   `max_sort_key_time` — the end-to-end contract, and the only place that proves `update_partition`
   persists the new column and the scan path reads it back. That workaround exists today precisely
-  because of this bug, so deleting it is the sharpest available regression signal. One DB test is
-  enough: see Step 9 for why a second, forced-cut DB test is not included. Because it is
-  `#[ignore]`d it runs neither in `cargo test` nor in `build/rust_ci.py`, so Step 10 calls it out as
-  an explicit, must-run step rather than leaving it to whoever remembers.
+  because of this bug, so deleting it is the sharpest available regression signal. See Step 9 for
+  why a second, *forced-cut* DB test is not included. Because it is `#[ignore]`d it runs neither in
+  `cargo test` nor in `build/rust_ci.py`, so Step 10 calls it out as an explicit, must-run step
+  rather than leaving it to whoever remembers.
+- **Persistence round-trip test** (new file, Implementation Step 9): a `Partition` carrying
+  `max_sort_key_time: Some(t)` survives `insert_partition` → `partition_cache`, and a `None` row
+  stays `None`. This is the only test that isolates the SQL plumbing — the positional INSERT bind
+  and the four SELECTs — which is where this change's realistic failure modes live and which no
+  unit test can reach. Cheap enough (~50 lines, no ingestion or object store) that it is worth
+  running alongside the end-to-end test rather than instead of it.
 - **Running-max / `None`-poisoning fold** (`write_partition_tests.rs`): feed
   `write_rows_and_track_times` several out-of-order `PartitionRowSet`s — some `Some`, one `None` —
   over its hand-built channel (widen it past `channel(1)`, or spawn the sender, so the second send
