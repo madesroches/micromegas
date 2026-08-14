@@ -16,6 +16,27 @@ For an architecture overview (core crates, services, data flow), see `.github/co
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs
 - unless asked, don't amend commits
 
+## Interface stability
+
+**The SQL layer is the stable interface. Rust APIs are not.**
+
+- **SQL surface — keep it compatible.** View and table schemas (column names, types, and
+  order), view/table names, and UDF/UDTF signatures and their result columns are what users
+  build dashboards and saved queries on. Additive changes are fine: append a new column
+  **last** so `SELECT *` and positional readers keep working. Renaming or removing a column,
+  reordering existing ones, or changing a type breaks dashboards silently — avoid it, or stage
+  it deliberately.
+- **Rust API surface — change it freely.** Making a private item `pub`, widening a function
+  signature, adding a struct field, or altering a trait is all acceptable. The project is still
+  niche, so a clean design beats a compatible one, and contorting a design to spare a handful of
+  call sites costs more than the break does. Prefer the shape that makes the compiler enumerate
+  every affected call site — a silently defaulted value is the more expensive failure. Record
+  the break in `CHANGELOG.md` with its **Minor breaking change** clause; don't design around it.
+- An internal `SCHEMA_VERSION` bump is **not** a SQL break — it changes the partition
+  file-schema hash to force a rebuild, while the queryable Arrow schema stays identical.
+- Data and wire formats are separate from both: stored payloads and partition metadata still
+  need their migration / `SCHEMA_VERSION` handling.
+
 ## Scripting
 - prefer to script using python over shell scripts
 - use the poetry venv in python/micromegas run python code

@@ -342,25 +342,23 @@ precedent verbatim; bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 8.
 ### 2. Carry it through the write path
 
 - `PartitionRowSet` (`write_partition.rs:53-66`) gains
-  `max_sort_key_time: Option<DateTime<Utc>>`. Keep `new()` two-argument (sets `None`) so the seven
-  `::new` call sites (`sql_partition_spec.rs:169`, `merge.rs:409`, `metrics_block_processor.rs:68`,
+  `max_sort_key_time: Option<DateTime<Utc>>`, and **`new()` takes it as a third argument** — so
+  every construction site is enumerated by the compiler. Twelve sites total: the seven `::new`
+  callers (`sql_partition_spec.rs:169`, `merge.rs:409`, `metrics_block_processor.rs:68`,
   `metadata_partition_spec.rs:105`, `otel/spans_block_processor.rs:318`,
-  `otel/logs_block_processor.rs:243`, `otel/metrics_block_processor.rs:399`) are untouched. Five
-  sites build the struct as a literal instead: it's set at `thread_spans_view.rs:221-224`, and
-  `max_sort_key_time: None` must be added at the four mechanical sites in `net_spans_view.rs:208`,
-  `async_events_block_processor.rs:157`,
-  `log_block_processor.rs:68`, and `image_block_processor.rs:81` (or have them switch to
-  `PartitionRowSet::new`).
+  `otel/logs_block_processor.rs:243`, `otel/metrics_block_processor.rs:399`) all pass `None`, and
+  the five struct literals — set at `thread_spans_view.rs:221-224`, `None` at
+  `net_spans_view.rs:208`, `async_events_block_processor.rs:157`, `log_block_processor.rs:68`,
+  `image_block_processor.rs:81`.
 
-  Keeping `new()` at two arguments is a deliberate trade, and the implementer should know which way
-  it cuts: the seven `::new` sites keep compiling and silently receive `None`. That is exactly right
-  semantically — none of those views declares a `Concatenated` event-time ordering, so `None` (fall
-  back to `max_event_time`) is the correct value for all of them — but it means the compiler will
-  **not** force a review of those seven sites, and a future view that does need the bound could be
-  added through `::new` and get `None` without any signal. The five struct literals are the only
-  sites that break the build. If a second view ever declares `Concatenated` + `OrderingBounds::
-  EventTime`, converting `new()` to take the field explicitly (and letting the compiler enumerate
-  the callers) is the safer shape at that point.
+  Widening `new()` rather than keeping it two-argument is deliberate. `None` happens to be correct
+  for all seven callers today — none declares a `Concatenated` event-time ordering, so falling back
+  to `max_event_time` is right — but a defaulted `new()` would hand that `None` out *silently*, and
+  a future view that does declare the ordering could be added through `::new` and get a wrong bound
+  with no signal at all. The failure mode of a silent default here is a scan check that trusts a
+  bound nobody computed; the cost of avoiding it is passing `None` at seven call sites. This is a
+  published crate, so it is a minor breaking change — recorded in `CHANGELOG.md` (Step 12), not
+  designed around.
 - `write_rows_and_track_times` (`:626-675`) folds a running value alongside the existing min/max
   fold. Soundness rule: the partition-level value is `Some(max)` **only if every** received row
   set carried `Some`; any `None` poisons the whole partition to `None`. It must be a running
@@ -410,6 +408,12 @@ view. `get_file_schema_hash` changes, so every pre-existing `thread_spans` JIT p
 stale by schema hash and rebuilds automatically on its next query, carrying `max_sort_key_time`,
 with no admin `retire_partitions` call required (see Trade-offs).
 
+Note this is **not** a SQL-visible change: `SCHEMA_VERSION` feeds only the partition file-schema
+hash (`get_file_schema_hash` returns `vec![SCHEMA_VERSION]`, `:325-327`). The Arrow schema users
+actually query is built in `span_table.rs:52-82` and is untouched by this plan, so every existing
+`thread_spans` dashboard keeps working unchanged — the rebuild is invisible apart from a one-off
+first-query latency bump.
+
 ### 4. Read it back
 
 - `Partition` (`partition.rs:8-30`) gains `max_sort_key_time: Option<DateTime<Utc>>` with an
@@ -423,7 +427,14 @@ with no admin `retire_partitions` call required (see Trade-offs).
   `rows_to_record_batch` is generic **and strictly positional** — `sql_arrow_bridge.rs:371-396`
   builds one reader per `rows[0].columns()` and indexes the struct builder by the same ordinal — so
   append the new column **last** in both SELECTs and **last** in the schema `vec!`, and declare it
-  nullable. No `sql_arrow_bridge.rs` change is needed: `TIMESTAMPTZ` already maps to a nullable
+  nullable.
+
+  Appending last is required twice over, and the second reason is the more durable one: **the SQL
+  layer is this project's stable interface**, because users have dashboards built on it. Adding a
+  trailing nullable column is purely additive — `SELECT *` consumers gain a column they can ignore,
+  positional readers are unaffected, and every existing column keeps its name, type and ordinal.
+  Inserting it mid-list (say, next to `max_event_time`, where it reads more naturally) would break
+  both the bridge and those dashboards. Don't. No `sql_arrow_bridge.rs` change is needed: `TIMESTAMPTZ` already maps to a nullable
   `TimestampColumnReader` (`:330-337`, `:165-194`), the same path `min_event_time` uses.
 - Extend `Partition::validate` (`partition.rs:90-117`) with the cheap invariant: when both are
   present, `min_event_time <= max_sort_key_time <= max_event_time`; also reject a non-NULL
@@ -718,7 +729,11 @@ sort_and_check_non_overlapping: prev_max > next_min  → never fires for buffer-
     behavior, and `EventBlock::new_at`/`close_at` are pure inherent additions — mention them as
     additions and stop. The `**Analytics:**` entry
     must name `PartitionRowSet` and `Partition` (both all-public-field structs, so downstream struct
-    literals break) plus `write_rows_and_track_times`'s widened return type. The `**Analytics:**`
+    literals break), `PartitionRowSet::new`'s new third argument, and
+    `write_rows_and_track_times`'s widened return type. It should also state what is *not* broken,
+    since that is what users care about: no SQL-visible change beyond one trailing nullable column
+    on `list_partitions()`; `thread_spans`' queryable schema is identical, so existing dashboards
+    and saved queries keep working. The `**Analytics:**`
     entry also needs an **Operational note**, following the shape of `1429`'s v0.29.0 entry
     (`CHANGELOG.md:13`, which bumped both views 1 → 2; this one bumps `thread_spans` alone):
     `ThreadSpansView::SCHEMA_VERSION` bumps 2 → 3, so every existing `thread_spans` JIT partition is

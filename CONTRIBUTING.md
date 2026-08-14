@@ -415,6 +415,40 @@ yarn server             # Starts Grafana with docker compose (includes --build)
 # Access Grafana at http://localhost:3000
 ```
 
+## Interface Stability
+
+Micromegas treats its two public surfaces very differently. Knowing which one you're touching
+tells you how careful to be.
+
+### The SQL layer is stable — don't break dashboards
+
+View and table schemas (column names, types, and order), view/table names, and UDF/UDTF
+signatures and their result columns are what users build dashboards and saved queries on. A
+change here breaks someone's dashboard silently, with no compiler to catch it.
+
+- **Additive is fine**: append a new column **last**, so `SELECT *` consumers and positional
+  readers keep working.
+- **Avoid or stage carefully**: renaming or removing a column, reordering existing columns, or
+  changing a column's type.
+- An internal `SCHEMA_VERSION` bump is *not* a SQL break — it changes a partition's file-schema
+  hash to force a rebuild, while the schema users query stays identical.
+
+### Rust APIs are not stable — prefer the clean design
+
+The project is still niche, so agility matters more than downstream source compatibility.
+Making a private item `pub`, widening a signature, adding a struct field, or changing a trait
+are all acceptable.
+
+- Don't contort a design to spare a handful of call sites — the break costs less than the
+  contortion.
+- Prefer the shape that makes the compiler enumerate every affected call site. A silently
+  defaulted value is the more expensive failure mode.
+- Record the break in `CHANGELOG.md` with a **Minor breaking change** clause. Record it; don't
+  design around it.
+
+Data and wire formats are a separate concern from both: stored payloads and partition metadata
+still need their migration / `SCHEMA_VERSION` handling.
+
 ## Code Style and Conventions
 
 ### Rust
