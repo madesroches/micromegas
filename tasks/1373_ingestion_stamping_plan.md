@@ -398,24 +398,35 @@ deliberately-reused `process_id` and a mislabeled process there.
 
 ### 7. What this stage does not close
 
-`insert_stream` and `insert_block` accept any `process_id`/`stream_id` without checking that the
-target process belongs to the caller's audience. A credential bound to audience A that knows a
-`process_id`/`stream_id` belonging to audience B can append events to B's process, and those
-events inherit B's audience — so B's readers see data B did not produce. It grants the attacker
-**no read power** (reading B requires a read grant on B), so it stays inside the plan's
-"write keys govern integrity only" framing (`audience_based_access_control_plan.md:97-111`), but it
-is a real integrity gap and the plan's phrasing ("pollutes *that audience's* view") understates it.
+**Two different operations, and only one of them is in this stage.** `insert_process` does not
+*check* an audience — it **derives** one from the authenticated credential and writes it, which is
+exactly what §3 specifies. `insert_stream` and `insert_block` are the opposite shape: because the
+audience is recorded only on the process row and streams/blocks inherit it through `process_id`,
+they need no audience value at all — no `WriteAudience` parameter belongs on their signatures, and
+§1 accordingly threads it to the two process-insert sites only. What they need instead is an
+**authorization decision**: the ingestion auth layer must approve this credential writing to *this*
+process before the insert proceeds. That decision is what this stage does not yet make.
+
+Today it makes none: `insert_stream` and `insert_block` accept any `process_id`/`stream_id`
+unconditionally. A credential bound to audience A that knows a `process_id`/`stream_id` belonging to
+audience B can append events to B's process, and those events inherit B's audience — so B's readers
+see data B did not produce. It grants the attacker **no read power** (reading B requires a read
+grant on B), so it stays inside the plan's "write keys govern integrity only" framing
+(`audience_based_access_control_plan.md:97-111`), but it is a real integrity gap and the plan's
+phrasing ("pollutes *that audience's* view") understates it.
 
 Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
 
-- The fix is a write-side ownership check — `process_id → audience` (and `stream_id → process_id`)
-  through the same immutable, invalidation-free `moka` caches Stage 3 already specifies for Prong B
+- The fix is a write-side authorization gate, not an extra parameter: resolve the target's owning
+  audience (`process_id → audience`, and `stream_id → process_id` for blocks) and let the auth layer
+  decide, keeping the ingestion service's insert signatures audience-free. The lookup rides the same
+  immutable, invalidation-free `moka` caches Stage 3 already specifies for Prong B
   (`audience_based_access_control_plan.md:465-478`), so the design work is shared, not duplicated.
 - Prong B is verifiably unimplemented today, which is why that cache design cannot simply be reused
   here: `auth/src/policy.rs:8-9` / `read_scope.rs:13` record Prong B (the UDTF/UDF guards) as
   still pending (#1371, Stage 3), and `rust/ingestion/Cargo.toml` has no `moka` dependency, though
   it is a workspace dep (`rust/Cargo.toml:66`) already used by `analytics`/`auth`. Landing the
-  write-side check inside #1373 would mean designing and building Stage 3's cache layer inside
+  authorization gate inside #1373 would mean designing and building Stage 3's cache layer inside
   this stage instead. Stages 1, 2 and 4 each landed as their own issue
   (`d0364c950`, `5dcb74026`, `5298a1ca9`) — the epic's own cadence is the in-tree precedent for
   splitting this off the same way.
