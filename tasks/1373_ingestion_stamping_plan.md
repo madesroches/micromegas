@@ -136,9 +136,10 @@ one row per process by `MAX(audience)` (`:153+`). `OwnershipRewriteConfig.unstam
 
 ### 1. `WriteAudience` — the value threaded through the write path
 
-A newtype in `micromegas-ingestion` (`rust/ingestion/src/write_audience.rs`), so both
-`micromegas-otel-ingestion` and `micromegas-public` can name it without either depending on
-`micromegas-auth`:
+A newtype in `micromegas-ingestion` (`rust/ingestion/src/write_audience.rs`), so
+`micromegas-otel-ingestion` can name it without depending on `micromegas-auth` — unlike
+`micromegas-public`, which already pulls in `micromegas-auth` (`dep:micromegas-auth` under its
+`server` feature), `micromegas-otel-ingestion` is auth-free today and should stay that way:
 
 ```rust
 /// The authenticated write audience a request ingests under (AbAC Stage 5, #1373).
@@ -327,6 +328,14 @@ explicitly rather than expecting it as an ambient extension. `serve_ingestion` p
 `StampingConfig` through to both calls; every existing direct-call test site fails to compile until
 updated, per §1's stance.
 
+This asymmetry — `otlp_router`/`webhook_router`/`register_routes` keep the ambient
+`Extension<Arc<StampingConfig>>` rather than taking it as an explicit parameter — is justified only
+by in-tree call sites: `servers/mod.rs` exports all four routers alike, but only `firehose_router`
+has call sites outside `serve_ingestion` (the 11 tests above); the other three have none today. An
+embedder that mounts `otlp_router`/`webhook_router`/`register_routes` directly, outside
+`serve_ingestion`'s own tree, must layer the `StampingConfig` extension itself or hit the same
+missing-extension 500 that motivates `firehose_router`'s explicit-parameter design.
+
 **The Firehose fix** is `firehose_common.rs:98-108`: `Ok(ctx) => { …strip spoofable headers…;
 req.extensions_mut().insert(ctx); next.run(req).await }`, mirroring `auth/src/axum.rs:73-83`. Both
 Firehose routers then behave exactly like the Bearer routes.
@@ -343,7 +352,7 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   (`servers/otlp.rs`) that carries it through to that response shape.
 - **Webhook** (`/ingestion/webhook`): reuses `OtelError::Denied` (the same variant OTLP uses) but
   renders it through `webhook.rs`'s own `build_error_response(status, message, retryable)`
-  (`webhook.rs:114-153`) rather than the OTLP shape — 403, `text/plain`, and `retryable == false`
+  (`webhook.rs:99-112`) rather than the OTLP shape — 403, `text/plain`, and `retryable == false`
   (no `Retry-After` header), since a denied write is not a transient condition a webhook sender
   should retry.
 - **Firehose**: the Firehose ack shape with `errorMessage`, still a non-2xx status — but this is
@@ -403,10 +412,11 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
   through the same immutable, invalidation-free `moka` caches Stage 3 already specifies for Prong B
   (`audience_based_access_control_plan.md:465-478`), so the design work is shared, not duplicated.
 - Prong B is verifiably unimplemented today, which is why that cache design cannot simply be reused
-  here: `ownership_rewrite.rs:1-10` records Prong B as "still pending (#1371, Stage 3)", and
-  `rust/ingestion/Cargo.toml` has no `moka` dependency at all (only `rust/analytics/Cargo.toml`
-  does). Landing the write-side check inside #1373 would mean designing and building Stage 3's
-  cache layer inside this stage instead. Stages 1, 2 and 4 each landed as their own issue
+  here: `auth/src/policy.rs:8-9` / `read_scope.rs:13` record Prong B (the UDTF/UDF guards) as
+  still pending (#1371, Stage 3), and `rust/ingestion/Cargo.toml` has no `moka` dependency, though
+  it is a workspace dep (`rust/Cargo.toml:66`) already used by `analytics`/`auth`. Landing the
+  write-side check inside #1373 would mean designing and building Stage 3's cache layer inside
+  this stage instead. Stages 1, 2 and 4 each landed as their own issue
   (`d0364c950`, `5dcb74026`, `5298a1ca9`) — the epic's own cadence is the in-tree precedent for
   splitting this off the same way.
 - `insert_block` is the hot path; a warm cache hit is an in-memory lookup, but the measurement and
@@ -488,6 +498,14 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
    everywhere for now. Fix the call sites the compiler names (`analytics/tests/*_db_test.rs`,
    `otel-ingestion/tests/*`, `public/tests/firehose*`).
 
+**Phases 2 and 3 must ship in the same release, never separately.** Phase 2 starts stamping
+processes with the authenticated audience; Phase 3 (§4) is what makes OTLP `process_id`/`block_id`
+audience-scoped so two audiences sending identical resources/payloads stop colliding. §4 already
+calls that collision "not only an attack — it is the ordinary multi-tenant case." A deploy cut
+between step 8 and step 9 would stamp OTLP processes whose ids still collapse across audiences,
+and because §3 forbids any retro-`UPDATE` of the stamp (blocks snapshot `processes.properties` at
+materialization), that mislabeling is permanent and unrepairable. Land steps 6-10 as one deploy.
+
 **Phase 2 — stamp and strip.**
 
 6. `finalize_process_properties` / `strip_reserved_properties` in `web_ingestion_service.rs`, wired
@@ -511,7 +529,10 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
    `Some`); audience-prefixed `block_id` input.
 10. `block.rs`: `build_prepared_block(.., ctx)`; collapse the `split_logs` pair into
     `split_logs(req, ctx)`; add the parameter to `split_metrics` / `split_traces`. Update
-    `handler.rs` call sites and `otel-ingestion/tests/{identity,split,webhook,firehose,cloudwatch_*}_tests.rs`.
+    `handler.rs` call sites and
+    `otel-ingestion/tests/{identity,split,webhook,firehose,cloudwatch_*,block,json}_tests.rs`
+    (`block_tests.rs` and `json_tests.rs` both call `split_logs`/`split_metrics`/`split_traces`
+    directly and break on the signature change).
 
 **Phase 4 — one audience per process.**
 
@@ -543,6 +564,12 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 - `rust/public/src/servers/ingestion.rs` (`IngestionError::Forbidden`), `otlp.rs`
   (`OtlpHttpError` arm for `OtelError::Denied`), `webhook.rs`, `firehose.rs`,
   `firehose_cloudwatch_logs.rs`, `firehose_common.rs`
+- `rust/public/Cargo.toml`: add a `[[test]]` entry for the new
+  `audience_stamping_db_test` (`name = "audience_stamping_db_test"`,
+  `required-features = ["server"]`), matching all 13 existing entries in this file —
+  `default = []` gates `micromegas-ingestion`/`micromegas-otel-ingestion`/`servers::*` behind
+  `server`, and `autotests` is not disabled, so an unlisted file is auto-discovered and fails to
+  build under `cargo test -p micromegas` without this entry.
 - `rust/otel-ingestion/src/identity.rs`, `block.rs`, `handler.rs`, `cloudwatch_logs.rs`,
   `error.rs` (`OtelError::Denied` variant and its exhaustive-match arm for `AudienceConflict`)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (constant + stale-gap note)
@@ -672,10 +699,12 @@ DB-backed (`#[ignore]` + `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_S
   absent; `register_otel_process` stamping the same way with a pre-built `Vec<Property>`. Conflict
   guard: re-register the same `process_id` with the same audience ⇒ ok; with a different audience ⇒
   `AudienceConflict`; existing `NULL` + incoming `Some` ⇒ ok, still `NULL`.
-- `rust/public/tests/audience_stamping_db_test.rs` (new — `micromegas-public` is the first crate
-  that depends on both `micromegas-ingestion` and `micromegas-otel-ingestion`, so it is the lowest
-  crate that can name `split_metrics`/`process_id_from_resource` alongside a DB-backed harness;
-  follows the existing DB-backed precedent in `pg_stats_test.rs` / `materialize_fail_isolation_tests.rs`):
+- `rust/public/tests/audience_stamping_db_test.rs` (new — `micromegas-otel-ingestion` already
+  depends on `micromegas-ingestion` and so can name `split_metrics`/`process_id_from_resource`
+  together, but it declares no `[dev-dependencies]` at all (no `tokio`, `sqlx`, `object_store`), so
+  it has no DB-backed harness to host this in; `rust/public` is the lowest crate that depends on
+  both crates *and* already has one, following the existing DB-backed precedent in
+  `pg_stats_test.rs` / `materialize_fail_isolation_tests.rs`):
   the OTLP identity/collision regression — two audiences posting **identical** OTLP resources
   produce two distinct `process_id`s and both blocks persist (the collision/dedup regression test).
 - End-to-end acceptance, reusing `ownership_rewrite_db_test`'s materialize-then-query harness:
@@ -685,10 +714,13 @@ DB-backed (`#[ignore]` + `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_S
   That file's own hand-stamping (`ownership_rewrite_db_test.rs:144-161`) switches to the new
   parameter, and its "no stamping exists yet" preamble is corrected.
 
-Manual: `local_test_env/ai_scripts/start_services.py` uses `MICROMEGAS_API_KEYS`
-(`start_services.py:135`), i.e. an audience-less key — so the default local flow must keep working
-unstamped. Exercise stamping locally by importing a DB ingestion key with an audience through
-`analytics-web-srv`'s import route and pointing a producer at it.
+Manual: `local_test_env/ai_scripts/start_services.py` launches ingestion with `--disable-auth`
+(split mode, `:174`) and the monolith with `--disable-ingestion-auth`/`--disable-auth` (`:290`) —
+no auth provider runs, so no `AuthContext` extension exists at all. (`MICROMEGAS_API_KEYS` at
+`:135` only configures the object-cache server, not ingestion.) So the default local flow exercises
+the no-extension branch of `resolve_write_audience` — it must keep working unstamped. Exercise
+stamping locally by importing a DB ingestion key with an audience through `analytics-web-srv`'s
+import route and pointing a producer at it.
 
 ## Open Questions
 
