@@ -159,7 +159,7 @@ describe('IngestionApiKeysPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
     const nameInput = await screen.findByPlaceholderText(/game-client-42/i)
     fireEvent.change(nameInput, { target: { value: 'new-key' } })
-    const audienceInput = await screen.findByPlaceholderText('public')
+    const audienceInput = await screen.findByPlaceholderText('team-alpha')
     fireEvent.change(audienceInput, { target: { value: 'team-alpha' } })
 
     const mintButton = screen.getByRole('button', { name: 'Mint' })

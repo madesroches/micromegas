@@ -248,7 +248,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                       <input
                         type="text"
                         className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
-                        placeholder="public"
+                        placeholder="team-alpha"
                         value={mintAudience}
                         onChange={(e) => setMintAudience(e.target.value)}
                       />

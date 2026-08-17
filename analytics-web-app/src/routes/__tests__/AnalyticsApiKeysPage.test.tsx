@@ -126,7 +126,7 @@ describe('AnalyticsApiKeysPage', () => {
     )
     fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
     await screen.findByPlaceholderText(/grafana-datasource/i)
-    expect(screen.queryByPlaceholderText('public')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('team-alpha')).not.toBeInTheDocument()
     expect(screen.queryByText('Audience')).not.toBeInTheDocument()
   })
 

@@ -525,6 +525,23 @@ fn default_key_audience_from_env_valid_value_is_returned() {
     );
 }
 
+/// A whitespace-padded value is trimmed before validation and storage -- matching
+/// `OwnershipRewriteConfig::from_env`'s trim-then-validate order in `read_scope.rs`.
+#[test]
+#[serial]
+fn default_key_audience_from_env_whitespace_padded_value_is_trimmed() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DKA_PREFIXED_VAR);
+        std::env::set_var(DKA_UNPREFIXED_VAR, "  team-alpha  ");
+    }
+    assert_eq!(
+        default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
+        Some("team-alpha".to_string())
+    );
+}
+
 #[test]
 #[serial]
 fn default_key_audience_from_env_prefixed_var_wins_over_unprefixed_fallback() {

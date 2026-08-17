@@ -123,8 +123,7 @@ scanners; validation covers the whole string via its hash, so imported legacy
 keys of any shape keep working. **400** if `name` is empty or exceeds 255
 bytes (stricter than the `VARCHAR(255)` column, which bounds characters, not
 bytes); for ingestion, also **400** if `audience` is neither a valid audience
-name nor resolvable from `MICROMEGAS_DEFAULT_KEY_AUDIENCE`/
-`{prefix}_DEFAULT_KEY_AUDIENCE` — see
+name nor resolvable from `MICROMEGAS_DEFAULT_KEY_AUDIENCE` — see
 [What audience does a key carry](#what-audience-does-a-key-carry).
 
 **List** (`GET .../{table}-api-keys?limit=&offset=&include_revoked=`) — **200**,
@@ -230,7 +229,7 @@ selector to the audience's entry in `{prefix}_AUDIENCE_GRANTS`), never a
 restamping of the key or its already-ingested history.
 
 **`mint` requires an explicit audience or a working
-`MICROMEGAS_DEFAULT_KEY_AUDIENCE`/`{prefix}_DEFAULT_KEY_AUDIENCE` — there is
+`MICROMEGAS_DEFAULT_KEY_AUDIENCE` — there is
 no built-in default.** A new credential's *entire future* ingestion history
 follows this one choice, so an unresolvable mint is a **400**, never a silent
 `public`: defaulting a fresh write credential to a universally-readable

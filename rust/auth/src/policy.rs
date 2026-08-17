@@ -17,6 +17,7 @@
 use crate::types::AuthContext;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use micromegas_tracing::info;
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use std::collections::BTreeMap;
@@ -89,19 +90,26 @@ fn default_key_audience_var(prefix: &str) -> String {
 /// unset.
 pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>> {
     let var = default_key_audience_var(prefix);
-    match std::env::var(&var) {
-        Ok(raw) if raw.trim().is_empty() => Ok(None),
+    let resolved = match std::env::var(&var) {
         Ok(raw) => {
-            if is_valid_audience(&raw) {
-                Ok(Some(raw))
+            let raw = raw.trim().to_string();
+            if raw.is_empty() {
+                None
+            } else if is_valid_audience(&raw) {
+                Some(raw)
             } else {
-                Err(anyhow!(
+                return Err(anyhow!(
                     "{var}: {raw:?} is not a valid audience name -- must match [A-Za-z0-9_-]{{1,255}}"
-                ))
+                ));
             }
         }
-        Err(_) => Ok(None),
+        Err(_) => None,
+    };
+    match &resolved {
+        Some(aud) => info!("{var}: default key audience = {aud}"),
+        None => info!("{var}: no default key audience configured"),
     }
+    Ok(resolved)
 }
 
 /// A principal selector on either axis of an [`AudienceGrants`] entry: `*` (any authenticated
@@ -274,11 +282,18 @@ impl AudienceGrants {
     /// Resolves [`audience_grants_var`] and parses it. Unset ⇒ [`Self::empty`].
     pub fn from_env(prefix: &str) -> Result<Self> {
         let var = audience_grants_var(prefix);
-        match std::env::var(&var) {
-            Ok(raw) if raw.trim().is_empty() => Ok(Self::empty()),
-            Ok(raw) => Self::parse(&raw).map_err(|e| anyhow!("{var}: {e}")),
-            Err(_) => Ok(Self::empty()),
+        let grants = match std::env::var(&var) {
+            Ok(raw) if raw.trim().is_empty() => Self::empty(),
+            Ok(raw) => Self::parse(&raw).map_err(|e| anyhow!("{var}: {e}"))?,
+            Err(_) => Self::empty(),
+        };
+        if grants.entries.is_empty() {
+            info!("{var}: no audience grants configured");
+        } else {
+            let names = grants.entries.keys().cloned().collect::<Vec<_>>().join(",");
+            info!("{var}: {} audience grants ({names})", grants.entries.len());
         }
+        Ok(grants)
     }
 
     fn readers(&self) -> impl Iterator<Item = (&String, &[String])> {
