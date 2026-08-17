@@ -683,15 +683,22 @@ not evidence they work. Verify these by hand against a live DB (`cargo test -- -
 - `ingestion_keys_tests.rs:309`'s `live_mint_list_revoke_round_trip` — POSTs no `audience` and
   asserts `CREATED` (`:327`), which §6 turns into the 400 case.
 
-Two of those four stop being *sole* guards once the Testing Strategy's non-live coverage lands — the
+All four are edits to **existing** live tests, not new ones. Write the non-live coverage first: the
 `allow_delegation` rule and `has_audience()` are pure functions of `ApiKeyTable` and get their own unit
 tests, and §5's resolution matrix is unit-tested against `pub fn resolve_audience` rather than through
-a route that must complete an `INSERT`. Write those first: they turn two silent live-only failures into
-ordinary `cargo test` failures. The list above is then what remains genuinely live.
+a route that must complete an `INSERT`. That demotes `:282` from sole guard to confirmation and puts
+the resolution matrix in default `cargo test`.
 
-Two more are runtime-only but caught by any live run: a `KeyListEntry`/`ImportedRow` column added to
-one query but not its twin (`ingestion_keys.rs:261`/`:272`, `:397`/`:414`) 500s instead of failing to
-compile, and the Python tuple-arity change surfaces no error until the test executes.
+**This change adds exactly one new live test file and one new live assertion**, both justified
+individually in the Testing Strategy: `rust/ingestion/tests/sql_migration_test.rs` (nothing but
+Postgres can evaluate a `CHECK` regex or `SET NOT NULL` ordering, and it is the only executable link
+between the SQL copy of the charset rule and the Rust one), and "the audience reaches `bound_audience`"
+in `db_api_key_tests.rs` (the `RETURNING` list and `try_get("audience")` are string-typed end to end).
+Everything else that touches a live test is a modification of one that already exists.
+
+Two more ripples are runtime-only but caught by any live run: a `KeyListEntry`/`ImportedRow` column
+added to one query but not its twin (`ingestion_keys.rs:261`/`:272`, `:397`/`:414`) 500s instead of
+failing to compile, and the Python tuple-arity change surfaces no error until the test executes.
 
 1. **Opaque audiences.** `policy.rs`: add `is_valid_audience`, `PUBLIC_AUDIENCE` (`is_well_formed_audience`
    itself is deleted in step 2, alongside its other callers, since steps 1–2 land as a single
@@ -1024,9 +1031,24 @@ an `ApiKeyTable::Ingestion` key (`:268`/`:270`), which §4 makes `false`. It mus
 `assert!(!ctx.allow_delegation)`, and it is the regression test for that half of §4 — the compiler
 cannot catch it.
 
-New **live** coverage — each of these needs a real row, the real loader, or the real cache, so none of
-it can be anything but live: the audience reaches `bound_audience` unchanged (the issue's first test);
-the audience survives a cache hit; the unreachable-pool cases still yield `ProviderUnavailable`.
+New **live** coverage — exactly one assertion: **the audience reaches `bound_audience` unchanged** (the
+issue's first test). Justified because the loader builds its `RETURNING` list as a `&'static str`
+chosen by `table.has_audience()` and then reads the column back with `try_get("audience")` **by name**
+— a string-typed path end to end, where getting the table branch wrong yields a runtime
+`LookupError::Db` rather than a compile error. There is no seam to inject a fake row (the query lives
+inside `validate_request`'s moka closure, welded to `sqlx::query` + `PgPool`), and adding one would be
+a larger change than the feature.
+
+Two things previously listed here as new live coverage are **not**, and should not be written:
+
+- **"The audience survives a cache hit" — cut.** It is tautological under this design: `KeyRow` *is*
+  the cached unit, so if `KeyRow.audience` exists and `AuthContext` is built from `row.audience`, a
+  cache hit cannot return anything else. It would test moka, not this change. (Nor should the
+  neighbouring TTL claim in §4 be tested — asserting hand-edit latency needs a sleep or clock control,
+  the exact antipattern `tasks/completed/1252_test_quality_timing_tests_plan.md` exists to remove.)
+- **The unreachable-pool `ProviderUnavailable` cases already exist and are not live at all** —
+  `:122`, `:142-151`, `:162-166`, `:179`, `:195-211`, all built on `unreachable_pool()` and none
+  `#[ignore]`d. They keep passing; there is nothing to add.
 
 New **non-live** coverage, and this is the important half: `ApiKeyTable::has_audience()` and the
 `allow_delegation` derivation are **pure functions of the enum** (`matches!` over two variants, no
@@ -1068,8 +1090,13 @@ audience ⇒ 400 **before any DB access**; the no-audience-no-knob 400 actually 
 body names `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; and the `require_pool` → `validate_name` →
 `resolve_audience` precedence below.
 
-`#[ignore]`d live-DB, genuinely unavoidable (it needs a real `ON CONFLICT`): importing an
-already-present hash reports the **existing** audience.
+**No new live test here.** The immutability property — importing an already-present hash reports the
+**existing** audience, never the request's — folds into `live_import_is_idempotent` (`:372`), which
+already imports the same key twice and already asserts `imported: true` → `false` with a stable
+`key_id`. Strengthen it instead: send a *different* `audience` on the second import and assert the
+first one survives. That is two lines on a test that already does all the setup, and it is where the
+`ON CONFLICT DO NOTHING` → fallback-`SELECT` path (`:397`/`:414`) is exercised — the twin-query hazard
+that 500s if `audience` is added to one and not the other.
 
 Two **existing** tests in this file change, beyond the 13 mechanical `IngestionKeysState` literals:
 
@@ -1082,8 +1109,9 @@ Two **existing** tests in this file change, beyond the 13 mechanical `IngestionK
   order guarantees; they are the regression test for that order and must not be relaxed to accept a
   400.
 
-`live_import_is_idempotent` (`:372`) needs only the state-literal field: import with no audience
-still succeeds, now defaulting to `public`.
+`live_import_is_idempotent` (`:372`) is the one existing live test that gains a real assertion rather
+than just the state-literal field — see the immutability point above. Its first import still sends no
+audience and still succeeds, now defaulting to `public`.
 
 **Migration** — new `rust/ingestion/tests/sql_migration_test.rs` (this crate has no migration test
 today; `analytics-web-srv/tests/migration_test.rs` covers the unrelated **app_db** v3→v4 chain and
@@ -1094,14 +1122,31 @@ than staying NULL"), leaves `read_data_lake_schema_version` reporting **6** (whi
 catches a forgotten `UPDATE migration SET version=6;` — see §3 — before it becomes a startup panic),
 and a hand-written `INSERT` of `''` is rejected by the `CHECK`.
 
-**Scope this test to what only Postgres can answer**, so it doesn't drift into re-testing the charset:
-the backfill's `public`-not-NULL outcome, the version bump, and the fact that the SQL `CHECK` agrees
-with `is_valid_audience` on a *couple* of representative values (`''`, and one containing `:`). The
-charset rules themselves are already pinned by the `is_valid_audience` unit tests above; the live test
-exists to verify the **third copy** of those rules (§3: `policy.rs`, `read_scope.rs`, this `CHECK`)
-actually matches the other two — which no Rust test can do, since Postgres ARE semantics are the thing
-under test. Enumerating the full accept/reject table here again would be duplication that can rot in
-one place while passing in the other.
+**Why this one has to be live, and why it is worth adding at all** — this is the only *new* live test
+file in the change, so it should carry an explicit justification rather than inherit the file
+convention:
+
+- **No cheaper mechanism exists.** The workspace has no `testcontainers`, no embedded Postgres, no
+  migration harness of any kind (checked across every `Cargo.toml`). For anything whose subject *is*
+  Postgres behavior, an `#[ignore]`d live test is the only tool available.
+- **The subject genuinely is Postgres behavior.** `ADD COLUMN` → `UPDATE` → `SET NOT NULL` ordering,
+  and ARE regex evaluation inside a `CHECK`, have no Rust-side representation to unit-test. There is
+  no pure function here to extract, unlike §5's `resolve_audience`.
+- **The load-bearing assertion is the third-copy check.** "Valid audience" is stated in three places
+  (§3: `policy.rs`, `read_scope.rs`, this `CHECK`), and `micromegas-ingestion` **cannot** depend on
+  `micromegas-auth` — so the SQL literal and the Rust validator are structurally independent, with no
+  shared constant to bind them. A live comparison is the only executable link between them. Assert
+  agreement on a couple of representative values (`''`, and one containing `:`), **not** the full
+  accept/reject table, which the `is_valid_audience` unit tests already pin — a second enumeration can
+  rot in one place while passing in the other.
+- **Argued against, and accepted anyway.** v6 is a first for this crate in two ways — the first
+  migration that backfills data, and the first that adds a constraint (v1–v4 create tables or add a
+  column *with* a default; v5 creates). Those are the new risk classes. But note honestly that v5,
+  which created these very tables, shipped with no migration test, and that an `#[ignore]`d test has
+  near-zero *regression* value since nothing runs it automatically. Its value is one-time, at
+  implementation, plus documenting the issue's own acceptance criterion ("backfills … rather than
+  staying NULL") executably for whoever writes v7. That is a modest but real return for one small file;
+  if it were any larger, the Manual section would be the better home.
 
 **`OwnershipRewrite`** — `MICROMEGAS_UNSTAMPED_AUDIENCE=public` and `=team-alpha` both parse (the
 latter would have been rejected before) and produce the same coalesce predicate. This also rewrites
