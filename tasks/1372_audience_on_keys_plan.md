@@ -664,6 +664,25 @@ ingestion request: Bearer <key> ────────────────
 
 ## Implementation Steps
 
+**Read this first: what green CI will not tell you.** Most of this change fails loudly — a new struct
+field breaks every literal at compile time (all 15 `IngestionKeysState` sites), `formatDate`'s typing
+breaks `yarn type-check`, a forgotten `UPDATE migration SET version=6;` panics at startup, and the
+strict `toEqual` mint-body assertions break `yarn test`. Four ripples do **not**: they live in
+`#[ignore]`d live-Postgres tests that `python3 build/rust_ci.py` never runs, so a full-green CI run is
+not evidence they work. Verify these by hand against a live DB (`cargo test -- --ignored`):
+
+- `rust/auth/tests/db_api_key_tests.rs`'s `insert_live_key` (`:232-251`) — table-generic `INSERT`
+  with no `audience`; fails at all nine call sites against a v6 schema.
+- `rust/auth/tests/default_provider_tests.rs`'s own `insert_live_key` (`:45-59`) — same problem, two
+  call sites, easy to miss because it is a second copy of the helper.
+- `db_api_key_tests.rs:282`'s `assert!(ctx.allow_delegation)` — **inverts** under §4.
+- `ingestion_keys_tests.rs:309`'s `live_mint_list_revoke_round_trip` — POSTs no `audience` and
+  asserts `CREATED` (`:327`), which §6 turns into the 400 case.
+
+Two more are runtime-only but caught by any live run: a `KeyListEntry`/`ImportedRow` column added to
+one query but not its twin (`ingestion_keys.rs:261`/`:272`, `:397`/`:414`) 500s instead of failing to
+compile, and the Python tuple-arity change surfaces no error until the test executes.
+
 1. **Opaque audiences.** `policy.rs`: add `is_valid_audience`, `PUBLIC_AUDIENCE` (`is_well_formed_audience`
    itself is deleted in step 2, alongside its other callers, since steps 1–2 land as a single
    compiling change). `read_scope.rs`: the same relaxation in its copy. This inverts the premise of
