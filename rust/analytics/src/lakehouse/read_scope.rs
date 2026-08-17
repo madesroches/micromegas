@@ -169,11 +169,16 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     Ok(values)
 }
 
-/// Parses a `{var}` env var as a strict boolean: `"true"`/`"false"` (case-insensitive) only,
-/// `Err` on anything else -- matching the fail-fast posture of the other two knobs rather than
-/// silently defaulting a typo to `false`. Unset ⇒ `false` (the knob's off-by-default posture).
+/// Parses a `{var}` env var as a strict boolean: `"true"`/`"false"` (case-insensitive), `Err` on
+/// anything else -- matching the fail-fast posture of the other two knobs rather than silently
+/// defaulting a typo to `false`. Unset *or* empty/whitespace-only ⇒ `false` (the knob's
+/// off-by-default posture), the same "empty means unset" treatment `unstamped_audience` and
+/// `public_view_sets` give their own vars -- routine in k8s manifests, docker-compose
+/// `environment:` lists, and systemd `EnvironmentFile`s, where declaring a var with an empty
+/// value is common.
 fn parse_bool_var(var: &str) -> anyhow::Result<bool> {
     match std::env::var(var) {
+        Ok(raw) if raw.trim().is_empty() => Ok(false),
         Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
             "true" => Ok(true),
             "false" => Ok(false),

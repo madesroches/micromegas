@@ -282,6 +282,27 @@ fn user_maintenance_functions_false_is_accepted() {
 
 #[test]
 #[serial]
+fn user_maintenance_functions_all_whitespace_resolves_to_false() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(PREFIXED_UNSTAMPED_VAR);
+        std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
+        std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
+        std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
+        std::env::set_var(PREFIXED_USER_MAINTENANCE_FUNCTIONS_VAR, "   ");
+        std::env::remove_var(UNPREFIXED_USER_MAINTENANCE_FUNCTIONS_VAR);
+    }
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
+    assert!(
+        !config.user_maintenance_functions,
+        "an all-whitespace value must be treated as unset (false), not an error, matching the \
+         other two knobs' empty-is-unset treatment"
+    );
+}
+
+#[test]
+#[serial]
 fn user_maintenance_functions_garbage_value_is_rejected() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
