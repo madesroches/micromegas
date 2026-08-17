@@ -72,8 +72,7 @@ Per-signal headers override the catch-all.
 OTLP has no "process" concept; it has a `Resource` (key/value attributes) attached to each batch. Micromegas synthesizes a stable `process_id` by hashing the OS-honest identifying tuple together with the OTel service identity:
 
 ```
-process_id = uuid_v5(NS_OTEL_PROCESS_V1,
-    host.id · host.name ·
+key = host.id · host.name ·
     process.pid · process.creation.time ·
     service.namespace · service.name · service.instance.id · process.owner ·
     os.type · os.version · os.name · os.description · os.build_id ·
@@ -84,7 +83,9 @@ process_id = uuid_v5(NS_OTEL_PROCESS_V1,
     service.version ·
     telemetry.sdk.name · telemetry.sdk.language · telemetry.sdk.version ·
     process.runtime.name · process.runtime.version · process.runtime.description
-    [· write_audience])
+
+process_id = uuid_v5(NS_OTEL_PROCESS_V1, key)                                   # no write audience
+process_id = uuid_v5(uuid_v5(NS_OTEL_PROCESS_V1, write_audience), key)          # write audience present
 ```
 
 `·` denotes `\x1F` (ASCII unit separator). All fields pass through lower-case + trim except
@@ -92,12 +93,16 @@ process_id = uuid_v5(NS_OTEL_PROCESS_V1,
 as empty strings.
 
 `write_audience` — the authenticated write audience resolved from the ingestion credential,
-**not** anything in the OTLP payload — is appended as a 32nd field **only when the credential
-carries one**. This is what makes `process_id` audience-scoped (AbAC Stage 5, #1373): two
-audiences posting identical resource attributes (the same containerized app in two tenants, a
-degenerate resource, a CloudWatch namespace) derive two distinct `process_id`s instead of
-colliding on one. With no write audience (an env-keyring key, OIDC, or no auth provider at all)
-the joined key has no 32nd field and is byte-identical to before this stage. See
+**not** anything in the OTLP payload — domain-separates the hash **only when the credential
+carries one**, by hashing `key` under a per-audience namespace UUID (itself derived from
+`NS_OTEL_PROCESS_V1` and the audience) rather than appending the audience string onto `key`.
+This is what makes `process_id` audience-scoped (AbAC Stage 5, #1373): two audiences posting
+identical resource attributes (the same containerized app in two tenants, a degenerate
+resource, a CloudWatch namespace) derive two distinct `process_id`s instead of colliding on
+one — and a resource attribute value crafted to contain a raw `\x1F` byte cannot forge another
+audience's `process_id` either, since the two hashes no longer share a namespace or a joined
+string. With no write audience (an env-keyring key, OIDC, or no auth provider at all) `key` is
+hashed directly under `NS_OTEL_PROCESS_V1`, byte-identical to before this stage. See
 [Authentication → Write-Side Stamping](../admin/authentication.md#write-side-stamping-abac-stage-5)
 for what carries a write audience and what doesn't.
 

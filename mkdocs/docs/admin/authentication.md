@@ -204,14 +204,24 @@ Two consequences worth knowing before you flip this stage on:
   that audience.
 
 !!! warning "Residual gap: cross-audience write injection (tracked, not yet closed)"
-    Stamping covers process *registration* (`insert_process`/`register_otel_process`). It does
-    **not** yet check that a credential is authorized to append to an *existing* process it
-    didn't create: `insert_stream`/`insert_block` accept any `process_id`/`stream_id`
-    unconditionally, so a credential bound to audience A that discovers a `process_id`/`stream_id`
-    belonging to audience B can still append events to B's process — events that then inherit B's
-    stamped audience. This grants no *read* power (reading B still requires a read grant on B),
-    so it is an integrity-only gap, tracked as a follow-up issue rather than closed by #1373 (it
-    depends on the same cache layer AbAC Stage 3's Prong B needs).
+    Process *registration* (`insert_process`/`register_otel_process`) now rejects a
+    same-`process_id`, different-audience re-registration outright (§6), closing the OTLP
+    process-squatting confidentiality gap described below. What's still open is appending to an
+    *existing* process a credential didn't create: `insert_stream`/`insert_block` accept any
+    `process_id`/`stream_id` unconditionally, so a credential bound to audience A that discovers a
+    `process_id`/`stream_id` belonging to audience B can still append events to B's process —
+    events that then inherit B's stamped audience. This grants no *read* power (reading B still
+    requires a read grant on B), so it is an integrity-only gap, tracked as a follow-up issue
+    rather than closed by #1373 (it depends on the same cache layer AbAC Stage 3's Prong B needs).
+
+    Process registration itself is confidentiality-sensitive, not merely an integrity concern:
+    `processes` is a single table shared by the native and OTLP paths, and the OTLP `process_id`
+    derivation formula is public (see [OTLP Ingestion](../otlp/index.md)). Before this guard, any
+    ingestion credential could pre-register (via the native `insert_process` path) the exact
+    `process_id` a victim audience's OTLP producer would later derive; the genuine producer's
+    stream/blocks would then silently land on a row stamped with the squatter's audience, leaking
+    that audience's data to the squatter. `insert_process` and `register_otel_process` both now
+    reject such a conflicting re-registration with a 403.
 
 ## Audiences and Grants
 

@@ -65,10 +65,16 @@
 //! client-supplied `micromegas.*` property and writes `micromegas.audience` itself from the
 //! authenticated credential's `AuthContext.bound_audience` (each ingestion key is assigned
 //! exactly one write audience, Stage 4, #1372) -- a client can no longer assert or suppress the
-//! stamp. What remains open, tracked separately: a credential bound to one audience that knows
-//! another audience's `process_id`/`stream_id` can still append events to it over
-//! `insert_stream`/`insert_block` (Stage 5b, an integrity-only gap -- see
-//! `rust/ingestion/src/web_ingestion_service.rs`'s doc comments on those two methods).
+//! stamp. Registration itself (`insert_process`/`register_otel_process`) now also rejects a
+//! same-`process_id`, different-audience re-registration outright -- needed because the OTLP
+//! `process_id` derivation formula is public, so without this guard a credential could
+//! pre-register (via the native path) the exact `process_id` a victim audience's OTLP producer
+//! would later derive, silently exposing that audience's data to the squatter; this is a
+//! confidentiality gap, not merely an integrity one. What remains open, tracked separately: a
+//! credential bound to one audience that knows another audience's already-registered
+//! `process_id`/`stream_id` can still append events to it over `insert_stream`/`insert_block`
+//! (Stage 5b, an integrity-only gap -- see `rust/ingestion/src/web_ingestion_service.rs`'s doc
+//! comments on those two methods).
 
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{

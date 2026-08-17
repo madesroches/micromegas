@@ -336,3 +336,57 @@ fn process_id_same_audience_is_stable() {
         process_id_from_resource(Some(&r), ctx)
     );
 }
+
+#[test]
+fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
+    // Before the audience was domain-separated via a per-audience namespace UUID, the audience
+    // was appended to the joined field key with the same unescaped `\x1F` `SEPARATOR` that joins
+    // the 31 resource-attribute fields. OTLP attribute values are arbitrary UTF-8 and `norm` only
+    // trims + lower-cases -- it does not reject or escape `\x1F` -- so an unstamped (or
+    // differently-audienced) caller could craft a resource attribute whose value ends in
+    // `\x1F<victim-audience>` and reproduce byte-for-byte the joined key + audience suffix a
+    // genuinely stamped request for that audience would hash, forging the victim's process_id.
+    //
+    // Craft that exact scenario: the victim is a real `victim-team`-stamped producer whose last
+    // identifying field (`process.runtime.description`) is `"real-runtime"`; the attacker is an
+    // unstamped caller whose corresponding field is `"real-runtime\x1Fvictim-team"` -- under the
+    // old concatenation scheme this made the attacker's un-stamped joined key byte-identical to
+    // the victim's stamped one.
+    let shared_fields: &[(&str, &str)] =
+        &[("host.name", "shared-host"), ("service.name", "shared-svc")];
+
+    let mut victim_pairs = shared_fields.to_vec();
+    victim_pairs.push(("process.runtime.description", "real-runtime"));
+    let victim_resource = resource_with(&victim_pairs);
+    let victim_ctx = IdentityContext {
+        audience: Some("victim-team"),
+        extra_hash_input: &[],
+    };
+    let victim_id = process_id_from_resource(Some(&victim_resource), victim_ctx);
+
+    let mut attacker_pairs = shared_fields.to_vec();
+    attacker_pairs.push(("process.runtime.description", "real-runtime\x1Fvictim-team"));
+    let attacker_resource = resource_with(&attacker_pairs);
+    let attacker_id =
+        process_id_from_resource(Some(&attacker_resource), IdentityContext::default());
+
+    assert_ne!(
+        victim_id, attacker_id,
+        "a crafted resource attribute containing a raw separator byte must not let an \
+         unstamped request forge a stamped audience's process_id"
+    );
+
+    // Same crafted attribute, but the attacker also claims a *different* audience than the
+    // victim's -- must still not collide.
+    let attacker_ctx = IdentityContext {
+        audience: Some("attacker-team"),
+        extra_hash_input: &[],
+    };
+    let attacker_id_other_audience =
+        process_id_from_resource(Some(&attacker_resource), attacker_ctx);
+    assert_ne!(
+        victim_id, attacker_id_other_audience,
+        "a crafted resource attribute must not let a differently-audienced request forge \
+         another audience's process_id either"
+    );
+}

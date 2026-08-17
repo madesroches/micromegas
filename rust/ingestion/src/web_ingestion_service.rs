@@ -558,10 +558,15 @@ impl WebIngestionService {
     /// `insert_time` is the server wall clock, matching the existing `insert_process` path.
     ///
     /// `audience` (AbAC Stage 5, #1373) is stamped via [`finalize_process_properties`], exactly
-    /// like `insert_process`. **No conflict guard here** (unlike `insert_process`, §6): once
-    /// `process_id_from_resource` folds the audience into its hash, a given `process_id` can
-    /// only ever have been derived under one audience, so a same-`process_id`,
-    /// different-audience conflict on this path is unreachable by construction.
+    /// like `insert_process`. **Same conflict guard as `insert_process`, §6, and for a
+    /// confidentiality reason, not just consistency**: `processes` is a single table shared with
+    /// the native path, and `insert_process` accepts a client-chosen `process_id` stamped with
+    /// the caller's own audience. Because `process_id_from_resource`'s derivation formula is
+    /// public, any ingestion credential can pre-register (via the native path) the exact
+    /// `process_id` a victim audience's OTLP producer will later derive; without this guard the
+    /// genuine producer's stream/blocks would silently land on a row stamped with the squatter's
+    /// audience, leaking that audience's data to the squatter. `check_process_audience_conflict`
+    /// closes that hole the same way it does for `insert_process`.
     #[span_fn]
     #[expect(clippy::too_many_arguments, reason = "OTel process identity fields")]
     pub async fn register_otel_process(
@@ -609,7 +614,8 @@ impl WebIngestionService {
         })?;
 
         if result.rows_affected() == 0 {
-            debug!("duplicate otel process_id={process_id} skipped (already exists)");
+            self.check_process_audience_conflict(process_id, audience)
+                .await?;
         }
         Ok(())
     }
