@@ -189,6 +189,7 @@ pub fn resolve_audience(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MintRequest {
     name: String,
     audience: Option<String>,
@@ -377,6 +378,7 @@ async fn revoke_key(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImportRequest {
     name: String,
     key: String,

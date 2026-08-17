@@ -266,9 +266,20 @@ minted key exactly once in a dismissable banner with a copy-to-clipboard
 button — the browser never receives it a second time, and it's never
 persisted client-side.
 
-Minting an ingestion key works exactly the same way, against
+Minting an ingestion key uses the same shape, against
 `/api/ingestion-api-keys` instead (or the Admin → Ingestion API Keys page) —
-`analytics-web-srv` is the mint target for both tables.
+`analytics-web-srv` is the mint target for both tables — but the body must
+supply an `audience`:
+
+```bash
+curl -X POST https://analytics.example.com/api/ingestion-api-keys \
+  -H 'Content-Type: application/json' -H "Cookie: id_token=$TOKEN" \
+  -d '{"name": "grafana-datasource", "audience": "team-alpha"}'
+```
+
+Omitting `audience` returns **400** unless `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
+is configured server-side — see [What audience does a key
+carry](#what-audience-does-a-key-carry).
 
 **Revoke** — `DELETE {base_path}/api/{ingestion,analytics}-api-keys/{key_id}`,
 keyed **only** on `key_id` (`name` carries no uniqueness constraint — a
