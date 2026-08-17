@@ -321,14 +321,19 @@ this plan deviates deliberately:
   it is populated only by the maintenance daemon's pass (`blocks_view.rs:158-168`) — so a process
   ingested since the daemon's last pass already produces an empty flame graph or trace today; that
   is the known limitation Stage 2's CHANGELOG already flags, unchanged by this stage either way.
-  `perfetto_trace_chunks`' `get_process_exe` adds a second, independent daemon-populated read on top
-  of that: `processes` is its own `SqlBatchView` with a no-op `jit_update` (`sql_batch_view.rs`),
-  materialized on the same daemon cadence but not necessarily the same pass as `blocks`. Inheriting
-  the caller's scope there would additionally require `OwnershipRewrite`'s `processes`-scan
-  semi-join to pass, so it can fail in the narrow window where `blocks` is materialized (spans
-  visible) but `processes` is not yet (would make `get_process_exe` newly empty) — a strictly
-  narrower gap than "every function, every deployment", but real for `perfetto_trace_chunks`
-  specifically.
+  Both run under `CallerContext::internal()` (`ReadScope::All`) today, where `OwnershipRewrite`'s
+  analyzer pass is a no-op on that `blocks` scan, so the read needs only `blocks` materialized.
+  Inheriting the caller's scope instead would activate `OwnershipRewrite`'s `process_id` semi-join
+  against `__processes__partitions` on that same scan (`blocks` is one of the rewritten tables,
+  §4) — a second, independent daemon-populated dependency that is not there today: a process whose
+  `blocks` partitions are materialized but whose `__processes__partitions` are not yet would newly
+  fail `process_spans`/`parse_block`, on top of the gap above. `perfetto_trace_chunks`'
+  `get_process_exe` does not have this problem to create, because it already has it
+  unconditionally: it reads the `processes` named table (its own `SqlBatchView`, no-op
+  `jit_update`, `sql_batch_view.rs:306-312`) under `CallerContext::internal()` today too, so in
+  that same window it is already empty regardless of scope — inheriting would not make it "newly"
+  empty, and the guard reading Postgres does not change that outcome either, since the failure is
+  a materialization gap in the inner session's own read, not an authorization decision.
 - **The guard is the stronger check anyway.** It reads Postgres, so it is both fresher and
   independent of the maintenance daemon.
 - **The inner SQL is server-constructed and confined to the guarded process.** Every inner statement
@@ -731,11 +736,17 @@ pipeline (reuse `ownership_rewrite_db_test.rs`'s `ProcessInfo.properties` stampi
 thread and async spans and at least one block per process. Then, for a
 `ReadScope::Audiences(["team-a"])` session:
 - `process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload` on **own** ids return the
-  same rows/bytes as a `ReadScope::All` session (no over-blocking). Pin the exact §6 regression
-  window: with the process's `blocks` partitions materialized but its `processes` partitions
-  deliberately **not**, `process_spans`/`parse_block`/`get_payload` still succeed (they never touch
-  `processes`), while `perfetto_trace_chunks`' `get_process_exe` hop is the one path this stage keeps
-  working only because the guard reads Postgres instead of inheriting scope into that scan.
+  same rows/bytes as a `ReadScope::All` session (no over-blocking), with every view — including
+  `processes` — materialized. Then pin the §6 regression window for the two functions that
+  genuinely avoid a `processes` dependency: with the process's `blocks` partitions materialized but
+  its `processes` partitions deliberately **not**, `parse_block`/`get_payload` still succeed (they
+  never touch `processes`). `process_spans` and `perfetto_trace_chunks` do **not** belong in that
+  assertion: `process_spans`' `view_instance('thread_spans'/'async_events', …)` call triggers a
+  `jit_update` that itself reads `processes` (`find_process_with_latest_timing`,
+  `thread_spans_view.rs:358-374`, `async_events_view.rs:130`, bailing `"Process not found"` on an
+  empty result, `metadata.rs:319-321`), and `perfetto_trace_chunks`' `get_process_exe` hop reads the
+  `processes` named table directly — so both already fail in that window under `ReadScope::All`
+  today, guard or no guard; that daemon-materialization gap is pre-existing and out of scope here.
 - The same four on the **other** audience's ids fail, with an error indistinguishable from the
   error for a random, nonexistent id (assert the message shape, not just the failure).
 - The same four on the **unstamped** process fail with `MICROMEGAS_UNSTAMPED_AUDIENCE` unset and
