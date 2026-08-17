@@ -393,6 +393,13 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
 - The fix is a write-side ownership check — `process_id → audience` (and `stream_id → process_id`)
   through the same immutable, invalidation-free `moka` caches Stage 3 already specifies for Prong B
   (`audience_based_access_control_plan.md:465-478`), so the design work is shared, not duplicated.
+- Prong B is verifiably unimplemented today, which is why that cache design cannot simply be reused
+  here: `ownership_rewrite.rs:1-10` records Prong B as "still pending (#1371, Stage 3)", and
+  `rust/ingestion/Cargo.toml` has no `moka` dependency at all (only `rust/analytics/Cargo.toml`
+  does). Landing the write-side check inside #1373 would mean designing and building Stage 3's
+  cache layer inside this stage instead. Stages 1, 2 and 4 each landed as their own issue
+  (`d0364c950`, `5dcb74026`, `5298a1ca9`) — the epic's own cadence is the in-tree precedent for
+  splitting this off the same way.
 - `insert_block` is the hot path; a warm cache hit is an in-memory lookup, but the measurement and
   the cold-miss behavior deserve their own issue rather than riding along here.
 - Until it lands, the exposure needs a known-gap doc comment on `insert_stream`/`insert_block_typed`
@@ -622,9 +629,15 @@ Unit (no DB):
 HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, per
 `public/tests/firehose_tests.rs:1-40`):
 
-- Firehose: an authenticated request reaches the handler with an `AuthContext` extension carrying
-  the expected `bound_audience` (the regression test for the discarded-context bug); an
-  audience-less key under `require_write_audience` gets the Firehose ack shape with a 4xx and an
+- Firehose: `firehose_tests.rs:1-40`'s own `make_auth_provider()` builds an `ApiKeyAuthProvider`
+  from an env keyring, and every env-keyring key hard-codes `bound_audience: None`
+  (`auth/src/api_key.rs:128`) — only `DbApiKeyAuthProvider` (live Postgres) ever produces `Some(..)`,
+  so the discarded-context regression cannot be asserted on that harness. Instead, add a test
+  `impl AuthProvider` (`async-trait` is already a `micromegas-public` dev-dependency) returning an
+  `AuthContext` with `bound_audience: Some("team-a")`, following the existing precedent at
+  `public/tests/read_policy_threading_tests.rs:253-270`; assert the request reaches the handler with
+  an `AuthContext` extension carrying that `bound_audience`. Separately, an audience-less
+  (env-keyring) key under `require_write_audience` gets the Firehose ack shape with a 4xx and an
   `errorMessage`.
 - OTLP: audience-less credential under `require_write_audience` ⇒ `google.rpc.Status` code 7 in the
   request's own encoding (JSON in → JSON out).
