@@ -679,12 +679,12 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
         })
         .collect();
     assert!(
-        team_a_instance_ids.contains(&f.process_a.process_id.to_string()),
-        "team-a must see its own log_entries instance row in list_partitions"
+        team_a_instance_ids.contains(&f.process_a.cpu_stream_id.to_string()),
+        "team-a must see its own thread_spans instance row in list_partitions"
     );
     assert!(
-        !team_a_instance_ids.contains(&f.process_b.process_id.to_string()),
-        "team-a must not see team-b's log_entries instance row in list_partitions"
+        !team_a_instance_ids.contains(&f.process_b.cpu_stream_id.to_string()),
+        "team-a must not see team-b's thread_spans instance row in list_partitions"
     );
     assert!(
         !team_a_instance_ids.iter().any(|id| id == "global"),
