@@ -125,9 +125,7 @@ def select_entries(entries, args, parser):
                 f"--only names not found in keyring: {', '.join(sorted(missing))}"
             )
         return [
-            (name, key, audience)
-            for name, key, audience in entries
-            if name in selected
+            (name, key, audience) for name, key, audience in entries if name in selected
         ]
     if args.exclude:
         excluded = set(args.exclude)
@@ -302,7 +300,7 @@ def main():
             "Write audience to stamp newly-imported ingestion keys with (--table ingestion "
             "only; analytics_api_keys has no such column). Not the OIDC token audience "
             "already configured via --profile/MICROMEGAS_OIDC_AUDIENCE -- unrelated setting, "
-            "same flag name coincidence. A keyring entry's own \"audience\" field wins over "
+            'same flag name coincidence. A keyring entry\'s own "audience" field wins over '
             "this flag. Neither given: the server applies MICROMEGAS_DEFAULT_KEY_AUDIENCE, "
             "falling back to 'public'."
         ),

@@ -390,9 +390,7 @@ def test_audience_flag_empty_string_is_rejected_not_silently_omitted(
 
 
 def test_audience_flag_accepted_with_ingestion_table(monkeypatch):
-    monkeypatch.setenv(
-        "MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "ka"}])
-    )
+    monkeypatch.setenv("MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "ka"}]))
     fake_client = FakeClient(
         {"a": {"key_id": "id-a", "imported": True, "revoked_at": None}}
     )
@@ -515,7 +513,10 @@ def test_run_import_dispatches_to_the_right_client_method():
 def test_run_import_per_entry_audience_wins_over_cli_audience(capsys):
     client = FakeClient({"a": {"key_id": "id-a", "imported": True, "revoked_at": None}})
     import_keys.run_import(
-        client, "ingestion", [("a", "ka", "entry-audience")], cli_audience="cli-audience"
+        client,
+        "ingestion",
+        [("a", "ka", "entry-audience")],
+        cli_audience="cli-audience",
     )
     assert client.calls == [("a", "ka", "entry-audience")]
 
@@ -530,7 +531,14 @@ def test_run_import_falls_back_to_cli_audience_when_entry_has_none(capsys):
 
 def test_run_import_prints_the_server_reported_audience(capsys):
     client = FakeClient(
-        {"a": {"key_id": "id-a", "imported": True, "revoked_at": None, "audience": "public"}}
+        {
+            "a": {
+                "key_id": "id-a",
+                "imported": True,
+                "revoked_at": None,
+                "audience": "public",
+            }
+        }
     )
     import_keys.run_import(client, "ingestion", [("a", "ka", None)])
     out = capsys.readouterr().out
