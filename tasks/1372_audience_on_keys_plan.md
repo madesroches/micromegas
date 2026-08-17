@@ -57,9 +57,9 @@ literal reading of #1372, and it is deliberate:
 - The cost is roughly 150 lines of policy code plus its tests, and a `group:everyone`/prefix sweep
   through docs and comments.
 
-If it should be split, the natural cut is a companion issue amending #1369's model that lands
-immediately before this one; the rest of this plan is unchanged either way. Flagged in
-[Open Questions](#open-questions).
+**Decided: not split.** Steps 1–2 land in this same plan/PR rather than a companion issue amending
+#1369 immediately before it — the model change and the column that makes an audience value durable
+ship together, so no value is ever persisted in the vocabulary being abandoned.
 
 ## Current State
 
@@ -220,8 +220,10 @@ and the first is the charset:
 So a personal audience is an ordinary audience with an ordinary grant — `"alice-laptop":
 ["user:alice@example.com"]`. The cost is one grant entry per user instead of zero; the mitigation is
 that Stage 6 (#1374) already mints a personal key per user through a route, and creating the grant in
-that same flow is a natural extension of it rather than new machinery. See
-[Open Questions](#open-questions).
+that same flow is a natural extension of it rather than new machinery. **Decided: this plan does
+nothing further here.** A privacy deployment has no way to provision per-user audiences until users
+can mint their own keys — that arrives with Stage 6, not before — so per-user isolation is out of
+scope for #1372 by construction, not an open gap. See [Open Questions](#open-questions).
 
 `AudienceReadPolicy::resolve(caller)` is therefore a pure lookup over each audience's **read** list
 (the whole array for the bare-array shorthand, the `"read"` field for the object form), with no
@@ -591,7 +593,9 @@ ingestion request: Bearer <key> ────────────────
 - **`public` built in, everything else granted.** One built-in rule instead of two: the alternative
   (a self-audience rule) needs either a lossy email derivation or a `subject` key that lets an
   admin mint read access by naming a key after an audience. Cost: per-user isolation needs a grant
-  per user rather than zero config. See [Open Questions](#open-questions).
+  per user rather than zero config, and no deployment can provision that grant until Stage 6
+  (#1374) lets a user mint their own key — accepted as out of scope for this stage. See
+  [Open Questions](#open-questions).
 - **`mint` requires a choice, `import` defaults to `public`** — different subjects: a new credential
   has no prior visibility to preserve (defaulting it would publish), while `import`'s default is a
   continuity assumption for a pre-existing key, overridable like any other default; for a key
@@ -777,19 +781,19 @@ end-to-end stamping is #1373.
 Full CI: `python3 build/rust_ci.py`, `python3 build/python_ci.py`, `yarn lint && yarn type-check &&
 yarn test`.
 
-## Open Questions
+## Open Questions (resolved)
 
-1. **Split the model change out of #1372?** As argued in [Scope note](#scope-note-this-amends-shipped-stage-1),
-   steps 1–2 amend #1369. Fold in (one PR, values never persist in the old vocabulary), or land a
-   companion issue immediately before this one?
-2. **How does a privacy deployment provision per-user audiences?** With no self-audience rule, each
-   user needs an audience plus a grant. Stage 6 (#1374) mints the personal key anyway, so the grant
-   can be created there — but that means Stage 6 needs a *writable* grant store, which the env map
-   is not. Either Stage 6 brings the grant store forward, or a deployment scripts the map. Worth
-   deciding before #1374 is specced. (If per-user isolation should stay zero-config, the smallest
-   change is adding `@` and `.` to the charset — both are escape-free everywhere the charset was
-   chosen to protect — and restoring the email-keyed self rule.)
-3. **Should `public` be neutralizable?** As designed an operator cannot configure it away. The lever
-   for a deployment that wants "no `public`, ever" would be a startup check rejecting it in
-   `MICROMEGAS_DEFAULT_KEY_AUDIENCE` plus a mint-time refusal — not a read-side switch, which would
-   hide already-ingested data rather than prevent publication.
+1. **Split the model change out of #1372?** — **No.** Steps 1–2 amend #1369's model in this same
+   plan/PR rather than a companion issue landing first: one PR, values never persist in the old
+   vocabulary. See [Scope note](#scope-note-this-amends-shipped-stage-1).
+2. **How does a privacy deployment provision per-user audiences?** — **It doesn't, not in this
+   plan.** With no self-audience rule, each user needs an audience plus a grant, and the env map
+   isn't a writable store a route can update. Rather than bring the grant store forward or have a
+   deployment script the map by hand, this is deferred wholesale to Stage 6 (#1374): a privacy
+   deployment gets no per-user audience provisioning until users can mint their own keys, at which
+   point the mint route is the natural place to create the matching grant. The charset-widening
+   alternative (add `@`/`.`, restore the email-keyed self rule) is not taken.
+3. **Should `public` be neutralizable?** — **Not for now; keep it simple.** `public` stays a
+   built-in, non-removable read grant exactly as designed in [§2](#2-access-is-a-grant-map-with-a-readmint-axis-prefix_audience_grants).
+   No startup check or mint-time refusal is added. Revisit if a deployment actually needs to
+   eliminate it.
