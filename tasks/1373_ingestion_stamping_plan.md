@@ -198,9 +198,11 @@ fn finalize_process_properties(client: Vec<Property>, audience: &WriteAudience) 
 
 - `insert_process(body, audience)` → `finalize_process_properties(make_properties(&info.properties), audience)`.
 - `register_otel_process(..., properties, audience)` → same call on the `otel.resource.*` list.
-- `insert_stream(body)` and `register_otel_stream` strip the reserved prefix as well (a second
-  tiny helper, `strip_reserved_properties`). Nothing reads a stream audience today; stripping keeps
-  the namespace honest so a later stage that does read one is not reading client input.
+- `insert_stream(body)` strips the reserved prefix as well (a second tiny helper,
+  `strip_reserved_properties`). Nothing reads a stream audience today; stripping keeps the
+  namespace honest so a later stage that does read one is not reading client input.
+  `register_otel_stream` has no client-supplied stream properties to strip — it binds
+  `Vec::<Property>::new()` unconditionally (`web_ingestion_service.rs:341`) — so it needs no call.
 - A dropped reserved key logs at `warn!` once per process registration, naming the key — a native
   client setting `micromegas.audience` was either doing the pre-Stage-5 thing or probing, and both
   are worth seeing. Stripping (rather than rejecting the request with 400) keeps a legacy producer
@@ -294,11 +296,23 @@ monolith (`main.rs:206`) — matching how they already scope `ProviderBuilder`.
 req.extensions_mut().insert(ctx); next.run(req).await }`, mirroring `auth/src/axum.rs:73-83`. Both
 Firehose routers then behave exactly like the Bearer routes.
 
-Rejection shape per entry point, so a rejected write is retried-or-not correctly: 403 + plain body
-for native routes; `google.rpc.Status` (code 7, `PERMISSION_DENIED`) for OTLP via the existing
-`OtlpHttpError` mapping; the Firehose ack shape with `errorMessage` for the Firehose routes (a 4xx
-is non-retryable for the client, which is right — retrying a credential without an audience cannot
-succeed).
+Rejection shape per entry point, so a rejected write is retried-or-not correctly:
+
+- **Native routes** (`insert_process`/`insert_stream`/`insert_block`): 403 + plain body, via a new
+  `IngestionError::Forbidden` variant alongside the existing `BadRequest`/`Internal`
+  (`servers/ingestion.rs`).
+- **OTLP** (`/otlp/v1/*`): `google.rpc.Status` (code 7, `PERMISSION_DENIED`), via a new
+  `OtelError::Denied` variant (`otel-ingestion/src/error.rs`) — `grpc_code() == 7`,
+  `http_status() == 403`, `is_retryable() == false`, and a sanitized `public_message`
+  (`"write audience required"`, no internal detail) — plus the matching `OtlpHttpError` arm
+  (`servers/otlp.rs`) that carries it through to that response shape.
+- **Firehose**: the Firehose ack shape with `errorMessage`, still a non-2xx status — but this is
+  *not* a clean rejection the way the other two are. Firehose does not distinguish 4xx from 5xx;
+  it retries any non-200 for its configured retry duration and then spills to the configured S3
+  backup bucket (`firehose_common.rs:66-70` already documents "retries/spills" as the intended
+  behavior for a Firehose-shape error). Enabling `require_write_audience` against an audience-less
+  Firehose delivery stream therefore produces a retry-then-spill, not an immediate rejection — an
+  operator note for `mkdocs/docs/admin/ingestion.md`'s "What gets stamped" section.
 
 **Prefixed-var resolution, DRY.** `auth/src/policy.rs:52-99` and `ProviderBuilder`
 (`default_provider.rs:49-83`) each hand-roll `{prefix}_X`-with-fallback-to-`MICROMEGAS_X`. Extract
@@ -307,9 +321,18 @@ it for the new knob, and refactor those existing copies onto it.
 
 ### 6. One audience per process, enforced
 
-`insert_process` / `register_otel_process` currently treat a conflicting re-registration as a
-no-op. Add: when `rows_affected() == 0` **and** the request carries `Some` audience, `SELECT` the
-existing row's audience and compare.
+Scoped to the **native `insert_process` path only** — `process_id` there is client-chosen, so a
+conflicting re-registration under a different audience is a real, reachable case. `register_otel_process`
+needs no guard: once step 9 folds the audience into `process_id_from_resource` (§4), a given
+`process_id` can only ever have been derived under one audience, so a same-`process_id`,
+different-audience conflict on that path is unreachable by construction — the query would run on
+every OTLP resource in every export request (`write_blocks`, `handler.rs:104-121`, calls
+`register_otel_process` per `PreparedBlock`) and could never fire. Its existing
+`ON CONFLICT (process_id) DO NOTHING` plus `debug!` on `rows_affected() == 0` stays as-is.
+
+`insert_process` currently treats a conflicting re-registration as a no-op. Add: when
+`rows_affected() == 0` **and** the request carries `Some` audience, `SELECT` the existing row's
+audience and compare.
 
 | Existing | Incoming | Outcome |
 |---|---|---|
@@ -317,10 +340,12 @@ existing row's audience and compare.
 | `NULL` | `Some(a)` | no-op, `debug!` — a mid-migration re-registration must not lose the process; no retro-stamp |
 | `Some(b)` | `Some(a)`, `a != b` | **403**, `warn!` with both audiences and the `process_id` |
 
-This costs one indexed point query only on the conflict path (a retry or an id collision), nothing
-on first insert. It is what makes Stage 2's `MAX(audience)` resolution sound rather than assumed,
-and on the native path (client-chosen `process_id`) it is the only thing standing between a
-deliberately-reused `process_id` and a mislabeled process.
+This costs one indexed point query on the conflict path in `insert_process` only — a retry or a
+genuine `process_id` collision, not the steady state, since native clients are expected to pick
+their own `process_id` once — nothing on first insert, and nothing at all on the OTLP path. It is
+what makes Stage 2's `MAX(audience)` resolution sound rather than assumed on the one path where
+`process_id` is not itself audience-derived, and it is the only thing standing between a
+deliberately-reused `process_id` and a mislabeled process there.
 
 ### 7. What this stage does not close
 
@@ -349,10 +374,15 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
 |---|---|---|---|---|
 | `{prefix}_REQUIRE_WRITE_AUDIENCE` (new) → `MICROMEGAS_REQUIRE_WRITE_AUDIENCE` | reject ingestion from a credential carrying no write audience | off | off (env-keyring keys keep working, data stays unstamped and `UNSTAMPED_AUDIENCE`-visible) | `true` |
 
-Consistent with every other stage: inert until an operator configures it. Stage 7 (#1374's sibling,
-step 14) is where "the operator must choose a posture" becomes a startup requirement; this stage
-only supplies the switch. `{prefix}_UNSTAMPED_AUDIENCE` (analytics side, already shipped) remains
-the continuity mechanism for everything written before stamping.
+Consistent with every other stage: inert until an operator configures it. Ship
+`{prefix}_REQUIRE_WRITE_AUDIENCE` now, matching the per-stage knob convention every landed AbAC
+stage already follows — `{prefix}_UNSTAMPED_AUDIENCE` / `{prefix}_PUBLIC_VIEW_SETS`
+(`read_scope.rs:148-192`), `{prefix}_AUDIENCE_GRANTS` / `{prefix}_DEFAULT_KEY_AUDIENCE`
+(`auth/src/policy.rs:52-99`) — none of which waited for a consolidated posture flag. Stage 7
+(#1374's sibling, step 14) is where "the operator must choose a posture" becomes a startup
+requirement over the knobs that already exist, this one included; this stage only supplies the
+switch. `{prefix}_UNSTAMPED_AUDIENCE` (analytics side, already shipped) remains the continuity
+mechanism for everything written before stamping.
 
 ### Flow after this stage
 
@@ -400,7 +430,8 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 **Phase 2 — stamp and strip.**
 
 6. `finalize_process_properties` / `strip_reserved_properties` in `web_ingestion_service.rs`, wired
-   into both process paths and both stream paths.
+   into both process paths and `insert_stream` (`register_otel_stream` has no client-supplied
+   stream properties, so it needs no call — see §3).
 7. `servers/write_audience.rs` in `rust/public`: `StampingConfig::from_env(prefix)`,
    `resolve_write_audience`, `WriteAudienceError` with the three per-entry-point response shapes.
 8. `serve_ingestion` takes `StampingConfig`, layers it as an extension; handlers in `ingestion.rs`,
@@ -419,9 +450,13 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 
 **Phase 4 — one audience per process.**
 
-11. Conflict guard in both process-insert paths per §6, with a new
+11. Conflict guard in the native `insert_process` path per §6, with a new
     `IngestionServiceError::AudienceConflict` variant (a caller must branch on it to answer 403 —
-    the `rust/CLAUDE.md` bar for a typed error) mapped to 403 in each entry point's error mapping.
+    the `rust/CLAUDE.md` bar for a typed error). Because `IngestionServiceError` is matched
+    exhaustively at both consumers, add the arm to each: `IngestionError::Forbidden`
+    (`servers/ingestion.rs`) and `OtelError::Denied` (`otel-ingestion/src/error.rs`, reusing the
+    variant introduced in §5) — the latter is unreachable in practice since `register_otel_process`
+    never produces `AudienceConflict` (§6), but the match still needs the arm to compile.
 
 **Phase 5 — docs, changelog, tests.**
 
@@ -435,14 +470,16 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 ## Files to Modify
 
 - `rust/ingestion/src/write_audience.rs` (new), `rust/ingestion/src/lib.rs`
-- `rust/ingestion/src/web_ingestion_service.rs` (stamp/strip helpers, both process paths, both
-  stream paths, conflict guard, `AudienceConflict` variant)
+- `rust/ingestion/src/web_ingestion_service.rs` (stamp/strip helpers, both process paths,
+  `insert_stream`, conflict guard scoped to `insert_process`, `AudienceConflict` variant)
 - `rust/telemetry/src/property.rs` (constants)
 - `rust/auth/src/default_provider.rs`, `rust/auth/src/policy.rs` (`resolve_prefixed_var`)
 - `rust/public/src/servers/write_audience.rs` (new), `mod.rs`
-- `rust/public/src/servers/ingestion.rs`, `otlp.rs`, `webhook.rs`, `firehose.rs`,
+- `rust/public/src/servers/ingestion.rs` (`IngestionError::Forbidden`), `otlp.rs`
+  (`OtlpHttpError` arm for `OtelError::Denied`), `webhook.rs`, `firehose.rs`,
   `firehose_cloudwatch_logs.rs`, `firehose_common.rs`
-- `rust/otel-ingestion/src/identity.rs`, `block.rs`, `handler.rs`, `cloudwatch_logs.rs`
+- `rust/otel-ingestion/src/identity.rs`, `block.rs`, `handler.rs`, `cloudwatch_logs.rs`,
+  `error.rs` (`OtelError::Denied` variant and its exhaustive-match arm for `AudienceConflict`)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (constant + stale-gap note)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
 - Tests: `rust/ingestion/tests/`, `rust/otel-ingestion/tests/`, `rust/public/tests/`,
@@ -470,6 +507,17 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
   plan already calls that collision out at `audience_based_access_control_plan.md:209-215`).
 - **Deferring write-side ownership checks** (§7) keeps the hot path untouched in this stage; the
   price is an explicitly documented integrity gap and a second issue.
+- **No ingestion-side default/fallback audience.** A configured fallback stamped onto
+  otherwise-unstamped writes (an ingestion-side analogue of `MICROMEGAS_DEFAULT_KEY_AUDIENCE`)
+  would ease migration but reintroduces exactly the "silent audience nobody chose" failure #1372
+  already rejected for `mint`: `auth/src/policy.rs:80-99`'s `default_key_audience_from_env` lets
+  `import` fall back but never `mint`, because "an unresolved mint is a 400, never a silent
+  `public`" — a silent default there "would publish a new credential's entire future ingestion
+  history" (`audience_based_access_control_plan.md:1154-1157`). Stamping a guessed audience onto
+  data is the same failure one layer down, permanent once blocks materialize (Current State,
+  "The read side that consumes the stamp"). `OwnershipRewriteConfig.unstamped_audience`
+  (`read_scope.rs:88-96`) already gives the read side the same continuity without ever writing a
+  guess into the data, so this stage adds no ingestion-side fallback.
 
 ## Security
 
@@ -559,12 +607,3 @@ unstamped. Exercise stamping locally by importing a DB ingestion key with an aud
    `insert_block` ownership checks in a follow-up issue with the Prong B caches), or should the
    write-side ownership check land inside #1373? The recommendation is to split: it keeps the hot
    path untouched here, and the cache design is shared with Stage 3.
-2. **Knob name.** `{prefix}_REQUIRE_WRITE_AUDIENCE` reads as the fail-closed switch it is; an
-   alternative is folding it into a future single `{prefix}_ISOLATION_REQUIRED` posture flag at
-   Stage 7 and shipping no knob now (privacy deployments would then have no way to fail closed
-   until Stage 7). Recommendation: ship the knob.
-3. **Should `MICROMEGAS_DEFAULT_KEY_AUDIENCE`'s ingestion-side analogue exist** — i.e. a configured
-   fallback audience stamped when the credential carries none? It would ease migration but
-   re-introduces exactly the "silent audience nobody chose" failure #1372 rejected for `mint`
-   (`audience_based_access_control_plan.md:1154-1157`). Recommendation: no; `UNSTAMPED_AUDIENCE` on
-   the read side already covers the continuity case without writing a guess into the data.
