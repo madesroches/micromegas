@@ -71,9 +71,11 @@ Prong B has no reason to inherit that. It resolves audiences from **Postgres**, 
 query — authoritative, fresh, and independent of materialization. §11 covers the consequences of the
 two prongs reading different copies.
 
-Also relevant: `streams.process_id` and `blocks.process_id` both exist and are indexed
-(`sql_telemetry_db.rs:48-88`), so `stream_id → owning process` and `block_id → owning process` are
-one indexed point query each — no join through the lakehouse needed.
+Also relevant: `streams.process_id` is indexed (`sql_telemetry_db.rs:48-88`), so
+`stream_id → owning process` is one indexed point query. `blocks.process_id` itself is not indexed,
+but the block lookup doesn't need it: `block_id → owning process` is one indexed point query via the
+unique `blocks_block_id_unique` index (`sql_migration.rs:263`), joined to `processes` by its unique
+`process_id` index — no join through the lakehouse needed either way.
 
 ### Existing pieces to reuse
 
@@ -155,8 +157,11 @@ on `(IdKind, Uuid)` removes the collision instead of relying on downstream empti
 deliberately its own key too rather than reusing `Process` entries or caching the `streams` table
 under its own kind, so its `UNION ALL` result is what gets cached. If both arms of that `UNION ALL`
 return a row for the same id (only possible for a `process_id`/`stream_id` collision), take the
-`processes` row — i.e. `LEFT JOIN`/`UNION ALL` order is process-first, and a caller who names a
-colliding id gets the process's audience, not the stream's. One cache, two disjoint keyspaces plus one
+`processes` row: each arm is tagged with a source-discriminator column (`'process'`/`'stream'`) and
+the process-wins precedence is applied deterministically in Rust while collapsing the rows into the
+cached `OwnerAudience`, never inferred from `UNION ALL` result order — PostgreSQL does not guarantee
+that order (e.g. Parallel Append may interleave the branches), so a caller who names a colliding id
+gets the process's audience, not the stream's, on every run. One cache, two disjoint keyspaces plus one
 derived one, instead of the parent plan's three caches.
 
 **Bounded by entry count and by a TTL — no other invalidation.** `process_id → properties` is
@@ -180,10 +185,10 @@ Cost of not caching: one indexed point query per denied lookup.
 
 The SQL, for `IdKind::Process` (`Block` swaps the driving table and joins through `processes`;
 `ProcessOrStream` is a `UNION ALL` of this process-id shape with the analogous stream-id shape, one
-round trip):
+round trip, each arm tagged with a literal `source` column):
 
 ```sql
-SELECT p.process_id AS id, a.value AS audience
+SELECT p.process_id AS id, a.value AS audience, 'process' AS source
 FROM processes p
 LEFT JOIN LATERAL (
     SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
@@ -195,8 +200,14 @@ WHERE p.process_id = ANY($1)
 result: an inner unnest silently drops them, collapsing `Unstamped` into `Unknown` and turning the
 `MICROMEGAS_UNSTAMPED_AUDIENCE` escape hatch off for exactly the rows it exists for. `LIMIT 1`
 handles a duplicated property key; `= ANY($1::uuid[])` is what makes `resolve_many` one query. Each
-id resolves to at most one row — `process_id`, `stream_id` and `block_id` are all unique since
-migration v3 (`sql_migration.rs:250-268`).
+id resolves to at most one row per arm — `process_id`, `stream_id` and `block_id` are all unique
+since migration v3 (`sql_migration.rs:250-268`) — but `ProcessOrStream`'s two arms can each return a
+row for the same id (the collision case above), so PostgreSQL may return them in either order and
+even interleaved (`UNION ALL` carries no ordering guarantee, and Parallel Append can run both arms
+concurrently). `resolve_many` never relies on that order: it groups the returned rows by `id` in
+Rust and, for any id with a row from both arms, keeps the `source = 'process'` row and discards the
+`'stream'` one — the same process-wins precedence stated above, applied deterministically regardless
+of how Postgres ordered the result set.
 
 ### 2. `AudienceGuard` — pure decision, async resolution, fail-closed
 
@@ -528,7 +539,10 @@ and the aggregate-scan cost this design was chosen to avoid.
    `isolation_config`, add `user_maintenance_functions: bool` parsed from
    `{prefix}_USER_MAINTENANCE_FUNCTIONS`/`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`
    (`read_scope.rs:84-193`). Follow the compiler through `flight_sql_service_impl.rs:500-565`,
-   `flight_sql_server.rs`, `monolith`, and the test files.
+   `flight_sql_server.rs`, `monolith`, and the test files. Also fix the doc comment in
+   `rust/auth/tests/policy_tests.rs:529` (`"OwnershipRewriteConfig::from_env"` → `"IsolationConfig::
+   from_env"`) — a comment in a crate with no compile-time dependency on the type, so the compiler
+   won't flag it.
 6. Extend the gate at `query.rs:154` to `caller.is_admin || caller.isolation_config
    .user_maintenance_functions`; extend `lakehouse_admin_gate_test.rs` with the knob's two states.
 
@@ -603,6 +617,7 @@ and the aggregate-scan cost this design was chosen to avoid.
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `flight_sql_server.rs` (rename only)
 - `rust/monolith/` and any other `with_ownership_config` caller (rename only)
 - `rust/public/tests/read_policy_threading_tests.rs`
+- `rust/auth/tests/policy_tests.rs` (comment-only: stale `OwnershipRewriteConfig::from_env` reference)
 
 **Docs**
 - `mkdocs/docs/admin/flight-sql.md`, `mkdocs/docs/admin/monolith.md` (env-var tables — the new knob,
@@ -663,8 +678,9 @@ and the aggregate-scan cost this design was chosen to avoid.
 
 - Warm path: one `moka` hash lookup plus an `Arc<[String]>` scan of the caller's audiences —
   effectively free next to the parquet reads that follow.
-- Cold path: one indexed Postgres point query per new id, at most once per id for the process's
-  lifetime. `list_partitions` and `get_payload` batch their misses into a single `= ANY($1)` query.
+- Cold path: one indexed Postgres point query per new id, at most once per id per TTL window
+  (default `5m`). `list_partitions` and `get_payload` batch their misses into a single `= ANY($1)`
+  query.
 - `list_partitions` under a filtered scope loses `LIMIT` pushdown and gains one extra query; the
   row-filter itself is a `Vec` retain over `sqlx` rows.
 - Cache bound: `100_000` entries ≈ 10 MB, one per service process.
