@@ -272,9 +272,12 @@ complete: a caller who names a readable process cannot reach another process's b
 foreign block simply is not under that prefix. The parent plan's `block_id → process_id` chain for
 this function is unnecessary — the process id is right there in the call.
 
-In `invoke_async_with_args`, collect the **distinct** `process_ids` values, `resolve_many` them in
-one query, and fail the whole call if any is unreadable (never per-row `NULL`s: a partially-filtered
-binary column would be indistinguishable from a missing payload).
+In `invoke_async_with_args`, collect the **distinct** `process_ids` values, parse each with
+`Uuid::parse_str`, and deny the whole call under `ReadScope::Audiences` if any value fails to parse
+(the one input that could otherwise take `read_blob` outside the `blobs/{process_id}` prefix the
+completeness argument relies on). Then `resolve_many` the parsed ids in one query, and fail the whole
+call if any is unreadable (never per-row `NULL`s: a partially-filtered binary column would be
+indistinguishable from a missing payload).
 
 ### 5. `parse_block` — `IdKind::Block`
 
@@ -384,9 +387,12 @@ UDTF-registration knob has nothing to do with the rewrite. **Rename it to `Isola
 `FlightSqlServerBuilder::with_ownership_config()` → `with_isolation_config()` following. Rust API
 churn is explicitly cheaper than a misleading name in this codebase (`CLAUDE.md` §Interface
 stability), and the compiler enumerates all ~6 construction sites (three servers, three test files).
-Parse the knob with the existing `resolved_var` helper (`read_scope.rs:151-162`); accept exactly
-`true`/`false` (case-insensitive) and `Err` on anything else, matching the fail-fast posture of the
-other two knobs.
+**Decided: rename, not an additive field** — `CLAUDE.md` §Interface stability states the Rust API
+surface may change freely, that "a clean design beats a compatible one", and that the preferred
+shape is the one that makes the compiler enumerate every affected call site; the rename touches only
+Rust construction sites, none of them SQL-layer surface. Parse the knob with the existing
+`resolved_var` helper (`read_scope.rs:151-162`); accept exactly `true`/`false` (case-insensitive) and
+`Err` on anything else, matching the fail-fast posture of the other two knobs.
 
 ### 10. Denial is indistinguishable from absence
 
@@ -435,8 +441,10 @@ path and cost a full aggregate scan per guard check instead of one indexed point
    property name has exactly one definition.
 3. Add `audience_index: Arc<AudienceIndex>` to `LakehouseContext` (`lakehouse_context.rs:22-85`)
    with an `audience_index()` accessor, constructed in `LakehouseContext::new` next to
-   `metadata_cache`. Size from a module constant (`DEFAULT_AUDIENCE_CACHE_ENTRIES = 100_000`); no
-   new env knob (see Open Questions).
+   `metadata_cache`. Size from a module constant `DEFAULT_AUDIENCE_CACHE_ENTRIES = 100_000`; no env
+   knob — same shape as `analytics-web-srv/src/data_source_cache.rs`'s hardcoded
+   `.max_capacity(1000)`, a fixed-shape entry cache with no operational knob, unlike
+   `MICROMEGAS_METADATA_CACHE_MB` whose per-entry weight genuinely varies.
 4. Offline unit tests for `is_readable` and for `AudienceIndex`'s cache behavior that needs no DB.
 
 ### Phase 2 — `IsolationConfig` and the registration knob
@@ -512,6 +520,8 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 - `rust/public/tests/read_policy_threading_tests.rs`
 
 **Docs**
+- `mkdocs/docs/admin/flight-sql.md`, `mkdocs/docs/admin/monolith.md` (env-var tables — the new knob,
+  prefixed + unprefixed fallback)
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/functions-reference.md`,
   `mkdocs/docs/query-guide/functions-reference.md`, `CHANGELOG.md`,
   `tasks/data_isolation/audience_based_access_control_plan.md` (record the §5 and cache-shape
@@ -569,6 +579,12 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 
 ## Documentation
 
+- `mkdocs/docs/admin/flight-sql.md` env-var table: add a `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` row
+  alongside `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, with the API-key-only-
+  deployment rationale from Current State.
+- `mkdocs/docs/admin/monolith.md` env-var table: add the `MICROMEGAS_ANALYTICS_`-prefixed
+  `MICROMEGAS_ANALYTICS_USER_MAINTENANCE_FUNCTIONS` row (falls back to unprefixed
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, following the table's existing prefixed-knob rows).
 - `mkdocs/docs/admin/authentication.md` §"Audience Filtering Activation" (:152-175): extend from
   "every query plan gets a predicate" to also cover Prong B — the four guarded functions and their
   uniform denial, `list_partitions` row filtering including the `'global'`-row rule and its
@@ -597,7 +613,12 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 - `AudienceGuard::authorize` under `ReadScope::All` performs no I/O (a guard built over a
   `connect_lazy` pool to an unroutable address must still return `Ok` — the same trick
   `lakehouse_admin_gate_test.rs:20` uses).
-- An `ExecutionPlan` built by `call_with_args` and executed without going through `scan` errors.
+- The `None` ⇒ `Internal` branch in `execute` (§3) is a compile-time-enforced invariant, not a
+  runtime one exercised here: `ProcessSpansExecutionPlan::new`/`ProcessSpansTableProvider` are
+  private to their module and `TableFunctionImpl::call_with_args` returns only
+  `Arc<dyn TableProvider>`, so an integration test in `rust/analytics/tests/` has no way to reach an
+  un-authorized plan except through `scan` — exactly the path this invariant exists to not depend
+  on. The DB-backed denial tests (below) cover the caller-observable behavior instead.
 - `IsolationConfig::from_env`: knob `true`/`false`/absent/garbage (`Err`), prefixed and unprefixed.
 - Registration gate: the five mutating functions are absent for a non-admin with the knob unset,
   present with the knob `true`, present for an admin regardless (extends
@@ -634,16 +655,6 @@ thread and async spans and at least one block per process. Then, for a
 
 ## Open Questions
 
-1. **Cache size knob or constant?** Plan says constant `100_000` entries (~10 MB) with no env var,
-   on the grounds that the metadata cache's knob exists because parquet metadata size varies wildly
-   while these entries are uniform. Add `MICROMEGAS_AUDIENCE_CACHE_ENTRIES` if you'd rather have the
-   escape hatch.
-2. **`IsolationConfig` rename vs. an additive third `CallerContext` field.** Recommended as written
-   (§9), but it is the one change here whose only payoff is naming, and it touches a published API
-   plus ~6 construction sites. Say so if you'd rather take the additive path.
-3. **Follow-up issue for the `view_instance` JIT residual (§7)?** A caller can trigger
+1. **Follow-up issue for the `view_instance` JIT residual (§7)?** A caller can trigger
    materialization of an instance they cannot read. Recommend filing it rather than widening this
    stage.
-4. **`get_payload`'s single-argument guard (§4).** This plan checks arg 1 only and argues the blob
-   path makes that complete. Worth a second pair of eyes: it is the one place where the security
-   argument leans on an object-storage path layout rather than on a database lookup.
