@@ -127,9 +127,11 @@ impl OtelError {
             IngestionServiceError::ParseError(m) => OtelError::Parse { signal, message: m },
             IngestionServiceError::DatabaseError(m) => OtelError::Database { signal, message: m },
             IngestionServiceError::StorageError(m) => OtelError::Storage { signal, message: m },
-            // Unreachable in practice: `register_otel_process` never produces
-            // `AudienceConflict` (`web_ingestion_service.rs`'s doc comment, AbAC Stage 5 §6) --
-            // the arm exists so this match compiles against `IngestionServiceError`'s full set.
+            // Reachable: `register_otel_process` runs the same conflict guard as the native
+            // `insert_process` path (`web_ingestion_service.rs`'s doc comment, AbAC Stage 5 §6),
+            // and rejects a same-`process_id`, different-audience OTLP registration with this
+            // variant -- closing cross-path squatting where a credential pre-registers (via
+            // `insert_process`) the `process_id` a victim's OTLP producer would later derive.
             IngestionServiceError::AudienceConflict {
                 process_id,
                 existing,

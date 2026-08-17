@@ -74,7 +74,15 @@
 //! credential bound to one audience that knows another audience's already-registered
 //! `process_id`/`stream_id` can still append events to it over `insert_stream`/`insert_block`
 //! (Stage 5b, an integrity-only gap -- see `rust/ingestion/src/web_ingestion_service.rs`'s doc
-//! comments on those two methods).
+//! comments on those two methods). A second, distinct residual gap sits in the conflict guard
+//! itself: its existing-`NULL`-audience branch is deliberately a no-op (so a mid-migration
+//! re-registration doesn't lose its process), which lets an audience-less credential
+//! pre-register a victim's future `process_id` unstamped -- the victim's later, genuine
+//! registration then hits that same `NULL`→no-op branch and never gets stamped, permanently
+//! suppressing its audience (a confidentiality gap, not an integrity one, and closed only by
+//! `{prefix}_REQUIRE_WRITE_AUDIENCE=true` rejecting the audience-less write up front -- see the
+//! "Residual gap" admonition in `mkdocs/docs/admin/authentication.md` and this stage's
+//! `CHANGELOG.md` entry).
 
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{

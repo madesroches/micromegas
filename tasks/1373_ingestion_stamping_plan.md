@@ -425,17 +425,22 @@ on `micromegas-auth` (`read_scope.rs:102-107`), the same trade-off §1 makes for
 
 ### 6. One audience per process, enforced
 
-Scoped to the **native `insert_process` path only** — `process_id` there is client-chosen, so a
-conflicting re-registration under a different audience is a real, reachable case. `register_otel_process`
-needs no guard: once step 9 folds the audience into `process_id_from_resource` (§4), a given
-`process_id` can only ever have been derived under one audience, so a same-`process_id`,
-different-audience conflict on that path is unreachable by construction — the query would run on
-every OTLP resource in every export request (`write_blocks`, `handler.rs:95-145`, calls
-`register_otel_process` per `PreparedBlock` at `:108` — its only caller in the workspace) and could
-never fire. Its existing
-`ON CONFLICT (process_id) DO NOTHING` plus `debug!` on `rows_affected() == 0` stays as-is.
+Enforced on **both** the native `insert_process` path and the OTLP `register_otel_process` path,
+for two different reasons. On the native path, `process_id` is client-chosen, so a conflicting
+re-registration under a different audience is a directly reachable case. `register_otel_process`
+needs the guard too, and not merely for consistency: `processes` is a single table shared by both
+paths, and `process_id_from_resource`'s derivation formula — even after step 9 folds the audience
+into it (§4) — is public. Any ingestion credential can therefore pre-register, via the native
+`insert_process` path, the exact `process_id` a victim audience's OTLP producer will later derive;
+without a guard on the OTLP path too, the genuine producer's stream/blocks would silently land on
+a row already stamped with the squatter's audience, leaking that audience's data to the squatter.
+This is a **confidentiality gap**, not an integrity one, so it is in scope for this stage rather
+than deferred to §7/Stage 5b. Both `write_blocks` (`handler.rs:95-145`, calling
+`register_otel_process` per `PreparedBlock` at `:108`) and `insert_process` therefore route a
+conflicting re-registration through the same conflict check.
 
-`insert_process` currently treats a conflicting re-registration as a no-op. Add: when
+Both paths currently treat a conflicting re-registration as a no-op
+(`ON CONFLICT (process_id) DO NOTHING` plus `debug!` on `rows_affected() == 0`). Add: when
 `rows_affected() == 0` **and** the request carries `Some` audience, `SELECT` the existing row's
 audience and compare.
 
@@ -445,12 +450,12 @@ audience and compare.
 | `NULL` | `Some(a)` | no-op, `debug!` — a mid-migration re-registration must not lose the process; no retro-stamp |
 | `Some(b)` | `Some(a)`, `a != b` | **403**, `warn!` with both audiences and the `process_id` |
 
-This costs one indexed point query on the conflict path in `insert_process` only — a retry or a
-genuine `process_id` collision, not the steady state, since native clients are expected to pick
-their own `process_id` once — nothing on first insert, and nothing at all on the OTLP path. It is
-what makes Stage 2's `MAX(audience)` resolution sound rather than assumed on the one path where
-`process_id` is not itself audience-derived, and it is the only thing standing between a
-deliberately-reused `process_id` and a mislabeled process there.
+This costs one indexed point query on the conflict path in `insert_process` and
+`register_otel_process` — a retry, a genuine `process_id` collision, or a cross-path squatting
+attempt, not the steady state — nothing on first insert. It is what makes Stage 2's `MAX(audience)`
+resolution sound rather than assumed on the native path, where `process_id` is not itself
+audience-derived, and it is what closes the cross-path squatting/confidentiality gap on the OTLP
+path.
 
 ### 7. What this stage does not close
 
@@ -633,17 +638,18 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 
 **Phase 4 — one audience per process.**
 
-11. Conflict guard in the native `insert_process` path per §6, with a new
-    `IngestionServiceError::AudienceConflict` variant (a caller must branch on it to answer 403 —
-    the `rust/CLAUDE.md` bar for a typed error). `IngestionServiceError` has exactly two
-    out-of-crate consumers, both exhaustive with no `_` arm, so add the arm to each:
+11. Conflict guard in **both** the native `insert_process` and OTLP `register_otel_process` paths
+    per §6, with a new `IngestionServiceError::AudienceConflict` variant (a caller must branch on
+    it to answer 403 — the `rust/CLAUDE.md` bar for a typed error). `IngestionServiceError` has
+    exactly two out-of-crate consumers, both exhaustive with no `_` arm, so add the arm to each:
     `From<IngestionServiceError> for IngestionError` (`servers/ingestion.rs:41-49`) →
     `IngestionError::Forbidden`, and `OtelError::from_ingestion` (`otel-ingestion/src/error.rs:111-117`)
     → `OtelError::Denied` (reusing the variant introduced in §5; `from_ingestion` already has the
-    `signal` in scope to fill it). The latter is unreachable in practice since
-    `register_otel_process` never produces `AudienceConflict` (§6), but the match still needs the arm
-    to compile. Nothing else breaks: the remaining out-of-crate references are
-    `map_err(|e| anyhow!(..))` in tests, which use `Display`, not a match.
+    `signal` in scope to fill it). This arm **is** reachable, from `register_otel_process`'s own
+    conflict guard (§6) — it fires whenever the OTLP path rejects a same-`process_id`,
+    different-audience registration, i.e. exactly the cross-path squatting case §6 closes. Nothing
+    else breaks: the remaining out-of-crate references are `map_err(|e| anyhow!(..))` in tests,
+    which use `Display`, not a match.
 
 **Phase 5 — docs, changelog, tests.**
 
@@ -735,7 +741,13 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   payload: the reserved namespace is stripped on the way in and re-written from the authenticated
   credential. This is the fix `ownership_rewrite.rs:59-75` points at.
 - A stamped process's audience is immutable: no `UPDATE` path, and a conflicting re-registration is
-  a 403, so Stage 2's `MAX(audience)` collapse cannot be gamed by a later, narrower stamp.
+  a 403 **on both the native `insert_process` and OTLP `register_otel_process` paths** (§6), so
+  Stage 2's `MAX(audience)` collapse cannot be gamed by a later, narrower stamp.
+- The `register_otel_process` guard is a confidentiality fix, not just an integrity one: because
+  the OTLP `process_id` derivation formula is public, any ingestion credential could otherwise
+  pre-register (via `insert_process`) the exact `process_id` a victim audience's OTLP producer
+  will later derive, and the genuine producer's stream/blocks would silently land on a row stamped
+  with the squatter's audience. §6's guard on the OTLP path closes that hole.
 - Audience-scoped OTLP identity removes cross-audience process collapse and cross-audience block
   dedup.
 - Unchanged on the Firehose path: it already strips all five spoofable headers (`x-auth-subject`,
@@ -881,7 +893,10 @@ against a database.
   `NULL` + incoming `Some` ⇒ ok, row still `NULL` (no retro-stamp). Plus **one** round-trip case
   proving the stamp survives the `sqlx` bind into `processes.properties` and reads back — that is
   the only thing the DB adds over the `finalize_process_properties` unit tests, so it is one case,
-  not four.
+  not four. Exercised through `insert_process` only: `register_otel_process` calls the identical
+  private `check_process_audience_conflict` helper (§6), so this file's coverage of the guard's
+  `ON CONFLICT`/`SELECT` mechanics applies to both call sites without a second, redundant set of
+  DB-backed cases.
 - **No new `rust/public` *DB* test.** An earlier draft put the OTLP identity/collision regression there
   ("two audiences posting identical resources produce two distinct `process_id`s and both blocks
   persist"). Both halves are pure functions already covered by the identity unit tests above, and the

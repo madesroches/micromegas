@@ -1166,6 +1166,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    /// `bulk_ingest` (routed here from `CommandStatementIngest`) is a replication/administrative
+    /// API, not an ordinary analytics write path: it writes row properties -- including
+    /// `micromegas.audience` on `processes` rows -- verbatim, with none of the server-side
+    /// stamping or reserved-namespace stripping the HTTP ingestion paths apply. Gating this RPC
+    /// on `is_admin` is what keeps that verbatim write safe: an admin-run replication tool
+    /// re-ingesting rows already stamped at their origin lake is exactly the case the docs
+    /// describe (`mkdocs/docs/query-guide/python-api.md`), while an ordinary authenticated
+    /// analytics client must not be able to set `micromegas.audience` directly (#1373, AbAC
+    /// Stage 5).
     #[span_fn]
     async fn do_put_statement_ingest(
         &self,
@@ -1174,6 +1183,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<i64, Status> {
         let table_name = command.table;
         info!("do_put_statement_ingest table_name={table_name}");
+        if !is_admin(request.metadata()) {
+            return Err(Status::permission_denied(
+                "bulk_ingest requires admin privileges",
+            ));
+        }
         let stream = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         );

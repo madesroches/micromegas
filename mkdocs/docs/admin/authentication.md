@@ -223,6 +223,30 @@ Two consequences worth knowing before you flip this stage on:
     that audience's data to the squatter. `insert_process` and `register_otel_process` both now
     reject such a conflicting re-registration with a 403.
 
+    **A second, distinct residual gap: unstamped pre-registration (confidentiality, not
+    integrity).** The conflict guard above only fires on a conflicting *re*-registration -- an
+    existing row whose audience is still `NULL` is left alone by design, so a mid-migration
+    re-registration doesn't lose its process. That `NULL`-tolerant branch has its own attack: a
+    credential with no bound audience (an env-keyring key, OIDC, or `--disable-auth`) can
+    pre-register a victim's future `process_id` (the OTLP derivation formula is public again)
+    via `insert_process`, creating an unstamped row. The victim's genuine OTLP producer's later
+    `register_otel_process` call for that same `process_id` then hits the same `NULL`→no-op
+    branch and returns `Ok` -- but the row stays unstamped forever, permanently suppressing the
+    victim's stamp. Under the commonly recommended migration setting
+    `MICROMEGAS_UNSTAMPED_AUDIENCE=public`, this makes the victim's data world-readable.
+    `{prefix}_REQUIRE_WRITE_AUDIENCE=true` closes this gap by rejecting the audience-less write
+    that would create the squatted row in the first place.
+
+    **Whichever party registers second gets the 403, and recovery is manual.** In both squatting
+    scenarios above, it is the *victim's* genuine, later registration that hits the conflict
+    guard and is rejected -- not the squatter's. Since a stamped process's audience is immutable
+    (there is no `UPDATE processes` path anywhere in the codebase), the victim's producer can
+    never successfully register that `process_id` again until an operator manually deletes the
+    squatted row (e.g. `DELETE FROM processes WHERE process_id = ...`). The maintenance daemon's
+    automatic `delete_empty_processes` sweep (`rust/analytics/src/delete.rs`) only reclaims it on
+    its own once the squatted row has no streams and the retention window has elapsed -- a
+    squatter that also writes a stream keeps the row alive indefinitely.
+
 ## Audiences and Grants
 
 An audience is an **opaque label on data** — `public`, `team-alpha`,

@@ -472,6 +472,9 @@ print(f"Found {len(root_spans)} root operations")
 
 ### `bulk_ingest(table_name, table)`
 
+!!! note "Requires admin"
+    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+
 Bulk ingest metadata for replication or administrative tasks. `table` is a
 `pyarrow.Table` whose schema matches the target table exactly; complex
 columns (struct, list, binary) are passed through natively.
