@@ -261,6 +261,19 @@ deployments see no churn at all.
 second tenant out of ingestion whenever two tenants genuinely share resource attributes — worse
 than id churn, and it converts a labeling problem into an outage.
 
+**Alternative rejected:** fold the *ingestion key* into the identity instead of the audience. The
+audience is the right granularity for three reasons. (1) Key rotation is routine and an audience
+change is not: keying on the credential would fork a long-lived producer's `process_id` on every
+rotation, while the audience only changes when the data genuinely changes owner — which is exactly
+when a new process id *is* required, since one `processes` row cannot carry two audiences (§6). (2)
+It buys no ownership separation: the read side scopes by audience (`ownership_rewrite.rs:140-151`,
+collapsed with `MAX(audience)` per process), so two keys of the same audience landing on one
+`process_id` is an intra-tenant merge — the same behavior a single key has today — not a
+cross-audience leak. (3) There is no stable key identity to hash anyway: `AuthContext` carries no
+`key_id`, `DbApiKeyAuthProvider` sets `subject: row.name` (`db_api_key.rs:348`) and `name` has no
+unique index (`sql_migration.rs:104-113`), while env-keyring keys have no row at all
+(`api_key.rs:118`) — the input would be non-unique and provider-dependent.
+
 ### 5. Resolving the audience at the HTTP edge
 
 Resolution lives in `rust/public` (the only crate that sees both `AuthContext` and the ingestion
