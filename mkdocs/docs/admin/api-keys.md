@@ -52,11 +52,14 @@ CREATE TABLE ingestion_api_keys (
   created_by   VARCHAR(255) NOT NULL,   -- OIDC email/subject of the minting/importing caller
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ,
-  revoked_by   VARCHAR(255)
+  revoked_by   VARCHAR(255),
+  audience     VARCHAR(255) NOT NULL    -- immutable write audience (migration v6, see below)
+    CONSTRAINT ingestion_api_keys_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$')
 );
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 
--- analytics_api_keys: identical shape; never gains an audience column
+-- analytics_api_keys: identical shape apart from `audience` -- its read-side
+-- mirror is a per-key `read_audiences` grant, not a column on this table
 CREATE TABLE analytics_api_keys (
   key_id       UUID PRIMARY KEY,
   key_hash     BYTEA NOT NULL,
@@ -96,25 +99,32 @@ surface onto one service means there is exactly one admin list to manage
 
 | Route | Body / result |
 |---|---|
-| `POST {base_path}/api/ingestion-api-keys` | `{"name"}` → 201 `{"key_id","name","created_at","key"}` |
-| `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]` |
+| `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience"}` |
+| `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience"}]` |
 | `DELETE {base_path}/api/ingestion-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
-| `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key"}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported"}` |
+| `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key","audience"?}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported","audience"}` |
 | `POST {base_path}/api/analytics-api-keys` | `{"name"}` → 201 `{"key_id","name","created_at","key"}` |
 | `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]` |
 | `DELETE {base_path}/api/analytics-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
 | `POST {base_path}/api/analytics-api-keys/import` | `{"name","key"}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported"}` |
 
-Both route groups share the same request/response shapes and validation:
+Both route groups share the same request/response shapes and validation for
+`name`/`key`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
+see [What audience does a key carry](#what-audience-does-a-key-carry) — that
+`analytics_api_keys`'s routes never accept or return.
 
-**Mint** (`POST .../{table}-api-keys`) — `{"name"}` → **201**
-`{"key_id","name","created_at","key"}`. The `key` field is the cleartext key,
+**Mint** (`POST .../{table}-api-keys`) — `{"name"}` (plus, for ingestion,
+an optional `"audience"`) → **201**
+`{"key_id","name","created_at","key"}` (plus `"audience"` for ingestion). The
+`key` field is the cleartext key,
 returned **exactly once** — it is never logged (only `key_id` is) and never
 retrievable afterwards. `mmk_` marks the key as a Micromegas secret for
 scanners; validation covers the whole string via its hash, so imported legacy
 keys of any shape keep working. **400** if `name` is empty or exceeds 255
 bytes (stricter than the `VARCHAR(255)` column, which bounds characters, not
-bytes).
+bytes); for ingestion, also **400** if `audience` is neither a valid audience
+name nor resolvable from `MICROMEGAS_DEFAULT_KEY_AUDIENCE` — see
+[What audience does a key carry](#what-audience-does-a-key-carry).
 
 **List** (`GET .../{table}-api-keys?limit=&offset=&include_revoked=`) — **200**,
 newest first. `limit` defaults to `100`; values above `500` are silently
@@ -137,12 +147,18 @@ cover: carrying a *pre-existing* key string forward, rather than generating a
 fresh one. This is what lets an existing client keep presenting the same key
 string after migrating off the env keyring — see
 [Migrating from the env keyring](#migrating-from-the-env-keyring).
-`{"name","key"}` → `imported: true` and **201** on a fresh insert;
+`{"name","key"}` (plus, for ingestion, an optional `"audience"`) →
+`imported: true` and **201** on a fresh insert;
 `imported: false` and **200** when the hash already exists (idempotent
 re-run — importing the same legacy keyring twice has no side effects).
 `revoked_at` is always present (`null` unless the existing row was itself
 revoked), so a caller can distinguish "already present and usable" from
-"already present but revoked". `created_by` is the importing caller's own
+"already present but revoked". For ingestion, the response also carries
+`audience`: on the fresh-insert path, whatever resolved from the request/knob
+(see [What audience does a key carry](#what-audience-does-a-key-carry)); on
+the already-present path, the **existing** row's audience, never the
+request's — the binding is immutable, so a second import can never rewrite
+it. `created_by` is the importing caller's own
 OIDC identity (`email` or `subject`, the same resolution mint uses) — never
 the literal string `"import"`. **400** if `name` is empty/too long (same rule
 as mint) or `key` is empty. No format validation on `key` beyond non-empty —
@@ -153,13 +169,31 @@ import cleanly. Never logs the key, same as mint. The
 [Migrating from the env keyring](#migrating-from-the-env-keyring)) is the
 recommended way to call this route in bulk; it can also be called directly.
 
-**Precondition: the telemetry DB must already have the v5 migration**
-(creating both `ingestion_api_keys` and `analytics_api_keys`), which only
+**Precondition: the telemetry DB must already have the v6 migration**
+(v5 creates both `ingestion_api_keys` and `analytics_api_keys`; v6 adds
+`ingestion_api_keys.audience`, `NOT NULL`), which only
 ingestion or a lakehouse-role monolith runs — a standalone `analytics-web-srv`
 or a `--roles web`-only monolith never runs it themselves. Run ingestion (or a
 lakehouse-role monolith) against the target telemetry DB at least once before
 relying on these routes, or every call fails at request time with an opaque
-`500`.
+`500` — a missing table (short of v5) or a missing `audience` column (short
+of v6) are the same symptom with different causes.
+
+**The `NOT NULL` `audience` column (with no `DEFAULT`, deliberately) also
+imposes a deploy-order requirement in the opposite direction.** Once the
+schema reaches v6, a not-yet-upgraded `analytics-web-srv` process's
+mint/import `INSERT`s (which list columns explicitly and, before this
+column existed, omitted `audience`) start failing with a `NOT NULL`
+violation (**500**) — same symptom as the missing-column case above, opposite
+cause. **Upgrade `analytics-web-srv` to a version that writes `audience` in
+the same deploy that runs the v6 migration** — running the migration first
+without also rolling the web service, or the reverse, both produce an outage
+window on these two routes until both sides catch up. Key *validation* is
+unaffected either way: the ingestion/monolith binary that reads the column
+back (via `DbApiKeyAuthProvider`) is always the same binary that just ran the
+migration creating it, so it can never run ahead of the schema — this
+deploy-order requirement is specific to `analytics-web-srv`'s two write
+routes.
 
 **One env var backs both route groups:**
 
@@ -170,6 +204,53 @@ relying on these routes, or every call fails at request time with an opaque
 When `MICROMEGAS_SQL_CONNECTION_STRING` is unset, both route groups stay
 registered and return **503** — same "always registered, 503 when
 unconfigured" shape as `/api/maps/*`.
+
+## What audience does a key carry
+
+Every `ingestion_api_keys` row carries a single, **immutable** write audience
+(migration v6) — the value every process that key ingests will eventually be
+stamped with (`micromegas.audience`, Stage 5, not yet shipped). `analytics_api_keys`
+has no such column: its read-side equivalent is a per-key `read_audiences`
+grant, in the opposite direction (which audiences a caller may *read*, not
+which one it *writes*).
+
+**An audience is an opaque label, not a principal encoding** — `public`,
+`team-alpha`, `payments-svc`, `alice-laptop`. It carries no meaning by itself;
+who may read or mint into it is separate, editable configuration (a grant
+map, `{prefix}_AUDIENCE_GRANTS` — see [Audiences and Grants](authentication.md#audiences-and-grants)
+for the full model). `public` is the one built-in: every authenticated
+principal can read it, with no grant map entry needed.
+
+**The binding is immutable by design.** Once a key is minted or imported with
+an audience, that audience never changes for that key — not through a later
+mint/import call, not through any route this page documents. Re-sharing
+already-ingested data with a wider audience is a *grants* edit (add a
+selector to the audience's entry in `{prefix}_AUDIENCE_GRANTS`), never a
+restamping of the key or its already-ingested history.
+
+**`mint` requires an explicit audience or a working
+`MICROMEGAS_DEFAULT_KEY_AUDIENCE` — there is
+no built-in default.** A new credential's *entire future* ingestion history
+follows this one choice, so an unresolvable mint is a **400**, never a silent
+`public`: defaulting a fresh write credential to a universally-readable
+audience would publish everything it ever ingests. `import` is different — a
+legacy key's already-ingested history is either unstamped (visible only
+through `MICROMEGAS_UNSTAMPED_AUDIENCE`) or, once migration v6's backfill has
+run, already `public` — so `import` falls back to `public` when neither the
+request nor the knob supplies one, matching that continuity rather than
+erroring.
+
+**Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) is never
+stamped at all.** That keyring has no audience column to carry one, by
+design (per the umbrella data-isolation plan) — its data stays visible only
+through `MICROMEGAS_UNSTAMPED_AUDIENCE`, the same escape hatch that covers
+any process minted before this stage existed.
+
+**A hand-edited row takes effect within the key's cache TTL, not instantly** —
+the audience is cached alongside the rest of the row
+(`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`, default 60s; see
+[Cache and audit env vars](#cache-and-audit-env-vars)), and since it's
+immutable that caching is free — there's no invalidation to reason about.
 
 ### Minting an analytics key over HTTP
 
@@ -184,9 +265,20 @@ minted key exactly once in a dismissable banner with a copy-to-clipboard
 button — the browser never receives it a second time, and it's never
 persisted client-side.
 
-Minting an ingestion key works exactly the same way, against
+Minting an ingestion key uses the same shape, against
 `/api/ingestion-api-keys` instead (or the Admin → Ingestion API Keys page) —
-`analytics-web-srv` is the mint target for both tables.
+`analytics-web-srv` is the mint target for both tables — but the body must
+supply an `audience`:
+
+```bash
+curl -X POST https://analytics.example.com/api/ingestion-api-keys \
+  -H 'Content-Type: application/json' -H "Cookie: id_token=$TOKEN" \
+  -d '{"name": "grafana-datasource", "audience": "team-alpha"}'
+```
+
+Omitting `audience` returns **400** unless `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
+is configured server-side — see [What audience does a key
+carry](#what-audience-does-a-key-carry).
 
 **Revoke** — `DELETE {base_path}/api/{ingestion,analytics}-api-keys/{key_id}`,
 keyed **only** on `key_id` (`name` carries no uniqueness constraint — a
@@ -383,7 +475,16 @@ only affects carrying *existing* key strings forward.
    `flight-sql-srv` (which only ever read the unprefixed name). Pass
    `--var NAME` explicitly to pin an exact source var, or `--source file
    --path ...` to read the legacy keyring's real shape — a JSON array of
-   `{"name", "key"}` objects — from a file instead. Auth
+   `{"name", "key"}` objects, each optionally carrying an `"audience"` field
+   too (ingestion only) — from a file instead. `--audience AUD` sets the
+   audience for every ingestion key imported in this run (valid only with
+   `--table ingestion`; a per-entry `"audience"` in the keyring wins over it).
+   This is a **different** audience than the one already threaded through
+   this same tool for OIDC token validation (`MICROMEGAS_OIDC_AUDIENCE`) — the
+   flag name coincidence is unrelated. Neither given, the server applies
+   `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, falling back to `public` — see
+   [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry).
+   Auth
    follows the same OIDC setup as `micromegas-screens`/`-query`
    (`MICROMEGAS_OIDC_*` env vars for a service-account/non-interactive run,
    or an interactive/cached login via `--profile`); the OIDC identity used

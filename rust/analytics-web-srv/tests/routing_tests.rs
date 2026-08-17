@@ -402,7 +402,10 @@ fn disabled_auth_app() -> Router {
     let data_source_cache = DataSourceCache::new(pool.clone(), std::time::Duration::from_secs(60));
     let maps_state = MapsState::new(None);
     let analytics_keys_state = AnalyticsKeysState { pool: None };
-    let ingestion_keys_state = IngestionKeysState { pool: None };
+    let ingestion_keys_state = IngestionKeysState {
+        pool: None,
+        default_audience: None,
+    };
     build_protected_routes(
         "",
         &None,

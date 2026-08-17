@@ -53,3 +53,23 @@ class TestUpdateScreenFolderPath:
         client.update_screen("s", {}, folder_path="dashboards/team-a")
         payload = client.session.put.call_args.kwargs["json"]
         assert payload["folder_path"] == "dashboards/team-a"
+
+
+class TestImportIngestionApiKeyAudience:
+    """`audience` (#1372, AbAC Stage 4) follows the same omitted/set convention
+    as `folder_path` above -- but no empty-string case: unlike `folder_path`,
+    an empty-string audience is never a meaningful value to transmit (the
+    server's `resolve_audience` treats it as absent either way), so this
+    class only pins the two cases that differ in behavior."""
+
+    def test_omitted_when_none(self):
+        client = _make_client()
+        client.import_ingestion_api_key("k", "secret")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert "audience" not in payload
+
+    def test_included_when_set(self):
+        client = _make_client()
+        client.import_ingestion_api_key("k", "secret", audience="team-alpha")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload["audience"] == "team-alpha"

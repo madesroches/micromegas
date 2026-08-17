@@ -43,8 +43,14 @@ export interface ApiKeysAdminPageConfig {
   maxListLimit: number
   ErrorClass: ApiKeyErrorConstructor
   listKeys: (includeRevoked: boolean, offset: number) => Promise<ApiKeyListEntry[]>
-  mintKey: (name: string) => Promise<MintApiKeyResponse>
+  mintKey: (name: string, audience?: string) => Promise<MintApiKeyResponse>
   revokeKey: (keyId: string) => Promise<unknown>
+  /**
+   * Shows an "Audience" table column and an audience input in the mint dialog
+   * (#1372, AbAC Stage 4). Ingestion keys carry a write audience; analytics
+   * keys never do, so the analytics page leaves this unset.
+   */
+  showAudience?: boolean
 }
 
 export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig }) {
@@ -56,6 +62,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
   const [error, setError] = useState<string | null>(null)
   const [showMintForm, setShowMintForm] = useState(false)
   const [mintName, setMintName] = useState('')
+  const [mintAudience, setMintAudience] = useState('')
   const [isMinting, setIsMinting] = useState(false)
   const [mintError, setMintError] = useState<string | null>(null)
   // The cleartext key is shown exactly once, right after minting — never
@@ -95,6 +102,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
 
   const openMintForm = () => {
     setMintName('')
+    setMintAudience('')
     setMintError(null)
     setShowMintForm(true)
   }
@@ -103,7 +111,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
     setIsMinting(true)
     setMintError(null)
     try {
-      const result = await config.mintKey(mintName.trim())
+      const result = await config.mintKey(mintName.trim(), mintAudience.trim() || undefined)
       setShowMintForm(false)
       setMintedKey(result.key)
       setCopied(false)
@@ -232,6 +240,23 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                       autoFocus
                     />
                   </div>
+                  {config.showAudience && (
+                    <div>
+                      <label className="block text-sm font-medium text-theme-text-secondary mb-1">
+                        Audience
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
+                        placeholder="team-alpha"
+                        value={mintAudience}
+                        onChange={(e) => setMintAudience(e.target.value)}
+                      />
+                      <p className="mt-1 text-xs text-theme-text-muted">
+                        Leave blank to use MICROMEGAS_DEFAULT_KEY_AUDIENCE.
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="flex justify-end gap-2 px-4 py-3 border-t border-theme-border">
                   <Button variant="outline" onClick={() => setShowMintForm(false)} disabled={isMinting}>
@@ -301,6 +326,11 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Last Used
                     </th>
+                    {config.showAudience && (
+                      <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
+                        Audience
+                      </th>
+                    )}
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Status
                     </th>
@@ -322,6 +352,11 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                       <td className="p-2.5 px-4 text-theme-text-secondary text-sm">
                         {formatDate(key.last_used_at)}
                       </td>
+                      {config.showAudience && (
+                        <td className="p-2.5 px-4 text-theme-text-secondary text-sm">
+                          {key.audience ?? '—'}
+                        </td>
+                      )}
                       <td className="p-2.5 px-4">
                         {key.revoked_at ? (
                           <span className="inline-flex items-center px-2 py-0.5 bg-red-500/15 text-red-400 rounded-sm text-xs font-medium">

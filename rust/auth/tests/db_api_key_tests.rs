@@ -12,6 +12,7 @@ use micromegas_auth::db_api_key::{
     hash_key, key_store_has_live_rows,
 };
 use micromegas_auth::multi::MultiAuthProvider;
+use micromegas_auth::policy::PUBLIC_AUDIENCE;
 use micromegas_auth::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::metrics::MetricsMsgQueueAny;
@@ -114,6 +115,26 @@ fn generate_key_has_mmk_prefix_32_decoded_bytes_and_is_distinct() {
 fn table_name_maps_to_expected_literals() {
     assert_eq!(ApiKeyTable::Ingestion.table_name(), "ingestion_api_keys");
     assert_eq!(ApiKeyTable::Analytics.table_name(), "analytics_api_keys");
+}
+
+/// `has_audience()` (AbAC Stage 4, #1372) is a pure function of the enum -- `true` only for
+/// `Ingestion`, the sole table with a v6 `audience` column. Moved into default `cargo test`
+/// rather than left covered only transitively through the `#[ignore]`d live tests below, which
+/// is how it was reached before this test existed.
+#[test]
+fn has_audience_is_true_only_for_ingestion() {
+    assert!(ApiKeyTable::Ingestion.has_audience());
+    assert!(!ApiKeyTable::Analytics.has_audience());
+}
+
+/// `allow_delegation`'s derivation (AbAC Stage 4, #1372) -- `db_api_key.rs` sets it from
+/// `ApiKeyTable::allows_delegation()`, the method pinned here. This is the non-live regression
+/// guard for the property `live_row_authenticates_with_expected_context` below only *confirms*:
+/// an ingestion key is never a delegating service account.
+#[test]
+fn allow_delegation_derivation_is_true_only_for_analytics() {
+    assert!(!ApiKeyTable::Ingestion.allows_delegation());
+    assert!(ApiKeyTable::Analytics.allows_delegation());
 }
 
 #[tokio::test]
@@ -229,24 +250,43 @@ async fn live_pool() -> sqlx::PgPool {
         .expect("connecting to metadata Postgres")
 }
 
+/// `audience` is only meaningful for `ApiKeyTable::Ingestion` (the `NOT NULL` v6 column) --
+/// table-generic, so the column list branches on `table.has_audience()` rather than always
+/// naming `audience`, which would fail against `ApiKeyTable::Analytics` (no such column).
 async fn insert_live_key(
     pool: &sqlx::PgPool,
     table: ApiKeyTable,
     name: &str,
     key: &str,
+    audience: &str,
 ) -> uuid::Uuid {
     let key_id = uuid::Uuid::new_v4();
     let hash = hash_key(key);
-    sqlx::query(&format!(
-        "INSERT INTO {} (key_id, key_hash, name, created_at, created_by) VALUES ($1, $2, $3, now(), 'test')",
-        table.table_name()
-    ))
-    .bind(key_id)
-    .bind(&hash[..])
-    .bind(name)
-    .execute(pool)
-    .await
-    .expect("inserting test key");
+    if table.has_audience() {
+        sqlx::query(&format!(
+            "INSERT INTO {} (key_id, key_hash, name, created_at, created_by, audience) \
+             VALUES ($1, $2, $3, now(), 'test', $4)",
+            table.table_name()
+        ))
+        .bind(key_id)
+        .bind(&hash[..])
+        .bind(name)
+        .bind(audience)
+        .execute(pool)
+        .await
+        .expect("inserting test key");
+    } else {
+        sqlx::query(&format!(
+            "INSERT INTO {} (key_id, key_hash, name, created_at, created_by) VALUES ($1, $2, $3, now(), 'test')",
+            table.table_name()
+        ))
+        .bind(key_id)
+        .bind(&hash[..])
+        .bind(name)
+        .execute(pool)
+        .await
+        .expect("inserting test key");
+    }
     key_id
 }
 
@@ -265,7 +305,14 @@ async fn cleanup_key(pool: &sqlx::PgPool, table: ApiKeyTable, key_id: uuid::Uuid
 async fn live_row_authenticates_with_expected_context() {
     let pool = live_pool().await;
     let key = format!("mmk_test_{}", uuid::Uuid::new_v4());
-    let key_id = insert_live_key(&pool, ApiKeyTable::Ingestion, "db-api-key-test-row", &key).await;
+    let key_id = insert_live_key(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-row",
+        &key,
+        PUBLIC_AUDIENCE,
+    )
+    .await;
 
     let provider = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
     let parts = bearer_parts(&key);
@@ -279,7 +326,39 @@ async fn live_row_authenticates_with_expected_context() {
         micromegas_auth::types::AuthType::ApiKey
     ));
     assert!(!ctx.is_admin);
-    assert!(ctx.allow_delegation);
+    // AbAC Stage 4 (#1372): an ingestion write credential is not a delegating service
+    // account -- this inverts the pre-#1372 expectation, and is the regression test for
+    // that half of the change (the compiler cannot catch it).
+    assert!(!ctx.allow_delegation);
+
+    cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
+}
+
+/// The audience reaches `bound_audience` unchanged (AbAC Stage 4, #1372) -- a string-typed path
+/// end to end (the loader's `RETURNING` list is chosen by `table.has_audience()`, then read back
+/// with `try_get("audience")` by name), where getting the table branch wrong would surface as a
+/// runtime `LookupError::Db`, not a compile error.
+#[ignore]
+#[tokio::test]
+async fn live_bound_audience_reaches_auth_context_unchanged() {
+    let pool = live_pool().await;
+    let key = format!("mmk_test_audience_{}", uuid::Uuid::new_v4());
+    let key_id = insert_live_key(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-audience",
+        &key,
+        "team-alpha",
+    )
+    .await;
+
+    let provider = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
+    let parts = bearer_parts(&key);
+    let ctx = provider
+        .validate_request(&parts as &dyn RequestParts)
+        .await
+        .expect("live key should authenticate");
+    assert_eq!(ctx.bound_audience, Some("team-alpha".to_string()));
 
     cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
 }
@@ -304,6 +383,7 @@ async fn live_revocation_latency_is_bounded_by_ttl() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-revoke",
         &key,
+        PUBLIC_AUDIENCE,
     )
     .await;
 
@@ -343,6 +423,7 @@ async fn live_revocation_latency_is_bounded_by_ttl() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-revoke2",
         &key2,
+        PUBLIC_AUDIENCE,
     )
     .await;
     let provider2 = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
@@ -376,6 +457,7 @@ async fn live_no_cleartext_is_stored() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-cleartext",
         &key,
+        PUBLIC_AUDIENCE,
     )
     .await;
 
@@ -400,6 +482,7 @@ async fn live_last_used_at_written_on_miss_not_on_hit() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-last-used",
         &key,
+        PUBLIC_AUDIENCE,
     )
     .await;
 
@@ -456,6 +539,7 @@ async fn live_env_and_db_compose() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-compose",
         &key,
+        PUBLIC_AUDIENCE,
     )
     .await;
 
@@ -499,14 +583,18 @@ async fn live_surface_separation_both_directions() {
         ApiKeyTable::Ingestion,
         "db-api-key-test-surf-ing",
         &ingestion_key,
+        PUBLIC_AUDIENCE,
     )
     .await;
     let analytics_key = format!("mmk_test_surf_ana_{}", uuid::Uuid::new_v4());
+    // `audience` is ignored for `ApiKeyTable::Analytics` (no such column); the value here is
+    // arbitrary.
     let analytics_key_id = insert_live_key(
         &pool,
         ApiKeyTable::Analytics,
         "db-api-key-test-surf-ana",
         &analytics_key,
+        "unused",
     )
     .await;
 
@@ -542,8 +630,14 @@ async fn live_surface_separation_both_directions() {
 async fn live_key_store_has_live_rows_reflects_state() {
     let pool = live_pool().await;
     let key = format!("mmk_test_exist_{}", uuid::Uuid::new_v4());
-    let key_id =
-        insert_live_key(&pool, ApiKeyTable::Ingestion, "db-api-key-test-exist", &key).await;
+    let key_id = insert_live_key(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-exist",
+        &key,
+        PUBLIC_AUDIENCE,
+    )
+    .await;
 
     let has_rows = key_store_has_live_rows(&pool, ApiKeyTable::Ingestion)
         .await

@@ -7,7 +7,7 @@ use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesCon
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas_auth::default_provider::ProviderBuilder;
-use micromegas_auth::policy::{AudienceReadPolicy, ReadPolicy};
+use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -141,9 +141,10 @@ impl FlightSqlServerBuilder {
     /// `AuthContext` (#1369, AbAC Stage 1). This policy wins on every `build_and_serve` branch,
     /// overriding that branch's own default. When never called, the default depends on how auth
     /// is configured: with `with_default_auth()`, `AudienceReadPolicy::from_env("")`; with
-    /// `with_auth_provider(..)` or with auth left disabled, `AudienceReadPolicy` with empty
-    /// implicit groups. **Not** `ReadScope::All`: the absent-`AuthContext`-extension convention
-    /// already supplies `All` when no provider is configured, so this default must not duplicate
+    /// `with_auth_provider(..)` or with auth left disabled, `AudienceReadPolicy` with an empty
+    /// grant map (readable set degenerates to `{public}`). **Not** `ReadScope::All`: the
+    /// absent-`AuthContext`-extension convention already supplies `All` when no provider is
+    /// configured, so this default must not duplicate
     /// that decision -- it only ever resolves a scope when an `AuthContext` is present to resolve
     /// one from.
     pub fn with_read_policy(mut self, policy: Arc<dyn ReadPolicy>) -> Self {
@@ -268,10 +269,10 @@ impl FlightSqlServerBuilder {
                 // Injected-provider path (the monolith's `with_auth_provider` call): resolves no
                 // policy from env on its own -- the caller is expected to pair
                 // `with_auth_provider` with its own `with_read_policy` call. Falls back to the
-                // same empty-implicit-groups default as the other branches when it didn't.
+                // same empty-grant-map default as the other branches when it didn't.
                 (
                     Some(provider),
-                    Arc::new(AudienceReadPolicy::new(vec![])),
+                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
                     Arc::new(OwnershipRewriteConfig::default()),
                 )
             } else if self.use_default_auth {
@@ -302,7 +303,7 @@ impl FlightSqlServerBuilder {
                 // one.
                 (
                     None,
-                    Arc::new(AudienceReadPolicy::new(vec![])),
+                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
                     Arc::new(OwnershipRewriteConfig::default()),
                 )
             };

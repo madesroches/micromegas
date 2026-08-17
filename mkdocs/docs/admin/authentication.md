@@ -159,26 +159,98 @@ telemetry-ingestion-srv --disable-auth
     it, and a caller only sees processes whose (client-asserted) `micromegas.audience` property
     resolves to one of their own audiences.
 
-    **Required in the same deploy:** set `MICROMEGAS_IMPLICIT_GROUPS=everyone` and
-    `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` (the monolith's `MICROMEGAS_ANALYTICS_`-prefixed
-    equivalents for a monolith deployment) to keep pre-existing, never-stamped data visible — see
-    the matching env-var rows and upgrade note on the
+    **Required in the same deploy:** set `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
+    (the monolith's `MICROMEGAS_ANALYTICS_`-prefixed equivalent for a monolith deployment) to keep
+    pre-existing, never-stamped data visible — see the matching env-var row and upgrade note on the
     [FlightSQL](flight-sql.md#environment-variables) and
     [Monolith](monolith.md#environment-variables) admin pages, and the CHANGELOG's AbAC Stage 2
     upgrade note, for the full mechanism.
 
-    **API keys and no-`email`-claim OIDC tokens need the `MICROMEGAS_IMPLICIT_GROUPS` half
-    specifically.** An API-key caller, or an OIDC token with no `email` claim (a
-    client-credentials/service-account token, for example), carries no `user:<email>` term of its
-    own — its entire resolved audience set comes from the `groups` claim and implicit groups
-    alone. Without `MICROMEGAS_IMPLICIT_GROUPS` naming a group these callers belong to, that set
-    is empty, and `OwnershipRewrite` treats an empty caller audience set as fail-closed — zero
-    rows for every query — *before* it ever looks at `MICROMEGAS_UNSTAMPED_AUDIENCE`; that knob by
-    itself never rescues these callers. `MICROMEGAS_IMPLICIT_GROUPS` applies to every
-    authenticated caller, not only ones with an `email` claim, so setting it (as part of the pair
-    above) also restores these callers' visibility; until it's set, they see nothing, regardless
-    of `MICROMEGAS_UNSTAMPED_AUDIENCE` — a future per-key/read grant is planned to allow a
-    narrower, non-blanket alternative.
+    **API keys and no-`email`-claim OIDC tokens are covered by `public` alone, with no second
+    knob.** Under the grant-map model (see [Audiences and Grants](#audiences-and-grants) below),
+    every authenticated caller's readable set always includes `public`, regardless of identity —
+    there is no caller kind whose resolved set is otherwise empty the way an API key's was under
+    the identity-derived model this replaced. `MICROMEGAS_UNSTAMPED_AUDIENCE=public` alone restores
+    visibility for every caller kind.
+
+## Audiences and Grants
+
+An audience is an **opaque label on data** — `public`, `team-alpha`,
+`payments-svc` — not an encoding of any principal's identity. What determines
+who can read or mint into an audience is separate, editable configuration: a
+grant map, resolved once at startup from `{prefix}_AUDIENCE_GRANTS` (falling
+back to the unprefixed `MICROMEGAS_AUDIENCE_GRANTS`). This is the model
+`AudienceReadPolicy`/`AudienceMintPolicy` (`micromegas_auth::policy`) resolve
+against; the [Audience Filtering Activation](#audience-filtering-activation)
+section above is what actually consumes the *read* half of it.
+
+```json
+{
+  "public":       ["*"],
+  "team-alpha":   ["group:eng", "user:alice@example.com"],
+  "alice-laptop": {
+    "read": ["user:alice@example.com", "group:leads"],
+    "mint": ["user:alice@example.com"]
+  }
+}
+```
+
+Keys are audience names (`[A-Za-z0-9_-]{1,255}`, case-sensitive, no
+normalization). Each value is either a bare array — read-only shorthand, the
+common case — or an object with separate `"read"`/`"mint"` lists, needed only
+when the audience should also grant *mint* authority (minting a new
+`ingestion_api_keys` row stamped with that audience). An omitted `"mint"`
+list is always empty, never derived from `"read"`: a read grant never confers
+mint authority. Selectors:
+
+| Selector | Matches |
+|---|---|
+| `*` | any authenticated principal |
+| `user:<email>` | the caller's `email` claim |
+| `group:<g>` | any value in the caller's `groups` claim |
+
+**Two built-in rules, and nothing else:**
+
+- **`public` is always readable**, by every authenticated principal, whether
+  or not it appears in the map at all — writing `{"public": ["*"]}` changes
+  nothing, but an operator who omits it doesn't accidentally hide legacy
+  (unstamped, coalesced-to-`public`) data either.
+- **There is no self-audience rule.** A caller is never granted an audience
+  merely for being named like one — an API key named `team-alpha` does not
+  thereby read the `team-alpha` audience. A personal audience is an ordinary
+  audience with an ordinary grant entry (e.g. `"alice-laptop":
+  ["user:alice@example.com"]`); provisioning one per user is Stage 6 (#1374)
+  territory, since that's the stage that lets a user mint their own key in
+  the first place.
+
+**Re-sharing already-ingested data is a grants edit, never a restamp.** Since
+the audience *value* stamped on data never changes, widening who can see
+`team-alpha` is a one-line config change — add a selector to its `"read"`
+list — that takes effect for every already-ingested process immediately
+(bounded by the mint-time key-store cache TTL for callers, not by anything
+about the data itself).
+
+**A malformed grant map fails startup, not silently**: an unknown-shaped
+key, an unrecognized selector prefix, or a duplicate JSON key for the same
+audience are all a startup `Err`, the same "typo fails fast" convention every
+other knob on this page follows.
+
+**Worked profiles**, open and privacy:
+
+```bash
+# Open deployment: everyone reads everything, no grant map needed at all.
+export MICROMEGAS_UNSTAMPED_AUDIENCE=public
+export MICROMEGAS_DEFAULT_KEY_AUDIENCE=public
+
+# Privacy deployment: a team's data stays inside the team.
+export MICROMEGAS_AUDIENCE_GRANTS='{"team-alpha": ["group:eng"]}'
+export MICROMEGAS_DEFAULT_KEY_AUDIENCE=team-alpha
+# MICROMEGAS_UNSTAMPED_AUDIENCE left unset: legacy/never-stamped data stays invisible.
+```
+
+Worked **mint** profiles (granting mint authority for a non-admin caller) are
+deferred to Stage 6 (#1374), the first stage with a real non-admin mint
+consumer.
 
 ## Client Configuration
 

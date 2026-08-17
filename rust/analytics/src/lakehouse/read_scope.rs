@@ -27,8 +27,8 @@ pub enum ReadScope {
     /// provider configured, e.g. `--disable-auth`) -- never as the output of resolving a
     /// `ReadPolicy` against a real caller.
     All,
-    /// Restricted to the given set of audiences (`"user:<email>"` / `"group:<id>"`), as resolved
-    /// by a `ReadPolicy`.
+    /// Restricted to the given set of audiences -- opaque labels (e.g. `"public"`,
+    /// `"team-alpha"`), as resolved by a `ReadPolicy`.
     Audiences(Arc<[String]>),
 }
 
@@ -87,7 +87,7 @@ impl CallerContext {
 #[derive(Debug, Clone, Default)]
 pub struct OwnershipRewriteConfig {
     /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
-    /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"group:everyone"`. `None`
+    /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"public"`. `None`
     /// (the default) means unstamped processes stay invisible to every `ReadScope::Audiences`
     /// caller. Parsed from `{prefix}_UNSTAMPED_AUDIENCE`, falling back to
     /// `MICROMEGAS_UNSTAMPED_AUDIENCE`.
@@ -99,23 +99,27 @@ pub struct OwnershipRewriteConfig {
     pub public_view_sets: Vec<String>,
 }
 
-/// `true` if `aud` is a well-formed `user:`/`group:`-prefixed audience (non-empty after the
-/// prefix). An unprefixed `MICROMEGAS_UNSTAMPED_AUDIENCE` value would silently never match any
-/// `ReadScope::Audiences` element (every one of those is prefixed), so `from_env` rejects it at
-/// parse time rather than shipping a configured-but-inert knob.
+/// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the same
+/// two rules as `micromegas_auth::policy::is_valid_audience`, duplicated here rather than
+/// depending on `micromegas-auth` for it (see this module's doc comment). An audience outside
+/// this charset would silently never match any `ReadScope::Audiences` element (every one of those
+/// passed this same check on its way in), so `from_env` rejects it at parse time rather than
+/// shipping a configured-but-inert knob.
 fn is_well_formed_audience(aud: &str) -> bool {
-    ["user:", "group:"]
-        .iter()
-        .any(|prefix| aud.len() > prefix.len() && aud.starts_with(prefix))
+    !aud.is_empty()
+        && aud.len() <= 255
+        && aud
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Comma-separated list parser for `{prefix}_PUBLIC_VIEW_SETS` / `MICROMEGAS_PUBLIC_VIEW_SETS`.
 ///
-/// Deliberately the same encoding as `micromegas_auth::policy`'s `MICROMEGAS_IMPLICIT_GROUPS`
-/// parser (comma-separated, rejecting `[`, `]`, `"`) rather than the `MICROMEGAS_ADMINS`
-/// JSON-array shape -- duplicated here rather than depending on `micromegas-auth` for it, since
-/// `micromegas-analytics` does not depend on that crate (the same crate-boundary reasoning
-/// `read_scope.rs`'s own module doc comment gives for keeping `ReadScope` here).
+/// Deliberately a comma-separated list (rejecting `[`, `]`, `"`) rather than the
+/// `MICROMEGAS_ADMINS` JSON-array shape -- duplicated here rather than depending on
+/// `micromegas-auth` for it, since `micromegas-analytics` does not depend on that crate (the same
+/// crate-boundary reasoning `read_scope.rs`'s own module doc comment gives for keeping
+/// `ReadScope` here).
 fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     let raw = match std::env::var(var) {
         Ok(raw) => raw,
@@ -160,7 +164,7 @@ fn resolved_var(prefix: &str, suffix: &str) -> String {
 impl OwnershipRewriteConfig {
     /// Resolves both knobs from the environment. Unset ⇒ `OwnershipRewriteConfig::default()`
     /// (unstamped processes stay invisible, no public view sets). A malformed
-    /// `{prefix}_UNSTAMPED_AUDIENCE` (missing the `user:`/`group:` prefix) or a malformed
+    /// `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
     /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
     /// typo into a fail-fast instead of a silently-inert knob.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
@@ -171,8 +175,8 @@ impl OwnershipRewriteConfig {
                 let raw = raw.trim().to_string();
                 if !is_well_formed_audience(&raw) {
                     anyhow::bail!(
-                        "{unstamped_var}: {raw:?} is not a well-formed audience -- must be \
-                         'user:<id>' or 'group:<id>'"
+                        "{unstamped_var}: {raw:?} is not a valid audience -- must match \
+                         [A-Za-z0-9_-]{{1,255}}"
                     );
                 }
                 Some(raw)

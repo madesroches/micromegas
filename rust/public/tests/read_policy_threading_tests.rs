@@ -442,7 +442,7 @@ async fn auth_context_with_groups_survives_the_real_tonic_stack() {
 // No behavior change: an unconfigured deployment still resolves a scope
 // ---------------------------------------------------------------------------
 
-/// An unconfigured deployment (implicit-groups env var unset) resolves a scope through the real
+/// An unconfigured deployment (audience-grants env var unset) resolves a scope through the real
 /// `AudienceReadPolicy::from_env` -- not an error, not a crash -- and a query's results are
 /// unaffected: `SELECT 1 AS one` never scans a `MaterializedView`, so `OwnershipRewrite` (#1370,
 /// AbAC Stage 2) has nothing to filter here even though it is now registered and active for this

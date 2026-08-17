@@ -45,8 +45,15 @@ FALLBACK_VAR = "MICROMEGAS_API_KEYS"
 def read_keyring(args, parser):
     """Parse the legacy keyring's real shape -- a JSON array of
     `{"name": ..., "key": ...}` objects, exactly what `parse_key_ring` reads
-    (`rust/auth/src/api_key.rs`'s `KeyRingEntry`) -- from the named env var
-    or a file. Returns a list of `(name, key)` tuples, in source order.
+    (`rust/auth/src/api_key.rs`'s `KeyRingEntry`), plus an optional per-entry
+    `"audience"` field (#1372, AbAC Stage 4) -- from the named env var or a
+    file. Returns a list of `(name, key, audience)` triples, in source order;
+    `audience` is `None` when the entry carries none.
+
+    A per-entry `"audience"` combined with `--table analytics` is a
+    `parser.error`, raised here (not deferred to the import call) so a
+    keyring built for ingestion is rejected up front, before any HTTP
+    request, rather than partway through a series of live imports.
 
     For `--source env` with no explicit `--var`, tries the table's prefixed
     default first, then falls back to the unprefixed `MICROMEGAS_API_KEYS`
@@ -94,7 +101,15 @@ def read_keyring(args, parser):
             parser.error(
                 f"keyring entry {i} must be an object with string 'name' and 'key' fields"
             )
-        result.append((entry["name"], entry["key"]))
+        audience = entry.get("audience")
+        if audience is not None and not isinstance(audience, str):
+            parser.error(f"keyring entry {i}: 'audience' must be a string")
+        if audience is not None and args.table != "ingestion":
+            parser.error(
+                f"keyring entry {i}: a per-entry 'audience' is only valid with "
+                "--table ingestion (analytics_api_keys has no such column)"
+            )
+        result.append((entry["name"], entry["key"], audience))
     return result
 
 
@@ -103,22 +118,28 @@ def select_entries(entries, args, parser):
     argparse) to the parsed keyring, in source order."""
     if args.only:
         selected = set(args.only)
-        known = {name for name, _ in entries}
+        known = {name for name, _, _ in entries}
         missing = selected - known
         if missing:
             parser.error(
                 f"--only names not found in keyring: {', '.join(sorted(missing))}"
             )
-        return [(name, key) for name, key in entries if name in selected]
+        return [
+            (name, key, audience) for name, key, audience in entries if name in selected
+        ]
     if args.exclude:
         excluded = set(args.exclude)
-        known = {name for name, _ in entries}
+        known = {name for name, _, _ in entries}
         missing = excluded - known
         if missing:
             parser.error(
                 f"--exclude names not found in keyring: {', '.join(sorted(missing))}"
             )
-        return [(name, key) for name, key in entries if name not in excluded]
+        return [
+            (name, key, audience)
+            for name, key, audience in entries
+            if name not in excluded
+        ]
     return entries
 
 
@@ -168,40 +189,57 @@ def make_client(args, parser):
     return WebClient(args.url, auth_provider=auth_provider)
 
 
-def import_one(client, table, name, key):
+def import_one(client, table, name, key, audience):
     """Calls the table-appropriate import method and returns the parsed
     response dict. Raises `RuntimeError` on a 4xx/5xx (from
     `WebClient`'s `_check_response`), or
     `requests.exceptions.RequestException` on a network-level failure
     (connection reset, DNS failure, timeout) from the underlying
-    `session.post` call."""
+    `session.post` call.
+
+    `audience` is passed through only on the ingestion branch --
+    `import_analytics_api_key` takes no such parameter, since
+    `analytics_api_keys` has no `audience` column. This is only ever reached
+    with a non-`None` `audience` on the analytics branch if the up-front
+    guards in `read_keyring`/`main` were somehow bypassed; those guards are
+    what actually keep this call correct.
+    """
     if table == "ingestion":
-        return client.import_ingestion_api_key(name, key)
+        return client.import_ingestion_api_key(name, key, audience)
     return client.import_analytics_api_key(name, key)
 
 
-def run_import(client, table, entries):
-    """Imports each `(name, key)` pair, printing one line per key and
-    continuing past individual failures rather than aborting the batch.
+def run_import(client, table, entries, cli_audience=None):
+    """Imports each `(name, key, audience)` triple, printing one line per key
+    and continuing past individual failures rather than aborting the batch.
     Returns `True` if every key imported cleanly (freshly imported, or
-    already present and not revoked)."""
+    already present and not revoked).
+
+    A per-entry `audience` wins over `cli_audience` (`--audience`); neither
+    given leaves `audience` `None`, so the request omits the field entirely
+    and the server applies its own default.
+    """
     all_ok = True
-    for name, key in entries:
+    for name, key, entry_audience in entries:
+        audience = entry_audience if entry_audience is not None else cli_audience
         try:
-            result = import_one(client, table, name, key)
+            result = import_one(client, table, name, key, audience)
         except (RuntimeError, requests.exceptions.RequestException) as e:
             print(f"{name}: error: {e}", file=sys.stderr)
             all_ok = False
             continue
 
         key_id = result.get("key_id")
+        # `analytics_api_keys` rows carry no `audience` at all, so this is
+        # blank for `--table analytics`.
+        suffix = f", audience={result['audience']}" if "audience" in result else ""
         if result.get("imported"):
-            print(f"{name}: imported (key_id={key_id})")
+            print(f"{name}: imported (key_id={key_id}{suffix})")
         elif result.get("revoked_at"):
-            print(f"{name}: already present (revoked) (key_id={key_id})")
+            print(f"{name}: already present (revoked) (key_id={key_id}{suffix})")
             all_ok = False
         else:
-            print(f"{name}: already present (key_id={key_id})")
+            print(f"{name}: already present (key_id={key_id}{suffix})")
     return all_ok
 
 
@@ -256,10 +294,23 @@ def main():
         "--profile",
         help="Named connection profile from ~/.micromegas/config.json (for OIDC auth setup)",
     )
+    parser.add_argument(
+        "--audience",
+        help=(
+            "Write audience to stamp newly-imported ingestion keys with (--table ingestion "
+            "only; analytics_api_keys has no such column). Not the OIDC token audience "
+            "already configured via --profile/MICROMEGAS_OIDC_AUDIENCE -- unrelated setting, "
+            'same flag name coincidence. A keyring entry\'s own "audience" field wins over '
+            "this flag. Neither given: the server applies MICROMEGAS_DEFAULT_KEY_AUDIENCE, "
+            "falling back to 'public'."
+        ),
+    )
     args = parser.parse_args()
 
     if args.source == "file" and not args.path:
         parser.error("--source file requires --path")
+    if args.table != "ingestion" and args.audience is not None:
+        parser.error("--audience is only valid with --table ingestion")
 
     entries = read_keyring(args, parser)
     selected = select_entries(entries, args, parser)
@@ -269,7 +320,7 @@ def main():
         return
 
     client = make_client(args, parser)
-    ok = run_import(client, args.table, selected)
+    ok = run_import(client, args.table, selected, args.audience)
     if not ok:
         sys.exit(1)
 

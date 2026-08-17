@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 5;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 6;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -140,6 +140,39 @@ pub async fn upgrade_data_lake_schema_v5(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 6.
+/// Adds the `audience` column to `ingestion_api_keys` (#1372, AbAC Stage 4): the write
+/// audience a key is immutably bound to. Backfilled to `'public'` before `SET NOT NULL` --
+/// every pre-existing row is a pre-AbAC key, and `public` is the accurate description of
+/// its current, unstamped-and-visible-to-everyone state, not a new grant. No `DEFAULT` on
+/// the column: that would let a not-yet-upgraded `analytics-web-srv` keep inserting rows
+/// that silently take `public`, defeating the fail-closed property this stage relies on.
+/// `analytics_api_keys` is untouched -- its read-side mirror is `read_audiences` (Stage
+/// 4b), a set-valued grant in the opposite direction.
+pub async fn upgrade_data_lake_schema_v6(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute("ALTER TABLE ingestion_api_keys ADD COLUMN audience VARCHAR(255);")
+        .await
+        .with_context(|| "adding column audience to ingestion_api_keys table")?;
+    tr.execute("UPDATE ingestion_api_keys SET audience = 'public' WHERE audience IS NULL;")
+        .await
+        .with_context(|| "backfilling audience to 'public' on ingestion_api_keys")?;
+    tr.execute("ALTER TABLE ingestion_api_keys ALTER COLUMN audience SET NOT NULL;")
+        .await
+        .with_context(|| "setting audience NOT NULL on ingestion_api_keys")?;
+    tr.execute(
+        "ALTER TABLE ingestion_api_keys ADD CONSTRAINT ingestion_api_keys_audience_name \
+         CHECK (audience ~ '^[A-Za-z0-9_-]+$');",
+    )
+    .await
+    .with_context(|| "adding audience-name CHECK constraint on ingestion_api_keys")?;
+    tr.execute("UPDATE migration SET version=6;")
+        .await
+        .with_context(|| "updating data lake schema version to 6")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -250,6 +283,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v5");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v5(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 5 == current_version {
+        info!("upgrading data_lake_schema to v6");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v6(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }
