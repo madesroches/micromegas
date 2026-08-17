@@ -179,12 +179,13 @@ impl OwnershipRewrite {
     /// `coalesce(resolved_audience, unstamped_audience) IN (audiences)`, or `lit(false)` when
     /// `audiences` is empty -- the fail-closed reading of "caller has no audiences" rather than
     /// emitting `IN ()` and leaving its behavior to DataFusion (`ReadScope::Audiences` can
-    /// legitimately resolve to an empty set, see `identity_and_group_audiences`).
+    /// legitimately resolve to an empty set -- a caller matching no grant resolves to `{public}`,
+    /// but a bare-array read-only audience with no matching selector contributes nothing).
     ///
     /// `coalesce` is applied to the already-aggregated `resolved_audience` column, never to the
     /// pre-aggregate, per-row audience expression: applying it per row first would let the
     /// constant default outrank a real stamped value under `MAX`'s plain string ordering (e.g.
-    /// `"user:alice"` sorts below `"group:everyone"`), silently resolving a stamped process to the
+    /// `"alice-laptop"` sorts below `"public"`), silently resolving a stamped process to the
     /// wrong audience.
     fn resolved_predicate(&self) -> Expr {
         let audiences = self.audiences();

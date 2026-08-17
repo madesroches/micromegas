@@ -30,6 +30,7 @@ use axum::routing::{delete, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::db_api_key::{generate_key, hash_key};
+use micromegas::auth::policy::{PUBLIC_AUDIENCE, is_valid_audience};
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -51,6 +52,11 @@ const MAX_LIMIT: i64 = 500;
 #[derive(Clone)]
 pub struct IngestionKeysState {
     pub pool: Option<PgPool>,
+    /// Resolved once at startup from `{prefix}_DEFAULT_KEY_AUDIENCE`
+    /// (`micromegas::auth::policy::default_key_audience_from_env`, `web_server.rs`). `None`
+    /// when the knob is unset -- `mint` then requires an explicit `audience` (400 otherwise);
+    /// `import` falls back further, to `PUBLIC_AUDIENCE`. See [`resolve_audience`].
+    pub default_audience: Option<String>,
 }
 
 /// JSON error body returned by every handler in this module. Same
@@ -78,6 +84,7 @@ impl ErrorResponse {
 /// (`auth/handlers.rs`), whose rejection renders as `AdminRequired`'s own 403
 /// body — before any handler in this file even starts running — so a
 /// `Forbidden` variant here would be dead code, never constructed.
+#[derive(Debug)]
 pub enum IngestionKeyError {
     /// Request body/query failed validation.
     BadRequest(String),
@@ -150,9 +157,41 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
     Ok(())
 }
 
+/// Resolves the audience to stamp on a mint/import `INSERT`'s `NOT NULL` column
+/// (`tasks/1372_audience_on_keys_plan.md` §5-§6). `pub`, not module-private, and sync with no
+/// pool access, so the whole resolution matrix is unit-testable without a database.
+///
+/// `requested`: a missing field or an empty string counts as absent (the empty string is not a
+/// name -- it fails [`is_valid_audience`] either way); anything else is taken **verbatim**, no
+/// case folding. `fallback`: `None` for `mint` (an unresolved mint is a `BadRequest`, never a
+/// silent `public`), `Some(PUBLIC_AUDIENCE)` for `import` (continuity with the v6 backfill).
+///
+/// Resolution order: `requested` → `state.default_audience` → `fallback`; the first
+/// non-absent value is validated with [`is_valid_audience`] and returned. `BadRequest` when
+/// nothing resolves at all.
+pub fn resolve_audience(
+    state: &IngestionKeysState,
+    requested: Option<&str>,
+    fallback: Option<&str>,
+) -> Result<String, IngestionKeyError> {
+    let requested = requested.filter(|s| !s.is_empty());
+    let default_audience = state.default_audience.as_deref();
+    let candidate = requested.or(default_audience).or(fallback);
+    match candidate {
+        Some(aud) if is_valid_audience(aud) => Ok(aud.to_string()),
+        Some(aud) => Err(IngestionKeyError::BadRequest(format!(
+            "invalid audience {aud:?}: must match [A-Za-z0-9_-]{{1,255}}"
+        ))),
+        None => Err(IngestionKeyError::BadRequest(
+            "no audience given and MICROMEGAS_DEFAULT_KEY_AUDIENCE is not set".to_string(),
+        )),
+    }
+}
+
 #[derive(Deserialize)]
 struct MintRequest {
     name: String,
+    audience: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +199,7 @@ struct MintResponse {
     key_id: Uuid,
     name: String,
     created_at: DateTime<Utc>,
+    audience: String,
     /// The cleartext key, returned exactly once. Never logged, never
     /// retrievable afterwards.
     key: String,
@@ -174,6 +214,10 @@ async fn mint_key(
 ) -> Result<(StatusCode, Json<MintResponse>), IngestionKeyError> {
     let pool = require_pool(&state)?;
     validate_name(&body.name)?;
+    // `fallback: None` -- a new credential must never silently default to `public`; with
+    // neither an explicit `audience` nor `MICROMEGAS_DEFAULT_KEY_AUDIENCE` configured, this
+    // is a `BadRequest`, not a fail-open publish grant.
+    let audience = resolve_audience(&state, body.audience.as_deref(), None)?;
 
     let key = generate_key();
     let hash = hash_key(&key);
@@ -184,19 +228,20 @@ async fn mint_key(
     // Table name is a literal, never derived from caller input: no route in
     // this module ever writes to `analytics_api_keys`.
     sqlx::query(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(key_id)
     .bind(&hash[..])
     .bind(&body.name)
     .bind(created_at)
     .bind(&created_by)
+    .bind(&audience)
     .execute(&pool)
     .await?;
 
     info!(
-        "minted ingestion api key key_id={key_id} name={} created_by={created_by}",
+        "minted ingestion api key key_id={key_id} name={} created_by={created_by} audience={audience}",
         body.name
     );
 
@@ -206,6 +251,7 @@ async fn mint_key(
             key_id,
             name: body.name,
             created_at,
+            audience,
             key,
         }),
     ))
@@ -227,6 +273,7 @@ struct KeyListEntry {
     last_used_at: Option<DateTime<Utc>>,
     revoked_at: Option<DateTime<Utc>>,
     revoked_by: Option<String>,
+    audience: String,
 }
 
 /// `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` —
@@ -258,7 +305,7 @@ async fn list_keys(
 
     let rows = if include_revoked {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience
              FROM ingestion_api_keys
              ORDER BY created_at DESC
              LIMIT $1 OFFSET $2",
@@ -269,7 +316,7 @@ async fn list_keys(
         .await?
     } else {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience
              FROM ingestion_api_keys
              WHERE revoked_at IS NULL
              ORDER BY created_at DESC
@@ -333,6 +380,7 @@ async fn revoke_key(
 struct ImportRequest {
     name: String,
     key: String,
+    audience: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -346,6 +394,10 @@ struct ImportResponse {
     revoked_at: Option<DateTime<Utc>>,
     /// `true` on a fresh insert; `false` when `key_hash` already existed.
     imported: bool,
+    /// The audience the row actually carries. On the already-present
+    /// (`imported: false`) path this is the **existing** row's audience, never the
+    /// request's -- the binding is immutable, so an import never rewrites it.
+    audience: String,
 }
 
 /// Row shape shared by both branches of `import_key`'s `INSERT ... ON
@@ -357,6 +409,7 @@ struct ImportedRow {
     created_at: DateTime<Utc>,
     created_by: String,
     revoked_at: Option<DateTime<Utc>>,
+    audience: String,
 }
 
 /// `POST {base_path}/api/ingestion-api-keys/import` — a route the removed
@@ -384,6 +437,10 @@ async fn import_key(
             "key must not be empty".to_string(),
         ));
     }
+    // `fallback: Some(PUBLIC_AUDIENCE)` -- continuity with the v6 backfill: a legacy key's
+    // already-ingested history was just stamped `public`, so an import with no explicit
+    // audience and no knob keeps the new rows under the same audience rather than a 400.
+    let audience = resolve_audience(&state, body.audience.as_deref(), Some(PUBLIC_AUDIENCE))?;
 
     let hash = hash_key(&body.key);
     let key_id = Uuid::new_v4();
@@ -391,16 +448,17 @@ async fn import_key(
     let created_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
 
     let inserted = sqlx::query_as::<_, ImportedRow>(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (key_hash) DO NOTHING
-         RETURNING key_id, name, created_at, created_by, revoked_at",
+         RETURNING key_id, name, created_at, created_by, revoked_at, audience",
     )
     .bind(key_id)
     .bind(&hash[..])
     .bind(&body.name)
     .bind(created_at)
     .bind(&created_by)
+    .bind(&audience)
     .fetch_optional(&pool)
     .await?;
 
@@ -408,10 +466,11 @@ async fn import_key(
         Some(row) => (row, true, StatusCode::CREATED),
         None => {
             // The hash already exists: report the existing row (including
-            // whether it's revoked) instead of the freshly-generated values
-            // above, which never made it into the table.
+            // whether it's revoked, and its actual, immutable audience) instead
+            // of the freshly-generated values above, which never made it into
+            // the table.
             let row = sqlx::query_as::<_, ImportedRow>(
-                "SELECT key_id, name, created_at, created_by, revoked_at
+                "SELECT key_id, name, created_at, created_by, revoked_at, audience
                  FROM ingestion_api_keys
                  WHERE key_hash = $1",
             )
@@ -423,8 +482,8 @@ async fn import_key(
     };
 
     info!(
-        "imported ingestion api key key_id={} name={} created_by={} imported={imported}",
-        row.key_id, row.name, row.created_by
+        "imported ingestion api key key_id={} name={} created_by={} imported={imported} audience={}",
+        row.key_id, row.name, row.created_by, row.audience
     );
 
     Ok((
@@ -436,6 +495,7 @@ async fn import_key(
             created_by: row.created_by,
             revoked_at: row.revoked_at,
             imported,
+            audience: row.audience,
         }),
     ))
 }

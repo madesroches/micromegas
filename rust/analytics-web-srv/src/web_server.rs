@@ -640,8 +640,13 @@ pub async fn run_web_server(
     // Both tables live in the same telemetry DB behind the same
     // `MICROMEGAS_SQL_CONNECTION_STRING` — reuse the same pool rather than
     // opening a second one.
+    //
+    // Resolved once at startup, per `default_key_audience_from_env`'s doc comment, so a typo
+    // in `MICROMEGAS_DEFAULT_KEY_AUDIENCE` fails fast rather than surfacing as a per-request
+    // 400 (AbAC Stage 4, #1372).
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
         pool: analytics_keys_pool,
+        default_audience: micromegas::auth::policy::default_key_audience_from_env("")?,
     };
 
     let auth_state = if config.disable_auth {

@@ -129,8 +129,8 @@ Vocabulary used throughout:
 
 | Term | Meaning |
 |---|---|
-| **audience** | the label stamped on data at ingestion — `user:<email>` or `group:<id>`. Distinct from `AuthContext.audience` (the OIDC token audience); see "Naming collision to avoid" below. |
-| **grant** | one of the two relations — `write(subject → group)` at mint, `read(subject → group)` at query. In v1 both derive from IdP group membership. |
+| **audience** | the label stamped on data at ingestion — an opaque `[A-Za-z0-9_-]{1,255}` name (e.g. `team-alpha`), no `user:`/`group:` prefix, no principal semantics (revised by Stage 4, #1372 — see the status update above; this row originally read `user:<email>` or `group:<id>`). Distinct from `AuthContext.audience` (the OIDC token audience); see "Naming collision to avoid" below. |
+| **grant** | one of the two relations — `write(subject → group)` at mint, `read(subject → group)` at query. As of Stage 4 (#1372), both are resolved from an explicit `AudienceGrants` map (`{prefix}_AUDIENCE_GRANTS`) rather than derived from IdP group membership (this row's original claim) — see the status update above. |
 | **readable set** | the audiences a caller may read; the `ReadScope` resolved per request. |
 | **role** | reserved for the *capability* axis (`is_admin`, issues #1376/#1377), which is orthogonal to audience scope. Not used for data isolation. |
 
@@ -142,6 +142,33 @@ Roles would become meaningful here if read and write ever separate: today group 
 both, so there is nothing for a role to bundle. If the deferred grants table or a second write-role
 claim lands (see Deferred / Trade-offs), `viewer`/`minter` per group becomes a real role and the
 term earns its place.
+
+### Status update (2026-08-17): Stage 4 (#1372) landed, revising the audience model
+
+Stage 4 (below) landed and, per its own plan's "Scope note," amended §1–§3 of this document rather
+than waiting for the long-term grant store: **an audience is now an opaque label
+(`[A-Za-z0-9_-]{1,255}`, no normalization) with no `user:`/`group:` prefix, and there is no
+identity-derived audience anywhere** — not `{user:<email>}`, not a mintable/readable set derived
+from `caller.groups`/`MICROMEGAS_IMPLICIT_GROUPS`. Access is a separate, explicit grant map
+(`AudienceGrants`, `{prefix}_AUDIENCE_GRANTS`), with `public` the sole built-in read grant.
+`MICROMEGAS_IMPLICIT_GROUPS` is removed. This is **two deliberate overrides** of what this document
+originally said, recorded here rather than silently edited away:
+
+- **§2's "the prefixes stay" claim (below) is overridden.** `[A-Za-z0-9_-]` makes
+  `user:alice@example.com` unrepresentable; the collision concern it named is answered instead by
+  audiences living in a single flat namespace with byte-exact identity, and the default-grant
+  concern by an explicit grant entry.
+- **§2's target formula's `∪ {user:<email>}` term (below) is abolished** — the "no self-audience
+  rule" decision. Reasons: the charset removes email as a candidate value, and keying the rule on
+  `subject` instead would let an admin mint themselves read access by naming a key after an
+  audience (API-key principals have no email but do have `subject`).
+
+Neither override changes this document's long-term grant-store end state (`group_read_grants`
+/ `group_mint_grants` below) — Stage 4's env-map grants are explicitly a 1:1 stand-in for those two
+tables, kept in one map only because no store exists yet to split them across. §1–§3 below are left
+as the historical record of the model *as shipped in Stage 1* (#1369); read them with the override
+above in mind. See `tasks/1372_audience_on_keys_plan.md` for the full design and
+`rust/auth/src/policy.rs` for what actually ships.
 
 ## Current State
 
@@ -208,12 +235,15 @@ pub trait MintPolicy: Send + Sync + std::fmt::Debug {
 }
 ```
 
-The one shipped impl (`AudienceMintPolicy`) permits `requested` iff it is in the caller's **mintable
+**As shipped in Stage 1 (#1369), superseded by Stage 4 (#1372) — see the status update above.** The
+shipped-then impl (`AudienceMintPolicy`) permitted `requested` iff it was in the caller's **mintable
 set**: `{user:<caller email>} ∪ {group:G : G ∈ caller's IdP groups claim} ∪ {group:G : G ∈
-MICROMEGAS_IMPLICIT_GROUPS}`. With `requested = None`, the audience defaults to
-`user:<caller email>`. In a privacy deployment with no implicit groups and no groups claim this
-degenerates to "you may only mint keys for yourself" — the per-user case, with no separate
-`SelfMintPolicy` implementation.
+MICROMEGAS_IMPLICIT_GROUPS}`. With `requested = None`, the audience defaulted to
+`user:<caller email>`. As of Stage 4, the mintable set is instead the grant map's `mint` list for
+the requested audience (`AudienceGrants`, admin callers exempted per the admin arm below), there is
+no identity-derived term of any kind, `MICROMEGAS_IMPLICIT_GROUPS` no longer exists, and
+`requested = None` is always an `Err` — there is no "myself" audience for an opaque label to
+default to.
 
 ### 2. `ReadPolicy` — which audiences a caller may read (query-time, flight-sql side)
 
@@ -234,7 +264,8 @@ pub enum ReadScope {
 }
 ```
 
-The one shipped impl (`AudienceReadPolicy`) returns the caller's **readable set**:
+**As shipped in Stage 1 (#1369), superseded by Stage 4 (#1372) — see the status update above.** The
+shipped-then impl (`AudienceReadPolicy`) returned the caller's **readable set** as:
 
 ```
 ReadScope::Principals(
@@ -244,6 +275,10 @@ ReadScope::Principals(
   ∪ {group:G : G ∈ MICROMEGAS_IMPLICIT_GROUPS}
 )
 ```
+
+As of Stage 4, this is instead a pure grant-map lookup —
+`{public} ∪ {a : selector ∈ grants[a].read matches caller} ∪ caller.read_audiences` — with `public`
+the sole built-in and no identity-derived term (no `∪ {user:<email>}`, no implicit groups).
 
 The union is **branch-free — no `auth_type` check anywhere**: an OIDC caller carries no
 `read_audiences`, and an API key carries no email and no groups claim (`api_key.rs:116-127`,
@@ -256,11 +291,14 @@ config stays fail-closed.
 `Err`**; a resolution failure is never an empty-or-permissive scope.
 
 `ReadScope::All` is **never** produced by this policy — it exists only for the internal maintenance
-daemon's contexts (§5). In a privacy deployment (no implicit groups, no groups claim) the readable
-set is the singleton `{user:<caller email>}` — per-user isolation with no separate `SelfReadPolicy`
-implementation. In an open deployment (`MICROMEGAS_IMPLICIT_GROUPS=everyone`) every caller's set
-includes `group:everyone`, which is what imported keys stamp and what unstamped data coalesces to
-(§4), so everyone keeps reading everything.
+daemon's contexts (§5). Under the shipped-then (Stage 1) model, a privacy deployment (no implicit
+groups, no groups claim) resolved the singleton `{user:<caller email>}`; an open deployment
+(`MICROMEGAS_IMPLICIT_GROUPS=everyone`) resolved `group:everyone` for every caller. As of Stage 4,
+the equivalent profiles are: privacy — an explicit grant map, no self rule, so per-user isolation
+needs a per-user audience *and* a grant, deferred to Stage 6 (#1374); open — every caller's set
+already includes `public` (the built-in), with `MICROMEGAS_UNSTAMPED_AUDIENCE=public` covering
+never-stamped legacy data — no grant map entry needed at all. See
+`mkdocs/docs/admin/authentication.md#audiences-and-grants` for the worked profiles.
 
 ### 3. Ingestion stamps `audience`
 
@@ -536,16 +574,25 @@ make_session_context(lakehouse, part_provider, query_range, view_factory, config
 `MICROMEGAS_ISOLATION_POLICY=self|audience` knob and its `self` default). One AbAC engine, configured
 by grants; every knob is fail-closed when empty/unset:
 
+**Table below is as originally designed (Stage 1); superseded by Stage 4 (#1372) — see the status
+update near the top of this document.** `MICROMEGAS_IMPLICIT_GROUPS` no longer exists, replaced by
+the `{prefix}_AUDIENCE_GRANTS` grant map; `MICROMEGAS_UNSTAMPED_AUDIENCE`'s value shape is now an
+opaque audience name (`public`, not `group:everyone` — `:` is outside the charset and now fails
+startup).
+
 | Knob | Meaning | Open deployment | Privacy deployment |
 |---|---|---|---|
-| `MICROMEGAS_IMPLICIT_GROUPS` | comma-separated groups every authenticated principal belongs to (added to both readable and mintable sets) | `everyone` | unset |
-| `MICROMEGAS_UNSTAMPED_AUDIENCE` | audience attributed at query time to data with no `micromegas.audience` property, and the visibility rule for `'global'` partition rows (§4) | `group:everyone` | unset (unstamped data hidden) |
+| `MICROMEGAS_IMPLICIT_GROUPS` (removed, #1372) | comma-separated groups every authenticated principal belongs to (added to both readable and mintable sets) | `everyone` | unset |
+| `MICROMEGAS_UNSTAMPED_AUDIENCE` | audience attributed at query time to data with no `micromegas.audience` property, and the visibility rule for `'global'` partition rows (§4) | `public` (was `group:everyone`) | unset (unstamped data hidden) |
 | `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` | register the five mutating UDTFs/UDFs (§4) for **non-admin** user sessions (admin sessions always get them — issue #1377) | `true` | unset/false |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | §5b public view-set allowlist | — | optional |
+| `{prefix}_AUDIENCE_GRANTS` (added, #1372) | JSON grant map, keyed by audience name — see `mkdocs/docs/admin/authentication.md#audiences-and-grants` | unset (`public` alone covers it) | e.g. `{"team-alpha": ["group:eng"]}` |
 
 `MICROMEGAS_UNSTAMPED_AUDIENCE` is the migration-pain killer: an open deployment can turn
 enforcement on **before any stamping exists** — legacy `NULL`-audience data coalesces to
-`group:everyone`, which every caller implicitly reads. No backfill, no retention wait, no
+`public` (was `group:everyone`), which every caller implicitly reads (`public` is a built-in read
+grant for every authenticated principal, so no companion knob is needed the way
+`MICROMEGAS_IMPLICIT_GROUPS` used to be). No backfill, no retention wait, no
 mode flip, nothing ever disappears.
 
 **Activation story:** while the stages ship, absence of all isolation config = enforcement
@@ -559,13 +606,20 @@ factory reading the env vars; `from_env` precedent: `static_tables_configurator.
 trait seam permits asymmetric policies later (e.g. group reads, self-only mint) with no code
 change.
 
-**Encoding (decided 2026-08-12).** `MICROMEGAS_IMPLICIT_GROUPS` and `MICROMEGAS_PUBLIC_VIEW_SETS` are
+**Encoding (decided 2026-08-12; the `MICROMEGAS_IMPLICIT_GROUPS` half of this decision is moot as of
+Stage 4/#1372, which deletes that knob outright).** `MICROMEGAS_IMPLICIT_GROUPS` and
+`MICROMEGAS_PUBLIC_VIEW_SETS` are
 **comma-separated** flat lists; group names and view-set names may not contain a comma (validate and
 reject at parse time, naming the offending entry). This deliberately differs from `MICROMEGAS_ADMINS`,
 which is a JSON array: that variable is cited throughout as the precedent for *config-sourced
 authorization data*, not for an encoding. Say which it is in the doc comment, because an operator
 copying the `MICROMEGAS_ADMINS` shape into `MICROMEGAS_IMPLICIT_GROUPS` would silently configure one
-group literally named `["everyone"]`.
+group literally named `["everyone"]`. `MICROMEGAS_PUBLIC_VIEW_SETS` keeps this same comma-separated
+encoding unchanged by #1372. `{prefix}_AUDIENCE_GRANTS` (#1372's replacement for the *access*
+knob `MICROMEGAS_IMPLICIT_GROUPS` used to be) is deliberately the **other** encoding this section
+argues against for a flat list — a `MICROMEGAS_ADMINS`-style JSON value — because it is not a flat
+list: it needs the structured, per-audience `{"read": [...], "mint": [...]}` shape §2's own grant-map
+section documents, which no comma-separated encoding could express.
 
 ## Long-term model — groups, nested membership, and grants
 
@@ -579,10 +633,21 @@ model separates the two relations that identity collapses:
 ```
 membership:  user → group,  group → group          (transitive)
 grant:       group → { audience, ... }             (many-to-many)
-label:       audience stamped on data              (unchanged)
+label:       audience stamped on data              (the stamping *mechanism* is unchanged --
+                                                      ingestion still writes one micromegas.audience
+                                                      property per process from bound_audience -- but
+                                                      what an audience *value* IS changed under Stage 4,
+                                                      #1372: an opaque [A-Za-z0-9_-]{1,255} label, not a
+                                                      user:/group: encoding; see the status update above)
 
-readable(caller) = ⋃ { read_grants(g) : g ∈ closure(caller) }  ∪  {user:<email>}
+readable(caller) = ⋃ { read_grants(g) : g ∈ closure(caller) }  ∪  {user:<email>}   [OVERRIDDEN below]
 ```
+
+**The `∪ {user:<email>}` term above is overridden as of Stage 4 (#1372) — see the status update near
+the top of this document.** There is no identity-derived term in the shipped formula at all: a
+caller's readable set is `⋃ { read_grants(g) : g ∈ closure(caller) } ∪ {public}` (public built in,
+not a closure-derived grant) `∪ caller.read_audiences`, full stop. A personal audience needs an
+explicit grant like any other; there is no free `{user:<email>}` union member standing in for one.
 
 Users belong to groups, groups belong to groups, and a group is granted a set of audiences it may
 read. Nothing about the **stamp** changes — ingestion still writes one `micromegas.audience` per
@@ -598,12 +663,17 @@ and no caller's readable set changes on the day the store lands. Two consequence
 
 - §2's formula is not a competing design to be replaced; it is the special case. `ReadPolicy` is the
   seam that lets a `GroupGraphReadPolicy` land beside `AudienceReadPolicy` with **zero** change to
-  Prongs A/B.
-- **Grants are the only authority; the `user:`/`group:` value prefixes are naming convention.** Once
-  grants exist, no consumer may infer authorization from an audience's prefix — `group:studio-x` is
-  readable by whoever holds a grant for it, not by the like-named group as a matter of language. The
-  prefixes stay because they encode the *default* (identity) grant and keep emails from colliding with
-  group ids (§3, Q4).
+  Prongs A/B. Stage 4's env-map `AudienceGrants` is exactly this special case, one stage early: a 1:1
+  stand-in for `group_read_grants`/`group_mint_grants` below, kept as one map only because no store
+  exists yet to split it across two.
+- **"Grants are the only authority; the `user:`/`group:` value prefixes are naming convention" —
+  overridden, not merely superseded, as of Stage 4 (#1372).** This section originally argued that
+  prefixes would *stay* once grants existed, purely as naming convention with no authority of their
+  own. Stage 4 went further and removed the prefixes outright: `[A-Za-z0-9_-]` makes
+  `user:alice@example.com` unrepresentable as an audience value. The collision concern this passage
+  named (a group id colliding with a user email in one flat namespace) is answered instead by
+  byte-exact identity in that flat namespace, and the default-grant concern by requiring an explicit
+  grant entry — see the status update near the top of this document.
 
 ### Where authority lives
 
@@ -1007,15 +1077,22 @@ extension rather than a new header).
 4. **Config factory.** Parse the grant knobs (Config surface) next to
    `default_provider::provider_with_prefix`; `from_env` precedent
    `static_tables_configurator.rs:44-54`. Unset ⇒ enforcement inactive (transitional).
-5. **Policy source (decided): IdP `groups` claim + `MICROMEGAS_IMPLICIT_GROUPS` only.** No local
+5. **Policy source (decided at Stage 1; superseded by Stage 4, #1372 — see the status update near
+   the top of this document): IdP `groups` claim + `MICROMEGAS_IMPLICIT_GROUPS` only.** No local
    grants table in v1 — confidentiality rests solely on OIDC plus operator config; no TCB
    additions. Precedent: the `MICROMEGAS_ADMINS` allowlist (`oidc.rs:264-394`).
-   **Consequence — write/read collapse to membership:** membership in `G` grants *both* `read:G`
-   and `write:G`. Separately grantable write-only/read-only needs a richer source (a second role
-   claim, or a Postgres grants table putting its editors in the TCB) and stays a **pure addition**
-   behind the same seams — that addition is now specified as the target state in
-   [Long-term model](#long-term-model--groups-nested-membership-and-grants), including nested groups,
-   two grant tables, and the TCB consequence this step defers.
+   **Consequence — write/read collapse to membership, closed by Stage 4, not deferred to the
+   long-term store:** this step's original premise was that membership in `G` grants *both*
+   `read:G` and `write:G`, with separate read/mint grants deferred to the eventual
+   `group_read_grants`/`group_mint_grants` store. Stage 4 (#1372) lands that split now, one stage
+   early, via the env-map `AudienceGrants`'s separate `"read"`/`"mint"` lists per audience — a
+   bare-array (read-only) grant confers no mint authority, tested explicitly. This is *not* the
+   Postgres grants table the paragraph below anticipated (no new TCB member — the map is still a
+   flat env var, not an admin-editable store), but it is the read/write split arriving via the
+   *env-map* mechanism rather than the store. The env map is a 1:1 stand-in for the two tables below,
+   kept in one map only because no store exists yet to split it across — see
+   [Long-term model](#long-term-model--groups-nested-membership-and-grants), including nested
+   groups, two grant tables, and the TCB consequence a *store* (not the env map) still defers.
 
 ### Stage 2 — Enforcement Prong A (inactive until configured)
 6. Add `OwnershipRewrite` in `rust/analytics/src/lakehouse/ownership_rewrite.rs`, constructed from
@@ -1040,12 +1117,16 @@ extension rather than a new header).
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
    inherit the caller's scope (§5).
 
-### Stage 4 — Audience on keys (the open-deployment migration vehicle)
+### Stage 4 — Audience on keys (the open-deployment migration vehicle) — **landed, #1372**
 
 Reduced to the part that genuinely needs the AbAC seam (revised 2026-07-30); the key store itself
-is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
+is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape). **Landed as #1372**,
+which also amended Stage 1's audience model itself (opaque labels, grant map — see the status
+update near the top of this document); the two bullets below are corrected to what actually shipped
+rather than left as the pre-implementation plan.
 
-9. Add `audience VARCHAR NOT NULL` to `ingestion_api_keys` — **a column, not a mapping table.** The
+9. Added `audience VARCHAR(255) NOT NULL` to `ingestion_api_keys` (migration v6) — **a column, not a
+   mapping table.** The
    binding is 1:1 and immutable (§3: `resolve_audience` runs once at mint and the result is recorded
    on the key; `bound_audience` is single-valued), so `NOT NULL` is fail-closed by construction,
    whereas a 1:1 side table would add a join to the hot auth path and admit a key-with-no-audience
@@ -1054,16 +1135,26 @@ is Stage 0. Depends on Stage 0 (the tables) and Stage 1 (the audience shape).
    gets **no** `audience` column: nothing stamps data on the read side. It gets a set-valued *read
    grant* instead — Stage 4b, a different column in the opposite direction.
    The ingestion `DbApiKeyAuthProvider` now produces `AuthContext { bound_audience: Some(audience),
-   email: Some(...), allow_delegation: false, is_admin: false }`.
-10. Legacy-key imports assign an audience: existing keys land as `group:everyone` (or a per-key
-    choice) — still zero client changes; this is how open deployments migrate. Keys imported before
-    this stage get the configured default on backfill. The import path is now a real route —
-    `POST {base_path}/api/ingestion-api-keys/import` in `ingestion_keys.rs` — so this step edits
-    that handler (and the `import_keys.py` CLI's request shape), not a runbook. The `NOT NULL`
+   email: None, allow_delegation: false, is_admin: false }` — **`email` stays `None`, not
+   `Some(...)` as originally sketched**: under the opaque-label model, `email` is what `user:`
+   selectors match on, and populating it from `created_by` would hand an ingestion key every
+   audience granted to the minting admin (a deliberate, settled deviation from this bullet's
+   original sketch, not an oversight).
+10. Legacy-key imports assign an audience: existing keys land as **`public`** (the built-in read
+    grant, not `group:everyone` — that value is no longer representable under the opaque-label
+    charset) — still zero client changes; this is how open deployments migrate. Keys imported before
+    this stage get `public` on the v6 backfill (an accurate description of their current,
+    unstamped-and-visible-to-everyone state, not a new grant). The import path is a real route —
+    `POST {base_path}/api/ingestion-api-keys/import` in `ingestion_keys.rs` — this step edits
+    that handler (and the `import_keys.py` CLI's request shape, plus a per-entry keyring
+    `"audience"` field), not a runbook. The `NOT NULL`
     column added in step 9 means **every** insert site must supply an audience: `mint_key`,
     `import_key`, and any hand-written `INSERT` in the 0d fallback. Adding the column without
     updating all three breaks key creation outright — that is the fail-closed behavior working,
-    but it should be a planned edit, not a surprise.
+    but it should be a planned edit, not a surprise. **`mint` requires an explicit audience or a
+    configured `MICROMEGAS_DEFAULT_KEY_AUDIENCE`** (400 otherwise — never a silent `public`, since
+    that would publish a new credential's entire future ingestion history); `import` alone falls
+    back to `public`, matching the backfill's continuity assumption.
 
 ### Stage 4b — Read grants on analytics keys (service accounts)
 
@@ -1142,17 +1233,25 @@ Stage 7 activation. Needs its own epic issue.
     integration tests per Testing Strategy, including **open-profile equivalence** (nothing
     hidden, maintenance functions present, `'global'` rows visible).
 
-**Deployment stories:**
+**Deployment stories** (revised for the Stage 4/#1372 opaque-label + grant-map model — see the
+status update near the top of this document):
 - *Team/open*: upgrade → import keys into the two tables, choosing a destination per key (Stage 0;
   any key that was used for **both** ingestion and queries splits into two keys — the one
-  client-visible change) → stamp the ingestion keys `group:everyone` (Stage 4) → set the three knobs
+  client-visible change) → stamp the ingestion keys `public` (Stage 4 — the v6 backfill's default,
+  and `import`'s fallback for keys imported later) → set `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
+  (no `{prefix}_AUDIENCE_GRANTS` needed at all — `public` is a built-in read grant)
   → identical behavior forever; no flip, no backfill, nothing disappears.
 - *Privacy*: key store + management API (Stage 0) → audience on ingestion keys (Stage 4) → audience
-  resolution on mint (Stage 6) → users mint personal ingestion keys (data stamped `user:<email>`) →
-  grant read audiences to service-account analytics keys (Stage 4b — Grafana and any other
-  non-human reader, or they see nothing) → set restrictive config (no implicit groups, no unstamped
-  audience) → per-user isolation; team sharing via the IdP groups claim, and later via nested groups
-  and grants ([Long-term model](#long-term-model--groups-nested-membership-and-grants)).
+  resolution on mint (Stage 6) → users mint personal ingestion keys, each stamping data under its own
+  audience (e.g. `alice-laptop` — an opaque name, not `user:<email>`) → grant read audiences to
+  service-account analytics keys (Stage 4b — Grafana and any other
+  non-human reader, or they see nothing) → a per-user audience needs an explicit grant entry (there
+  is no self-audience rule under the opaque-label model — provisioning one per user is Stage 6
+  territory, since minting a personal key and creating its matching grant happen in the same flow)
+  → set restrictive config (`{prefix}_AUDIENCE_GRANTS` scoped to real teams, no unstamped
+  audience) → per-user isolation; team sharing via an explicit grant naming the IdP groups claim,
+  and later via nested groups and grants
+  ([Long-term model](#long-term-model--groups-nested-membership-and-grants)).
 
 ### Later — (optional) physical boundary
 15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
@@ -1205,10 +1304,12 @@ Stage 7 activation. Needs its own epic issue.
   boolean `owner = caller` special-case is exactly the corner to avoid.
 - **`ReadScope::All` variant** vs. a wildcard principal string. Chosen: explicit enum — no sentinel
   that could collide with a real audience or be forged into a filter.
-- **Everyone-group over a wildcard read grant** (decided 2026-07-30) for open deployments. A
+- **Everyone-group over a wildcard read grant** (decided 2026-07-30, revised by Stage 4/#1372 — see
+  the status update near the top of this document) for open deployments. A
   user-grantable `ReadScope::All` would be exactly today's behavior, but it forks the model into
-  "filtered" and "unfiltered" deployments. Chosen instead: open = `group:everyone` implicit
-  membership + `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` — one uniform data model where every
+  "filtered" and "unfiltered" deployments. Chosen instead: open = the built-in `public` read grant
+  (originally an implicit `group:everyone` membership) + `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
+  (originally `=group:everyone`) — one uniform data model where every
   deployment runs the same filtered path. The behavioral deltas that choice creates (unstamped
   legacy data, `'global'` partition rows, mutating functions) are each closed by a dedicated knob
   (Config surface) so open deployments still see byte-for-byte today's behavior.
@@ -1282,9 +1383,13 @@ Stage 7 activation. Needs its own epic issue.
   `validate_and_resolve_user_attribution_grpc` falls back to client-claimed identity when the
   `x-auth-subject` header is absent (`user_attribution.rs:125-133`) — `ReadScope` is derived from
   the authenticated `AuthContext` only, never from client-claimed attribution.
-- `MICROMEGAS_IMPLICIT_GROUPS` and `MICROMEGAS_UNSTAMPED_AUDIENCE` are deliberate, operator-owned
+- `{prefix}_AUDIENCE_GRANTS` and `MICROMEGAS_UNSTAMPED_AUDIENCE` are deliberate, operator-owned
   confidentiality relaxations (like §5b): setting them widens what every authenticated caller can
-  read. Both are unset in a privacy deployment; the engine is fail-closed without them.
+  read. Both are unset (empty grant map; unstamped data invisible) in a privacy deployment; the
+  engine is fail-closed without them — every authenticated caller's readable set is still `{public}`
+  even with an empty grant map, since `public` is a built-in, not a relaxation the operator opts
+  into. (Originally `MICROMEGAS_IMPLICIT_GROUPS`, removed by Stage 4/#1372 — see the status update
+  near the top of this document.)
 - No admin query-path read bypass — admin FlightSQL sessions are filtered like any other. Cross-
   principal reads for operators are an out-of-band capability (direct object-store/parquet access),
   intentionally outside the query path. API keys can never be admin.
@@ -1352,9 +1457,10 @@ Stage 7 activation. Needs its own epic issue.
   rows are hidden; assert the daemon (`ReadScope::All`) sees everything and that an **admin user
   session is still filtered** (no bypass); assert the prepared-statement path is filtered
   identically to `do_get`.
-- **Integration (open profile — equivalence with today):** with `MICROMEGAS_IMPLICIT_GROUPS=everyone`,
-  `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` and
-  a mix of stamped (`group:everyone`) and unstamped data: every caller sees every row, `'global'`
+- **Integration (open profile — equivalence with today):** with `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
+  and `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` (no `MICROMEGAS_IMPLICIT_GROUPS` — removed by
+  Stage 4/#1372, since `public` is a built-in read grant needing no companion knob) and
+  a mix of stamped (`public`) and unstamped data: every caller sees every row, `'global'`
   partition rows are listed, and the mutating functions are registered — byte-for-byte the
   pre-isolation behavior.
 - **Equivalence (per-user plan):** confirm the executed plan in the privacy profile matches the

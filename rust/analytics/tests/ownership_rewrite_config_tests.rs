@@ -85,16 +85,19 @@ fn malformed_unstamped_audience_is_rejected() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "everyone");
+        // `"everyone"` (once the case this test covered, back under the `user:`/`group:`
+        // prefix model) is a *valid* audience name under `[A-Za-z0-9_-]` -- `"a:b"` is a
+        // still-invalid example under the relaxed charset (`:` is outside it).
+        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "a:b");
         std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
     let err = OwnershipRewriteConfig::from_env(PREFIX)
-        .expect_err("a non-user:/group:-prefixed audience must be rejected, not silently ignored");
+        .expect_err("an audience outside [A-Za-z0-9_-] must be rejected, not silently ignored");
     let msg = err.to_string();
     assert!(
-        msg.contains(PREFIXED_UNSTAMPED_VAR) && msg.contains("everyone"),
+        msg.contains(PREFIXED_UNSTAMPED_VAR) && msg.contains("a:b"),
         "expected the error to name the offending var and value, got: {msg}"
     );
 }
@@ -105,16 +108,13 @@ fn well_formed_unstamped_audience_is_accepted() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "group:everyone");
+        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "everyone");
         std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
     let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(
-        config.unstamped_audience,
-        Some("group:everyone".to_string())
-    );
+    assert_eq!(config.unstamped_audience, Some("everyone".to_string()));
 }
 
 #[test]
@@ -123,15 +123,15 @@ fn prefixed_unstamped_audience_wins_over_unprefixed_fallback() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "group:prefixed");
-        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "group:unprefixed");
+        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "prefixed");
+        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "unprefixed");
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
     let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience,
-        Some("group:prefixed".to_string()),
+        Some("prefixed".to_string()),
         "the prefixed var must win over the unprefixed fallback when both are set"
     );
 }
@@ -143,14 +143,14 @@ fn unprefixed_unstamped_audience_used_when_prefixed_is_unset() {
     // SAFETY: serialized via `#[serial]`.
     unsafe {
         std::env::remove_var(PREFIXED_UNSTAMPED_VAR);
-        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "group:unprefixed");
+        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "unprefixed");
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
     let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience,
-        Some("group:unprefixed".to_string()),
+        Some("unprefixed".to_string()),
         "the unprefixed fallback must be used only when the prefixed var is genuinely unset"
     );
 }

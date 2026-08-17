@@ -96,7 +96,7 @@ class WebClient:
         )
         self._check_response(resp)
 
-    def import_ingestion_api_key(self, name, key):
+    def import_ingestion_api_key(self, name, key, audience=None):
         """Import an existing ingestion API key string (#1458).
 
         Hashes and stores `key` verbatim via
@@ -105,12 +105,20 @@ class WebClient:
         forward, since existing clients must keep presenting the same key.
         Mirrors `mint_key`'s response shape minus the cleartext:
         `{"key_id", "name", "created_at", "created_by", "revoked_at",
-        "imported"}`.
+        "imported", "audience"}`.
+
+        `audience` (#1372, AbAC Stage 4) is omitted from the request body when
+        `None`, so the server applies its own default
+        (`MICROMEGAS_DEFAULT_KEY_AUDIENCE`, falling back to `public`) rather
+        than receiving an explicit `null`.
         """
+        payload = {"name": name, "key": key}
+        if audience is not None:
+            payload["audience"] = audience
         resp = self.session.post(
             self._api_url("ingestion-api-keys/import"),
             headers=self._headers(),
-            json={"name": name, "key": key},
+            json=payload,
             timeout=self.timeout,
         )
         self._check_response(resp)

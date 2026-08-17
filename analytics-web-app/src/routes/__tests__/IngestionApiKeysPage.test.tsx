@@ -90,6 +90,93 @@ describe('IngestionApiKeysPage', () => {
     expect(screen.getByText('Active')).toBeInTheDocument()
   })
 
+  it('shows an Audience column, rendering — for a key with none', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve([
+          {
+            key_id: 'key-1',
+            name: 'game-client-42',
+            created_at: '2026-01-01T00:00:00Z',
+            created_by: 'alice@example.com',
+            last_used_at: null,
+            revoked_at: null,
+            revoked_by: null,
+            audience: 'team-alpha',
+          },
+          {
+            key_id: 'key-2',
+            name: 'no-audience-key',
+            created_at: '2026-01-01T00:00:00Z',
+            created_by: 'alice@example.com',
+            last_used_at: null,
+            revoked_at: null,
+            revoked_by: null,
+          },
+        ]),
+    } as unknown as Response) as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Audience')).toBeInTheDocument())
+    expect(screen.getByText('team-alpha')).toBeInTheDocument()
+    // '—' also appears in the (null) Last Used column, so there must be at least
+    // two occurrences once the no-audience row's Audience cell renders one too.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('mints a key with an explicit audience', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            key_id: 'key-1',
+            name: 'new-key',
+            created_at: '2026-01-01T00:00:00Z',
+            key: 'mmk_test_cleartext',
+            audience: 'team-alpha',
+          }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText(/No ingestion API keys yet/i)).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
+    const nameInput = await screen.findByPlaceholderText(/game-client-42/i)
+    fireEvent.change(nameInput, { target: { value: 'new-key' } })
+    const audienceInput = await screen.findByPlaceholderText('public')
+    fireEvent.change(audienceInput, { target: { value: 'team-alpha' } })
+
+    const mintButton = screen.getByRole('button', { name: 'Mint' })
+    await act(async () => {
+      fireEvent.click(mintButton)
+    })
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find((c) => c[1]?.method === 'POST')
+      expect(postCall).toBeDefined()
+      expect(JSON.parse(postCall![1].body)).toEqual({
+        name: 'new-key',
+        audience: 'team-alpha',
+      })
+    })
+  })
+
   it('mints a key and shows the one-time-key banner', async () => {
     const fetchMock = vi
       .fn()

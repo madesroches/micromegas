@@ -90,6 +90,46 @@ describe('AnalyticsApiKeysPage', () => {
     expect(screen.getByText('Active')).toBeInTheDocument()
   })
 
+  it('does not show an Audience column', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve([
+          {
+            key_id: 'key-1',
+            name: 'grafana-datasource',
+            created_at: '2026-01-01T00:00:00Z',
+            created_by: 'alice@example.com',
+            last_used_at: null,
+            revoked_at: null,
+            revoked_by: null,
+          },
+        ]),
+    } as unknown as Response) as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('grafana-datasource')).toBeInTheDocument())
+    expect(screen.queryByText('Audience')).not.toBeInTheDocument()
+  })
+
+  it('does not show an audience input in the mint dialog', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+    } as unknown as Response) as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText(/No analytics API keys yet/i)).toBeInTheDocument()
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
+    await screen.findByPlaceholderText(/grafana-datasource/i)
+    expect(screen.queryByPlaceholderText('public')).not.toBeInTheDocument()
+    expect(screen.queryByText('Audience')).not.toBeInTheDocument()
+  })
+
   it('mints a key and shows the one-time-key banner', async () => {
     const fetchMock = vi
       .fn()

@@ -245,12 +245,12 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12): unset
-    // `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`/`MICROMEGAS_IMPLICIT_GROUPS` -> empty implicit
-    // groups -> a real caller's resolved scope is just their own identity, filtered by
+    // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12; grant map rewrite
+    // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
+    // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
     // `OwnershipRewrite` (#1370, AbAC Stage 2) -- see the CHANGELOG upgrade note for the
-    // `MICROMEGAS_IMPLICIT_GROUPS=everyone` + `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone`
-    // pair required to keep legacy, never-stamped data visible once this ships.
+    // `MICROMEGAS_UNSTAMPED_AUDIENCE=public` setting required to keep legacy, never-stamped
+    // data visible once this ships.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         Some(Arc::new(AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?) as Arc<dyn ReadPolicy>)
     } else {

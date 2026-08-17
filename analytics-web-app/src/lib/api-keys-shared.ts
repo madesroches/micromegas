@@ -16,6 +16,8 @@ export interface ApiKeyListEntry {
   last_used_at: string | null
   revoked_at: string | null
   revoked_by: string | null
+  /** The write audience an ingestion key is bound to (#1372). Analytics rows never carry one. */
+  audience?: string
 }
 
 export interface MintApiKeyResponse {
@@ -24,6 +26,8 @@ export interface MintApiKeyResponse {
   created_at: string
   /** The cleartext key, returned exactly once. Never persisted client-side. */
   key: string
+  /** The audience the minted key was stamped with (#1372). Analytics keys never carry one. */
+  audience?: string
 }
 
 interface ErrorResponseShape {
@@ -60,7 +64,7 @@ export interface ApiKeysApiConfig {
 export interface ApiKeysApi<TRevokeResponse> {
   ErrorClass: ApiKeyErrorConstructor
   list: (includeRevoked?: boolean, offset?: number) => Promise<ApiKeyListEntry[]>
-  mint: (name: string) => Promise<MintApiKeyResponse>
+  mint: (name: string, audience?: string) => Promise<MintApiKeyResponse>
   revoke: (keyId: string) => Promise<TRevokeResponse>
 }
 
@@ -94,11 +98,14 @@ export function createApiKeysApi<
     return handleResponse<ApiKeyListEntry[]>(response)
   }
 
-  async function mint(name: string): Promise<MintApiKeyResponse> {
+  async function mint(name: string, audience?: string): Promise<MintApiKeyResponse> {
     const response = await authenticatedFetch(`${getApiBase()}${config.basePath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      // `audience` is sent only when set: `JSON.stringify` drops an `undefined` value
+      // entirely, so an unset audience omits the field rather than sending `null` --
+      // the server then applies its own default (`MICROMEGAS_DEFAULT_KEY_AUDIENCE`).
+      body: JSON.stringify({ name, audience }),
     })
     return handleResponse<MintApiKeyResponse>(response)
   }

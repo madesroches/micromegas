@@ -13,6 +13,7 @@
 
 use micromegas_auth::db_api_key::{ApiKeyTable, hash_key, key_store_has_live_rows};
 use micromegas_auth::default_provider::ProviderBuilder;
+use micromegas_auth::policy::PUBLIC_AUDIENCE;
 use micromegas_auth::types::{HttpRequestParts, RequestParts};
 use serial_test::serial;
 use std::str::FromStr;
@@ -42,16 +43,17 @@ async fn live_pool() -> sqlx::PgPool {
         .expect("connecting to metadata Postgres")
 }
 
-async fn insert_live_key(pool: &sqlx::PgPool, name: &str, key: &str) -> uuid::Uuid {
+async fn insert_live_key(pool: &sqlx::PgPool, name: &str, key: &str, audience: &str) -> uuid::Uuid {
     let key_id = uuid::Uuid::new_v4();
     let hash = hash_key(key);
     sqlx::query(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
-         VALUES ($1, $2, $3, now(), 'test')",
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+         VALUES ($1, $2, $3, now(), 'test', $4)",
     )
     .bind(key_id)
     .bind(&hash[..])
     .bind(name)
+    .bind(audience)
     .execute(pool)
     .await
     .expect("inserting test key");
@@ -106,7 +108,13 @@ async fn provider_always_registered_authenticates_key_minted_after_build() {
 
     // Minted *after* build() returned.
     let key = format!("mmk_test_registered_{}", uuid::Uuid::new_v4());
-    let key_id = insert_live_key(&pool, "provider-always-registered-test", &key).await;
+    let key_id = insert_live_key(
+        &pool,
+        "provider-always-registered-test",
+        &key,
+        PUBLIC_AUDIENCE,
+    )
+    .await;
 
     let parts = bearer_parts(&key);
     let result = provider.validate_request(&parts as &dyn RequestParts).await;
@@ -133,7 +141,7 @@ async fn non_empty_table_alone_counts_as_configured() {
 
     let pool = live_pool().await;
     let key = format!("mmk_test_nonempty_{}", uuid::Uuid::new_v4());
-    let key_id = insert_live_key(&pool, "non-empty-table-test", &key).await;
+    let key_id = insert_live_key(&pool, "non-empty-table-test", &key, PUBLIC_AUDIENCE).await;
 
     let result = ProviderBuilder::new("")
         .with_db_key_store(pool.clone(), ApiKeyTable::Ingestion)

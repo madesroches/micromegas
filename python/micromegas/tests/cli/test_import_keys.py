@@ -19,15 +19,15 @@ class FakeClient:
         self.responses = responses
         self.calls = []
 
-    def _handle(self, name, key):
-        self.calls.append((name, key))
+    def _handle(self, name, key, audience=None):
+        self.calls.append((name, key, audience))
         result = self.responses[name]
         if isinstance(result, Exception):
             raise result
         return result
 
-    def import_ingestion_api_key(self, name, key):
-        return self._handle(name, key)
+    def import_ingestion_api_key(self, name, key, audience=None):
+        return self._handle(name, key, audience)
 
     def import_analytics_api_key(self, name, key):
         return self._handle(name, key)
@@ -42,6 +42,7 @@ def make_args(**overrides):
         "only": None,
         "exclude": None,
         "profile": None,
+        "audience": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -95,7 +96,7 @@ def test_read_keyring_from_env_var(monkeypatch):
     )
     args = make_args()
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("a", "secret-a")]
+    assert entries == [("a", "secret-a", None)]
 
 
 def test_read_keyring_uses_analytics_default_var(monkeypatch):
@@ -104,7 +105,7 @@ def test_read_keyring_uses_analytics_default_var(monkeypatch):
     )
     args = make_args(table="analytics")
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("b", "secret-b")]
+    assert entries == [("b", "secret-b", None)]
 
 
 def test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set(monkeypatch):
@@ -118,7 +119,7 @@ def test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set(monkeypatc
     monkeypatch.delenv("MICROMEGAS_API_KEYS", raising=False)
     args = make_args(table="ingestion")
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("a", "secret-a")]
+    assert entries == [("a", "secret-a", None)]
 
 
 def test_read_keyring_falls_back_to_unprefixed_var_for_analytics(monkeypatch):
@@ -134,14 +135,14 @@ def test_read_keyring_falls_back_to_unprefixed_var_for_analytics(monkeypatch):
     )
     args = make_args(table="analytics")
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("b", "secret-b")]
+    assert entries == [("b", "secret-b", None)]
 
 
 def test_read_keyring_explicit_var_overrides_default(monkeypatch):
     monkeypatch.setenv("CUSTOM_VAR", json.dumps([{"name": "c", "key": "secret-c"}]))
     args = make_args(var="CUSTOM_VAR")
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("c", "secret-c")]
+    assert entries == [("c", "secret-c", None)]
 
 
 def test_read_keyring_explicit_var_does_not_fall_back(monkeypatch):
@@ -187,7 +188,7 @@ def test_read_keyring_from_file(tmp_path):
     path.write_text(json.dumps([{"name": "d", "key": "secret-d"}]))
     args = make_args(source="file", path=str(path))
     entries = import_keys.read_keyring(args, FakeParser())
-    assert entries == [("d", "secret-d")]
+    assert entries == [("d", "secret-d", None)]
 
 
 def test_read_keyring_invalid_json_errors(monkeypatch):
@@ -212,10 +213,78 @@ def test_read_keyring_rejects_entry_missing_key(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# read_keyring: per-entry "audience" (#1372, AbAC Stage 4)
+# ---------------------------------------------------------------------------
+
+
+def test_read_keyring_carries_a_per_entry_audience(monkeypatch):
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS",
+        json.dumps([{"name": "a", "key": "secret-a", "audience": "team-alpha"}]),
+    )
+    args = make_args()
+    entries = import_keys.read_keyring(args, FakeParser())
+    assert entries == [("a", "secret-a", "team-alpha")]
+
+
+def test_read_keyring_entry_with_no_audience_field_is_none(monkeypatch):
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "secret-a"}])
+    )
+    args = make_args()
+    entries = import_keys.read_keyring(args, FakeParser())
+    assert entries == [("a", "secret-a", None)]
+
+
+def test_read_keyring_rejects_a_non_string_audience(monkeypatch):
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS",
+        json.dumps([{"name": "a", "key": "secret-a", "audience": 42}]),
+    )
+    args = make_args()
+    with pytest.raises(SystemExit):
+        import_keys.read_keyring(args, FakeParser())
+
+
+def test_read_keyring_rejects_a_per_entry_audience_with_analytics_table(monkeypatch):
+    """A keyring built for ingestion must not be silently reused against
+    `--table analytics` with its audience dropped -- rejected up front,
+    before any HTTP request, per §7's design."""
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS",
+        json.dumps([{"name": "a", "key": "secret-a", "audience": "team-alpha"}]),
+    )
+    args = make_args(table="analytics")
+    with pytest.raises(SystemExit) as exc_info:
+        import_keys.read_keyring(args, FakeParser())
+    assert "audience" in str(exc_info.value)
+
+
+def test_read_keyring_per_entry_audience_guard_fires_even_when_only_would_drop_it(
+    monkeypatch,
+):
+    """The guard runs in `read_keyring`, before `select_entries` -- an
+    offending entry aborts the run even when `--only`/`--exclude` would have
+    excluded it."""
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS",
+        json.dumps(
+            [
+                {"name": "a", "key": "secret-a"},
+                {"name": "b", "key": "secret-b", "audience": "team-alpha"},
+            ]
+        ),
+    )
+    args = make_args(table="analytics", only=["a"])
+    with pytest.raises(SystemExit):
+        import_keys.read_keyring(args, FakeParser())
+
+
+# ---------------------------------------------------------------------------
 # select_entries
 # ---------------------------------------------------------------------------
 
-ENTRIES = [("a", "ka"), ("b", "kb"), ("c", "kc")]
+ENTRIES = [("a", "ka", None), ("b", "kb", None), ("c", "kc", None)]
 
 
 def test_select_entries_no_filter_returns_all():
@@ -226,16 +295,16 @@ def test_select_entries_no_filter_returns_all():
 def test_select_entries_only():
     args = make_args(only=["a", "c"])
     assert import_keys.select_entries(ENTRIES, args, FakeParser()) == [
-        ("a", "ka"),
-        ("c", "kc"),
+        ("a", "ka", None),
+        ("c", "kc", None),
     ]
 
 
 def test_select_entries_exclude():
     args = make_args(exclude=["b"])
     assert import_keys.select_entries(ENTRIES, args, FakeParser()) == [
-        ("a", "ka"),
-        ("c", "kc"),
+        ("a", "ka", None),
+        ("c", "kc", None),
     ]
 
 
@@ -273,13 +342,86 @@ def test_only_and_exclude_are_mutually_exclusive(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# --audience / --table cross-flag guard
+# ---------------------------------------------------------------------------
+
+
+def test_audience_flag_rejected_with_analytics_table(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "micromegas-import-keys",
+            "--table",
+            "analytics",
+            "--url",
+            "http://analytics:3000",
+            "--audience",
+            "team-alpha",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        import_keys.main()
+    assert "--audience" in capsys.readouterr().err
+
+
+def test_audience_flag_empty_string_is_rejected_not_silently_omitted(
+    monkeypatch, capsys
+):
+    """The guard tests `args.audience is not None`, not truthiness -- an
+    explicitly passed empty string is a transmitted value, not an absence,
+    and must still be rejected against `--table analytics`."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "micromegas-import-keys",
+            "--table",
+            "analytics",
+            "--url",
+            "http://analytics:3000",
+            "--audience",
+            "",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        import_keys.main()
+    assert "--audience" in capsys.readouterr().err
+
+
+def test_audience_flag_accepted_with_ingestion_table(monkeypatch):
+    monkeypatch.setenv(
+        "MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "ka"}])
+    )
+    fake_client = FakeClient(
+        {"a": {"key_id": "id-a", "imported": True, "revoked_at": None}}
+    )
+    monkeypatch.setattr(import_keys, "make_client", lambda args, parser: fake_client)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "micromegas-import-keys",
+            "--table",
+            "ingestion",
+            "--url",
+            "http://analytics:3000",
+            "--audience",
+            "team-alpha",
+        ],
+    )
+    import_keys.main()
+    assert fake_client.calls == [("a", "ka", "team-alpha")]
+
+
+# ---------------------------------------------------------------------------
 # run_import: per-key result classification
 # ---------------------------------------------------------------------------
 
 
 def test_run_import_classifies_fresh_import(capsys):
     client = FakeClient({"a": {"key_id": "id-a", "imported": True, "revoked_at": None}})
-    ok = import_keys.run_import(client, "ingestion", [("a", "ka")])
+    ok = import_keys.run_import(client, "ingestion", [("a", "ka", None)])
     assert ok is True
     out = capsys.readouterr().out
     assert "a: imported (key_id=id-a)" in out
@@ -289,7 +431,7 @@ def test_run_import_classifies_already_present_usable(capsys):
     client = FakeClient(
         {"a": {"key_id": "id-a", "imported": False, "revoked_at": None}}
     )
-    ok = import_keys.run_import(client, "ingestion", [("a", "ka")])
+    ok = import_keys.run_import(client, "ingestion", [("a", "ka", None)])
     assert ok is True
     out = capsys.readouterr().out
     assert "a: already present (key_id=id-a)" in out
@@ -305,7 +447,7 @@ def test_run_import_classifies_already_present_revoked_as_failure(capsys):
             }
         }
     )
-    ok = import_keys.run_import(client, "ingestion", [("a", "ka")])
+    ok = import_keys.run_import(client, "ingestion", [("a", "ka", None)])
     assert ok is False
     out = capsys.readouterr().out
     assert "a: already present (revoked) (key_id=id-a)" in out
@@ -318,10 +460,12 @@ def test_run_import_continues_past_individual_failures(capsys):
             "b": {"key_id": "id-b", "imported": True, "revoked_at": None},
         }
     )
-    ok = import_keys.run_import(client, "ingestion", [("a", "ka"), ("b", "kb")])
+    ok = import_keys.run_import(
+        client, "ingestion", [("a", "ka", None), ("b", "kb", None)]
+    )
     assert ok is False
     # Both keys were attempted -- the batch didn't abort at the first failure.
-    assert client.calls == [("a", "ka"), ("b", "kb")]
+    assert client.calls == [("a", "ka", None), ("b", "kb", None)]
     captured = capsys.readouterr()
     assert "b: imported (key_id=id-b)" in captured.out
     assert "a: error:" in captured.err
@@ -339,10 +483,12 @@ def test_run_import_continues_past_network_level_failures(capsys):
             "b": {"key_id": "id-b", "imported": True, "revoked_at": None},
         }
     )
-    ok = import_keys.run_import(client, "ingestion", [("a", "ka"), ("b", "kb")])
+    ok = import_keys.run_import(
+        client, "ingestion", [("a", "ka", None), ("b", "kb", None)]
+    )
     assert ok is False
     # Both keys were attempted -- the batch didn't abort at the first failure.
-    assert client.calls == [("a", "ka"), ("b", "kb")]
+    assert client.calls == [("a", "ka", None), ("b", "kb", None)]
     captured = capsys.readouterr()
     assert "b: imported (key_id=id-b)" in captured.out
     assert "a: error:" in captured.err
@@ -352,8 +498,8 @@ def test_run_import_dispatches_to_the_right_client_method():
     calls = []
 
     class Client:
-        def import_ingestion_api_key(self, name, key):
-            calls.append(("ingestion", name, key))
+        def import_ingestion_api_key(self, name, key, audience=None):
+            calls.append(("ingestion", name, key, audience))
             return {"key_id": "id", "imported": True, "revoked_at": None}
 
         def import_analytics_api_key(self, name, key):
@@ -361,9 +507,44 @@ def test_run_import_dispatches_to_the_right_client_method():
             return {"key_id": "id", "imported": True, "revoked_at": None}
 
     client = Client()
-    import_keys.run_import(client, "ingestion", [("a", "ka")])
-    import_keys.run_import(client, "analytics", [("a", "ka")])
-    assert calls == [("ingestion", "a", "ka"), ("analytics", "a", "ka")]
+    import_keys.run_import(client, "ingestion", [("a", "ka", None)])
+    import_keys.run_import(client, "analytics", [("a", "ka", None)])
+    assert calls == [("ingestion", "a", "ka", None), ("analytics", "a", "ka")]
+
+
+def test_run_import_per_entry_audience_wins_over_cli_audience(capsys):
+    client = FakeClient({"a": {"key_id": "id-a", "imported": True, "revoked_at": None}})
+    import_keys.run_import(
+        client, "ingestion", [("a", "ka", "entry-audience")], cli_audience="cli-audience"
+    )
+    assert client.calls == [("a", "ka", "entry-audience")]
+
+
+def test_run_import_falls_back_to_cli_audience_when_entry_has_none(capsys):
+    client = FakeClient({"a": {"key_id": "id-a", "imported": True, "revoked_at": None}})
+    import_keys.run_import(
+        client, "ingestion", [("a", "ka", None)], cli_audience="cli-audience"
+    )
+    assert client.calls == [("a", "ka", "cli-audience")]
+
+
+def test_run_import_prints_the_server_reported_audience(capsys):
+    client = FakeClient(
+        {"a": {"key_id": "id-a", "imported": True, "revoked_at": None, "audience": "public"}}
+    )
+    import_keys.run_import(client, "ingestion", [("a", "ka", None)])
+    out = capsys.readouterr().out
+    assert "a: imported (key_id=id-a, audience=public)" in out
+
+
+def test_run_import_analytics_response_prints_no_audience_suffix(capsys):
+    """`analytics_api_keys` rows carry no `audience` at all -- the printed
+    line must not grow a stray `audience=None`."""
+    client = FakeClient({"a": {"key_id": "id-a", "imported": True, "revoked_at": None}})
+    import_keys.run_import(client, "analytics", [("a", "ka", None)])
+    out = capsys.readouterr().out
+    assert "a: imported (key_id=id-a)" in out
+    assert "audience" not in out
 
 
 # ---------------------------------------------------------------------------

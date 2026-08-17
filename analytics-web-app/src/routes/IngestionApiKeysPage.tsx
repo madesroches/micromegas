@@ -27,6 +27,7 @@ const ingestionApiKeysPageConfig: ApiKeysAdminPageConfig = {
   listKeys: listIngestionApiKeys,
   mintKey: mintIngestionApiKey,
   revokeKey: revokeIngestionApiKey,
+  showAudience: true,
 }
 
 export default function IngestionApiKeysPage() {

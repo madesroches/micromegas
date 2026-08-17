@@ -43,6 +43,14 @@ impl ApiKeyTable {
             ApiKeyTable::Analytics => "analytics_api_keys",
         }
     }
+
+    /// Whether this table carries Stage 4's (#1372) write-side `audience` column
+    /// (`ingestion_api_keys` only, migration v6). `analytics_api_keys`'s read-side mirror is
+    /// `read_audiences` (Stage 4b), a set-valued grant on the caller rather than a column on
+    /// the key row.
+    pub fn has_audience(self) -> bool {
+        matches!(self, ApiKeyTable::Ingestion)
+    }
 }
 
 /// Cache and audit knobs for [`DbApiKeyAuthProvider`], read from env with defaults.
@@ -157,10 +165,13 @@ pub async fn key_store_has_live_rows(pool: &PgPool, table: ApiKeyTable) -> Resul
     Ok(has_rows)
 }
 
-/// hash -> (key_id, name) for a key known to be live.
+/// hash -> (key_id, name, audience) for a key known to be live.
 struct KeyRow {
     key_id: uuid::Uuid,
     name: String,
+    /// `Some` for `Ingestion` (the column is `NOT NULL` as of migration v6), `None` for
+    /// `Analytics` (which carries no `audience` column at all).
+    audience: Option<String>,
 }
 
 /// Distinguishes "the DB answered: no such live key" from "the DB could not be
@@ -269,8 +280,15 @@ impl AuthProvider for DbApiKeyAuthProvider {
         let result = self
             .valid
             .try_get_with(hash, async move {
+                // Built from `&'static str` literals alongside `table.table_name()`, so
+                // nothing caller-supplied ever reaches this SQL.
+                let returning = if table.has_audience() {
+                    "key_id, name, audience"
+                } else {
+                    "key_id, name"
+                };
                 let row = sqlx::query(&format!(
-                    "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING key_id, name",
+                    "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
                     table.table_name()
                 ))
                 .bind(&hash[..])
@@ -299,7 +317,14 @@ impl AuthProvider for DbApiKeyAuthProvider {
                         let name: String = row
                             .try_get("name")
                             .map_err(|e| LookupError::Db(anyhow::Error::from(e).context("reading name")))?;
-                        Ok(Arc::new(KeyRow { key_id, name }))
+                        let audience: Option<String> = if table.has_audience() {
+                            Some(row.try_get("audience").map_err(|e| {
+                                LookupError::Db(anyhow::Error::from(e).context("reading audience"))
+                            })?)
+                        } else {
+                            None
+                        };
+                        Ok(Arc::new(KeyRow { key_id, name, audience }))
                     }
                     None => Err(LookupError::NotFound),
                 }
@@ -316,6 +341,12 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 );
                 Ok(AuthContext {
                     subject: row.name.clone(),
+                    // Deliberately left `None`, not `created_by` (AbAC plan §4): under the
+                    // grant-map model, `email` is what `user:` selectors match on, so
+                    // populating it from the minting admin would hand this key every
+                    // audience granted to *them*. `OidcAuthProvider::is_admin` is the only
+                    // other consumer of a principal's email, and it never sees an API-key
+                    // `AuthContext`.
                     email: None,
                     issuer: "api_key".to_string(),
                     audience: None,
@@ -323,10 +354,14 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     auth_type: AuthType::ApiKey,
                     // SECURITY: API keys can NEVER be admins.
                     is_admin: false,
-                    allow_delegation: true,
-                    // DB-backed keys carry no Stage 4/4b grant until those stages populate the
-                    // table with a bound_audience / read_audiences column.
-                    bound_audience: None,
+                    // `false` for ingestion keys (Stage 4, #1372): an ingestion write
+                    // credential is not a delegating service account, and can never reach
+                    // the gRPC path `allow_delegation` governs anyway (it lives in the
+                    // other table). Unchanged (`true`) for analytics keys.
+                    allow_delegation: matches!(self.table, ApiKeyTable::Analytics),
+                    // `Some(..)` for every ingestion key (the column is `NOT NULL`), `None`
+                    // for analytics keys -- Stage 4b populates `read_audiences` for those.
+                    bound_audience: row.audience.clone(),
                     read_audiences: vec![],
                     groups: vec![],
                 })

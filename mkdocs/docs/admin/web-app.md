@@ -56,10 +56,18 @@ export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 # unset. Backs BOTH route groups -- analytics-web-srv is the sole admin HTTP
 # surface for both ingestion_api_keys and analytics_api_keys, writing
 # directly to Postgres for each (see mkdocs/docs/admin/api-keys.md). Must
-# point at a telemetry DB where the v5 migration has already run (via
-# ingestion or a lakehouse-role monolith), or the routes fail at request
-# time with an opaque 500.
+# point at a telemetry DB where the v6 migration has already run (via
+# ingestion or a lakehouse-role monolith) -- v6 is required, not just v5,
+# since the ingestion-key mint/import routes write a NOT NULL `audience`
+# column that migration adds -- or the routes fail at request time with an
+# opaque 500.
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
+
+# Default write audience for newly-minted/imported ingestion keys, when a
+# mint/import request supplies none (`import` falls back further to
+# `public`; `mint` is a 400 if neither this nor the request resolves one) --
+# see mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
+export MICROMEGAS_DEFAULT_KEY_AUDIENCE="public"
 
 # Disable auth (dev only) -- also disables both key-management route groups
 # above (a fixed 503 answers them instead), not just cookie auth on the rest

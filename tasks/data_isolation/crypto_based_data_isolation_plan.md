@@ -3,7 +3,8 @@
 > **Alternative to** [`audience_based_access_control_plan.md`](audience_based_access_control_plan.md), not a
 > supersession. Both are candidate designs; this document is the stronger-threat-model option and has
 > not been chosen over the AbAC plan. It **reuses that plan's vocabulary** — `audience`, `ReadScope`,
-> `ReadPolicy`/`MintPolicy`, the `user:`/`group:` value shape — and where it needs query-path access
+> `ReadPolicy`/`MintPolicy`, the opaque-label audience shape (`[A-Za-z0-9_-]{1,255}`, #1372, Stage 4)
+> — and where it needs query-path access
 > control on cleartext data it **layers on top of** that plan rather than replacing it. Where they
 > differ: the AbAC plan rests confidentiality entirely on OIDC + a per-query filter over *plaintext*
 > parquet; this plan additionally makes the **bytes at rest useless without keys**.
@@ -91,9 +92,15 @@ it redundant, it narrows what it has to protect (§6).
 ## §2 — Global-per-audience via instance-id overload
 
 `view_instance_id` is already a free-form key that today holds a `process_id`, a `stream_id`, or the
-literal `'global'` (`view.rs:56`). Add a **fourth kind: an audience** (`user:<email>` / `group:<id>`).
-`view_instance('log_entries', 'group:teamA')` materializes only teamA's bodies into a single-audience,
-teamA-key-encrypted partition set.
+literal `'global'` (`view.rs:56`). Add a **fourth kind: an audience**. Under #1372 (AbAC Stage 4) an
+audience is now an opaque `[A-Za-z0-9_-]{1,255}` label with no prefix — so it can no longer be
+disambiguated from `Global`/`Process` by a `user:`/`group:` prefix the way this section originally
+proposed, and a real audience literally named `global` would collide with the reserved `Global`
+sentinel. The instance-id argument therefore carries an explicit **sigil on the reference, not on
+the audience name**: `view_instance('log_entries', 'audience:teamA')` materializes only `teamA`'s
+bodies into a single-audience, `teamA`-key-encrypted partition set — the audience name itself
+(`teamA`) is unprefixed and stored verbatim (matching `is_valid_audience`); `audience:` is a
+sigil this instance-id grammar adds on top, not part of the audience value.
 
 **Per-process body instances are kept (decided, not open).** `view_instance('log_entries', <pid>)` /
 `view_instance('measures', <pid>)` are load-bearing across the web app for process drilldown
@@ -113,9 +120,16 @@ encryptable exactly like an `Audience` instance, with its KEK derived via `proce
 enum InstanceKind { Global, Process(Uuid), Audience(String) }
 ```
 
-Classification is unambiguous: `"global"` → `Global`; a `user:`/`group:`-prefixed string → `Audience`;
-otherwise parse as a `Process(Uuid)`. The `user:`/`group:` prefix (already mandated by the AbAC plan
-to prevent user/group collisions) is exactly what makes this parse-free to disambiguate. The same
+Classification is unambiguous, and deliberately keyed on the *instance-id string's* shape, not the
+audience value's (which, post-#1372, has none to key on — no prefix, and `global` is a legal
+audience name that would otherwise collide with the `Global` sentinel): the exact literal
+`"global"` → `Global`; a string prefixed `"audience:"` → `Audience(rest)`, with `rest` validated
+against `is_valid_audience` (`micromegas_auth::policy`) before use; otherwise parse as a
+`Process(Uuid)`. The `audience:` sigil lives on the *reference* (this instance-id grammar), not on
+the value stored in `ingestion_api_keys.audience` or matched by grant selectors — those stay bare,
+unprefixed names throughout the rest of the system; this is the one seam that needs a marker at
+all, because it is the one place three kinds of string (a reserved word, an audience name, and a
+UUID) share one untyped slot. The same
 UUID-parse assumption lives in the span makers (`thread_spans_view.rs:86`) but they gain no audience
 kind, so they're untouched.
 
@@ -147,7 +161,9 @@ that doesn't exist today; that's a future optimization, not v1.
   (`materialize_all_views` → `materialize_partition_range` over a rolling insert range,
   `maintenance.rs:30-66`) — it already iterates arbitrary `Arc<dyn View>` objects. What changes is the
   *set of views handed to it*: it must include the config-derived audience instances, constructed via
-  `make_view("group:teamA")` at startup. `get_update_group()` is currently `if view_instance_id ==
+  `make_view("audience:team-alpha")` at startup (the `audience:` sigil is the instance-id grammar's,
+  per §2a — `MICROMEGAS_PINNED_AUDIENCES` itself lists bare, unprefixed audience names, e.g.
+  `["team-alpha"]`, and the sigil is added when building the instance-id string). `get_update_group()` is currently `if view_instance_id ==
   "global" { Some(...) } else { None }` (`log_view.rs:221-227`, `metrics_view.rs:225-231`), and the
   daemon's scheduled set is exactly the views for which this returns `Some`
   (`get_global_views_with_update_group`, `maintenance.rs:271-278`) — so `get_update_group()` must be
@@ -227,19 +243,22 @@ cope with the mixed artifact.
 
 - **Write / encrypt (materialized parquet):** `write_partition.rs` already knows the
   `view_instance_id` (it builds `views/{view_set}/{instance_id}/{date}/…parquet` at `:546-552`). For an
-  `Audience` instance the audience is the instance id; for a `Process` instance derive it via
+  `Audience` instance the audience is the instance id (prefixed with the `audience:` sigil, §2a); for
+  a `Process` instance derive it via
   `process → audience`. Select that audience's KEK and hand PME the wrapped DEK. Metadata-plane views
-  (`Global` metadata) get no encryption. **Sharp edge:** the instance id becomes an object-store path
-  segment through `Path::parse` (`write_partition.rs:557`). `:` and `@` are not actually a hazard here —
-  `object_store` 0.13.2's `Path::parse` (`path/parts.rs`) only rejects `/`, whole-segment `.`/`..`, and
-  ASCII control chars; the reserved-character set (`% { } # [ ] < > | \ " * ?` …) is enforced by the
-  encoding `From` impl, not by `parse`, so `user:alice@example.com` parses and round-trips fine. The
-  genuine hazards are embedded `/`, `.`/`..` segments, control chars, `%`/`{}`, and cross-backend/OS
-  portability (S3 tooling, Windows) — mainly for arbitrary `group:` ids. **v1 constrains the audience
-  charset to path-safe at the MintPolicy/ingestion boundary** (where audience ids are already prefixed
-  and validated) rather than percent-encoding at the path builder — `percent-encoding` is already a dep
-  of `rust/auth` but not of `rust/analytics`, so charset-constraining at the boundary avoids adding that
-  dependency to the analytics crate and is the lower-surprise choice. The advisory-lock key hashes the
+  (`Global` metadata) get no encryption. **Sharp edge, now closed by #1372 rather than open here:** the
+  instance id becomes an object-store path
+  segment through `Path::parse` (`write_partition.rs:557`). This section originally had to reason
+  about whether `:` and `@` were a hazard in an object-store path (`object_store` 0.13.2's
+  `Path::parse`, `path/parts.rs`, only rejects `/`, whole-segment `.`/`..`, and ASCII control chars;
+  the reserved-character set is enforced by the encoding `From` impl, not by `parse`) because the
+  audience *value* itself used to carry a `user:`/`group:` prefix and an email's `@`/`.`. Under
+  #1372's `[A-Za-z0-9_-]{1,255}` charset (`is_valid_audience`, `micromegas_auth::policy`) an audience
+  value contains none of `:`/`@`/`/`/`.` to begin with — it is trivially path-safe by construction,
+  checked once at the MintPolicy/ingestion boundary where audience values already get validated, not
+  by percent-encoding at the path builder. The only non-alphanumeric character this seam introduces
+  is the `audience:` sigil itself (§2a), which is a fixed, code-controlled literal, never
+  caller-supplied, so it introduces no new path-safety question. The advisory-lock key hashes the
   instance id (`write_partition.rs:232-245`) and is fine for any string.
 - **Write / encrypt (raw blocks):** the HTTP ingestion handlers (`rust/public/src/servers/ingestion.rs`,
   `otlp.rs`) are thin shims — the actual object-store write is one choke point, deeper down:
@@ -359,8 +378,10 @@ through the standard scan/write paths.
 - **Decryption read seam:** `rust/analytics/src/lakehouse/materialized_view.rs` (key-retriever,
   ReadScope-gated unwrap).
 - **KMS/DEK cache:** new module mirroring `metadata_cache.rs` (moka).
-- **Shared with the AbAC plan:** `ReadScope`/`ReadPolicy`, audience value shape, `bound_audience`,
-  Prong A/B for the metadata plane.
+- **Shared with the AbAC plan:** `ReadScope`/`ReadPolicy`, the opaque-label audience value shape
+  (#1372), `bound_audience`, `AudienceGrants` (#1372's grant map — who may read/mint an audience is
+  this plan's concern too, since KEK access follows the same grant), Prong A/B for the metadata
+  plane.
 
 ## Open forks (undecided)
 
@@ -376,8 +397,10 @@ opt-out, so a leak can't happen because someone forgot to enable it. Metadata co
 deferred — v1 leaves process metadata
 cleartext at rest; see "Honest limits" for the closing-the-side-channel option. Audience-global source
 is re-scan-`blocks`, not merge — future optimization: merge per-process partitions once
-view-from-partitions machinery exists, §2b. Audience-id path encoding is charset-constraining at the
-MintPolicy boundary, not percent-encoding, §4. Pinned-set granularity is a flat list applied to both
+view-from-partitions machinery exists, §2b. Audience-id path safety is inherited for free from
+#1372's `[A-Za-z0-9_-]` MintPolicy/ingestion-boundary charset, not achieved by percent-encoding at
+the path builder, §4 — the only sigil this plan itself introduces is the code-controlled
+`audience:` instance-id prefix (§2a), never a caller-supplied value. Pinned-set granularity is a flat list applied to both
 body view sets, startup-only like `MICROMEGAS_ADMINS`, §2c — future: per-`(view_set, audience)`
 granularity + hot-reload.)
 
