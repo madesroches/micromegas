@@ -305,8 +305,9 @@ collapsed with `MAX(audience)` per process), so two keys of the same audience la
 `process_id` is an intra-tenant merge — the same behavior a single key has today — not a
 cross-audience leak. (3) There is no stable key identity to hash anyway: `AuthContext` carries no
 `key_id`, `DbApiKeyAuthProvider` sets `subject: row.name.clone()` (`db_api_key.rs:349`) and `name` has no
-unique index (`sql_migration.rs:104-113`; the only unique index is on `key_hash`, `:117`, and the v6
-migration at `:152-169` adds none), while env-keyring keys have no row at all
+unique index (`rust/ingestion/src/sql_migration.rs:104-113` — note the file lives in the ingestion crate, not
+`rust/auth`; the only unique index is on `key_hash`, `:117`, and the v6
+migration at `:152-174` adds none), while env-keyring keys have no row at all
 (`api_key.rs:116-131`) — the input would be non-unique and provider-dependent.
 
 ### 5. Resolving the audience at the HTTP edge
@@ -381,7 +382,9 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   returns `Signal` unconditionally, with no fallback to give a signal-less variant. Five exhaustive
   matches in that file need the new arm — `signal()`, `grpc_code()` → `7`, `http_status()` → `403`,
   `public_message()` → a sanitized `"write audience required"` (no internal detail), and
-  `with_context()` (`:122-137`), which is easy to miss. `is_retryable()` (`:84`) uses `matches!`, so
+  `with_context()` (`:122-137`), which is easy to miss. A sixth, compiler-silent edit rides along:
+  the variant→status table in the module doc (`error.rs:1-9`) gains a `Denied` row.
+  `is_retryable()` (`:84`) uses `matches!`, so
   `Denied` is non-retryable by default with no edit. **No `OtlpHttpError` arm is needed**:
   `OtlpHttpError` is just `{ WrongContentType, Otel(OtelError) }` (`otlp.rs:61-64`) and
   `into_otlp_response` (`:67-95`) already maps an arbitrary `http_status()` through
@@ -398,7 +401,8 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   backup bucket (`firehose_common.rs:66-70` already documents "retries/spills" as the intended
   behavior for a Firehose-shape error). Enabling `require_write_audience` against an audience-less
   Firehose delivery stream therefore produces a retry-then-spill, not an immediate rejection — an
-  operator note for `mkdocs/docs/admin/ingestion.md`'s "What gets stamped" section.
+  operator note for the new "What gets stamped" section this stage adds to
+  `mkdocs/docs/admin/ingestion.md`.
 
 **Prefixed-var resolution, DRY.** The helper already exists in shape — copy it rather than invent
 it: `read_scope.rs:148-162`'s `fn resolved_var(prefix: &str, suffix: &str) -> String` resolves
@@ -568,7 +572,9 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 3. `micromegas-auth`: `resolve_prefixed_var` in a new `auth/src/env.rs` (+ `lib.rs` declaration);
    refactor `policy.rs:52-99`, `default_provider.rs:49-83` and `db_api_key.rs:80-103`
    (`resolve_u64`, which wants the resolved *name* for its `warn!`) onto it. Unit-test it in the
-   existing `auth/tests/default_provider_tests.rs` — no new test file needed there.
+   existing `auth/tests/policy_tests.rs`, which already hosts the analogous prefixed-var fallback
+   cases (`:433`, `:547`); the new tests mutate env vars, so mark them `#[serial]` like their
+   neighbours. (Not `default_provider_tests.rs` — every test there needs live Postgres.)
 4. `firehose_common.rs:98-108`: insert the resolved `AuthContext` into request extensions.
 5. Thread `&WriteAudience` through the signatures — `insert_process`, `register_otel_process`,
    `write_blocks` (`handler.rs:95-145`), `ingest_logs`/`ingest_metrics`/`ingest_traces`/
@@ -669,7 +675,7 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   - `rust/ingestion/tests/write_audience_tests.rs` (new — `WriteAudience` + the two `pub` property
     helpers) and `rust/ingestion/tests/audience_stamping_db_test.rs` (new — conflict guard + one
     stamp round-trip). That manifest declares no `[[test]]` entries, so both are autodiscovered.
-  - `rust/auth/tests/default_provider_tests.rs` (`resolve_prefixed_var`)
+  - `rust/auth/tests/policy_tests.rs` (`resolve_prefixed_var`, `#[serial]` — env-mutating)
   - `rust/otel-ingestion/tests/` (all eight `*_tests.rs`, incl. the `identity_tests.rs:236-254`
     golden lock)
   - `rust/public/tests/firehose_tests.rs` + `firehose_cloudwatch_logs_tests.rs` (the 11
@@ -753,11 +759,12 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   stops taking effect — a process relying on it falls back to unstamped (unless
   `{prefix}_UNSTAMPED_AUDIENCE` widens it) unless its credential is a DB ingestion key bound to that
   audience.
-- `mkdocs/docs/admin/api-keys.md:212`: drop "Stage 5, not yet shipped" (the passage runs `:208-226`).
+- `mkdocs/docs/admin/api-keys.md:212`: drop "Stage 5, not yet shipped" (the passage runs `:208-229`).
 - `mkdocs/docs/admin/monolith.md:38-55`: prefixed knob row, alongside the existing
   `MICROMEGAS_ANALYTICS_*` AbAC rows.
-- `mkdocs/docs/admin/flight-sql.md:33`: the same `MICROMEGAS_UNSTAMPED_AUDIENCE` row as
-  `monolith.md:51`, whose "a process with no `micromegas.audience` property" framing describes
+- `mkdocs/docs/admin/flight-sql.md:33`: the `MICROMEGAS_UNSTAMPED_AUDIENCE` row — same prose as
+  `monolith.md:51`, which carries the prefixed name `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` —
+  whose "a process with no `micromegas.audience` property" framing describes
   never-stamped legacy data once stamping ships. Keep the two copies in step.
 - `mkdocs/docs/otlp/index.md`: this file **restates both derivation formulas literally**, so it is a
   correctness fix, not a note — three sites: `:73-98` (the full 31-field `process_id` field list,
@@ -776,6 +783,10 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
      `micromegas.audience` stamping exists yet (ingestion stamping is Stage 5, #1373), so this knob
      is required for every legacy-data deployment until then." This one is load-bearing operator
      guidance: post-stage the knob covers *pre-stamping* data only, not everything.
+
+  Two lines below, `CHANGELOG.md:10` (Stage 4's `**Auth:**` entry) ends on "…the value Stage 5
+  (#1373) will stamp `micromegas.audience` from" — future tense the same landing falsifies; amend
+  it in the same commit.
 - `CHANGELOG.md` **Unreleased**: a new `* **Ingestion:**` group (Unreleased already carries two
   separate `**Analytics:**` groups, so append the new group after the existing `**Auth:**` one rather
   than assuming a canonical slot) with an entry in the established AbAC style —
@@ -801,7 +812,7 @@ Unit (no DB) — hosts, since `rust/CLAUDE.md` puts unit tests under each crate'
 a new `rust/ingestion/tests/write_audience_tests.rs` (`WriteAudience` + the two property helpers,
 which §3 makes `pub` for exactly this reason; that manifest declares no `[[test]]` entries, so
 Cargo autodiscovers it), the existing `rust/otel-ingestion/tests/identity_tests.rs` for §4's
-identity cases, the existing `rust/auth/tests/default_provider_tests.rs` for `resolve_prefixed_var`,
+identity cases, the existing `rust/auth/tests/policy_tests.rs` for `resolve_prefixed_var` (`#[serial]`, env-mutating),
 and the new `rust/public/tests/ingestion_stamping_tests.rs` below for `resolve_write_audience` /
 `StampingConfig::from_env` alongside its HTTP cases.
 
@@ -827,7 +838,8 @@ case below must be a request that either stops at the gate or does zero database
 constraint `firehose_tests.rs:1-7` already records for itself:
 
 - Firehose: `firehose_tests.rs:1-40`'s own `make_auth_provider()` builds an `ApiKeyAuthProvider`
-  from an env keyring, and every env-keyring key hard-codes `bound_audience: None`
+  from an inline JSON keyring (`parse_key_ring` on a literal in the `MICROMEGAS_API_KEYS` format —
+  no env var is read), and every `ApiKeyAuthProvider` key hard-codes `bound_audience: None`
   (`auth/src/api_key.rs:128`) — only `DbApiKeyAuthProvider` (live Postgres) ever produces `Some(..)`,
   so the discarded-context regression cannot be asserted on that harness as it stands. Add a test
   `impl AuthProvider` (`async-trait` is already a `micromegas-public` dev-dependency) returning an
