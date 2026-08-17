@@ -20,6 +20,7 @@ use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -198,7 +199,7 @@ impl TableProvider for ListPartitionsTableProvider {
         let rb = if !restricted {
             rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
         } else {
-            let filtered = self.filter_rows(rows).await?;
+            let filtered = self.filter_rows(rows, limit).await?;
             if filtered.is_empty() {
                 // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
                 // (`make_empty_record_batch`), which doesn't match this provider's 15-column
@@ -226,49 +227,74 @@ impl TableProvider for ListPartitionsTableProvider {
 }
 
 impl ListPartitionsTableProvider {
+    /// Bounds how many rows' worth of ids a single `readable_ids` round trip resolves. Keeps a
+    /// restricted caller's `LIMIT n` from resolving every distinct `view_instance_id` in
+    /// `lakehouse_partitions` up front: rows are processed in chunks of this size, stopping as
+    /// soon as `limit` matching rows have been kept, so a small `LIMIT` costs at most a handful of
+    /// audience-resolution round trips instead of one unbounded batch.
+    const RESOLVE_CHUNK_ROWS: usize = 1_000;
+
     /// Row filtering for a `ReadScope::Audiences` caller (plan §8): a `view_instance_id` that
     /// parses as a `Uuid` is kept iff it resolves (as `IdKind::ProcessOrStream`) to a readable
     /// audience; the literal `'global'` is kept iff `AudienceGuard::global_rows_visible` says so
     /// for that row's `view_set_name`; anything else is dropped (fail-closed -- nothing produces
     /// such a value today). Filters the `sqlx` row vector *before* `rows_to_record_batch` rather
     /// than the built `RecordBatch` after: simpler than a `take` kernel over 15 columns, and
-    /// leaves the schema construction untouched.
+    /// leaves the schema construction untouched. Processes `rows` in bounded chunks
+    /// ([`Self::RESOLVE_CHUNK_ROWS`]) and returns as soon as `limit` matching rows have been kept.
     async fn filter_rows(
         &self,
         rows: Vec<sqlx::postgres::PgRow>,
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Vec<sqlx::postgres::PgRow>> {
-        let mut candidate_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
-        let mut row_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let view_instance_id: &str = row
-                .try_get("view_instance_id")
-                .map_err(|e| DataFusionError::External(e.into()))?;
-            let id = Uuid::parse_str(view_instance_id).ok();
-            if let Some(id) = id {
-                candidate_ids.push(id);
+        let mut kept = Vec::new();
+        let mut rows_iter = rows.into_iter();
+        loop {
+            let chunk: Vec<_> = (&mut rows_iter).take(Self::RESOLVE_CHUNK_ROWS).collect();
+            if chunk.is_empty() {
+                break;
             }
-            row_ids.push(id);
-        }
-        let readable = self
-            .guard
-            .readable_ids(&candidate_ids, IdKind::ProcessOrStream)
-            .await?;
-        let mut kept = Vec::with_capacity(rows.len());
-        for (row, id) in rows.into_iter().zip(row_ids) {
-            let keep = match id {
-                Some(uuid) => readable.contains(&uuid),
-                None => {
-                    let view_instance_id: &str = row
-                        .try_get("view_instance_id")
-                        .map_err(|e| DataFusionError::External(e.into()))?;
-                    let view_set_name: &str = row
-                        .try_get("view_set_name")
-                        .map_err(|e| DataFusionError::External(e.into()))?;
-                    view_instance_id == "global" && self.guard.global_rows_visible(view_set_name)
+            let mut candidate_ids: Vec<Uuid> = Vec::with_capacity(chunk.len());
+            let mut seen_ids: HashSet<Uuid> = HashSet::with_capacity(chunk.len());
+            let mut row_ids: Vec<Option<Uuid>> = Vec::with_capacity(chunk.len());
+            for row in &chunk {
+                let view_instance_id: &str = row
+                    .try_get("view_instance_id")
+                    .map_err(|e| DataFusionError::External(e.into()))?;
+                let id = Uuid::parse_str(view_instance_id).ok();
+                if let Some(id) = id
+                    && seen_ids.insert(id)
+                {
+                    candidate_ids.push(id);
                 }
-            };
-            if keep {
-                kept.push(row);
+                row_ids.push(id);
+            }
+            let readable = self
+                .guard
+                .readable_ids(&candidate_ids, IdKind::ProcessOrStream)
+                .await?;
+            for (row, id) in chunk.into_iter().zip(row_ids) {
+                let keep = match id {
+                    Some(uuid) => readable.contains(&uuid),
+                    None => {
+                        let view_instance_id: &str = row
+                            .try_get("view_instance_id")
+                            .map_err(|e| DataFusionError::External(e.into()))?;
+                        let view_set_name: &str = row
+                            .try_get("view_set_name")
+                            .map_err(|e| DataFusionError::External(e.into()))?;
+                        view_instance_id == "global"
+                            && self.guard.global_rows_visible(view_set_name)
+                    }
+                };
+                if keep {
+                    kept.push(row);
+                    if let Some(n) = limit
+                        && kept.len() >= n
+                    {
+                        return Ok(kept);
+                    }
+                }
             }
         }
         Ok(kept)

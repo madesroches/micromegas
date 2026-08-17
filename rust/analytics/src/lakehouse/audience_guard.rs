@@ -19,9 +19,11 @@
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
 //! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally,
 //! passes [`OwnerAudience::Unstamped`] only when `unstamped_audience` is both configured and in
-//! scope, and matches [`OwnerAudience::Audience`] byte-exactly. A resolution *error* (Postgres
-//! unreachable) is a denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`]
-//! map it to a query failure, never to a readable verdict.
+//! scope, and matches [`OwnerAudience::Audience`] byte-exactly. An id ambiguous between a
+//! `process_id` and a `stream_id` interpretation ([`OwnerAudience::Ambiguous`]) is readable only
+//! when every interpretation is -- never by picking one arm over the other. A resolution *error*
+//! (Postgres unreachable) is a denial too -- [`AudienceGuard::authorize`]/
+//! [`AudienceGuard::readable_ids`] map it to a query failure, never to a readable verdict.
 //!
 //! ## No existence oracle
 //!
@@ -55,6 +57,12 @@ pub enum OwnerAudience {
     Unknown,
     Unstamped,
     Audience(Arc<str>),
+    /// The id resolved to more than one distinct owner under `IdKind::ProcessOrStream`'s two
+    /// arms -- a `process_id`/`stream_id` collision (see the variant's doc comment on
+    /// [`IdKind::ProcessOrStream`]). Fail-closed: [`is_readable`] treats this as readable only
+    /// when *every* one of the distinct owners would independently be readable, never by picking
+    /// one arm over the other.
+    Ambiguous(Vec<OwnerAudience>),
 }
 
 /// Which table resolves the id to its owning process. Also the cache's key discriminator: the
@@ -70,8 +78,8 @@ pub enum IdKind {
     Block,
     /// `list_partitions`' `view_instance_id`: either a `process_id` or a `stream_id`, resolved in
     /// one round trip. Cached under its own key rather than reusing `Process`/`Block` entries or a
-    /// separate `streams` kind, so the `UNION ALL` result (with its process-wins precedence, see
-    /// [`merge_owner_rows`]) is what actually gets cached.
+    /// separate `streams` kind, so the `UNION ALL` result -- fail-closed on a collision between the
+    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached.
     ProcessOrStream,
 }
 
@@ -92,39 +100,47 @@ pub const DEFAULT_AUDIENCE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// One row of the id -> owning-process-audience resolution, tagged with which arm of the
 /// (possibly `UNION ALL`) query produced it. Only `ProcessOrStream`'s query can produce both tags
 /// for the same id (a `process_id`/`stream_id` collision); `Process`/`Block` only ever produce
-/// `Process`-tagged rows.
+/// `Process`-tagged rows. Kept only for `debug!` diagnostics in [`merge_owner_rows`] -- it no
+/// longer picks a winner between the two arms.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum OwnerSource {
     Process,
     Stream,
 }
 
-/// Merges possibly-duplicated `(id, audience, source)` rows into one [`OwnerAudience`] per id,
-/// applying the process-wins precedence deterministically in Rust -- never inferred from
-/// `UNION ALL` result order, which PostgreSQL does not guarantee (Parallel Append may interleave
-/// the branches). A `Process`-sourced row always wins over a `Stream`-sourced row for the same
-/// id, regardless of which arrives first.
+/// Merges possibly-duplicated `(id, audience, source)` rows into one [`OwnerAudience`] per id.
+/// Fail-closed on a collision: when `ProcessOrStream`'s two arms resolve the same id to
+/// *different* audiences (a `process_id`/`stream_id` collision -- both ids are client-supplied at
+/// ingestion, with no cross-table uniqueness constraint), neither arm wins over the other --
+/// the id maps to [`OwnerAudience::Ambiguous`], which [`is_readable`] only passes when every
+/// resolved audience is independently readable. `Process`/`Block` queries never produce more than
+/// one row per id, so this never triggers for them.
 fn merge_owner_rows(
     rows: Vec<(Uuid, Option<String>, OwnerSource)>,
 ) -> HashMap<Uuid, OwnerAudience> {
-    let mut winners: HashMap<Uuid, (Option<String>, OwnerSource)> = HashMap::new();
-    for (id, audience, source) in rows {
-        match winners.get(&id) {
-            Some((_, OwnerSource::Process)) => {
-                // A process-sourced row for this id already won; a stream-sourced row (the only
-                // other possibility for the same id) never displaces it.
-            }
-            _ => {
-                winners.insert(id, (audience, source));
-            }
+    let mut by_id: HashMap<Uuid, Vec<OwnerAudience>> = HashMap::new();
+    for (id, audience, _source) in rows {
+        let owner = match audience {
+            Some(a) => OwnerAudience::Audience(Arc::from(a)),
+            None => OwnerAudience::Unstamped,
+        };
+        let distinct_owners = by_id.entry(id).or_default();
+        if !distinct_owners.contains(&owner) {
+            distinct_owners.push(owner);
         }
     }
-    winners
+    by_id
         .into_iter()
-        .map(|(id, (audience, _))| {
-            let owner = match audience {
-                Some(a) => OwnerAudience::Audience(Arc::from(a)),
-                None => OwnerAudience::Unstamped,
+        .map(|(id, mut owners)| {
+            let owner = if owners.len() == 1 {
+                owners.pop().expect("checked len() == 1 above")
+            } else {
+                debug!(
+                    "audience_guard: '{id}' resolved to {} distinct owners across process_id/stream_id \
+                     collision, treating as Ambiguous (fail-closed)",
+                    owners.len()
+                );
+                OwnerAudience::Ambiguous(owners)
             };
             (id, owner)
         })
@@ -285,6 +301,9 @@ pub fn is_readable(
                 unstamped_audience.is_some_and(|u| auds.iter().any(|a| a == u))
             }
             OwnerAudience::Audience(a) => auds.iter().any(|x| x.as_str() == &**a),
+            OwnerAudience::Ambiguous(owners) => owners
+                .iter()
+                .all(|owner| is_readable(scope, unstamped_audience, owner)),
         },
     }
 }
