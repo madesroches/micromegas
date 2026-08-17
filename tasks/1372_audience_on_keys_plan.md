@@ -202,6 +202,18 @@ identity axis to match, on either list:
 | `user:<email>` | `AuthContext.email` |
 | `group:<g>` | any raw value in `AuthContext.groups` (the IdP claim) |
 
+**Parsing validates both axes of the map, not just its JSON shape** — same reason every other knob
+here fails startup on a typo rather than shipping inert:
+
+- **Every key must satisfy `is_valid_audience`.** `{"group:everyone": ["*"]}` is the single most
+  likely typo in this whole change — it is exactly the value operators are migrating *from* — and it
+  can never match a stamped audience, because the v6 `CHECK` and `resolve_audience` both reject `:`.
+  An unvalidated key would be a grant that reads as configured and grants nothing.
+- **Every selector must be `*`, `user:<non-empty>`, or `group:<non-empty>`.** An unprefixed `"eng"`
+  (or a mistyped `"users:alice@example.com"`) matches no identity axis and is likewise inert. The
+  prefixes are a closed set here precisely so an unrecognized one is an error rather than a
+  never-matching string.
+
 **`public` is the only built-in**: readable by every authenticated principal. It is expressible as
 `{"public": ["*"]}`, but built in so an operator who writes a grant map without it doesn't silently
 hide legacy data.
@@ -264,6 +276,12 @@ confusion this rewrite exists to end. Env-var churn pre-GA is acceptable — the
 covers the SQL surface, not deployment config — but it belongs in the CHANGELOG as an operator-facing
 break.
 
+`AudienceMintPolicy` remains what it is today: **test-only, with no production construction site and
+no `from_env`.** §6's route helper does the mint-time decision inline, and #1374 is what builds a
+real instance and calls the trait. Rewriting the policy now anyway is what keeps the two axes from
+drifting — the mint arm has to be written against the same `AudienceGrants` the read arm resolves, or
+#1374 inherits a policy that still speaks the deleted vocabulary.
+
 Grant resolution stays `async` and fallible exactly as the trait already requires, so replacing the
 env map with the `group_read_grants` store later changes the body of one function and nothing else.
 
@@ -293,9 +311,11 @@ ALTER TABLE ingestion_api_keys ADD CONSTRAINT ingestion_api_keys_audience_name
   monolith / maintenance) ran it, and every other migration literal in this file is likewise frozen
   history.
 - The `CHECK` mirrors `is_valid_audience` for hand-written `INSERT`s and the `psql` runbook —
-  `VARCHAR(255)` already caps the length, so the regex carries the character set. It stays in step
-  with the Rust predicate by being the same two rules stated in the same place in the docs; there is
-  no third definition of "valid audience" anywhere.
+  `VARCHAR(255)` already caps the length, so the regex carries the character set. Counting §1's
+  deliberate `read_scope.rs` copy, "valid audience" is therefore stated in three places
+  (`policy.rs`, `read_scope.rs`, this `CHECK`) — two crate-boundary-forced Rust copies plus the SQL
+  one, each the same two rules, documented together in one place so they stay in step. No *fourth*
+  definition, and no place where the rules differ.
 - `analytics_api_keys` is untouched: its read-side mirror is `read_audiences` (Stage 4b), a
   set-valued grant in the opposite direction.
 - **`NOT NULL` with no default breaks the opposite deployment order too.** The migration ships in
@@ -305,9 +325,19 @@ ALTER TABLE ingestion_api_keys ADD CONSTRAINT ingestion_api_keys_audience_name
   `analytics-web-srv` means every mint/import against the now-v6 schema hits the `NOT NULL`
   constraint until the web service is upgraded. The [Documentation](#documentation) upgrade note
   below states the required order: roll `analytics-web-srv` to this change in the same deploy that
-  runs the v6 migration, not before and not after. Ingestion (writing telemetry payloads) and key
-  *validation* (`db_api_key.rs`, §4) never insert this column, so both are unaffected regardless of
-  ordering.
+  runs the v6 migration, not before and not after.
+- **Key *validation* is safe for a different reason than "it never inserts".** §4 makes the
+  ingestion provider's loader *read* the column (`RETURNING key_id, name, audience`), so an upgraded
+  ingestion binary against a still-v5 schema would fail **every** ingestion-key validation into
+  `ProviderUnavailable` — a total ingestion-auth outage, not a per-route 500. That cannot happen
+  because the processes that host an `ApiKeyTable::Ingestion` provider are the same ones that run the
+  data-lake migration themselves at startup, before serving: `migrate_db`
+  (`rust/ingestion/src/remote_data_lake.rs:21-40`) via `connect_to_remote_data_lake`, called from
+  `telemetry-ingestion-srv/src/main.rs:52` and `monolith/src/main.rs:183`. So the binary that reads
+  the column is always the binary that just created it. `flight-sql-srv` runs no data-lake migration
+  but binds `ApiKeyTable::Analytics` (`flight_sql_server.rs:279-280`), whose `RETURNING` is unchanged
+  — the table-conditional `RETURNING` in §4 is what keeps that true. Writing telemetry payloads
+  touches no key column at all and is unaffected either way.
 
 ### 4. Auth provider — carrying the audience
 
@@ -420,6 +450,15 @@ supply an audience").
   ) -> Result<String, IngestionKeyError>
   ```
 
+  **Called after `require_pool` and `validate_name`, not before them.** The order is
+  `require_pool` → `validate_name` → `resolve_audience` → `INSERT`, which keeps the existing
+  `NotConfigured` precedence intact: `mint_503_when_pool_unconfigured`
+  (`ingestion_keys_tests.rs:218`) and `import_503_when_pool_unconfigured` (`:251`) both post a body
+  with no `audience` against `IngestionKeysState { pool: None }`, and both must still get 503, not
+  the new 400. This costs nothing against the "400 before any DB access" requirement — `require_pool`
+  (`ingestion_keys.rs:135`) only clones an `Option<PgPool>` and never touches the database, so an
+  invalid audience is still rejected before any query runs.
+
   A missing field or an empty string counts as absent (the empty string is not a name — it fails
   `is_valid_audience` either way); anything else is taken **verbatim**, no case folding, so
   the audience an operator typed is the audience that gets stored. It then applies
@@ -442,12 +481,26 @@ supply an audience").
   (`imported: false`) path the response reports the **existing** row's audience — the audience is
   immutable, so an import never rewrites it; both branches already share `ImportedRow`, which gains
   the field.
+- `KeyListEntry` is `sqlx::FromRow`, so its new field needs the column added to **both** of
+  `list_keys`' `SELECT`s (`ingestion_keys.rs:261` and `:272`, the `include_revoked` true/false
+  branches) — a column missing from one of them fails at *runtime* with a 500, not at compile time.
+  Same for `ImportedRow`'s two queries (`:397` `RETURNING`, `:414` fallback `SELECT`).
+- **Doc-comment constraint on this file.** `mint_statement_names_ingestion_table_only`
+  (`ingestion_keys_tests.rs:274-286`) asserts on `src/ingestion_keys.rs`'s **source text**: it
+  requires `"INSERT INTO ingestion_api_keys"` to still appear verbatim (unaffected by adding a
+  column) and forbids the substrings `"INTO analytics_api_keys"` / `"UPDATE analytics_api_keys"`
+  anywhere in the file, **including comments**. The new doc comment explaining why the analytics
+  table carries no audience must therefore say `analytics_api_keys` on its own, never
+  `INTO analytics_api_keys`.
 - `revoke_key` is unchanged.
 
 ### 7. CLI + Python client
 
 - `WebClient.import_ingestion_api_key(name, key, audience=None)` — omits the field when `None`.
-  `import_analytics_api_key` is untouched.
+  The current body posts an inline literal (`json={"name": name, "key": key}`,
+  `web_client.py:113`), so omit-when-`None` means building a local `payload` dict first — the same
+  shape `create_screen` (`:55-74`) and `update_screen` (`:76-89`) already use for
+  `managed_by`/`folder_path`. `import_analytics_api_key` (`:119`) is untouched.
 - `micromegas-import-keys`:
   - `--audience AUD`, valid only with `--table ingestion` (`parser.error` otherwise —
     `analytics_api_keys` has no such column).
@@ -473,12 +526,28 @@ supply an audience").
 
 ### 8. Web app
 
-- `api-keys-shared.ts`: `ApiKeyListEntry` and `MintApiKeyResponse` gain `audience?: string`
-  (optional — analytics rows never carry one); `mint(name, audience?)` sends the field only when set.
-- `ApiKeysAdminPageConfig` gains `showAudience?: boolean`: an **Audience** table column plus an
-  audience input in the mint dialog (placeholder `public`, helper text naming
-  `MICROMEGAS_DEFAULT_KEY_AUDIENCE`). `IngestionApiKeysPage.tsx` sets it; the analytics page is
-  untouched.
+- `api-keys-shared.ts`: `ApiKeyListEntry` (`:11-19`) and `MintApiKeyResponse` (`:21-27`) gain
+  `audience?: string` (optional — analytics rows never carry one); `mint(name, audience?)` sends the
+  field only when set, both in the `ApiKeysApi<T>` interface (`:63`) and in `createApiKeysApi`'s
+  closure (`:97-104`). Because that factory is shared, `mintAnalyticsApiKey`
+  (`analytics-api-keys-api.ts:50`) inherits the optional parameter too. That is accepted rather than
+  gated: the analytics *page* never passes it (`showAudience` is unset there, so no input exists),
+  and a `supportsAudience` flag on `ApiKeysApiConfig` would be a second knob guarding a caller that
+  doesn't exist. `ingestion-api-keys-api.ts` needs **no** edit — its entries are pure aliases
+  (`IngestionApiKeyListEntry = ApiKeyListEntry` `:32`, `mintIngestionApiKey = api.mint` `:54`) and
+  inherit the change.
+- `ApiKeysAdminPageConfig` (`ApiKeysAdminPage.tsx:32-48`) gains `showAudience?: boolean`: an
+  **Audience** table column (header row `:294-310`, currently 5 columns) plus an audience input in
+  the mint dialog (`:206-253`, alongside the Name input at `:226-233`) — placeholder `public`,
+  helper text naming `MICROMEGAS_DEFAULT_KEY_AUDIENCE`. Two edits in the same component that
+  `showAudience` alone does not cover: **`mintKey` widens** to
+  `(name: string, audience?: string) => Promise<MintApiKeyResponse>` (`:46`) so `handleMint` can
+  pass the value (`:106`, today `config.mintKey(mintName.trim())`) — a TS error otherwise; and
+  `openMintForm` (`:96-100`), which already resets `mintName`/`mintError`, must reset the new
+  `mintAudience` state too, or a previous mint's audience leaks into the next one.
+  `IngestionApiKeysPage.tsx` sets `showAudience: true`; the analytics page is untouched. List rows
+  predating the column render `undefined` — use the component's existing `'—'` placeholder
+  (`formatDate`, `:26`).
 - The 400 a mint gets with neither an explicit audience nor the knob surfaces through the existing
   `ErrorClass` path, and its message names the knob to set.
 
@@ -525,18 +594,35 @@ ingestion request: Bearer <key> ────────────────
    on both requests, both `INSERT`s, `ImportedRow`, `KeyListEntry`, all three responses.
    `web_server.rs:643`: resolve the knob at startup.
 6. **Python.** `web_client.py`; `cli/import_keys.py`: `read_keyring`'s new `(name, key, audience)`
-   triple and every site that destructures it — `select_entries`, `import_one`, `run_import`.
-7. **Web app.** `api-keys-shared.ts`, `ingestion-api-keys-api.ts`, `ApiKeysAdminPage.tsx`,
-   `IngestionApiKeysPage.tsx`.
+   triple and every site that destructures it — `select_entries`, `import_one`, `run_import` — plus
+   `tests/cli/test_import_keys.py`'s `FakeClient`/`Client` arities, `make_args` defaults, and ~20
+   2-tuple literals (all runtime failures, not import-time; see Testing Strategy).
+7. **Web app.** `api-keys-shared.ts`, `ApiKeysAdminPage.tsx` (including `mintKey`'s widened
+   signature), `IngestionApiKeysPage.tsx`. `ingestion-api-keys-api.ts` inherits the change with no
+   edit.
 8. **Vocabulary sweep.** `group:everyone` / `user:`-prefixed examples out of
-   `monolith/src/main.rs:252`, `policy.rs` doc comments, `ownership_rewrite.rs` module docs,
+   `monolith/src/main.rs:248-253` (the whole comment block, not just `:252`'s knob pair — `:249`
+   names both `IMPLICIT_GROUPS` forms and `:250` asserts the prefixed model's "resolved scope is
+   just their own identity"), `policy.rs` doc comments **and its runtime error string** (`:259`,
+   `"must be 'user:<id>' or 'group:<id>'"`), `ownership_rewrite.rs:187`'s doc comment (`"user:alice"
+   sorts below "group:everyone"` — a doc comment mid-file, not the top-of-file module doc),
    `read_scope.rs`'s own doc comments (`:30`, the `ReadScope::Audiences` variant doc's
    `"user:<email>" / "group:<id>"` example; `:90`, `unstamped_audience`'s `"group:everyone"`
-   example; and `:112-118`, `parse_comma_separated_list`'s doc comment, which also loses its
+   example; `:175`, `from_env`'s own bail message, which repeats the same prefix vocabulary and is
+   rewritten with the validator in step 1; and `:112-118`, `parse_comma_separated_list`'s doc
+   comment, which also loses its
    dangling cross-reference to `micromegas_auth::policy`'s `MICROMEGAS_IMPLICIT_GROUPS` parser once
    step 2 deletes `parse_implicit_groups` and the knob — restate the comparison against the new
    `AudienceGrants` parser or drop the cross-reference), the Unreleased Stage 2 CHANGELOG entry (the
-   Stage 1 entry is released and stays untouched), the umbrella plan, and
+   Stage 1 entry is released and stays untouched — note it carries *two* artifacts: the escape-hatch
+   knob pair and a forward-reference to this plan, `"each key is assigned exactly one write audience
+   (Stage 4)"`, which now needs the grants model), the umbrella plan,
+   **`tasks/data_isolation/crypto_based_data_isolation_plan.md`** (`:94` adds "a fourth kind: an
+   audience (`user:<email>` / `group:<id>`)"; `:236` asserts that `user:alice@example.com` "parses
+   and round-trips fine" — a round-trip property `[A-Za-z0-9_-]` invalidates, since both `@` and `:`
+   are now illegal. An *active* sibling design doc in the same folder as the umbrella plan, not a
+   historical record — unlike `tasks/completed/{1369,1370}_*.md`, which keep their prefixed
+   vocabulary because they record what shipped), and
    `mkdocs/docs/admin/{flight-sql, monolith}.md`'s env-var tables (see
    [Documentation](#documentation)).
 9. **Tests**, then **docs + CHANGELOG**, per the sections below.
@@ -547,25 +633,26 @@ ingestion request: Bearer <key> ────────────────
 |---|---|
 | `rust/auth/src/policy.rs` | opaque audiences, grant map, both policies rewritten |
 | `rust/auth/src/default_provider.rs` | drop `implicit_groups_var` |
-| `rust/analytics/src/lakehouse/read_scope.rs` | validator relaxed to `is_valid_audience`; doc-comment vocabulary sweep (`:30`, `:90`, `:112-118` — the last drops or restates its dangling reference to the deleted `MICROMEGAS_IMPLICIT_GROUPS` parser) |
+| `rust/analytics/src/lakehouse/read_scope.rs` | validator relaxed to the same rules as `is_valid_audience` (its own copy — this crate does not depend on `micromegas-auth`), preserving `from_env`'s existing trim-before-validate order (`:169`) so an all-whitespace value still resolves to `None` rather than becoming a malformed audience; vocabulary sweep at `:30`, `:90`, `:175` (the bail message) and `:112-118` (the last drops or restates its dangling reference to the deleted `MICROMEGAS_IMPLICIT_GROUPS` parser) |
 | `rust/ingestion/src/sql_migration.rs` | migration v6 |
 | `rust/auth/src/db_api_key.rs` | `has_audience`, `KeyRow.audience`, `bound_audience`, `allow_delegation` |
 | `rust/auth/src/types.rs` | doc comments on `bound_audience` / `groups` |
 | `rust/analytics-web-srv/src/{ingestion_keys,web_server}.rs` | audience on mint/import/list; knob at startup |
-| `rust/monolith/src/main.rs` | config comment |
-| `rust/public/src/servers/flight_sql_server.rs` | update both `AudienceReadPolicy::new(vec![])` call sites (injected-provider and disabled-auth default-policy branches) and their doc comments (`:143`, `:270`) for the grant-map constructor |
-| `python/micromegas/micromegas/{web_client.py,cli/import_keys.py}` | `audience` param, `--audience` |
-| `analytics-web-app/src/lib/{api-keys-shared,ingestion-api-keys-api}.ts` | types + `mint(name, audience?)` |
-| `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | `showAudience` column + input |
+| `rust/monolith/src/main.rs` | config comment (`:248-253`); `AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")` at `:255` compiles unchanged — `from_env(prefix)` keeps its signature |
+| `rust/public/src/servers/flight_sql_server.rs` | update both `AudienceReadPolicy::new(vec![])` call sites for the grant-map constructor — `:274` (injected-provider branch) and `:305` (disabled-auth default-policy branch) — plus their "implicit groups" comments at `:145` and `:271`. `from_env("")` at `:293` is unchanged |
+| `python/micromegas/micromegas/{web_client.py,cli/import_keys.py}` | `audience` param (built via a `payload` dict so it can be omitted, `web_client.py:113`), `--audience` |
+| `analytics-web-app/src/lib/api-keys-shared.ts` | types + `mint(name, audience?)` on both the `ApiKeysApi` interface (`:63`) and the `createApiKeysApi` closure (`:97-104`). `ingestion-api-keys-api.ts` needs no edit — pure aliases |
+| `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | `showAudience` column (`:294-310`) + mint-dialog input (`:206-253`); `mintKey` widens to `(name, audience?)` (`:46`, called at `:106`); `openMintForm` (`:96-100`) resets the new `mintAudience` state |
 | `analytics-web-app/src/routes/IngestionApiKeysPage.tsx` | `showAudience: true` |
-| `rust/auth/tests/{policy,db_api_key,default_provider}_tests.rs`, `rust/analytics-web-srv/tests/{ingestion_keys,routing}_tests.rs`, `rust/analytics/tests/*ownership_rewrite*`, `analytics-web-app/src/**/__tests__/*`, `python/**/tests` | per Testing Strategy; `routing_tests.rs:405`'s `IngestionKeysState { pool: None }` literal needs the new `default_audience` field |
-| `rust/public/tests/read_policy_threading_tests.rs` | doc-comment vocabulary sweep only (`:444-450`, "implicit-groups env var unset"); the `AudienceReadPolicy::from_env("MICROMEGAS_1369_THREADING_TESTS_UNSET")` call (`:455`) and its assertions (`:451-475`, which only check that `SELECT 1 AS one` returns one row) are unaffected |
+| `rust/auth/tests/{policy,db_api_key,default_provider}_tests.rs`, `rust/analytics-web-srv/tests/{ingestion_keys,routing}_tests.rs`, `rust/analytics/tests/*ownership_rewrite*`, `analytics-web-app/src/**/__tests__/*`, `python/**/tests` | per Testing Strategy. **15 `IngestionKeysState { … }` literals need the new `default_audience` field**, not one: `routing_tests.rs:405`, `web_server.rs:643`, and 13 in `ingestion_keys_tests.rs` (`:96`, `:111`, `:126`, `:144`, `:166`, `:181`, `:199`, `:219`, `:229`, `:239`, `:252`, `:312`, `:375`) |
+| `rust/public/tests/read_policy_threading_tests.rs` | doc-comment vocabulary sweep only (`:445-450`, "implicit-groups env var unset"); the `AudienceReadPolicy::from_env("MICROMEGAS_1369_THREADING_TESTS_UNSET")` call (`:455`) and its single assertion (`:475`, that `SELECT 1 AS one` returns one row) are unaffected. Its `RecordingReadPolicy` synthesizes a test-only `"subject:<subject>"` audience (`:235`) that never reaches a validator, so it stays valid |
 | `rust/ingestion/tests/sql_migration_test.rs` (new) | live-DB, `#[ignore]`d migration v6 coverage — see Testing Strategy |
 | `mkdocs/docs/admin/{api-keys,authentication}.md` | audiences + grants + DDL + CLI |
-| `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove `MICROMEGAS_IMPLICIT_GROUPS`/`MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` rows, restate `UNSTAMPED_AUDIENCE`'s format as an opaque label (not `user:<id>`/`group:<id>`), add a `{prefix}_AUDIENCE_GRANTS` row, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset; `monolith.md` additionally gets the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row (its `web` role reads the knob) — `flight-sql.md` does not, since `flight-sql-srv` never reads it |
+| `mkdocs/docs/admin/{flight-sql,monolith}.md` | remove the `MICROMEGAS_IMPLICIT_GROUPS` (`flight-sql.md:32`) / `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` (`monolith.md:50`) rows; restate the `UNSTAMPED_AUDIENCE` rows (`flight-sql.md:33`, `monolith.md:51`) — **both the `user:<id>`/`group:<id>` format parenthetical *and* the bolded "Required, together with `…_IMPLICIT_GROUPS=everyone`" clause embedded inside them, which would otherwise survive as an instruction to set a deleted knob**; add a `{prefix}_AUDIENCE_GRANTS` row, add an upgrade note that the previously-recommended `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup under the relaxed charset; `monolith.md` additionally gets the `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row (its `web` role reads the knob) — `flight-sql.md` does not, since `flight-sql-srv` never reads it |
 | `mkdocs/docs/admin/web-app.md` | add a commented `export MICROMEGAS_DEFAULT_KEY_AUDIENCE=…` entry to the `### Optional` block (`:44-68`) — this is the service that actually resolves the knob for `IngestionKeysState` |
 | `CHANGELOG.md` | new Unreleased entry; amend the Unreleased Stage 2 (#1370) entry only — the Stage 1 (#1369) entry is in the released `v0.29.0` section and stays untouched |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | model change recorded; Stage 4 landed |
+| `tasks/data_isolation/crypto_based_data_isolation_plan.md` | vocabulary sweep: `:94`'s "fourth kind: an audience (`user:<email>` / `group:<id>`)" and `:236`'s claim that `user:alice@example.com` round-trips through the encoding — invalid under `[A-Za-z0-9_-]`. An active sibling design doc, not a `tasks/completed/` record |
 
 ## Trade-offs
 
@@ -634,25 +721,43 @@ ingestion request: Bearer <key> ────────────────
   deploy order as a requirement, not just a sequencing note: **upgrade `analytics-web-srv` to this
   change in the same deploy that runs the v6 migration** — running the migration first without also
   rolling the web service (or rolling the web service first against a still-v5 schema, which
-  reproduces the existing missing-column 500) both produce an outage window. Ingestion and key
-  validation insert no columns and are unaffected by ordering either way.
+  reproduces the existing missing-column 500) both produce an outage window. Key *validation* is
+  unaffected for the reason §3 spells out — the processes that read the new column are the same ones
+  that run the migration themselves at startup — not because it inserts no columns; the runbook
+  states that reason explicitly so an operator never concludes an ingestion binary may run ahead of
+  the schema. (The v5 wording in `default_provider.rs:169-174` and `:180` stays **v5**: it describes
+  the `key_store_has_live_rows` existence probe, which needs only the table, not the column.)
 - **New section, not a new page: "Audiences and Grants" in `mkdocs/docs/admin/authentication.md`**,
-  immediately after the existing "Audience Filtering Activation" section (`:152-180`) — that section
+  immediately after the existing "Audience Filtering Activation" section (`:152-181`) — that section
   already documents the `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_IMPLICIT_GROUPS` mechanism this
   plan rewrites (per the sweep above) and is the closest existing anchor for the model. A new page
   under `mkdocs/docs/admin/` would also need a `nav:` entry added to `mkdocs/mkdocs.yml`'s explicit
-  tree (`:129-144`, the "Administration" list) — avoided by keeping this a section on an existing,
+  tree (`:133-144`, the "Administration" list under `- Operations:` at `:129`) — avoided by keeping this a section on an existing,
   already-navigable page. Covers: the model (label vs. grant), the `{prefix}_AUDIENCE_GRANTS` shape
   and its unprefixed fallback, the two built-in rules, worked open and privacy profiles, and the
   "re-share after the fact by editing grants, never by restamping" property that motivates it.
 - `mkdocs/docs/admin/authentication.md` — ingestion keys carry an audience and are no longer
-  delegating service accounts. Its `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` recipe (`:162-180`)
-  is restated using an opaque audience name instead.
+  delegating service accounts. Two separate edits inside "Audience Filtering Activation", not one:
+  - The **recipe** (`:162-168`, with `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` at `:163`) is
+    restated with an opaque audience name and loses its `MICROMEGAS_IMPLICIT_GROUPS` half.
+  - The **admonition that follows it** (`:170-181`, "API keys and no-`email`-claim OIDC tokens need
+    the `MICROMEGAS_IMPLICIT_GROUPS` half specifically") is **rewritten or deleted, not restated**:
+    the deleted knob is its entire subject ("Without `MICROMEGAS_IMPLICIT_GROUPS` naming a group
+    these callers belong to, that set is empty…"), and its closing forward-reference to "a future
+    per-key/read grant … a narrower, non-blanket alternative" is *this plan*. Its replacement is one
+    sentence: an API-key or no-email caller's readable set is now `{public}` plus whatever
+    `group:`/`*` selectors in `{prefix}_AUDIENCE_GRANTS` match it, so `public` alone restores legacy
+    visibility with no second knob.
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md` — both document the knob
   this plan deletes and a value format the new validator rejects, so both need the same sweep:
-  drop the `MICROMEGAS_IMPLICIT_GROUPS` / `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS` env-table rows;
-  restate `MICROMEGAS_UNSTAMPED_AUDIENCE` / `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE`'s description
-  as an opaque audience name rather than `user:<id>`/`group:<id>`; add a `{prefix}_AUDIENCE_GRANTS`
+  drop the `MICROMEGAS_IMPLICIT_GROUPS` (`flight-sql.md:32`) / `MICROMEGAS_ANALYTICS_IMPLICIT_GROUPS`
+  (`monolith.md:50`) env-table rows; restate `MICROMEGAS_UNSTAMPED_AUDIENCE` /
+  `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` (`flight-sql.md:33`, `monolith.md:51`) — their
+  description as an opaque audience name rather than `user:<id>`/`group:<id>`, **and the bolded
+  "Required, together with `…_IMPLICIT_GROUPS=everyone`" clause each of those two surviving rows
+  carries inline**, which deleting the `IMPLICIT_GROUPS` rows does not remove and which would
+  otherwise leave both pages telling operators to set a knob that no longer exists; add a
+  `{prefix}_AUDIENCE_GRANTS`
   row; and add an upgrade note that a previously-recommended
   `MICROMEGAS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup (`:` is outside
   `[A-Za-z0-9_-]`). `MICROMEGAS_DEFAULT_KEY_AUDIENCE` is **not** added to `flight-sql.md`:
@@ -680,7 +785,7 @@ ingestion request: Bearer <key> ────────────────
 ## Testing Strategy
 
 **`rust/auth/tests/policy_tests.rs`** is rewritten wholesale, not merely extended: the model change
-inverts the premise of its entire existing suite, not just the four tests already called out for
+inverts the premise of all 13 of its existing tests, not just the four already called out for
 `ownership_rewrite_config_tests.rs`. In particular: `read_policy_every_element_is_prefixed` (`:71`)
 asserts every resolved audience starts with `user:`/`group:` — the exact property §1 abolishes, and
 is deleted rather than adapted; `read_policy_resolves_singleton_when_no_groups` (`:40`) and
@@ -692,8 +797,15 @@ replaced by the "no self rule" coverage below; `mint_policy_defaults_to_user_ema
 `mint_policy_rejects_a_malformed_audience_for_admin_and_non_admin` (`:233`) asserts
 `"not-a-well-formed-audience"` is refused, which is a *valid* name under the new
 `[A-Za-z0-9_-]` charset, so it is replaced with a still-invalid example (e.g. containing `:` or a
-space). The new tests below are what the file's contents become, not additions alongside the old
-ones.
+space). The remaining eight — `read_policy_resolves_union_of_identity_groups_and_implicit_groups`
+(`:51`), `read_policy_resolves_empty_set_for_a_caller_with_no_grants` (`:89`),
+`read_policy_service_account_grant_has_no_user_element` (`:103`),
+`read_policy_service_account_with_empty_grant_resolves_implicit_only` (`:142`), and the four mint
+tests at `:168`, `:186`, `:199`, `:213` — are each built on either identity derivation or the
+implicit-groups list, so all eight are replaced too; the two whose *properties* must survive the
+replacement (fail-closed exactness, `read_audiences` folding) get their own bullets below rather than
+being lost with their old phrasing. The new tests below are what the file's contents become, not
+additions alongside the old ones.
 
 - `is_valid_audience` accepts `public`, `team-alpha`, `Team_Alpha`, `a`, and a 255-byte name;
   rejects `""`, 256 bytes, `alice@example.com`, `team alpha`, `a,b`, `["x"]`, `it's`. A companion
@@ -703,6 +815,18 @@ ones.
   matches the email; `*` grants everyone; an audience with no matching selector is absent; a caller
   gets **no** audience merely for being named like one (the absence of a self rule, tested
   explicitly — including an API key named `team-alpha`, which must not read `team-alpha`).
+- **The fail-closed guarantee, restated for the new model.** `read_policy_resolves_empty_set_for_a_caller_with_no_grants`
+  (`:89`) is today's version of it — a grantless caller resolves to the *empty* set, "never anything
+  permissive". `public` being built in changes the value but not the property, so its successor
+  asserts the exact set: a caller matching no selector anywhere resolves to **`{public}` and nothing
+  else** — not a superset, not the empty set. Without an exactness assertion, "`public` is always
+  present" would pass just as well for a policy that over-grants.
+- **`read_audiences` still folds into the read axis**, per §2's formula. Two existing tests are its
+  only coverage — `read_policy_service_account_grant_has_no_user_element` (`:103`) and
+  `read_policy_service_account_with_empty_grant_resolves_implicit_only` (`:142`) — and both are
+  written around identity derivation, so they are replaced rather than kept: a caller with
+  `read_audiences: ["team-a", "team-b"]` and no grant-map entry resolves to
+  `{public, team-a, team-b}`, which pins both the folding and the absence of a `user:` element.
 - **The motivating case, end to end in one test**: resolve `alice-laptop` for bob ⇒ absent; add
   `{"alice-laptop": ["group:leads"]}` with bob in `leads` ⇒ present. *No data changed.*
 - Mint: `read_audiences` never enters the mintable set; `PUBLIC_AUDIENCE` never enters a non-admin's
@@ -710,11 +834,19 @@ ones.
   `public` included; non-admins may not mint an audience they hold no **mint** grant for — including
   one they hold a bare-array (read-only) grant for, testing explicitly that a read grant never
   confers mint authority; a `"mint"` entry does grant it, independent of `"read"`.
-- Malformed `{prefix}_AUDIENCE_GRANTS` / `MICROMEGAS_AUDIENCE_GRANTS` (not an object; a per-audience
-  value that is neither a bare array nor a `{"read": [...], "mint": [...]}` object; a non-array
-  `read`/`mint` field; non-string selector) ⇒ `Err`, so a typo fails startup rather than shipping an
-  inert knob. The prefixed-falls-back-to-unprefixed resolution itself gets the same test coverage as
-  `implicit_groups_var`.
+- Malformed `{prefix}_AUDIENCE_GRANTS` / `MICROMEGAS_AUDIENCE_GRANTS` ⇒ `Err`, so a typo fails
+  startup rather than shipping an inert knob. Shape errors: not an object; a per-audience value that
+  is neither a bare array nor a `{"read": [...], "mint": [...]}` object; a non-array `read`/`mint`
+  field; a non-string selector. **Content errors, per §2 — the ones a real operator actually
+  writes**: a key that fails `is_valid_audience` (`{"group:everyone": ["*"]}`, the migration-from
+  value, and `{"": ["*"]}`), and a selector that is neither `*` nor `user:`/`group:`-prefixed
+  (`["eng"]`, `["users:alice@example.com"]`, `["group:"]`). Each must be an `Err` naming the
+  offending key or selector, not a silently-inert entry.
+- The prefixed-falls-back-to-unprefixed resolution gets its own tests — set only
+  `MICROMEGAS_AUDIENCE_GRANTS` and confirm a prefixed `from_env` reads it; set both and confirm the
+  prefixed name wins; the same pair `ownership_rewrite_config_tests.rs` has for `UNSTAMPED_AUDIENCE`
+  (`:122`, `:141`). (Not "the same coverage as `implicit_groups_var`" — that helper has no tests at
+  all, which is the gap this closes rather than the bar to match.)
 
 **`rust/auth/tests/db_api_key_tests.rs`** (live-Postgres cases `#[ignore]`d, per the file's
 convention): its `insert_live_key` helper (`:232-251`) currently inserts into `ingestion_api_keys`
@@ -722,9 +854,11 @@ with no `audience`, which every existing live test using it at its nine call sit
 `:341`, `:374`, `:398`, `:454`, `:497`, `:505`, `:546`) would fail at runtime against a v6-migrated
 schema, since the column is `NOT NULL` with no default — a failure the compiler cannot catch.
 `insert_live_key` gains an `audience: &str` parameter (every ingestion-table call site passes a
-literal, e.g. `PUBLIC_AUDIENCE`), threaded into the `INSERT`'s column list; the `:505` call site
-(`ApiKeyTable::Analytics` in `live_surface_separation_both_directions`) is unaffected since that
-table has no such column. New coverage: the audience reaches `bound_audience` unchanged (the issue's first test);
+literal, e.g. `PUBLIC_AUDIENCE`), threaded into the `INSERT`'s column list. Note the helper's
+`INSERT` is **table-generic** (`format!` over `table.table_name()`, `:240-243`), so this is not a
+plain new parameter: the column list has to branch on the table, since the `:505` call site
+(`ApiKeyTable::Analytics` in `live_surface_separation_both_directions`) targets a table with no
+`audience` column and would otherwise fail on the added column. New coverage: the audience reaches `bound_audience` unchanged (the issue's first test);
 ingestion keys give `allow_delegation: false` while analytics keys still give `true` and
 `bound_audience: None`; the audience survives a cache hit; the unreachable-pool cases still yield
 `ProviderUnavailable`.
@@ -738,10 +872,24 @@ existence checks, not `bound_audience`. (Its other, throwaway-schema table used 
 existence-query tests at `:196` is unaffected — it creates its own minimal `ingestion_api_keys` in
 a throwaway schema the migration never runs against.)
 
-**`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**: `mint` with no audience and no knob ⇒
-400 naming the knob; with the knob ⇒ that value; explicit ⇒ that value (the issue's per-key
-override). `import` with neither ⇒ `public`. An invalid audience ⇒ 400 before any DB access.
+**`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**: new coverage — `mint` with no audience
+and no knob ⇒ 400 naming the knob; with the knob ⇒ that value; explicit ⇒ that value (the issue's
+per-key override). `import` with neither ⇒ `public`. An invalid audience ⇒ 400 before any DB access.
 `#[ignore]`d live-DB: importing an already-present hash reports the **existing** audience.
+
+Two **existing** tests in this file change, beyond the 13 mechanical `IngestionKeysState` literals:
+
+- `live_mint_list_revoke_round_trip` (`:309`, `#[ignore]`d) POSTs `{"name": …}` with no `audience`
+  and asserts `CREATED` (`:327`) — under §6 that is now the 400 case. It gets an explicit
+  `"audience"` in its body (the round-trip is about mint→list→revoke, not about defaulting), and its
+  list assertion additionally checks the audience round-trips through `KeyListEntry`.
+- `mint_503_when_pool_unconfigured` (`:218`) and `import_503_when_pool_unconfigured` (`:251`) keep
+  asserting 503, which is what §6's stated `require_pool` → `validate_name` → `resolve_audience`
+  order guarantees; they are the regression test for that order and must not be relaxed to accept a
+  400.
+
+`live_import_is_idempotent` (`:372`) needs only the state-literal field: import with no audience
+still succeeds, now defaulting to `public`.
 
 **Migration** — new `rust/ingestion/tests/sql_migration_test.rs` (this crate has no migration test
 today; `analytics-web-srv/tests/migration_test.rs` covers the unrelated **app_db** v3→v4 chain and
@@ -763,16 +911,45 @@ and the two fallback-resolution tests, `prefixed_unstamped_audience_wins_over_un
 `group:`-prefixed values (`"group:everyone"`, `"group:prefixed"`, `"group:unprefixed"`) that fail
 the new parser (`:` is outside `[A-Za-z0-9_-]`) — each is rewritten to use an opaque value (e.g.
 `"everyone"`, `"prefixed"`, `"unprefixed"`) so the fallback-resolution behavior they actually test
-keeps its coverage.
+keeps its coverage. The file's other seven tests are unaffected — in particular
+`all_whitespace_unstamped_audience_resolves_to_none` (`:66`) survives **only** because `from_env`
+trims and short-circuits on empty *before* validating (`read_scope.rs:169`); step 1 must keep that
+ordering, or `"   "` becomes a malformed audience and this test inverts too.
 
-**Python** — `read_keyring` triples with and without a per-entry audience; the `--audience` +
-`--table analytics` guard; the per-entry `"audience"` + `--table analytics` guard in `main`, run
-before any import call (same rejection, checked up front rather than mid-batch); per-entry
-precedence over `--audience`; `import_one` calls `import_analytics_api_key(name, key)` with no
-`audience` argument on the analytics branch.
+**Python** — new behavior: `read_keyring` triples with and without a per-entry audience; the
+`--audience` + `--table analytics` guard; the per-entry `"audience"` + `--table analytics` guard in
+`main`, run before any import call (same rejection, checked up front rather than mid-batch);
+per-entry precedence over `--audience`; `import_one` calls `import_analytics_api_key(name, key)`
+with no `audience` argument on the analytics branch. Plus `web_client.py` payload tests — the
+`audience` field omitted when `None`, included when set — following
+`test_web_client.py`'s existing `folder_path` triple (`:18-55`); that file has no coverage of either
+import method today.
 
-**Web app** — `mint` omits `audience` when unset and includes it when set; the Audience column
-renders on the ingestion page and the analytics page does not regress.
+The tuple-arity change also breaks `python/micromegas/tests/cli/test_import_keys.py` at runtime
+(Python catches none of this at import time, unlike the Rust helpers above), so this is a listed
+step, not an implied one:
+
+- `FakeClient.import_ingestion_api_key(self, name, key)` (`:29`) and `import_analytics_api_key`
+  (`:32`) are 2-arg, and `_handle` records `(name, key)` (`:23`) — a positional `audience` raises
+  `TypeError`. Same for the ad-hoc `Client` at `:354-361`.
+- `make_args` (`:36-47`) has no `"audience"` default, so every test built from it hits
+  `AttributeError` the moment anything reads `args.audience`.
+- 2-tuple literals and equality assertions: `:98`, `:107`, `:121`, `:137`, `:144`, `:190` (the
+  `read_keyring` assertions), `:218`'s `ENTRIES` feeding `select_entries` (`:223`, `:228`, `:236`,
+  `:245`, `:251`), `run_import`'s literals (`:282`, `:292`, `:308`, `:321`, `:342`, `:364-365`), and
+  the recorded-call assertions (`:324`, `:345`, `:366`).
+
+**Web app** — `mint` omits `audience` when unset and includes it when set (the ingestion page test
+already pins the exact body, `IngestionApiKeysPage.test.tsx:146` asserting
+`toEqual({ name: 'new-key' })`, so the omission must be strict — sending `audience: ''` for a blank
+input breaks it); the Audience column renders on the ingestion page, with `'—'` for a row whose
+`audience` is `undefined`; and the analytics page does not regress — asserted on **both** axes, no
+Audience column *and* no audience input in its mint dialog, since `showAudience` gates both. The
+knob-naming 400 renders through `config.ErrorClass` rather than `handleMint`'s generic
+`'Failed to mint key'` fallback (`ApiKeysAdminPage.tsx:119-120`). All of this lands in the two route
+tests (`src/routes/__tests__/{Ingestion,Analytics}ApiKeysPage.test.tsx`) — there is no
+`ApiKeysAdminPage` test file, and the two `lib/__tests__/*-api-keys-api.test.ts` files cover `list`
+only.
 
 **Manual** — `start_services.py --monolith`, mint a key with an explicit audience through the web UI,
 ingest with it, confirm the audience reaches the auth context (trace-level `db api key validated`);
