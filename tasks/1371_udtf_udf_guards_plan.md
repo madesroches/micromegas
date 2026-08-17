@@ -12,7 +12,7 @@ block's decoded objects, any block's raw payload, and the full partition invento
 audience, completely unfiltered. Stage 3 closes that: an **arg-addressed guard** on
 `process_spans`, `perfetto_trace_chunks`, `parse_block`, and the `get_payload` UDF, **row filtering**
 on `list_partitions`, and the two remaining registration arms (maintenance context, opt-in knob) for
-the five mutating functions. All of it fed by one new, size-bounded, invalidation-free cache
+the five mutating functions. All of it fed by one new, size- and TTL-bounded cache
 resolving *any telemetry id → its owning process's audience* from Postgres.
 
 Like Stages 1, 2 and 4, this is inert by default: every guard is a no-op under `ReadScope::All`, and
@@ -119,7 +119,6 @@ pub enum OwnerAudience {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IdKind {
     Process,          // processes.process_id
-    Stream,           // streams.stream_id     -> processes
     Block,            // blocks.block_id       -> processes
     ProcessOrStream,  // list_partitions' view_instance_id: either, resolved in one round trip
 }
@@ -130,7 +129,7 @@ pub struct AudienceIndex {
 }
 
 impl AudienceIndex {
-    pub fn new(pool: sqlx::Pool<sqlx::Postgres>, max_entries: u64) -> Self;
+    pub fn new(pool: sqlx::Pool<sqlx::Postgres>, max_entries: u64, ttl: std::time::Duration) -> Self;
     pub async fn resolve(&self, id: Uuid, kind: IdKind) -> anyhow::Result<OwnerAudience>;
     pub async fn resolve_many(
         &self,
@@ -140,7 +139,7 @@ impl AudienceIndex {
 }
 ```
 
-**One cache for all three kinds, keyed by `(IdKind, Uuid)`, not by the bare `Uuid`.** A UUID is
+**One cache for every kind, keyed by `(IdKind, Uuid)`, not by the bare `Uuid`.** A UUID is
 client-supplied at ingestion for all three tables (`ProcessInfo.process_id`, and stream/block
 registration — `web_ingestion_service.rs`) and no constraint spans `processes`, `streams` and
 `blocks`, so nothing stops the *same* UUID from being a process id in one audience and a stream id
@@ -151,27 +150,37 @@ genuine cross-audience read, because §6 runs the inner query under `Authorized:
 guard, and the inner, unscoped session would then return the colliding id's real data (e.g.
 `get_process_thread_list`/`get_process_exe`, `process_streams.rs:9-21`,
 `perfetto_trace_execution_plan.rs:302-317`) to a caller who was never granted that audience. Keying
-on `(IdKind, Uuid)` removes the collision instead of relying on downstream emptiness: `Process`,
-`Stream` and `Block` each own a disjoint slice of the keyspace, and `ProcessOrStream`
-(`list_partitions`' usage) is deliberately its own key too rather than reusing `Process`/`Stream`
-entries, so its `UNION ALL` result is what gets cached. If both arms of that `UNION ALL` return a
-row for the same id (only possible for a `process_id`/`stream_id` collision), take the `processes`
-row — i.e. `LEFT JOIN`/`UNION ALL` order is process-first, and a caller who names a colliding id gets
-the process's audience, not the stream's. One cache, three disjoint keyspaces plus one derived one,
-instead of the parent plan's three caches.
+on `(IdKind, Uuid)` removes the collision instead of relying on downstream emptiness: `Process` and
+`Block` each own a disjoint slice of the keyspace, and `ProcessOrStream` (`list_partitions`' usage) is
+deliberately its own key too rather than reusing `Process` entries or caching the `streams` table
+under its own kind, so its `UNION ALL` result is what gets cached. If both arms of that `UNION ALL`
+return a row for the same id (only possible for a `process_id`/`stream_id` collision), take the
+`processes` row — i.e. `LEFT JOIN`/`UNION ALL` order is process-first, and a caller who names a
+colliding id gets the process's audience, not the stream's. One cache, two disjoint keyspaces plus one
+derived one, instead of the parent plan's three caches.
 
-**Invalidation-free, bounded by entry count.** `process_id → properties` is written once at process
-insert and never updated (no `UPDATE processes` exists anywhere in the tree); `streams.process_id`
-and `blocks.process_id` are fixed at creation. So the mapping is immutable and the cache needs no
-TTL — only an LRU bound (`max_capacity(entries)`, default `100_000`, one `Uuid` + short string
-≈ 100 B ⇒ ~10 MB). Mirrors `MetadataCache`'s `imetric!` entry-count reporting.
+**Bounded by entry count and by a TTL — no other invalidation.** `process_id → properties` is
+written once at process insert and never updated in place (no `UPDATE processes` exists anywhere in
+the tree); `streams.process_id` and `blocks.process_id` are fixed at creation. But the row is not
+immutable across the process's *lifetime*: `delete_old_data` (`delete.rs:151-170`) deletes `blocks`
+→ `streams` → `processes` rows once retention expires them, and ids are client-supplied — for OTLP, a
+deterministic UUIDv5 derived from resource attributes (`otel-ingestion/src/identity.rs:230,236`,
+`NS_OTEL_PROCESS_V1`) — so a routine retention-then-re-export cycle recreates the *same* `process_id`
+under fresh `properties`, and nothing ever `UPDATE`s the stale cache entry to match. An entry-count
+bound alone does not help here: `max_capacity` only evicts under size pressure, which may never occur
+at 100k entries, so a stale entry can otherwise sit forever. So the cache also carries
+`time_to_live(entries_ttl)` (default `5m`) — `AudienceIndex`'s only freshness mechanism, cheap because
+a miss is one indexed point query — bounding how long a re-derived process's audience can serve a
+stale answer; `max_capacity(entries)` (default `100_000`, one `Uuid` + short string ≈ 100 B ⇒ ~10 MB)
+remains the size bound. Mirrors `MetadataCache`'s `imetric!` entry-count reporting.
 
 **`Unknown` is never cached.** A miss means "no such row *yet*" — the process may be mid-ingestion —
 and caching it would both pin a wrong answer and let a caller pollute the cache with random UUIDs.
 Cost of not caching: one indexed point query per denied lookup.
 
-The SQL, for `IdKind::Process` (the other kinds swap the driving table and join through
-`processes`; `ProcessOrStream` is a `UNION ALL` of the first two, one round trip):
+The SQL, for `IdKind::Process` (`Block` swaps the driving table and joins through `processes`;
+`ProcessOrStream` is a `UNION ALL` of this process-id shape with the analogous stream-id shape, one
+round trip):
 
 ```sql
 SELECT p.process_id AS id, a.value AS audience
@@ -471,8 +480,17 @@ more*", not just "not yet" — Prong B denies `process_spans`/`perfetto_trace_ch
 `get_payload`/`list_partitions` for a process whose Prong-A-filterable partition data an owner can
 still query directly, permanently, with no path back once the Postgres row is gone.
 
+The cache has a parallel, narrower residual on the same delete-then-recreate cycle: a
+`(IdKind::Process, Uuid)` entry populated *before* deletion keeps answering with the pre-deletion
+`OwnerAudience` — now stale — until the cache's `time_to_live` (§1) elapses, not just until the next
+Postgres lookup. That is exactly why the cache is TTL-bounded rather than invalidation-free (§1): with
+only an entry-count bound, an entry that never gets evicted (a real possibility at 100k capacity)
+would serve a stale audience forever instead of for one bounded window.
+
 **Decision: accept the denial, matching the plan's fail-closed posture everywhere else** (Security:
-`Unknown` ⇒ deny is stated as unconditional). Falling back to the parquet snapshot when Postgres has
+`Unknown` ⇒ deny is stated as unconditional for a fresh, uncached resolution — the cache's TTL bounds
+how long a stale cached verdict, allow or deny, can outlive the Postgres row it was read from).
+Falling back to the parquet snapshot when Postgres has
 no row would mean trusting an *un-refreshable* audience — the whole reason Prong B reads Postgres
 instead of the snapshot (§1) is that the snapshot can go stale in the safe direction (missing rows,
 never wrong ones) but a snapshot with no live source of truth behind it can never be corrected if the
@@ -487,7 +505,7 @@ and the aggregate-scan cost this design was chosen to avoid.
 ### Phase 1 — the index and the guard (no call sites yet)
 
 1. New `rust/analytics/src/lakehouse/audience_guard.rs`: `AUDIENCE_PROPERTY`, `OwnerAudience`,
-   `IdKind`, `AudienceIndex` (`resolve`, `resolve_many`, the four SQL shapes), `is_readable`,
+   `IdKind`, `AudienceIndex` (`resolve`, `resolve_many`, the three SQL shapes), `is_readable`,
    `AudienceGuard`, `Authorized`. Register in `lakehouse/mod.rs`.
 2. Point `OwnershipRewrite::audience_col` (`ownership_rewrite.rs:148`) at `AUDIENCE_PROPERTY` so the
    property name has exactly one definition.
@@ -668,7 +686,12 @@ and the aggregate-scan cost this design was chosen to avoid.
 - `mkdocs/docs/query-guide/functions-reference.md`: `perfetto_trace_chunks` (:85),
   `process_spans` (:138), `parse_block` (:196) and `get_payload` gain one line each — the id
   argument must name data in an audience the caller can read, otherwise the call fails with a
-  not-found-shaped error.
+  not-found-shaped error. The 🔒 legend line (:5) and the five 🔒-marked entries it describes
+  (`retire_partitions` :49, `materialize_partitions` :55, `regenerate_partitions` :61,
+  `retire_partition_by_metadata` :73, `retire_partition_by_file` :79) currently state admin-only
+  access unconditionally; qualify both the legend and the five entries with "...unless
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled", matching the admin-gate caveat already
+  planned for `admin/functions-reference.md` above.
 - `tasks/data_isolation/audience_based_access_control_plan.md`: record the two deviations (§6's
   guard-then-internal instead of scope inheritance; one cache instead of three, and no
   `block_id → process_id` chain for `get_payload`) in the same "Implemented — corrections to the
