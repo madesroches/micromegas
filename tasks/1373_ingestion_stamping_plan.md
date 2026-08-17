@@ -300,10 +300,23 @@ Rules:
 | No auth provider (no extension) | unstamped | **403** |
 
 Every handler gains `ctx: Option<Extension<AuthContext>>` (absent ⇔ no auth provider, since both
-middlewares always insert) and the `Extension<Arc<StampingConfig>>` layered by `serve_ingestion`.
-`serve_ingestion` takes the `StampingConfig` as a parameter; the two binaries build it with their
-own prefix — `""` for `telemetry-ingestion-srv` (`main.rs:59-63`), `"MICROMEGAS_INGESTION"` for the
-monolith (`main.rs:206`) — matching how they already scope `ProviderBuilder`.
+middlewares always insert). For the native/OTLP/webhook routes — all merged into `serve_ingestion`'s
+own router tree — the `StampingConfig` reaches handlers the same way: an `Extension<Arc<StampingConfig>>`
+layered by `serve_ingestion`, which takes the `StampingConfig` as a parameter; the two binaries build
+it with their own prefix — `""` for `telemetry-ingestion-srv` (`main.rs:59-63`),
+`"MICROMEGAS_INGESTION"` for the monolith (`main.rs:206`) — matching how they already scope
+`ProviderBuilder`.
+
+The two Firehose routers are different: `firehose_router(service, auth_provider)` is built and
+layered standalone by `serve_ingestion` (`ingestion.rs:161-163`), but `rust/public/tests/firehose_tests.rs`
+and `firehose_cloudwatch_logs_tests.rs` (11 call sites total) construct it directly with no parent
+router to supply an extension — a required `Extension<Arc<StampingConfig>>` extractor would 500 at
+those sites with no compiler signal. So both `firehose_router` variants instead take an explicit
+`stamping: Arc<StampingConfig>` parameter and layer it themselves (`.layer(Extension(stamping))`,
+alongside the existing `Extension(service)`), the same way they already take `auth_provider`
+explicitly rather than expecting it as an ambient extension. `serve_ingestion` passes its
+`StampingConfig` through to both calls; every existing direct-call test site fails to compile until
+updated, per §1's stance.
 
 **The Firehose fix** is `firehose_common.rs:98-108`: `Ok(ctx) => { …strip spoofable headers…;
 req.extensions_mut().insert(ctx); next.run(req).await }`, mirroring `auth/src/axum.rs:73-83`. Both
@@ -319,6 +332,11 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   `http_status() == 403`, `is_retryable() == false`, and a sanitized `public_message`
   (`"write audience required"`, no internal detail) — plus the matching `OtlpHttpError` arm
   (`servers/otlp.rs`) that carries it through to that response shape.
+- **Webhook** (`/ingestion/webhook`): reuses `OtelError::Denied` (the same variant OTLP uses) but
+  renders it through `webhook.rs`'s own `build_error_response(status, message, retryable)`
+  (`webhook.rs:114-153`) rather than the OTLP shape — 403, `text/plain`, and `retryable == false`
+  (no `Retry-After` header), since a denied write is not a transient condition a webhook sender
+  should retry.
 - **Firehose**: the Firehose ack shape with `errorMessage`, still a non-2xx status — but this is
   *not* a clean rejection the way the other two are. Firehose does not distinguish 4xx from 5xx;
   it retries any non-200 for its configured retry duration and then spills to the configured S3
@@ -461,11 +479,15 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
    stream properties, so it needs no call — see §3).
 7. `servers/write_audience.rs` in `rust/public`: `StampingConfig::from_env(prefix)`,
    `resolve_write_audience`, `WriteAudienceError` with the three per-entry-point response shapes.
-8. `serve_ingestion` takes `StampingConfig`, layers it as an extension; handlers in `ingestion.rs`,
-   `otlp.rs`, `webhook.rs`, `firehose.rs`, `firehose_cloudwatch_logs.rs` gain
-   `Option<Extension<AuthContext>>` + `Extension<Arc<StampingConfig>>` and resolve before
-   ingesting. Update `telemetry-ingestion-srv/src/main.rs` and `monolith/src/main.rs` with their
-   prefixes.
+8. `serve_ingestion` takes `StampingConfig`, layers it as an extension over the native/OTLP/webhook
+   router tree; handlers in `ingestion.rs`, `otlp.rs`, `webhook.rs` gain
+   `Option<Extension<AuthContext>>` + `Extension<Arc<StampingConfig>>` and resolve before ingesting,
+   with `webhook.rs` rendering a denial through its own `build_error_response` (§5). `firehose.rs`
+   and `firehose_cloudwatch_logs.rs` instead gain an explicit `stamping: Arc<StampingConfig>`
+   parameter on `firehose_router` that each layers itself, since those routers are built directly
+   (with no parent extension) by `serve_ingestion` and by the 11 existing test call sites in
+   `public/tests/firehose_tests.rs` / `firehose_cloudwatch_logs_tests.rs` — update those call sites.
+   Update `telemetry-ingestion-srv/src/main.rs` and `monolith/src/main.rs` with their prefixes.
 
 **Phase 3 — audience-scoped OTLP identity.**
 
@@ -509,8 +531,10 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
   `error.rs` (`OtelError::Denied` variant and its exhaustive-match arm for `AudienceConflict`)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (constant + stale-gap note)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- Tests: `rust/ingestion/tests/`, `rust/otel-ingestion/tests/`, `rust/public/tests/`,
-  `rust/analytics/tests/ownership_rewrite_db_test.rs`
+- Tests: `rust/ingestion/tests/` (row-level `insert_process`/`register_otel_process` stamping and
+  conflict-guard assertions only), `rust/otel-ingestion/tests/`, `rust/public/tests/` (new
+  `audience_stamping_db_test.rs` carrying the OTLP identity/collision DB assertions, plus the
+  Firehose `firehose_router` call-site updates), `rust/analytics/tests/ownership_rewrite_db_test.rs`
 - Docs: `mkdocs/docs/admin/ingestion.md`, `authentication.md`, `api-keys.md`, `monolith.md`,
   `mkdocs/docs/otlp/index.md`, `CHANGELOG.md`
 - `tasks/data_isolation/audience_based_access_control_plan.md`
@@ -609,13 +633,19 @@ HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, pe
 DB-backed (`#[ignore]` + `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`, per
 `analytics/tests/ownership_rewrite_db_test.rs`):
 
-- `rust/ingestion/tests/audience_stamping_db_test.rs`: native + OTLP insert with `Some("team-a")`
-  lands `micromegas.audience = team-a` on the row; a client-supplied `micromegas.audience = team-b`
-  in the same request does not survive; `None` leaves the property absent.
-- Conflict guard: re-register the same `process_id` with the same audience ⇒ ok; with a different
-  audience ⇒ `AudienceConflict`; existing `NULL` + incoming `Some` ⇒ ok, still `NULL`.
-- Two audiences posting **identical** OTLP resources produce two distinct `process_id`s and both
-  blocks persist (the collision/dedup regression test).
+- `rust/ingestion/tests/audience_stamping_db_test.rs`: exercises only what `micromegas-ingestion`
+  can name without a dev-dependency cycle on `micromegas-otel-ingestion` — `insert_process` with
+  `Some("team-a")` lands `micromegas.audience = team-a` on the row; a client-supplied
+  `micromegas.audience = team-b` in the same request does not survive; `None` leaves the property
+  absent; `register_otel_process` stamping the same way with a pre-built `Vec<Property>`. Conflict
+  guard: re-register the same `process_id` with the same audience ⇒ ok; with a different audience ⇒
+  `AudienceConflict`; existing `NULL` + incoming `Some` ⇒ ok, still `NULL`.
+- `rust/public/tests/audience_stamping_db_test.rs` (new — `micromegas-public` is the first crate
+  that depends on both `micromegas-ingestion` and `micromegas-otel-ingestion`, so it is the lowest
+  crate that can name `split_metrics`/`process_id_from_resource` alongside a DB-backed harness;
+  follows the existing DB-backed precedent in `pg_stats_test.rs` / `materialize_fail_isolation_tests.rs`):
+  the OTLP identity/collision regression — two audiences posting **identical** OTLP resources
+  produce two distinct `process_id`s and both blocks persist (the collision/dedup regression test).
 - End-to-end acceptance, reusing `ownership_rewrite_db_test`'s materialize-then-query harness:
   ingest through the real path under audience A, materialize, then assert a `ReadScope` granting
   only B sees nothing, only A sees the rows, and `ReadScope::All` sees everything — i.e. Stage 5's
