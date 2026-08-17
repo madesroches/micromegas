@@ -89,7 +89,7 @@ OIDC, has no audience to stamp. That rules out "reject when absent" as a Stage 5
 Both use `ON CONFLICT (process_id) DO NOTHING`: a re-registration of an existing `process_id` is a
 silent no-op, whatever it claims. `insert_stream` (`:265-308`) binds stream properties verbatim
 too; `insert_block_typed` (`:146-261`) inserts with `ON CONFLICT (block_id) DO NOTHING`
-(`:185`) and writes the payload to `blobs/{process_id}/{stream_id}/{block_id}`.
+(`:186`) and writes the payload to `blobs/{process_id}/{stream_id}/{block_id}`.
 
 `analytics/src/replication.rs:120-145` copies `processes` rows (properties included) between
 lakes, so a replicated process keeps the audience it was stamped with at its origin — the correct
@@ -194,18 +194,25 @@ therefore invisible to `micromegas-telemetry-sink`, which is fine since only ser
 
 ### 3. Stamping and stripping, in one place per insert path
 
-In `web_ingestion_service.rs`, one private helper used by both process paths:
+In `web_ingestion_service.rs`, one helper used by both process paths:
 
 ```rust
 /// Drops every client-supplied reserved-namespace property, then appends the server-written
 /// audience. Client input can neither assert nor suppress the stamp.
-fn finalize_process_properties(client: Vec<Property>, audience: &WriteAudience) -> Vec<Property>;
+pub fn finalize_process_properties(client: Vec<Property>, audience: &WriteAudience) -> Vec<Property>;
 ```
+
+`pub`, not private, and the same for `strip_reserved_properties` below: `rust/CLAUDE.md` puts unit
+tests under the crate's `tests/` folder, which cannot reach a private item, and the Testing
+Strategy asserts both helpers directly (reserved keys dropped, `None` writing no property at all).
+That is exactly why `handler::build_webhook_request` is public — "so `tests/webhook_tests.rs` can
+assert its shape directly" (`handler.rs:234-235`). Both are pure functions of their arguments, so
+exposing them widens no invariant.
 
 - `insert_process(body, audience)` → `finalize_process_properties(make_properties(&info.properties), audience)`.
 - `register_otel_process(..., properties, audience)` → same call on the `otel.resource.*` list.
 - `insert_stream(body)` strips the reserved prefix as well (a second tiny helper,
-  `strip_reserved_properties`). Nothing reads a stream audience today; stripping keeps the
+  `pub fn strip_reserved_properties`). Nothing reads a stream audience today; stripping keeps the
   namespace honest so a later stage that does read one is not reading client input.
   `register_otel_stream` has no client-supplied stream properties to strip — it binds
   `Vec::<Property>::new()` unconditionally (`web_ingestion_service.rs:341`) — so it needs no call.
@@ -252,13 +259,17 @@ pub struct IdentityContext<'a> {
   `identity.rs:169-187` already licenses in-place field addition under the same namespace UUID
   ("Long-term stability of `process_id` values is not a design goal").
 - `block_id`: prepend `aud\x1F{audience}\x1F` to the hash input when `Some`, ahead of the
-  existing `extra_hash_input` bytes, using `identity.rs`'s own separator consts — note it declares
-  both `SEPARATOR: char` and `SEPARATOR_STR: &str` (`identity.rs:39-40`) and both are private, so
-  this is `format!("aud{SEPARATOR}{audience}{SEPARATOR}")` rather than a `\x1F` string literal.
+  existing `extra_hash_input` bytes, reusing `identity.rs`'s own separator const rather than a
+  `\x1F` string literal — so the prefix is `format!("aud{SEPARATOR}{audience}{SEPARATOR}")`. Both
+  `SEPARATOR: char` and `SEPARATOR_STR: &str` (`identity.rs:39-40`) are **module-private** today,
+  and the prepend happens in `block.rs`, a sibling module that cannot name them: step 9 therefore
+  widens both to `pub(crate)`. (The alternative — a `block_id_from_payload_with_audience` helper
+  inside `identity.rs` — keeps them private but splits the hash-input assembly across two modules,
+  where the webhook path already assembles it in `block.rs`.)
   `block_id_from_payload(payload: &[u8])` (`identity.rs:241`) needs no signature change at all —
   the prepend is caller-side concatenation in `block.rs`, exactly as the webhook path already does
   at `block.rs:309-312`. Necessary and not redundant with `process_id`: `blocks` conflicts on
-  `block_id` alone (`web_ingestion_service.rs:185`), so without this, two audiences with
+  `block_id` alone (`web_ingestion_service.rs:186`), so without this, two audiences with
   byte-identical payloads silently dedup into one row belonging to one of them.
 - While in there, fix `identity.rs:239-240`'s doc comment. It claims `block_id` derives "from the
   re-encoded protobuf bytes of one Resource submessage", which the webhook path already falsified
@@ -392,8 +403,11 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
 **Prefixed-var resolution, DRY.** The helper already exists in shape — copy it rather than invent
 it: `read_scope.rs:148-162`'s `fn resolved_var(prefix: &str, suffix: &str) -> String` resolves
 `{prefix}_{suffix}`, falling back to `MICROMEGAS_{suffix}` when unset *or* whenever `prefix` is
-empty. Promote that exact signature to `pub fn resolve_prefixed_var` in `micromegas-auth`, use it
-for the new knob, and refactor the four hand-rolled copies in that crate onto it:
+empty. Promote that exact signature to `pub fn resolve_prefixed_var` in a new
+`rust/auth/src/env.rs` (declared in `lib.rs`) — three sibling modules consume it (`policy.rs`,
+`default_provider.rs`, `db_api_key.rs`), so parking it in any one of them would make the other two
+import an unrelated module for a pure env concern. Use it for the new knob, and refactor the four
+hand-rolled copies in that crate onto it:
 `policy.rs:55-66` (`audience_grants_var`), `policy.rs:70-81` (`default_key_audience_var`),
 `default_provider.rs:63-71` (`oidc_config_var`), `default_provider.rs:75-86` (`admin_var`).
 Two adjacent call sites also fit and should move: `default_provider.rs:51-59` (`api_keys_json`,
@@ -551,8 +565,10 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
    export from `lib.rs`.
 2. `telemetry/src/property.rs`: `RESERVED_PROPERTY_PREFIX`, `PROPERTY_AUDIENCE`. Point
    `ownership_rewrite.rs:148` at `PROPERTY_AUDIENCE`.
-3. `micromegas-auth`: `resolve_prefixed_var`; refactor `policy.rs:52-99` and
-   `default_provider.rs:49-83` onto it.
+3. `micromegas-auth`: `resolve_prefixed_var` in a new `auth/src/env.rs` (+ `lib.rs` declaration);
+   refactor `policy.rs:52-99`, `default_provider.rs:49-83` and `db_api_key.rs:80-103`
+   (`resolve_u64`, which wants the resolved *name* for its `warn!`) onto it. Unit-test it in the
+   existing `auth/tests/default_provider_tests.rs` — no new test file needed there.
 4. `firehose_common.rs:98-108`: insert the resolved `AuthContext` into request extensions.
 5. Thread `&WriteAudience` through the signatures — `insert_process`, `register_otel_process`,
    `write_blocks` (`handler.rs:95-145`), `ingest_logs`/`ingest_metrics`/`ingest_traces`/
@@ -638,23 +654,38 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 - `rust/ingestion/src/web_ingestion_service.rs` (stamp/strip helpers, both process paths,
   `insert_stream`, conflict guard scoped to `insert_process`, `AudienceConflict` variant)
 - `rust/telemetry/src/property.rs` (constants)
-- `rust/auth/src/default_provider.rs`, `rust/auth/src/policy.rs` (`resolve_prefixed_var`)
+- `rust/auth/src/env.rs` (new, `resolve_prefixed_var`), `rust/auth/src/lib.rs` (module
+  declaration), `rust/auth/src/default_provider.rs`, `rust/auth/src/policy.rs`,
+  `rust/auth/src/db_api_key.rs` (all three refactored onto it — see §5)
 - `rust/public/src/servers/write_audience.rs` (new), `mod.rs`
-- `rust/public/src/servers/ingestion.rs` (`IngestionError::Forbidden`), `otlp.rs`
-  (`OtlpHttpError` arm for `OtelError::Denied`), `webhook.rs`, `firehose.rs`,
-  `firehose_cloudwatch_logs.rs`, `firehose_common.rs`
+- `rust/public/src/servers/ingestion.rs` (`IngestionError::Forbidden`), `otlp.rs` (resolve +
+  render an `OtelError::Denied`; **no** new `OtlpHttpError` arm — see §5), `webhook.rs`,
+  `firehose.rs`, `firehose_cloudwatch_logs.rs`, `firehose_common.rs`
 - `rust/otel-ingestion/src/identity.rs`, `block.rs`, `handler.rs`, `cloudwatch_logs.rs`,
   `error.rs` (`OtelError::Denied` variant and its exhaustive-match arm for `AudienceConflict`)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (constant + stale-gap note)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- Tests: `rust/ingestion/tests/audience_stamping_db_test.rs` (new — conflict guard + one stamp
-  round-trip), `rust/otel-ingestion/tests/` (all eight `*_tests.rs`, incl. the
-  `identity_tests.rs:236-254` golden lock), `rust/public/tests/` (the 11 `firehose_router`
-  call-site updates plus the new HTTP-level denial/stamping cases — no new file, no new
-  `[[test]]` entry), `rust/analytics/tests/ownership_rewrite_db_test.rs`
+- Tests:
+  - `rust/ingestion/tests/write_audience_tests.rs` (new — `WriteAudience` + the two `pub` property
+    helpers) and `rust/ingestion/tests/audience_stamping_db_test.rs` (new — conflict guard + one
+    stamp round-trip). That manifest declares no `[[test]]` entries, so both are autodiscovered.
+  - `rust/auth/tests/default_provider_tests.rs` (`resolve_prefixed_var`)
+  - `rust/otel-ingestion/tests/` (all eight `*_tests.rs`, incl. the `identity_tests.rs:236-254`
+    golden lock)
+  - `rust/public/tests/firehose_tests.rs` + `firehose_cloudwatch_logs_tests.rs` (the 11
+    `firehose_router` call-site updates, plus the differential Firehose case) and a **new**
+    `rust/public/tests/ingestion_stamping_tests.rs` for the native/OTLP denial cases — no existing
+    file in that directory exercises those routers. It needs a matching `[[test]]` entry in
+    `public/Cargo.toml` with `required-features = ["server"]`: `default = []` there, and all 13
+    existing test files are declared explicitly, so an autodiscovered file would compile without
+    the `server` feature and fail.
+  - `rust/analytics/tests/ownership_rewrite_db_test.rs` (hand-stamping → the new parameter, plus
+    the end-to-end acceptance case), and the two other `insert_process` callers the new parameter
+    breaks: `thread_spans_ordering_db_test.rs` (9 call sites) and `jit_process_batch_db_test.rs`
+    (1 call site) — mechanical `WriteAudience::none()` updates.
 - Docs: `mkdocs/docs/admin/ingestion.md`, `authentication.md`, `api-keys.md`, `monolith.md`,
-  `flight-sql.md`, `mkdocs/docs/otlp/index.md`, `CHANGELOG.md` (both the new entry **and** the stale
-  sentence at `CHANGELOG.md:8`)
+  `flight-sql.md`, `mkdocs/docs/otlp/index.md`, `CHANGELOG.md` (both the new entry **and** the two
+  stale sentences at `CHANGELOG.md:8`)
 - `tasks/data_isolation/audience_based_access_control_plan.md`
 
 ## Trade-offs
@@ -736,17 +767,29 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   starts — `:93-95` already establishes the re-derivation precedent this leans on. `:17` and `:36`
   ("the OTLP routes share the same auth chain as the rest of the ingestion service") are the in-tree
   evidence for step 14's correction of the AbAC plan's stale step-11 premise.
-- `CHANGELOG.md:8` (Stage 2's Unreleased entry) currently ends its known-limitation paragraph with
-  "Stage 5 (#1373) … has not landed yet, so operators should not treat this stage's enforcement as a
-  hard security boundary against a malicious or misconfigured instrumented client until it does."
-  Merging this stage falsifies that sentence — amend it in the same commit, the same way step 14
-  handles `ownership_rewrite.rs:59-75`.
+- `CHANGELOG.md:8` (Stage 2's Unreleased entry) carries **two** sentences this stage falsifies, both
+  to be amended in the same commit, the same way step 14 handles `ownership_rewrite.rs:59-75`:
+  1. its known-limitation close — "Stage 5 (#1373) … has not landed yet, so operators should not
+     treat this stage's enforcement as a hard security boundary against a malicious or
+     misconfigured instrumented client until it does."
+  2. earlier on the same line, inside the `MICROMEGAS_UNSTAMPED_AUDIENCE` upgrade note — "No
+     `micromegas.audience` stamping exists yet (ingestion stamping is Stage 5, #1373), so this knob
+     is required for every legacy-data deployment until then." This one is load-bearing operator
+     guidance: post-stage the knob covers *pre-stamping* data only, not everything.
 - `CHANGELOG.md` **Unreleased**: a new `* **Ingestion:**` group (Unreleased already carries two
   separate `**Analytics:**` groups, so append the new group after the existing `**Auth:**` one rather
   than assuming a canonical slot) with an entry in the established AbAC style —
   `(#1373, Stage 5 of the epic tracked at #1334)` — with the
-  **Minor breaking change** clause for the Rust signature changes (`insert_process`,
-  `register_otel_process`, `split_*`, `process_id_from_resource`, `serve_ingestion`) and an upgrade
+  **Minor breaking change** clause covering every published Rust item this stage moves —
+  `WebIngestionService::insert_process` and `register_otel_process` (`&WriteAudience`);
+  `serve_ingestion` (a `StampingConfig` parameter); both `firehose_router`s
+  (`micromegas::servers::firehose` and `::firehose_cloudwatch_logs`, an
+  `Arc<StampingConfig>` parameter); `micromegas_otel_ingestion::identity::process_id_from_resource`
+  and `block::{split_logs, split_metrics, split_traces}` (an `IdentityContext`);
+  `block::split_logs_with_extra_hash_input` **removed outright**, collapsed into `split_logs` (§4);
+  and `handler::{ingest_logs, ingest_metrics, ingest_traces, ingest_webhook,
+  ingest_firehose_metrics}` plus `cloudwatch_logs::ingest_cloudwatch_logs_firehose`
+  (`&WriteAudience`) — and an upgrade
   note covering both OTLP `process_id` re-derivation and the visibility change for client
   self-stamped audiences: a process that previously self-stamped `micromegas.audience` while
   authenticating with an audience-less credential (env-keyring, OIDC) silently becomes unstamped —
@@ -754,7 +797,13 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 
 ## Testing Strategy
 
-Unit (no DB):
+Unit (no DB) — hosts, since `rust/CLAUDE.md` puts unit tests under each crate's `tests/` folder:
+a new `rust/ingestion/tests/write_audience_tests.rs` (`WriteAudience` + the two property helpers,
+which §3 makes `pub` for exactly this reason; that manifest declares no `[[test]]` entries, so
+Cargo autodiscovers it), the existing `rust/otel-ingestion/tests/identity_tests.rs` for §4's
+identity cases, the existing `rust/auth/tests/default_provider_tests.rs` for `resolve_prefixed_var`,
+and the new `rust/public/tests/ingestion_stamping_tests.rs` below for `resolve_write_audience` /
+`StampingConfig::from_env` alongside its HTTP cases.
 
 - `WriteAudience::new` accepts `[A-Za-z0-9_-]{1,255}`, rejects empty / `:` / 256 bytes / non-ASCII.
 - `finalize_process_properties`: client `micromegas.audience` dropped and replaced; other
@@ -773,7 +822,9 @@ Unit (no DB):
   empty-prefix and fallback rules.
 
 HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, per
-`public/tests/firehose_tests.rs:1-40`):
+`public/tests/firehose_tests.rs:1-40`). The lazy pool points at an unreachable database, so every
+case below must be a request that either stops at the gate or does zero database work — the same
+constraint `firehose_tests.rs:1-7` already records for itself:
 
 - Firehose: `firehose_tests.rs:1-40`'s own `make_auth_provider()` builds an `ApiKeyAuthProvider`
   from an env keyring, and every env-keyring key hard-codes `bound_audience: None`
@@ -791,8 +842,15 @@ HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, pe
   handler or sends zero records", `firehose_tests.rs:1-7`), and a layer added outside
   `firehose_router` cannot observe an extension inserted by middleware inside it.
 - OTLP: audience-less credential under `require_write_audience` ⇒ `google.rpc.Status` code 7 in the
-  request's own encoding (JSON in → JSON out).
-- Native: 403 body shape; unstamped-and-allowed passes through when the knob is off.
+  request's own encoding (JSON in → JSON out). The knob-off counterpart uses an **empty
+  `resource_logs`** body, which `ingest_logs` (`handler.rs:154-156`) returns `Ok` on before touching
+  the database — a 200 there is proof the gate let the request through.
+- Native: 403 body shape with the knob on. The knob-off counterpart cannot assert a successful
+  insert on this harness (`insert_process` would reach the unreachable pool and 500), so assert it
+  **differentially against the parse boundary instead**: a deliberately malformed CBOR body returns
+  **400** (`IngestionServiceError::ParseError`, `web_ingestion_service.rs:360-361`) with the knob
+  off and **403** with it on — the 400 is reached only after `resolve_write_audience` returns `Ok`,
+  which is exactly the pass-through being asserted, and it needs no database.
 
 DB-backed (`#[ignore]` + `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`, per
 `analytics/tests/ownership_rewrite_db_test.rs`):
@@ -812,15 +870,15 @@ against a database.
   proving the stamp survives the `sqlx` bind into `processes.properties` and reads back — that is
   the only thing the DB adds over the `finalize_process_properties` unit tests, so it is one case,
   not four.
-- **No new `rust/public` DB test.** An earlier draft put the OTLP identity/collision regression there
+- **No new `rust/public` *DB* test.** An earlier draft put the OTLP identity/collision regression there
   ("two audiences posting identical resources produce two distinct `process_id`s and both blocks
   persist"). Both halves are pure functions already covered by the identity unit tests above, and the
   persistence half adds nothing on top: `insert_block_typed`'s create-only behavior under
   `ON CONFLICT (block_id) DO NOTHING` is already locked against live PG by
   `rust/ingestion/tests/insert_block_dedup_db_test.rs`, which is indifferent to how a `block_id` was
   derived (it builds ids with `Uuid::new_v4()`). Distinct ids ⇒ distinct rows needs no second
-  DB-backed proof, so this stage adds no test file to `rust/public` and no `[[test]]` entry to its
-  `Cargo.toml`.
+  DB-backed proof, so nothing in `rust/public` needs a live Postgres. The one new file there is the
+  DB-less `ingestion_stamping_tests.rs` above.
 - End-to-end acceptance, reusing `ownership_rewrite_db_test`'s materialize-then-query harness:
   ingest through the real path under audience A, materialize, then assert a `ReadScope` granting
   only B sees nothing, only A sees the rows, and `ReadScope::All` sees everything — i.e. Stage 5's
