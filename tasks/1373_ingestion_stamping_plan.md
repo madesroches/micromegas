@@ -381,6 +381,20 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
   in the same style as `ownership_rewrite.rs:59-75`, and a line in
   `mkdocs/docs/admin/authentication.md`.
 
+**The reserved property stays the carrier; the physical column is #1482.** Promoting
+`micromegas.audience` to a first-class `audience` column on the six global-instance views
+(`blocks`, `processes`, `streams`, `log_entries`, `measures`, `log_stats`) is tracked separately as
+#1482 — the AbAC plan's step 15 — and is deliberately not in this stage. The dependency runs one
+way: #1482 sources that column from the resolved process property, so it needs this stage's
+authenticated stamp to exist first, and merging them would bundle a write-path/auth change with a
+`SCHEMA_VERSION` bump on every global view (a full partition rebuild) plus a rewrite of
+`OwnershipRewrite`'s §3/§4 semi-join branches into a column predicate — two blast radii that could
+then no longer be reverted independently. Nothing here becomes throwaway: the property remains the
+carrier from the Postgres `processes` row into the lakehouse, and remains what the landed Stage 2
+rule reads for unstamped rows. What this stage owes #1482 is the invariant that makes a scalar
+column representable at all — §6's one-audience-per-process enforcement, since a process holding two
+audiences has no valid column value.
+
 ### Config surface
 
 | Knob | Meaning | Default | Open deployment | Privacy deployment |
