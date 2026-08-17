@@ -9,7 +9,7 @@
 
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, MintPolicy, PUBLIC_AUDIENCE,
-    ReadPolicy, is_valid_audience,
+    ReadPolicy, default_key_audience_from_env, is_valid_audience,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
@@ -443,4 +443,99 @@ async fn from_env_prefixed_var_wins_over_unprefixed_fallback() {
     let resolved = sorted(resolved.into_inner());
     assert!(resolved.contains(&"prefixed".to_string()));
     assert!(!resolved.contains(&"unprefixed".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// default_key_audience_from_env
+// ---------------------------------------------------------------------------
+
+const DKA_PREFIX: &str = "MICROMEGAS_1372_POLICY_TESTS";
+const DKA_PREFIXED_VAR: &str = "MICROMEGAS_1372_POLICY_TESTS_DEFAULT_KEY_AUDIENCE";
+const DKA_UNPREFIXED_VAR: &str = "MICROMEGAS_DEFAULT_KEY_AUDIENCE";
+
+/// Clears both vars on drop so a failing assertion in one test can't leak state into the next.
+struct DefaultKeyAudienceEnvGuard;
+
+impl Drop for DefaultKeyAudienceEnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: tests are serialized with `#[serial]`.
+        unsafe {
+            std::env::remove_var(DKA_PREFIXED_VAR);
+            std::env::remove_var(DKA_UNPREFIXED_VAR);
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn default_key_audience_from_env_neither_var_set_is_none() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DKA_PREFIXED_VAR);
+        std::env::remove_var(DKA_UNPREFIXED_VAR);
+    }
+    assert_eq!(
+        default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
+        None
+    );
+}
+
+/// An empty or whitespace-only value is "unset", not a validation failure -- the templated-
+/// deployment idiom where the var exists but resolves to empty when the feature is unused.
+#[test]
+#[serial]
+fn default_key_audience_from_env_empty_value_is_none() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DKA_PREFIXED_VAR);
+        std::env::set_var(DKA_UNPREFIXED_VAR, "   ");
+    }
+    assert_eq!(
+        default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
+        None
+    );
+}
+
+#[test]
+#[serial]
+fn default_key_audience_from_env_invalid_value_is_an_error() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DKA_PREFIXED_VAR);
+        std::env::set_var(DKA_UNPREFIXED_VAR, "not valid");
+    }
+    assert!(default_key_audience_from_env(DKA_PREFIX).is_err());
+}
+
+#[test]
+#[serial]
+fn default_key_audience_from_env_valid_value_is_returned() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DKA_PREFIXED_VAR);
+        std::env::set_var(DKA_UNPREFIXED_VAR, "team-alpha");
+    }
+    assert_eq!(
+        default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
+        Some("team-alpha".to_string())
+    );
+}
+
+#[test]
+#[serial]
+fn default_key_audience_from_env_prefixed_var_wins_over_unprefixed_fallback() {
+    let _guard = DefaultKeyAudienceEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(DKA_PREFIXED_VAR, "prefixed-audience");
+        std::env::set_var(DKA_UNPREFIXED_VAR, "unprefixed-audience");
+    }
+    assert_eq!(
+        default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
+        Some("prefixed-audience".to_string())
+    );
 }

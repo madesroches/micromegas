@@ -90,7 +90,7 @@ fn default_key_audience_var(prefix: &str) -> String {
 pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>> {
     let var = default_key_audience_var(prefix);
     match std::env::var(&var) {
-        Ok(raw) if raw.is_empty() => Ok(None),
+        Ok(raw) if raw.trim().is_empty() => Ok(None),
         Ok(raw) => {
             if is_valid_audience(&raw) {
                 Ok(Some(raw))
@@ -275,6 +275,7 @@ impl AudienceGrants {
     pub fn from_env(prefix: &str) -> Result<Self> {
         let var = audience_grants_var(prefix);
         match std::env::var(&var) {
+            Ok(raw) if raw.trim().is_empty() => Ok(Self::empty()),
             Ok(raw) => Self::parse(&raw).map_err(|e| anyhow!("{var}: {e}")),
             Err(_) => Ok(Self::empty()),
         }
