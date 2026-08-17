@@ -206,7 +206,16 @@ fn finalize_process_properties(client: Vec<Property>, audience: &WriteAudience) 
 - A dropped reserved key logs at `warn!` once per process registration, naming the key — a native
   client setting `micromegas.audience` was either doing the pre-Stage-5 thing or probing, and both
   are worth seeing. Stripping (rather than rejecting the request with 400) keeps a legacy producer
-  that self-stamped from losing all telemetry on upgrade.
+  that self-stamped from losing all telemetry on upgrade. The self-stamp itself, though, stops
+  taking effect: today it is the *only* mechanism that stamps a process at all
+  (`ownership_rewrite.rs:59-75`; `ownership_rewrite_db_test.rs:144-161` hand-stamps exactly this
+  way), and it is replaced by the credential's `bound_audience`, which is `None` for both
+  env-keyring keys (`api_key.rs:128`) and OIDC (`oidc.rs:553-555`). A producer that self-stamped
+  `team-a` while authenticating with such a credential silently becomes **unstamped** on upgrade:
+  invisible to every `ReadScope::Audiences` caller when `{prefix}_UNSTAMPED_AUDIENCE` is unset, and
+  widened to the unstamped label (visible to whoever that label is granted to) when it is set.
+  Carrying the producer's history forward under its own label requires switching it to a DB
+  ingestion key bound to that audience.
 - `WriteAudience::none()` stamps nothing at all — the property is absent, not empty. `NULL` is what
   `OwnershipRewriteConfig.unstamped_audience` already coalesces; an empty string would silently
   fail every `IN` comparison instead.
@@ -550,7 +559,11 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 
 - **Strip client `micromegas.*` vs. 400 on it.** Stripping keeps a producer that self-stamped
   pre-Stage-5 alive on upgrade; a 400 would drop all of its telemetry to punish a key that is now
-  simply ignored. The `warn!` preserves the signal.
+  simply ignored. The `warn!` preserves the signal. What stripping does *not* preserve is the
+  self-stamp's effect: a producer authenticating with an audience-less credential (env-keyring,
+  OIDC) goes from self-stamped to unstamped — invisible to `ReadScope::Audiences` callers when
+  `{prefix}_UNSTAMPED_AUDIENCE` is unset, folded into the unstamped label when it is set — unless it
+  is moved onto a DB ingestion key bound to that audience.
 - **Knob defaulting to off.** Rejecting audience-less writes by default would break every
   env-keyring (`MICROMEGAS_API_KEYS`) and OIDC producer the moment they upgrade — a data-loss
   default in a stage that is supposed to be inert until configured. The cost is that a privacy
@@ -601,7 +614,10 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
   reserved `micromegas.*` namespace).
 - `mkdocs/docs/admin/authentication.md`: extend the audiences/grants material with the write side —
   stamping is what makes the read filter trustworthy; the OTLP-identity-is-audience-scoped note and
-  its id-churn consequence; the §7 residual.
+  its id-churn consequence; the §7 residual; and that client self-stamping of `micromegas.audience`
+  stops taking effect — a process relying on it falls back to unstamped (unless
+  `{prefix}_UNSTAMPED_AUDIENCE` widens it) unless its credential is a DB ingestion key bound to that
+  audience.
 - `mkdocs/docs/admin/api-keys.md:208-226`: drop "Stage 5, not yet shipped".
 - `mkdocs/docs/admin/monolith.md`: prefixed knob row.
 - `mkdocs/docs/otlp/index.md`: process ids are audience-scoped when the credential carries an
@@ -609,7 +625,10 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
 - `CHANGELOG.md` **Unreleased**: an `Ingestion:` entry in the established AbAC style, with the
   **Minor breaking change** clause for the Rust signature changes (`insert_process`,
   `register_otel_process`, `split_*`, `process_id_from_resource`, `serve_ingestion`) and an upgrade
-  note covering OTLP `process_id` re-derivation.
+  note covering both OTLP `process_id` re-derivation and the visibility change for client
+  self-stamped audiences: a process that previously self-stamped `micromegas.audience` while
+  authenticating with an audience-less credential (env-keyring, OIDC) silently becomes unstamped —
+  it must move to a DB ingestion key bound to that audience to keep its own label.
 
 ## Testing Strategy
 
