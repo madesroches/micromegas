@@ -83,13 +83,13 @@ OIDC, has no audience to stamp. That rules out "reject when absent" as a Stage 5
   `micromegas.audience` and today the query filter believes it.
 - `WebIngestionService::register_otel_process` (`web_ingestion_service.rs:405-451`) — takes an
   already-built `Vec<Property>`; every OTLP resource attribute lands namespaced
-  `otel.resource.<key>` (`block.rs:448-456`), so an OTLP client cannot reach the reserved
+  `otel.resource.<key>` (`block.rs:449-457`), so an OTLP client cannot reach the reserved
   namespace, but nothing server-side writes into it either.
 
 Both use `ON CONFLICT (process_id) DO NOTHING`: a re-registration of an existing `process_id` is a
 silent no-op, whatever it claims. `insert_stream` (`:265-308`) binds stream properties verbatim
-too; `insert_block_typed` (`:146-241`) inserts with `ON CONFLICT (block_id) DO NOTHING`
-(`:186`) and writes the payload to `blobs/{process_id}/{stream_id}/{block_id}`.
+too; `insert_block_typed` (`:146-261`) inserts with `ON CONFLICT (block_id) DO NOTHING`
+(`:185`) and writes the payload to `blobs/{process_id}/{stream_id}/{block_id}`.
 
 `analytics/src/replication.rs:120-145` copies `processes` rows (properties included) between
 lakes, so a replicated process keeps the audience it was stamped with at its origin — the correct
@@ -101,10 +101,11 @@ behavior, and no change is needed there.
   resource attributes under `NS_OTEL_PROCESS_V1`.
 - `stream_id_from_process_signal` (`identity.rs:234-237`) derives from `(process_id, signal)`, so
   it inherits whatever scoping `process_id` has.
-- `block_id_from_payload` (`identity.rs:241-243`) hashes **only** the encoded resource submessage.
-  `split_logs_with_extra_hash_input` (`block.rs:285-329`) already folds extra bytes in for the
-  webhook path; `split_metrics` (`:332-355`) and `split_traces` (`:357-379`) do not have the
-  hook.
+- `block_id_from_payload` (`identity.rs:241-243`) hashes the bytes it is handed — its doc comment
+  says "the encoded resource submessage", already stale.
+  `split_logs_with_extra_hash_input` (`block.rs:285-329`) folds extra bytes in ahead of them for the
+  webhook path (`:309-312`); `split_metrics` (`:332-354`) and `split_traces` (`:357-379`) do not have
+  the hook.
 - `is_degenerate_resource` (`identity.rs:162-167`) exists precisely because resources with none of
   `host.id`/`host.name`/`process.pid`/`service.instance.id` collapse onto one id — it only
   `debug!`s (`block.rs:219-228`).
@@ -160,7 +161,7 @@ impl WriteAudience {
 
 The charset check duplicates `micromegas_auth::policy::is_valid_audience` (`policy.rs:44-50`)
 rather than depending on `micromegas-auth` from `micromegas-ingestion` — the same crate-boundary
-trade-off `read_scope.rs:104-113` already made and documented for
+trade-off `read_scope.rs:108-114` already made, documented at `:102-107`, for
 `is_well_formed_audience`. Keep that cross-reference in the doc comment so the three copies stay
 discoverable.
 
@@ -183,9 +184,13 @@ pub const PROPERTY_AUDIENCE: &str = "micromegas.audience";
 ```
 
 `ownership_rewrite.rs:148`'s `lit("micromegas.audience")` becomes `lit(PROPERTY_AUDIENCE)`, so the
-write side and the read side cannot drift. No `micromegas.*` property exists in the tree today, so
-reserving the whole prefix costs nothing and pre-empts the next reserved key needing its own
-migration.
+write side and the read side cannot drift. The only `micromegas.*` property key in the tree today is
+`micromegas.audience` itself — read at `ownership_rewrite.rs:148`, hand-written by
+`ownership_rewrite_db_test.rs:154` — and no client (`python/`, `unreal/`, the Rust sink) sets any
+other one, so reserving the whole prefix costs nothing and pre-empts the next reserved key needing
+its own migration. Note `property.rs` is behind `micromegas-telemetry`'s non-default `server`
+feature (`telemetry/src/lib.rs:9-10`), which every crate here already enables; the constants are
+therefore invisible to `micromegas-telemetry-sink`, which is fine since only server code needs them.
 
 ### 3. Stamping and stripping, in one place per insert path
 
@@ -246,14 +251,22 @@ pub struct IdentityContext<'a> {
   even for unstamped deployments. With `None` the joined key is byte-identical to today.
   `identity.rs:169-187` already licenses in-place field addition under the same namespace UUID
   ("Long-term stability of `process_id` values is not a design goal").
-- `block_id`: prepend `"aud\x1F{audience}\x1F"` to the hash input when `Some`, ahead of the
-  existing `extra_hash_input` bytes, using `identity.rs`'s own `SEPARATOR` convention. Necessary
-  and not redundant with `process_id`: `blocks` conflicts on `block_id` alone
-  (`web_ingestion_service.rs:186`), so without this, two audiences with byte-identical payloads
-  silently dedup into one row belonging to one of them.
+- `block_id`: prepend `aud\x1F{audience}\x1F` to the hash input when `Some`, ahead of the
+  existing `extra_hash_input` bytes, using `identity.rs`'s own separator consts — note it declares
+  both `SEPARATOR: char` and `SEPARATOR_STR: &str` (`identity.rs:39-40`) and both are private, so
+  this is `format!("aud{SEPARATOR}{audience}{SEPARATOR}")` rather than a `\x1F` string literal.
+  `block_id_from_payload(payload: &[u8])` (`identity.rs:241`) needs no signature change at all —
+  the prepend is caller-side concatenation in `block.rs`, exactly as the webhook path already does
+  at `block.rs:309-312`. Necessary and not redundant with `process_id`: `blocks` conflicts on
+  `block_id` alone (`web_ingestion_service.rs:185`), so without this, two audiences with
+  byte-identical payloads silently dedup into one row belonging to one of them.
+- While in there, fix `identity.rs:239-240`'s doc comment. It claims `block_id` derives "from the
+  re-encoded protobuf bytes of one Resource submessage", which the webhook path already falsified
+  when it started folding `extra_hash_input` in; the audience makes it a third input.
 - `stream_id` needs no change — it derives from `process_id`.
-- Collapse `split_logs` / `split_logs_with_extra_hash_input` into a single
-  `split_logs(req, ctx)`; give `split_metrics(req, ctx)` / `split_traces(req, ctx)` the same
+- Collapse `split_logs` (`block.rs:273-275`, today a thin `split_logs_with_extra_hash_input(req, &[])`
+  wrapper) and `split_logs_with_extra_hash_input` (`:285-329`) into a single `split_logs(req, ctx)`;
+  give `split_metrics(req, ctx)` (`:332-354`) / `split_traces(req, ctx)` (`:357-379`) the same
   parameter (they have no hook today). One shared code path for both identity inputs instead of a
   logs-only special case.
 - `is_degenerate_resource`'s `debug!` (`block.rs:219-228`) stays as-is: after this change a
@@ -280,9 +293,10 @@ It buys no ownership separation: the read side scopes by audience (`ownership_re
 collapsed with `MAX(audience)` per process), so two keys of the same audience landing on one
 `process_id` is an intra-tenant merge — the same behavior a single key has today — not a
 cross-audience leak. (3) There is no stable key identity to hash anyway: `AuthContext` carries no
-`key_id`, `DbApiKeyAuthProvider` sets `subject: row.name` (`db_api_key.rs:348`) and `name` has no
-unique index (`sql_migration.rs:104-113`), while env-keyring keys have no row at all
-(`api_key.rs:118`) — the input would be non-unique and provider-dependent.
+`key_id`, `DbApiKeyAuthProvider` sets `subject: row.name.clone()` (`db_api_key.rs:349`) and `name` has no
+unique index (`sql_migration.rs:104-113`; the only unique index is on `key_hash`, `:117`, and the v6
+migration at `:152-169` adds none), while env-keyring keys have no row at all
+(`api_key.rs:116-131`) — the input would be non-unique and provider-dependent.
 
 ### 5. Resolving the audience at the HTTP edge
 
@@ -309,8 +323,11 @@ Rules:
 | Env-keyring key / OIDC (`None`) | unstamped + `warn!` (rate-limited) | **403**, body `write audience required` |
 | No auth provider (no extension) | unstamped | **403** |
 
-Every handler gains `ctx: Option<Extension<AuthContext>>` (absent ⇔ no auth provider, since both
-middlewares always insert). For the native/OTLP/webhook routes — all merged into `serve_ingestion`'s
+Every handler gains `ctx: Option<Extension<AuthContext>>`. Post-condition, once step 4 lands: absent
+⇔ no auth provider, since `auth_middleware` inserts unconditionally on its success path
+(`auth/src/axum.rs:82`, every failure short-circuiting at `:56-64`) and `firehose_auth_middleware`
+then does the same. Before step 4 the Firehose path is the one exception, which is why step 4 is
+ordered ahead of the handlers. For the native/OTLP/webhook routes — all merged into `serve_ingestion`'s
 own router tree — the `StampingConfig` reaches handlers the same way: an `Extension<Arc<StampingConfig>>`
 layered by `serve_ingestion`, which takes the `StampingConfig` as a parameter; the two binaries build
 it with their own prefix — `""` for `telemetry-ingestion-srv` (`main.rs:59-63`),
@@ -336,9 +353,11 @@ embedder that mounts `otlp_router`/`webhook_router`/`register_routes` directly, 
 `serve_ingestion`'s own tree, must layer the `StampingConfig` extension itself or hit the same
 missing-extension 500 that motivates `firehose_router`'s explicit-parameter design.
 
-**The Firehose fix** is `firehose_common.rs:98-108`: `Ok(ctx) => { …strip spoofable headers…;
-req.extensions_mut().insert(ctx); next.run(req).await }`, mirroring `auth/src/axum.rs:73-83`. Both
-Firehose routers then behave exactly like the Bearer routes.
+**The Firehose fix** is a two-token change at `firehose_common.rs:98-108`: bind the context
+(`Ok(_ctx)` → `Ok(ctx)`) and `req.extensions_mut().insert(ctx)` before `next.run(req).await`,
+mirroring `auth/src/axum.rs:82`. Nothing else on that arm moves — the five spoofable-header strips
+(`firehose_common.rs:99-106`) are already there and stay as-is. Both Firehose routers then behave
+exactly like the Bearer routes.
 
 Rejection shape per entry point, so a rejected write is retried-or-not correctly:
 
@@ -346,10 +365,17 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   `IngestionError::Forbidden` variant alongside the existing `BadRequest`/`Internal`
   (`servers/ingestion.rs`).
 - **OTLP** (`/otlp/v1/*`): `google.rpc.Status` (code 7, `PERMISSION_DENIED`), via a new
-  `OtelError::Denied` variant (`otel-ingestion/src/error.rs`) — `grpc_code() == 7`,
-  `http_status() == 403`, `is_retryable() == false`, and a sanitized `public_message`
-  (`"write audience required"`, no internal detail) — plus the matching `OtlpHttpError` arm
-  (`servers/otlp.rs`) that carries it through to that response shape.
+  `OtelError::Denied { signal: Signal, message: String }` variant (`otel-ingestion/src/error.rs`).
+  It carries a `signal` like every other variant because `OtelError::signal()` (`error.rs:55-61`)
+  returns `Signal` unconditionally, with no fallback to give a signal-less variant. Five exhaustive
+  matches in that file need the new arm — `signal()`, `grpc_code()` → `7`, `http_status()` → `403`,
+  `public_message()` → a sanitized `"write audience required"` (no internal detail), and
+  `with_context()` (`:122-137`), which is easy to miss. `is_retryable()` (`:84`) uses `matches!`, so
+  `Denied` is non-retryable by default with no edit. **No `OtlpHttpError` arm is needed**:
+  `OtlpHttpError` is just `{ WrongContentType, Otel(OtelError) }` (`otlp.rs:61-64`) and
+  `into_otlp_response` (`:67-95`) already maps an arbitrary `http_status()` through
+  `other => StatusCode::from_u16(other)`, so 403 + code 7 + the sanitized message flow through
+  untouched. `otlp.rs` still changes, but only for step 8's extractors.
 - **Webhook** (`/ingestion/webhook`): reuses `OtelError::Denied` (the same variant OTLP uses) but
   renders it through `webhook.rs`'s own `build_error_response(status, message, retryable)`
   (`webhook.rs:99-112`) rather than the OTLP shape — 403, `text/plain`, and `retryable == false`
@@ -363,10 +389,21 @@ Rejection shape per entry point, so a rejected write is retried-or-not correctly
   Firehose delivery stream therefore produces a retry-then-spill, not an immediate rejection — an
   operator note for `mkdocs/docs/admin/ingestion.md`'s "What gets stamped" section.
 
-**Prefixed-var resolution, DRY.** `auth/src/policy.rs:52-99` and `ProviderBuilder`
-(`default_provider.rs:49-83`) each hand-roll `{prefix}_X`-with-fallback-to-`MICROMEGAS_X`. Extract
-one `pub fn resolve_prefixed_var(prefix: &str, suffix: &str) -> String` in `micromegas-auth`, use
-it for the new knob, and refactor those existing copies onto it.
+**Prefixed-var resolution, DRY.** The helper already exists in shape — copy it rather than invent
+it: `read_scope.rs:148-162`'s `fn resolved_var(prefix: &str, suffix: &str) -> String` resolves
+`{prefix}_{suffix}`, falling back to `MICROMEGAS_{suffix}` when unset *or* whenever `prefix` is
+empty. Promote that exact signature to `pub fn resolve_prefixed_var` in `micromegas-auth`, use it
+for the new knob, and refactor the four hand-rolled copies in that crate onto it:
+`policy.rs:55-66` (`audience_grants_var`), `policy.rs:70-81` (`default_key_audience_var`),
+`default_provider.rs:63-71` (`oidc_config_var`), `default_provider.rs:75-86` (`admin_var`).
+Two adjacent call sites also fit and should move: `default_provider.rs:51-59` (`api_keys_json`,
+which returns the *value* — becomes `std::env::var(resolve_prefixed_var(..)).ok()`) and
+`db_api_key.rs:80-103` (`resolve_u64`, which wants the resolved *name* for its `warn!`). Contract to
+state explicitly, since every caller depends on it: suffixes are passed **without** the
+`MICROMEGAS_` prefix (`"API_KEYS"`, `"ADMINS"`, `"OIDC_CONFIG"`, `"DEFAULT_KEY_AUDIENCE"`,
+`"REQUIRE_WRITE_AUDIENCE"`), and an empty prefix resolves straight to `MICROMEGAS_{suffix}`.
+`read_scope.rs`'s own copy stays where it is — `micromegas-analytics` deliberately does not depend
+on `micromegas-auth` (`read_scope.rs:102-107`), the same trade-off §1 makes for the charset check.
 
 ### 6. One audience per process, enforced
 
@@ -375,8 +412,9 @@ conflicting re-registration under a different audience is a real, reachable case
 needs no guard: once step 9 folds the audience into `process_id_from_resource` (§4), a given
 `process_id` can only ever have been derived under one audience, so a same-`process_id`,
 different-audience conflict on that path is unreachable by construction — the query would run on
-every OTLP resource in every export request (`write_blocks`, `handler.rs:104-121`, calls
-`register_otel_process` per `PreparedBlock`) and could never fire. Its existing
+every OTLP resource in every export request (`write_blocks`, `handler.rs:95-145`, calls
+`register_otel_process` per `PreparedBlock` at `:108` — its only caller in the workspace) and could
+never fire. Its existing
 `ON CONFLICT (process_id) DO NOTHING` plus `debug!` on `rows_affected() == 0` stays as-is.
 
 `insert_process` currently treats a conflicting re-registration as a no-op. Add: when
@@ -415,7 +453,10 @@ grant on B), so it stays inside the plan's "write keys govern integrity only" fr
 (`audience_based_access_control_plan.md:97-111`), but it is a real integrity gap and the plan's
 phrasing ("pollutes *that audience's* view") understates it.
 
-Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
+**Decision: it ships as Stage 5b, a follow-up issue, not inside #1373.** The tree settles this
+rather than taste. Landing the gate here would mean designing and building Stage 3's cache layer
+inside this stage — the reasons follow — and every prior stage of this epic landed as its own issue.
+Deliberately deferred, with a follow-up issue rather than silence:
 
 - The fix is a write-side authorization gate, not an extra parameter: resolve the target's owning
   audience (`process_id → audience`, and `stream_id → process_id` for blocks) and let the auth layer
@@ -423,9 +464,10 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
   immutable, invalidation-free `moka` caches Stage 3 already specifies for Prong B
   (`audience_based_access_control_plan.md:465-478`), so the design work is shared, not duplicated.
 - Prong B is verifiably unimplemented today, which is why that cache design cannot simply be reused
-  here: `auth/src/policy.rs:8-9` / `read_scope.rs:13` record Prong B (the UDTF/UDF guards) as
+  here: `auth/src/policy.rs:8-9` / `read_scope.rs:13-14` record Prong B (the UDTF/UDF guards) as
   still pending (#1371, Stage 3), and `rust/ingestion/Cargo.toml` has no `moka` dependency, though
-  it is a workspace dep (`rust/Cargo.toml:66`) already used by `analytics`/`auth`. Landing the
+  it is a workspace dep (`rust/Cargo.toml:66`) already used by `analytics`, `auth` and
+  `analytics-web-srv`. Landing the
   authorization gate inside #1373 would mean designing and building Stage 3's cache layer inside
   this stage instead. Stages 1, 2 and 4 each landed as their own issue
   (`d0364c950`, `5dcb74026`, `5298a1ca9`) — the epic's own cadence is the in-tree precedent for
@@ -439,7 +481,9 @@ Deliberately deferred, with a follow-up issue (Stage 5b) rather than silence:
 **The reserved property stays the carrier; the physical column is #1482.** Promoting
 `micromegas.audience` to a first-class `audience` column on the six global-instance views
 (`blocks`, `processes`, `streams`, `log_entries`, `measures`, `log_stats`) is tracked separately as
-#1482 — the AbAC plan's step 15 — and is deliberately not in this stage. The dependency runs one
+#1482, and is deliberately not in this stage. (That issue↔step mapping is this plan's own: #1482 is
+the work the AbAC plan describes as its step 15, `audience_based_access_control_plan.md:1257`, which
+predates the issue and cites no number.) The dependency runs one
 way: #1482 sources that column from the resolved process property, so it needs this stage's
 authenticated stamp to exist first, and merging them would bundle a write-path/auth change with a
 `SCHEMA_VERSION` bump on every global view (a full partition rebuild) plus a rewrite of
@@ -460,10 +504,17 @@ Consistent with every other stage: inert until an operator configures it. Ship
 `{prefix}_REQUIRE_WRITE_AUDIENCE` now, matching the per-stage knob convention every landed AbAC
 stage already follows — `{prefix}_UNSTAMPED_AUDIENCE` / `{prefix}_PUBLIC_VIEW_SETS`
 (`read_scope.rs:148-192`), `{prefix}_AUDIENCE_GRANTS` / `{prefix}_DEFAULT_KEY_AUDIENCE`
-(`auth/src/policy.rs:52-99`) — none of which waited for a consolidated posture flag. Stage 7
-(#1374's sibling, step 14) is where "the operator must choose a posture" becomes a startup
-requirement over the knobs that already exist, this one included; this stage only supplies the
-switch. `{prefix}_UNSTAMPED_AUDIENCE` (analytics side, already shipped) remains the continuity
+(`auth/src/policy.rs:52-81`) — none of which waited for a consolidated posture flag. Stage 7 (the
+AbAC plan's step 14, `audience_based_access_control_plan.md:1231`, which carries no issue number of
+its own) is where "the operator must choose a posture" becomes a startup requirement over the knobs
+that already exist, this one included; this stage only supplies the switch.
+
+One asymmetry to record rather than fix here: inside the monolith, this knob resolves under
+`MICROMEGAS_INGESTION_*` (the ingestion role's prefix), while the sibling mint-side default is
+resolved unprefixed — `analytics-web-srv/src/web_server.rs:649` calls
+`default_key_audience_from_env("")` even in-process. So one monolith reads
+`MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` for stamping but only `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
+for mint defaults. Pre-existing, out of scope, worth a docs sentence so an operator is not surprised. `{prefix}_UNSTAMPED_AUDIENCE` (analytics side, already shipped) remains the continuity
 mechanism for everything written before stamping.
 
 ### Flow after this stage
@@ -504,10 +555,15 @@ POST /ingestion/insert_process            POST /ingestion/otlp/v1/logs        PO
    `default_provider.rs:49-83` onto it.
 4. `firehose_common.rs:98-108`: insert the resolved `AuthContext` into request extensions.
 5. Thread `&WriteAudience` through the signatures — `insert_process`, `register_otel_process`,
-   `write_blocks`, `ingest_logs`/`ingest_metrics`/`ingest_traces`/`ingest_webhook`/
-   `ingest_firehose_metrics`/`ingest_cloudwatch_logs_firehose` — passing `WriteAudience::none()`
-   everywhere for now. Fix the call sites the compiler names (`analytics/tests/*_db_test.rs`,
-   `otel-ingestion/tests/*`, `public/tests/firehose*`).
+   `write_blocks` (`handler.rs:95-145`), `ingest_logs`/`ingest_metrics`/`ingest_traces`/
+   `ingest_webhook`/`ingest_firehose_metrics` (all in `handler.rs`) and
+   `ingest_cloudwatch_logs_firehose` (in `cloudwatch_logs.rs:214`, **not** `handler.rs`) — passing
+   `WriteAudience::none()` everywhere for now. The private `ingest_parsed_metrics`
+   (`handler.rs:169`) needs it too: it is the shared `split_metrics` wrapper behind both
+   `ingest_metrics` and `ingest_firehose_metrics`. Fix the call sites the compiler names
+   (`analytics/tests/*_db_test.rs`, `otel-ingestion/tests/*`, `public/tests/firehose*`, and
+   `public/src/servers/{otlp.rs:150,165,180, webhook.rs:139, firehose.rs:53,
+   firehose_cloudwatch_logs.rs:47}`).
 
 **Phases 2 and 3 must ship in the same release, never separately.** Phase 2 starts stamping
 processes with the authenticated audience; Phase 3 (§4) is what makes OTLP `process_id`/`block_id`
@@ -539,21 +595,33 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 9. `identity.rs`: `IdentityContext`; `process_id_from_resource(resource, ctx)` (append-only when
    `Some`); audience-prefixed `block_id` input.
 10. `block.rs`: `build_prepared_block(.., ctx)`; collapse the `split_logs` pair into
-    `split_logs(req, ctx)`; add the parameter to `split_metrics` / `split_traces`. Update
-    `handler.rs` call sites and
+    `split_logs(req, ctx)`; add the parameter to `split_metrics` / `split_traces`. Update the
+    production call sites — `handler.rs:157,176,205,299` **and `cloudwatch_logs.rs:225`
+    (`split_logs`) / `:229` (`write_blocks`)**, the second production `split_*` caller, easy to miss
+    because it lives outside `handler.rs` — then
     `otel-ingestion/tests/{identity,split,webhook,firehose,cloudwatch_*,block,json}_tests.rs`
-    (`block_tests.rs` and `json_tests.rs` both call `split_logs`/`split_metrics`/`split_traces`
-    directly and break on the signature change).
+    (all eight `*_tests.rs` files call one of the changed functions; `block_tests.rs` and
+    `json_tests.rs` call `split_logs`/`split_metrics`/`split_traces` directly, and
+    `cloudwatch_*_tests.rs`/`webhook_tests.rs` call `process_id_from_resource` directly.
+    `fixtures.rs` builds only proto fixtures and needs no change).
+    `identity_tests.rs:236-254` (`process_id_is_stable_with_new_fields`, asserting the literal
+    `92267645-021b-5d0f-960b-c74719552658`) is the acceptance lock for §4's no-churn guarantee: it
+    must keep passing **verbatim** under `IdentityContext::default()`, so update its call to pass the
+    default context and leave the expected UUID untouched.
 
 **Phase 4 — one audience per process.**
 
 11. Conflict guard in the native `insert_process` path per §6, with a new
     `IngestionServiceError::AudienceConflict` variant (a caller must branch on it to answer 403 —
-    the `rust/CLAUDE.md` bar for a typed error). Because `IngestionServiceError` is matched
-    exhaustively at both consumers, add the arm to each: `IngestionError::Forbidden`
-    (`servers/ingestion.rs`) and `OtelError::Denied` (`otel-ingestion/src/error.rs`, reusing the
-    variant introduced in §5) — the latter is unreachable in practice since `register_otel_process`
-    never produces `AudienceConflict` (§6), but the match still needs the arm to compile.
+    the `rust/CLAUDE.md` bar for a typed error). `IngestionServiceError` has exactly two
+    out-of-crate consumers, both exhaustive with no `_` arm, so add the arm to each:
+    `From<IngestionServiceError> for IngestionError` (`servers/ingestion.rs:41-49`) →
+    `IngestionError::Forbidden`, and `OtelError::from_ingestion` (`otel-ingestion/src/error.rs:111-117`)
+    → `OtelError::Denied` (reusing the variant introduced in §5; `from_ingestion` already has the
+    `signal` in scope to fill it). The latter is unreachable in practice since
+    `register_otel_process` never produces `AudienceConflict` (§6), but the match still needs the arm
+    to compile. Nothing else breaks: the remaining out-of-crate references are
+    `map_err(|e| anyhow!(..))` in tests, which use `Display`, not a match.
 
 **Phase 5 — docs, changelog, tests.**
 
@@ -575,22 +643,18 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 - `rust/public/src/servers/ingestion.rs` (`IngestionError::Forbidden`), `otlp.rs`
   (`OtlpHttpError` arm for `OtelError::Denied`), `webhook.rs`, `firehose.rs`,
   `firehose_cloudwatch_logs.rs`, `firehose_common.rs`
-- `rust/public/Cargo.toml`: add a `[[test]]` entry for the new
-  `audience_stamping_db_test` (`name = "audience_stamping_db_test"`,
-  `required-features = ["server"]`), matching all 13 existing entries in this file —
-  `default = []` gates `micromegas-ingestion`/`micromegas-otel-ingestion`/`servers::*` behind
-  `server`, and `autotests` is not disabled, so an unlisted file is auto-discovered and fails to
-  build under `cargo test -p micromegas` without this entry.
 - `rust/otel-ingestion/src/identity.rs`, `block.rs`, `handler.rs`, `cloudwatch_logs.rs`,
   `error.rs` (`OtelError::Denied` variant and its exhaustive-match arm for `AudienceConflict`)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (constant + stale-gap note)
 - `rust/telemetry-ingestion-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- Tests: `rust/ingestion/tests/` (row-level `insert_process`/`register_otel_process` stamping and
-  conflict-guard assertions only), `rust/otel-ingestion/tests/`, `rust/public/tests/` (new
-  `audience_stamping_db_test.rs` carrying the OTLP identity/collision DB assertions, plus the
-  Firehose `firehose_router` call-site updates), `rust/analytics/tests/ownership_rewrite_db_test.rs`
+- Tests: `rust/ingestion/tests/audience_stamping_db_test.rs` (new — conflict guard + one stamp
+  round-trip), `rust/otel-ingestion/tests/` (all eight `*_tests.rs`, incl. the
+  `identity_tests.rs:236-254` golden lock), `rust/public/tests/` (the 11 `firehose_router`
+  call-site updates plus the new HTTP-level denial/stamping cases — no new file, no new
+  `[[test]]` entry), `rust/analytics/tests/ownership_rewrite_db_test.rs`
 - Docs: `mkdocs/docs/admin/ingestion.md`, `authentication.md`, `api-keys.md`, `monolith.md`,
-  `mkdocs/docs/otlp/index.md`, `CHANGELOG.md`
+  `flight-sql.md`, `mkdocs/docs/otlp/index.md`, `CHANGELOG.md` (both the new entry **and** the stale
+  sentence at `CHANGELOG.md:8`)
 - `tasks/data_isolation/audience_based_access_control_plan.md`
 
 ## Trade-offs
@@ -619,7 +683,7 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
 - **No ingestion-side default/fallback audience.** A configured fallback stamped onto
   otherwise-unstamped writes (an ingestion-side analogue of `MICROMEGAS_DEFAULT_KEY_AUDIENCE`)
   would ease migration but reintroduces exactly the "silent audience nobody chose" failure #1372
-  already rejected for `mint`: `auth/src/policy.rs:80-99`'s `default_key_audience_from_env` lets
+  already rejected for `mint`: `auth/src/policy.rs:83-113`'s `default_key_audience_from_env` lets
   `import` fall back but never `mint`, because "an unresolved mint is a 400, never a silent
   `public`" — a silent default there "would publish a new credential's entire future ingestion
   history" (`audience_based_access_control_plan.md:1154-1157`). Stamping a guessed audience onto
@@ -637,8 +701,10 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   a 403, so Stage 2's `MAX(audience)` collapse cannot be gamed by a later, narrower stamp.
 - Audience-scoped OTLP identity removes cross-audience process collapse and cross-audience block
   dedup.
-- Both spoofable-header strips (`x-auth-*`) now happen on the Firehose path too, alongside the
-  extension insert.
+- Unchanged on the Firehose path: it already strips all five spoofable headers (`x-auth-subject`,
+  `x-auth-email`, `x-auth-issuer`, `x-allow-delegation`, `x-auth-is-admin`) on the success path
+  (`firehose_common.rs:99-106`), mirroring `auth/src/axum.rs:75-79`. The only delta this stage makes
+  there is that the validated `AuthContext` stops being discarded.
 - Residual, tracked, integrity-only: `insert_stream` / `insert_block` cross-audience injection
   (§7). No write→read escalation exists in any of these cases — reading an audience still requires
   a read grant.
@@ -656,11 +722,29 @@ materialization), that mislabeling is permanent and unrepairable. Land steps 6-1
   stops taking effect — a process relying on it falls back to unstamped (unless
   `{prefix}_UNSTAMPED_AUDIENCE` widens it) unless its credential is a DB ingestion key bound to that
   audience.
-- `mkdocs/docs/admin/api-keys.md:208-226`: drop "Stage 5, not yet shipped".
-- `mkdocs/docs/admin/monolith.md`: prefixed knob row.
-- `mkdocs/docs/otlp/index.md`: process ids are audience-scoped when the credential carries an
-  audience; existing ids re-derive once stamping starts.
-- `CHANGELOG.md` **Unreleased**: an `Ingestion:` entry in the established AbAC style, with the
+- `mkdocs/docs/admin/api-keys.md:212`: drop "Stage 5, not yet shipped" (the passage runs `:208-226`).
+- `mkdocs/docs/admin/monolith.md:38-55`: prefixed knob row, alongside the existing
+  `MICROMEGAS_ANALYTICS_*` AbAC rows.
+- `mkdocs/docs/admin/flight-sql.md:33`: the same `MICROMEGAS_UNSTAMPED_AUDIENCE` row as
+  `monolith.md:51`, whose "a process with no `micromegas.audience` property" framing describes
+  never-stamped legacy data once stamping ships. Keep the two copies in step.
+- `mkdocs/docs/otlp/index.md`: this file **restates both derivation formulas literally**, so it is a
+  correctness fix, not a note — three sites: `:73-98` (the full 31-field `process_id` field list,
+  which gains the audience as a conditional 32nd), `:224`
+  (`block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`), and `:414-417` (the webhook header-hash
+  input, now one of three `block_id` inputs). Also state that existing ids re-derive once stamping
+  starts — `:93-95` already establishes the re-derivation precedent this leans on. `:17` and `:36`
+  ("the OTLP routes share the same auth chain as the rest of the ingestion service") are the in-tree
+  evidence for step 14's correction of the AbAC plan's stale step-11 premise.
+- `CHANGELOG.md:8` (Stage 2's Unreleased entry) currently ends its known-limitation paragraph with
+  "Stage 5 (#1373) … has not landed yet, so operators should not treat this stage's enforcement as a
+  hard security boundary against a malicious or misconfigured instrumented client until it does."
+  Merging this stage falsifies that sentence — amend it in the same commit, the same way step 14
+  handles `ownership_rewrite.rs:59-75`.
+- `CHANGELOG.md` **Unreleased**: a new `* **Ingestion:**` group (Unreleased already carries two
+  separate `**Analytics:**` groups, so append the new group after the existing `**Auth:**` one rather
+  than assuming a canonical slot) with an entry in the established AbAC style —
+  `(#1373, Stage 5 of the epic tracked at #1334)` — with the
   **Minor breaking change** clause for the Rust signature changes (`insert_process`,
   `register_otel_process`, `split_*`, `process_id_from_resource`, `serve_ingestion`) and an upgrade
   note covering both OTLP `process_id` re-derivation and the visibility change for client
@@ -678,10 +762,15 @@ Unit (no DB):
   writes no property at all (asserted as *absent*, not empty).
 - `strip_reserved_properties` on stream properties.
 - `resolve_write_audience`: the full 3×2 table of §5, including "no extension + require ⇒ 403".
-- Identity: `process_id_from_resource(r, ctx{audience: None})` equals a golden pre-change value
-  (the no-churn guarantee); two audiences over the same resource differ; same for `block_id`;
-  webhook `extra_hash_input` still influences `block_id` with and without an audience.
-- `StampingConfig::from_env` prefixed/unprefixed resolution.
+- Identity — this is where the whole §4 collision story is asserted, because every input is a pure
+  function of its arguments and needs no database to exercise:
+  `process_id_from_resource(r, IdentityContext::default())` still equals the golden value already
+  locked in `identity_tests.rs:236-254` (the no-churn guarantee); two audiences over the **same**
+  resource derive two distinct `process_id`s; same for `block_id`; webhook `extra_hash_input` still
+  influences `block_id` with and without an audience; and `stream_id` inherits the split for free
+  because it derives from `process_id`.
+- `StampingConfig::from_env` prefixed/unprefixed resolution, and `resolve_prefixed_var`'s
+  empty-prefix and fallback rules.
 
 HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, per
 `public/tests/firehose_tests.rs:1-40`):
@@ -689,13 +778,18 @@ HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, pe
 - Firehose: `firehose_tests.rs:1-40`'s own `make_auth_provider()` builds an `ApiKeyAuthProvider`
   from an env keyring, and every env-keyring key hard-codes `bound_audience: None`
   (`auth/src/api_key.rs:128`) — only `DbApiKeyAuthProvider` (live Postgres) ever produces `Some(..)`,
-  so the discarded-context regression cannot be asserted on that harness. Instead, add a test
+  so the discarded-context regression cannot be asserted on that harness as it stands. Add a test
   `impl AuthProvider` (`async-trait` is already a `micromegas-public` dev-dependency) returning an
   `AuthContext` with `bound_audience: Some("team-a")`, following the existing precedent at
-  `public/tests/read_policy_threading_tests.rs:253-270`; assert the request reaches the handler with
-  an `AuthContext` extension carrying that `bound_audience`. Separately, an audience-less
-  (env-keyring) key under `require_write_audience` gets the Firehose ack shape with a 4xx and an
-  `errorMessage`.
+  `public/tests/read_policy_threading_tests.rs:247-269`.
+  Assert it **differentially**, with `require_write_audience` on and a zero-record body: the
+  `Some("team-a")` provider gets a clean ack (no `errorMessage`), while the audience-less
+  env-keyring key gets the Firehose ack shape with a 4xx and an `errorMessage`. The passing case is
+  precisely what proves the context is no longer dropped — if `firehose_common.rs` still discarded
+  it, the audience-carrying key would be rejected too. Asserting the extension *directly* is not
+  available here: this harness never touches the DB ("every case … either fails auth before the
+  handler or sends zero records", `firehose_tests.rs:1-7`), and a layer added outside
+  `firehose_router` cannot observe an extension inserted by middleware inside it.
 - OTLP: audience-less credential under `require_write_audience` ⇒ `google.rpc.Status` code 7 in the
   request's own encoding (JSON in → JSON out).
 - Native: 403 body shape; unstamped-and-allowed passes through when the knob is off.
@@ -703,21 +797,30 @@ HTTP level (`tower::ServiceExt::oneshot`, in-memory object store + lazy pool, pe
 DB-backed (`#[ignore]` + `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`, per
 `analytics/tests/ownership_rewrite_db_test.rs`):
 
-- `rust/ingestion/tests/audience_stamping_db_test.rs`: exercises only what `micromegas-ingestion`
-  can name without a dev-dependency cycle on `micromegas-otel-ingestion` — `insert_process` with
-  `Some("team-a")` lands `micromegas.audience = team-a` on the row; a client-supplied
-  `micromegas.audience = team-b` in the same request does not survive; `None` leaves the property
-  absent; `register_otel_process` stamping the same way with a pre-built `Vec<Property>`. Conflict
-  guard: re-register the same `process_id` with the same audience ⇒ ok; with a different audience ⇒
-  `AudienceConflict`; existing `NULL` + incoming `Some` ⇒ ok, still `NULL`.
-- `rust/public/tests/audience_stamping_db_test.rs` (new — `micromegas-otel-ingestion` already
-  depends on `micromegas-ingestion` and so can name `split_metrics`/`process_id_from_resource`
-  together, but it declares no `[dev-dependencies]` at all (no `tokio`, `sqlx`, `object_store`), so
-  it has no DB-backed harness to host this in; `rust/public` is the lowest crate that depends on
-  both crates *and* already has one, following the existing DB-backed precedent in
-  `pg_stats_test.rs` / `materialize_fail_isolation_tests.rs`):
-  the OTLP identity/collision regression — two audiences posting **identical** OTLP resources
-  produce two distinct `process_id`s and both blocks persist (the collision/dedup regression test).
+Scoped deliberately: a live PG/object-store test earns its place only where the assertion is about
+*Postgres semantics* — `ON CONFLICT` outcomes, `rows_affected`, what a row actually holds. Everything
+that is a pure function of its inputs (`finalize_process_properties`, all of §4's identity
+derivation, `resolve_write_audience`) is asserted in the unit tests above and is **not** re-asserted
+against a database.
+
+- `rust/ingestion/tests/audience_stamping_db_test.rs` (new; the crate already has this harness —
+  `insert_block_dedup_db_test.rs` — and `sqlx`/`tokio`/`object_store` are already deps):
+  the **conflict guard**, which is irreducibly about `ON CONFLICT (process_id) DO NOTHING` +
+  `rows_affected() == 0` + the follow-up `SELECT`, and cannot be unit-tested. Re-register the same
+  `process_id` with the same audience ⇒ ok; with a different audience ⇒ `AudienceConflict`; existing
+  `NULL` + incoming `Some` ⇒ ok, row still `NULL` (no retro-stamp). Plus **one** round-trip case
+  proving the stamp survives the `sqlx` bind into `processes.properties` and reads back — that is
+  the only thing the DB adds over the `finalize_process_properties` unit tests, so it is one case,
+  not four.
+- **No new `rust/public` DB test.** An earlier draft put the OTLP identity/collision regression there
+  ("two audiences posting identical resources produce two distinct `process_id`s and both blocks
+  persist"). Both halves are pure functions already covered by the identity unit tests above, and the
+  persistence half adds nothing on top: `insert_block_typed`'s create-only behavior under
+  `ON CONFLICT (block_id) DO NOTHING` is already locked against live PG by
+  `rust/ingestion/tests/insert_block_dedup_db_test.rs`, which is indifferent to how a `block_id` was
+  derived (it builds ids with `Uuid::new_v4()`). Distinct ids ⇒ distinct rows needs no second
+  DB-backed proof, so this stage adds no test file to `rust/public` and no `[[test]]` entry to its
+  `Cargo.toml`.
 - End-to-end acceptance, reusing `ownership_rewrite_db_test`'s materialize-then-query harness:
   ingest through the real path under audience A, materialize, then assert a `ReadScope` granting
   only B sees nothing, only A sees the rows, and `ReadScope::All` sees everything — i.e. Stage 5's
@@ -735,7 +838,9 @@ import route and pointing a producer at it.
 
 ## Open Questions
 
-1. **Is the Stage 5b split acceptable** (stamping now; cross-audience `insert_stream`/
-   `insert_block` ownership checks in a follow-up issue with the Prong B caches), or should the
-   write-side ownership check land inside #1373? The recommendation is to split: it keeps the hot
-   path untouched here, and the cache design is shared with Stage 3.
+None. The one question this plan carried — whether the cross-audience `insert_stream`/`insert_block`
+ownership check belongs inside #1373 or in a follow-up — is settled by the tree and recorded as a
+decision in [§7](#7-what-this-stage-does-not-close): it ships as Stage 5b, because the gate depends
+on Stage 3's Prong B cache layer, which is verifiably unimplemented (`policy.rs:8-9`,
+`read_scope.rs:13-14`, and no `moka` dependency in `rust/ingestion/Cargo.toml`), and because stages
+1, 2 and 4 each landed as their own issue (`d0364c950`, `5dcb74026`, `5298a1ca9`).
