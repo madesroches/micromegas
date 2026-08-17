@@ -508,12 +508,16 @@ supply an audience").
 - One shared helper implements the table above:
 
   ```rust
-  fn resolve_audience(
+  pub fn resolve_audience(
       state: &IngestionKeysState,
       requested: Option<&str>,
       fallback: Option<&str>,   // None for mint, Some(PUBLIC_AUDIENCE) for import
   ) -> Result<String, IngestionKeyError>
   ```
+
+  `pub`, not module-private, so the resolution matrix above is unit-testable without a database — see
+  Testing Strategy for why that is the difference between three assertions in `cargo test` and three
+  in `#[ignore]`d live tests. It is sync and touches no pool, which is what makes that possible.
 
   **Called after `require_pool` and `validate_name`, not before them.** The order is
   `require_pool` → `validate_name` → `resolve_audience` → `INSERT` for `mint`, and
@@ -678,6 +682,12 @@ not evidence they work. Verify these by hand against a live DB (`cargo test -- -
 - `db_api_key_tests.rs:282`'s `assert!(ctx.allow_delegation)` — **inverts** under §4.
 - `ingestion_keys_tests.rs:309`'s `live_mint_list_revoke_round_trip` — POSTs no `audience` and
   asserts `CREATED` (`:327`), which §6 turns into the 400 case.
+
+Two of those four stop being *sole* guards once the Testing Strategy's non-live coverage lands — the
+`allow_delegation` rule and `has_audience()` are pure functions of `ApiKeyTable` and get their own unit
+tests, and §5's resolution matrix is unit-tested against `pub fn resolve_audience` rather than through
+a route that must complete an `INSERT`. Write those first: they turn two silent live-only failures into
+ordinary `cargo test` failures. The list above is then what remains genuinely live.
 
 Two more are runtime-only but caught by any live run: a `KeyListEntry`/`ImportedRow` column added to
 one query but not its twin (`ingestion_keys.rs:261`/`:272`, `:397`/`:414`) 500s instead of failing to
@@ -1014,10 +1024,19 @@ an `ApiKeyTable::Ingestion` key (`:268`/`:270`), which §4 makes `false`. It mus
 `assert!(!ctx.allow_delegation)`, and it is the regression test for that half of §4 — the compiler
 cannot catch it.
 
-New coverage: the audience reaches `bound_audience` unchanged (the issue's first test);
-ingestion keys give `allow_delegation: false` while analytics keys still give `true` and
-`bound_audience: None`; the audience survives a cache hit; the unreachable-pool cases still yield
-`ProviderUnavailable`.
+New **live** coverage — each of these needs a real row, the real loader, or the real cache, so none of
+it can be anything but live: the audience reaches `bound_audience` unchanged (the issue's first test);
+the audience survives a cache hit; the unreachable-pool cases still yield `ProviderUnavailable`.
+
+New **non-live** coverage, and this is the important half: `ApiKeyTable::has_audience()` and the
+`allow_delegation` derivation are **pure functions of the enum** (`matches!` over two variants, no
+pool, no async), so they get plain unit tests — `has_audience()` is `true` for `Ingestion` and `false`
+for `Analytics`, and the `allow_delegation` rule inverts that. Do **not** leave these covered only
+transitively through the `#[ignore]`d live tests, which is how they are reached today. This is exactly
+why `:282`'s inversion above is the most dangerous item in this change: `python3 build/rust_ci.py`
+never runs `--ignored`, so a full-green CI run currently proves nothing about either property. A
+three-line test on the enum moves both into default `cargo test`, and then the live assertion at
+`:282` is confirmation rather than the sole guard.
 
 **`rust/auth/tests/default_provider_tests.rs`**: same live-DB issue as `db_api_key_tests.rs` above —
 its own `insert_live_key` helper (`:45-59`) inserts into `ingestion_api_keys` with no `audience`,
@@ -1028,10 +1047,29 @@ existence checks, not `bound_audience`. (Its other, throwaway-schema table used 
 existence-query tests at `:196` is unaffected — it creates its own minimal `ingestion_api_keys` in
 a throwaway schema the migration never runs against.)
 
-**`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**: new coverage — `mint` with no audience
-and no knob ⇒ 400 naming the knob; with the knob ⇒ that value; explicit ⇒ that value (the issue's
-per-key override). `import` with neither ⇒ `public`. An invalid audience ⇒ 400 before any DB access.
-`#[ignore]`d live-DB: importing an already-present hash reports the **existing** audience.
+**`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**.
+
+**Test §5's resolution matrix against `resolve_audience` directly, not through the routes.** The
+helper is sync, takes no pool, and reads only `state.default_audience` — the entire four-row table
+(explicit / knob / `import`'s `PUBLIC_AUDIENCE` fallback / `mint`'s 400) is a **pure unit test**. This
+matters because of how this file is built: every one of its nine non-`#[ignore]`d tests asserts a
+403/400/503, i.e. a rejection that short-circuits *before* the `INSERT`, and its module doc states the
+rule outright — "Every test here uses a lazily-connected pool … and **never actually reaches the
+database**" (`:14-21`). So a route-level assertion that mint *succeeded* with audience X has to get
+past the write, which forces it `#[ignore]`d and out of default CI. Testing the helper keeps the three
+success rows in `cargo test` where they belong, and only the 400 row would have worked route-level
+anyway. `resolve_audience` therefore needs to be `pub` rather than module-private — blessed explicitly
+by `CLAUDE.md`'s "making a private item `pub` … is all acceptable", and the file already imports
+`analytics_web_srv::ingestion_keys::{IngestionKeysState, ingestion_keys_router}` (`:24`) through the
+crate's `[lib]` target, so nothing new is needed to reach it.
+
+Route-level coverage then narrows to what only a route can add, all of it still non-live: an invalid
+audience ⇒ 400 **before any DB access**; the no-audience-no-knob 400 actually surfaces as a 400 whose
+body names `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; and the `require_pool` → `validate_name` →
+`resolve_audience` precedence below.
+
+`#[ignore]`d live-DB, genuinely unavoidable (it needs a real `ON CONFLICT`): importing an
+already-present hash reports the **existing** audience.
 
 Two **existing** tests in this file change, beyond the 13 mechanical `IngestionKeysState` literals:
 
@@ -1055,6 +1093,15 @@ different `execute_migration`): against a live data-lake DB seeded with a v5-era
 than staying NULL"), leaves `read_data_lake_schema_version` reporting **6** (which is also what
 catches a forgotten `UPDATE migration SET version=6;` — see §3 — before it becomes a startup panic),
 and a hand-written `INSERT` of `''` is rejected by the `CHECK`.
+
+**Scope this test to what only Postgres can answer**, so it doesn't drift into re-testing the charset:
+the backfill's `public`-not-NULL outcome, the version bump, and the fact that the SQL `CHECK` agrees
+with `is_valid_audience` on a *couple* of representative values (`''`, and one containing `:`). The
+charset rules themselves are already pinned by the `is_valid_audience` unit tests above; the live test
+exists to verify the **third copy** of those rules (§3: `policy.rs`, `read_scope.rs`, this `CHECK`)
+actually matches the other two — which no Rust test can do, since Postgres ARE semantics are the thing
+under test. Enumerating the full accept/reject table here again would be duplication that can rot in
+one place while passing in the other.
 
 **`OwnershipRewrite`** — `MICROMEGAS_UNSTAMPED_AUDIENCE=public` and `=team-alpha` both parse (the
 latter would have been rejected before) and produce the same coalesce predicate. This also rewrites
