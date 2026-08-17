@@ -127,15 +127,14 @@ fn has_audience_is_true_only_for_ingestion() {
     assert!(!ApiKeyTable::Analytics.has_audience());
 }
 
-/// `allow_delegation`'s derivation (AbAC Stage 4, #1372) -- `db_api_key.rs` sets it to
-/// `matches!(self.table, ApiKeyTable::Analytics)`, the same pure `matches!` expression pinned
-/// here. This is the non-live regression guard for the property
-/// `live_row_authenticates_with_expected_context` below only *confirms*: an ingestion key is
-/// never a delegating service account.
+/// `allow_delegation`'s derivation (AbAC Stage 4, #1372) -- `db_api_key.rs` sets it from
+/// `ApiKeyTable::allows_delegation()`, the method pinned here. This is the non-live regression
+/// guard for the property `live_row_authenticates_with_expected_context` below only *confirms*:
+/// an ingestion key is never a delegating service account.
 #[test]
 fn allow_delegation_derivation_is_true_only_for_analytics() {
-    assert!(!matches!(ApiKeyTable::Ingestion, ApiKeyTable::Analytics));
-    assert!(matches!(ApiKeyTable::Analytics, ApiKeyTable::Analytics));
+    assert!(!ApiKeyTable::Ingestion.allows_delegation());
+    assert!(ApiKeyTable::Analytics.allows_delegation());
 }
 
 #[tokio::test]

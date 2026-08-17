@@ -325,6 +325,13 @@ fn grants_parse_rejects_a_non_string_selector() {
     assert!(AudienceGrants::parse(r#"{"team-alpha": [42]}"#).is_err());
 }
 
+/// A misspelled key (`"raed"` for `"read"`) in the object form must fail startup, not parse
+/// into an empty, silently-inert grant -- see the module doc comment on `RawGrantValue`.
+#[test]
+fn grants_parse_rejects_an_unknown_field() {
+    assert!(AudienceGrants::parse(r#"{"team-alpha": {"raed": ["group:eng"]}}"#).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // AudienceGrants::parse -- content errors
 // ---------------------------------------------------------------------------
@@ -406,9 +413,9 @@ async fn from_env_with_unset_var_resolves_to_public_only() {
     );
 }
 
-#[test]
+#[tokio::test]
 #[serial]
-fn from_env_reads_the_unprefixed_fallback_when_prefixed_is_unset() {
+async fn from_env_reads_the_unprefixed_fallback_when_prefixed_is_unset() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
@@ -416,7 +423,9 @@ fn from_env_reads_the_unprefixed_fallback_when_prefixed_is_unset() {
         std::env::set_var(UNPREFIXED_VAR, r#"{"team-alpha": ["*"]}"#);
     }
     let policy = AudienceReadPolicy::from_env(PREFIX).expect("from_env");
-    let _ = policy; // constructed successfully from the unprefixed fallback
+    let ctx = caller(None, vec![], vec![], false);
+    let resolved = policy.resolve(&ctx).await.expect("resolve");
+    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
 }
 
 #[tokio::test]

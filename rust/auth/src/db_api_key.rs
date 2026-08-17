@@ -51,6 +51,12 @@ impl ApiKeyTable {
     pub fn has_audience(self) -> bool {
         matches!(self, ApiKeyTable::Ingestion)
     }
+
+    /// Whether a key from this table may delegate (mint/act as another principal) --
+    /// `analytics_api_keys` only.
+    pub fn allows_delegation(self) -> bool {
+        matches!(self, ApiKeyTable::Analytics)
+    }
 }
 
 /// Cache and audit knobs for [`DbApiKeyAuthProvider`], read from env with defaults.
@@ -358,7 +364,7 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     // credential is not a delegating service account, and can never reach
                     // the gRPC path `allow_delegation` governs anyway (it lives in the
                     // other table). Unchanged (`true`) for analytics keys.
-                    allow_delegation: matches!(self.table, ApiKeyTable::Analytics),
+                    allow_delegation: self.table.allows_delegation(),
                     // `Some(..)` for every ingestion key (the column is `NOT NULL`), `None`
                     // for analytics keys -- Stage 4b populates `read_audiences` for those.
                     bound_audience: row.audience.clone(),

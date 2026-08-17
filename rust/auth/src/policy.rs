@@ -151,12 +151,20 @@ enum RawGrantValue {
     /// `mint` list -- never derived from `read`.
     Bare(Vec<String>),
     /// The explicit form, needed only when an audience also grants mint authority.
-    Object {
-        #[serde(default)]
-        read: Vec<String>,
-        #[serde(default)]
-        mint: Vec<String>,
-    },
+    Object(RawGrantObject),
+}
+
+/// The object form of a single grant-map value, broken out of [`RawGrantValue::Object`] so
+/// `#[serde(deny_unknown_fields)]` -- which serde cannot apply directly to an enum variant --
+/// has somewhere to attach: without it, a misspelled key (`"raed"` for `"read"`) would silently
+/// parse into an empty grant instead of failing startup.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGrantObject {
+    #[serde(default)]
+    read: Vec<String>,
+    #[serde(default)]
+    mint: Vec<String>,
 }
 
 /// Deserializes the top-level `{prefix}_AUDIENCE_GRANTS` object while rejecting a repeated key --
@@ -248,7 +256,7 @@ impl AudienceGrants {
             }
             let (read, mint) = match value {
                 RawGrantValue::Bare(read) => (read, vec![]),
-                RawGrantValue::Object { read, mint } => (read, mint),
+                RawGrantValue::Object(RawGrantObject { read, mint }) => (read, mint),
             };
             for selector in read.iter().chain(mint.iter()) {
                 if !valid_selector(selector) {
