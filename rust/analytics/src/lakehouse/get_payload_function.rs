@@ -1,10 +1,11 @@
+use super::audience_guard::{AudienceGuard, IdKind};
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
         array::{Array, BinaryBuilder, StringArray},
         datatypes::DataType,
     },
-    common::{internal_err, not_impl_err},
+    common::{internal_err, not_impl_err, plan_err},
     error::DataFusionError,
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -14,13 +15,16 @@ use datafusion::{
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
+use std::collections::HashSet;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// A scalar UDF that retrieves the payload of a block from the data lake.
 #[derive(Debug)]
 pub struct GetPayload {
     signature: Signature,
     lake: Arc<DataLakeConnection>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl PartialEq for GetPayload {
@@ -38,13 +42,14 @@ impl std::hash::Hash for GetPayload {
 }
 
 impl GetPayload {
-    pub fn new(lake: Arc<DataLakeConnection>) -> Self {
+    pub fn new(lake: Arc<DataLakeConnection>, guard: Arc<AudienceGuard>) -> Self {
         Self {
             signature: Signature::exact(
                 vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
                 Volatility::Immutable,
             ),
             lake,
+            guard,
         }
     }
 }
@@ -99,6 +104,38 @@ impl AsyncScalarUDFImpl for GetPayload {
             .downcast_ref::<StringArray>()
             .ok_or_else(|| DataFusionError::Internal("downcasting block_ids in GetPayload".into()))?
             .clone();
+
+        // Query Enforcement Prong B (#1371): `get_payload` reads `blobs/{process_id}/{stream_id}
+        // /{block_id}` directly out of object storage, bypassing the lakehouse entirely -- arg 1
+        // (`process_id`) is therefore the whole check, and a complete one: a caller who names a
+        // readable process cannot reach another process's blob, because the foreign block simply
+        // isn't under that prefix. Distinct ids only (one resolution per unique process, not per
+        // row); a value that doesn't even parse as a UUID is denied the same way an unreadable
+        // one is, since it's the one input that could otherwise escape the `blobs/{process_id}`
+        // prefix the completeness argument above relies on. All-or-nothing over the batch, never
+        // a per-row `NULL`: a partially-filtered binary column would be indistinguishable from a
+        // missing payload.
+        let mut distinct_process_ids: Vec<Uuid> = Vec::new();
+        let mut seen: HashSet<Uuid> = HashSet::new();
+        for i in 0..process_ids.len() {
+            let raw = process_ids.value(i);
+            let Ok(id) = Uuid::parse_str(raw) else {
+                return plan_err!("get_payload: '{raw}' is not a valid process id");
+            };
+            if seen.insert(id) {
+                distinct_process_ids.push(id);
+            }
+        }
+        let readable = self
+            .guard
+            .readable_ids(&distinct_process_ids, IdKind::Process)
+            .await?;
+        for id in &distinct_process_ids {
+            if !readable.contains(id) {
+                return plan_err!("get_payload: process '{id}' not found or not accessible");
+            }
+        }
+
         let lake = self.lake.clone();
         let mut stream = futures::stream::iter(0..process_ids.len())
             .map(|i| {

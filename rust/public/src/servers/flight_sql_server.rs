@@ -1,7 +1,7 @@
 use anyhow::Result;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
-use micromegas_analytics::lakehouse::read_scope::OwnershipRewriteConfig;
+use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
@@ -37,12 +37,12 @@ type ViewFactoryFn = Box<
         + Send,
 >;
 
-/// The auth provider plus the default `ReadPolicy`/`OwnershipRewriteConfig` `build_and_serve`
-/// resolves per branch, before `self.read_policy`/`self.ownership_config` (if set) override them.
+/// The auth provider plus the default `ReadPolicy`/`IsolationConfig` `build_and_serve`
+/// resolves per branch, before `self.read_policy`/`self.isolation_config` (if set) override them.
 type AuthAndDefaults = (
     Option<Arc<dyn AuthProvider>>,
     Arc<dyn ReadPolicy>,
-    Arc<OwnershipRewriteConfig>,
+    Arc<IsolationConfig>,
 );
 
 /// Builder for assembling and running a FlightSQL server.
@@ -77,7 +77,7 @@ pub struct FlightSqlServerBuilder {
     session_configurator: Option<Arc<dyn SessionConfigurator>>,
     auth_provider: Option<Arc<dyn AuthProvider>>,
     read_policy: Option<Arc<dyn ReadPolicy>>,
-    ownership_config: Option<Arc<OwnershipRewriteConfig>>,
+    isolation_config: Option<Arc<IsolationConfig>>,
     use_default_auth: bool,
     max_decoding_message_size: usize,
     listen_addr: SocketAddr,
@@ -94,7 +94,7 @@ impl Default for FlightSqlServerBuilder {
             session_configurator: None,
             auth_provider: None,
             read_policy: None,
-            ownership_config: None,
+            isolation_config: None,
             use_default_auth: false,
             max_decoding_message_size: 100 * 1024 * 1024,
             listen_addr: "0.0.0.0:50051"
@@ -152,13 +152,15 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set an explicit `OwnershipRewriteConfig` (#1370, AbAC Stage 2) -- the
-    /// `MICROMEGAS_UNSTAMPED_AUDIENCE` / `MICROMEGAS_PUBLIC_VIEW_SETS` deployment knobs
-    /// `OwnershipRewrite` reads. Mirrors `with_read_policy`: wins on every `build_and_serve`
-    /// branch, overriding that branch's own default (`OwnershipRewriteConfig::from_env("")` on
-    /// the `use_default_auth` branch, `OwnershipRewriteConfig::default()` on the other two).
-    pub fn with_ownership_config(mut self, config: Arc<OwnershipRewriteConfig>) -> Self {
-        self.ownership_config = Some(config);
+    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knobs consumed by
+    /// Prong A (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, `OwnershipRewrite`,
+    /// #1370, AbAC Stage 2) and Prong B (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, the mutating-
+    /// function registration gate, #1371, AbAC Stage 3). Mirrors `with_read_policy`: wins on
+    /// every `build_and_serve` branch, overriding that branch's own default
+    /// (`IsolationConfig::from_env("")` on the `use_default_auth` branch, `IsolationConfig::default()`
+    /// on the other two).
+    pub fn with_isolation_config(mut self, config: Arc<IsolationConfig>) -> Self {
+        self.isolation_config = Some(config);
         self
     }
 
@@ -264,7 +266,7 @@ impl FlightSqlServerBuilder {
         // explicit policy. This keeps `with_read_policy` order-independent with respect to
         // `with_auth_provider` / `with_default_auth`, unlike an earlier version that resolved the
         // override inside the `auth_provider` arm only and silently dropped it on the other two.
-        let (auth_provider, default_policy, default_ownership_config): AuthAndDefaults =
+        let (auth_provider, default_policy, default_isolation_config): AuthAndDefaults =
             if let Some(provider) = self.auth_provider {
                 // Injected-provider path (the monolith's `with_auth_provider` call): resolves no
                 // policy from env on its own -- the caller is expected to pair
@@ -273,7 +275,7 @@ impl FlightSqlServerBuilder {
                 (
                     Some(provider),
                     Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
-                    Arc::new(OwnershipRewriteConfig::default()),
+                    Arc::new(IsolationConfig::default()),
                 )
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
@@ -292,8 +294,8 @@ impl FlightSqlServerBuilder {
                     }
                 };
                 let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::from_env("")?);
-                let ownership_config = Arc::new(OwnershipRewriteConfig::from_env("")?);
-                (Some(provider), policy, ownership_config)
+                let isolation_config = Arc::new(IsolationConfig::from_env("")?);
+                (Some(provider), policy, isolation_config)
             } else {
                 info!("Authentication disabled");
                 // No `AuthContext` extension is ever inserted on this path (no `AuthService`
@@ -304,11 +306,11 @@ impl FlightSqlServerBuilder {
                 (
                     None,
                     Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
-                    Arc::new(OwnershipRewriteConfig::default()),
+                    Arc::new(IsolationConfig::default()),
                 )
             };
         let read_policy = self.read_policy.unwrap_or(default_policy);
-        let ownership_config = self.ownership_config.unwrap_or(default_ownership_config);
+        let isolation_config = self.isolation_config.unwrap_or(default_isolation_config);
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
@@ -316,7 +318,7 @@ impl FlightSqlServerBuilder {
             view_factory,
             session_configurator,
             read_policy,
-            ownership_config,
+            isolation_config,
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 

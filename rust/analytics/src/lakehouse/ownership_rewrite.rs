@@ -2,10 +2,11 @@
 //!
 //! An `AnalyzerRule` that injects an audience-filtering predicate into every
 //! `MaterializedView`-backed `TableScan` a query plan touches, based on the caller's `ReadScope`
-//! (#1369, AbAC Stage 1, `read_scope.rs`) and the two deployment knobs bundled in
-//! [`super::read_scope::OwnershipRewriteConfig`] (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
-//! `MICROMEGAS_PUBLIC_VIEW_SETS`). See `tasks/1370_ownership_rewrite_plan.md` for the full design
-//! rationale; this comment records only what a future reader of this file needs close at hand.
+//! (#1369, AbAC Stage 1, `read_scope.rs`) and two of the three deployment knobs bundled in
+//! [`super::read_scope::IsolationConfig`] (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
+//! `MICROMEGAS_PUBLIC_VIEW_SETS` -- the third, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, is Prong
+//! B's, #1371). See `tasks/1370_ownership_rewrite_plan.md` for the full design rationale; this
+//! comment records only what a future reader of this file needs close at hand.
 //!
 //! ## `ReadScope::All` is a true no-op
 //!
@@ -28,7 +29,9 @@
 //! column ignoring `NULL`s so a stamped row always outranks an unstamped one), then filters
 //! *that* -- uniformly, including `processes`'s own scan, which gets no separate per-row branch.
 //! This assumes a process is stamped with at most one distinct audience over its lifetime (true
-//! under Stage 5's design); Stage 3/#1371 should revisit this if that assumption changes.
+//! under Stage 5's design). Stage 3 (#1371, `audience_guard.rs`) landed without revisiting this --
+//! Prong B resolves straight from Postgres's current row, so the assumption doesn't even arise
+//! there the way it does for this rule's own historical, multi-row aggregate.
 //!
 //! ## Branch table
 //!
@@ -84,7 +87,9 @@
 //! "Residual gap" admonition in `mkdocs/docs/admin/authentication.md` and this stage's
 //! `CHANGELOG.md` entry).
 
-use super::{materialized_view::MaterializedView, read_scope::ReadScope};
+use super::{
+    audience_guard::AUDIENCE_PROPERTY, materialized_view::MaterializedView, read_scope::ReadScope,
+};
 use datafusion::{
     arrow::datatypes::DataType,
     common::{Column, tree_node::Transformed},
@@ -99,7 +104,6 @@ use datafusion::{
     sql::TableReference,
 };
 use micromegas_datafusion_extensions::properties::property_get::PropertyGet;
-use micromegas_telemetry::property::PROPERTY_AUDIENCE;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -148,15 +152,17 @@ impl OwnershipRewrite {
         }
     }
 
-    /// `property_get(properties, "micromegas.audience")`, cast to `Utf8`. `property_get` returns
+    /// `property_get(properties, AUDIENCE_PROPERTY)`, cast to `Utf8`. `property_get` returns
     /// `Dictionary(Int32, Utf8)` (`property_get.rs`), and this rule runs strictly *after*
     /// DataFusion's built-in `TypeCoercion` analyzer pass (`Analyzer::new()`'s only two built-ins
     /// are `[ResolveGroupingFunction, TypeCoercion]`), so nothing coerces the expressions it
-    /// injects -- every one of them is explicitly typed here instead.
+    /// injects -- every one of them is explicitly typed here instead. The property name itself is
+    /// [`AUDIENCE_PROPERTY`] (`audience_guard.rs`), Prong B's constant too -- one definition
+    /// shared by both prongs, rather than each inlining its own copy of the literal.
     fn audience_col() -> Expr {
         cast(
             ScalarUDF::from(PropertyGet::new())
-                .call(vec![col("properties"), lit(PROPERTY_AUDIENCE)]),
+                .call(vec![col("properties"), lit(AUDIENCE_PROPERTY)]),
             DataType::Utf8,
         )
     }

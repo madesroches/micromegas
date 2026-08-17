@@ -1,5 +1,8 @@
+use super::audience_guard::{AudienceGuard, IdKind};
+use super::read_scope::ReadScope;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 use async_trait::async_trait;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::datatypes::Schema;
@@ -16,17 +19,20 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
+use sqlx::Row;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
 #[derive(Debug)]
 pub struct ListPartitionsTableFunction {
     lake: Arc<DataLakeConnection>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl ListPartitionsTableFunction {
-    pub fn new(lake: Arc<DataLakeConnection>) -> Self {
-        Self { lake }
+    pub fn new(lake: Arc<DataLakeConnection>, guard: Arc<AudienceGuard>) -> Self {
+        Self { lake, guard }
     }
 }
 
@@ -37,6 +43,7 @@ impl TableFunctionImpl for ListPartitionsTableFunction {
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(ListPartitionsTableProvider {
             lake: self.lake.clone(),
+            guard: self.guard.clone(),
         }))
     }
 }
@@ -45,6 +52,7 @@ impl TableFunctionImpl for ListPartitionsTableFunction {
 #[derive(Debug)]
 pub struct ListPartitionsTableProvider {
     pub lake: Arc<DataLakeConnection>,
+    guard: Arc<AudienceGuard>,
 }
 
 #[async_trait]
@@ -108,14 +116,40 @@ impl TableProvider for ListPartitionsTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        // Build query with optional LIMIT clause pushed down to PostgreSQL.
-        // DataFusion only pushes the limit when it's safe to do so (i.e., when there
-        // are no WHERE clauses that could filter rows). When filters are present,
-        // DataFusion passes limit=None and applies the limit after filtering.
-        // Important: DataFusion trusts us to apply the limit - if we ignore it,
-        // too many rows will be returned to the client.
-        let query = if let Some(n) = limit {
-            format!(
+        // Query Enforcement Prong B (#1371): `ReadScope::All` keeps today's path unchanged,
+        // including the `LIMIT` pushdown. A restricted caller instead fetches every row
+        // unlimited, row-filters per plan §8, then truncates to `limit` in Rust -- filtering
+        // after a pushed-down limit would return fewer rows than asked for while more matching
+        // rows exist, silently wrong.
+        let restricted = *self.guard.read_scope() != ReadScope::All;
+        let query = if !restricted {
+            // Build query with optional LIMIT clause pushed down to PostgreSQL.
+            // DataFusion only pushes the limit when it's safe to do so (i.e., when there
+            // are no WHERE clauses that could filter rows). When filters are present,
+            // DataFusion passes limit=None and applies the limit after filtering.
+            // Important: DataFusion trusts us to apply the limit - if we ignore it,
+            // too many rows will be returned to the client.
+            if let Some(n) = limit {
+                format!(
+                    "SELECT view_set_name,
+                            view_instance_id,
+                            begin_insert_time,
+                            end_insert_time,
+                            min_event_time,
+                            max_event_time,
+                            updated,
+                            file_path,
+                            file_size,
+                            file_schema_hash,
+                            source_data_hash,
+                            num_rows,
+                            partition_format_version,
+                            sort_order,
+                            max_sort_key_time
+                     FROM lakehouse_partitions
+                     LIMIT {n};"
+                )
+            } else {
                 "SELECT view_set_name,
                         view_instance_id,
                         begin_insert_time,
@@ -131,9 +165,9 @@ impl TableProvider for ListPartitionsTableProvider {
                         partition_format_version,
                         sort_order,
                         max_sort_key_time
-                 FROM lakehouse_partitions
-                 LIMIT {n};"
-            )
+                 FROM lakehouse_partitions;"
+                    .to_string()
+            }
         } else {
             "SELECT view_set_name,
                     view_instance_id,
@@ -160,7 +194,27 @@ impl TableProvider for ListPartitionsTableProvider {
         )
         .await
         .map_err(|e| DataFusionError::External(e.into()))?;
-        let rb = rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?;
+
+        let rb = if !restricted {
+            rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
+        } else {
+            let filtered = self.filter_rows(rows).await?;
+            if filtered.is_empty() {
+                // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
+                // (`make_empty_record_batch`), which doesn't match this provider's 15-column
+                // schema -- fine for a genuinely empty `lakehouse_partitions` table (today's only
+                // caller of that path), wrong once a `ReadScope::Audiences` caller with no
+                // readable partitions makes this the steady state. Build the empty batch
+                // directly from this provider's own schema instead.
+                RecordBatch::new_empty(self.schema())
+            } else {
+                let truncated: Vec<_> = match limit {
+                    Some(n) => filtered.into_iter().take(n).collect(),
+                    None => filtered,
+                };
+                rows_to_record_batch(&truncated).map_err(|e| DataFusionError::External(e.into()))?
+            }
+        };
 
         let source = MemorySourceConfig::try_new(
             &[vec![rb]],
@@ -168,5 +222,55 @@ impl TableProvider for ListPartitionsTableProvider {
             projection.map(|v| v.to_owned()),
         )?;
         Ok(DataSourceExec::from_data_source(source))
+    }
+}
+
+impl ListPartitionsTableProvider {
+    /// Row filtering for a `ReadScope::Audiences` caller (plan §8): a `view_instance_id` that
+    /// parses as a `Uuid` is kept iff it resolves (as `IdKind::ProcessOrStream`) to a readable
+    /// audience; the literal `'global'` is kept iff `AudienceGuard::global_rows_visible` says so
+    /// for that row's `view_set_name`; anything else is dropped (fail-closed -- nothing produces
+    /// such a value today). Filters the `sqlx` row vector *before* `rows_to_record_batch` rather
+    /// than the built `RecordBatch` after: simpler than a `take` kernel over 15 columns, and
+    /// leaves the schema construction untouched.
+    async fn filter_rows(
+        &self,
+        rows: Vec<sqlx::postgres::PgRow>,
+    ) -> datafusion::error::Result<Vec<sqlx::postgres::PgRow>> {
+        let mut candidate_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+        let mut row_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let view_instance_id: &str = row
+                .try_get("view_instance_id")
+                .map_err(|e| DataFusionError::External(e.into()))?;
+            let id = Uuid::parse_str(view_instance_id).ok();
+            if let Some(id) = id {
+                candidate_ids.push(id);
+            }
+            row_ids.push(id);
+        }
+        let readable = self
+            .guard
+            .readable_ids(&candidate_ids, IdKind::ProcessOrStream)
+            .await?;
+        let mut kept = Vec::with_capacity(rows.len());
+        for (row, id) in rows.into_iter().zip(row_ids) {
+            let keep = match id {
+                Some(uuid) => readable.contains(&uuid),
+                None => {
+                    let view_instance_id: &str = row
+                        .try_get("view_instance_id")
+                        .map_err(|e| DataFusionError::External(e.into()))?;
+                    let view_set_name: &str = row
+                        .try_get("view_set_name")
+                        .map_err(|e| DataFusionError::External(e.into()))?;
+                    view_instance_id == "global" && self.guard.global_rows_visible(view_set_name)
+                }
+            };
+            if keep {
+                kept.push(row);
+            }
+        }
+        Ok(kept)
     }
 }

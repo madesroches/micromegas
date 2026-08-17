@@ -27,7 +27,7 @@ use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
-use micromegas_analytics::lakehouse::read_scope::OwnershipRewriteConfig;
+use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
@@ -134,7 +134,7 @@ async fn start_server(
         view_factory,
         session_configurator,
         read_policy,
-        Arc::new(OwnershipRewriteConfig::default()),
+        Arc::new(IsolationConfig::default()),
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

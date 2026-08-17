@@ -32,9 +32,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{NullPartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::{
-    CallerContext, OwnershipRewriteConfig, ReadScope,
-};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
@@ -191,7 +189,7 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
     Arc::new(factory)
 }
 
-/// Builds a session under `read_scope`/`ownership_config` against the given `view_factory`, plans
+/// Builds a session under `read_scope`/`isolation_config` against the given `view_factory`, plans
 /// `sql`, and returns the **optimized** `LogicalPlan` -- i.e. what actually executes, after
 /// `DecorrelatePredicateSubquery` (an optimizer, not analyzer, rule) has rewritten
 /// `OwnershipRewrite`'s injected `InSubquery`/`Exists` into a join. Stopping at the
@@ -202,13 +200,13 @@ async fn optimized_plan_with_factory(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     read_scope: ReadScope,
-    ownership_config: OwnershipRewriteConfig,
+    isolation_config: IsolationConfig,
     sql: &str,
 ) -> datafusion::error::Result<LogicalPlan> {
     let caller = CallerContext {
         read_scope,
         is_admin: false,
-        ownership_config: Arc::new(ownership_config),
+        isolation_config: Arc::new(isolation_config),
     };
     let ctx: SessionContext = make_session_context(
         lakehouse,
@@ -227,12 +225,12 @@ async fn optimized_plan_with_factory(
 /// `make_test_view_factory`.
 async fn optimized_plan(
     read_scope: ReadScope,
-    ownership_config: OwnershipRewriteConfig,
+    isolation_config: IsolationConfig,
     sql: &str,
 ) -> datafusion::error::Result<LogicalPlan> {
     let lakehouse = make_offline_lakehouse_context().await;
     let view_factory = make_test_view_factory(&lakehouse).await;
-    optimized_plan_with_factory(lakehouse, view_factory, read_scope, ownership_config, sql).await
+    optimized_plan_with_factory(lakehouse, view_factory, read_scope, isolation_config, sql).await
 }
 
 fn scope(audiences: &[&str]) -> ReadScope {
@@ -247,9 +245,10 @@ fn scope(audiences: &[&str]) -> ReadScope {
 
 #[tokio::test]
 async fn public_view_set_plans_with_no_injected_predicate() {
-    let config = OwnershipRewriteConfig {
+    let config = IsolationConfig {
         unstamped_audience: None,
         public_view_sets: vec!["blocks".to_string()],
+        ..IsolationConfig::default()
     };
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM blocks")
         .await
@@ -263,7 +262,7 @@ async fn public_view_set_plans_with_no_injected_predicate() {
 
 #[tokio::test]
 async fn non_public_process_id_column_view_plans_with_an_injected_semi_join() {
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
         .await
         .expect("a non-public process_id-column view must plan");
@@ -279,7 +278,7 @@ async fn non_public_process_id_column_view_plans_with_an_injected_semi_join() {
 
 #[tokio::test]
 async fn unhandled_view_set_fails_analysis_loudly() {
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let err = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM test_no_branch")
         .await
         .expect_err("a view set matching no branch must fail analysis, not plan unfiltered");
@@ -292,7 +291,7 @@ async fn unhandled_view_set_fails_analysis_loudly() {
 
 #[tokio::test]
 async fn empty_audience_set_plans_a_literal_false_predicate() {
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let plan = optimized_plan(
         ReadScope::Audiences(Arc::from([])),
         config,
@@ -315,7 +314,7 @@ async fn processes_own_scan_plans_with_an_injected_semi_join() {
     // §3: `processes`'s own scan uses the same `process_id IN (subquery)` construction as §4,
     // filtered against the shared `per_process_audience` aggregate built from
     // `__processes__partitions` -- not an unfiltered scan of the audience source itself.
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
         .await
         .expect("processes' own scan must plan");
@@ -336,7 +335,7 @@ async fn async_events_view_instance_plans_with_an_injected_exists() {
     // predicate is a literal-valued `EXISTS`, keyed on `get_view_instance_id()` (parsed as the
     // process_id UUID). A syntactically valid UUID literal is enough for a plan-shape-only test --
     // no data is scanned.
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let process_id = "00000000-0000-0000-0000-000000000001";
     let plan = optimized_plan(
         scope(&["user:a"]),
@@ -362,7 +361,7 @@ async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
     // §6: `thread_spans` is stream-scoped with no `process_id`/`stream_id` column -- the predicate
     // is a literal `EXISTS` built from a two-hop `streams` -> `per_process_audience` join, keyed on
     // `get_view_instance_id()` (parsed as the stream_id UUID).
-    let config = OwnershipRewriteConfig::default();
+    let config = IsolationConfig::default();
     let stream_id = "00000000-0000-0000-0000-000000000002";
     let plan = optimized_plan(
         scope(&["user:a"]),
@@ -437,7 +436,7 @@ async fn real_view_factory_covers_every_registered_view_set() {
     }
 
     for sql in &queries {
-        let config = OwnershipRewriteConfig::default();
+        let config = IsolationConfig::default();
         let plan = optimized_plan_with_factory(
             lakehouse.clone(),
             inventory_view_factory.clone(),

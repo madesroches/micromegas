@@ -6,6 +6,10 @@ pub mod async_events_block_processor;
 pub mod async_events_view;
 /// Write parquet in object store
 pub mod async_parquet_writer;
+/// Query Enforcement Prong B (#1371, AbAC Stage 3): per-id audience resolution
+/// (`AudienceIndex`) and the fail-closed guard (`AudienceGuard`) for the UDTF/UDF surfaces
+/// `OwnershipRewrite` (Prong A) structurally cannot reach.
+pub mod audience_guard;
 /// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
 /// The batches are based on event times.
 pub mod batch_partition_merger;
@@ -93,7 +97,9 @@ pub mod processes_view;
 /// Datafusion integration
 pub mod query;
 /// Authorization seam input: `ReadScope` and the `CallerContext` bundle threaded into
-/// `make_session_context` (#1369, AbAC Stage 1)
+/// `make_session_context` (#1369, AbAC Stage 1). Consumed by Prong A
+/// (`ownership_rewrite::OwnershipRewrite`, #1370) and Prong B (`audience_guard::AudienceGuard`,
+/// #1371).
 pub mod read_scope;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData, reading footers from the
 /// ObjectStore through a cache-backed reader

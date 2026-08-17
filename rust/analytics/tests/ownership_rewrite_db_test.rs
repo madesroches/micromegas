@@ -32,9 +32,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::{
-    CallerContext, OwnershipRewriteConfig, ReadScope,
-};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
 use micromegas_analytics::lakehouse::view::View;
@@ -296,7 +294,7 @@ fn caller_with_scope(read_scope: ReadScope) -> CallerContext {
     CallerContext {
         read_scope,
         is_admin: false,
-        ownership_config: Arc::new(OwnershipRewriteConfig::default()),
+        isolation_config: Arc::new(IsolationConfig::default()),
     }
 }
 
@@ -307,9 +305,10 @@ fn caller_with_unstamped_audience(
     CallerContext {
         read_scope,
         is_admin: false,
-        ownership_config: Arc::new(OwnershipRewriteConfig {
+        isolation_config: Arc::new(IsolationConfig {
             unstamped_audience: Some(unstamped_audience.to_string()),
             public_view_sets: vec![],
+            user_maintenance_functions: false,
         }),
     }
 }

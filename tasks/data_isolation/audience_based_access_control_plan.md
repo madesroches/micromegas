@@ -469,6 +469,43 @@ struct, then:
   deployment mixing an everyone-group with personal audiences, enabling it lets users retire
   partitions of personal audiences too; tighten to per-audience checks if hybrid becomes real.)
 
+**Implemented (Stage 3, #1371) — corrections to the sketch above, recorded here now that Prong B
+has landed as `AudienceGuard`/`AudienceIndex` (`rust/analytics/src/lakehouse/audience_guard.rs`):**
+- **One cache, not three.** The sketch above described a `process_id → audience` cache plus two
+  chained resolutions (`block_id → process_id`, `stream_id → process_id`). The shipped
+  `AudienceIndex` instead has a single `moka::future::Cache` keyed on `(IdKind, Uuid)` — `Process`,
+  `Block`, and `ProcessOrStream` are three disjoint (plus one derived) slices of one keyspace, not
+  three separate caches with separate eviction policies. Keying on the bare `Uuid` (as the sketch's
+  chained caches implicitly would) is unsafe here: ids are client-supplied at ingestion with no
+  cross-table uniqueness constraint, so the same `Uuid` can be a `process_id` in one audience and a
+  `stream_id`/`block_id` in another, and a wrong-kind cache hit would authorize a guard against the
+  wrong owner.
+- **No `block_id → process_id → audience` chain for `get_payload`.** The sketch assumed `get_payload`
+  needed the same cache chain as `parse_block`. It doesn't: `get_payload(process_id, stream_id,
+  block_id)` already takes `process_id` as its own argument and builds
+  `blobs/{process_id}/{stream_id}/{block_id}` directly, so checking that argument alone is both
+  necessary and complete — a caller who names a readable process cannot reach another process's
+  blob, since the foreign block simply isn't under that prefix. One `IdKind::Process` resolution,
+  no `blocks` join at all.
+- **Guard-then-internal-caller, not scope inheritance, for the three UDTFs' inner sessions.** The
+  original audit (and the parent plan's own §5) assumed the three recursive-context call sites
+  inside `process_spans`/`perfetto_trace_chunks`/`parse_block` must inherit the caller's resolved
+  `ReadScope`. Stage 3 deviates deliberately: each inner session instead runs under a witness type
+  (`Authorized`, constructible only by a successful `AudienceGuard::authorize` call)'s
+  `internal_caller()`, which still resolves `ReadScope::All`. Every statement those inner sessions
+  run is server-constructed and confined to the id the guard already authorized, so inheriting the
+  caller's scope would add nothing to the confidentiality argument while introducing a second,
+  independent daemon-materialization dependency (`OwnershipRewrite`'s `processes`/`streams`
+  freshness requirement) on top of one two of the three functions already have. See
+  `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument and its accepted trade-off (losing
+  a second, independent filter as defense-in-depth inside those three functions specifically).
+- **Postgres, not the materialized `processes`/`streams` snapshot, is Prong B's audience source.**
+  `find_process` (cited above) reads via a connection pool straight against Postgres — fresher than
+  Prong A's daemon-materialized copy, and free of Prong A's "the maintenance role must have caught
+  up" precondition. The two prongs consequently read different copies of the same property in the
+  general case (documented as an accepted trade-off in `tasks/1371_udtf_udf_guards_plan.md` §11,
+  not fixed here).
+
 In a privacy deployment (no implicit groups, no groups claim), `ps` is a singleton, so Prong A
 reduces to `… IN ('user:alice@…')` — the exact per-user filter, same DataFusion plan — and Prong B
 checks membership in a one-element set.

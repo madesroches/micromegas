@@ -10,8 +10,10 @@
 //! **Stage 2 (#1370) consumes `ReadScope`.** [`super::ownership_rewrite::OwnershipRewrite`] --
 //! Prong A of the two-pronged enforcement design -- reads it out of [`CallerContext`] inside
 //! `query.rs::make_session_context` and injects an audience predicate into every
-//! `MaterializedView`-backed scan. Prong B (the UDTF/UDF guards for the span/metadata functions
-//! Prong A structurally cannot reach) is still pending, Stage 3 (#1371).
+//! `MaterializedView`-backed scan. **Stage 3 (#1371) adds Prong B**: the UDTF/UDF guards
+//! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
+//! structurally cannot reach, plus the [`IsolationConfig::user_maintenance_functions`]
+//! registration knob.
 
 use std::sync::Arc;
 
@@ -49,12 +51,15 @@ pub struct CallerContext {
     /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs (unchanged from
     /// today's `is_admin: bool` parameter).
     pub is_admin: bool,
-    /// Per-service `OwnershipRewrite` deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
-    /// `MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved once at server startup, not per request, but
-    /// bundled here rather than as a new `make_session_context` parameter (#1370 Design §8):
-    /// per-request resolved values ride the context, per-service objects live on the service,
-    /// and this rides along with `read_scope` at every real call site anyway.
-    pub ownership_config: Arc<OwnershipRewriteConfig>,
+    /// Per-service data-isolation deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
+    /// `MICROMEGAS_PUBLIC_VIEW_SETS`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) -- resolved once
+    /// at server startup, not per request, but bundled here rather than as a new
+    /// `make_session_context` parameter (#1370 Design §8): per-request resolved values ride the
+    /// context, per-service objects live on the service, and this rides along with `read_scope`
+    /// at every real call site anyway. Named `isolation_config`, not `ownership_config`: it
+    /// carries knobs consumed by both Prong A (`OwnershipRewrite`, #1370) and Prong B
+    /// (`AudienceGuard`'s registration gate, #1371), not just the ownership rewrite.
+    pub isolation_config: Arc<IsolationConfig>,
 }
 
 impl CallerContext {
@@ -66,7 +71,7 @@ impl CallerContext {
         Self {
             read_scope: ReadScope::All,
             is_admin: false,
-            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
+            isolation_config: Arc::new(IsolationConfig::default()),
         }
     }
 
@@ -76,16 +81,21 @@ impl CallerContext {
         Self {
             read_scope: ReadScope::All,
             is_admin: true,
-            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
+            isolation_config: Arc::new(IsolationConfig::default()),
         }
     }
 }
 
-/// Deployment config for [`super::ownership_rewrite::OwnershipRewrite`] (#1370, AbAC Stage 2).
-/// Per-service, resolved once at server startup from environment variables -- see
-/// [`OwnershipRewriteConfig::from_env`].
+/// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
+/// (#1370, AbAC Stage 2, Prong A) and the mutating-function registration gate
+/// (#1371, AbAC Stage 3, Prong B). Per-service, resolved once at server startup from environment
+/// variables -- see [`IsolationConfig::from_env`]. Named for what it configures (data isolation),
+/// not for either prong individually -- it predates Prong B's own name and was renamed from
+/// `OwnershipRewriteConfig` when this third knob landed, per `CLAUDE.md`'s "Rust API surface may
+/// change freely" stance: a clean name beats a compatible one here, and this rename touches only
+/// Rust construction sites, none of them SQL-layer surface.
 #[derive(Debug, Clone, Default)]
-pub struct OwnershipRewriteConfig {
+pub struct IsolationConfig {
     /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
     /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"public"`. `None`
     /// (the default) means unstamped processes stay invisible to every `ReadScope::Audiences`
@@ -97,6 +107,20 @@ pub struct OwnershipRewriteConfig {
     /// fail-closed" framing for this operator-responsibility allowlist. Parsed from
     /// `{prefix}_PUBLIC_VIEW_SETS`, falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub public_view_sets: Vec<String>,
+    /// Registers the five mutating lakehouse UDTFs/UDFs (`retire_partitions`,
+    /// `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
+    /// `retire_partition_by_metadata`) for *every* caller, not just an admin (`query.rs`'s gate
+    /// becomes `caller.is_admin || isolation_config.user_maintenance_functions`). Off (`false`)
+    /// by default. Meant for an API-key-only deployment: an API key can never be admin
+    /// (`api_key.rs`), so without this knob such a deployment has no admin principal at all and
+    /// no access to these functions whatsoever. **Deployment-wide, not per-audience** -- none of
+    /// the five functions filters by audience, so enabling this grants *any* authenticated caller
+    /// destructive access to *every* audience's partitions, not just their own; safe only when no
+    /// admin principal exists, unsafe the moment the same deployment also has personal or
+    /// per-team audiences (tighten to per-audience checks if that becomes real; out of scope
+    /// here). Parsed from `{prefix}_USER_MAINTENANCE_FUNCTIONS`, falling back to
+    /// `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`.
+    pub user_maintenance_functions: bool,
 }
 
 /// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the same
@@ -145,9 +169,26 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     Ok(values)
 }
 
+/// Parses a `{var}` env var as a strict boolean: `"true"`/`"false"` (case-insensitive) only,
+/// `Err` on anything else -- matching the fail-fast posture of the other two knobs rather than
+/// silently defaulting a typo to `false`. Unset ⇒ `false` (the knob's off-by-default posture).
+fn parse_bool_var(var: &str) -> anyhow::Result<bool> {
+    match std::env::var(var) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => anyhow::bail!(
+                "{var}: {raw:?} is not a valid boolean -- must be \"true\" or \"false\" \
+                 (case-insensitive)"
+            ),
+        },
+        Err(_) => Ok(false),
+    }
+}
+
 /// Resolves `{prefix}_{suffix}` (falling back to `MICROMEGAS_{suffix}` if unset, or always if
-/// `prefix` is empty). Shared by both `OwnershipRewriteConfig::from_env` knobs
-/// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`).
+/// `prefix` is empty). Shared by all three `IsolationConfig::from_env` knobs
+/// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`, `"USER_MAINTENANCE_FUNCTIONS"`).
 fn resolved_var(prefix: &str, suffix: &str) -> String {
     if prefix.is_empty() {
         format!("MICROMEGAS_{suffix}")
@@ -161,11 +202,12 @@ fn resolved_var(prefix: &str, suffix: &str) -> String {
     }
 }
 
-impl OwnershipRewriteConfig {
-    /// Resolves both knobs from the environment. Unset ⇒ `OwnershipRewriteConfig::default()`
-    /// (unstamped processes stay invisible, no public view sets). A malformed
-    /// `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
-    /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
+impl IsolationConfig {
+    /// Resolves all three knobs from the environment. Unset ⇒ `IsolationConfig::default()`
+    /// (unstamped processes stay invisible, no public view sets, mutating functions stay
+    /// admin-only). A malformed `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`),
+    /// a malformed `{prefix}_PUBLIC_VIEW_SETS` entry, or a `{prefix}_USER_MAINTENANCE_FUNCTIONS`
+    /// value other than `true`/`false` is `Err`, not silently ignored -- a startup `?` turns a
     /// typo into a fail-fast instead of a silently-inert knob.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
@@ -185,9 +227,12 @@ impl OwnershipRewriteConfig {
         };
         let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");
         let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;
+        let user_maintenance_functions_var = resolved_var(prefix, "USER_MAINTENANCE_FUNCTIONS");
+        let user_maintenance_functions = parse_bool_var(&user_maintenance_functions_var)?;
         Ok(Self {
             unstamped_audience,
             public_view_sets,
+            user_maintenance_functions,
         })
     }
 }

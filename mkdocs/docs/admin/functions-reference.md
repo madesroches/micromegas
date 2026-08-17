@@ -68,6 +68,13 @@ SELECT * FROM list_partitions();
 | `sort_order` | List(String) | Recorded sort guarantee (e.g. `["insert_time"]`), or `NULL` if none is guaranteed |
 | `max_sort_key_time` | Timestamp | Recorded true maximum of the view's leading sort column across the partition's rows (e.g. `begin` for `thread_spans`), or `NULL` if not recorded |
 
+!!! note "Audience-filtered for a restricted caller"
+    Under a `ReadScope::Audiences` session (auth enabled, non-admin), rows are filtered to the
+    caller's own audiences: a `view_instance_id` row is kept only if its owning process/stream
+    resolves to a readable audience, and a `'global'` row (no single audience) is kept only under
+    `MICROMEGAS_UNSTAMPED_AUDIENCE`, a matching `MICROMEGAS_PUBLIC_VIEW_SETS` entry, or
+    `ReadScope::All`. See [Authentication](authentication.md#audience-filtering-activation).
+
 **Example**:
 ```sql
 -- List partitions for specific view set
@@ -89,7 +96,7 @@ GROUP BY view_set_name;
 ### `retire_partitions(view_set, view_instance, start_time, end_time)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get "function not found".
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)) -- or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (see [Authentication](authentication.md#audience-filtering-activation); the knob grants this deployment-wide, not per-audience). Otherwise callers, including API keys, get "function not found".
 
 **Description**: Retires partitions within a specified time range.
 
@@ -116,7 +123,7 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get "function not found".
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)) -- or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (see [Authentication](authentication.md#audience-filtering-activation); the knob grants this deployment-wide, not per-audience). Otherwise callers, including API keys, get "function not found".
 
 **Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)), or a `SqlBatchView` (e.g. `log_stats`) whose live partitions predate it adopting a `with_merge_sort_order` declaration and so won't certify for ordered k-way merges until regenerated.
 
@@ -148,7 +155,7 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 ### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get an "Invalid function" error.
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)) -- or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (see [Authentication](authentication.md#audience-filtering-activation); the knob grants this deployment-wide, not per-audience). Otherwise callers, including API keys, get an "Invalid function" error.
 
 **Description**: Surgically retires a single partition by its metadata identifiers. This is the preferred method for retiring partitions as it works for both empty partitions (file_path=NULL) and non-empty partitions.
 
@@ -213,7 +220,7 @@ LIMIT 10;
 ### `retire_partition_by_file(file_path)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, get an "Invalid function" error.
+    Only callable by an authenticated admin (see [Authentication](flight-sql.md#authentication)) -- or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (see [Authentication](authentication.md#audience-filtering-activation); the knob grants this deployment-wide, not per-audience). Otherwise callers, including API keys, get an "Invalid function" error.
 
 **Description**: Retires a single partition by exact file path match.
 

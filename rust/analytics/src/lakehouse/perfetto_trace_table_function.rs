@@ -1,6 +1,6 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    view_factory::ViewFactory,
+    audience_guard::AudienceGuard, lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider, view_factory::ViewFactory,
 };
 use crate::{
     dfext::expressions::{exp_to_string, exp_to_timestamp},
@@ -13,6 +13,7 @@ use datafusion::{
 };
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// `PerfettoTraceTableFunction` generates Perfetto trace chunks from process telemetry data.
 ///
@@ -36,6 +37,7 @@ pub struct PerfettoTraceTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl PerfettoTraceTableFunction {
@@ -43,11 +45,13 @@ impl PerfettoTraceTableFunction {
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
             lakehouse,
             view_factory,
             part_provider,
+            guard,
         }
     }
 
@@ -69,12 +73,22 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
         let exprs = args.exprs();
         // Parse process_id (arg 1)
         let arg1 = exprs.first().map(exp_to_string);
-        let Some(Ok(process_id)) = arg1 else {
+        let Some(Ok(process_id_arg)) = arg1 else {
             return plan_err!(
                 "First argument to perfetto_trace_chunks must be a string (the process ID), given {:?}",
                 arg1
             );
         };
+        // Parsed as a `Uuid` at plan time -- see `process_spans_table_function.rs`'s identical
+        // comment for why (closes an injection vector into the inner session's SQL, matches
+        // `parse_block`'s existing block-id parsing). The canonical hyphenated rendering is kept
+        // for the inner literal comparisons `perfetto_trace_execution_plan.rs` builds.
+        let Ok(process_uuid) = Uuid::parse_str(&process_id_arg) else {
+            return plan_err!(
+                "First argument to perfetto_trace_chunks must be a valid UUID (the process ID), given '{process_id_arg}'"
+            );
+        };
+        let process_id = process_uuid.hyphenated().to_string();
 
         // Parse span_types (arg 2)
         let arg2 = exprs.get(1).map(exp_to_string);
@@ -125,11 +139,13 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
         let execution_plan = Arc::new(PerfettoTraceExecutionPlan::new(
             Self::output_schema(),
             process_id,
+            process_uuid,
             span_types,
             time_range,
             self.lakehouse.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
+            self.guard.clone(),
         ));
 
         // Wrap it in a TableProvider

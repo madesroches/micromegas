@@ -38,9 +38,7 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::{
-    CallerContext, OwnershipRewriteConfig, ReadScope,
-};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
@@ -490,7 +488,7 @@ pub struct FlightSqlServiceImpl {
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
-    ownership_config: Arc<OwnershipRewriteConfig>,
+    isolation_config: Arc<IsolationConfig>,
 }
 
 impl FlightSqlServiceImpl {
@@ -500,7 +498,7 @@ impl FlightSqlServiceImpl {
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
-        ownership_config: Arc<OwnershipRewriteConfig>,
+        isolation_config: Arc<IsolationConfig>,
     ) -> Self {
         Self {
             lakehouse,
@@ -508,7 +506,7 @@ impl FlightSqlServiceImpl {
             view_factory,
             session_configurator,
             read_policy,
-            ownership_config,
+            isolation_config,
         }
     }
 
@@ -559,7 +557,7 @@ impl FlightSqlServiceImpl {
             // Not permission-sensitive the way `read_scope` is (it's deployment config, not
             // derived from the caller's identity), so it is copied verbatim on both branches
             // above rather than participating in the absent-extension/`Err` distinction.
-            ownership_config: self.ownership_config.clone(),
+            isolation_config: self.isolation_config.clone(),
         })
     }
 

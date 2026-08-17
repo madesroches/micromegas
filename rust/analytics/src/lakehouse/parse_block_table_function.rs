@@ -1,4 +1,5 @@
 use super::{
+    audience_guard::{AudienceGuard, IdKind},
     block_object_decoder::{BlockObjectDecoderMap, ObjectVisitor, default_block_object_decoders},
     lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
@@ -79,17 +80,21 @@ async fn fetch_block_metadata(
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
     block_id: Uuid,
+    caller: CallerContext,
 ) -> anyhow::Result<Option<(i64, String, StreamMetadata)>> {
-    // TODO(#1371): user-reachable (parse_block UDTF, registered for every caller,
-    // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must replace
-    // with the caller's inherited scope.
+    // Runs under the witness's internal caller (`caller`, threaded in from `scan` after
+    // `AudienceGuard::authorize` succeeds), not the caller's own scope: the query below is
+    // server-constructed and confined to the single, already-authorized `block_id` -- if that
+    // block's process is readable, everything this statement can reach is readable too. A
+    // deliberate deviation from naive scope inheritance; see
+    // `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
         query_range,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        CallerContext::internal(),
+        caller,
     )
     .await?;
 
@@ -230,6 +235,7 @@ pub struct ParseBlockTableFunction {
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     decoders: Arc<BlockObjectDecoderMap>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl ParseBlockTableFunction {
@@ -238,6 +244,7 @@ impl ParseBlockTableFunction {
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
             lakehouse,
@@ -245,6 +252,7 @@ impl ParseBlockTableFunction {
             part_provider,
             query_range,
             decoders: default_block_object_decoders(),
+            guard,
         }
     }
 }
@@ -269,6 +277,7 @@ impl TableFunctionImpl for ParseBlockTableFunction {
             part_provider: self.part_provider.clone(),
             query_range: self.query_range,
             decoders: self.decoders.clone(),
+            guard: self.guard.clone(),
         }))
     }
 }
@@ -281,6 +290,7 @@ struct ParseBlockProvider {
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     decoders: Arc<BlockObjectDecoderMap>,
+    guard: Arc<AudienceGuard>,
 }
 
 #[async_trait]
@@ -306,12 +316,18 @@ impl TableProvider for ParseBlockProvider {
             return plan_err!("parse_block: '{block_id_str}' is not a valid block id");
         };
 
+        let authorized = self
+            .guard
+            .authorize(block_id, IdKind::Block, "parse_block")
+            .await?;
+
         let Some((object_offset, format, stream_metadata)) = fetch_block_metadata(
             self.lakehouse.clone(),
             self.part_provider.clone(),
             self.query_range,
             self.view_factory.clone(),
             block_id,
+            authorized.internal_caller(),
         )
         .await
         .map_err(|e| DataFusionError::External(e.into()))?
