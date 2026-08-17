@@ -106,6 +106,8 @@ pub const AUDIENCE_PROPERTY: &str = "micromegas.audience";
 
 /// What a resolution attempt found. `Unknown` is *not* `Unstamped`: an id with no row at all
 /// is always denied, while an unstamped process is subject to the `unstamped_audience` knob.
+/// "No row" covers both "not yet ingested" and "retention already deleted it" (§11) — both
+/// deny, on the same fail-closed reasoning.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerAudience {
     Unknown,
@@ -114,7 +116,7 @@ pub enum OwnerAudience {
 }
 
 /// Which table resolves the id to its owning process.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IdKind {
     Process,          // processes.process_id
     Stream,           // streams.stream_id     -> processes
@@ -124,7 +126,7 @@ pub enum IdKind {
 
 pub struct AudienceIndex {
     pool: sqlx::Pool<sqlx::Postgres>,
-    cache: moka::future::Cache<Uuid, OwnerAudience>,
+    cache: moka::future::Cache<(IdKind, Uuid), OwnerAudience>,
 }
 
 impl AudienceIndex {
@@ -138,13 +140,25 @@ impl AudienceIndex {
 }
 ```
 
-**One cache for all three kinds, keyed by the raw `Uuid`, is correct by construction.** The cached
-value is the *owning process's* audience, and a given UUID is a process id, a stream id or a block
-id — never two of those — so no key can be populated with two different answers. A cross-kind hit
-(e.g. a caller passing a stream id where `process_spans` wants a process id, after
-`list_partitions` cached it) returns that stream's owning process's audience, which is exactly the
-authorization question being asked; the downstream query then returns nothing because the id isn't a
-process. No confidentiality consequence, and one cache instead of the parent plan's three.
+**One cache for all three kinds, keyed by `(IdKind, Uuid)`, not by the bare `Uuid`.** A UUID is
+client-supplied at ingestion for all three tables (`ProcessInfo.process_id`, and stream/block
+registration — `web_ingestion_service.rs`) and no constraint spans `processes`, `streams` and
+`blocks`, so nothing stops the *same* UUID from being a process id in one audience and a stream id
+or block id in another. Keying on the bare `Uuid` would let a cache entry populated for one kind
+answer a lookup of a different kind for a colliding id — not "returns nothing downstream" but a
+genuine cross-audience read, because §6 runs the inner query under `Authorized::internal_caller()`
+(`ReadScope::All`): a wrong-kind hit that resolves to a *readable* audience would authorize the
+guard, and the inner, unscoped session would then return the colliding id's real data (e.g.
+`get_process_thread_list`/`get_process_exe`, `process_streams.rs:9-21`,
+`perfetto_trace_execution_plan.rs:302-317`) to a caller who was never granted that audience. Keying
+on `(IdKind, Uuid)` removes the collision instead of relying on downstream emptiness: `Process`,
+`Stream` and `Block` each own a disjoint slice of the keyspace, and `ProcessOrStream`
+(`list_partitions`' usage) is deliberately its own key too rather than reusing `Process`/`Stream`
+entries, so its `UNION ALL` result is what gets cached. If both arms of that `UNION ALL` return a
+row for the same id (only possible for a `process_id`/`stream_id` collision), take the `processes`
+row — i.e. `LEFT JOIN`/`UNION ALL` order is process-first, and a caller who names a colliding id gets
+the process's audience, not the stream's. One cache, three disjoint keyspaces plus one derived one,
+instead of the parent plan's three caches.
 
 **Invalidation-free, bounded by entry count.** `process_id → properties` is written once at process
 insert and never updated (no `UPDATE processes` exists anywhere in the tree); `streams.process_id`
@@ -171,9 +185,9 @@ WHERE p.process_id = ANY($1)
 `LEFT JOIN LATERAL` (not an inner `unnest` in the `FROM` list) is what keeps *unstamped* rows in the
 result: an inner unnest silently drops them, collapsing `Unstamped` into `Unknown` and turning the
 `MICROMEGAS_UNSTAMPED_AUDIENCE` escape hatch off for exactly the rows it exists for. `LIMIT 1`
-handles a duplicated property key; `= ANY($1::uuid[])` is what makes `resolve_many` one query.
-Neither `processes(process_id)` nor `blocks(block_id)` is a *unique* index
-(`sql_telemetry_db.rs:41,86`), so read at most one row per id and do not assume uniqueness.
+handles a duplicated property key; `= ANY($1::uuid[])` is what makes `resolve_many` one query. Each
+id resolves to at most one row — `process_id`, `stream_id` and `block_id` are all unique since
+migration v3 (`sql_migration.rs:250-268`).
 
 ### 2. `AudienceGuard` — pure decision, async resolution, fail-closed
 
@@ -292,15 +306,20 @@ The parent plan's §5 says the three user-reachable recursive context sites "mus
 caller's `ReadScope`**, never `All`, or they become bypasses". Inheriting is the wrong call here, and
 this plan deviates deliberately:
 
-- **It would break the functions for fresh data, in every deployment.** Prong A resolves audiences
-  from the daemon-materialized `processes`/`streams` views. `process_spans`' inner query is
-  `get_process_thread_list` over `blocks` (Prong A §4 semi-join) and then
-  `view_instance('thread_spans', …)` (Prong A §6 two-hop `EXISTS`); `perfetto_trace_chunks`' is
-  `get_process_exe` over `processes` plus the same span queries. A process ingested since the
-  daemon's last pass contributes no row to the aggregate, so **every one of those inner queries
-  returns nothing** — a caller's own just-finished process would produce an empty flame graph or an
-  empty trace. That is precisely the class of surprise Stage 2's CHANGELOG already flags as its
-  known limitation; extending it into the interactive tracing UX is a bad trade.
+- **Inheriting would add one more daemon-freshness hop, on top of one every deployment already
+  has.** `get_process_thread_list` (`process_spans`' inner query) and `fetch_block_metadata`
+  (`parse_block`'s) both read the `blocks` global view, whose `jit_update` is already a no-op —
+  it is populated only by the maintenance daemon's pass (`blocks_view.rs:158-168`) — so a process
+  ingested since the daemon's last pass already produces an empty flame graph or trace today; that
+  is the known limitation Stage 2's CHANGELOG already flags, unchanged by this stage either way.
+  `perfetto_trace_chunks`' `get_process_exe` adds a second, independent daemon-populated read on top
+  of that: `processes` is its own `SqlBatchView` with a no-op `jit_update` (`sql_batch_view.rs`),
+  materialized on the same daemon cadence but not necessarily the same pass as `blocks`. Inheriting
+  the caller's scope there would additionally require `OwnershipRewrite`'s `processes`-scan
+  semi-join to pass, so it can fail in the narrow window where `blocks` is materialized (spans
+  visible) but `processes` is not yet (would make `get_process_exe` newly empty) — a strictly
+  narrower gap than "every function, every deployment", but real for `perfetto_trace_chunks`
+  specifically.
 - **The guard is the stronger check anyway.** It reads Postgres, so it is both fresher and
   independent of the maintenance daemon.
 - **The inner SQL is server-constructed and confined to the guarded process.** Every inner statement
@@ -371,7 +390,14 @@ Implementation, in `ListPartitionsTableProvider::scan`
 
 Filtering the `RecordBatch` after `rows_to_record_batch` would mean a `take` kernel over 15 columns;
 filtering the `sqlx` row vector *before* `rows_to_record_batch` is simpler and cheaper, and keeps the
-schema construction untouched. Do it there.
+schema construction untouched. Do it there — **except when the filter empties the row vector**:
+`rows_to_record_batch` maps an empty slice to `make_empty_record_batch()`
+(`sql_arrow_bridge.rs:371-374`), which builds a **zero-field** struct (`arrow_utils.rs:14-18`), not
+one matching `ListPartitionsTableProvider::schema()`'s 15 columns. That mismatch exists today only
+on a genuinely empty `lakehouse_partitions` table; under this filter it becomes the steady state for
+any `ReadScope::Audiences` caller with no readable partitions. Guard it: if the filtered row vector
+is empty, build the empty batch directly from `ListPartitionsTableProvider::schema()`
+(`RecordBatch::new_empty`) instead of calling `rows_to_record_batch`.
 
 ### 9. The mutating-function registration knob, and where its config lives
 
@@ -394,6 +420,16 @@ Rust construction sites, none of them SQL-layer surface. Parse the knob with the
 `resolved_var` helper (`read_scope.rs:151-162`); accept exactly `true`/`false` (case-insensitive) and
 `Err` on anything else, matching the fail-fast posture of the other two knobs.
 
+**Carried caveat from the parent plan (§4): the knob is deployment-wide, not per-audience.** None of
+the five mutating functions carries an audience filter — `retire_partitions` takes an arbitrary
+`(view_set_name, view_instance_id)` pair (`query.rs:155-158`) — so once
+`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` is set, *any* authenticated caller can retire or
+materialize partitions belonging to *any* audience, not just their own. This is fine for the
+API-key-only deployment the knob is meant for (no admin principal exists at all, so the alternative
+is no access to these functions for anyone); it stops being fine the moment that deployment also has
+personal or per-team audiences, where it hands every user destructive access to every other user's
+data. Tighten to per-audience checks if such a hybrid deployment becomes real; out of scope here.
+
 ### 10. Denial is indistinguishable from absence
 
 Every guard denial and every "no such id" produces the **same** error text, e.g.:
@@ -412,12 +448,11 @@ the two apart; the client cannot.
 `list_partitions` denials are silent by construction — rows are simply absent, exactly like Prong A's
 predicate.
 
-### 11. Two prongs, two copies of the audience — accepted, with the direction stated
+### 11. Two prongs, two copies of the audience — accepted, with the direction stated per lifecycle stage
 
-Prong A reads the daemon-materialized parquet snapshot; Prong B reads Postgres, the origin. They can
-disagree only while a process is stamped in Postgres and not yet (or not consistently) materialized,
-and the disagreement is always in the same direction: **Prong B is fresher and at least as accurate**.
-Consequences:
+Prong A reads the daemon-materialized parquet snapshot; Prong B reads Postgres, the origin. **For
+live (not-yet-retained) data, Prong B is fresher and at least as accurate — never more permissive
+than the ground truth in Postgres:**
 
 - A caller's own just-ingested process: `process_spans`/`perfetto_trace_chunks`/`parse_block`/
   `get_payload` work (Prong B allows, correctly); the equivalent plain-SQL query over
@@ -425,10 +460,27 @@ Consequences:
   limitation, unchanged by this stage).
 - A foreign process: denied by both.
 
-There is no configuration in which Prong B is more permissive than the ground truth in Postgres, so
-this asymmetry is a usability gradient, not a hole. Making Prong B read the parquet snapshot instead
-(for symmetry) was rejected: it would import Prong A's daemon dependency into the interactive tracing
-path and cost a full aggregate scan per guard check instead of one indexed point query.
+**That direction flips once retention has run.** `delete_old_data`
+(`EveryHourTask::run` → `delete_old_data`, `delete.rs:151-170`) deletes `blocks` rows with
+`insert_time <= expiration`, then empty `streams`, then empty `processes` — Postgres forgets the
+process entirely. `retire_expired_partitions` (`write_partition.rs:86-135`) in the same pass only
+deletes lakehouse partitions with `end_insert_time < expiration`: a partition whose insert range
+extends past the boundary (a merged/compacted partition in particular) survives with its snapshot of
+`micromegas.audience` intact. In that window, `OwnerAudience::Unknown` means "no such row *any
+more*", not just "not yet" — Prong B denies `process_spans`/`perfetto_trace_chunks`/`parse_block`/
+`get_payload`/`list_partitions` for a process whose Prong-A-filterable partition data an owner can
+still query directly, permanently, with no path back once the Postgres row is gone.
+
+**Decision: accept the denial, matching the plan's fail-closed posture everywhere else** (Security:
+`Unknown` ⇒ deny is stated as unconditional). Falling back to the parquet snapshot when Postgres has
+no row would mean trusting an *un-refreshable* audience — the whole reason Prong B reads Postgres
+instead of the snapshot (§1) is that the snapshot can go stale in the safe direction (missing rows,
+never wrong ones) but a snapshot with no live source of truth behind it can never be corrected if the
+stamp was ever wrong, which is exactly the property Prong B exists to avoid. The residual is narrow
+(only merged/compacted partitions that outlive their process's Postgres row) and self-resolves on
+that partition's own next retention pass. Rejected alternative, for the same reason as before: making
+Prong B read the parquet snapshot instead of Postgres, which would reintroduce the daemon dependency
+and the aggregate-scan cost this design was chosen to avoid.
 
 ## Implementation Steps
 
@@ -469,7 +521,11 @@ path and cost a full aggregate scan per guard check instead of one indexed point
    context becomes `authorized.internal_caller()`.
 9. `perfetto_trace_table_function.rs` / `perfetto_trace_execution_plan.rs`: same shape —
    `Uuid` parse at :65-75, `authorize` in `scan` (:570), witness threaded into
-   `generate_streaming_perfetto_trace` (:254-266) for its inner context.
+   `generate_streaming_perfetto_trace` (:254-266) for its inner context. Also narrow
+   `PerfettoTraceExecutionPlan::new` and `PerfettoTraceTableProvider::new` from `pub` to
+   `pub(crate)` (only ever called from `perfetto_trace_table_function.rs`, same crate), matching
+   `process_spans`' existing module-private shape so the "no un-authorized plan reachable outside
+   `scan`" invariant (Testing Strategy) actually holds for this function too.
 10. `parse_block_table_function.rs`: `authorize(block_id, IdKind::Block)` in `scan` (:296) before
     `fetch_block_metadata`, whose inner context (:83-92) becomes the witness's.
 11. `get_payload_function.rs`: distinct arg-1 `process_ids` → `resolve_many` →
@@ -481,17 +537,23 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 
 13. `list_partitions_table_function.rs`: guard field on the function and the provider; in `scan`
     (:104), keep today's path for `ReadScope::All`, otherwise drop the `LIMIT` pushdown, filter the
-    `sqlx` rows per §8, then truncate and build the batch.
+    `sqlx` rows per §8, then truncate and build the batch — using `RecordBatch::new_empty(schema())`
+    rather than `rows_to_record_batch` when the filtered vector is empty (§8).
 
 ### Phase 5 — tests, docs, CHANGELOG
 
 14. Tests per Testing Strategy.
 15. Docs per Documentation.
-16. `CHANGELOG.md` entry under the unreleased section, including the **Minor breaking change**
-    clause for the `IsolationConfig` rename, the `ListPartitionsTableFunction::new` /
-    `GetPayload::new` / three UDTF constructor signature changes, and the operator note that
-    `list_partitions` now hides rows (and `'global'` rows in particular) from a
-    `ReadScope::Audiences` session unless `MICROMEGAS_UNSTAMPED_AUDIENCE` is set.
+16. `CHANGELOG.md`: `OwnershipRewriteConfig`/`ownership_config`/`with_ownership_config` have not
+    shipped in a release (they are introduced by Stage 2's own entry under `## Unreleased`), so
+    rename every mention of them to `IsolationConfig`/`isolation_config`/`with_isolation_config`
+    *inside that existing Unreleased entry* rather than announcing a break against them. Add a new
+    entry under the same Unreleased section for this stage's actual release-facing changes,
+    including the **Minor breaking change** clause for the `ListPartitionsTableFunction::new` /
+    `GetPayload::new` / three UDTF constructor signature changes (these *are* breaks against the
+    released v0.29.0 shape), and the operator note that `list_partitions` now hides rows (and
+    `'global'` rows in particular) from a `ReadScope::Audiences` session unless
+    `MICROMEGAS_UNSTAMPED_AUDIENCE` is set.
 
 ## Files to Modify
 
@@ -536,15 +598,17 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 - **Postgres as Prong B's audience source (§11).** Fresher and one indexed point query, at the cost
   of the two prongs reading different copies of the same property. Rejected alternative: resolving
   through the materialized `processes` view for symmetry.
-- **One cache keyed by bare `Uuid` across three id kinds (§1).** Simpler than the parent plan's
-  three caches and correct because the answer is kind-independent; the cost is that a wrong-kind id
-  is accepted by the guard (and then returns no data downstream) instead of being rejected outright.
+- **One cache keyed by `(IdKind, Uuid)` instead of the parent plan's three caches (§1).** Same
+  disjoint-per-kind isolation as three separate caches, in one `moka` instance and one eviction
+  policy; the cost is a slightly larger key than a bare `Uuid`.
 - **Not caching `Unknown`.** Avoids pinning a stale denial and cache pollution from random ids; costs
   one point query per denied lookup. A denial path being the slower path is the right way round.
 - **No `LIMIT` pushdown for filtered `list_partitions` (§8).** Correct results over one optimization,
   on a table whose unlimited path is already the common case.
-- **Renaming `OwnershipRewriteConfig` (§9).** Churn across ~6 construction sites and a published
-  API, bought against a config object whose name would otherwise lie about a third of its contents.
+- **Renaming `OwnershipRewriteConfig` (§9).** Churn across ~6 construction sites, bought against a
+  config object whose name would otherwise lie about a third of its contents. Not a break against
+  any released API: the type was introduced under the still-`## Unreleased` Stage-2 entry, so the
+  rename lands as an in-place edit of that entry, not a new breaking-change clause.
 - **JIT materialization remains triggerable for unreadable instances (§7).** Accepted as a
   cost/availability residual, not a confidentiality one; a `view_instance` scan-time guard is the
   fix and is deliberately out of scope here.
@@ -566,6 +630,11 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 - **Unchanged bypasses, by design:** no admin read bypass (`is_admin` never feeds `ReadScope`);
   `list_view_sets` unfiltered; public view sets relax only `list_partitions`' `'global'` rows, never
   the arg-addressed guards (which are process-scoped, so the public exemption cannot apply).
+- **`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is a deployment-wide grant, not a per-audience one
+  (§9).** None of the five mutating functions filters by audience, so enabling the knob lets any
+  authenticated caller retire or materialize partitions belonging to any audience — acceptable for
+  its intended API-key-only deployment (no admin principal exists), a real cross-audience
+  destructive-access hole in a hybrid deployment that also has personal or per-team audiences.
 
 ## Performance
 
@@ -581,16 +650,18 @@ path and cost a full aggregate scan per guard check instead of one indexed point
 
 - `mkdocs/docs/admin/flight-sql.md` env-var table: add a `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` row
   alongside `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, with the API-key-only-
-  deployment rationale from Current State.
+  deployment rationale from Current State **and the §9 deployment-wide-not-per-audience caveat**.
 - `mkdocs/docs/admin/monolith.md` env-var table: add the `MICROMEGAS_ANALYTICS_`-prefixed
   `MICROMEGAS_ANALYTICS_USER_MAINTENANCE_FUNCTIONS` row (falls back to unprefixed
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, following the table's existing prefixed-knob rows).
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, following the table's existing prefixed-knob rows), with
+  the same caveat.
 - `mkdocs/docs/admin/authentication.md` §"Audience Filtering Activation" (:152-175): extend from
   "every query plan gets a predicate" to also cover Prong B — the four guarded functions and their
   uniform denial, `list_partitions` row filtering including the `'global'`-row rule and its
   dependence on `MICROMEGAS_UNSTAMPED_AUDIENCE`, and the freshness difference between the prongs
   (§11). Add `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` to the knob list with the API-key-only-
-  deployment rationale.
+  deployment rationale **and the caveat that it grants cross-audience destructive access in a
+  hybrid deployment (§9)**.
 - `mkdocs/docs/admin/functions-reference.md`: `list_partitions()` (:42) gains a note that rows are
   audience-filtered for a scoped caller and that `'global'` rows follow the knob; the five mutating
   functions gain the knob alongside the existing admin requirement.
@@ -614,11 +685,16 @@ path and cost a full aggregate scan per guard check instead of one indexed point
   `connect_lazy` pool to an unroutable address must still return `Ok` — the same trick
   `lakehouse_admin_gate_test.rs:20` uses).
 - The `None` ⇒ `Internal` branch in `execute` (§3) is a compile-time-enforced invariant, not a
-  runtime one exercised here: `ProcessSpansExecutionPlan::new`/`ProcessSpansTableProvider` are
-  private to their module and `TableFunctionImpl::call_with_args` returns only
-  `Arc<dyn TableProvider>`, so an integration test in `rust/analytics/tests/` has no way to reach an
-  un-authorized plan except through `scan` — exactly the path this invariant exists to not depend
-  on. The DB-backed denial tests (below) cover the caller-observable behavior instead.
+  runtime one exercised here, for `process_spans`: `ProcessSpansExecutionPlan::new`/
+  `ProcessSpansTableProvider` are private to their module and `TableFunctionImpl::call_with_args`
+  returns only `Arc<dyn TableProvider>`, so an integration test in `rust/analytics/tests/` has no way
+  to reach an un-authorized plan except through `scan` — exactly the path this invariant exists to
+  not depend on. `perfetto_trace_chunks` needs the same shape to make the same claim: today
+  `PerfettoTraceExecutionPlan::new` and `PerfettoTraceTableProvider::new` are `pub`
+  (`perfetto_trace_execution_plan.rs:60,555`), so an external test crate *could* build an
+  un-authorized plan directly. Phase 3 (step 9) narrows both to `pub(crate)` alongside the witness
+  field, closing that gap the same way `process_spans` already has it closed. The DB-backed denial
+  tests (below) cover the caller-observable behavior for both functions either way.
 - `IsolationConfig::from_env`: knob `true`/`false`/absent/garbage (`Err`), prefixed and unprefixed.
 - Registration gate: the five mutating functions are absent for a non-admin with the knob unset,
   present with the knob `true`, present for an admin regardless (extends
@@ -632,9 +708,11 @@ pipeline (reuse `ownership_rewrite_db_test.rs`'s `ProcessInfo.properties` stampi
 thread and async spans and at least one block per process. Then, for a
 `ReadScope::Audiences(["team-a"])` session:
 - `process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload` on **own** ids return the
-  same rows/bytes as a `ReadScope::All` session (no over-blocking) — including for a process whose
-  `processes` view partitions have deliberately **not** been materialized, which is the regression
-  §6 exists to prevent.
+  same rows/bytes as a `ReadScope::All` session (no over-blocking). Pin the exact §6 regression
+  window: with the process's `blocks` partitions materialized but its `processes` partitions
+  deliberately **not**, `process_spans`/`parse_block`/`get_payload` still succeed (they never touch
+  `processes`), while `perfetto_trace_chunks`' `get_process_exe` hop is the one path this stage keeps
+  working only because the guard reads Postgres instead of inheriting scope into that scan.
 - The same four on the **other** audience's ids fail, with an error indistinguishable from the
   error for a random, nonexistent id (assert the message shape, not just the failure).
 - The same four on the **unstamped** process fail with `MICROMEGAS_UNSTAMPED_AUDIENCE` unset and
