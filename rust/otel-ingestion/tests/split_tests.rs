@@ -12,7 +12,7 @@ mod fixtures;
 use fixtures::*;
 use micromegas_otel_ingestion::FORMAT_OTLP_LOGS;
 use micromegas_otel_ingestion::block::{split_logs, split_metrics, split_traces};
-use micromegas_otel_ingestion::identity::{SignalKey, block_id_from_payload};
+use micromegas_otel_ingestion::identity::{IdentityContext, SignalKey, block_id_from_payload};
 use micromegas_otel_ingestion::proto::{ExportLogsServiceRequest, ResourceLogs};
 use prost::Message;
 
@@ -27,7 +27,7 @@ fn logs_split_one_block_per_resource_with_correct_bounds() {
             log_record(1_700_000_005_000_000_000, 17, "boom"),
         ],
     );
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 2);
@@ -67,9 +67,9 @@ fn logs_block_id_is_content_addressed_and_idempotent() {
         1,
         vec![log_record(1_700_000_000_000_000_000, 9, "b")],
     );
-    let a = split_logs(req).unwrap();
-    let b = split_logs(req2).unwrap();
-    let c = split_logs(req_diff).unwrap();
+    let a = split_logs(req, IdentityContext::default()).unwrap();
+    let b = split_logs(req2, IdentityContext::default()).unwrap();
+    let c = split_logs(req_diff, IdentityContext::default()).unwrap();
     assert_eq!(a[0].block.block_id, b[0].block.block_id);
     assert_eq!(a[0].process_id, b[0].process_id);
     assert_ne!(a[0].block.block_id, c[0].block.block_id);
@@ -98,7 +98,7 @@ fn metrics_split_emits_one_block_for_a_mixed_kind_resource() {
             ),
         ],
     );
-    let blocks = split_metrics(req).unwrap();
+    let blocks = split_metrics(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 2);
@@ -127,7 +127,7 @@ fn metrics_split_bounds_a_summary_data_point_by_max_rows_per_point() {
             123.5,
         )],
     );
-    let blocks = split_metrics(req).unwrap();
+    let blocks = split_metrics(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     // `metrics_bounds` counts a Summary data point as `SUMMARY_MAX_ROWS_PER_POINT` (4)
@@ -161,7 +161,7 @@ fn traces_split_carries_proto_in_payload() {
             1_700_000_000_500_000_000,
         )],
     );
-    let blocks = split_traces(req).unwrap();
+    let blocks = split_traces(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert!(matches!(b.signal, SignalKey::Traces));
@@ -179,7 +179,7 @@ fn empty_request_yields_no_blocks() {
     let req = ExportLogsServiceRequest {
         resource_logs: vec![],
     };
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert!(blocks.is_empty());
 }
 
@@ -197,8 +197,8 @@ fn distinct_resources_split_into_distinct_processes() {
         1,
         vec![log_record(1_700_000_000_000_000_000, 9, "a")],
     );
-    let a = split_logs(req).unwrap();
-    let b = split_logs(req_b).unwrap();
+    let a = split_logs(req, IdentityContext::default()).unwrap();
+    let b = split_logs(req_b, IdentityContext::default()).unwrap();
     assert_ne!(a[0].process_id, b[0].process_id);
     assert_ne!(a[0].stream_id, b[0].stream_id);
 }
@@ -221,7 +221,7 @@ fn logs_split_leaves_zero_timestamps_unmodified() {
             log_record_no_timestamp(9, "no-ts-b"),
         ],
     );
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 2);
@@ -252,7 +252,7 @@ fn logs_split_preserves_existing_observed_time() {
         1,
         vec![log_record_observed_only(observed, 9, "has-observed")],
     );
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let decoded = ResourceLogs::decode(&*blocks[0].block.payload.objects).unwrap();
     let record = &decoded.scope_logs[0].log_records[0];
@@ -274,7 +274,7 @@ fn logs_split_mixed_timestamps_all_survive() {
             log_record_no_timestamp(9, "no-ts"),
         ],
     );
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 2);
@@ -290,8 +290,8 @@ fn logs_split_mixed_timestamps_all_survive() {
 fn logs_split_block_id_stable_across_retries_for_zero_timestamp_payload() {
     let req1 = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "msg")]);
     let req2 = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "msg")]);
-    let blocks1 = split_logs(req1).unwrap();
-    let blocks2 = split_logs(req2).unwrap();
+    let blocks1 = split_logs(req1, IdentityContext::default()).unwrap();
+    let blocks2 = split_logs(req2, IdentityContext::default()).unwrap();
     assert_eq!(
         blocks1[0].block.block_id, blocks2[0].block.block_id,
         "block_id must be stable across retries with identical zero-timestamp payloads"
@@ -304,12 +304,136 @@ fn logs_split_block_id_stable_across_retries_for_zero_timestamp_payload() {
 #[test]
 fn logs_split_block_id_matches_stored_payload_hash_for_zero_timestamp_request() {
     let req = make_logs_request("svc", "h1", 1, vec![log_record_no_timestamp(9, "no-ts")]);
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let block = &blocks[0].block;
     assert_eq!(
         block_id_from_payload(&block.payload.objects),
         block.block_id,
         "block_id must be the hash of the exact bytes stored in the payload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AbAC Stage 5 (#1373, §4): audience-scoped process_id/block_id, exercised through the split
+// entry points so the actual hash-input assembly (`block::block_id_with_context`) is covered,
+// not just the identity formulas in isolation.
+// ---------------------------------------------------------------------------
+
+fn ctx_with_audience(audience: &str) -> IdentityContext<'_> {
+    IdentityContext {
+        audience: Some(audience),
+        extra_hash_input: &[],
+    }
+}
+
+#[test]
+fn two_audiences_posting_identical_logs_derive_distinct_process_and_block_ids() {
+    let req_a = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![log_record(1_700_000_000_000_000_000, 9, "same body")],
+    );
+    let req_b = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![log_record(1_700_000_000_000_000_000, 9, "same body")],
+    );
+    let blocks_a = split_logs(req_a, ctx_with_audience("team-a")).unwrap();
+    let blocks_b = split_logs(req_b, ctx_with_audience("team-b")).unwrap();
+    assert_ne!(
+        blocks_a[0].process_id, blocks_b[0].process_id,
+        "two audiences posting identical resources must not collapse onto one process_id"
+    );
+    assert_ne!(
+        blocks_a[0].block.block_id, blocks_b[0].block.block_id,
+        "two audiences posting byte-identical payloads must not dedup against each other"
+    );
+    // stream_id derives from process_id, so it inherits the split for free.
+    assert_ne!(blocks_a[0].stream_id, blocks_b[0].stream_id);
+}
+
+#[test]
+fn two_audiences_posting_identical_metrics_derive_distinct_process_and_block_ids() {
+    let req_a = make_metrics_request(
+        "svc",
+        "h1",
+        1,
+        vec![gauge_metric("cpu.usage", "percent", 1_000, 42)],
+    );
+    let req_b = make_metrics_request(
+        "svc",
+        "h1",
+        1,
+        vec![gauge_metric("cpu.usage", "percent", 1_000, 42)],
+    );
+    let blocks_a = split_metrics(req_a, ctx_with_audience("team-a")).unwrap();
+    let blocks_b = split_metrics(req_b, ctx_with_audience("team-b")).unwrap();
+    assert_ne!(blocks_a[0].process_id, blocks_b[0].process_id);
+    assert_ne!(blocks_a[0].block.block_id, blocks_b[0].block.block_id);
+}
+
+#[test]
+fn two_audiences_posting_identical_traces_derive_distinct_process_and_block_ids() {
+    let trace_id = [0x11u8; 16];
+    let span_id = [0x22u8; 8];
+    let req_a = make_traces_request(
+        "svc",
+        "h1",
+        1,
+        vec![root_span(
+            "handle_request",
+            trace_id,
+            span_id,
+            1_700_000_000_000_000_000,
+            1_700_000_000_500_000_000,
+        )],
+    );
+    let req_b = make_traces_request(
+        "svc",
+        "h1",
+        1,
+        vec![root_span(
+            "handle_request",
+            trace_id,
+            span_id,
+            1_700_000_000_000_000_000,
+            1_700_000_000_500_000_000,
+        )],
+    );
+    let blocks_a = split_traces(req_a, ctx_with_audience("team-a")).unwrap();
+    let blocks_b = split_traces(req_b, ctx_with_audience("team-b")).unwrap();
+    assert_ne!(blocks_a[0].process_id, blocks_b[0].process_id);
+    assert_ne!(blocks_a[0].block.block_id, blocks_b[0].block.block_id);
+}
+
+#[test]
+fn unstamped_audience_reproduces_pre_stage5_ids_byte_for_byte() {
+    // `IdentityContext::default()` (audience: None) must be byte-identical to the pre-Stage-5
+    // hash -- no churn for deployments that never stamp.
+    let req_default = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![log_record(1_700_000_000_000_000_000, 9, "hello")],
+    );
+    let req_explicit_none = make_logs_request(
+        "svc",
+        "h1",
+        1,
+        vec![log_record(1_700_000_000_000_000_000, 9, "hello")],
+    );
+    let default_blocks = split_logs(req_default, IdentityContext::default()).unwrap();
+    let explicit_none_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: &[],
+    };
+    let explicit_blocks = split_logs(req_explicit_none, explicit_none_ctx).unwrap();
+    assert_eq!(default_blocks[0].process_id, explicit_blocks[0].process_id);
+    assert_eq!(
+        default_blocks[0].block.block_id,
+        explicit_blocks[0].block.block_id
     );
 }

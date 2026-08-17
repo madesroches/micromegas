@@ -36,8 +36,27 @@ pub const NS_OTEL_BLOCK_V1: Uuid = uuid!("5829a6f7-0577-4c8c-862f-cf4fdab445cc")
 
 /// ASCII unit separator — used between concatenated string fields in identity formulas
 /// to prevent tuple-boundary collisions like `("abc", "")` vs `("ab", "c")`.
-const SEPARATOR: char = '\x1F';
-const SEPARATOR_STR: &str = "\x1F";
+///
+/// `pub(crate)`, not private (AbAC Stage 5, #1373, §4): `block.rs` prepends an
+/// audience-tagged prefix ahead of its own hash input using this exact separator, rather than a
+/// `\x1F` string literal, so the two modules can never drift on what the separator character is.
+pub(crate) const SEPARATOR: char = '\x1F';
+pub(crate) const SEPARATOR_STR: &str = "\x1F";
+
+/// Identity inputs beyond the OTLP payload itself (AbAC Stage 5, #1373, §4).
+///
+/// `Default` reproduces pre-Stage-5 ids byte for byte -- both fields are no-ops when absent, so
+/// an unstamped deployment (or any call site that hasn't been threaded with a real audience yet)
+/// sees zero id churn.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IdentityContext<'a> {
+    /// Authenticated write audience. Folded into `process_id` and `block_id` so two audiences
+    /// posting identical resources/payloads never collapse onto one process or dedup against
+    /// each other. `None` reproduces pre-Stage-5 ids byte for byte.
+    pub audience: Option<&'a str>,
+    /// Webhook-only: canonicalized incoming header bytes (formerly `extra_hash_input`).
+    pub extra_hash_input: &'a [u8],
+}
 
 /// OTel signal label used in stream-id derivation.
 #[derive(Debug, Clone, Copy)]
@@ -185,7 +204,14 @@ pub fn is_degenerate_resource(attrs: &[KeyValue]) -> bool {
 /// Fields are appended in-place under the same namespace UUID rather than bumping to `_V2` —
 /// the same pattern used when `process.owner` was added. Long-term stability of `process_id`
 /// values is not a design goal; re-deriving existing ids is always acceptable.
-pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
+///
+/// `ctx.audience` (AbAC Stage 5, #1373, §4) is appended as a 32nd field, **only when `Some`**:
+/// appending unconditionally would add a trailing separator and re-derive every existing id even
+/// for unstamped deployments. With `ctx.audience: None` the joined key -- and therefore the
+/// resulting id -- is byte-identical to before this stage. This is what stops two audiences
+/// sending identical resource attributes (the same containerized app in two tenants, a
+/// degenerate resource, a CloudWatch namespace) from silently collapsing onto one `process_id`.
+pub fn process_id_from_resource(resource: Option<&Resource>, ctx: IdentityContext) -> Uuid {
     let attrs = resource.map(|r| r.attributes.as_slice()).unwrap_or(&[]);
 
     let fields = [
@@ -226,7 +252,11 @@ pub fn process_id_from_resource(resource: Option<&Resource>) -> Uuid {
         attr_norm(attrs, "process.runtime.description"),
     ];
 
-    let key = fields.join(SEPARATOR_STR);
+    let mut key = fields.join(SEPARATOR_STR);
+    if let Some(audience) = ctx.audience {
+        key.push(SEPARATOR);
+        key.push_str(audience);
+    }
     Uuid::new_v5(&NS_OTEL_PROCESS_V1, key.as_bytes())
 }
 
@@ -236,8 +266,16 @@ pub fn stream_id_from_process_signal(process_id: Uuid, signal: SignalKey) -> Uui
     Uuid::new_v5(&NS_OTEL_STREAM_V1, key.as_bytes())
 }
 
-/// Derives `block_id` from the re-encoded protobuf bytes of one Resource submessage.
-/// `Uuid::new_v5` SHA-1s its input internally, so we don't pre-hash.
+/// Derives `block_id` by hashing whatever bytes the caller hands it. `Uuid::new_v5` SHA-1s its
+/// input internally, so we don't pre-hash.
+///
+/// This is no longer just "the re-encoded protobuf bytes of one Resource submessage" -- the
+/// signature is unchanged, but callers now routinely concatenate up to three inputs ahead of
+/// calling this: the webhook path's canonicalized header set (`extra_hash_input`, since before
+/// this doc was corrected), and, as of AbAC Stage 5 (#1373, §4), an
+/// `"aud{SEPARATOR}{audience}{SEPARATOR}"` prefix (`block.rs`) so two audiences posting
+/// byte-identical payloads never dedup against each other. See `block.rs`'s `split_logs` /
+/// `split_metrics` / `split_traces` for the actual hash-input assembly.
 pub fn block_id_from_payload(payload: &[u8]) -> Uuid {
     Uuid::new_v5(&NS_OTEL_BLOCK_V1, payload)
 }

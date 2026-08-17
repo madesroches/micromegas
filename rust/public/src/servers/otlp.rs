@@ -15,15 +15,18 @@
 //! request encoding is unknown at that point.
 
 use super::ingestion_limits::{RETRY_AFTER_SECONDS, apply_ingestion_body_limits};
+use super::write_audience::{StampingConfig, resolve_write_audience};
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
+use micromegas_auth::types::AuthContext;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_otel_ingestion::Encoding;
-use micromegas_otel_ingestion::error::OtelError;
+use micromegas_otel_ingestion::error::{OtelError, Signal};
 use micromegas_otel_ingestion::handler;
 use micromegas_tracing::prelude::*;
 use prost::Message;
@@ -138,8 +141,26 @@ fn success_response<M: Message + serde::Serialize>(msg: M, encoding: Encoding) -
         .expect("building OTLP success response")
 }
 
+/// Resolves the write audience for an OTLP request, mapping a gate rejection onto
+/// `OtelError::Denied` (AbAC Stage 5, #1373, §5) -- a sanitized `write audience required`
+/// message via `public_message()`, never internal detail.
+fn resolve_otlp_write_audience(
+    ctx: &Option<Extension<AuthContext>>,
+    stamping: &StampingConfig,
+    signal: Signal,
+) -> Result<WriteAudience, OtelError> {
+    resolve_write_audience(ctx.as_ref().map(|Extension(c)| c), stamping).map_err(|_| {
+        OtelError::Denied {
+            signal,
+            message: "write audience required".to_string(),
+        }
+    })
+}
+
 async fn logs_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    Extension(stamping): Extension<Arc<StampingConfig>>,
+    ctx: Option<Extension<AuthContext>>,
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
@@ -147,7 +168,11 @@ async fn logs_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    match handler::ingest_logs(service, body, encoding).await {
+    let audience = match resolve_otlp_write_audience(&ctx, &stamping, Signal::Logs) {
+        Ok(a) => a,
+        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
+    };
+    match handler::ingest_logs(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }
@@ -155,6 +180,8 @@ async fn logs_handler(
 
 async fn metrics_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    Extension(stamping): Extension<Arc<StampingConfig>>,
+    ctx: Option<Extension<AuthContext>>,
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
@@ -162,7 +189,11 @@ async fn metrics_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    match handler::ingest_metrics(service, body, encoding).await {
+    let audience = match resolve_otlp_write_audience(&ctx, &stamping, Signal::Metrics) {
+        Ok(a) => a,
+        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
+    };
+    match handler::ingest_metrics(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }
@@ -170,6 +201,8 @@ async fn metrics_handler(
 
 async fn traces_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    Extension(stamping): Extension<Arc<StampingConfig>>,
+    ctx: Option<Extension<AuthContext>>,
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
@@ -177,7 +210,11 @@ async fn traces_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    match handler::ingest_traces(service, body, encoding).await {
+    let audience = match resolve_otlp_write_audience(&ctx, &stamping, Signal::Traces) {
+        Ok(a) => a,
+        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
+    };
+    match handler::ingest_traces(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
     }

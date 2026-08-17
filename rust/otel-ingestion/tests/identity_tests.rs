@@ -1,7 +1,7 @@
 //! Tests for OTel resource → micromegas identity synthesis.
 
 use micromegas_otel_ingestion::identity::{
-    SignalKey, attr_to_string, block_id_from_payload, is_degenerate_resource,
+    IdentityContext, SignalKey, attr_to_string, block_id_from_payload, is_degenerate_resource,
     process_id_from_resource, process_owner_string, process_start_string,
     stream_id_from_process_signal,
 };
@@ -43,8 +43,8 @@ fn process_id_is_stable() {
         ("service.name", "claude-code"),
     ]);
     assert_eq!(
-        process_id_from_resource(Some(&r1)),
-        process_id_from_resource(Some(&r2))
+        process_id_from_resource(Some(&r1), IdentityContext::default()),
+        process_id_from_resource(Some(&r2), IdentityContext::default())
     );
 }
 
@@ -53,8 +53,8 @@ fn process_id_differs_per_pid() {
     let a = resource_with(&[("service.name", "claude-code"), ("process.pid", "1")]);
     let b = resource_with(&[("service.name", "claude-code"), ("process.pid", "2")]);
     assert_ne!(
-        process_id_from_resource(Some(&a)),
-        process_id_from_resource(Some(&b))
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -71,8 +71,8 @@ fn process_id_differs_per_owner() {
         ("process.owner", "bob"),
     ]);
     assert_ne!(
-        process_id_from_resource(Some(&a)),
-        process_id_from_resource(Some(&b))
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -83,8 +83,8 @@ fn process_id_owner_uses_user_name_fallback() {
     let canonical = resource_with(&[("host.name", "h"), ("process.owner", "alice")]);
     let fallback = resource_with(&[("host.name", "h"), ("user.name", "alice")]);
     assert_eq!(
-        process_id_from_resource(Some(&canonical)),
-        process_id_from_resource(Some(&fallback))
+        process_id_from_resource(Some(&canonical), IdentityContext::default()),
+        process_id_from_resource(Some(&fallback), IdentityContext::default())
     );
 }
 
@@ -124,8 +124,8 @@ fn process_id_normalizes_host_case() {
     let a = resource_with(&[("host.name", "Foo"), ("service.name", "svc")]);
     let b = resource_with(&[("host.name", "FOO"), ("service.name", "svc")]);
     assert_eq!(
-        process_id_from_resource(Some(&a)),
-        process_id_from_resource(Some(&b))
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -205,8 +205,8 @@ fn strindex_value_on_identity_key_hashes_as_absent() {
     };
     let without = resource_with(&[("host.name", "h")]);
     assert_eq!(
-        process_id_from_resource(Some(&with_strindex)),
-        process_id_from_resource(Some(&without))
+        process_id_from_resource(Some(&with_strindex), IdentityContext::default()),
+        process_id_from_resource(Some(&without), IdentityContext::default())
     );
 }
 
@@ -227,8 +227,8 @@ fn windows_and_wsl_differ() {
         ("os.type", "linux"),
     ]);
     assert_ne!(
-        process_id_from_resource(Some(&windows)),
-        process_id_from_resource(Some(&wsl))
+        process_id_from_resource(Some(&windows), IdentityContext::default()),
+        process_id_from_resource(Some(&wsl), IdentityContext::default())
     );
 }
 
@@ -249,7 +249,7 @@ fn process_id_is_stable_with_new_fields() {
         ("process.runtime.name", "rustc"),
         ("process.runtime.version", "1.88.0"),
     ]);
-    let id = process_id_from_resource(Some(&r));
+    let id = process_id_from_resource(Some(&r), IdentityContext::default());
     assert_eq!(id.to_string(), "92267645-021b-5d0f-960b-c74719552658");
 }
 
@@ -271,7 +271,68 @@ fn interned_key_is_ignored_in_identity() {
     };
     let without = resource_with(&[("host.name", "h")]);
     assert_eq!(
-        process_id_from_resource(Some(&with_interned)),
-        process_id_from_resource(Some(&without))
+        process_id_from_resource(Some(&with_interned), IdentityContext::default()),
+        process_id_from_resource(Some(&without), IdentityContext::default())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AbAC Stage 5 (#1373, §4): audience-scoped identity. Every case below is a pure function of
+// its arguments -- no database needed to exercise the collision story stamping introduces.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn process_id_none_audience_matches_default_context() {
+    // `IdentityContext { audience: None, .. }` must be byte-identical to `::default()` -- the
+    // no-churn guarantee for unstamped deployments.
+    let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
+    let none_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: &[],
+    };
+    assert_eq!(
+        process_id_from_resource(Some(&r), none_ctx),
+        process_id_from_resource(Some(&r), IdentityContext::default())
+    );
+}
+
+#[test]
+fn two_audiences_over_the_same_resource_derive_distinct_process_ids() {
+    // The core collision this stage closes: the same containerized app in two tenants (or a
+    // degenerate resource, or a CloudWatch namespace) must not collapse onto one process_id
+    // once two different audiences are posting it.
+    let r = resource_with(&[("host.name", "shared-host"), ("service.name", "shared-svc")]);
+    let ctx_a = IdentityContext {
+        audience: Some("team-a"),
+        extra_hash_input: &[],
+    };
+    let ctx_b = IdentityContext {
+        audience: Some("team-b"),
+        extra_hash_input: &[],
+    };
+    let unstamped = IdentityContext::default();
+    let id_a = process_id_from_resource(Some(&r), ctx_a);
+    let id_b = process_id_from_resource(Some(&r), ctx_b);
+    let id_unstamped = process_id_from_resource(Some(&r), unstamped);
+    assert_ne!(
+        id_a, id_b,
+        "distinct audiences must derive distinct process_id"
+    );
+    assert_ne!(
+        id_a, id_unstamped,
+        "a stamped audience must derive a different process_id than the unstamped default"
+    );
+}
+
+#[test]
+fn process_id_same_audience_is_stable() {
+    let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
+    let ctx = IdentityContext {
+        audience: Some("team-a"),
+        extra_hash_input: &[],
+    };
+    assert_eq!(
+        process_id_from_resource(Some(&r), ctx),
+        process_id_from_resource(Some(&r), ctx)
     );
 }

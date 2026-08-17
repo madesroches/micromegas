@@ -156,8 +156,8 @@ telemetry-ingestion-srv --disable-auth
     access to the server: it flips every session from the internal `ReadScope::All` marker to
     `ReadScope::Audiences`, which activates `OwnershipRewrite`'s query-time audience filtering
     (AbAC Stage 2). From that point on, every query plan gets an audience predicate injected into
-    it, and a caller only sees processes whose (client-asserted) `micromegas.audience` property
-    resolves to one of their own audiences.
+    it, and a caller only sees processes whose `micromegas.audience` property resolves to one of
+    their own audiences.
 
     **Required in the same deploy:** set `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
     (the monolith's `MICROMEGAS_ANALYTICS_`-prefixed equivalent for a monolith deployment) to keep
@@ -172,6 +172,46 @@ telemetry-ingestion-srv --disable-auth
     there is no caller kind whose resolved set is otherwise empty the way an API key's was under
     the identity-derived model this replaced. `MICROMEGAS_UNSTAMPED_AUDIENCE=public` alone restores
     visibility for every caller kind.
+
+### Write-Side Stamping (AbAC Stage 5)
+
+The read-side filter above is only trustworthy because of what happens on the write side
+(ingestion, #1373): `micromegas.audience` is now **server-written from the authenticated
+ingestion credential**, never trusted from the client payload. Ingestion strips any
+client-supplied `micromegas.*` property and, when the credential carries a bound audience (a
+DB-backed `ingestion_api_keys` row), stamps `micromegas.audience` itself before the process's
+first block is ever materialized. See [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)
+for the full mechanism, credential-by-credential, and `{prefix}_REQUIRE_WRITE_AUDIENCE` for the
+knob that turns "unstamped" into a hard rejection.
+
+Two consequences worth knowing before you flip this stage on:
+
+- **OTLP `process_id` re-derivation.** OTLP-derived identity (`process_id`, and therefore
+  `block_id`) is now audience-scoped, so two audiences posting identical resource attributes
+  never collapse onto one process — but a deployment that starts stamping re-derives every OTLP
+  producer's `process_id` the moment it does. The same logical process appears as a new row;
+  its pre-upgrade data keeps the old id and stays unstamped (visible only if
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` is set). Rotating an ingestion key to a different audience
+  likewise splits a long-lived producer's history across two process ids — expected, since the
+  data now genuinely belongs to two audiences.
+- **Client self-stamping stops taking effect.** Before this stage, a native client setting its
+  own `micromegas.audience` property was the *only* thing that stamped a process at all. That
+  self-stamp is now stripped and replaced by the credential's authenticated audience — which is
+  `None` for an env-keyring key or an OIDC token. A producer that relied on self-stamping while
+  authenticating with one of those silently becomes **unstamped** on upgrade (invisible unless
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` is set, and only ever widened to that shared fallback label,
+  never restored to its own). To keep its own label, move it onto a DB ingestion key bound to
+  that audience.
+
+!!! warning "Residual gap: cross-audience write injection (tracked, not yet closed)"
+    Stamping covers process *registration* (`insert_process`/`register_otel_process`). It does
+    **not** yet check that a credential is authorized to append to an *existing* process it
+    didn't create: `insert_stream`/`insert_block` accept any `process_id`/`stream_id`
+    unconditionally, so a credential bound to audience A that discovers a `process_id`/`stream_id`
+    belonging to audience B can still append events to B's process — events that then inherit B's
+    stamped audience. This grants no *read* power (reading B still requires a read grant on B),
+    so it is an integrity-only gap, tracked as a follow-up issue rather than closed by #1373 (it
+    depends on the same cache layer AbAC Stage 3's Prong B needs).
 
 ## Audiences and Grants
 

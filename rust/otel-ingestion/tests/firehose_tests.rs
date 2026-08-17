@@ -18,6 +18,7 @@ use fixtures::{gauge_metric, make_metrics_request};
 use micromegas_otel_ingestion::block::split_metrics;
 use micromegas_otel_ingestion::error::{OtelError, Signal};
 use micromegas_otel_ingestion::handler::{decode_firehose_envelope, decode_next_length_delimited};
+use micromegas_otel_ingestion::identity::IdentityContext;
 use micromegas_otel_ingestion::proto::ExportMetricsServiceRequest;
 use prost::Message;
 
@@ -64,7 +65,7 @@ fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
         .expect("decode record as ExportMetricsServiceRequest");
     assert_eq!(decoded, req);
 
-    let blocks = split_metrics(decoded).expect("split_metrics");
+    let blocks = split_metrics(decoded, IdentityContext::default()).expect("split_metrics");
     assert_eq!(blocks.len(), 1);
 }
 

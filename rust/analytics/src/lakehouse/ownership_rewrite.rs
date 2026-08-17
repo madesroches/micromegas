@@ -56,23 +56,19 @@
 //! -- the actual `processes`/`streams` scans happen during normal execution, exactly like
 //! `TableScanRewrite`'s injected time filter.
 //!
-//! ## `micromegas.audience` is client-asserted, not authenticated (known Stage 2 limitation)
+//! ## `micromegas.audience` is now server-written and authenticated (AbAC Stage 5, #1373, landed)
 //!
 //! [`Self::audience_col`] reads `micromegas.audience` via `property_get` off the `processes`
-//! view's `properties` column, which is a verbatim snapshot of whatever `ProcessInfo.properties`
-//! the instrumented client sent at ingestion -- there is no reserved-key filtering and no
-//! server-side validation of this property today. The intended trust anchor for this value is
-//! the *ingestion API key*, not the client payload: each ingestion key is assigned exactly one
-//! write audience (Stage 4), carried authenticated into `AuthContext.bound_audience`, and Stage 5
-//! (#1373) stamps `micromegas.audience` server-side from that authenticated `bound_audience`
-//! rather than trusting whatever the client sent. Neither stage has landed yet. Until Stage 5
-//! lands, any instrumented process can set `micromegas.audience` to an arbitrary value, including
-//! one that hides all of that process's data from every legitimate caller, or one that spoofs
-//! another principal's audience to gain read access it should not have. This is a known, tracked
-//! gap in Stage 2's enforcement (this rule trusts the property as-is) -- not a bug to fix within
-//! this
-//! stage's scope, and not something ingestion-side changes here should attempt to close; see
-//! #1373 for the actual fix.
+//! view's `properties` column. Before Stage 5 this was a verbatim snapshot of whatever
+//! `ProcessInfo.properties` the instrumented client sent at ingestion, with no reserved-key
+//! filtering and no server-side validation. Stage 5 closed that gap: ingestion now strips any
+//! client-supplied `micromegas.*` property and writes `micromegas.audience` itself from the
+//! authenticated credential's `AuthContext.bound_audience` (each ingestion key is assigned
+//! exactly one write audience, Stage 4, #1372) -- a client can no longer assert or suppress the
+//! stamp. What remains open, tracked separately: a credential bound to one audience that knows
+//! another audience's `process_id`/`stream_id` can still append events to it over
+//! `insert_stream`/`insert_block` (Stage 5b, an integrity-only gap -- see
+//! `rust/ingestion/src/web_ingestion_service.rs`'s doc comments on those two methods).
 
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{
@@ -89,6 +85,7 @@ use datafusion::{
     sql::TableReference,
 };
 use micromegas_datafusion_extensions::properties::property_get::PropertyGet;
+use micromegas_telemetry::property::PROPERTY_AUDIENCE;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -145,7 +142,7 @@ impl OwnershipRewrite {
     fn audience_col() -> Expr {
         cast(
             ScalarUDF::from(PropertyGet::new())
-                .call(vec![col("properties"), lit("micromegas.audience")]),
+                .call(vec![col("properties"), lit(PROPERTY_AUDIENCE)]),
             DataType::Utf8,
         )
     }

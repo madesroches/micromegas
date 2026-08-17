@@ -4,8 +4,8 @@
 //! the Resource boundary so each block has an unambiguous `process_id`.
 
 use crate::identity::{
-    SignalKey, attr_to_string, block_id_from_payload, is_degenerate_resource,
-    process_id_from_resource, stream_id_from_process_signal,
+    IdentityContext, SEPARATOR, SignalKey, attr_to_string, block_id_from_payload,
+    is_degenerate_resource, process_id_from_resource, stream_id_from_process_signal,
 };
 use crate::proto::{KeyValue, ResourceLogs, ResourceMetrics, ResourceSpans};
 use anyhow::Result;
@@ -193,12 +193,37 @@ fn nanos_to_datetime(nanos: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_nanos(nanos)
 }
 
+/// Prepends `"aud{SEPARATOR}{audience}{SEPARATOR}"` to `payload_bytes` before hashing when
+/// `ctx.audience` is `Some` (AbAC Stage 5, #1373, §4) -- ahead of `ctx.extra_hash_input`, which
+/// the webhook path already folds in -- so two audiences posting byte-identical payloads never
+/// dedup against each other. `block_id_from_payload`'s signature stays a plain `&[u8]`; the
+/// prepend is caller-side concatenation here, exactly like the webhook path's own
+/// `extra_hash_input` before it.
+fn block_id_with_context(ctx: IdentityContext, payload_bytes: &[u8]) -> Uuid {
+    if ctx.audience.is_none() && ctx.extra_hash_input.is_empty() {
+        // Byte-identical to pre-Stage-5 behavior when there is nothing to fold in.
+        return block_id_from_payload(payload_bytes);
+    }
+    let audience_prefix = ctx
+        .audience
+        .map(|aud| format!("aud{SEPARATOR}{aud}{SEPARATOR}"))
+        .unwrap_or_default();
+    let mut hash_input = Vec::with_capacity(
+        audience_prefix.len() + ctx.extra_hash_input.len() + payload_bytes.len(),
+    );
+    hash_input.extend_from_slice(audience_prefix.as_bytes());
+    hash_input.extend_from_slice(ctx.extra_hash_input);
+    hash_input.extend_from_slice(payload_bytes);
+    block_id_from_payload(&hash_input)
+}
+
 fn build_prepared_block(
     block_id: Uuid,
     payload_bytes: Vec<u8>,
     resource_attrs: Vec<KeyValue>,
     signal: SignalKey,
     bounds: (i64, i64, i32),
+    ctx: IdentityContext,
 ) -> PreparedBlock {
     let (min_nanos, max_nanos, nb_records) = bounds;
     let (begin_time, end_time) = if min_nanos == 0 && max_nanos == 0 {
@@ -213,7 +238,7 @@ fn build_prepared_block(
         dropped_attributes_count: 0,
         entity_refs: vec![],
     };
-    let process_id = process_id_from_resource(Some(&resource));
+    let process_id = process_id_from_resource(Some(&resource), ctx);
     let stream_id = stream_id_from_process_signal(process_id, signal);
 
     if is_degenerate_resource(&resource_attrs) {
@@ -263,28 +288,26 @@ fn build_prepared_block(
 ///
 /// Records where both `time_unix_nano` and `observed_time_unix_nano` are zero are stored
 /// as-is — no backfill, no mutation. The stored payload is a pure function of the
-/// incoming bytes, so `block_id` (hashed from those same bytes) is always the hash of
-/// what actually gets stored: a colliding write can never be "the same id, different
+/// incoming bytes, so `block_id` (hashed from those same bytes, plus `ctx`) is always the hash
+/// of what actually gets stored: a colliding write can never be "the same id, different
 /// content." The OTLP spec's requirement that the collecting system supply an observed
 /// timestamp is satisfied at the block-bounds layer instead: `logs_bounds` falls back to
 /// arrival time for an all-zero-timestamp resource (see `build_prepared_block`), and the
 /// downstream processor (`OtelLogsBlockProcessor`) substitutes the block's `begin_time`
 /// for any record that still has no timestamp of its own.
-pub fn split_logs(req: crate::proto::ExportLogsServiceRequest) -> Result<Vec<PreparedBlock>> {
-    split_logs_with_extra_hash_input(req, &[])
-}
-
-/// Same as [`split_logs`], but folds `extra_hash_input` into the `block_id` hash alongside
-/// the encoded `ResourceLogs` bytes. Used by the webhook path (`handler::ingest_webhook`)
-/// to fold in the full incoming HTTP header set: the synthetic `ResourceLogs` only carries the
-/// 3 recognized `X-Micromegas-*` headers as resource attrs, so without this, any other header
-/// (a delivery-id, a signature, an event-type header) would have zero influence on `block_id`
-/// — two deliveries with the same body but different unrecognized headers would collide and
-/// dedup as if they were retries of each other. Passing `&[]` (what `split_logs` does)
-/// reproduces the OTLP-only behavior exactly.
-pub fn split_logs_with_extra_hash_input(
+///
+/// `ctx.extra_hash_input` (used by the webhook path, `handler::ingest_webhook`) folds the full
+/// incoming HTTP header set into the `block_id` hash alongside the encoded `ResourceLogs` bytes:
+/// the synthetic `ResourceLogs` only carries the 3 recognized `X-Micromegas-*` headers as
+/// resource attrs, so without this, any other header (a delivery-id, a signature, an event-type
+/// header) would have zero influence on `block_id` — two deliveries with the same body but
+/// different unrecognized headers would collide and dedup as if they were retries of each other.
+/// `ctx.audience` (AbAC Stage 5, #1373, §4) is folded into both `process_id` and `block_id` --
+/// see [`crate::identity::IdentityContext`]. `IdentityContext::default()` (both fields absent)
+/// reproduces the pre-Stage-5, OTLP-only behavior exactly.
+pub fn split_logs(
     req: crate::proto::ExportLogsServiceRequest,
-    extra_hash_input: &[u8],
+    ctx: IdentityContext,
 ) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_logs.len());
     for rl in req.resource_logs {
@@ -303,14 +326,7 @@ pub fn split_logs_with_extra_hash_input(
 
         // Single encode: the hash and the stored bytes are always the same bytes.
         let payload_bytes = rl.encode_to_vec();
-        let block_id = if extra_hash_input.is_empty() {
-            block_id_from_payload(&payload_bytes)
-        } else {
-            let mut hash_input = Vec::with_capacity(extra_hash_input.len() + payload_bytes.len());
-            hash_input.extend_from_slice(extra_hash_input);
-            hash_input.extend_from_slice(&payload_bytes);
-            block_id_from_payload(&hash_input)
-        };
+        let block_id = block_id_with_context(ctx, &payload_bytes);
 
         let resource_attrs = rl
             .resource
@@ -323,13 +339,18 @@ pub fn split_logs_with_extra_hash_input(
             resource_attrs,
             SignalKey::Logs,
             bounds,
+            ctx,
         ));
     }
     Ok(out)
 }
 
-/// Splits a metrics request into per-resource blocks.
-pub fn split_metrics(req: crate::proto::ExportMetricsServiceRequest) -> Result<Vec<PreparedBlock>> {
+/// Splits a metrics request into per-resource blocks. See [`split_logs`] for `ctx`'s effect on
+/// `process_id`/`block_id` (`extra_hash_input` is a webhook-only concept and has no effect here).
+pub fn split_metrics(
+    req: crate::proto::ExportMetricsServiceRequest,
+    ctx: IdentityContext,
+) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_metrics.len());
     for rm in req.resource_metrics {
         let Some(bounds) = metrics_bounds(&rm) else {
@@ -341,20 +362,25 @@ pub fn split_metrics(req: crate::proto::ExportMetricsServiceRequest) -> Result<V
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rm.encode_to_vec();
-        let block_id = block_id_from_payload(&payload_bytes);
+        let block_id = block_id_with_context(ctx, &payload_bytes);
         out.push(build_prepared_block(
             block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Metrics,
             bounds,
+            ctx,
         ));
     }
     Ok(out)
 }
 
-/// Splits a trace request into per-resource blocks.
-pub fn split_traces(req: crate::proto::ExportTraceServiceRequest) -> Result<Vec<PreparedBlock>> {
+/// Splits a trace request into per-resource blocks. See [`split_logs`] for `ctx`'s effect on
+/// `process_id`/`block_id` (`extra_hash_input` is a webhook-only concept and has no effect here).
+pub fn split_traces(
+    req: crate::proto::ExportTraceServiceRequest,
+    ctx: IdentityContext,
+) -> Result<Vec<PreparedBlock>> {
     let mut out = Vec::with_capacity(req.resource_spans.len());
     for rs in req.resource_spans {
         let Some(bounds) = spans_bounds(&rs) else {
@@ -366,13 +392,14 @@ pub fn split_traces(req: crate::proto::ExportTraceServiceRequest) -> Result<Vec<
             .map(|r| r.attributes.clone())
             .unwrap_or_default();
         let payload_bytes = rs.encode_to_vec();
-        let block_id = block_id_from_payload(&payload_bytes);
+        let block_id = block_id_with_context(ctx, &payload_bytes);
         out.push(build_prepared_block(
             block_id,
             payload_bytes,
             resource_attrs,
             SignalKey::Traces,
             bounds,
+            ctx,
         ));
     }
     Ok(out)

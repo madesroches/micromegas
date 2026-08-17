@@ -6,9 +6,9 @@
 mod fixtures;
 
 use fixtures::s_kv;
-use micromegas_otel_ingestion::block::{split_logs, split_logs_with_extra_hash_input};
+use micromegas_otel_ingestion::block::split_logs;
 use micromegas_otel_ingestion::handler::build_webhook_request;
-use micromegas_otel_ingestion::identity::process_id_from_resource;
+use micromegas_otel_ingestion::identity::{IdentityContext, process_id_from_resource};
 use micromegas_otel_ingestion::proto::{Resource, SeverityNumber, any_value};
 
 #[test]
@@ -59,7 +59,7 @@ fn split_logs_on_webhook_request_yields_one_block_with_arrival_time_bounds_and_m
         s_kv("service.namespace", "ci"),
     ];
     let req = build_webhook_request(attrs.clone(), "push-events".to_string(), b"{}");
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     let b = &blocks[0];
     assert_eq!(b.nb_records, 1);
@@ -75,7 +75,10 @@ fn split_logs_on_webhook_request_yields_one_block_with_arrival_time_bounds_and_m
         dropped_attributes_count: 0,
         entity_refs: vec![],
     };
-    assert_eq!(b.process_id, process_id_from_resource(Some(&resource)));
+    assert_eq!(
+        b.process_id,
+        process_id_from_resource(Some(&resource), IdentityContext::default())
+    );
 }
 
 #[test]
@@ -85,9 +88,9 @@ fn identical_webhook_deliveries_dedup_distinct_bodies_dont() {
     let req2 = build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
     let req_diff = build_webhook_request(attrs, "push-events".to_string(), b"different body");
 
-    let a = split_logs(req1).unwrap();
-    let b = split_logs(req2).unwrap();
-    let c = split_logs(req_diff).unwrap();
+    let a = split_logs(req1, IdentityContext::default()).unwrap();
+    let b = split_logs(req2, IdentityContext::default()).unwrap();
+    let c = split_logs(req_diff, IdentityContext::default()).unwrap();
 
     assert_eq!(a[0].block.block_id, b[0].block.block_id);
     assert_ne!(a[0].block.block_id, c[0].block.block_id);
@@ -104,12 +107,22 @@ fn extra_hash_input_changes_block_id_but_empty_matches_plain_split_logs() {
     let req_with_other_extra =
         build_webhook_request(attrs, "push-events".to_string(), b"same body");
 
-    let plain = split_logs(req_plain).unwrap();
-    let empty_extra = split_logs_with_extra_hash_input(req_empty_extra, &[]).unwrap();
-    let with_extra =
-        split_logs_with_extra_hash_input(req_with_extra, b"x-gitlab-event-uuid:abc").unwrap();
-    let with_other_extra =
-        split_logs_with_extra_hash_input(req_with_other_extra, b"x-gitlab-event-uuid:def").unwrap();
+    let plain = split_logs(req_plain, IdentityContext::default()).unwrap();
+    let empty_extra_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: &[],
+    };
+    let with_extra_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: b"x-gitlab-event-uuid:abc",
+    };
+    let with_other_extra_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: b"x-gitlab-event-uuid:def",
+    };
+    let empty_extra = split_logs(req_empty_extra, empty_extra_ctx).unwrap();
+    let with_extra = split_logs(req_with_extra, with_extra_ctx).unwrap();
+    let with_other_extra = split_logs(req_with_other_extra, with_other_extra_ctx).unwrap();
 
     // &[] reproduces split_logs's OTLP-only behavior exactly.
     assert_eq!(plain[0].block.block_id, empty_extra[0].block.block_id);
@@ -120,5 +133,29 @@ fn extra_hash_input_changes_block_id_but_empty_matches_plain_split_logs() {
     assert_ne!(
         with_extra[0].block.block_id,
         with_other_extra[0].block.block_id
+    );
+}
+
+#[test]
+fn extra_hash_input_still_influences_block_id_alongside_an_audience() {
+    // AbAC Stage 5 (#1373, §4): the webhook path's extra_hash_input and the audience prefix
+    // are two independent inputs into the same hash -- both must keep mattering together.
+    let attrs = vec![s_kv("service.name", "gitlab")];
+    let req_a = build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
+    let req_b = build_webhook_request(attrs, "push-events".to_string(), b"same body");
+
+    let ctx_same_extra_diff_header = IdentityContext {
+        audience: Some("team-a"),
+        extra_hash_input: b"x-gitlab-event-uuid:abc",
+    };
+    let ctx_same_extra_other_header = IdentityContext {
+        audience: Some("team-a"),
+        extra_hash_input: b"x-gitlab-event-uuid:def",
+    };
+    let a = split_logs(req_a, ctx_same_extra_diff_header).unwrap();
+    let b = split_logs(req_b, ctx_same_extra_other_header).unwrap();
+    assert_ne!(
+        a[0].block.block_id, b[0].block.block_id,
+        "extra_hash_input must still influence block_id when an audience is also present"
     );
 }

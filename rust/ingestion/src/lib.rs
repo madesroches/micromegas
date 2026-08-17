@@ -9,3 +9,4 @@ pub mod remote_data_lake;
 pub mod sql_migration;
 pub mod sql_telemetry_db;
 pub mod web_ingestion_service;
+pub mod write_audience;

@@ -11,16 +11,18 @@
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
 //! does not run under a plain `cargo test`.
 //!
-//! No `micromegas.audience` ingestion-time stamping exists yet (that's Stage 5, #1373), so this
-//! file stamps it itself, directly on the `ProcessInfo` passed to `insert_process` -- `properties`
-//! is a plain `HashMap<String, String>` there, so this is simpler than a raw Postgres `UPDATE`.
-//! Critically, this must happen *before* the `blocks` view's partitions are materialized, not
-//! merely before the `processes` view's own materialization: `BlocksView::data_sql` snapshots
-//! `processes.properties` from Postgres into the `blocks` parquet partitions at materialization
-//! time (`blocks_view.rs`), and the `processes` `SqlBatchView`'s transform query reads
-//! `first_value("processes.properties") ... FROM blocks` -- i.e. from the already-materialized
-//! `blocks` partitions, never from Postgres directly (`processes_view.rs`). Stamping the process
-//! at creation time (before any block exists) trivially satisfies this ordering.
+//! `micromegas.audience` ingestion-time stamping now exists (Stage 5, #1373): this file stamps
+//! through the real `insert_process(body, &WriteAudience)` parameter, exactly the path a real
+//! ingestion key exercises, rather than hand-writing the property on the `ProcessInfo` passed in
+//! (which would now be stripped anyway -- `finalize_process_properties` drops any
+//! client-supplied `micromegas.*` key). Critically, stamping must happen *before* the `blocks`
+//! view's partitions are materialized, not merely before the `processes` view's own
+//! materialization: `BlocksView::data_sql` snapshots `processes.properties` from Postgres into
+//! the `blocks` parquet partitions at materialization time (`blocks_view.rs`), and the
+//! `processes` `SqlBatchView`'s transform query reads `first_value("processes.properties") ...
+//! FROM blocks` -- i.e. from the already-materialized `blocks` partitions, never from Postgres
+//! directly (`processes_view.rs`). Stamping the process at creation time (before any block
+//! exists) trivially satisfies this ordering.
 
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
@@ -42,6 +44,7 @@ use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
@@ -141,22 +144,20 @@ struct ProcessFixture {
     cpu_stream_id: uuid::Uuid,
 }
 
-/// Seeds one process (stamped with `audience`'s `micromegas.audience` property if `Some`, left
-/// unstamped if `None`) plus its cpu/log streams and one block each, through the real ingestion
-/// pipeline (`WebIngestionService`, the same entry point a real client hits).
+/// Seeds one process -- stamped with `audience` via the real `insert_process(body,
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left unstamped if `None` -- plus
+/// its cpu/log streams and one block each, through the real ingestion pipeline
+/// (`WebIngestionService`, the same entry point a real client hits).
 async fn seed_process(
     ingestion: &WebIngestionService,
     audience: Option<&str>,
 ) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
-    let mut properties = HashMap::new();
-    if let Some(audience) = audience {
-        properties.insert("micromegas.audience".to_string(), audience.to_string());
-    }
-    let process_info = make_process_info(process_id, None, properties);
+    let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
+    let write_audience = WriteAudience::new(audience)?;
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -328,8 +329,8 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     // Seed three processes *before* any block/view materialization: A and B are stamped with
     // different audiences, C is left unstamped (no `micromegas.audience` property at all) --
     // exercising the `MICROMEGAS_UNSTAMPED_AUDIENCE` escape hatch below.
-    let process_a = seed_process(&ingestion, Some("user:a")).await?;
-    let process_b = seed_process(&ingestion, Some("user:b")).await?;
+    let process_a = seed_process(&ingestion, Some("team-a")).await?;
+    let process_b = seed_process(&ingestion, Some("team-b")).await?;
     let process_c = seed_process(&ingestion, None).await?;
 
     let lake = Arc::new(lake);
@@ -389,7 +390,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:a"])),
+            caller_with_scope(audiences_scope(&["team-a"])),
             None,
             &processes_a_sql,
         )
@@ -401,7 +402,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:b"])),
+            caller_with_scope(audiences_scope(&["team-b"])),
             None,
             &processes_a_sql,
         )
@@ -413,7 +414,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:a"])),
+            caller_with_scope(audiences_scope(&["team-a"])),
             None,
             &processes_b_sql,
         )
@@ -425,7 +426,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:someone-else"])),
+            caller_with_scope(audiences_scope(&["team-other"])),
             None,
             &processes_a_sql,
         )
@@ -467,7 +468,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:a"])),
+            caller_with_scope(audiences_scope(&["team-a"])),
             None,
             &log_entries_a_sql,
         )
@@ -479,7 +480,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:b"])),
+            caller_with_scope(audiences_scope(&["team-b"])),
             None,
             &log_entries_a_sql,
         )
@@ -508,7 +509,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     let async_events_a_own = row_count(
         lakehouse.clone(),
         view_factory.clone(),
-        caller_with_scope(audiences_scope(&["user:a"])),
+        caller_with_scope(audiences_scope(&["team-a"])),
         None,
         &async_events_a_sql,
     )
@@ -521,7 +522,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:b"])),
+            caller_with_scope(audiences_scope(&["team-b"])),
             None,
             &async_events_a_sql,
         )
@@ -552,7 +553,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     let thread_spans_a_own = row_count(
         lakehouse.clone(),
         view_factory.clone(),
-        caller_with_scope(audiences_scope(&["user:a"])),
+        caller_with_scope(audiences_scope(&["team-a"])),
         // `ThreadSpansView::jit_update` hard-requires a bounded range (thread_spans_view.rs);
         // `insert_range` already covers the real-clock `now()` these spans were stamped with
         // (see `seed_process`), so it doubles as the query range here without inventing a new
@@ -569,7 +570,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:b"])),
+            caller_with_scope(audiences_scope(&["team-b"])),
             Some(insert_range),
             &thread_spans_a_sql,
         )
@@ -599,7 +600,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_scope(audiences_scope(&["user:a"])),
+            caller_with_scope(audiences_scope(&["team-a"])),
             None,
             &processes_c_sql,
         )
@@ -625,7 +626,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_unstamped_audience(audiences_scope(&["user:a"]), "group:everyone"),
+            caller_with_unstamped_audience(audiences_scope(&["team-a"]), "group:everyone"),
             None,
             &processes_c_sql,
         )

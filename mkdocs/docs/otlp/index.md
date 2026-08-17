@@ -83,17 +83,31 @@ process_id = uuid_v5(NS_OTEL_PROCESS_V1,
     host.cpu.vendor.id · host.cpu.stepping · host.cpu.cache.l2.size ·
     service.version ·
     telemetry.sdk.name · telemetry.sdk.language · telemetry.sdk.version ·
-    process.runtime.name · process.runtime.version · process.runtime.description)
+    process.runtime.name · process.runtime.version · process.runtime.description
+    [· write_audience])
 ```
 
 `·` denotes `\x1F` (ASCII unit separator). All fields pass through lower-case + trim except
 `process.pid` and `process.creation.time` which are used verbatim. Missing fields are treated
 as empty strings.
 
+`write_audience` — the authenticated write audience resolved from the ingestion credential,
+**not** anything in the OTLP payload — is appended as a 32nd field **only when the credential
+carries one**. This is what makes `process_id` audience-scoped (AbAC Stage 5, #1373): two
+audiences posting identical resource attributes (the same containerized app in two tenants, a
+degenerate resource, a CloudWatch namespace) derive two distinct `process_id`s instead of
+colliding on one. With no write audience (an env-keyring key, OIDC, or no auth provider at all)
+the joined key has no 32nd field and is byte-identical to before this stage. See
+[Authentication → Write-Side Stamping](../admin/authentication.md#write-side-stamping-abac-stage-5)
+for what carries a write audience and what doesn't.
+
 The formula was extended in-place under the same `NS_OTEL_PROCESS_V1` namespace UUID —
 re-deriving existing `process_id`s is always acceptable, so no namespace bump is needed.
 In-flight processes receive a new `process_id` on their next batch; existing rows are unaffected
-and decay under the normal retention policy.
+and decay under the normal retention policy. **A deployment that starts stamping (enables a
+DB-backed ingestion key with a bound audience) re-derives every OTLP producer's `process_id` the
+same way** — expect a one-time process-identity churn the first time each producer's next batch
+crosses a stamped credential, exactly like any other in-place formula extension.
 
 The first time a `process_id` is observed, a row is inserted into `processes` with these mappings:
 
@@ -221,7 +235,7 @@ Per the OTLP spec, error responses always carry a `google.rpc.Status` proto, **n
 
 ## Idempotency
 
-Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, payload_bytes)`. The block's payload object is written create-only — a retried POST that hashes to the same `block_id` finds the object already present and leaves it untouched (first write wins), and the row insert still collides on `ON CONFLICT (block_id) DO NOTHING` and adds no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting or corrupting a previously stored payload. Both the object collision and the row conflict are counted (`block_object_duplicate`), so a sustained rate of duplicates is visible to operators rather than silent.
+Block IDs are content-addressed: `block_id = uuid_v5(NS_OTEL_BLOCK_V1, [aud\x1F<write_audience>\x1F +] [header_hash_input +] payload_bytes)`. Three inputs can feed this hash, all optional and all caller-side concatenation ahead of the same `uuid_v5` call: the write audience (AbAC Stage 5, #1373 — same audience the `process_id` formula above appends, prefixed here as `aud\x1F<audience>\x1F` when the credential carries one), the webhook path's canonicalized header set (see [Webhook Ingestion](#webhook-ingestion) below), and the raw payload bytes themselves, always present. The write-audience prefix is what stops two audiences posting byte-identical payloads from deduping against each other's writes — without it, two tenants both posting the same degenerate resource's identical bytes would silently drop the second write as a duplicate. The block's payload object is written create-only — a retried POST that hashes to the same `block_id` finds the object already present and leaves it untouched (first write wins), and the row insert still collides on `ON CONFLICT (block_id) DO NOTHING` and adds no rows. This makes the OTLP endpoints safe to retry on transient errors without double-counting or corrupting a previously stored payload. Both the object collision and the row conflict are counted (`block_object_duplicate`), so a sustained rate of duplicates is visible to operators rather than silent.
 
 !!! warning "Content-hash dedup needs a distinguishing payload, not just a distinguishing event"
     Content-addressing dedups on the *bytes actually stored*, not on any identity the
@@ -419,7 +433,11 @@ described in [Idempotency](#idempotency), with a webhook-specific wrinkle:
   different unrecognized headers would collide and dedup as if they were retries of each
   other. The flip side: a genuine retry that picks up a new value for some header along
   the way (e.g. a proxy stamping a fresh `Date` or request-id on each hop) is no longer
-  deduped, since that header now participates in the hash too.
+  deduped, since that header now participates in the hash too. This is now one of *three*
+  independent `block_id` inputs (see [Idempotency](#idempotency) above for the general
+  formula) — the write audience, when the credential carries one, still applies on top of
+  the header hash, so two audiences posting the same webhook body with the same headers
+  still don't dedup against each other.
 
 Leaving both timestamps at 0 in the stored record (rather than backfilling a timestamp
 before storing, as an earlier version of this endpoint did) keeps the stored payload byte-

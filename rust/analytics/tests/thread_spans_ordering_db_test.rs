@@ -37,6 +37,7 @@ use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::{TimeRange, make_time_converter_from_latest_timing};
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
@@ -221,7 +222,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -531,7 +532,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -774,7 +775,7 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -988,7 +989,7 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1202,7 +1203,7 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1455,7 +1456,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1741,7 +1742,7 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1991,7 +1992,7 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -2197,7 +2198,7 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 

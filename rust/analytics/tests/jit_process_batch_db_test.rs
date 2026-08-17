@@ -38,6 +38,7 @@ use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::{FORMAT_TRANSIT, WebIngestionService};
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
@@ -185,7 +186,7 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body)
+        .insert_process(process_body, &WriteAudience::none())
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
