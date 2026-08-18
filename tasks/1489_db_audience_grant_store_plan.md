@@ -391,8 +391,9 @@ never see the table shape.
 
 ### Phase 2 — Store-backed grant source (`micromegas-auth`)
 2. Add `GrantAxis`, `AudienceGrants::from_rows`, `AudienceGrants::merge` to `policy.rs`.
-3. Add `rust/auth/src/db_audience_grants.rs`: `DbAudienceGrantsConfig`, `DbAudienceGrantsSource`,
-   the snapshot cache with serve-stale-on-failure semantics.
+3. Add `rust/auth/src/db_audience_grants.rs` (`pub mod`, registered in `lib.rs`):
+   `DbAudienceGrantsConfig`, `DbAudienceGrantsSource`, the snapshot cache with
+   serve-stale-on-failure semantics.
 4. Add `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store`; extend `resolve`/
    `resolve_audience` to merge in the store's snapshot.
 5. Wire `DbAudienceGrantsSource` construction into
@@ -404,8 +405,9 @@ never see the table shape.
    `AudienceReadPolicy::from_env`, passed to `AudienceReadPolicy::with_store`.
 
 ### Phase 3 — Admin API (`analytics-web-srv`)
-6. Add `rust/analytics-web-srv/src/audience_grants.rs` (state, error type, three handlers, router
-   function). In `web_server.rs::build_protected_routes`: merge `audience_grants_router` and layer
+6. Add `rust/analytics-web-srv/src/audience_grants.rs` (`pub mod`, registered in `lib.rs`; state,
+   error type, three handlers, router function). In `web_server.rs::build_protected_routes`: merge
+   `audience_grants_router` and layer
    its `Extension` only in the `auth_state.is_some()` arm, beside `analytics_keys_router`/
    `ingestion_keys_router`; add `/api/audience-grants` and `/api/audience-grants/{*rest}` to
    `key_management_disabled_router` for the `--disable-auth` arm.
@@ -426,11 +428,13 @@ never see the table shape.
   `AudienceGrants::from_rows`/`merge`, `with_store` on both policies, `resolve`/`resolve_audience`
   changes.
 - `rust/auth/src/db_audience_grants.rs` — new.
+- `rust/auth/src/lib.rs` — add `pub mod db_audience_grants;`.
 - `rust/public/src/servers/flight_sql_server.rs` — construct `DbAudienceGrantsSource` and wire it
   into `AudienceReadPolicy::with_store` in `build_and_serve`.
 - `rust/monolith/src/main.rs` — same wiring, alongside its existing `AudienceReadPolicy::from_env`
   call.
 - `rust/analytics-web-srv/src/audience_grants.rs` — new.
+- `rust/analytics-web-srv/src/lib.rs` — add `pub mod audience_grants;`.
 - `rust/analytics-web-srv/src/web_server.rs` — merge `audience_grants_router` + layer its state
   in the `auth_state.is_some()` arm of `build_protected_routes`, alongside
   `analytics_keys_router`/`ingestion_keys_router`; add `/api/audience-grants` (+ `/{*rest}`) to
