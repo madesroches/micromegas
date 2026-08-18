@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Option A — Query Blocks (rules only)</title>
+<title>Query Deny List — admin screen</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -82,7 +82,6 @@
     border-radius: 999px; padding: 2px 9px; letter-spacing: .03em; text-transform: uppercase;
   }
   .pill.active { background: rgba(248,113,113,.14); color: var(--accent-error); }
-  .pill.expired { background: rgba(107,114,128,.18); color: var(--text-muted); }
   .matcher {
     display: inline-block; font-size: 12px; background: var(--app-bg); border: 1px solid var(--border-color);
     border-radius: 5px; padding: 2px 7px; margin: 0 5px 5px 0; color: var(--text-primary);
@@ -117,28 +116,25 @@
 </div>
 
 <div class="page">
-  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Query Blocks</span></div>
+  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Query Deny List</span></div>
 
   <div class="head">
     <div>
-      <h1>Query Blocks</h1>
-      <p class="sub">Temporarily reject matching queries at the FlightSQL front door while an offending dashboard or alert is fixed.</p>
+      <h1>Query Deny List</h1>
+      <p class="sub">Reject matching queries at the FlightSQL front door while an offending dashboard or alert is fixed.</p>
     </div>
-    <button class="btn">+ Block a Query</button>
+    <button class="btn">+ Deny a Query</button>
   </div>
 
   <div class="banner">
-    Blocks are an incident valve, not a policy surface. Every rule expires (24&nbsp;h maximum) and applies to all
-    <code>flight-sql-srv</code> replicas within one refresh interval (~10&nbsp;s).
+    Rules stand until removed and apply to all <code>flight-sql-srv</code> replicas within one refresh
+    interval (~10&nbsp;s). This is an incident valve — remove a rule once the offending client is fixed.
   </div>
 
   <div class="toolbar">
     <div class="field">
       <span>Data source</span>
       <select><option>default (prod-flightsql)</option><option>staging</option></select>
-    </div>
-    <div class="field">
-      <label style="margin:0"><input type="checkbox" checked> Show recently expired</label>
     </div>
     <div style="flex:1"></div>
     <button class="btn outline small">Refresh</button>
@@ -149,50 +145,46 @@
     <table>
       <thead>
         <tr>
-          <th>Status</th>
+          <th>Rule</th>
           <th>Matchers</th>
           <th>Reason</th>
           <th>Created by</th>
-          <th>Expires</th>
           <th style="text-align:right">Hits</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td><span class="pill active">Active</span><div class="muted" style="font-size:11px;margin-top:6px" class="mono">#a41f</div></td>
+          <td class="mono muted">#a41f</td>
           <td>
             <span class="matcher"><span class="k">sql_hash</span> 9f2c41ab73de0155</span>
             <span class="matcher"><span class="k">entrypoint</span> grafana-alert</span>
           </td>
           <td class="sec">alert rule re-firing on failure, 4 QPS of full-day thread_spans scan</td>
           <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 14:02</div></td>
-          <td class="sec">in 26 min<div class="muted" style="font-size:12px">2026-08-18 14:32</div></td>
           <td style="text-align:right" class="hits">1,284</td>
-          <td style="text-align:right"><button class="btn danger small">Unblock</button></td>
+          <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
         <tr>
-          <td><span class="pill active">Active</span><div class="muted mono" style="font-size:11px;margin-top:6px">#c07b</div></td>
+          <td class="mono muted">#c07b</td>
           <td>
             <span class="matcher"><span class="k">service_account</span> dashboards-svc</span>
             <span class="matcher"><span class="k">notebook</span> fleet-overview</span>
           </td>
           <td class="sec">30 s refresh on a 7-day range; owner pinged, fix in flight</td>
           <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 13:51</div></td>
-          <td class="sec">in 9 min<div class="muted" style="font-size:12px">2026-08-18 14:15</div></td>
           <td style="text-align:right" class="hits">37</td>
-          <td style="text-align:right"><button class="btn danger small">Unblock</button></td>
+          <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
         <tr>
-          <td><span class="pill expired">Expired</span><div class="muted mono" style="font-size:11px;margin-top:6px">#5d13</div></td>
+          <td class="mono muted">#5d13</td>
           <td>
             <span class="matcher"><span class="k">client_ip</span> 10.4.9.221</span>
           </td>
           <td class="sec">notebook retry loop from a workstation</td>
           <td class="sec">other-admin@example.com<div class="muted" style="font-size:12px">2026-08-18 11:20</div></td>
-          <td class="muted">expired 42 min ago<div style="font-size:12px">2026-08-18 12:20</div></td>
           <td style="text-align:right" class="hits">612</td>
-          <td></td>
+          <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
       </tbody>
     </table>
@@ -200,10 +192,10 @@
   </div>
 </div>
 
-<!-- Block dialog, shown open -->
+<!-- Deny dialog, shown open -->
 <div class="overlay">
   <div class="dialog">
-    <h2>Block a Query</h2>
+    <h2>Deny a Query</h2>
     <div class="body">
       <div>
         <label>Normalized SQL fingerprint</label>
@@ -240,25 +232,20 @@
         <label>SQL contains (substring)</label>
         <input type="text" class="mono" placeholder="any">
       </div>
-      <div class="grid2">
-        <div>
-          <label>Expires in</label>
-          <select><option>15 minutes</option><option selected>30 minutes</option><option>2 hours</option><option>24 hours</option></select>
-        </div>
-        <div>
-          <label>Reason (required)</label>
-          <input type="text" value="alert rule re-firing on failure">
-        </div>
+      <div>
+        <label>Reason (required)</label>
+        <input type="text" value="alert rule re-firing on failure; owner notified">
+        <div class="hint">Shown to whoever finds a query failing, and in the rules table — say why, and what has to happen before the rule comes back off.</div>
       </div>
-      <div class="hint">All fields you fill in must match for a query to be rejected. At least one matcher is required — a rule that would match everything is refused.</div>
+      <div class="hint">All fields you fill in must match for a query to be rejected. At least one matcher is required — a rule that would match everything is refused. The rule stands until someone removes it.</div>
     </div>
     <div class="foot">
       <button class="btn outline">Cancel</button>
-      <button class="btn">Block</button>
+      <button class="btn">Deny</button>
     </div>
   </div>
 </div>
 
-<div class="mockup-note">Mockup — Option A: rules table only. The admin brings the fingerprint over from the audit log by hand.</div>
+<div class="mockup-note">Mockup — Query Deny List admin screen. The admin brings the sql_hash over from the query audit log by hand.</div>
 </body>
 </html>
