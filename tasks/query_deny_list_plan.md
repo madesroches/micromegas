@@ -211,13 +211,17 @@ runs:
 
 | Column | NULL when |
 |---|---|
-| `user_id`, `email` | never — `user_id` always carries the authenticated principal: the OIDC subject for a human caller, or a service account's own subject when it is not delegating (see `service_account` below) |
+| `user_id`, `email` | never — `user_id` is the *authenticated* OIDC subject only for a non-delegating caller under OIDC. A delegating service account (`x-allow-delegation: true` plus a client-supplied `x-user-id`/`x-user-email`) puts its own authenticated identity in `service_account` and echoes the client-asserted id into `user_id` instead; with no `x-auth-subject` at all (`--disable-auth`), `user_id`/`email` fall back to the client-supplied headers, defaulting to `'unknown'`. So a rule keyed on `user_id`/`email` targets a client-asserted value in the delegating-service-account case, and can be evaded by changing a header |
 | `service_account` | the caller is a service account that is **not delegating** — i.e. also NULL for an ordinary human caller. It is set only when a service account calls on behalf of a user (`x-user-id`/`x-user-email` present alongside its own credentials); a non-delegating service account's identity is in `user_id` instead, so a rule meant to target one should match on `user_id`, not `service_account` |
 | `client`, `agent`, `entrypoint` | never (`'unknown'` when the header is absent) |
 | `session`, `notebook`, `cell` | the caller sent no such header |
 | `client_ip` | never |
 | `sql` | never — the raw statement text |
 | `sql_hash` | never — the normalized fingerprint (§2) |
+
+Server-derived, not client-influenceable: `client_ip`, `sql`, `sql_hash`, `service_account`.
+Client-asserted, and therefore something an offender can change to evade a rule: `user_id`,
+`email`, `client`, `agent`, `entrypoint`, `session`, `notebook`, `cell`.
 
 The identity column is named `user_id`, not `user`: DataFusion's default (`Generic`) SQL dialect
 parses a bare `user` in expression position as the zero-argument function call `user()`, not a
@@ -359,14 +363,22 @@ Everything expensive happens at refresh, since rules are few and static:
    `Vec<HashMap<Box<str>, Vec<RuleIdx>>>` indexed by `FieldIdx` — keying each field's map on
    `Box<str>` alone (rather than a `(FieldIdx, Box<str>)` tuple) is what lets a probe use a
    borrowed `&str` with no allocation, since `Borrow` does not decompose through tuples and a
-   tuple-keyed map could only be probed by building a new `Box<str>` per lookup; unanchored
-   single-text-predicate rules go into a shared `RegexSet`; unanchored rules are laid out
-   contiguously in the program so they run as one bundled pass.
+   tuple-keyed map could only be probed by building a new `Box<str>` per lookup. Unanchored
+   single-text-predicate rules go into a `RegexSet`, one per field that has any — a query denies
+   nothing on a text match alone, so this is still gated by which field's `RegexSet` actually hits.
+   The remaining unanchored rules (no top-level equality and not a single text predicate) are laid
+   out contiguously in the program as the `unanchored` range, which the `RegexSet`-gated rules are
+   *not* part of, so nothing is evaluated twice.
 
-Per query, `check` does: empty snapshot → return; otherwise probe the anchor index (one hash lookup
-per anchored field, usually one), run the `RegexSet` pass if there is one, run the unanchored range
-of the program, and run the op ranges of whatever candidates the index produced. Nothing allocates:
-the attribution is borrowed `&str`, the program and its literal blob live in the snapshot `Arc`, and
+`RuleIdx` is assigned at compile time in stable rule order — by `(created_at, rule_id)`, oldest
+first — so a lower `RuleIdx` always means an older rule. Per query, `check` does: empty snapshot →
+return; otherwise probe the anchor index (one hash lookup per anchored field, usually one), run each
+field's `RegexSet` pass and collect the `RuleIdx`s of the patterns that hit, run the `unanchored`
+range of the program, and run the op ranges of whatever candidates the anchor index and the
+`RegexSet` passes produced — and returns the rule behind the **minimum** matching `RuleIdx` across
+all of that, not the first `Op::Match` encountered in evaluation order. This is what keeps "oldest
+matching rule wins" (§4) true regardless of which pass happens to run first. Nothing allocates: the
+attribution is borrowed `&str`, the program and its literal blob live in the snapshot `Arc`, and
 neither `str::contains` nor `Regex::is_match` allocates.
 
 #### One bundled program, not one tree per rule
@@ -428,8 +440,11 @@ where the anchor probe costs 20.6 ns, so pruning remains the primary lever and t
 runs on what pruning leaves behind:
 
 - anchored rules → the index yields candidate rule ids → run those rules' op ranges;
-- unanchored rules → their ranges are laid out contiguously and run as one bundled pass on every
-  query, which is exactly where the 2× is collected, since that is the set that cannot be pruned.
+- unanchored single-text-predicate rules → gated by their field's `RegexSet` → only a hit runs that
+  rule's op range;
+- everything else unanchored → laid out contiguously as the `unanchored` range and run as one
+  bundled pass on every query, which is exactly where the 2× is collected, since that is the set
+  that cannot be pruned at all.
 
 **The custom evaluator is the accepted price, and DataFusion is the oracle that keeps it honest.**
 Owning Kleene logic and `LIKE`-to-predicate lowering is where hand-rolled implementations go subtly
@@ -594,8 +609,10 @@ pub struct DenySnapshot {
     program: Program,                      // every rule's ops + one literal blob (§3)
     index: Vec<HashMap<Box<str>, Vec<RuleIdx>>>,  // indexed by FieldIdx; each map probes with &str, no allocation
     anchored_fields: Vec<FieldIdx>,        // usually one; probed on every query
-    text_set: Option<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // unanchored text rules, one pass
-    unanchored: Range<u32>,                // contiguous program range, run as one pass
+    text_sets: Vec<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // one per field with unanchored text rules;
+                                            // NOT part of `unanchored` below — RegexSet-gated
+                                            // rules are pruned there, not bundled
+    unanchored: Range<u32>,                // remaining unanchored rules; contiguous, run as one pass
 }
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
@@ -624,12 +641,14 @@ impl QueryDenyList {
   feature end to end: `sql_fingerprint` runs unconditionally regardless of rule count, at ~1.2 µs
   per query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
 - With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
-  one) and runs the shared `RegexSet` pass if any unanchored text rules exist. **~13–35 ns and zero
+  one) and runs each field's `RegexSet` pass, if any exist. **~13–35 ns and zero
   allocation, flat in the number of rules** (§3).
-- The unanchored program range runs as one bundled pass, and the candidates the index produced have
-  their own op ranges run — first `Op::Match` winning.
-- **Candidates are walked in a stable rule order** — by `created_at`, `rule_id` breaking ties — not
-  in whatever order the index buckets yield. Two replicas must name the same rule for the same
+- The `unanchored` program range runs as one bundled pass, and the candidates the anchor index and
+  the `RegexSet` passes produced have their own op ranges run — the minimum matching `RuleIdx`
+  across all of it winning, not the first `Op::Match` evaluated.
+- **Candidates are compared by a stable rule order** — `RuleIdx`, assigned by `created_at`, `rule_id`
+  breaking ties — not the order the index buckets or the program happen to evaluate them in. Two
+  replicas must name the same rule for the same
   query, since the rule id reaches the caller's error message, the `warn!` line, the audit record,
   and the per-rule metric. The oldest matching rule wins, which is also the one an operator is most
   likely to have forgotten about.
@@ -1005,6 +1024,7 @@ Open Questions.
 - `rust/analytics/Cargo.toml` (`sha2`, `regex`)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
 - `rust/analytics-web-srv/src/stream_query.rs` (narrow `contains_blocked_function` to call position)
+  and its existing test block, `rust/analytics-web-srv/tests/stream_query_tests.rs`
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
   `query-guide/query-audit-log.md`, `query-guide/python-api.md`
@@ -1166,6 +1186,16 @@ convention as `ownership_rewrite_db_test.rs`)**
 - The denial `warn!` line contains the rule id, `sql_hash`, and caller attribution — asserted
   against the formatted string the same way `build_log_line`'s content is asserted today, rather
   than by capturing log output.
+
+**`contains_blocked_function` (extend `rust/analytics-web-srv/tests/stream_query_tests.rs`)** — the
+existing five cases all use call position and would pass unchanged against either the old or the new
+behavior, so two cases are added to actually exercise the narrowing:
+
+- a blocked name appearing only inside a string literal, e.g.
+  `deny_queries('sql LIKE ''%retire_partitions%''', 'reason')`, is **allowed** (not flagged as a
+  destructive call);
+- a blocked name in call position is still **blocked**, both with no whitespace
+  (`retire_partitions()`) and with whitespace before the parenthesis (`retire_partitions ()`).
 
 **End-to-end (`python/micromegas/tests/test_query_deny_list.py`, against `local_test_env`)**
 
