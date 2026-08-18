@@ -136,19 +136,31 @@ file-schema) change: no partition content is affected.
 New in `rust/analytics/src/lakehouse/query_deny_list.rs`:
 
 ```rust
+/// Tokenizes once; both the fingerprint and the anti-jam escape hatch (§5) consume the same
+/// token stream instead of each re-tokenizing the statement.
+pub fn tokenize(sql: &str) -> Vec<Token>;
+
 /// Literal-stripped fingerprint of a statement: the first 16 hex chars of the
 /// SHA-256 of the normalized token stream.
-pub fn sql_fingerprint(sql: &str) -> String;
+pub fn fingerprint_of(tokens: &[Token]) -> String;
 ```
+
+`execute_query` calls `tokenize` once per query and derives both the fingerprint and the escape-hatch
+check from the result; there is no standalone `sql_fingerprint(sql: &str) -> String` that discards
+the tokens.
 
 Implementation: `sqlparser::tokenizer::Tokenizer` over `GenericDialect`, then
 
-- every `Token::Number`, `SingleQuotedString`, `DoubleQuotedString`, `NationalStringLiteral`,
-  `HexStringLiteral`, `EscapedStringLiteral` → `?`
+- every `Token::Number`, `SingleQuotedString`, `NationalStringLiteral`, `HexStringLiteral`,
+  `EscapedStringLiteral` → `?`
+- `DoubleQuotedString` is **not** stripped, even though `sqlparser` tokenizes it identically to a
+  string literal: this product's views expose dotted column names that require double-quoting
+  (e.g. `b."processes.exe"`), and mapping it to `?` would collapse `"processes.exe"` and
+  `"processes.username"` into the same fingerprint, making a rule keyed on `sql_hash` deny queries
+  it was never meant to. It is kept verbatim, case included, as an identifier.
 - whitespace runs collapse to one space; comments dropped
-- keywords/identifiers lowercased (identifiers are already case-insensitive in DataFusion unless
-  quoted; quoted identifiers keep their case since they arrive as `DoubleQuotedString`… which is
-  also a literal token — see Open Questions)
+- keywords/unquoted identifiers lowercased (identifiers are already case-insensitive in DataFusion
+  unless quoted)
 - tokens joined with a single space, then SHA-256, hex, truncated to 16 chars (64 bits)
 
 Tokenization failure falls back to hashing the whitespace-collapsed raw text, so a fingerprint
@@ -161,7 +173,11 @@ rule's other match predicates.
 
 The fingerprint is computed once per query in `execute_query` and stored on `QueryAuditState`, so
 it costs nothing extra to also emit it in the audit record (§7) — which is how an operator gets the
-value to paste into `deny_queries`.
+value to paste into `deny_queries`. Unlike the deny-list check itself, this cost is **not**
+conditional on any rule existing: `QueryAuditState::emit` writes `sql_hash` on every terminal path
+(success, failure, and abandoned-mid-drain), so `sql_fingerprint` runs on every query regardless of
+whether the deny list is empty. It is measured alongside the evaluator in §3's bench, and its cost
+is accounted for there rather than assumed away.
 
 ### 3. Match expression
 
@@ -207,6 +223,11 @@ involved. That is the point of the single-column design.
 NULL semantics come from SQL and are the ones we want: `notebook = 'fleet-overview'` evaluates to
 NULL — not true — for a query that carried no notebook header, so the rule does not fire.
 
+`user` and `email` match exactly, case-sensitive — `=` with no case folding — matching the existing
+precedent at `OidcProvider::is_admin` (`rust/auth/src/oidc.rs`), which already compares admin
+identities against the configured list with plain `==` and has no case-insensitive path anywhere in
+`rust/auth/src`. This is not a new decision, just the same rule applied here.
+
 #### Measured: what evaluation actually costs
 
 This check runs in front of **every** query, for as long as a rule stands, so it was measured
@@ -222,9 +243,22 @@ which is what nearly every query does — and the **hit**, paid only by a query 
 | Flat conjunction scan (the shape most rules reduce to) | **1.1 ns** | 6.0 ns | 72.6 ns |
 | Anchor probe only (one hash lookup, no rule touched) | 12.4 ns | 13.9 ns | **20.6 ns** |
 | Compiled tree walk where each rule regexes the SQL text | 72.5 ns | 1 490 ns | 37 769 ns |
+| `sql_fingerprint` (tokenize + SHA-256, ~130-char statement) | **paid unconditionally, on every query, rule count irrelevant** | 1 180 ns | |
 
 Of the DataFusion figure, 2 804 ns is building the one-row batch and only ~400 ns per rule is
-evaluation — entering Arrow at all is the cost. Two further results were surprises worth recording,
+evaluation — entering Arrow at all is the cost.
+
+`sql_fingerprint` is not a `check` cost at all — it runs whether or not any rule exists, because
+`QueryAuditRecord` carries `sql_hash` on every terminal path (§7). So "zero rules cost nothing"
+is true of the evaluator but not of the feature: every query pays ~1.2 µs of tokenizing and
+hashing it did not pay before this plan, and that is roughly a third of the 3.4 µs Phase 1b exists
+to remove. Phase 1b's payoff is therefore not "3.4 µs → ~20 ns"; it is "3.4 µs of evaluation
+collapses to ~20 ns, sitting behind a ~1.2 µs fingerprint cost that exists independently of the
+evaluator and of how many rules are configured." That fingerprint cost is accepted because the
+audit log needs it for the "paste the fingerprint into `deny_queries`" workflow regardless of
+whether the deny list is in active use — it is not something either evaluation strategy can shed.
+
+Two further results were surprises worth recording,
 because both contradict what this plan previously proposed:
 
 1. **OR-folding all rules into one DataFusion expression does not help** (7 338 ns vs 6 230 ns at
@@ -309,10 +343,13 @@ Everything expensive happens at refresh, since rules are few and static:
    (see "One bundled program" below for the opcode set and the ~2× it is worth over boxed trees).
    Kleene three-valued logic is preserved: a test carries true/false/null jump targets, and only a
    fall-through to `Op::Match` denies.
-4. **Index what can be indexed**: rules with a top-level equality go in
-   `HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>`; unanchored single-text-predicate rules go into a
-   shared `RegexSet`; unanchored rules are laid out contiguously in the program so they run as one
-   bundled pass.
+4. **Index what can be indexed**: rules with a top-level equality go in a per-field
+   `Vec<HashMap<Box<str>, Vec<RuleIdx>>>` indexed by `FieldIdx` — keying each field's map on
+   `Box<str>` alone (rather than a `(FieldIdx, Box<str>)` tuple) is what lets a probe use a
+   borrowed `&str` with no allocation, since `Borrow` does not decompose through tuples and a
+   tuple-keyed map could only be probed by building a new `Box<str>` per lookup; unanchored
+   single-text-predicate rules go into a shared `RegexSet`; unanchored rules are laid out
+   contiguously in the program so they run as one bundled pass.
 
 Per query, `check` does: empty snapshot → return; otherwise probe the anchor index (one hash lookup
 per anchored field, usually one), run the `RegexSet` pass if there is one, run the unanchored range
@@ -484,7 +521,9 @@ query for as long as they stand (§3).
 A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
 `property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules, for anchored and
 unanchored rule sets, on both the miss and the matching hit — so the numbers above stay true
-instead of decaying into folklore. Both tables came from throwaway versions of exactly that
+instead of decaying into folklore. The same bench also pins `sql_fingerprint` on a representative
+statement, since that cost sits in front of `check` on every query regardless of rule count and is
+otherwise easy to let decay unmeasured. Both tables came from throwaway versions of exactly that
 bench.
 
 #### Where this can go next
@@ -515,9 +554,21 @@ impl QueryAttribution<'_> {
     fn field(&self, idx: FieldIdx) -> Option<&str>;
 }
 
-pub struct QueryDenyRule {
+/// The DB row, exactly as `list_query_denials()` returns it (§8) and as `insert` echoes back.
+/// No `ops`/`anchor`/in-process counters here — those exist only for a rule that has been
+/// compiled into a `DenySnapshot`, and a freshly inserted or listed row has not necessarily
+/// been through that yet on every replica.
+pub struct QueryDenyRow {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
     pub reason: String, pub match_expr: String,
+    pub hit_count: i64,                       // last flushed value
+    pub last_hit_at: Option<DateTime<Utc>>,   // None until the rule first fires
+}
+
+/// A row compiled into one snapshot: adds the pieces `check` needs and lives only inside
+/// `DenySnapshot`.
+pub struct QueryDenyRule {
+    pub row: QueryDenyRow,
     ops: Range<u32>,                      // this rule's slice of DenySnapshot::program
     anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
     hits: AtomicU64,                      // in-process delta since the last flush
@@ -529,7 +580,7 @@ pub struct QueryDenyRule {
 pub struct DenySnapshot {
     rules: Vec<Arc<QueryDenyRule>>,
     program: Program,                      // every rule's ops + one literal blob (§3)
-    index: HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>,
+    index: Vec<HashMap<Box<str>, Vec<RuleIdx>>>,  // indexed by FieldIdx; each map probes with &str, no allocation
     anchored_fields: Vec<FieldIdx>,        // usually one; probed on every query
     text_set: Option<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // unanchored text rules, one pass
     unanchored: Range<u32>,                // contiguous program range, run as one pass
@@ -545,15 +596,17 @@ impl QueryDenyList {
     pub fn check(&self, q: &QueryAttribution<'_>) -> Option<Arc<QueryDenyRule>>;
     pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload + recompile
     pub async fn insert(&self, match_expr: &str, reason: &str, created_by: &str)
-        -> Result<QueryDenyRule>;
+        -> Result<QueryDenyRow>;
     pub async fn delete(&self, rule_id: Uuid) -> Result<bool>;
-    pub async fn list(&self) -> Result<Vec<QueryDenyRule>>;
+    pub async fn list(&self) -> Result<Vec<QueryDenyRow>>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
 }
 ```
 
-- **Zero rules cost nothing.** `check` returns on an empty-snapshot test — the steady state of
-  every deployment that is not mid-incident.
+- **Zero rules make `check` itself free.** `check` returns on an empty-snapshot test — the steady
+  state of every deployment that is not mid-incident. This is a claim about `check`, not about the
+  feature end to end: `sql_fingerprint` runs unconditionally regardless of rule count, at ~1.2 µs
+  per query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
 - With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
   one) and runs the shared `RegexSet` pass if any unanchored text rules exist. **~13–35 ns and zero
   allocation, flat in the number of rules** (§3).
@@ -603,13 +656,13 @@ if let Some(rule) = denied
     let status = Status::resource_exhausted(format!(
         "query denied by rule {} (reason: {}); ask an admin to lift it with \
          remove_query_denial('{}'); query_id={query_id}",
-        rule.rule_id, rule.reason, rule.rule_id));
+        rule.row.rule_id, rule.row.reason, rule.row.rule_id));
     warn!(
         "query denied rule_id={} reason={:?} sql_hash={sql_hash} user={} email={} \
          client={client_type} entrypoint={client_entrypoint} client_ip={client_ip} \
          query_id={query_id}",
-        rule.rule_id, rule.reason, attr.user_id, attr.user_email);
-    imetric!("query_denied", "count", rule_tags(&rule.rule_id), 1_u64);
+        rule.row.rule_id, rule.row.reason, attr.user_id, attr.user_email);
+    imetric!("query_denied", "count", rule_tags(&rule.row.rule_id), 1_u64);
     rule.record_hit();
     return Err(audit_state.fail_with_class(status, "denied"));
 }
@@ -771,8 +824,11 @@ Layout — a single rules table plus a create dialog (`tasks/query_deny_list_moc
 The dialog issues `SELECT * FROM deny_queries('<expr>', '<reason>')`. **SQL literal escaping**: both
 the expression and the reason are user-supplied and must go through a single `escapeSqlLiteral`
 helper (`'` → `''`), applied at the one place that builds these statements — the same rule
-`substitute_macros` already follows server-side. The expression itself already contains doubled
-quotes by the time it reaches that helper, so the round trip is worth a dedicated test.
+`substitute_macros` already follows server-side. The textarea holds the expression in its natural,
+single-quoted form (as the mockup shows — e.g. `sql_hash = '9f2c41ab73de0155' AND entrypoint =
+'grafana-alert'`, and every insert-chip inserts a single-quoted fragment), so `escapeSqlLiteral`
+doubles those quotes on the way out, exactly as it does for the reason field. The round trip is
+worth a dedicated test.
 
 Non-admins never reach the page (`AuthGuard requireAdmin`), and a non-admin who hand-typed the SQL
 would get "function not found" from `flight-sql-srv` — the gate is server-side, the guard is UX.
@@ -805,8 +861,8 @@ Open Questions.
 
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
-2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match-context
-   schema, `compile_match_expr` (parse → validate), `QueryAttribution`, `QueryDenyRule`,
+2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `tokenize`/`fingerprint_of`, the match-context
+   schema, `compile_match_expr` (parse → validate), `QueryAttribution`, `QueryDenyRow`, `QueryDenyRule`,
    `DenySnapshot`, `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
    `spawn_refresh_task`), env knobs. Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2`
    to `analytics/Cargo.toml`.
@@ -815,7 +871,7 @@ Open Questions.
    validated `Expr`, one row batch per candidate. It is a handful of lines, owns no SQL semantics,
    and is correct by construction. `check`'s signature and the whole rest of this plan are
    unchanged by which evaluator sits behind it.
-3. Unit tests for `sql_fingerprint` and validation (see Testing Strategy), plus the corpus that
+3. Unit tests for `tokenize`/`fingerprint_of` and validation (see Testing Strategy), plus the corpus that
    Phase 1b's differential test will reuse.
 
 ### Phase 1b — Swap in the compiled evaluator (optional, measurable)
@@ -828,7 +884,8 @@ Open Questions.
 5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
    the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
    moment we stop using it in production.
-6. Land `benches/query_deny_match.rs` and confirm the §3 numbers on the target hardware.
+6. Land `benches/query_deny_match.rs`, including a `sql_fingerprint` bench, and confirm the §3
+   numbers on the target hardware.
 
    Splitting here is deliberate: Phase 1 is correct and shippable on its own at 3.4 µs/query, and
    Phase 1b is a pure optimization behind an unchanged interface, with the oracle test already
@@ -840,7 +897,8 @@ Open Questions.
 7. `lakehouse_context.rs`: construct and expose `query_denials()` (mirrors `audience_index()`).
 8. `read_scope.rs`: add `CallerIdentity` + `CallerContext::identity`; fix every construction site
    the compiler flags.
-9. `flight_sql_service_impl.rs`: compute the fingerprint once; add `sql_hash` to `QueryAuditState`
+9. `flight_sql_service_impl.rs`: call `tokenize` once per query and derive both `fingerprint_of` and
+   the escape-hatch identifier check from its result; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
    is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
    `CallerContext::identity` in `caller_context`; add the check + attribution resolution to
@@ -874,7 +932,12 @@ Open Questions.
     plus the "find the offender, copy its fingerprint" query.
 21. `mkdocs/docs/admin/flight-sql.md`: the two env knobs, propagation delay, fail-open behavior.
 22. `mkdocs/docs/admin/web-app.md`: the new admin screen.
-23. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
+23. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
+    apart" guidance (§ Exception types) — a denial is also `ResourceExhausted` /
+    `pyarrow.lib.ArrowInvalid` with the same message prefix as a resource-budget failure, so both
+    existing discriminators (message prefix, `error_class: "resource"`) stop being sufficient; add
+    the deny-list row and point readers at `error_class: "denied"`.
+24. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
 
 ## Files to Modify
 
@@ -901,7 +964,7 @@ Open Questions.
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
-  `query-guide/query-audit-log.md`
+  `query-guide/query-audit-log.md`, `query-guide/python-api.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -1001,12 +1064,16 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
   (the warning-level `log_entries` panel and the per-rule `query_denied` rate panel) so an operator
   can paste them straight into a dashboard.
 - `mkdocs/docs/admin/web-app.md` — the Admin → Query Deny List screen.
+- `mkdocs/docs/query-guide/python-api.md` — a denial is `ResourceExhausted` /
+  `pyarrow.lib.ArrowInvalid` with the same message prefix as a resource-budget failure, so update
+  the exception-types table with a deny-list row and tell readers to use `error_class: "denied"`
+  (not the message prefix or `"resource"`) to distinguish the two.
 
 ## Testing Strategy
 
 **Unit (`rust/analytics/tests/query_deny_list_tests.rs`, no DB)**
 
-- `sql_fingerprint`: two dashboard refreshes differing only in timestamp/limit literals produce the
+- `tokenize`/`fingerprint_of`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
 - `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
@@ -1059,7 +1126,10 @@ convention as `ownership_rewrite_db_test.rs`)**
 - A non-matching query is unaffected while the rule is in force.
 - Each denial lands one `Warn`-level `log_entries` row (`msg LIKE 'query denied%'`) and one
   `query_denied` measure tagged with the rule id — the two dashboard signals from §6, checked
-  end-to-end rather than only at the call site.
+  end-to-end rather than only at the call site. Both rows only appear after the telemetry sink
+  flushes and the maintenance role materializes the corresponding view, so both assertions poll via
+  `otlp_helpers.assert_eventually` (already used for this in the test suite) with a timeout
+  comfortably above `MICROMEGAS_FLUSH_PERIOD` (5 s in `local_test_env`), not a fixed sleep.
 - A no-column expression is rejected, as is a syntactically invalid one, each with a message that
   names the problem.
 - `list_query_denials()` shows the rule while it stands and drops it after removal; `hit_count`
@@ -1070,25 +1140,17 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 **Web app (Vitest)**
 
-- SQL builders: a reason containing `'` is escaped exactly once, and an expression already
-  containing doubled quotes survives the round trip unchanged.
+- SQL builders: a reason containing `'` is escaped exactly once, and a single-quoted expression
+  (e.g. `sql_hash = '9f2c41ab73de0155'`, matching the textarea's natural form) survives
+  escape → server-side literal decoding unchanged.
 - Page: renders rules, opens the deny dialog, calls the right SQL on confirm, shows the error
   banner on a failed query.
 
 ## Open Questions
 
-1. **Quoted identifiers in the fingerprint.** `sqlparser` tokenizes `"My Column"` as a
-   `DoubleQuotedString`, indistinguishable from a string literal at the token level. Replacing it
-   with `?` would collapse queries that differ only in a quoted column name into one fingerprint.
-   Proposed: treat `DoubleQuotedString` as an identifier (keep it verbatim) and only strip
-   single-quoted/number/hex/national literals. Worth confirming against real queries before
-   implementing.
-2. **Where should the "find the offender" step live?** This plan leaves it in the audit-log docs:
+1. **Where should the "find the offender" step live?** This plan leaves it in the audit-log docs:
    the admin runs the top-offenders query themselves and pastes the fingerprint into the dialog.
    The mocked-up incident-console variant folded that into the same screen, and a standalone
    "Query Load" admin screen would serve it outside an incident too ("what is the service spending
    its time on?"). Either can be built later against the same `sql_hash` field; worth deciding
    before the screen's layout hardens.
-3. **`match_email` case sensitivity.** Exact match is proposed; if the deployment's OIDC provider
-   ever varies email case, a case-insensitive compare for `email`/`user` specifically may be worth
-   it. Deferred until observed.
