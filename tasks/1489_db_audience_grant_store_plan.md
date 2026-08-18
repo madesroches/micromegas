@@ -208,12 +208,15 @@ impl DbAudienceGrantsSource {
 ```
 
 Refresh queries the whole table (`SELECT audience, axis, selector FROM audience_grants`) and
-builds an `AudienceGrants` via `AudienceGrants::from_rows`. No single-flight/dedup lock: unlike
-`db_api_key.rs`'s `UPDATE ... RETURNING`, this is a plain `SELECT` with no side effect to
-de-duplicate, so letting a few concurrent callers each re-run it right at the TTL boundary is
-strictly simpler and still cheap (the whole point of "the map is small"). This applies to both the
-cold-start and post-success paths — `last_attempt_at`/`fetched_at` bound *how often* a query fires,
-not how many callers race to fire the one that's due.
+builds an `AudienceGrants` via `AudienceGrants::from_rows`. The post-success path has no
+single-flight/dedup lock: unlike `db_api_key.rs`'s `UPDATE ... RETURNING`, this is a plain
+`SELECT` with no side effect to de-duplicate, and that path is gated only by reading
+`Snapshot::fetched_at`, so a few concurrent callers landing right at the TTL boundary can each
+re-run it — strictly simpler and still cheap (the whole point of "the map is small"). The
+cold-start path is different: its `last_attempt_at` compare-exchange (see `current()` above)
+*is* a dedup mechanism, so only one caller per TTL window fires the query and the rest get the
+synthesized throttled-state error instead of racing in. `fetched_at` bounds the post-success
+path's steady-state query frequency, not the boundary race itself.
 
 ### 4. Wiring into `AudienceReadPolicy` / `AudienceMintPolicy`
 
