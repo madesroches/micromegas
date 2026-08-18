@@ -98,6 +98,9 @@ artifact whose provenance a caller might later need (also in Trade-offs).
 `rust/auth/src/policy.rs` additions (same file — `readers()`/`mint_selectors()` stay private, and
 the new code needs them):
 
+- `valid_selector` (currently private, `policy.rs:89`) becomes `pub` — the admin handler in
+  `analytics-web-srv` (a separate crate) needs to run the exact same selector-shape check `parse`
+  runs, not a re-implementation of it.
 - `pub enum GrantAxis { Read, Mint }` — the Rust side of the `axis` column.
 - `pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Result<Self>` —
   builds an `AudienceGrants` from `(audience, axis, selector)` triples, running the *same*
@@ -105,7 +108,10 @@ the new code needs them):
   path and the DB path fail closed on a malformed row, so a hand-edited row that slipped past the
   table's own `CHECK` constraints (e.g. via a direct `psql` session) still can't reach a policy
   decision.
-- `pub(crate) fn merge(&self, other: &Self) -> Self` — unions each audience's `read`/`mint`
+- `pub fn merge(&self, other: &Self) -> Self` — `pub`, not `pub(crate)`: the planned unit tests
+  for `merge` live under `rust/auth/tests/`, an external integration-test crate that cannot see
+  `pub(crate)` items, so this needs the same open Rust-API-surface treatment as the rest of this
+  stage's additions. Unions each audience's `read`/`mint`
   selector lists across both maps. No dedup: `selector_matches` is called with `.any()`, so a
   selector present in both the env map and the store costs one redundant comparison, never a
   wrong answer. This is what makes env-and-store additive per design question 3 (below) with no
@@ -120,9 +126,19 @@ small enough to hold as one snapshot, and `moka`'s eviction/LRU machinery has no
 
 ```rust
 pub struct DbAudienceGrantsConfig {
+    /// `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, falling back to
     /// `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, default 60 — mirrors
-    /// `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`'s name and default.
+    /// `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`'s name, default, and prefix-fallback shape.
     pub cache_ttl_secs: u64,
+}
+
+impl DbAudienceGrantsConfig {
+    /// Resolves the knob as `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS` first, falling back to
+    /// the unprefixed name — the same `resolve_u64`-based pattern
+    /// `DbApiKeyConfig::from_env_with_prefix` (`db_api_key.rs`) already uses for its four knobs,
+    /// so this config follows the same prefix contract every other knob at its wiring sites
+    /// does. With an empty prefix this is identical to the unprefixed var.
+    pub fn from_env_with_prefix(prefix: &str) -> Self { ... }
 }
 
 #[derive(Debug)]
@@ -228,7 +244,12 @@ The actual construction sites are where `AudienceReadPolicy::from_env(...)` alre
 `rust/public/src/servers/flight_sql_server.rs::build_and_serve` and `rust/monolith/src/main.rs`.
 Each constructs one `Arc<DbAudienceGrantsSource>` (when a telemetry-DB pool is configured, via
 `dedicated_key_store_pool`) and calls `.with_store(...)` on the `AudienceReadPolicy` it already
-builds there — one shared snapshot cache per process, not one per policy.
+builds there — one shared snapshot cache per process, not one per policy. Each site builds its
+`DbAudienceGrantsConfig` via `from_env_with_prefix` with the exact same prefix it already passes
+to `AudienceReadPolicy::from_env` beside it: `""` in `flight_sql_server.rs::build_and_serve`,
+`"MICROMEGAS_ANALYTICS"` in `monolith/src/main.rs` — the same prefix every other knob at that
+wiring site (including `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` itself) resolves under, so the
+cache-TTL knob follows the `{prefix}_` fallback convention rather than being unprefixed-only.
 
 ### 5. Admin write surface — `analytics-web-srv`
 
@@ -368,8 +389,10 @@ never see the table shape.
 5. Wire `DbAudienceGrantsSource` construction into
    `flight_sql_server.rs::build_and_serve` and `monolith/src/main.rs`, alongside their existing
    `AudienceReadPolicy::from_env(...)` calls — one `Arc<DbAudienceGrantsSource>` per process, built
-   via `dedicated_key_store_pool` when a telemetry-DB pool is configured, passed to
-   `AudienceReadPolicy::with_store`.
+   via `dedicated_key_store_pool` when a telemetry-DB pool is configured, its
+   `DbAudienceGrantsConfig` resolved via `from_env_with_prefix` using the same prefix
+   (`""`/`"MICROMEGAS_ANALYTICS"` respectively) each site already passes to
+   `AudienceReadPolicy::from_env`, passed to `AudienceReadPolicy::with_store`.
 
 ### Phase 3 — Admin API (`analytics-web-srv`)
 6. Add `rust/analytics-web-srv/src/audience_grants.rs` (state, error type, three handlers, router
@@ -390,8 +413,9 @@ never see the table shape.
 ## Files to Modify
 
 - `rust/ingestion/src/sql_migration.rs` — migration v7.
-- `rust/auth/src/policy.rs` — `GrantAxis`, `AudienceGrants::from_rows`/`merge`, `with_store` on
-  both policies, `resolve`/`resolve_audience` changes.
+- `rust/auth/src/policy.rs` — `valid_selector` made `pub`; `GrantAxis`,
+  `AudienceGrants::from_rows`/`merge`, `with_store` on both policies, `resolve`/`resolve_audience`
+  changes.
 - `rust/auth/src/db_audience_grants.rs` — new.
 - `rust/public/src/servers/flight_sql_server.rs` — construct `DbAudienceGrantsSource` and wire it
   into `AudienceReadPolicy::with_store` in `build_and_serve`.
@@ -411,7 +435,9 @@ never see the table shape.
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/api-keys.md` — document the store,
   the new env knob, and the CLI.
 - `CHANGELOG.md` — `## Unreleased` entry for the new table/migration, the cache-TTL knob, the
-  admin routes, and the CLI.
+  admin routes, and the CLI. **Minor breaking change**: `build_protected_routes` (published,
+  `analytics-web-srv::web_server`) gains a new required `AudienceGrantsState`/router parameter —
+  same pattern as `IngestionKeysState` gaining `default_audience` in the #1372 entry above.
 
 ## Trade-offs
 
@@ -468,16 +494,22 @@ never see the table shape.
 ## Documentation
 
 - `mkdocs/docs/admin/authentication.md` — add the store alongside the existing
-  `{prefix}_AUDIENCE_GRANTS` section, the new `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
-  and the staleness-on-outage note from design question 1.
+  `{prefix}_AUDIENCE_GRANTS` section, the new `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob
+  (falling back to the unprefixed `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, same
+  prefix-fallback shape as the existing knobs on this page), and the staleness-on-outage note from
+  design question 1.
 - `mkdocs/docs/admin/api-keys.md` — cross-reference the new admin route and CLI the way it already
   cross-references `{prefix}_AUDIENCE_GRANTS`; update the `--disable-auth` wording at line 343
   ("both key-management route groups return a fixed 503...") to reflect three route groups, not
   two, now that the audience-grants routes are wired into the same
   `key_management_disabled_router` mechanism.
 - `CHANGELOG.md` — an `## Unreleased` entry, following every prior AbAC stage's precedent: the new
-  `audience_grants` table/migration (v7), the `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
-  the new admin routes, and the `micromegas-grants` CLI.
+  `audience_grants` table/migration (v7), the new `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob
+  (falling back to `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), the new admin routes, and the
+  `micromegas-grants` CLI. **Minor breaking change** clause required
+  (per repo convention, e.g. the #1372 entry's `IngestionKeysState` line): `build_protected_routes`
+  is a published function whose signature changes to take the new `AudienceGrantsState`/router
+  parameter.
 - `tasks/data_isolation/audience_based_access_control_plan.md` — add a dated revision note at the
   top announcing Stage 6a (#1489), cross-referencing this plan file, following the doc's existing
   revision-log convention (e.g. "Stage 5 landed (#1373)", "Long-term model recorded 2026-08-12").
