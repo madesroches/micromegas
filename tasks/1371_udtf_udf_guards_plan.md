@@ -387,8 +387,8 @@ threading a scope through the `View` trait:
 cannot read (compute and storage cost, and any error text that materialization surfaces). That is an
 availability/cost issue, not a confidentiality one, and it is a property of `MaterializedView::scan`
 rather than of these two functions — the right place to fix it is a scan-time guard on
-`view_instance` in a later stage, not a scope parameter here. Recorded in Trade-offs and worth a
-follow-up issue.
+`view_instance` in a later stage, not a scope parameter here. Recorded in Trade-offs and filed as
+#1486.
 
 ### 8. `list_partitions` row filtering
 
@@ -664,7 +664,7 @@ and the aggregate-scan cost this design was chosen to avoid.
   rename lands as an in-place edit of that entry, not a new breaking-change clause.
 - **JIT materialization remains triggerable for unreadable instances (§7).** Accepted as a
   cost/availability residual, not a confidentiality one; a `view_instance` scan-time guard is the
-  fix and is deliberately out of scope here.
+  fix and is deliberately out of scope here. Filed as #1486.
 
 ## Security
 
@@ -794,8 +794,3 @@ thread and async spans and at least one block per process. Then, for a
 - Manual smoke on the local test env: monolith with `--disable-auth` (⇒ `ReadScope::All`) must show
   zero behavior change for flame graphs, perfetto export, and the admin partitions page.
 
-## Open Questions
-
-1. **Follow-up issue for the `view_instance` JIT residual (§7)?** A caller can trigger
-   materialization of an instance they cannot read. Recommend filing it rather than widening this
-   stage.

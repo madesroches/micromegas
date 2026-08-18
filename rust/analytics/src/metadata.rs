@@ -187,7 +187,7 @@ pub async fn find_stream_from_view(
     // caller's own read of that partition is filtered by Prong A
     // (`OwnershipRewrite`'s `async_events`/`thread_spans` `EXISTS` predicates). Residual, accepted:
     // a caller can still *trigger* materialization of an instance they cannot read (a cost/
-    // availability issue, not a confidentiality one) -- tracked as a follow-up, not fixed here.
+    // availability issue, not a confidentiality one) -- tracked as #1486, not fixed here.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
