@@ -179,9 +179,15 @@ pub async fn find_stream_from_view(
 ) -> Result<StreamMetadata> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
-    // TODO(#1371): reachable from a live user query (jit_update, thread_spans_view.rs:343,352 /
-    // net_spans_view.rs:326 / async_events_view.rs:130), so `internal()`'s `ReadScope::All` is a
-    // latent bypass -- Stage 3 must replace this with the caller's inherited scope.
+    // `ReadScope::All` here is intentional (#1371 §7), not a latent bypass: this function is
+    // only ever called from a `jit_update` implementation (`thread_spans_view.rs`,
+    // `net_spans_view.rs`, `async_events_view.rs`), which `MaterializedView::scan` runs *before*
+    // the caller's own scan, and it returns stream *metadata* used to build a partition of the
+    // very view instance the caller named -- never rows returned to the caller directly. The
+    // caller's own read of that partition is filtered by Prong A
+    // (`OwnershipRewrite`'s `async_events`/`thread_spans` `EXISTS` predicates). Residual, accepted:
+    // a caller can still *trigger* materialization of an instance they cannot read (a cost/
+    // availability issue, not a confidentiality one) -- tracked as #1486, not fixed here.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
@@ -283,9 +289,10 @@ pub async fn find_process_with_latest_timing(
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
-    // TODO(#1371): reachable from a live user query (jit_update, thread_spans_view.rs:343,352 /
-    // net_spans_view.rs:326 / async_events_view.rs:130), so `internal()`'s `ReadScope::All` is a
-    // latent bypass -- Stage 3 must replace this with the caller's inherited scope.
+    // `ReadScope::All` here is intentional (#1371 §7), not a latent bypass -- see
+    // `find_stream_from_view`'s identical comment above for the full rationale: only ever called
+    // from a `jit_update`, before the caller's own scan, returning process *metadata* used to
+    // build the caller's own partition rather than rows returned to the caller directly.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,

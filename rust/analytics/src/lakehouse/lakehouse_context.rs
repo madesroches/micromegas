@@ -1,3 +1,6 @@
+use super::audience_guard::{
+    AudienceIndex, DEFAULT_AUDIENCE_CACHE_ENTRIES, DEFAULT_AUDIENCE_CACHE_TTL,
+};
 use super::metadata_cache::MetadataCache;
 use super::migration::migrate_lakehouse;
 use super::reader_factory::ReaderFactory;
@@ -25,6 +28,10 @@ pub struct LakehouseContext {
     metadata_cache: Arc<MetadataCache>,
     runtime: Arc<RuntimeEnv>,
     reader_factory: Arc<ReaderFactory>,
+    /// Query Enforcement Prong B (#1371, AbAC Stage 3) -- resolves *any telemetry id -> its
+    /// owning process's audience* from Postgres, size- and TTL-bounded. Fixed shape, no
+    /// operational knob (see [`DEFAULT_AUDIENCE_CACHE_ENTRIES`]'s doc comment for why).
+    audience_index: Arc<AudienceIndex>,
 }
 
 impl LakehouseContext {
@@ -75,11 +82,17 @@ impl LakehouseContext {
             micromegas_object_cache::l1_wrap(lake.blob_storage.inner(), "lakehouse"),
             metadata_cache.clone(),
         ));
+        let audience_index = Arc::new(AudienceIndex::new(
+            lake.db_pool.clone(),
+            DEFAULT_AUDIENCE_CACHE_ENTRIES,
+            DEFAULT_AUDIENCE_CACHE_TTL,
+        ));
         Self {
             lake,
             metadata_cache,
             runtime,
             reader_factory,
+            audience_index,
         }
     }
 
@@ -93,11 +106,17 @@ impl LakehouseContext {
             micromegas_object_cache::l1_wrap(lake.blob_storage.inner(), "lakehouse"),
             metadata_cache.clone(),
         ));
+        let audience_index = Arc::new(AudienceIndex::new(
+            lake.db_pool.clone(),
+            DEFAULT_AUDIENCE_CACHE_ENTRIES,
+            DEFAULT_AUDIENCE_CACHE_TTL,
+        ));
         Self {
             lake,
             metadata_cache,
             runtime,
             reader_factory,
+            audience_index,
         }
     }
 
@@ -130,6 +149,11 @@ impl LakehouseContext {
     /// Returns the shared `ReaderFactory`.
     pub fn reader_factory(&self) -> &Arc<ReaderFactory> {
         &self.reader_factory
+    }
+
+    /// Returns the shared Prong B audience index (#1371, AbAC Stage 3).
+    pub fn audience_index(&self) -> &Arc<AudienceIndex> {
+        &self.audience_index
     }
 }
 

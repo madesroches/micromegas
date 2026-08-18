@@ -24,34 +24,32 @@
 //! directly (`processes_view.rs`). Stamping the process at creation time (before any block
 //! exists) trivially satisfies this ordering.
 
+mod common;
+
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
-use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
+use common::db_fixtures::{
+    caller_with_unstamped_audience, ensure_telemetry_guard, reset_global_view,
+};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::{
-    CallerContext, OwnershipRewriteConfig, ReadScope,
-};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
-use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
-use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
-use micromegas_analytics::response_writer::{Logger, ResponseWriter};
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::levels::LevelFilter;
 use micromegas_tracing::logs::{LogBlock, LogStaticStrInteropEvent, LogStream};
 use micromegas_tracing::spans::{
     BeginAsyncNamedSpanEvent, BeginThreadNamedSpanEvent, EndAsyncNamedSpanEvent,
@@ -68,73 +66,6 @@ static SPAN_LOCATION: SpanLocation = SpanLocation {
     file: "ownership_rewrite_db_test.rs",
     line: 1,
 };
-
-/// See `thread_spans_ordering_db_test.rs`'s identical helper: more than one DB-backed test can
-/// share this binary process, and `TelemetryGuardBuilder::build` does process-global, one-time
-/// setup.
-fn ensure_telemetry_guard() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let guard = TelemetryGuardBuilder::default()
-            .with_ctrlc_handling()
-            .with_local_sink_max_level(LevelFilter::Info)
-            .build()
-            .expect("telemetry guard");
-        std::mem::forget(guard);
-    });
-}
-
-/// Force-regenerates a global view's bucket(s) covering `insert_range` (which must exactly tile
-/// `TimeDelta::hours(1)`), bypassing the "already covered by an overlapping partition" freshness
-/// check -- needed to pick up newly ingested source rows on a shared, persistent dev lake. Mirrors
-/// `thread_spans_ordering_db_test.rs`'s identical helper.
-async fn regenerate_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
-            .await?,
-    );
-    regenerate_partition_range(
-        partitions,
-        lakehouse,
-        view,
-        insert_range,
-        TimeDelta::hours(1),
-        logger,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Retires every partition of `view` overlapping `insert_range`, then regenerates from source.
-/// Mirrors `thread_spans_ordering_db_test.rs`'s identical helper -- see its doc comment for why
-/// retiring by overlap first is needed on a shared, persistent dev lake.
-async fn reset_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let mut tr = lakehouse.lake().db_pool.begin().await?;
-    retire_partitions(
-        &mut tr,
-        &view.get_view_set_name(),
-        &view.get_view_instance_id(),
-        insert_range.begin,
-        insert_range.end,
-        RetireMatch::Overlap,
-        &[],
-        logger.clone(),
-    )
-    .await
-    .with_context(|| "retiring overlapping partitions before regeneration")?;
-    tr.commit().await.with_context(|| "commit")?;
-    regenerate_global_view(lakehouse, view, insert_range, logger).await
-}
 
 /// One seeded process, its "cpu" stream (carrying one thread span pair, for `thread_spans`, and
 /// one async span pair, for `async_events`) and its "log" stream (carrying one log entry, for
@@ -296,21 +227,8 @@ fn caller_with_scope(read_scope: ReadScope) -> CallerContext {
     CallerContext {
         read_scope,
         is_admin: false,
-        ownership_config: Arc::new(OwnershipRewriteConfig::default()),
-    }
-}
-
-fn caller_with_unstamped_audience(
-    read_scope: ReadScope,
-    unstamped_audience: &str,
-) -> CallerContext {
-    CallerContext {
-        read_scope,
-        is_admin: false,
-        ownership_config: Arc::new(OwnershipRewriteConfig {
-            unstamped_audience: Some(unstamped_audience.to_string()),
-            public_view_sets: vec![],
-        }),
+        isolation_config: Arc::new(IsolationConfig::default()),
+        admin_principal_possible: true,
     }
 }
 

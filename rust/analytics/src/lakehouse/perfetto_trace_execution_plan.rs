@@ -1,7 +1,11 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    process_streams::get_process_thread_list, read_scope::CallerContext,
-    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+    audience_guard::{AudienceGuard, Authorized, IdKind},
+    lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider,
+    process_streams::get_process_thread_list,
+    read_scope::CallerContext,
+    session_configurator::NoOpSessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
@@ -15,6 +19,7 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
+    error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
@@ -32,6 +37,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
+use uuid::Uuid;
 
 pub use super::process_spans_table_function::SpanTypes;
 
@@ -48,23 +54,32 @@ struct ProcessNotFoundError(String);
 pub struct PerfettoTraceExecutionPlan {
     schema: SchemaRef,
     process_id: String,
+    process_uuid: Uuid,
     span_types: SpanTypes,
     time_range: TimeRange,
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
+    guard: Arc<AudienceGuard>,
+    /// Set only by [`PerfettoTraceTableProvider::scan`], after `AudienceGuard::authorize`
+    /// succeeds -- see `process_spans_table_function.rs`'s identical field for the full
+    /// rationale (fail-closed by construction, not by convention).
+    authorized: Option<Authorized>,
     properties: Arc<PlanProperties>,
 }
 
 impl PerfettoTraceExecutionPlan {
-    pub fn new(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
         schema: SchemaRef,
         process_id: String,
+        process_uuid: Uuid,
         span_types: SpanTypes,
         time_range: TimeRange,
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -76,12 +91,32 @@ impl PerfettoTraceExecutionPlan {
         Self {
             schema,
             process_id,
+            process_uuid,
             span_types,
             time_range,
             lakehouse,
             view_factory,
             part_provider,
+            guard,
+            authorized: None,
             properties: Arc::new(properties),
+        }
+    }
+
+    /// See `ProcessSpansExecutionPlan::with_authorized`'s identical doc comment.
+    fn with_authorized(&self, authorized: Authorized) -> Self {
+        Self {
+            schema: self.schema.clone(),
+            process_id: self.process_id.clone(),
+            process_uuid: self.process_uuid,
+            span_types: self.span_types,
+            time_range: self.time_range,
+            lakehouse: self.lakehouse.clone(),
+            view_factory: self.view_factory.clone(),
+            part_provider: self.part_provider.clone(),
+            guard: self.guard.clone(),
+            authorized: Some(authorized),
+            properties: self.properties.clone(),
         }
     }
 }
@@ -143,6 +178,13 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         let lakehouse = self.lakehouse.clone();
         let view_factory = self.view_factory.clone();
         let part_provider = self.part_provider.clone();
+        // No witness ⇒ this plan never went through `scan` -- fail-closed by construction.
+        let Some(authorized) = &self.authorized else {
+            return Err(DataFusionError::Internal(
+                "perfetto_trace_chunks: unauthorized plan (no witness from scan)".into(),
+            ));
+        };
+        let caller = authorized.internal_caller();
 
         // Create the stream directly without channels
         let stream = generate_perfetto_trace_stream(
@@ -152,6 +194,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
             lakehouse,
             view_factory,
             part_provider,
+            caller,
         );
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
@@ -167,6 +210,7 @@ fn generate_perfetto_trace_stream(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
+    caller: CallerContext,
 ) -> impl futures::Stream<Item = DFResult<RecordBatch>> {
     stream! {
         // Create channel for streaming chunks
@@ -186,6 +230,7 @@ fn generate_perfetto_trace_stream(
                 lakehouse,
                 view_factory,
                 part_provider,
+                caller,
             ).await
         });
 
@@ -236,6 +281,7 @@ fn generate_perfetto_trace_stream(
 }
 
 /// Generate Perfetto trace using streaming architecture
+#[allow(clippy::too_many_arguments)]
 async fn generate_streaming_perfetto_trace(
     chunk_sender: ChunkSender,
     process_id: String,
@@ -244,16 +290,19 @@ async fn generate_streaming_perfetto_trace(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
+    caller: CallerContext,
 ) -> anyhow::Result<()> {
     info!(
         "Generating streaming Perfetto trace for process {} with span types {:?} from {} to {}",
         process_id, span_types, time_range.begin, time_range.end
     );
 
-    // Create a context for making queries
-    // TODO(#1371): user-reachable (perfetto_trace_chunks UDTF, registered for every caller,
-    // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must replace
-    // with the caller's inherited scope.
+    // Runs under the witness's internal caller (`caller`, threaded in from `execute`), not the
+    // caller's own scope: every SQL statement below is server-constructed and confined to the
+    // process id the guard already authorized (`get_process_exe`, `get_process_thread_list`, the
+    // `view_instance` calls further down) -- if that process is readable, everything these
+    // statements can reach is readable too. A deliberate deviation from naive scope inheritance;
+    // see `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
@@ -263,7 +312,7 @@ async fn generate_streaming_perfetto_trace(
         }),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
-        CallerContext::internal(),
+        caller,
     )
     .await?;
 
@@ -552,7 +601,12 @@ pub struct PerfettoTraceTableProvider {
 }
 
 impl PerfettoTraceTableProvider {
-    pub fn new(execution_plan: Arc<PerfettoTraceExecutionPlan>) -> Self {
+    /// `pub(crate)`, not `pub`: only ever called from `perfetto_trace_table_function.rs`, same
+    /// crate. Narrowed alongside `PerfettoTraceExecutionPlan::new` (#1371) so an external test
+    /// crate can't build an un-authorized plan directly, matching `process_spans`' existing
+    /// module-private shape -- see `tasks/1371_udtf_udf_guards_plan.md`'s Testing Strategy for
+    /// why this closes a real gap for this function specifically.
+    pub(crate) fn new(execution_plan: Arc<PerfettoTraceExecutionPlan>) -> Self {
         Self { execution_plan }
     }
 }
@@ -574,10 +628,20 @@ impl TableProvider for PerfettoTraceTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let authorized = self
+            .execution_plan
+            .guard
+            .authorize(
+                self.execution_plan.process_uuid,
+                IdKind::Process,
+                "perfetto_trace_chunks",
+            )
+            .await?;
         // Wrap the execution plan in a GlobalLimitExec if a limit is provided.
         // DataFusion trusts us to apply the limit - if we ignore it, too many rows
         // will be returned to the client.
-        let plan: Arc<dyn ExecutionPlan> = self.execution_plan.clone();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(self.execution_plan.with_authorized(authorized));
         if let Some(fetch) = limit {
             Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))))
         } else {

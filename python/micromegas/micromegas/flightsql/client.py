@@ -712,8 +712,10 @@ class FlightSQLClient:
             if the data is needed again.
 
         Requires admin:
-            Only callable by an authenticated admin. Non-admin callers, including API
-            keys, get a "function not found" error.
+            Only callable by an authenticated admin -- or by any authenticated caller
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -768,8 +770,10 @@ class FlightSQLClient:
             - Daily (86400): For historical analysis and reporting
 
         Requires admin:
-            Only callable by an authenticated admin. Non-admin callers, including API
-            keys, get a "function not found" error.
+            Only callable by an authenticated admin -- or by any authenticated caller
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -834,8 +838,10 @@ class FlightSQLClient:
             concurrently.
 
         Requires admin:
-            Only callable by an authenticated admin. Non-admin callers, including API
-            keys, get a "function not found" error.
+            Only callable by an authenticated admin -- or by any authenticated caller
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg

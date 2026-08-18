@@ -38,9 +38,7 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::read_scope::{
-    CallerContext, OwnershipRewriteConfig, ReadScope,
-};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
@@ -490,7 +488,11 @@ pub struct FlightSqlServiceImpl {
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
-    ownership_config: Arc<OwnershipRewriteConfig>,
+    isolation_config: Arc<IsolationConfig>,
+    /// Whether this deployment can ever produce an admin principal at all -- derived once at
+    /// startup from `AuthProvider::can_grant_admin` (`flight_sql_server.rs`), not per request.
+    /// Copied onto every `CallerContext` this service builds; see `caller_context` below.
+    admin_principal_possible: bool,
 }
 
 impl FlightSqlServiceImpl {
@@ -500,7 +502,8 @@ impl FlightSqlServiceImpl {
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
-        ownership_config: Arc<OwnershipRewriteConfig>,
+        isolation_config: Arc<IsolationConfig>,
+        admin_principal_possible: bool,
     ) -> Self {
         Self {
             lakehouse,
@@ -508,7 +511,8 @@ impl FlightSqlServiceImpl {
             view_factory,
             session_configurator,
             read_policy,
-            ownership_config,
+            isolation_config,
+            admin_principal_possible,
         }
     }
 
@@ -559,7 +563,10 @@ impl FlightSqlServiceImpl {
             // Not permission-sensitive the way `read_scope` is (it's deployment config, not
             // derived from the caller's identity), so it is copied verbatim on both branches
             // above rather than participating in the absent-extension/`Err` distinction.
-            ownership_config: self.ownership_config.clone(),
+            isolation_config: self.isolation_config.clone(),
+            // Deployment-wide, derived once at startup (`flight_sql_server.rs`) -- same
+            // treatment as `isolation_config` above.
+            admin_principal_possible: self.admin_principal_possible,
         })
     }
 

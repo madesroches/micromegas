@@ -527,7 +527,7 @@ fn default_key_audience_from_env_valid_value_is_returned() {
 }
 
 /// A whitespace-padded value is trimmed before validation and storage -- matching
-/// `OwnershipRewriteConfig::from_env`'s trim-then-validate order in `read_scope.rs`.
+/// `IsolationConfig::from_env`'s trim-then-validate order in `read_scope.rs`.
 #[test]
 #[serial]
 fn default_key_audience_from_env_whitespace_padded_value_is_trimmed() {

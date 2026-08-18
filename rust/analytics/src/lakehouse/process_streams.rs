@@ -30,8 +30,20 @@ pub async fn get_process_thread_list(
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i)?.to_owned();
-            let thread_name = thread_names.value(i)?;
-            let thread_id_str = thread_ids.value(i)?;
+            // `thread-name`/`thread-id` are absent on many streams, and `property_get` returns
+            // NULL for them -- a dictionary-encoded column whose every value is NULL has an empty
+            // values buffer, so `value(i)` on a NULL key panics. Treat NULL the same as the
+            // empty-string fallback below already does for a present-but-empty property.
+            let thread_name = if thread_names.is_null(i) {
+                ""
+            } else {
+                thread_names.value(i)?
+            };
+            let thread_id_str = if thread_ids.is_null(i) {
+                ""
+            } else {
+                thread_ids.value(i)?
+            };
 
             // thread_id falls back to stream_id if not available
             let thread_id_for_display = if thread_id_str.is_empty() {

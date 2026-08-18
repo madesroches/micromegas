@@ -2,7 +2,7 @@
 
 This page provides a complete reference to all SQL functions available in Micromegas queries, including both standard DataFusion functions and Micromegas-specific extensions.
 
-**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error. See [Authentication](../admin/flight-sql.md#authentication).
+**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error, unless this deployment can never produce an admin principal at all, in which case any authenticated caller may call it (deployment-wide, not per-audience — see [Authentication](../admin/authentication.md#audience-filtering-activation)). See [Authentication](../admin/flight-sql.md#authentication).
 
 ## Micromegas Extensions
 
@@ -48,19 +48,19 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_partitions)
 
 #### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
-**Administrative Function** - Retires data partitions from the lakehouse for a specified time range.
+**Administrative Function** - Retires data partitions from the lakehouse for a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partitionsview_set-view_instance-start_time-end_time) for details.
 
 #### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Materializes data partitions for a view over a specified time range.
+**Administrative Function** - Materializes data partitions for a view over a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at.
+**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
@@ -72,13 +72,13 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) 
 
 #### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by its metadata identifiers.
+**Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time) for details.
 
 #### `retire_partition_by_file(file_path)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code.
+**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_filefile_path) for details.
 
@@ -135,6 +135,8 @@ ORDER BY chunk_id;
 
 **Note:** The returned binary data is in Perfetto protobuf format and can be loaded directly into the [Perfetto UI](https://ui.perfetto.dev/) for visualization and analysis.
 
+**Note:** `process_id` must name a process in an audience the caller can read (under a restricted, authenticated session); otherwise the call fails with a not-found-shaped error, indistinguishable from naming a process that doesn't exist.
+
 #### `process_spans(process_id, types)`
 
 Returns thread spans, async spans, or both from a process, with `stream_id` and `thread_name` columns prepended. For async spans, `stream_id` is empty and `thread_name` is `'async'`.
@@ -159,6 +161,8 @@ ORDER BY lane, begin
 - `types` (`Utf8`): `'thread'`, `'async'`, or `'both'`
 
 **Note:** The time range is provided out of band via the query's begin/end parameters, not as function arguments.
+
+**Note:** `process_id` must name a process in an audience the caller can read (under a restricted, authenticated session); otherwise the call fails with a not-found-shaped error, indistinguishable from naming a process that doesn't exist.
 
 **Returns:** Same schema as `thread_spans` with two additional leading columns:
 
@@ -207,6 +211,8 @@ Parses a block's payload and returns each object as a row with its type name and
 | `otlp/v1/metrics` | One OTLP `ResourceMetrics` proto | `otlp.NumberDataPoint`, `otlp.HistogramDataPoint`, `otlp.ExponentialHistogramDataPoint`, `otlp.SummaryDataPoint` |
 
 A `streams.format` with no registered decoder returns an error naming the known formats, rather than silently returning nothing.
+
+`block_id` must name a block belonging to a process in an audience the caller can read (under a restricted, authenticated session); otherwise the call fails with a not-found-shaped error, indistinguishable from naming a block that doesn't exist.
 
 **Syntax:**
 ```sql
@@ -729,6 +735,8 @@ LIMIT 10;
 ```
 
 **Note:** This is an async function that fetches data from object storage. Use sparingly in queries as it can impact performance.
+
+**Note:** `process_id` must name a process in an audience the caller can read (under a restricted, authenticated session); otherwise the whole call fails with a not-found-shaped error, indistinguishable from naming a process that doesn't exist. A batch mixing a readable and an unreadable `process_id` fails entirely, not just the unreadable rows.
 
 #### Property Functions
 

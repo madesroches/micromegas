@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     lakehouse::{
+        audience_guard::AudienceGuard,
         materialized_view::MaterializedView,
         ownership_rewrite::OwnershipRewrite,
         read_scope::{CallerContext, ReadScope},
@@ -114,9 +115,23 @@ pub fn register_lakehouse_functions(
             query_range,
         )),
     );
+    // Query Enforcement Prong B (#1371, AbAC Stage 3): one guard, shared (via `Arc`) across every
+    // arg-addressed UDTF/UDF this call registers below -- `process_spans`, `perfetto_trace_chunks`,
+    // `parse_block`, `get_payload`, and `list_partitions`' row filter. `ReadScope::All` makes every
+    // one of its checks a no-op, so this costs nothing for internal/maintenance callers or an
+    // auth-unset deployment.
+    let audience_guard = Arc::new(AudienceGuard::new(
+        caller.read_scope.clone(),
+        caller.isolation_config.unstamped_audience.clone(),
+        caller.isolation_config.public_view_sets.clone(),
+        lakehouse.audience_index().clone(),
+    ));
     ctx.register_udtf(
         "list_partitions",
-        Arc::new(ListPartitionsTableFunction::new(lakehouse.lake().clone())),
+        Arc::new(ListPartitionsTableFunction::new(
+            lakehouse.lake().clone(),
+            audience_guard.clone(),
+        )),
     );
     ctx.register_udtf(
         "list_view_sets",
@@ -128,6 +143,7 @@ pub fn register_lakehouse_functions(
             lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
+            audience_guard.clone(),
         )),
     );
     ctx.register_udtf(
@@ -137,6 +153,7 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
             part_provider.clone(),
             query_range,
+            audience_guard.clone(),
         )),
     );
     ctx.register_udtf(
@@ -146,12 +163,19 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
             part_provider.clone(),
             query_range,
+            audience_guard.clone(),
         )),
     );
     ctx.register_udf(
-        AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake().clone()))).into_scalar_udf(),
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(
+            lakehouse.lake().clone(),
+            audience_guard.clone(),
+        )))
+        .into_scalar_udf(),
     );
-    if caller.is_admin {
+    // An admin, or a deployment that can never produce one at all (`CallerContext::
+    // admin_principal_possible`'s doc comment).
+    if caller.is_admin || !caller.admin_principal_possible {
         ctx.register_udtf(
             "retire_partitions",
             Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
@@ -289,8 +313,8 @@ pub async fn make_session_context(
             ))));
         ctx.add_analyzer_rule(Arc::new(OwnershipRewrite::new(
             caller.read_scope.clone(),
-            caller.ownership_config.unstamped_audience.clone(),
-            caller.ownership_config.public_view_sets.clone(),
+            caller.isolation_config.unstamped_audience.clone(),
+            caller.isolation_config.public_view_sets.clone(),
             processes_source,
             streams_source,
         )));

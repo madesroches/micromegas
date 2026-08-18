@@ -1,4 +1,4 @@
-//! Unit tests for `OwnershipRewriteConfig::from_env` (#1370, AbAC Stage 2), the parser Stage 1's
+//! Unit tests for `IsolationConfig::from_env` (#1370, AbAC Stage 2), the parser Stage 1's
 //! `AudienceReadPolicy::from_env` (`rust/auth/src/policy.rs`, covered by
 //! `rust/auth/tests/policy_tests.rs`) is explicitly modeled on -- unlike that policy, this parser
 //! shipped with no test coverage at all.
@@ -8,12 +8,12 @@
 //! test-only prefix (`MICROMEGAS_1370_CONFIG_TESTS`) keeps the *prefixed* var names from
 //! colliding with any other test/process env; the *unprefixed* fallback vars
 //! (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`) are not otherwise touched by
-//! any test in this repo (checked via grep), but are still cleared by `EnvGuard` since this file's
-//! tests are the only ones that set them.
+//! any test in this repo (checked via grep), but are still cleared by `EnvGuard` since this
+//! file's tests are the only ones that set them.
 
 #![cfg(test)]
 
-use micromegas_analytics::lakehouse::read_scope::OwnershipRewriteConfig;
+use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use serial_test::serial;
 
 const PREFIX: &str = "MICROMEGAS_1370_CONFIG_TESTS";
@@ -49,7 +49,7 @@ fn unset_vars_resolve_to_default() {
         std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience, None,
         "an unset unstamped-audience var must resolve to None, not a default that would \
@@ -72,7 +72,7 @@ fn all_whitespace_unstamped_audience_resolves_to_none() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience, None,
         "an all-whitespace value must be treated as unset, not as a malformed audience"
@@ -93,7 +93,7 @@ fn malformed_unstamped_audience_is_rejected() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let err = OwnershipRewriteConfig::from_env(PREFIX)
+    let err = IsolationConfig::from_env(PREFIX)
         .expect_err("an audience outside [A-Za-z0-9_-] must be rejected, not silently ignored");
     let msg = err.to_string();
     assert!(
@@ -113,7 +113,7 @@ fn well_formed_unstamped_audience_is_accepted() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(config.unstamped_audience, Some("everyone".to_string()));
 }
 
@@ -128,7 +128,7 @@ fn prefixed_unstamped_audience_wins_over_unprefixed_fallback() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience,
         Some("prefixed".to_string()),
@@ -147,7 +147,7 @@ fn unprefixed_unstamped_audience_used_when_prefixed_is_unset() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience,
         Some("unprefixed".to_string()),
@@ -166,7 +166,7 @@ fn public_view_sets_parses_comma_separated_list() {
         std::env::set_var(PREFIXED_PUBLIC_VIEW_SETS_VAR, "log_stats, images");
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.public_view_sets,
         vec!["log_stats".to_string(), "images".to_string()]
@@ -184,7 +184,7 @@ fn public_view_sets_rejects_json_array_shaped_entries() {
         std::env::set_var(PREFIXED_PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let err = OwnershipRewriteConfig::from_env(PREFIX).expect_err(
+    let err = IsolationConfig::from_env(PREFIX).expect_err(
         "a JSON-array-shaped value must be rejected -- this var is comma-separated, not a \
          MICROMEGAS_ADMINS-style JSON array",
     );
@@ -206,7 +206,7 @@ fn public_view_sets_rejects_empty_entries() {
         std::env::set_var(PREFIXED_PUBLIC_VIEW_SETS_VAR, "log_stats,,images");
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let err = OwnershipRewriteConfig::from_env(PREFIX)
+    let err = IsolationConfig::from_env(PREFIX)
         .expect_err("an empty comma-separated entry must be rejected, not silently dropped");
     let msg = err.to_string();
     assert!(
@@ -226,7 +226,7 @@ fn public_view_sets_all_whitespace_resolves_to_empty() {
         std::env::set_var(PREFIXED_PUBLIC_VIEW_SETS_VAR, "   ");
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = OwnershipRewriteConfig::from_env(PREFIX).expect("from_env");
+    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert!(
         config.public_view_sets.is_empty(),
         "an all-whitespace value must resolve to no public view sets, not an error"

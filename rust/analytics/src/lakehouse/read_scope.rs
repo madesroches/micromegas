@@ -10,8 +10,10 @@
 //! **Stage 2 (#1370) consumes `ReadScope`.** [`super::ownership_rewrite::OwnershipRewrite`] --
 //! Prong A of the two-pronged enforcement design -- reads it out of [`CallerContext`] inside
 //! `query.rs::make_session_context` and injects an audience predicate into every
-//! `MaterializedView`-backed scan. Prong B (the UDTF/UDF guards for the span/metadata functions
-//! Prong A structurally cannot reach) is still pending, Stage 3 (#1371).
+//! `MaterializedView`-backed scan. **Stage 3 (#1371) adds Prong B**: the UDTF/UDF guards
+//! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
+//! structurally cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function
+//! registration gate.
 
 use std::sync::Arc;
 
@@ -32,9 +34,10 @@ pub enum ReadScope {
     Audiences(Arc<[String]>),
 }
 
-/// Bundles the two orthogonal authorization inputs `make_session_context` and friends need --
-/// audience scope (`read_scope`) and the `is_admin` mutating-function-registration capability
-/// (#1376/#1377) -- into one struct instead of two adjacent, transposable positional parameters.
+/// Bundles the orthogonal authorization inputs `make_session_context` and friends need --
+/// audience scope (`read_scope`) and the `is_admin`/`admin_principal_possible`
+/// mutating-function-registration capability (#1376/#1377, #1371) -- into one struct instead of
+/// adjacent, transposable positional parameters.
 ///
 /// Required (not `Option`/defaulted) at every call site by design: a defaulting parameter would
 /// let a future call site inherit `ReadScope::All` by omission, which is exactly the failure this
@@ -49,43 +52,60 @@ pub struct CallerContext {
     /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs (unchanged from
     /// today's `is_admin: bool` parameter).
     pub is_admin: bool,
-    /// Per-service `OwnershipRewrite` deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
+    /// Per-service data-isolation deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
     /// `MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved once at server startup, not per request, but
     /// bundled here rather than as a new `make_session_context` parameter (#1370 Design §8):
     /// per-request resolved values ride the context, per-service objects live on the service,
     /// and this rides along with `read_scope` at every real call site anyway.
-    pub ownership_config: Arc<OwnershipRewriteConfig>,
+    pub isolation_config: Arc<IsolationConfig>,
+    /// Whether this *deployment* -- not this caller -- can ever produce an admin principal at
+    /// all, derived once at startup from `AuthProvider::can_grant_admin`
+    /// (`rust/public/src/servers/flight_sql_server.rs`) and copied onto every `CallerContext`
+    /// unchanged, the same treatment `isolation_config` gets. Consumed by `query.rs`'s mutating
+    /// UDTF/UDF registration gate (#1371, AbAC Stage 3, Prong B):
+    /// `caller.is_admin || !caller.admin_principal_possible`. Named for the fact it represents
+    /// (can this deployment ever produce an admin?), not its effect -- when `false` (an
+    /// API-key-only deployment, which can never mint an admin), the mutating functions are
+    /// registered for any authenticated caller rather than staying admin-only, since otherwise
+    /// they would be unreachable by anyone.
+    pub admin_principal_possible: bool,
 }
 
 impl CallerContext {
     /// For background/materialization callers that are not serving a user request at all
     /// (`is_admin: false`, `ReadScope::All`). Distinct from [`Self::maintenance`] only in
     /// `is_admin` -- use this for internal call sites that must not register the mutating
-    /// UDTFs/UDFs.
+    /// UDTFs/UDFs. `admin_principal_possible: true` so the gate's fallback (any-caller
+    /// registration when a deployment has no admin principal) never fires for this
+    /// non-user-request caller -- it is `is_admin` alone that must decide, same as today.
     pub fn internal() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: false,
-            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
+            isolation_config: Arc::new(IsolationConfig::default()),
+            admin_principal_possible: true,
         }
     }
 
     /// For background/materialization callers performing maintenance work (`is_admin: true`,
-    /// `ReadScope::All`) -- never a user session.
+    /// `ReadScope::All`) -- never a user session. `admin_principal_possible`'s value is moot here
+    /// (the gate's `caller.is_admin` arm already passes), kept `true` for consistency with
+    /// [`Self::internal`].
     pub fn maintenance() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: true,
-            ownership_config: Arc::new(OwnershipRewriteConfig::default()),
+            isolation_config: Arc::new(IsolationConfig::default()),
+            admin_principal_possible: true,
         }
     }
 }
 
-/// Deployment config for [`super::ownership_rewrite::OwnershipRewrite`] (#1370, AbAC Stage 2).
-/// Per-service, resolved once at server startup from environment variables -- see
-/// [`OwnershipRewriteConfig::from_env`].
+/// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
+/// (#1370, AbAC Stage 2, Prong A). Per-service, resolved once at server startup from environment
+/// variables -- see [`IsolationConfig::from_env`].
 #[derive(Debug, Clone, Default)]
-pub struct OwnershipRewriteConfig {
+pub struct IsolationConfig {
     /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
     /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"public"`. `None`
     /// (the default) means unstamped processes stay invisible to every `ReadScope::Audiences`
@@ -146,7 +166,7 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Resolves `{prefix}_{suffix}` (falling back to `MICROMEGAS_{suffix}` if unset, or always if
-/// `prefix` is empty). Shared by both `OwnershipRewriteConfig::from_env` knobs
+/// `prefix` is empty). Shared by both `IsolationConfig::from_env` knobs
 /// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`).
 fn resolved_var(prefix: &str, suffix: &str) -> String {
     if prefix.is_empty() {
@@ -161,8 +181,8 @@ fn resolved_var(prefix: &str, suffix: &str) -> String {
     }
 }
 
-impl OwnershipRewriteConfig {
-    /// Resolves both knobs from the environment. Unset ⇒ `OwnershipRewriteConfig::default()`
+impl IsolationConfig {
+    /// Resolves both knobs from the environment. Unset ⇒ `IsolationConfig::default()`
     /// (unstamped processes stay invisible, no public view sets). A malformed
     /// `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
     /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a

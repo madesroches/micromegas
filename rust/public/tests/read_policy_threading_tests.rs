@@ -27,7 +27,7 @@ use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
-use micromegas_analytics::lakehouse::read_scope::OwnershipRewriteConfig;
+use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
@@ -128,13 +128,15 @@ async fn start_server(
     let part_provider = Arc::new(NullPartitionProvider {});
     let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
     let session_configurator = Arc::new(NoOpSessionConfigurator);
+    let admin_principal_possible = auth_provider.as_ref().is_none_or(|p| p.can_grant_admin());
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
         part_provider,
         view_factory,
         session_configurator,
         read_policy,
-        Arc::new(OwnershipRewriteConfig::default()),
+        Arc::new(IsolationConfig::default()),
+        admin_principal_possible,
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

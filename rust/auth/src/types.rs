@@ -163,4 +163,16 @@ impl RequestParts for GrpcRequestParts {
 pub trait AuthProvider: Send + Sync {
     /// Validate a request and return authentication context
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext>;
+
+    /// Whether this provider can ever produce an `AuthContext { is_admin: true, .. }`.
+    ///
+    /// **Invariant**: must stay `true` for any provider that can ever return an admin
+    /// `AuthContext` -- a wrong `false` here silently widens who may call destructive
+    /// maintenance functions (the mutating lakehouse UDTFs/UDFs get registered for *any*
+    /// authenticated caller when no provider in the deployment can grant admin). Defaults to
+    /// `false`, matching the two API-key providers, which hardcode `is_admin: false` and can
+    /// never produce an admin principal.
+    fn can_grant_admin(&self) -> bool {
+        false
+    }
 }

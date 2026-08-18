@@ -1,7 +1,10 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
-    process_streams::get_process_thread_list, read_scope::CallerContext,
-    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+    audience_guard::{AudienceGuard, Authorized, IdKind},
+    lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider,
+    process_streams::get_process_thread_list,
+    session_configurator::NoOpSessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, span_table::get_spans_schema, time::TimeRange};
 use async_stream::try_stream;
@@ -12,6 +15,7 @@ use datafusion::{
     },
     catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::{Result as DFResult, plan_err},
+    error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
@@ -29,6 +33,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
+use uuid::Uuid;
 
 /// Span types to include in the output
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +87,7 @@ pub struct ProcessSpansTableFunction {
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl ProcessSpansTableFunction {
@@ -90,12 +96,14 @@ impl ProcessSpansTableFunction {
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
             lakehouse,
             view_factory,
             part_provider,
             query_range,
+            guard,
         }
     }
 }
@@ -108,12 +116,23 @@ impl TableFunctionImpl for ProcessSpansTableFunction {
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let exprs = args.exprs();
         let arg1 = exprs.first().map(exp_to_string);
-        let Some(Ok(process_id)) = arg1 else {
+        let Some(Ok(process_id_arg)) = arg1 else {
             return plan_err!(
                 "First argument to process_spans must be a string (the process ID), given {:?}",
                 arg1
             );
         };
+        // Parsed as a `Uuid` at plan time -- a malformed id is now a plan-time error instead of
+        // reaching the inner SQL these queries build for it (`process_streams.rs`), which
+        // previously interpolated the caller's raw string verbatim. The canonical hyphenated
+        // rendering is what's actually stored in `process_id` columns, so it's kept (not the
+        // caller's original spelling) for the inner literal comparisons below to match.
+        let Ok(process_uuid) = Uuid::parse_str(&process_id_arg) else {
+            return plan_err!(
+                "First argument to process_spans must be a valid UUID (the process ID), given '{process_id_arg}'"
+            );
+        };
+        let process_id = process_uuid.hyphenated().to_string();
 
         let arg2 = exprs.get(1).map(exp_to_string);
         let Some(Ok(span_types_str)) = arg2 else {
@@ -138,11 +157,13 @@ impl TableFunctionImpl for ProcessSpansTableFunction {
         let execution_plan = Arc::new(ProcessSpansExecutionPlan::new(
             schema,
             process_id,
+            process_uuid,
             span_types,
             self.query_range,
             self.lakehouse.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
+            self.guard.clone(),
         ));
 
         Ok(Arc::new(ProcessSpansTableProvider { execution_plan }))
@@ -154,23 +175,34 @@ impl TableFunctionImpl for ProcessSpansTableFunction {
 pub struct ProcessSpansExecutionPlan {
     schema: SchemaRef,
     process_id: String,
+    process_uuid: Uuid,
     span_types: SpanTypes,
     query_range: Option<TimeRange>,
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
+    guard: Arc<AudienceGuard>,
+    /// Set only by [`ProcessSpansTableProvider::scan`], after `AudienceGuard::authorize`
+    /// succeeds -- `None` here means this plan never went through `scan`, so `execute` refuses
+    /// to run it. See the plan's §3/§6 for why this witness exists (fail-closed by construction,
+    /// not by convention) and §6 for why the inner session below runs under the witness's
+    /// internal caller rather than the caller's own scope.
+    authorized: Option<Authorized>,
     properties: Arc<PlanProperties>,
 }
 
 impl ProcessSpansExecutionPlan {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         process_id: String,
+        process_uuid: Uuid,
         span_types: SpanTypes,
         query_range: Option<TimeRange>,
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -181,12 +213,35 @@ impl ProcessSpansExecutionPlan {
         Self {
             schema,
             process_id,
+            process_uuid,
             span_types,
             query_range,
             lakehouse,
             view_factory,
             part_provider,
+            guard,
+            authorized: None,
             properties: Arc::new(properties),
+        }
+    }
+
+    /// Clones `self` with the witness set -- built by `scan` after `AudienceGuard::authorize`
+    /// succeeds. `ProcessSpansExecutionPlan` isn't `Clone` (its `Arc<Self>` handle can't be
+    /// mutated in place), so this is the explicit way to thread the witness from `scan` into a
+    /// fresh plan `execute` can trust.
+    fn with_authorized(&self, authorized: Authorized) -> Self {
+        Self {
+            schema: self.schema.clone(),
+            process_id: self.process_id.clone(),
+            process_uuid: self.process_uuid,
+            span_types: self.span_types,
+            query_range: self.query_range,
+            lakehouse: self.lakehouse.clone(),
+            view_factory: self.view_factory.clone(),
+            part_provider: self.part_provider.clone(),
+            guard: self.guard.clone(),
+            authorized: Some(authorized),
+            properties: self.properties.clone(),
         }
     }
 }
@@ -248,19 +303,30 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
         let lakehouse = self.lakehouse.clone();
         let view_factory = self.view_factory.clone();
         let part_provider = self.part_provider.clone();
+        // No witness ⇒ this plan never went through `scan` (see `Self::authorized`'s doc
+        // comment) -- fail-closed by construction rather than by comment.
+        let Some(authorized) = &self.authorized else {
+            return Err(DataFusionError::Internal(
+                "process_spans: unauthorized plan (no witness from scan)".into(),
+            ));
+        };
+        let caller = authorized.internal_caller();
 
         let record_batch_stream = try_stream! {
             let schema = stream_schema;
-            // TODO(#1371): user-reachable (process_spans UDTF, registered for every caller,
-            // query.rs:96-176) -- `internal()`'s `ReadScope::All` is a latent bypass Stage 3 must
-            // replace with the caller's inherited scope.
+            // Runs under the witness's internal caller, not the caller's own scope: every SQL
+            // statement below is server-constructed and confined to the process id the guard
+            // just authorized (`process_streams::get_process_thread_list`, the `view_instance`
+            // calls further down) -- if that process is readable, everything these statements
+            // can reach is readable too. A deliberate deviation from naive scope inheritance;
+            // see `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
             let ctx = super::query::make_session_context(
                 lakehouse,
                 part_provider,
                 query_range,
                 view_factory,
                 Arc::new(NoOpSessionConfigurator),
-                CallerContext::internal(),
+                caller,
             )
             .await
             .map_err(|e| datafusion::error::DataFusionError::Internal(
@@ -388,7 +454,17 @@ impl TableProvider for ProcessSpansTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let mut plan: Arc<dyn ExecutionPlan> = self.execution_plan.clone();
+        let authorized = self
+            .execution_plan
+            .guard
+            .authorize(
+                self.execution_plan.process_uuid,
+                IdKind::Process,
+                "process_spans",
+            )
+            .await?;
+        let mut plan: Arc<dyn ExecutionPlan> =
+            Arc::new(self.execution_plan.with_authorized(authorized));
         if let Some(projection) = projection {
             let schema = plan.schema();
             let projected_exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> =

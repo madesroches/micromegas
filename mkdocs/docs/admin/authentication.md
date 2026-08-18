@@ -154,17 +154,24 @@ telemetry-ingestion-srv --disable-auth
 !!! danger "Enabling auth can silently zero out every query result"
     Configuring any authentication method above — OIDC, API keys, or both — does more than gate
     access to the server: it flips every session from the internal `ReadScope::All` marker to
-    `ReadScope::Audiences`, which activates `OwnershipRewrite`'s query-time audience filtering
-    (AbAC Stage 2). From that point on, every query plan gets an audience predicate injected into
-    it, and a caller only sees processes whose `micromegas.audience` property resolves to one of
-    their own audiences.
+    `ReadScope::Audiences`, which activates query-time audience filtering across both enforcement
+    prongs. **Prong A** (`OwnershipRewrite`, AbAC Stage 2) injects an audience predicate into
+    every `MaterializedView`-backed query plan, so a caller only sees processes whose
+    (client-asserted) `micromegas.audience` property resolves to one of their own audiences.
+    **Prong B** (`AudienceGuard`, AbAC Stage 3) covers the four functions Prong A structurally
+    can't reach — a restricted caller's call to `process_spans`, `perfetto_trace_chunks`,
+    `parse_block`, or `get_payload` fails with a not-found-shaped error unless the id argument
+    names a process in one of their own audiences, and `list_partitions()` silently omits every
+    row (including `'global'` rows) that isn't theirs to see.
 
     **Required in the same deploy:** set `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
     (the monolith's `MICROMEGAS_ANALYTICS_`-prefixed equivalent for a monolith deployment) to keep
     pre-existing, never-stamped data visible — see the matching env-var row and upgrade note on the
     [FlightSQL](flight-sql.md#environment-variables) and
     [Monolith](monolith.md#environment-variables) admin pages, and the CHANGELOG's AbAC Stage 2
-    upgrade note, for the full mechanism.
+    upgrade note, for the full mechanism. This one knob covers both prongs: Prong B's
+    `'global'`-row rule and its four guarded functions all consult the same
+    `MICROMEGAS_UNSTAMPED_AUDIENCE` value Prong A does.
 
     **API keys and no-`email`-claim OIDC tokens are covered by `public` alone, with no second
     knob.** Under the grant-map model (see [Audiences and Grants](#audiences-and-grants) below),
@@ -172,6 +179,27 @@ telemetry-ingestion-srv --disable-auth
     there is no caller kind whose resolved set is otherwise empty the way an API key's was under
     the identity-derived model this replaced. `MICROMEGAS_UNSTAMPED_AUDIENCE=public` alone restores
     visibility for every caller kind.
+
+    **The two prongs read different copies of `micromegas.audience`, with different freshness.**
+    Prong A reads a daemon-materialized parquet snapshot (unchanged from Stage 2 — a process the
+    maintenance role hasn't caught up on is invisible to everyone, including its owner); Prong B
+    reads Postgres directly, so it is fresher for a just-ingested process, but denies (rather than
+    falls back to the stale snapshot) once retention has deleted a process's Postgres row even if
+    a merged/compacted lakehouse partition of its data still exists. See the CHANGELOG's AbAC
+    Stage 3 entry for the full mechanism and its accepted trade-offs.
+
+    **The five mutating lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
+    `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are
+    gated on whether this *deployment* can ever produce an admin principal at all — not on a
+    knob an operator sets. An OIDC provider can grant admin whenever it has at least one
+    configured admin user; an API-key provider never can. At startup, the server asks every
+    configured auth provider "can you ever produce an admin?" and, if none of them can, registers
+    these five functions for *any* authenticated caller instead of admin-only — otherwise an
+    API-key-only deployment would have no path to them at all. **Deployment-wide, not
+    per-audience**: none of the five functions filters by audience, so on a deployment with no
+    admin principal, every authenticated caller gets destructive access to every audience's
+    partitions, not just their own — safe only when no admin principal exists in the deployment,
+    unsafe the moment it also has personal or per-team audiences.
 
 ### Write-Side Stamping (AbAC Stage 5)
 
