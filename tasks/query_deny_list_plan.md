@@ -129,7 +129,7 @@ and validation happens at insert time in one place. The *input* encoding for `de
 still JSON (§3), so adding a matcher never changes a function signature.
 
 No expiry column: a rule is in force from insertion until `remove_query_denial` deletes it. The
-table holds at most `MICROMEGAS_QUERY_DENY_MAX_RULES` rows (§8) and needs no index — every replica
+table holds at most `MICROMEGAS_QUERY_DENY_MAX_RULES` rows (§9) and needs no index — every replica
 reads all of it on each refresh tick.
 
 `LATEST_LAKEHOUSE_SCHEMA_VERSION` 8 → 9, `upgrade_v8_to_v9`. No `SCHEMA_VERSION` (partition
@@ -164,7 +164,7 @@ realistic query population are negligible, and the consequence of a collision is
 rule's other matchers.
 
 The fingerprint is computed once per query in `execute_query` and stored on `QueryAuditState`, so
-it costs nothing extra to also emit it in the audit record (§5) — which is how an operator gets the
+it costs nothing extra to also emit it in the audit record (§6) — which is how an operator gets the
 value to paste into `deny_queries`.
 
 ### 3. Rule model, evaluation, and cache
@@ -248,7 +248,12 @@ if let Some(rule) = denied
         "query denied by rule {} (reason: {}); ask an admin to lift it with \
          remove_query_denial('{}'); query_id={query_id}",
         rule.rule_id, rule.reason, rule.rule_id));
-    imetric!("query_denied", "count", 1);
+    warn!(
+        "query denied rule_id={} reason={:?} sql_hash={sql_hash} user={} email={} \
+         client={client_type} entrypoint={client_entrypoint} client_ip={client_ip} \
+         query_id={query_id}",
+        rule.rule_id, rule.reason, attr.user_id, attr.user_email);
+    imetric!("query_denied", "count", rule_tags(&rule.rule_id), 1_u64);
     rule.record_hit();
     return Err(audit_state.fail_with_class(status, "denied"));
 }
@@ -259,6 +264,11 @@ if let Some(rule) = denied
   rejection out of the `query_failed`/`error!` internal-error path. The message is the
   distinguishing part: it names the rule id and the reason, and — since a rule has no expiry to
   wait out — tells the caller exactly what an admin has to run to lift it.
+- **Warning log (§5)**: every denial emits a `warn!` line, so a denied query is visible on any
+  dashboard already watching warning-level logs — not only to someone who thought to query the
+  audit target. This is the one new log point on the deny path; without it the rejection would be
+  silent at log level, since the deny site builds its `Status` directly and never passes through
+  `error_or_warn_log` (which only ever sees a `DataFusionError`).
 - **Audit record**: emitted with `status: "error"` and a dedicated `error_class: "denied"` (a
   fourth value alongside `user`/`resource`/`internal`), via a new
   `QueryAuditState::fail_with_class(status, class)` — `fail()` becomes a thin wrapper that derives
@@ -277,7 +287,56 @@ if let Some(rule) = denied
   `validate_and_resolve_user_attribution_grpc` for this. No audit record exists on that RPC, so the
   rejection is logged and counted but not audited.
 
-### 5. `CallerContext` gains the caller's identity
+### 5. Making a denial visible
+
+Three signals, deliberately at three different volumes:
+
+**`warn!` per denial → `log_entries`.** Level `Warn` (3), under the
+`micromegas::servers::flight_sql_service_impl` target, carrying the rule id, the reason, the
+`sql_hash`, the caller (user/email/client/entrypoint/client_ip) and the `query_id`. Any panel that
+already charts or lists warnings picks this up with no new wiring:
+
+```sql
+SELECT time, msg
+FROM log_entries
+WHERE level <= 3          -- Fatal, Error, Warn
+  AND msg LIKE 'query denied%'
+  AND time >= NOW() - INTERVAL '1 hour'
+ORDER BY time DESC;
+```
+
+(A deployment watching `log_stats` instead sees the denials as a `Warn` rise on the
+`micromegas::servers::flight_sql_service_impl` target — cheaper, but not denial-specific: that
+target also carries the client-error warnings `error_or_warn_log` emits.)
+
+**`imetric!("query_denied", "count", {rule_id}, 1)` → `measures`.** Tagged with the rule id (the
+per-rule counter the issue asks for), which is why it is a tagged metric rather than an untagged
+one: cardinality is bounded by `MICROMEGAS_QUERY_DENY_MAX_RULES` (100), well inside what a
+`PropertySet` should carry. This is the rate signal a dashboard graphs:
+
+```sql
+SELECT date_bin(INTERVAL '1 minute', time) AS minute,
+       property_get(properties, 'rule_id')  AS rule_id,
+       sum(value)                           AS denied
+FROM measures
+WHERE name = 'query_denied'
+  AND time >= NOW() - INTERVAL '6 hours'
+GROUP BY minute, rule_id
+ORDER BY minute;
+```
+
+**The audit record** (`error_class = 'denied'`) stays the full-detail row: SQL text, fingerprint,
+full attribution. It is what an operator drills into once a panel says something is being denied.
+
+**Volume.** A denied 4-QPS dashboard produces ~4 warnings/second for as long as its rule stands,
+and rules no longer expire. That is the intended behavior — a standing denial *should* keep saying
+so — but a deployment that finds a long-lived rule too chatty can set
+`MICROMEGAS_QUERY_DENY_WARN_WINDOW_SECONDS` (default `0` = warn on every denial) to throttle the
+line to at most once per rule per window, using the same checked-and-set `AtomicI64` pattern as
+`db_api_key.rs::maybe_log_error`. The metric and the audit record are never throttled, so the exact
+count survives regardless of what the log does.
+
+### 6. `CallerContext` gains the caller's identity
 
 `deny_queries` must record `created_by`, and the UDTF only ever sees `CallerContext`. Add:
 
@@ -297,7 +356,7 @@ enumerates every construction site, which is the intended failure mode.
 `QueryAuditRecord` gains `pub sql_hash: String` — appended **last**, so existing JSON consumers are
 unaffected. The doc comment on `error_class` is updated to enumerate `"denied"`.
 
-### 6. Admin SQL surface
+### 7. Admin SQL surface
 
 Registered inside the existing `caller.is_admin || !caller.admin_principal_possible` block in
 `register_lakehouse_functions`.
@@ -330,7 +389,7 @@ everything); empty `reason`; rule count already at `MICROMEGAS_QUERY_DENY_MAX_RU
 a clear "no such rule" message when it matched nothing). The audit log is the durable record of
 what was denied and what it rejected, so the row itself does not need to survive its removal.
 
-### 7. Web app — Admin → Query Deny List
+### 8. Web app — Admin → Query Deny List
 
 The screen drives the **same SQL functions** through the existing `useStreamQuery` →
 `/api/stream-query` path, against the data source the admin selects. No new REST routes and no
@@ -359,12 +418,13 @@ would get "function not found" from `flight-sql-srv` — the gate is server-side
 `BLOCKED_FUNCTIONS` in `stream_query.rs` is deliberately **not** extended: these three functions are
 admin-gated at `flight-sql-srv` and are precisely what the web screen needs to call.
 
-### 8. Configuration
+### 9. Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
 | `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | 10 | Snapshot refresh / hit-count flush interval; also the bound on cross-replica propagation |
 | `MICROMEGAS_QUERY_DENY_MAX_RULES` | 100 | Cap on rules in force at once (bounds per-query cost) |
+| `MICROMEGAS_QUERY_DENY_WARN_WINDOW_SECONDS` | 0 | `0` warns on every denial; `>0` throttles the `warn!` line to once per rule per window (metric/audit unaffected) |
 
 ## Mockups
 
@@ -396,8 +456,9 @@ Open Questions.
    the compiler flags.
 6. `flight_sql_service_impl.rs`: compute the fingerprint once; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
-   is built; populate `CallerContext::identity` in `caller_context`; add the check +
-   attribution resolution to `do_action_create_prepared_statement`.
+   is built, with its `warn!` line and the rule-tagged `query_denied` metric (§5); populate
+   `CallerContext::identity` in `caller_context`; add the check + attribution resolution to
+   `do_action_create_prepared_statement`.
 7. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
 
 ### Phase 3 — Admin SQL functions
@@ -509,8 +570,10 @@ are astronomically unlikely and bounded in blast radius by the rule's other matc
   confirm rejections → `remove_query_denial` once the offending client is fixed.
 - `mkdocs/docs/query-guide/query-audit-log.md` — the new `sql_hash` field, `error_class = "denied"`,
   and the top-offenders query an operator runs to find the fingerprint.
-- `mkdocs/docs/admin/flight-sql.md` — env knobs, propagation delay, fail-open behavior, and the
-  admin escape hatch.
+- `mkdocs/docs/admin/flight-sql.md` — env knobs, propagation delay, fail-open behavior, the admin
+  escape hatch, and a **"Watching for denials"** section carrying both dashboard queries from §5
+  (the warning-level `log_entries` panel and the per-rule `query_denied` rate panel) so an operator
+  can paste them straight into a dashboard.
 - `mkdocs/docs/admin/web-app.md` — the Admin → Query Deny List screen.
 
 ## Testing Strategy
@@ -541,12 +604,18 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 - `QueryAuditRecord` with `error_class: "denied"` and `sql_hash` serializes as expected
   (extend `query_audit_tests.rs`).
+- The denial `warn!` line contains the rule id, `sql_hash`, and caller attribution — asserted
+  against the formatted string the same way `build_log_line`'s content is asserted today, rather
+  than by capturing log output.
 
 **End-to-end (`python/micromegas/tests/test_query_deny_list.py`, against `local_test_env`)**
 
 - `deny_queries` with a `sql_hash` matcher → the matching query fails with a `ResourceExhausted`
   naming the rule id → `remove_query_denial` → the query succeeds again.
 - A non-matching query is unaffected while the rule is in force.
+- Each denial lands one `Warn`-level `log_entries` row (`msg LIKE 'query denied%'`) and one
+  `query_denied` measure tagged with the rule id — the two dashboard signals from §5, checked
+  end-to-end rather than only at the call site.
 - An empty-matcher rule is rejected.
 - `list_query_denials()` shows the rule while it stands and drops it after removal; `hit_count`
   reflects the rejections once a refresh tick has flushed.
