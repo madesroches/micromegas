@@ -125,6 +125,7 @@ pub struct DbAudienceGrantsConfig {
     pub cache_ttl_secs: u64,
 }
 
+#[derive(Debug)]
 struct Snapshot {
     grants: AudienceGrants,
     /// Time of the last *successful* load — never advanced on a failed refresh.
@@ -137,6 +138,7 @@ struct Snapshot {
     fetched_at: Instant,
 }
 
+#[derive(Debug)]
 pub struct DbAudienceGrantsSource {
     pool: PgPool,
     ttl: Duration,
@@ -240,11 +242,20 @@ only in the `is_some()` arm, alongside the other two key-management routers, and
 so the route is structurally unreachable under `--disable-auth` rather than merged
 unconditionally — this route is exactly as sensitive as the other two (see Security), so it
 needs the same disable-auth treatment, not just the same per-request `pool: Option<PgPool>`
-503.
+503. `build_protected_routes`'s new `AudienceGrantsState`/router parameter changes its
+signature, so `rust/analytics-web-srv/tests/routing_tests.rs::disabled_auth_app()` — which
+calls `build_protected_routes` directly with today's positional arguments to build the
+`--disable-auth` router under test — needs updating to pass the new parameter too; add
+`disable_auth_audience_grants_base_route_returns_503`/`..._sub_path_returns_503` mirroring the
+existing four key-management tests in that file.
 
 - `POST {base_path}/api/audience-grants` — body `{audience, axis, selector}`
   (`deny_unknown_fields`), validated with `is_valid_audience`/the same selector-shape check
-  `policy.rs` uses. Unlike `import_key`'s insert-then-re-`SELECT` (safe there only because that
+  `policy.rs` uses, plus an explicit `selector.len() <= 255` check: `valid_selector` itself has
+  no length bound (a `group:<id>` selector can carry an arbitrarily long hierarchical IdP group
+  name), but the `selector` column is `VARCHAR(255)`, so without this check an over-long selector
+  would pass Rust-side validation and only fail at the INSERT, surfacing as a `500` instead of a
+  `400 BadRequest`. Unlike `import_key`'s insert-then-re-`SELECT` (safe there only because that
   table never physically deletes rows), this table has a hard `DELETE`, so a concurrent delete
   between a failed insert and a re-`SELECT` could otherwise find nothing. One round trip instead,
   via a CTE that unions the just-inserted row with the pre-existing one:
@@ -391,6 +402,9 @@ never see the table shape.
   in the `auth_state.is_some()` arm of `build_protected_routes`, alongside
   `analytics_keys_router`/`ingestion_keys_router`; add `/api/audience-grants` (+ `/{*rest}`) to
   `key_management_disabled_router`.
+- `rust/analytics-web-srv/tests/routing_tests.rs` — update `disabled_auth_app()`'s call to
+  `build_protected_routes` for the new `AudienceGrantsState`/router parameter; add
+  `disable_auth_audience_grants_base_route_returns_503`/`..._sub_path_returns_503`.
 - `python/micromegas/micromegas/web_client.py` — three new client methods.
 - `python/micromegas/micromegas/cli/grants.py` — new.
 - `python/micromegas/pyproject.toml` — new script entry.
