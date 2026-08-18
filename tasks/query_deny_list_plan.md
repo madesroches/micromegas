@@ -50,10 +50,11 @@ path that builds a session context and plans without executing.
 would want to match on: `client_ip`, `client`, `agent`, `entrypoint`, `session`, `notebook`, `cell`,
 `user`, `email`, `service_account_name`, and the raw `sql`. It is emitted as one JSON line under the
 `flightsql_query_audit` target on every terminal path — success, failure, and abandoned-mid-drain
-(`QueryAuditState::emit`, line 314; `fail`, line 369; `Drop`, line 406). It does **not** currently
+(`QueryAuditState::emit`, `fail`, and its `Drop` impl — all in
+`rust/public/src/servers/flight_sql_service_impl.rs:314,369,406`). It does **not** currently
 carry a normalized-SQL fingerprint.
 
-`error_class` is derived from the gRPC code by `error_class()` (line 116): `InvalidArgument` /
+`error_class` is derived from the gRPC code by `error_class()` (`flight_sql_service_impl.rs:116`): `InvalidArgument` /
 `Unimplemented` → `"user"`, `ResourceExhausted` → `"resource"`, everything else → `"internal"`.
 
 ### Admin gating
@@ -74,8 +75,9 @@ never be an admin principal.
 ### Postgres and caching precedents
 
 - Lakehouse schema migrations: `rust/analytics/src/lakehouse/migration.rs`,
-  `LATEST_LAKEHOUSE_SCHEMA_VERSION = 8`. `LakehouseContext::from_env`/`new` run `migrate_lakehouse`
-  at startup (`lakehouse_context.rs:45,60`), so **`flight-sql-srv` itself migrates on boot**.
+  `LATEST_LAKEHOUSE_SCHEMA_VERSION = 8`. `LakehouseContext::from_connection`/`from_env` run
+  `migrate_lakehouse` at startup (`lakehouse_context.rs:45,60`), so **`flight-sql-srv` itself
+  migrates on boot**.
 - `AudienceIndex` (`rust/analytics/src/lakehouse/audience_guard.rs:202`) is the precedent for a
   Postgres-backed, TTL-cached lookup owned by `LakehouseContext` and reached from `query.rs` via
   `lakehouse.audience_index()`.
@@ -181,9 +183,9 @@ The fingerprint is computed once per query in `execute_query` and stored on `Que
 it costs nothing extra to also emit it in the audit record (§7) — which is how an operator gets the
 value to paste into `deny_queries`. Unlike the deny-list check itself, this cost is **not**
 conditional on any rule existing: `QueryAuditState::emit` writes `sql_hash` on every terminal path
-(success, failure, and abandoned-mid-drain), so `sql_fingerprint` runs on every query regardless of
-whether the deny list is empty. It is measured alongside the evaluator in §3's bench, and its cost
-is accounted for there rather than assumed away.
+(success, failure, and abandoned-mid-drain), so `tokenize` + `fingerprint_of` run on every query
+regardless of whether the deny list is empty. This fingerprint cost is measured alongside the
+evaluator in §3's bench, and accounted for there rather than assumed away.
 
 ### 3. Match expression
 
@@ -258,12 +260,12 @@ which is what nearly every query does — and the **hit**, paid only by a query 
 | Flat conjunction scan (the shape most rules reduce to) | **1.1 ns** | 6.0 ns | 72.6 ns |
 | Anchor probe only (one hash lookup, no rule touched) | 12.4 ns | 13.9 ns | **20.6 ns** |
 | Compiled tree walk where each rule regexes the SQL text | 72.5 ns | 1 490 ns | 37 769 ns |
-| `sql_fingerprint` (tokenize + SHA-256, ~130-char statement) | **paid unconditionally, on every query, rule count irrelevant** | 1 180 ns | |
+| `tokenize` + `fingerprint_of` (SHA-256, ~130-char statement) | **paid unconditionally, on every query, rule count irrelevant** | 1 180 ns | |
 
 Of the DataFusion figure, 2 804 ns is building the one-row batch and only ~400 ns per rule is
 evaluation — entering Arrow at all is the cost.
 
-`sql_fingerprint` is not a `check` cost at all — it runs whether or not any rule exists, because
+The `tokenize` + `fingerprint_of` cost is not a `check` cost at all — it runs whether or not any rule exists, because
 `QueryAuditRecord` carries `sql_hash` on every terminal path (§7). So "zero rules cost nothing"
 is true of the evaluator but not of the feature: every query pays ~1.2 µs of tokenizing and
 hashing it did not pay before this plan, and that is roughly a third of the 3.4 µs Phase 1b exists
@@ -352,8 +354,9 @@ Everything expensive happens at refresh, since rules are few and static:
    `SessionContext::new()` held on `QueryDenyList` for exactly this call — no lakehouse tables or
    catalog registered against it, just DataFusion's parser and name resolution, so there is no
    grammar of ours to specify or keep in sync. `compile_match_expr(ctx: &SessionContext, match_expr:
-   &str) -> Result<CompiledExpr>` is the function that owns steps 1-3; `refresh` and `insert` both
-   call it with `&self.ctx`.
+   &str) -> Result<CompiledExpr>` is the function that owns steps 1-3; `refresh` calls it with
+   `&self.ctx` on every reload, and `deny_queries`'s `call_with_args` calls it the same way, still
+   synchronously, before `insert` ever runs (§8).
 2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
    scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
    same thing on every replica); require a `Boolean` result and at least one column reference.
@@ -557,8 +560,8 @@ query for as long as they stand (§3).
 A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
 `property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules, for anchored and
 unanchored rule sets, on both the miss and the matching hit — so the numbers above stay true
-instead of decaying into folklore. The same bench also pins `sql_fingerprint` on a representative
-statement, since that cost sits in front of `check` on every query regardless of rule count and is
+instead of decaying into folklore. The same bench also pins the `tokenize` + `fingerprint_of` cost on
+a representative statement, since that cost sits in front of `check` on every query regardless of rule count and is
 otherwise easy to let decay unmeasured. Both tables came from throwaway versions of exactly that
 bench.
 
@@ -602,7 +605,10 @@ pub struct QueryDenyRow {
 }
 
 /// A row compiled into one snapshot: adds the pieces `check` needs and lives only inside
-/// `DenySnapshot`.
+/// `DenySnapshot`. **This is the Phase-1b form** (Implementation Steps, Phase 1b step 4) — it is
+/// what the bundled flat program (§3) needs. Phase 1's `check` runs DataFusion `PhysicalExpr`s
+/// directly and has no `ops`/`anchor`; its snapshot is a plain
+/// `Vec<(QueryDenyRow, Arc<dyn PhysicalExpr>)>`.
 pub struct QueryDenyRule {
     pub row: QueryDenyRow,
     ops: Range<u32>,                          // this rule's slice of DenySnapshot::program
@@ -612,7 +618,8 @@ pub struct QueryDenyRule {
 }
 
 /// Rule vector plus the anchor index built from it (§3). Rebuilt wholesale on every refresh,
-/// which is cheap because rules are few and change rarely.
+/// which is cheap because rules are few and change rarely. **This is the Phase-1b form**; see
+/// `QueryDenyRule` above for Phase 1's minimal stand-in.
 pub struct DenySnapshot {
     rules: Vec<Arc<QueryDenyRule>>,
     program: Program,                      // every rule's ops + one literal blob (§3)
@@ -637,7 +644,9 @@ pub struct QueryDenyList {               // owned by LakehouseContext, like Audi
 impl QueryDenyList {
     pub fn check(&self, q: &QueryAttribution<'_>) -> Option<Arc<QueryDenyRule>>;
     pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload + recompile
-    pub async fn insert(&self, match_expr: &str, reason: &str, created_by: &str)
+    // `compiled` was already produced by `call_with_args`'s synchronous `compile_match_expr`
+    // (§8); `insert` stores `match_expr` verbatim and does not re-validate it.
+    pub async fn insert(&self, match_expr: &str, compiled: CompiledExpr, reason: &str, created_by: &str)
         -> Result<QueryDenyRow>;
     pub async fn delete(&self, rule_id: Uuid) -> Result<bool>;
     pub async fn list(&self) -> Result<Vec<QueryDenyRow>>;
@@ -647,8 +656,8 @@ impl QueryDenyList {
 
 - **Zero rules make `check` itself free.** `check` returns on an empty-snapshot test — the steady
   state of every deployment that is not mid-incident. This is a claim about `check`, not about the
-  feature end to end: `sql_fingerprint` runs unconditionally regardless of rule count, at ~1.2 µs
-  per query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
+  feature end to end: `tokenize` + `fingerprint_of` run unconditionally regardless of rule count, at
+  ~1.2 µs per query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
 - With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
   one) and runs each field's `RegexSet` pass, if any exist. **~13–35 ns and zero
   allocation, flat in the number of rules** (§3).
@@ -732,9 +741,12 @@ if let Some(rule) = denied
   own. So the check is skipped when the caller can reach the admin functions at all —
   `is_admin || !admin_principal_possible`, the same predicate `register_lakehouse_functions` gates
   `deny_queries`/`remove_query_denial` on (Current State, "Admin gating") — **and** the statement
-  references one of `deny_queries` / `remove_query_denial` / `list_query_denials` as an *identifier
-  token* (checked over the token stream already produced for the fingerprint — not a substring match
-  on the raw text). Gating on `is_admin` alone would leave the hatch permanently shut in any
+  *calls* one of `deny_queries` / `remove_query_denial` / `list_query_denials` — the name token
+  immediately followed by a `(` token (checked over the token stream already produced for the
+  fingerprint, which has already dropped comments and collapsed whitespace runs, so no intervening
+  trivia can separate the two). Call position, not mere identifier presence, is required: a column
+  alias (`SELECT x AS remove_query_denial FROM …`) is an identifier token too, and would otherwise
+  exempt any statement carrying it. Gating on `is_admin` alone would leave the hatch permanently shut in any
   deployment where `admin_principal_possible` is false (no admin principal configured: every API-key
   provider, or OIDC with an empty `admin_users` list) — `is_admin` is then always false while the
   mutating functions are registered for every caller, exactly the deployment this hatch most needs to
@@ -814,7 +826,8 @@ pub struct CallerIdentity { pub user: String, pub email: String, pub service_acc
 
 pub struct CallerContext {
     // ... existing fields ...
-    pub identity: Option<CallerIdentity>,   // None on internal/maintenance paths
+    pub identity: Option<CallerIdentity>,   // None on internal/maintenance paths; such a caller
+                                             // cannot call `deny_queries`, which requires `Some` (§8)
 }
 ```
 
@@ -852,12 +865,19 @@ SELECT * FROM deny_queries(
   'alert rule re-firing on failure; owner notified');
 ```
 
-The table function itself is handed no `SessionContext` (`TableFunctionImpl::call` doesn't get one);
-validation runs through `QueryDenyList::insert`, which compiles against the bare `SessionContext` the
-list holds for exactly this (§3, §4). Validation, all fail-loud with `plan_err!`/a returned error: any `compile_match_expr` failure (§3),
-reported with the offending token where the parser gives one; an expression with no column reference
-at all, which would deny every query; an empty `reason`; rule count already at
-`MICROMEGAS_QUERY_DENY_MAX_RULES`.
+The table function's `call_with_args` is handed a `&dyn Session` (via `TableFunctionArgs::session`),
+which has no SQL-expression parser — and rule compilation must produce the same result on every
+replica regardless of whose session triggered it, so compilation goes through the bare
+`SessionContext` the list holds for exactly this (§3, §4) either way, not the caller's session.
+`call_with_args` itself runs, synchronously and all fail-loud with `plan_err!`: `compile_match_expr`
+against that context (§3), reported with the offending token where the parser gives one; the
+empty-`reason` check; the caller-identity check (`CallerContext::identity` must be `Some` — a `None`
+identity, the maintenance/internal path, is rejected here, since `created_by` is `NOT NULL` and has
+no sentinel to fall back on, §7); and the rule-count check against the current snapshot
+(`MICROMEGAS_QUERY_DENY_MAX_RULES`). Only the DB write and the local snapshot refresh happen in the
+async body behind `LogStreamTableProvider`/`TaskLogExecPlan`: `QueryDenyList::insert` takes the
+already-compiled expression (plus the original `match_expr` text, stored verbatim) and cannot itself
+fail on a bad expression.
 
 **`remove_query_denial(rule_id)`** — scalar UDF returning a status string; deletes the row (returns
 a clear "no such rule" message when it matched nothing). The audit log is the durable record of
@@ -903,9 +923,10 @@ one of the blocked names — e.g. `SELECT * FROM deny_queries('sql LIKE ''%retir
 '…')`, a reasonable incident rule aimed at exactly that function — would be rejected by
 `/api/stream-query` with a misleading "destructive function" error before it ever reaches
 `flight-sql-srv`. `contains_blocked_function` is narrowed alongside this feature to match a blocked
-name only in call position (the name immediately followed by `(`, allowing whitespace), which also
-closes the same false positive for any other statement that merely quotes one of those names without
-calling it.
+name only in call position — the name immediately followed by `(`, skipping intervening whitespace
+**and SQL comments** (`/* … */` and `-- …`), so a comment inserted between the name and the
+parenthesis cannot slip a real call past the check. This also closes the same false positive for any
+other statement that merely quotes one of those names without calling it.
 
 ### 10. Configuration
 
@@ -933,8 +954,11 @@ Open Questions.
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
 2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `tokenize`/`fingerprint_of`, the match-context
-   schema, `compile_match_expr` (parse → validate), `QueryAttribution`, `QueryDenyRow`, `QueryDenyRule`,
-   `DenySnapshot`, `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
+   schema, `compile_match_expr` (parse → validate → `Arc<dyn PhysicalExpr>` in this phase),
+   `QueryAttribution`, `QueryDenyRow`, and Phase 1's own minimal snapshot shape — a
+   `Vec<(QueryDenyRow, Arc<dyn PhysicalExpr>)>`, with none of `QueryDenyRule`'s `ops`/`anchor` or
+   `DenySnapshot`'s `program`/`index`/`text_sets`/`unanchored` (those are the Phase-1b form built in
+   step 4, §4) — plus `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
    `spawn_refresh_task`), env knobs. Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2`
    to `analytics/Cargo.toml`.
 
@@ -950,14 +974,16 @@ Open Questions.
 4. Replace the `PhysicalExpr` evaluation with the bundled flat program (§3): resolve field indices,
    append literals to one blob, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, lay
    every rule out as its own op range with the unanchored ones contiguous, and build the anchor
-   index and shared `RegexSet`. Add `regex = "1"` to `rust/Cargo.toml`'s `[workspace.dependencies]`
+   index and shared `RegexSet` — this is where `QueryDenyRule`'s `ops`/`anchor` and `DenySnapshot`'s
+   `program`/`index`/`text_sets`/`unanchored` (§4) get built for the first time. Add `regex = "1"` to
+   `rust/Cargo.toml`'s `[workspace.dependencies]`
    (already in the tree transitively via `datafusion-functions`, but not declared there today) and
    `regex.workspace = true` to `analytics/Cargo.toml`, matching the crate's existing convention.
 5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
    the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
    moment we stop using it in production.
-6. Land `benches/query_deny_match.rs`, including a `sql_fingerprint` bench, and confirm the §3
-   numbers on the target hardware.
+6. Land `benches/query_deny_match.rs`, including a `tokenize` + `fingerprint_of` bench, and confirm
+   the §3 numbers on the target hardware.
 
    Splitting here is deliberate: Phase 1 is correct and shippable on its own at 3.4 µs/query, and
    Phase 1b is a pure optimization behind an unchanged interface, with the oracle test already
@@ -1005,7 +1031,7 @@ Open Questions.
 19. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
 20. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
     plus the "find the offender, copy its fingerprint" query.
-21. `mkdocs/docs/admin/flight-sql.md`: the two env knobs, propagation delay, fail-open behavior.
+21. `mkdocs/docs/admin/flight-sql.md`: the three env knobs, propagation delay, fail-open behavior.
 22. `mkdocs/docs/admin/web-app.md`: the new admin screen.
 23. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
     apart" guidance (§ Exception types) — a denial is also `ResourceExhausted` /
@@ -1183,8 +1209,11 @@ this reason, so the lowering and anchor-extraction assertions below compile.
 - Every example expression in the docs compiles and evaluates as documented.
 - `skip_for_admin_recovery` (defined and tested here, in `query_deny_list.rs`, since it only takes a
   token stream and two booleans): an admin statement calling `remove_query_denial` is exempt; the
-  same statement from a non-admin is not; a non-admin query that merely aliases a column
-  `remove_query_denial` is not exempt; with `admin_principal_possible == false` (no admin principal
+  same statement from a non-admin is not; an admin (or `admin_principal_possible == false`)
+  statement that merely aliases a column `remove_query_denial`, or references it as a quoted
+  identifier, without calling it, is **not** exempt — pinning the call-position requirement, since
+  both would otherwise pass a bare identifier-token check; with `admin_principal_possible == false`
+  (no admin principal
   configured), a non-admin caller's `remove_query_denial` statement is exempt too, matching
   `register_lakehouse_functions`' gate; the same cases apply unchanged to the
   `do_action_create_prepared_statement` call site (§5), since the function takes the same inputs
@@ -1213,13 +1242,14 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 **`contains_blocked_function` (extend `rust/analytics-web-srv/tests/stream_query_tests.rs`)** — the
 existing five cases all use call position and would pass unchanged against either the old or the new
-behavior, so two cases are added to actually exercise the narrowing:
+behavior, so cases are added to actually exercise the narrowing:
 
 - a blocked name appearing only inside a string literal, e.g.
   `deny_queries('sql LIKE ''%retire_partitions%''', 'reason')`, is **allowed** (not flagged as a
   destructive call);
-- a blocked name in call position is still **blocked**, both with no whitespace
-  (`retire_partitions()`) and with whitespace before the parenthesis (`retire_partitions ()`).
+- a blocked name in call position is still **blocked**: with no whitespace (`retire_partitions()`),
+  with whitespace before the parenthesis (`retire_partitions ()`), and with a comment between the
+  name and the parenthesis (`retire_partitions/*x*/()`).
 
 **End-to-end (`python/micromegas/tests/test_query_deny_list.py`, against `local_test_env`)**
 
