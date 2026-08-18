@@ -176,18 +176,19 @@ problem, with a few established answers:
 | **OPA / Rego** | Cluster-wide authorization policy | A whole policy language and runtime (`regorus` in Rust). Far past what an incident valve needs. |
 | **Envoy Unified Matcher API** | Envoy xDS | A protobuf matcher *tree*, not a text language. Useful as a shape reference (predicate tree over typed inputs); nothing to adopt directly. |
 | **JsonLogic** | Assorted rules engines | JSON-encoded predicate trees; trivial to build a form UI over and to serialize. Not really a standard, and painful to write by hand. |
-| **A boolean SQL expression** | — | Not a "matcher standard", but a standard *language* — already this product's stable interface, already parseable by a crate in the tree, and already what an admin reading the audit log thinks in. |
+| **A boolean SQL expression** | — | Not a "matcher standard", but a standard *language* — already this product's stable interface, already parsed *and evaluated* by an engine in the process, and already what an admin reading the audit log thinks in. |
 
-**This plan uses a boolean SQL expression** as the authoring and storage form, parsed by the
-`sqlparser` already in the tree and compiled to a small interpreted IR for evaluation (next
-subsection). No new language for the admin to learn, no bespoke grammar to specify from scratch,
-and no engine on the hot path. CEL becomes the better answer the day the matcher has to be authored
-by non-admins, or evaluated somewhere with no Rust — and that is the trigger to revisit this.
+**This plan uses a boolean SQL expression**, parsed *and evaluated* by DataFusion, with a
+pre-filter in front so that the common case never reaches it (next subsection). No new language for
+the admin to learn, no grammar to specify, and no evaluation semantics to reimplement. CEL becomes
+the better answer the day the matcher has to be authored by non-admins, or evaluated somewhere with
+no DataFusion — and that is the trigger to revisit this.
 
 #### The match context
 
-Every rule is a predicate over one fixed, documented set of string attributes — what
-`execute_query` has already resolved by the time the check runs:
+Every rule is a predicate over one fixed, documented schema (`match_schema()`, a `DFSchema` of
+nullable `Utf8` fields) — the attributes `execute_query` has already resolved by the time the check
+runs:
 
 | Column | NULL when |
 |---|---|
@@ -199,89 +200,162 @@ Every rule is a predicate over one fixed, documented set of string attributes �
 | `sql` | never — the raw statement text |
 | `sql_hash` | never — the normalized fingerprint (§2) |
 
-Every attribute is a string, so there is no type system to speak of and no coercion rules to get
-wrong. Adding an attribute later means appending one entry to this list: existing expressions keep
-compiling, and no migration is involved. That is the point of the single-column design.
+Every attribute is a string, so there are no coercion surprises. Adding an attribute later means
+appending one field to this schema: existing expressions keep compiling, and no migration is
+involved. That is the point of the single-column design.
 
 NULL semantics come from SQL and are the ones we want: `notebook = 'fleet-overview'` evaluates to
 NULL — not true — for a query that carried no notebook header, so the rule does not fire.
 
-#### Compile once, evaluate without Arrow
+#### Measured: what evaluation actually costs
 
-SQL is the *authoring* language; it is deliberately **not** the evaluation machinery. DataFusion is
-a columnar engine, and single-row expression evaluation is the shape it is worst at: building a
-one-row `RecordBatch` over 12 string columns is ~25 heap allocations before any predicate runs, and
-every `PhysicalExpr` node then allocates its own one-element output array. A few microseconds and
-tens of allocations per query, on the front door of every query including the cheap ones, to answer
-a question that is really a handful of string comparisons.
+DataFusion is the evaluator. It owns SQL semantics — three-valued logic, `LIKE`, coercion, regex —
+and none of that gets reimplemented here. The open question was whether it is fast enough on the
+front door, so it was measured rather than argued about: release build, one rule set evaluated
+against one query's attribution (12 Utf8 columns), on the development machine.
 
-So a rule is compiled — once, at refresh — into a small interpreted IR that holds no Arrow:
+| | ns/query |
+|---|---|
+| Build the one-row `RecordBatch` (12 string columns), nothing else | **2 804** |
+| Evaluate 1 rule against a pre-built batch | 309 |
+| Build batch + evaluate 1 rule | **3 384** |
+| Build batch + evaluate 10 rules | 6 230 |
+| Build batch + evaluate 10 rules OR-folded into a single expression | 7 338 |
+| Build batch + evaluate 100 rules | 44 983 |
+| Build batch + evaluate 100 rules OR-folded into a single expression | 45 373 |
+| Floor: the same 10 predicates as direct `&str` comparisons | 29 |
+| Floor: the same 100 predicates as direct `&str` comparisons | 287 |
+
+Three things fall out of this, two of them counter to what the plan previously assumed:
+
+1. **Entering Arrow at all costs ~2.8 µs** — building the one-row batch dominates everything else at
+   realistic rule counts. The marginal cost of a rule is only ~400 ns.
+2. **OR-folding every rule into one expression does not help** (7.3 µs vs 6.2 µs at ten rules; a
+   wash at a hundred). DataFusion evaluates each disjunct as its own array operation with its own
+   allocation, so collapsing N expressions into one changes nothing. This plan previously proposed
+   that fold as the key optimization; the measurement retired it.
+3. Straight-line string comparison is ~200× faster, which is what makes the pre-filter below
+   worth having — not because 3.4 µs is unaffordable on a millisecond-scale query, but because it
+   is pure waste on the overwhelming majority of queries, which match nothing.
+
+#### Pre-processing: an equality pre-filter, so the common case never reaches Arrow
+
+Rules are few and change rarely, so everything expensive happens at refresh:
+
+1. `ctx.parse_sql_expr(match_expr, &match_schema())` — parse and resolve against the match context.
+2. **Validate** by walking the resulting `Expr` (a check, not an evaluator): reject subqueries,
+   aggregates, and window functions (`Expr::Exists` / `InSubquery` / `ScalarSubquery` /
+   `AggregateFunction` / `WindowFunction`); reject any scalar function whose `Volatility` is not
+   `Immutable`, which is what keeps `now()` and `random()` out so a rule means the same thing on
+   every replica; require a non-`Boolean`-free result type and at least one column reference.
+3. Simplify via `ExprSimplifier` (constant folding, boolean simplification) — free, once.
+4. `ctx.create_physical_expr(...)` → the `Arc<dyn PhysicalExpr>` kept on the rule.
+5. **Extract a required equality.** Walk the top-level `AND` chain for a
+   `Column = Literal(Utf8)` conjunct. A rule containing one *cannot* match a query whose attribution
+   disagrees on that field, so the rule can be indexed by it. Rules with no such conjunct — a
+   top-level `OR`, or nothing but `LIKE`/regex predicates — go on a small always-evaluate list.
+
+The refresh then builds, alongside the rule vector:
 
 ```rust
-/// Compiled form of a match expression. Column names are resolved to match-context
-/// field indices, LIKE/regex patterns are precompiled, literals are interned.
-pub enum MatchExpr {
-    And(Vec<MatchExpr>), Or(Vec<MatchExpr>), Not(Box<MatchExpr>),
-    Eq(FieldIdx, String), NotEq(FieldIdx, String),
-    In(FieldIdx, Vec<String>),
-    Like { field: FieldIdx, re: Regex },        // LIKE / ILIKE, lowered to a regex
-    Regexp { field: FieldIdx, re: Regex },      // regexp_like(field, '...')
-    Contains(FieldIdx, String), StartsWith(FieldIdx, String),
-    IsNull(FieldIdx), IsNotNull(FieldIdx),
-}
-
-impl MatchExpr {
-    /// SQL three-valued logic: `None` is NULL. Borrowed `&str`s straight off the
-    /// attribution — no allocation, no Arrow, no engine.
-    fn eval(&self, ctx: &QueryAttribution<'_>) -> Option<bool>;
-}
+/// (field, value) -> rules whose required equality that satisfies. Only fields some rule
+/// actually constrains are probed, so a single rule keyed on `sql_hash` costs one lookup.
+index: HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>,
+indexed_fields: Vec<FieldIdx>,   // usually one or two
+always_evaluate: Vec<RuleIdx>,   // rules with no indexable equality
 ```
 
-Evaluating `sql_hash = '9f2c…' AND entrypoint = 'grafana-alert'` is then two `str` comparisons and
-a branch — tens of nanoseconds, zero allocations — against the ~µs-with-allocations an Arrow round
-trip would cost. The gap does not matter for one rule on a 5 ms query; it matters because this sits
-on the front door, the rule cap is 100, and a check that is free is a check nobody has to reason
-about later.
+Per query, `check` then does:
 
-**Compilation pipeline** (`compile_match_expr`), run at insert time so the admin gets the error, and
-again at refresh so a rule written by a newer version can never take down an older replica:
+- empty snapshot → return (the steady state of a healthy deployment: zero cost);
+- one hash lookup per *constrained* field — typically one or two, not twelve — to collect candidate
+  rules, plus the always-evaluate list;
+- no candidates → return. **No `RecordBatch` is built and DataFusion is never entered**;
+- candidates → build the batch once, evaluate their `PhysicalExpr`s in rule order, first `true`
+  wins.
 
-1. `sqlparser::Parser::parse_expr` over `GenericDialect` — the parser already reachable as
-   `datafusion::sql::sqlparser`, and the same one that parses the admin's queries. No
-   `SessionContext` is constructed and no logical planner runs.
-2. Lower the AST to `MatchExpr`, resolving identifiers against the match context and rejecting
-   anything outside the grammar below. Lowering *is* the validation: the evaluator can only ever
-   see node kinds it implements, because nothing else survives this step.
-3. Precompile every pattern into a `regex::Regex` — `LIKE` by escaping regex metacharacters and
-   mapping `%`→`.*`, `_`→`.`; `ILIKE` the same with `(?i)`; `regexp_like` verbatim.
+So the realistic incident steady state — a rule keyed on the offender's `sql_hash`, and every other
+client's query missing it — costs one hash lookup, ~25 ns. The offender's own query pays the 3.4 µs,
+and is about to be rejected instead of spending milliseconds planning, so that cost is noise.
 
-**Supported grammar** — small on purpose, and documented as the contract:
+**The index can only skip, never deny.** DataFusion always makes the final call on a candidate; a
+bug in the extractor can at worst fail to enforce a rule, never invent an enforcement. It is kept
+deliberately dumb — one recognized shape, everything else falls through to always-evaluate — and a
+property test asserts that filtered evaluation and brute-force evaluation of every rule agree over
+a corpus of expressions and attributions.
 
-```
-expr    := expr AND expr | expr OR expr | NOT expr | '(' expr ')' | pred
-pred    := col '=' lit | col '!=' lit | col IN (lit, ...)
-         | col LIKE lit | col ILIKE lit | col IS [NOT] NULL
-         | regexp_like(col, lit) | contains(col, lit) | starts_with(col, lit)
-col     := a match-context column name (§3)
-lit     := a single-quoted string literal
-```
+#### Compiling the rules to native code — considered, not adopted
 
-Rejected with a clear, specific message: an unknown column or function; a comparison between two
-columns or two literals; arithmetic; subqueries; aggregates; anything non-`Immutable` (`now()`,
-`random()`) — none of which the grammar admits in the first place; and an expression with **no
-column reference at all** (`true`, `1 = 1`), the replacement for the old "at least one matcher"
-rule. A determined admin can still write a tautology over a real column; the rule is visible in
-`list_query_denials()`, and `hit_count`/`last_hit_at` make it obvious.
+"The deny list is short and changes rarely" is exactly the premise that justifies a compiler, so the
+compile-it-once options were costed rather than waved off.
 
-Regex is safe here and comes free: the `regex` crate has no backtracking and guarantees linear-time
-matching, and patterns are compiled once per rule rather than per query. (This corrects an earlier
-version of this plan, which excluded regex on ReDoS grounds — a hazard of backtracking engines, not
-of this one.) `regex` becomes a direct dependency of `micromegas-analytics`; it is already in the
-tree transitively, via `datafusion-functions`' `regex_expressions` feature.
+**Cranelift (`cranelift-jit`).** The strongest version of this idea is not per-rule compilation but
+compiling the *entire rule set* into one native function: every literal an immediate, every string
+length known at compile time, no loop over rules, no dispatch, early-out branches laid out in rule
+order. That plausibly lands at ~5 ns for a whole miss — at or below the 29 ns hand-written floor
+measured above — and the ~1 ms it costs to compile is irrelevant when rules change a few times a
+month. Cranelift is a real, maintained Rust backend (it is what Wasmtime generates code with), and
+expression JIT is a proven technique in query engines: Postgres does it with LLVM, and HyPer/Umbra
+built their reputation on it.
 
-A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
-`property_get`/`parse_block` benches) pins the per-query cost of `check` at 0, 1, 10, and 100 rules,
-so the "free" claim above stays true rather than merely being asserted here.
+The reason it does not apply here is the row count. Expression JIT pays off when the compiled code
+runs over *millions of rows*, so that per-row interpreter dispatch dominates and compilation
+amortizes across the scan. This predicate runs over **exactly one row per query**. There is no inner
+loop to amortize against — the compiled function is entered once and returns.
+
+What it would cost:
+
+- **A custom compiler, which is more custom machinery than the interpreter that was already
+  rejected**, not less. Cranelift IR has no string type; `sql_hash = 'X'` becomes a length compare
+  plus a `memcmp` call the code generator has to emit, and `LIKE`/regex/three-valued logic have to
+  be either generated or called out to. Emitting SSA and managing blocks is strictly more code than
+  a tree-walk, and it carries the same semantic-correctness burden in a form that is far harder to
+  test.
+- **Executable memory in the service process.** JIT pages need `PROT_EXEC`; hardened container
+  runtimes and seccomp profiles restrict that, and "the observability server now mmaps executable
+  memory" is a security-review conversation in most deployments. That is a steep price for a
+  microsecond.
+- **A large dependency** (`cranelift-codegen`/`-frontend`/`-module`/`-jit`) in compile time and
+  binary size.
+- **Miscompiles present as a wrongly allowed or wrongly denied query** with no stack to inspect.
+
+**Wasmtime.** Same generation problem — something must still compile SQL into WASM bytes, and that
+compiler is ours to write — plus a boundary that does not exist in the Cranelift case: the SQL text
+and every attribute must be copied into guest linear memory on each call, which puts the floor well
+above native. Wasmtime's actual value proposition is *sandboxing untrusted code*, and there is no
+untrusted code here: rules come from admins, and whatever executes was generated by us. Note also
+that the repo's existing WASM work is not a starting point — `datafusion-wasm` is DataFusion
+compiled **to** `wasm32` to run in the browser, the opposite direction from embedding a host runtime
+in the server; no `wasmtime`/`wasmi` dependency exists anywhere in the workspace today. Wasmtime
+becomes the right answer the day admins supply *scripts* instead of expressions, where sandboxing
+is the whole point.
+
+**A hand-written interpreter.** ~200× faster than DataFusion and what an earlier version of this
+plan proposed, but it means owning SQL three-valued logic, `LIKE` pattern semantics, and regex
+handling — the things most often subtly wrong in a hand-rolled implementation, in code that decides
+whether a query runs.
+
+**Why none of them are needed.** The pre-filter already removes the cost from the common path: a
+query that matches nothing pays one hash probe and never enters DataFusion. What remains is a
+query that is *about to be denied*, where 3.4 µs replaces milliseconds of planning. There is no hot
+path left for a JIT to accelerate — which is the honest reason to skip it, rather than any claim
+that it would not be fast.
+
+**What would flip this.** A deny list in the thousands of rules, dominated by unindexable shapes
+(regex- and `LIKE`-heavy, no leading equality), would put real work back on every query. The first
+answer then is not a JIT but `regex::RegexSet`, which matches N patterns in a single linear pass;
+compiling the rule set to native code is the step after that.
+
+#### Grammar
+
+Because DataFusion evaluates, the accepted language is "any DataFusion boolean expression over the
+match context", minus what validation rejects above. In practice that is `AND`/`OR`/`NOT`,
+`=`/`!=`, `IN`, `LIKE`/`ILIKE`, `IS [NOT] NULL`, `regexp_like`, and the built-in string functions —
+without any of it having to be specified, implemented, or kept in sync here.
+
+Regex is safe and comes free: DataFusion's `regexp_like` is backed by the Rust `regex` crate, which
+does not backtrack and guarantees linear-time matching. (This corrects an earlier version of this
+plan, which excluded regex on ReDoS grounds — a hazard of backtracking engines, not of this one.)
 
 Examples, all valid:
 
@@ -293,14 +367,26 @@ client = 'grafana' AND regexp_like(sql, '(?i)from\s+view_instance')
 email = 'jean@example.com' AND (notebook IS NOT NULL OR entrypoint = 'notebook')
 ```
 
+All five are indexable: each has a top-level `AND` conjunct of the form `col = 'literal'`, so each
+is pruned by a single hash probe. What is *not* indexable is a rule whose top level is a
+disjunction — `sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'` — which lands in
+`always_evaluate` and is evaluated by DataFusion on every query. That list is expected to stay
+short, and the rule cap bounds it.
+
+A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
+`property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules for both the
+pre-filtered miss and the matching hit, so the numbers above stay true instead of decaying into
+folklore.
+
 #### Where this can go next
 
-The column holds text and the compiler is one function over a documented grammar, so richer
-semantics land without a migration: more predicates (numeric comparison once the match context
-carries numbers), a structured `deny_queries` variant that renders the expression for a UI builder,
+The column holds text and the expression language is DataFusion's, so richer semantics land without
+a migration and mostly without code: numeric comparison the moment the match context carries a
+numeric attribute, a structured `deny_queries` variant that renders an expression for a UI builder,
 cost predicates once an estimate is available at check time, or a `test_query_denial(expr)` function
-that dry-runs an expression against recent audit records before it goes live. If the grammar ever
-outgrows hand-lowering, the fallback is CEL (§3, prior art) — not a bigger bespoke language.
+that dry-runs an expression against recent audit records before it goes live. The pre-filter is an
+independent axis: if unindexable rules ever dominate, `regex::RegexSet` over the residual set is the
+next step, and compiling the rule set to native code the one after that.
 
 ### 4. Rule model, evaluation, and cache
 
@@ -315,22 +401,35 @@ pub struct QueryAttribution<'a> {      // borrowed view of what execute_query al
 }
 
 impl QueryAttribution<'_> {
-    /// Borrowed field by match-context index, for `MatchExpr::eval`. `None` is SQL NULL.
+    /// Borrowed field by match-context index, for the pre-filter's hash probes.
     fn field(&self, idx: FieldIdx) -> Option<&str>;
+    /// One-row RecordBatch matching `match_schema()`. Built only when the pre-filter
+    /// leaves at least one candidate rule -- ~2.8 us, so never on a miss.
+    fn to_batch(&self) -> Result<RecordBatch>;
 }
 
 pub struct QueryDenyRule {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
     pub reason: String, pub match_expr: String,
-    compiled: MatchExpr,                  // from compile_match_expr, built at refresh
+    compiled: Arc<dyn PhysicalExpr>,      // parsed/validated/simplified at refresh
+    required_eq: Option<(FieldIdx, Box<str>)>,  // the conjunct this rule is indexed by
     hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
 
+/// Rule vector plus the pre-filter built from it (§3). Rebuilt wholesale on every refresh,
+/// which is cheap because rules are few and change rarely.
+pub struct DenySnapshot {
+    rules: Vec<Arc<QueryDenyRule>>,
+    index: HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>,
+    indexed_fields: Vec<FieldIdx>,
+    always_evaluate: Vec<RuleIdx>,
+}
+
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
     pool: sqlx::Pool<sqlx::Postgres>,
-    snapshot: std::sync::RwLock<Arc<Vec<Arc<QueryDenyRule>>>>,  // `arc-swap` is not a
-                                   // workspace dep; a read lock held for one clone is enough
+    snapshot: std::sync::RwLock<Arc<DenySnapshot>>,  // `arc-swap` is not a workspace dep;
+                                   // a read lock held for one clone is enough
 }
 
 impl QueryDenyList {
@@ -346,10 +445,11 @@ impl QueryDenyList {
 
 - **Zero rules cost nothing.** `check` returns on an empty-snapshot test — the steady state of
   every deployment that is not mid-incident.
-- With rules present, `check` evaluates each rule's `MatchExpr` directly against the borrowed
-  attribution and returns the first yielding `Some(true)` (`Some(false)`/`None` do not match). No
-  allocation, no Arrow, no engine: a short-circuiting walk over a few string comparisons, bounded
-  by `MICROMEGAS_QUERY_DENY_MAX_RULES` (default 100) and single-digit in practice.
+- With rules present, `check` runs the pre-filter first (§3): one hash probe per constrained field,
+  ~25 ns for the usual single-field rule set. On a miss it returns without building a `RecordBatch`
+  or entering DataFusion at all. On a hit it builds the batch once and evaluates the candidates'
+  `PhysicalExpr`s in rule order, first `true` winning — ~3.4 µs, paid only by a query that is about
+  to be rejected instead of planned.
 - `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it flushes each rule's
   accumulated `hits`/`last_hit` (`UPDATE query_deny_list SET hit_count = hit_count + $1,
   last_hit_at = greatest(coalesce(last_hit_at, $2), $2) WHERE rule_id = $3`, skipping rules with a
@@ -586,10 +686,11 @@ Open Questions.
 
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
-2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match context,
-   `MatchExpr` + `compile_match_expr` (parse → lower → precompile patterns), `QueryAttribution`,
-   `QueryDenyRule`, `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
-   `spawn_refresh_task`), env knobs. Add `sha2` and `regex` to `analytics/Cargo.toml`.
+2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match context
+   schema, `compile_match_expr` (parse → validate → simplify → `create_physical_expr` → extract the
+   required equality), `QueryAttribution`, `QueryDenyRule`, `DenySnapshot` (rules + pre-filter
+   index), `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
+   `spawn_refresh_task`), env knobs. Add `sha2` to `analytics/Cargo.toml`.
    Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2` to `analytics/Cargo.toml`.
 3. Unit tests for `sql_fingerprint` and `matches` (see Testing Strategy).
 
@@ -655,7 +756,7 @@ Open Questions.
 
 - `rust/analytics/src/lakehouse/migration.rs`, `mod.rs`, `query.rs`, `read_scope.rs`,
   `lakehouse_context.rs`
-- `rust/analytics/Cargo.toml` (`sha2`, `regex`)
+- `rust/analytics/Cargo.toml` (`sha2`)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
@@ -687,13 +788,15 @@ cost is that the stored form is no longer directly queryable in SQL (`WHERE matc
 the rules table is gone) — which the rules table's size, and the fact that nobody queries it
 programmatically, makes a non-issue.
 
-**SQL to author, a compiled IR to evaluate.** Using DataFusion end-to-end would have been less code,
-but single-row evaluation is exactly the shape a columnar engine is worst at — a one-row batch plus
-per-node output arrays, some microseconds and tens of allocations on the front door of every query.
-Parsing with `sqlparser` and lowering to a small `MatchExpr` keeps the authoring language identical
-while making evaluation allocation-free. The price is a hand-written evaluator and an explicitly
-bounded grammar; the grammar being explicit is arguably worth it on its own, since it is what gets
-documented and what the validator enforces.
+**DataFusion evaluates; a pre-filter keeps it off the common path.** Single-row evaluation is the
+shape a columnar engine is worst at — measured at 3.4 µs, of which 2.8 µs is just constructing the
+one-row batch (§3). The alternatives that beat it (a hand-written interpreter, a Cranelift JIT, a
+WASM runtime) all require owning SQL semantics or a code generator, in the component that decides
+whether a query runs. Indexing rules by a required equality instead means a non-matching query pays
+one hash probe and never enters DataFusion, so the engine's cost is paid only by queries that are
+about to be rejected. The price is a small extractor whose worst failure is a rule that fails to
+fire — never one that fires wrongly — held down by a property test against brute-force
+evaluation.
 
 **Regex is in, and the earlier ReDoS objection was wrong.** An earlier version of this plan excluded
 regex because "caller-influenced regexes on a hot path invite ReDoS". That reasoning applies to
@@ -727,7 +830,7 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 ## Documentation
 
 - `mkdocs/docs/admin/functions-reference.md` — reference for the three functions, the **match
-  context** columns and the **supported grammar** (§3) with worked examples, plus an "incident
+  context** columns and the **expression language** (§3) with worked examples, plus an "incident
   runbook" section: find the offender in the audit log → copy `sql_hash` → `deny_queries` → confirm
   rejections → `remove_query_denial` once the offending client is fixed.
 - `mkdocs/docs/query-guide/query-audit-log.md` — the new `sql_hash` field, `error_class = "denied"`,
@@ -745,16 +848,18 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 - `sql_fingerprint`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
-- `compile_match_expr` accepts every construct in the documented grammar and rejects everything
-  outside it — unknown column, unknown function, column-to-column comparison, arithmetic, subquery,
-  aggregate, `now()`, and a no-column expression (`true`, `1 = 1`) — each with a distinct message.
-- `MatchExpr::eval` three-valued logic: a predicate on an absent optional attribute
-  (`notebook = 'x'` with no notebook) yields `None`, and `None` does not deny; `NOT NULL` stays
-  `None`; `OR` short-circuits over it correctly.
-- `LIKE`/`ILIKE` lowering: `%`/`_` map correctly, regex metacharacters in the pattern are escaped
-  (`sql LIKE '100%'` must not become a regex quantifier), `ILIKE` is case-insensitive.
-- Round-trip: every example expression in the docs compiles, and evaluates as documented against a
-  hand-built attribution.
+- `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
+  non-boolean result, subquery, aggregate, window function, a non-`Immutable` function (`now()`),
+  and a no-column expression (`true`, `1 = 1`).
+- Required-equality extraction: recognized for a top-level `AND` chain containing
+  `col = 'literal'`; *not* claimed for an `OR` at the top level, a `LIKE`, or a column-to-column
+  comparison — those must land in `always_evaluate`.
+- **Pre-filter equivalence (property test).** Over a corpus of expressions × attributions,
+  `check` through the index returns exactly what evaluating every rule by brute force returns. This
+  is the test that makes the index safe to trust.
+- Three-valued logic end-to-end: `notebook = 'x'` does not deny a query that carried no notebook
+  header; `notebook IS NULL` does.
+- Every example expression in the docs compiles and evaluates as documented.
 - `skip_for_admin_recovery`: an admin statement calling `remove_query_denial` is exempt; the same
   statement from a non-admin is not; a non-admin query that merely aliases a column
   `remove_query_denial` is not exempt.
