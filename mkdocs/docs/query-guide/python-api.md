@@ -516,7 +516,7 @@ if result:
 ### `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin — or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Create materialized partitions for performance optimization:
 
@@ -537,7 +537,7 @@ client.materialize_partitions(
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin — or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced, or a `SqlBatchView` such as `log_stats` whose live partitions predate it declaring a merge sort order):
 
@@ -564,7 +564,7 @@ For a `SqlBatchView`, the bucket size is dictated by the existing partition's bo
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin — or by any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Remove materialized partitions to free up storage:
 
@@ -605,7 +605,7 @@ print(f"Total size: {incompatible['file_size'].sum() / (1024**3):.2f} GB")
 ### `retire_incompatible_partitions(client, view_set_name=None)`
 
 !!! note "Requires admin"
-    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin — see [Admin SQL Functions](../admin/functions-reference.md).
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin — or any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
 
 Retires partitions with incompatible schemas using metadata-based retirement (works for empty and non-empty partitions).
 

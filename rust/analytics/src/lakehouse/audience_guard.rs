@@ -118,29 +118,29 @@ enum OwnerSource {
 fn merge_owner_rows(
     rows: Vec<(Uuid, Option<String>, OwnerSource)>,
 ) -> HashMap<Uuid, OwnerAudience> {
-    let mut by_id: HashMap<Uuid, Vec<OwnerAudience>> = HashMap::new();
-    for (id, audience, _source) in rows {
+    let mut by_id: HashMap<Uuid, Vec<(OwnerAudience, OwnerSource)>> = HashMap::new();
+    for (id, audience, source) in rows {
         let owner = match audience {
             Some(a) => OwnerAudience::Audience(Arc::from(a)),
             None => OwnerAudience::Unstamped,
         };
         let distinct_owners = by_id.entry(id).or_default();
-        if !distinct_owners.contains(&owner) {
-            distinct_owners.push(owner);
+        if !distinct_owners.iter().any(|(o, _)| *o == owner) {
+            distinct_owners.push((owner, source));
         }
     }
     by_id
         .into_iter()
         .map(|(id, mut owners)| {
             let owner = if owners.len() == 1 {
-                owners.pop().expect("checked len() == 1 above")
+                owners.pop().expect("checked len() == 1 above").0
             } else {
                 debug!(
                     "audience_guard: '{id}' resolved to {} distinct owners across process_id/stream_id \
-                     collision, treating as Ambiguous (fail-closed)",
+                     collision ({owners:?}), treating as Ambiguous (fail-closed)",
                     owners.len()
                 );
-                OwnerAudience::Ambiguous(owners)
+                OwnerAudience::Ambiguous(owners.into_iter().map(|(o, _)| o).collect())
             };
             (id, owner)
         })

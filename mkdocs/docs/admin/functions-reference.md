@@ -298,7 +298,7 @@ print(f"Empty partitions: {len(empty_partitions)}")
 ### `micromegas.admin.retire_incompatible_partitions(client, view_set_name=None)`
 
 !!! note "Requires admin"
-    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin (see [Authentication](flight-sql.md#authentication)). Non-admin callers, including API keys, will see this fail with an "Invalid function" error.
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin (see [Authentication](flight-sql.md#authentication)) -- or any authenticated caller when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (see [Authentication](authentication.md#audience-filtering-activation); the knob grants this deployment-wide, not per-audience). Non-admin callers, including API keys, will otherwise see this fail with an "Invalid function" error.
 
 **Description**: Safely retires partitions with incompatible schemas using metadata-based retirement. This handles both empty partitions (file_path=NULL) and non-empty partitions.
 

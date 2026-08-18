@@ -119,9 +119,10 @@ impl TableProvider for ListPartitionsTableProvider {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         // Query Enforcement Prong B (#1371): `ReadScope::All` keeps today's path unchanged,
         // including the `LIMIT` pushdown. A restricted caller instead fetches every row
-        // unlimited, row-filters per plan §8, then truncates to `limit` in Rust -- filtering
-        // after a pushed-down limit would return fewer rows than asked for while more matching
-        // rows exist, silently wrong.
+        // unlimited and row-filters per plan §8, with `filter_rows` itself enforcing `limit` by
+        // stopping as soon as enough matching rows are kept -- filtering after a pushed-down
+        // limit would return fewer rows than asked for while more matching rows exist, silently
+        // wrong.
         let restricted = *self.guard.read_scope() != ReadScope::All;
         let query = if !restricted {
             // Build query with optional LIMIT clause pushed down to PostgreSQL.
@@ -222,11 +223,10 @@ impl TableProvider for ListPartitionsTableProvider {
                 // no readable partitions hits this as its steady state, not just an edge case.
                 RecordBatch::new_empty(self.schema())
             } else {
-                let truncated: Vec<_> = match limit {
-                    Some(n) => filtered.into_iter().take(n).collect(),
-                    None => filtered,
-                };
-                rows_to_record_batch(&truncated).map_err(|e| DataFusionError::External(e.into()))?
+                // `filter_rows` already stops as soon as `limit` matching rows have been kept
+                // (see its doc comment), so `filtered.len() <= limit.unwrap_or(usize::MAX)`
+                // always holds here -- no further truncation needed.
+                rows_to_record_batch(&filtered).map_err(|e| DataFusionError::External(e.into()))?
             }
         };
 
