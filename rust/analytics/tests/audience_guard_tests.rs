@@ -96,6 +96,39 @@ fn audiences_audience_matches_byte_exactly() {
 }
 
 #[test]
+fn audiences_ambiguous_denies_unless_every_owner_is_readable() {
+    let scope = audiences(&["team-alpha"]);
+    assert!(
+        !is_readable(
+            &scope,
+            None,
+            &OwnerAudience::Ambiguous(vec![audience("team-alpha"), audience("team-beta")])
+        ),
+        "one unreadable owner among the collision's arms -> deny"
+    );
+    assert!(
+        is_readable(
+            &scope,
+            None,
+            &OwnerAudience::Ambiguous(vec![audience("team-alpha"), audience("team-alpha")])
+        ),
+        "every arm independently readable -> allow"
+    );
+    assert!(
+        !is_readable(
+            &scope,
+            None,
+            &OwnerAudience::Ambiguous(vec![audience("team-beta"), audience("team-beta")])
+        ),
+        "no arm readable -> deny"
+    );
+    assert!(
+        !is_readable(&scope, None, &OwnerAudience::Ambiguous(vec![])),
+        "an empty owner set must not be vacuously readable"
+    );
+}
+
+#[test]
 fn empty_audience_set_denies_everything() {
     let scope = audiences(&[]);
     assert!(!is_readable(&scope, None, &OwnerAudience::Unknown));

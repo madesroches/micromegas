@@ -301,9 +301,12 @@ pub fn is_readable(
                 unstamped_audience.is_some_and(|u| auds.iter().any(|a| a == u))
             }
             OwnerAudience::Audience(a) => auds.iter().any(|x| x.as_str() == &**a),
-            OwnerAudience::Ambiguous(owners) => owners
-                .iter()
-                .all(|owner| is_readable(scope, unstamped_audience, owner)),
+            OwnerAudience::Ambiguous(owners) => {
+                !owners.is_empty()
+                    && owners
+                        .iter()
+                        .all(|owner| is_readable(scope, unstamped_audience, owner))
+            }
         },
     }
 }
