@@ -10,13 +10,19 @@ use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 fn make_test_service() -> WebIngestionService {
     let blob_store = Arc::new(InMemory::new());
     let blob_storage = Arc::new(BlobStorage::new(blob_store, Path::default()));
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused")
+    // Short explicit acquire_timeout (sqlx's default is 30s) -- see
+    // `rust/auth/tests/db_api_key_tests.rs`'s `unreachable_pool` for the same pattern.
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
     WebIngestionService::new(DataLakeConnection::new(pool, blob_storage))
 }
