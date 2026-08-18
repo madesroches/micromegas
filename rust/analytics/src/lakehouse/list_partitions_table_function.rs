@@ -205,16 +205,21 @@ impl TableProvider for ListPartitionsTableProvider {
         .map_err(|e| DataFusionError::External(e.into()))?;
 
         let rb = if !restricted {
-            rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
+            if rows.is_empty() {
+                // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
+                // (`make_empty_record_batch`), which doesn't match this provider's 15-column
+                // schema and fails once `MemoryStream` projects it. Build the empty batch
+                // directly from this provider's own schema instead -- this is the normal state
+                // of a fresh deployment with no partitions materialized yet.
+                RecordBatch::new_empty(self.schema())
+            } else {
+                rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
+            }
         } else {
             let filtered = self.filter_rows(rows, limit).await?;
             if filtered.is_empty() {
-                // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
-                // (`make_empty_record_batch`), which doesn't match this provider's 15-column
-                // schema -- fine for a genuinely empty `lakehouse_partitions` table (today's only
-                // caller of that path), wrong once a `ReadScope::Audiences` caller with no
-                // readable partitions makes this the steady state. Build the empty batch
-                // directly from this provider's own schema instead.
+                // Same zero-field-batch pitfall as above: a `ReadScope::Audiences` caller with
+                // no readable partitions hits this as its steady state, not just an edge case.
                 RecordBatch::new_empty(self.schema())
             } else {
                 let truncated: Vec<_> = match limit {
