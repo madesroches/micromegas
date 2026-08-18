@@ -5,7 +5,8 @@
 //!  - `Database`     → 503 (transient — client should retry per OTLP/HTTP spec)
 //!  - `Storage`      → 503 (transient)
 //!  - `Denied`       → 403 (AbAC Stage 5, #1373: write audience required but absent, or a
-//!    conflicting re-registration under a different audience)
+//!    conflicting re-registration under a different audience -- `public_message()` returns a
+//!    distinct, sanitized string per cause so clients can tell which one happened)
 //!
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
 //! in the axum layer stack before the request reaches the OtelError surface.
@@ -56,7 +57,16 @@ pub enum OtelError {
     /// re-registration under a different audience (AbAC Stage 5, #1373). Maps to 403 -- never
     /// retryable, since retrying with the same credential produces the same denial.
     #[error("OTLP write denied ({signal}): {message}")]
-    Denied { signal: Signal, message: String },
+    Denied {
+        signal: Signal,
+        message: String,
+        /// Sanitized, client-facing text for this specific cause (gate rejection vs.
+        /// audience conflict) -- returned verbatim by `public_message()`. Kept alongside
+        /// `message` (which carries the unsanitized, server-logged detail) so the two
+        /// causes -- both mapped to the same variant/status -- stay distinguishable to
+        /// the client without leaking a process id or audience label.
+        public_message: &'static str,
+    },
 }
 
 impl OtelError {
@@ -113,7 +123,8 @@ impl OtelError {
             Self::Database { signal, .. } => format!("database error ({signal})"),
             Self::Storage { signal, .. } => format!("storage error ({signal})"),
             // Sanitized: no internal detail (audience labels, process ids) leaks to the client.
-            Self::Denied { .. } => "write audience required".to_string(),
+            // The exact text depends on which of the two `Denied` causes this is.
+            Self::Denied { public_message, .. } => public_message.to_string(),
         }
     }
 }
@@ -142,6 +153,8 @@ impl OtelError {
                     "process_id {process_id} was registered under audience {existing:?}, this \
                      request carries {incoming:?}"
                 ),
+                public_message: "write denied: process already registered under a different \
+                                  audience",
             },
         }
     }
@@ -163,9 +176,14 @@ impl OtelError {
                 signal,
                 message: format!("{prefix}: {message}"),
             },
-            Self::Denied { signal, message } => Self::Denied {
+            Self::Denied {
+                signal,
+                message,
+                public_message,
+            } => Self::Denied {
                 signal,
                 message: format!("{prefix}: {message}"),
+                public_message,
             },
         }
     }

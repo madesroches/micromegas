@@ -153,6 +153,7 @@ fn resolve_otlp_write_audience(
         OtelError::Denied {
             signal,
             message: "write audience required".to_string(),
+            public_message: "write audience required",
         }
     })
 }
