@@ -496,7 +496,11 @@ impl QueryDenyList {
   `warn!` naming the rule id and the compile error, plus
   `imetric!("query_deny_compile_error_count", ...)`. This is what makes it safe to extend the match
   context later: an older replica that cannot compile a newer rule declines to enforce it rather
-  than denying everything or crashing.
+  than denying everything or crashing. It also absorbs the one real cost of borrowing DataFusion's
+  parser — **the stored rule format is coupled to DataFusion's SQL dialect**, so an upgrade could in
+  principle change how an existing `match_expr` parses. A rule that stops compiling stops being
+  enforced, loudly, instead of silently changing meaning; the `query_deny_compile_error_count`
+  metric is what an upgrade should be watched on.
 - **Fail-open by design.** A failed refresh keeps the previous snapshot and emits
   `imetric!("query_deny_refresh_error_count", ...)` + a `warn!`. A failed *initial* load starts with
   an empty snapshot. The deny list is an availability valve, not a security control — failing closed
@@ -724,55 +728,74 @@ Open Questions.
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
 2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match-context
-   schema, `compile_match_expr` (parse → validate → lower to `MatchExpr`, lowering `LIKE` to
-   `contains`/`starts_with`/`ends_with`/`Regex`), `MatchExpr::eval`, `QueryAttribution`,
-   `QueryDenyRule`, `DenySnapshot` (rules + anchor index + `RegexSet`), `QueryDenyList`
-   (`check` / `refresh` / `insert` / `delete` / `list` /
-   `spawn_refresh_task`), env knobs. Add `sha2` and `regex` to `analytics/Cargo.toml` (both are
-   already workspace/transitive dependencies).
-   Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2` to `analytics/Cargo.toml`.
-3. Unit tests for `sql_fingerprint` and `matches` (see Testing Strategy).
+   schema, `compile_match_expr` (parse → validate), `QueryAttribution`, `QueryDenyRule`,
+   `DenySnapshot`, `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
+   `spawn_refresh_task`), env knobs. Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2`
+   to `analytics/Cargo.toml`.
+
+   **Evaluate with DataFusion's `PhysicalExpr` in this step** — `create_physical_expr` on the
+   validated `Expr`, one row batch per candidate. It is a handful of lines, owns no SQL semantics,
+   and is correct by construction. `check`'s signature and the whole rest of this plan are
+   unchanged by which evaluator sits behind it.
+3. Unit tests for `sql_fingerprint` and validation (see Testing Strategy), plus the corpus that
+   Phase 1b's differential test will reuse.
+
+### Phase 1b — Swap in the compiled evaluator (optional, measurable)
+
+4. Replace the `PhysicalExpr` evaluation with the lowered `MatchExpr` (§3): resolve field indices,
+   own literals inline, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, build the
+   anchor index and the shared `RegexSet`. Add `regex` to `analytics/Cargo.toml` (already in the
+   tree transitively via `datafusion-functions`).
+5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
+   the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
+   moment we stop using it in production.
+6. Land `benches/query_deny_match.rs` and confirm the §3 numbers on the target hardware.
+
+   Splitting here is deliberate: Phase 1 is correct and shippable on its own at 3.4 µs/query, and
+   Phase 1b is a pure optimization behind an unchanged interface, with the oracle test already
+   written. If the deny list turns out to be used a few times a year, Phase 1b can simply wait for
+   a profile to justify it.
 
 ### Phase 2 — Wiring and enforcement
 
-4. `lakehouse_context.rs`: construct and expose `query_denials()` (mirrors `audience_index()`).
-5. `read_scope.rs`: add `CallerIdentity` + `CallerContext::identity`; fix every construction site
+7. `lakehouse_context.rs`: construct and expose `query_denials()` (mirrors `audience_index()`).
+8. `read_scope.rs`: add `CallerIdentity` + `CallerContext::identity`; fix every construction site
    the compiler flags.
-6. `flight_sql_service_impl.rs`: compute the fingerprint once; add `sql_hash` to `QueryAuditState`
+9. `flight_sql_service_impl.rs`: compute the fingerprint once; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
    is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
    `CallerContext::identity` in `caller_context`; add the check + attribution resolution to
    `do_action_create_prepared_statement`.
-7. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
+10. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
 
 ### Phase 3 — Admin SQL functions
 
-8. `list_query_denials_table_function.rs` (pattern: `list_partitions_table_function.rs`).
-9. `deny_queries_table_function.rs` — validates, inserts, refreshes the local snapshot, returns
+11. `list_query_denials_table_function.rs` (pattern: `list_partitions_table_function.rs`).
+12. `deny_queries_table_function.rs` — validates, inserts, refreshes the local snapshot, returns
    one row.
-10. `remove_query_denial_udf.rs` (pattern: `retire_partition_by_file_udf.rs`).
-11. Register all three in `query.rs`'s admin block.
+13. `remove_query_denial_udf.rs` (pattern: `retire_partition_by_file_udf.rs`).
+14. Register all three in `query.rs`'s admin block.
 
 ### Phase 4 — Web app screen
 
-12. `analytics-web-app/src/lib/query-deny-list-api.ts` — SQL builders (`escapeSqlLiteral`, the
+15. `analytics-web-app/src/lib/query-deny-list-api.ts` — SQL builders (`escapeSqlLiteral`, the
     three statements) and Arrow→row decoding.
-13. `analytics-web-app/src/routes/QueryDenyListPage.tsx` — the page, reusing
+16. `analytics-web-app/src/routes/QueryDenyListPage.tsx` — the page, reusing
     `PageLayout` / `AuthGuard requireAdmin` / `ErrorBanner` / `ConfirmDialog` / `Button` /
     `DataSourceField`.
-14. Register the route (`/admin/query-deny-list`) in `router.tsx` and add the card to
+17. Register the route (`/admin/query-deny-list`) in `router.tsx` and add the card to
     `AdminPage.tsx` (lucide `ShieldBan` or `Ban` icon).
-15. Vitest coverage for the SQL builders (escaping in particular) and a page render test, matching
+18. Vitest coverage for the SQL builders (escaping in particular) and a page render test, matching
     `routes/__tests__/AnalyticsApiKeysPage.test.tsx`.
 
 ### Phase 5 — Docs and changelog
 
-16. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
-17. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
+19. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
+20. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
     plus the "find the offender, copy its fingerprint" query.
-18. `mkdocs/docs/admin/flight-sql.md`: the two env knobs, propagation delay, fail-open behavior.
-19. `mkdocs/docs/admin/web-app.md`: the new admin screen.
-20. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
+21. `mkdocs/docs/admin/flight-sql.md`: the two env knobs, propagation delay, fail-open behavior.
+22. `mkdocs/docs/admin/web-app.md`: the new admin screen.
+23. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
 
 ## Files to Modify
 
