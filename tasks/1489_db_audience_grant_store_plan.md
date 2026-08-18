@@ -243,6 +243,17 @@ needs the same disable-auth treatment, not just the same per-request `pool: Opti
   ```
   `created = true` ⇒ `201`; `created = false` ⇒ `200`, reporting the pre-existing row — no
   re-`SELECT` after the fact, so no window for a concurrent `DELETE` to invalidate it.
+
+  This single statement can still return **zero rows**: Postgres data-modifying CTEs share one
+  statement-level snapshot with the query around them, so when two callers race to create the
+  same new `(audience, axis, selector)`, the loser's `ins` branch resolves to "do nothing" (its
+  `INSERT ... ON CONFLICT` finds the winner's row already committed) while its plain-`SELECT`
+  branch still runs against the snapshot taken before the winner committed — neither branch sees
+  the row, and the query yields nothing to build a response from. The handler must handle this:
+  if the query returns zero rows, re-run the exact same statement once more (now that the
+  winner's insert has definitely committed, the loser's re-`SELECT` branch will see it and return
+  `created = false`); if that retry also returns zero rows, treat it as an internal error (`500`)
+  rather than looping further.
 - `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` — lists rows, optionally
   filtered, ordered by `created_at DESC`, paginated with the same `DEFAULT_LIMIT`/`MAX_LIMIT`
   clamping convention `ingestion_keys.rs::list_keys` uses. Admin-gated like the write side: this
