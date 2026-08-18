@@ -132,8 +132,8 @@ struct Snapshot {
     /// view right now", independent of `fetched_at`.
     loaded_at: Instant,
     /// Time of the last refresh *attempt*, successful or not — gates how often a
-    /// failing DB is re-queried, so an outage costs one query per TTL, not one
-    /// per request.
+    /// failing DB is re-queried once at least one load has succeeded, so a
+    /// post-first-success outage costs one query per TTL, not one per request.
     fetched_at: Instant,
 }
 
@@ -141,6 +141,15 @@ pub struct DbAudienceGrantsSource {
     pool: PgPool,
     ttl: Duration,
     snapshot: tokio::sync::RwLock<Option<Snapshot>>,
+    /// Unix-epoch seconds of the last refresh *attempt*, recorded outside
+    /// `Snapshot` so it exists even before any load has ever succeeded —
+    /// mirrors `db_api_key.rs`'s `last_logged_at`. This is what gates
+    /// cold-start retries: with no `Snapshot` yet, there is nowhere else to
+    /// remember "we just tried and failed a moment ago", so without this field
+    /// every `current()` call during process startup against a still-coming-up
+    /// DB would re-query with no throttling at all, unlike the post-success
+    /// path which `fetched_at` already gates.
+    last_attempt_at: Arc<AtomicI64>,
 }
 
 impl DbAudienceGrantsSource {
@@ -148,9 +157,19 @@ impl DbAudienceGrantsSource {
 
     /// Returns the current grant snapshot, refreshing it first if stale.
     ///
+    /// Both the cold-start path (no `Snapshot` yet) and the post-success path
+    /// are throttled to at most one DB query per TTL window: cold-start via
+    /// `last_attempt_at` (checked-and-set the same compare-exchange way
+    /// `db_api_key.rs::maybe_log_error` rate-limits its own log line), the
+    /// post-success path via `Snapshot::fetched_at` as before. A `current()`
+    /// call that lands inside an already-throttled window returns the last
+    /// snapshot if one exists, or the prior cold-start error if not — it never
+    /// skips the query silently with nothing to show for it.
+    ///
     /// `Err` only when there has never been one successful load — a fresh
     /// process whose first query hits a down DB has no "last good" to serve, so
-    /// it fails closed like everything else on this seam. Once any load has
+    /// it fails closed like everything else on this seam, at a rate capped by
+    /// `last_attempt_at` rather than once per request. Once any load has
     /// succeeded, a later refresh failure is logged + counted
     /// (`imetric!("audience_grant_refresh_error_count", ...)`) and the last good
     /// snapshot keeps serving, unbounded — this store has no per-item TTL
@@ -165,7 +184,9 @@ Refresh queries the whole table (`SELECT audience, axis, selector FROM audience_
 builds an `AudienceGrants` via `AudienceGrants::from_rows`. No single-flight/dedup lock: unlike
 `db_api_key.rs`'s `UPDATE ... RETURNING`, this is a plain `SELECT` with no side effect to
 de-duplicate, so letting a few concurrent callers each re-run it right at the TTL boundary is
-strictly simpler and still cheap (the whole point of "the map is small").
+strictly simpler and still cheap (the whole point of "the map is small"). This applies to both the
+cold-start and post-success paths — `last_attempt_at`/`fetched_at` bound *how often* a query fires,
+not how many callers race to fire the one that's due.
 
 ### 4. Wiring into `AudienceReadPolicy` / `AudienceMintPolicy`
 
@@ -443,6 +464,9 @@ never see the table shape.
 - `CHANGELOG.md` — an `## Unreleased` entry, following every prior AbAC stage's precedent: the new
   `audience_grants` table/migration (v7), the `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
   the new admin routes, and the `micromegas-grants` CLI.
+- `tasks/data_isolation/audience_based_access_control_plan.md` — add a dated revision note at the
+  top announcing Stage 6a (#1489), cross-referencing this plan file, following the doc's existing
+  revision-log convention (e.g. "Stage 5 landed (#1373)", "Long-term model recorded 2026-08-12").
 
 ## Open Questions
 
