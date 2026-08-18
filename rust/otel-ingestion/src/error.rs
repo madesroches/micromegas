@@ -4,6 +4,9 @@
 //!  - `Parse`        → 400 (malformed protobuf, malformed gzip)
 //!  - `Database`     → 503 (transient — client should retry per OTLP/HTTP spec)
 //!  - `Storage`      → 503 (transient)
+//!  - `Denied`       → 403 (AbAC Stage 5, #1373: write audience required but absent, or a
+//!    conflicting re-registration under a different audience -- `public_message()` returns a
+//!    distinct, sanitized string per cause so clients can tell which one happened)
 //!
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
 //! in the axum layer stack before the request reaches the OtelError surface.
@@ -49,6 +52,21 @@ pub enum OtelError {
     /// Object-store transient failure. Maps to 503 + Retry-After.
     #[error("OTLP storage error ({signal}): {message}")]
     Storage { signal: Signal, message: String },
+
+    /// Write audience required but absent from the authenticated credential, or a conflicting
+    /// re-registration under a different audience (AbAC Stage 5, #1373). Maps to 403 -- never
+    /// retryable, since retrying with the same credential produces the same denial.
+    #[error("OTLP write denied ({signal}): {message}")]
+    Denied {
+        signal: Signal,
+        message: String,
+        /// Sanitized, client-facing text for this specific cause (gate rejection vs.
+        /// audience conflict) -- returned verbatim by `public_message()`. Kept alongside
+        /// `message` (which carries the unsanitized, server-logged detail) so the two
+        /// causes -- both mapped to the same variant/status -- stay distinguishable to
+        /// the client without leaking a process id or audience label.
+        public_message: &'static str,
+    },
 }
 
 impl OtelError {
@@ -56,7 +74,8 @@ impl OtelError {
         match self {
             Self::Parse { signal, .. }
             | Self::Database { signal, .. }
-            | Self::Storage { signal, .. } => *signal,
+            | Self::Storage { signal, .. }
+            | Self::Denied { signal, .. } => *signal,
         }
     }
 
@@ -69,6 +88,8 @@ impl OtelError {
             Self::Parse { .. } => 3,
             // UNAVAILABLE = 14
             Self::Database { .. } | Self::Storage { .. } => 14,
+            // PERMISSION_DENIED = 7
+            Self::Denied { .. } => 7,
         }
     }
 
@@ -77,6 +98,7 @@ impl OtelError {
         match self {
             Self::Parse { .. } => 400,
             Self::Database { .. } | Self::Storage { .. } => 503,
+            Self::Denied { .. } => 403,
         }
     }
 
@@ -100,6 +122,9 @@ impl OtelError {
             Self::Parse { signal, message } => format!("parse error ({signal}): {message}"),
             Self::Database { signal, .. } => format!("database error ({signal})"),
             Self::Storage { signal, .. } => format!("storage error ({signal})"),
+            // Sanitized: no internal detail (audience labels, process ids) leaks to the client.
+            // The exact text depends on which of the two `Denied` causes this is.
+            Self::Denied { public_message, .. } => public_message.to_string(),
         }
     }
 }
@@ -113,6 +138,24 @@ impl OtelError {
             IngestionServiceError::ParseError(m) => OtelError::Parse { signal, message: m },
             IngestionServiceError::DatabaseError(m) => OtelError::Database { signal, message: m },
             IngestionServiceError::StorageError(m) => OtelError::Storage { signal, message: m },
+            // Reachable: `register_otel_process` runs the same conflict guard as the native
+            // `insert_process` path (`web_ingestion_service.rs`'s doc comment, AbAC Stage 5 §6),
+            // and rejects a same-`process_id`, different-audience OTLP registration with this
+            // variant -- closing cross-path squatting where a credential pre-registers (via
+            // `insert_process`) the `process_id` a victim's OTLP producer would later derive.
+            IngestionServiceError::AudienceConflict {
+                process_id,
+                existing,
+                incoming,
+            } => OtelError::Denied {
+                signal,
+                message: format!(
+                    "process_id {process_id} was registered under audience {existing:?}, this \
+                     request carries {incoming:?}"
+                ),
+                public_message: "write denied: process already registered under a different \
+                                  audience",
+            },
         }
     }
 
@@ -132,6 +175,15 @@ impl OtelError {
             Self::Storage { signal, message } => Self::Storage {
                 signal,
                 message: format!("{prefix}: {message}"),
+            },
+            Self::Denied {
+                signal,
+                message,
+                public_message,
+            } => Self::Denied {
+                signal,
+                message: format!("{prefix}: {message}"),
+                public_message,
             },
         }
     }

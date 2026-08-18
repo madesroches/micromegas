@@ -4,11 +4,10 @@
 //! tests, or anything else that hands us a buffer of bytes. Errors map onto the OTLP/HTTP
 //! response surface in the server crate.
 
-use crate::block::{
-    ProcessFromResource, split_logs, split_logs_with_extra_hash_input, split_metrics, split_traces,
-};
+use crate::block::{ProcessFromResource, split_logs, split_metrics, split_traces};
 use crate::cloudwatch_metrics::rewrite_cloudwatch_metric_streams;
 use crate::error::{OtelError, Signal};
+use crate::identity::IdentityContext;
 use crate::proto::{
     AnyValue, ExportLogsServiceRequest, ExportLogsServiceResponse, ExportMetricsServiceRequest,
     ExportMetricsServiceResponse, ExportTraceServiceRequest, ExportTraceServiceResponse,
@@ -22,6 +21,7 @@ use crate::{
 use base64::Engine as _;
 use bytes::Buf;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_tracing::prelude::*;
 use prost::Message;
 use serde::de::DeserializeOwned;
@@ -96,6 +96,7 @@ pub(crate) async fn write_blocks(
     service: &WebIngestionService,
     signal: Signal,
     blocks: Vec<crate::block::PreparedBlock>,
+    audience: &WriteAudience,
 ) -> Result<usize, OtelError> {
     let tag = signal_tag(signal).to_string();
     let format = signal_format(signal);
@@ -116,6 +117,7 @@ pub(crate) async fn write_blocks(
                 proc_attrs.start_time,
                 proc_attrs.start_ticks,
                 proc_attrs.properties,
+                audience,
             )
             .await
             .map_err(|e| OtelError::from_ingestion(e, signal))?;
@@ -149,16 +151,21 @@ pub async fn ingest_logs(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
     encoding: Encoding,
+    audience: &WriteAudience,
 ) -> Result<ExportLogsServiceResponse, OtelError> {
     let req: ExportLogsServiceRequest = parse(&body, Signal::Logs, encoding)?;
     if req.resource_logs.is_empty() {
         return Ok(ExportLogsServiceResponse::default());
     }
-    let blocks = split_logs(req).map_err(|e| OtelError::Parse {
+    let ctx = IdentityContext {
+        audience: audience.as_str(),
+        extra_hash_input: &[],
+    };
+    let blocks = split_logs(req, ctx).map_err(|e| OtelError::Parse {
         signal: Signal::Logs,
         message: format!("split_logs: {e}"),
     })?;
-    write_blocks(&service, Signal::Logs, blocks).await?;
+    write_blocks(&service, Signal::Logs, blocks, audience).await?;
     Ok(ExportLogsServiceResponse::default())
 }
 
@@ -169,15 +176,20 @@ pub async fn ingest_logs(
 async fn ingest_parsed_metrics(
     service: &WebIngestionService,
     req: ExportMetricsServiceRequest,
+    audience: &WriteAudience,
 ) -> Result<(), OtelError> {
     if req.resource_metrics.is_empty() {
         return Ok(());
     }
-    let blocks = split_metrics(req).map_err(|e| OtelError::Parse {
+    let ctx = IdentityContext {
+        audience: audience.as_str(),
+        extra_hash_input: &[],
+    };
+    let blocks = split_metrics(req, ctx).map_err(|e| OtelError::Parse {
         signal: Signal::Metrics,
         message: format!("split_metrics: {e}"),
     })?;
-    write_blocks(service, Signal::Metrics, blocks).await?;
+    write_blocks(service, Signal::Metrics, blocks, audience).await?;
     Ok(())
 }
 
@@ -186,9 +198,10 @@ pub async fn ingest_metrics(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
     encoding: Encoding,
+    audience: &WriteAudience,
 ) -> Result<ExportMetricsServiceResponse, OtelError> {
     let req: ExportMetricsServiceRequest = parse(&body, Signal::Metrics, encoding)?;
-    ingest_parsed_metrics(&service, req).await?;
+    ingest_parsed_metrics(&service, req, audience).await?;
     Ok(ExportMetricsServiceResponse::default())
 }
 
@@ -197,16 +210,21 @@ pub async fn ingest_traces(
     service: Arc<WebIngestionService>,
     body: bytes::Bytes,
     encoding: Encoding,
+    audience: &WriteAudience,
 ) -> Result<ExportTraceServiceResponse, OtelError> {
     let req: ExportTraceServiceRequest = parse(&body, Signal::Traces, encoding)?;
     if req.resource_spans.is_empty() {
         return Ok(ExportTraceServiceResponse::default());
     }
-    let blocks = split_traces(req).map_err(|e| OtelError::Parse {
+    let ctx = IdentityContext {
+        audience: audience.as_str(),
+        extra_hash_input: &[],
+    };
+    let blocks = split_traces(req, ctx).map_err(|e| OtelError::Parse {
         signal: Signal::Traces,
         message: format!("split_traces: {e}"),
     })?;
-    write_blocks(&service, Signal::Traces, blocks).await?;
+    write_blocks(&service, Signal::Traces, blocks, audience).await?;
     Ok(ExportTraceServiceResponse::default())
 }
 
@@ -284,7 +302,7 @@ pub fn build_webhook_request(
 ///
 /// `header_hash_input` is the caller's canonicalized encoding of the *full* incoming HTTP
 /// header set (see `webhook::canonical_header_bytes`), folded into `block_id` alongside the
-/// synthetic request bytes — see `split_logs_with_extra_hash_input` for why this matters:
+/// synthetic request bytes — see [`IdentityContext::extra_hash_input`] for why this matters:
 /// only 3 headers become resource attrs, so without this, unrecognized headers would be
 /// invisible to the dedup hash.
 pub async fn ingest_webhook(
@@ -293,14 +311,18 @@ pub async fn ingest_webhook(
     target: String,
     body: bytes::Bytes,
     header_hash_input: &[u8],
+    audience: &WriteAudience,
 ) -> Result<(), OtelError> {
     let req = build_webhook_request(resource_attrs, target, &body);
-    let blocks =
-        split_logs_with_extra_hash_input(req, header_hash_input).map_err(|e| OtelError::Parse {
-            signal: Signal::Logs,
-            message: format!("split_logs (webhook): {e}"),
-        })?;
-    write_blocks(&service, Signal::Logs, blocks).await?;
+    let ctx = IdentityContext {
+        audience: audience.as_str(),
+        extra_hash_input: header_hash_input,
+    };
+    let blocks = split_logs(req, ctx).map_err(|e| OtelError::Parse {
+        signal: Signal::Logs,
+        message: format!("split_logs (webhook): {e}"),
+    })?;
+    write_blocks(&service, Signal::Logs, blocks, audience).await?;
     Ok(())
 }
 
@@ -374,6 +396,7 @@ pub fn decode_firehose_envelope(
 pub async fn ingest_firehose_metrics(
     service: Arc<WebIngestionService>,
     records: Vec<Vec<u8>>,
+    audience: &WriteAudience,
 ) -> Result<(), OtelError> {
     for (i, rec) in records.into_iter().enumerate() {
         let mut buf: &[u8] = &rec;
@@ -383,7 +406,7 @@ pub async fn ingest_firehose_metrics(
                 .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?
         {
             let req = rewrite_cloudwatch_metric_streams(req);
-            ingest_parsed_metrics(&service, req)
+            ingest_parsed_metrics(&service, req, audience)
                 .await
                 .map_err(|e| e.with_context(format!("firehose record[{i}] message[{j}]")))?;
             j += 1;

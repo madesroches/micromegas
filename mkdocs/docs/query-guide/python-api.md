@@ -472,6 +472,13 @@ print(f"Found {len(root_spans)} root operations")
 
 ### `bulk_ingest(table_name, table)`
 
+!!! note "Requires admin"
+    Only callable by an OIDC-authenticated identity listed in `MICROMEGAS_ADMINS` (or a
+    `--disable-auth` deployment) — see [Admin SQL Functions](../admin/functions-reference.md).
+    API-key credentials (both `ingestion_api_keys` and `analytics_api_keys`) are never
+    admin and can never satisfy this check, so automation currently calling `bulk_ingest`
+    with an API key must switch to an OIDC-based admin identity.
+
 Bulk ingest metadata for replication or administrative tasks. `table` is a
 `pyarrow.Table` whose schema matches the target table exactly; complex
 columns (struct, list, binary) are passed through natively.

@@ -7,6 +7,7 @@
 //! audit trail. [`DbApiKeyAuthProvider`] validates by hash-indexed lookup behind a
 //! short-TTL `moka` cache.
 
+use crate::env::resolve_prefixed_var;
 use crate::types::{AuthContext, AuthProvider, AuthType, ProviderUnavailable, RequestParts};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -78,21 +79,8 @@ pub struct DbApiKeyConfig {
 }
 
 fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
-    let (var, raw) = if prefix.is_empty() {
-        let var = format!("MICROMEGAS_{suffix}");
-        let raw = std::env::var(&var).ok();
-        (var, raw)
-    } else {
-        let prefixed = format!("{prefix}_{suffix}");
-        match std::env::var(&prefixed) {
-            Ok(s) => (prefixed, Some(s)),
-            Err(_) => {
-                let var = format!("MICROMEGAS_{suffix}");
-                let raw = std::env::var(&var).ok();
-                (var, raw)
-            }
-        }
-    };
+    let var = resolve_prefixed_var(prefix, suffix);
+    let raw = std::env::var(&var).ok();
     match raw {
         Some(s) => s.parse::<u64>().unwrap_or_else(|_| {
             micromegas_tracing::warn!("Invalid {var} value '{s}', using default {default}");

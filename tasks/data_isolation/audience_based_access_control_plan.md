@@ -44,6 +44,17 @@
 > throughout, but it has no roles — see [Naming](#naming) below. The model is **AbAC,
 > audience-based access control**; `Rbac*` identifiers become `Audience*`.
 
+> **Stage 5 landed (#1373).** Ingestion now stamps `micromegas.audience` server-side from
+> `AuthContext.bound_audience` at both process-insert sites, stripping any client-supplied
+> `micromegas.*` property, and OTLP-derived `process_id`/`block_id` are audience-scoped (folded
+> in alongside the stamp, not a separate follow-up) to close the cross-audience collision the
+> stamp would otherwise expose. Full design in `tasks/1373_ingestion_stamping_plan.md`; see the
+> revised Stage 5 section below for what changed from the original step 11 sketch — notably, that
+> step's premise that OTLP/Firehose had no auth wiring was stale (OTLP already ran under
+> `auth_middleware`; Firehose already authenticated but discarded the resulting context). The
+> cross-audience `insert_stream`/`insert_block` write-injection gap (§7 of the 1373 plan) is
+> tracked as a follow-up issue (Stage 5b), not closed by this stage.
+
 > **Mint surface moved 2026-08-12** (#1411 / #1458, `tasks/completed/simplify_ingestion_api_key_admin_plan.md`).
 > This plan was written assuming key management lives on the **ingestion** service at
 > `POST/GET/DELETE /auth/api_keys`. Those routes shipped in Stage 0 and were then **removed**:
@@ -1199,12 +1210,43 @@ Stage 7 activation. Needs its own epic issue.
     end-user token, so its dashboards read the service account's audiences and its `x-user-*` headers
     remain attribution-only.
 
-### Stage 5 — Ingestion stamping
-11. Read `AuthContext.bound_audience` in native + OTLP handlers; write `micromegas.audience` onto
-    the process; demote client-supplied owner fields to display metadata. **Defines the OTLP /
-    Firehose auth story**: OTLP handlers currently have no auth wiring at all, and Firehose routes
-    are merged outside the protected router (`ingestion.rs:151-156`) — both must carry an
-    authenticated `bound_audience` before stamping is meaningful there.
+### Stage 5 — Ingestion stamping — **landed, #1373**
+
+Full design and rationale live in `tasks/1373_ingestion_stamping_plan.md`; this section is
+corrected to what actually shipped rather than left as the pre-implementation plan.
+
+11. Read `AuthContext.bound_audience` in the two process-insert sites (native `insert_process`,
+    OTLP's `register_otel_process`) and write `micromegas.audience` onto the process; strip any
+    client-supplied property under the reserved `micromegas.*` namespace so the property can
+    never be asserted from the payload. **Corrects this step's original, stale auth premise**:
+    the issue text this step was originally drafted against claimed "OTLP handlers currently have
+    no auth wiring at all, and Firehose routes are merged outside the protected router" — verified
+    false on the first half (OTLP and webhook already sat inside `serve_ingestion`'s
+    `auth_middleware`-covered router tree; `mkdocs/docs/otlp/index.md:17,36` already documented
+    "the OTLP routes share the same auth chain as the rest of the ingestion service") and
+    misleading on the second (Firehose *is* merged outside the protected router, because it can
+    only authenticate via the non-standard `X-Amz-Firehose-Access-Key` header, but it already ran
+    the same `AuthProvider` through its own `firehose_auth_middleware` — the gap was one missing
+    `req.extensions_mut().insert(ctx)` on that middleware's success arm, not missing auth
+    entirely). So this stage's actual work was resolution + a fail-closed knob
+    (`{prefix}_REQUIRE_WRITE_AUDIENCE`, off by default), not adding auth wiring that already
+    existed.
+11a. **Landed alongside stamping, not deferred**: OTLP-derived `process_id`/`block_id` are now
+    audience-scoped (`IdentityContext { audience, extra_hash_input }` folded into both formulas).
+    Stamping without this would let two audiences sending identical resource attributes collapse
+    onto one `process_id` — silently mislabeling the second audience's data and, since `blocks`
+    also dedups on `block_id` alone, silently dropping its writes — which the design plan judged
+    "not only an attack — it is the ordinary multi-tenant case," not a follow-up-worthy edge case.
+11b. **Residual, deliberately deferred to a follow-up issue (Stage 5b), not this stage**:
+    `insert_stream`/`insert_block` still accept any `process_id`/`stream_id` unconditionally, with
+    no check that the authenticated caller is authorized to write to that specific process. A
+    credential bound to audience A that discovers a `process_id`/`stream_id` belonging to
+    audience B can still append events to B's process, which then inherit B's stamped audience —
+    an integrity gap (no read escalation: reading B still requires a read grant on B). Deferred
+    because the fix is a write-side authorization gate that shares Stage 3's (#1371) still-
+    unimplemented `moka` cache layer (`process_id → audience`, `stream_id → process_id`) rather
+    than duplicating that design inside #1373 — see `web_ingestion_service.rs`'s
+    `insert_stream`/`insert_block_typed` doc comments for the in-tree tracking.
 
 ### Stage 6 — Audience resolution on mint + setup script (enables real per-user keys)
 12. Extend the mint route with `MintPolicy::resolve_audience` (`AudienceMintPolicy`, §1): the

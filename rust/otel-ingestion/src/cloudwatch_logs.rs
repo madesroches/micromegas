@@ -9,12 +9,14 @@
 use crate::block::split_logs;
 use crate::error::{OtelError, Signal};
 use crate::handler::write_blocks;
+use crate::identity::IdentityContext;
 use crate::proto::{
     AnyValue, ExportLogsServiceRequest, KeyValue, LogRecord, Resource, ResourceLogs, ScopeLogs,
     any_value,
 };
 use flate2::read::GzDecoder;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -214,19 +216,24 @@ pub fn build_export_logs_request(msg: &CloudWatchLogsMessageJson) -> ExportLogsS
 pub async fn ingest_cloudwatch_logs_firehose(
     service: Arc<WebIngestionService>,
     records: Vec<Vec<u8>>,
+    audience: &WriteAudience,
 ) -> Result<(), OtelError> {
     let mut total_decompressed_bytes: u64 = 0;
+    let ctx = IdentityContext {
+        audience: audience.as_str(),
+        extra_hash_input: &[],
+    };
     for (i, rec) in records.iter().enumerate() {
         let Some(msg) = decode_cloudwatch_logs_record(rec, i, &mut total_decompressed_bytes)?
         else {
             continue;
         };
         let req = build_export_logs_request(&msg);
-        let blocks = split_logs(req).map_err(|e| OtelError::Parse {
+        let blocks = split_logs(req, ctx).map_err(|e| OtelError::Parse {
             signal: Signal::Logs,
             message: format!("split_logs (cloudwatch): {e}"),
         })?;
-        write_blocks(&service, Signal::Logs, blocks).await?;
+        write_blocks(&service, Signal::Logs, blocks, audience).await?;
     }
     Ok(())
 }

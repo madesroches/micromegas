@@ -15,12 +15,14 @@
 //! decoding).
 
 use super::ingestion_limits::{RETRY_AFTER_SECONDS, apply_ingestion_body_limits};
+use super::write_audience::{StampingConfig, resolve_write_audience};
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
+use micromegas_auth::types::AuthContext;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_otel_ingestion::handler;
 use micromegas_otel_ingestion::proto::{AnyValue, KeyValue, any_value};
@@ -113,12 +115,24 @@ fn build_error_response(status: StatusCode, message: &str, retryable: bool) -> R
 
 async fn webhook_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    Extension(stamping): Extension<Arc<StampingConfig>>,
+    ctx: Option<Extension<AuthContext>>,
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Response {
     if body.is_empty() {
         return build_error_response(StatusCode::BAD_REQUEST, "empty body", false);
     }
+
+    // AbAC Stage 5 (#1373, §5): reuses `OtelError::Denied`'s meaning but renders it through
+    // this route's own `build_error_response` (text/plain, non-retryable) rather than the OTLP
+    // `google.rpc.Status` shape -- a denied write is not a transient condition worth retrying.
+    let audience = match resolve_write_audience(ctx.as_ref(), &stamping) {
+        Ok(a) => a,
+        Err(_) => {
+            return build_error_response(StatusCode::FORBIDDEN, "write audience required", false);
+        }
+    };
 
     let mut resource_attrs = Vec::new();
     push_attr_from_header(
@@ -136,7 +150,16 @@ async fn webhook_handler(
     let target = target_from_header(&headers);
     let header_hash_input = canonical_header_bytes(&headers);
 
-    match handler::ingest_webhook(service, resource_attrs, target, body, &header_hash_input).await {
+    match handler::ingest_webhook(
+        service,
+        resource_attrs,
+        target,
+        body,
+        &header_hash_input,
+        &audience,
+    )
+    .await
+    {
         Ok(()) => Response::builder()
             .status(StatusCode::OK)
             .body(Body::empty())

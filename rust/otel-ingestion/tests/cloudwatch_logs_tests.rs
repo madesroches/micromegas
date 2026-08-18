@@ -11,7 +11,7 @@ use micromegas_otel_ingestion::cloudwatch_logs::{
     build_export_logs_request, decode_cloudwatch_logs_record,
 };
 use micromegas_otel_ingestion::error::OtelError;
-use micromegas_otel_ingestion::identity::process_id_from_resource;
+use micromegas_otel_ingestion::identity::{IdentityContext, process_id_from_resource};
 use std::io::Write;
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -171,7 +171,7 @@ fn full_pipeline_decode_build_split_produces_one_block_with_matching_record_coun
         .expect("decode ok")
         .expect("Some");
     let req = build_export_logs_request(&msg);
-    let blocks = split_logs(req).expect("split_logs");
+    let blocks = split_logs(req, IdentityContext::default()).expect("split_logs");
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].nb_records, 3);
 }
@@ -190,23 +190,31 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
         .expect("decode ok")
         .expect("Some");
 
-    let blocks1 = split_logs(build_export_logs_request(&msg1)).expect("split_logs");
-    let blocks2 = split_logs(build_export_logs_request(&msg2)).expect("split_logs");
+    let blocks1 = split_logs(build_export_logs_request(&msg1), IdentityContext::default())
+        .expect("split_logs");
+    let blocks2 = split_logs(build_export_logs_request(&msg2), IdentityContext::default())
+        .expect("split_logs");
     assert_eq!(blocks1.len(), 1);
     assert_eq!(blocks2.len(), 1);
     assert_ne!(blocks1[0].process_id, blocks2[0].process_id);
 
     // Cross-check against the identity formula directly.
-    let pid1 = process_id_from_resource(Some(&micromegas_otel_ingestion::proto::Resource {
-        attributes: blocks1[0].resource_attrs.clone(),
-        dropped_attributes_count: 0,
-        entity_refs: vec![],
-    }));
-    let pid2 = process_id_from_resource(Some(&micromegas_otel_ingestion::proto::Resource {
-        attributes: blocks2[0].resource_attrs.clone(),
-        dropped_attributes_count: 0,
-        entity_refs: vec![],
-    }));
+    let pid1 = process_id_from_resource(
+        Some(&micromegas_otel_ingestion::proto::Resource {
+            attributes: blocks1[0].resource_attrs.clone(),
+            dropped_attributes_count: 0,
+            entity_refs: vec![],
+        }),
+        IdentityContext::default(),
+    );
+    let pid2 = process_id_from_resource(
+        Some(&micromegas_otel_ingestion::proto::Resource {
+            attributes: blocks2[0].resource_attrs.clone(),
+            dropped_attributes_count: 0,
+            entity_refs: vec![],
+        }),
+        IdentityContext::default(),
+    );
     assert_eq!(blocks1[0].process_id, pid1);
     assert_eq!(blocks2[0].process_id, pid2);
 }

@@ -95,7 +95,7 @@ pub(crate) async fn firehose_auth_middleware(
         uri: req.uri().clone(),
     };
     match provider.validate_request(&parts as &dyn RequestParts).await {
-        Ok(_ctx) => {
+        Ok(ctx) => {
             // SECURITY: strip any client-provided auth headers to prevent spoofing, matching
             // the shared `auth_middleware` (auth/src/axum.rs). These headers must only ever be
             // trusted when set by the authentication layer, never by the incoming request.
@@ -104,6 +104,10 @@ pub(crate) async fn firehose_auth_middleware(
             req.headers_mut().remove("x-auth-issuer");
             req.headers_mut().remove("x-allow-delegation");
             req.headers_mut().remove("x-auth-is-admin");
+            // AbAC Stage 5 (#1373): the validated `AuthContext` used to be discarded here --
+            // insert it into the request extensions, mirroring `auth_middleware`'s success
+            // path, so downstream handlers can resolve a write audience from it.
+            req.extensions_mut().insert(ctx);
             next.run(req).await
         }
         Err(e) => {

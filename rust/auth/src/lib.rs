@@ -75,6 +75,9 @@
 /// Core authentication types and traits
 pub mod types;
 
+/// Shared prefixed-env-var resolution (`{prefix}_{suffix}` with `MICROMEGAS_{suffix}` fallback)
+pub mod env;
+
 /// API key authentication
 pub mod api_key;
 

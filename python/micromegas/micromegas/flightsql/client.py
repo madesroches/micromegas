@@ -595,6 +595,12 @@ class FlightSQLClient:
     def bulk_ingest(self, table_name, table):
         """Bulk ingest a pyarrow.Table into a Micromegas metadata table.
 
+        Requires admin: only callable by an OIDC-authenticated identity listed in
+        MICROMEGAS_ADMINS (or a --disable-auth deployment). API-key credentials
+        (both ingestion_api_keys and analytics_api_keys) are never admin and can
+        never satisfy this check, so automation calling bulk_ingest with an API
+        key must switch to an OIDC-based admin identity.
+
         This method efficiently loads metadata or replication data into Micromegas
         tables using Arrow's columnar format. Primarily used for ingesting:
         - processes: Process metadata and information
@@ -616,6 +622,9 @@ class FlightSQLClient:
         Raises:
             Exception: If ingestion fails due to schema mismatch, unsupported table,
                 or invalid data.
+            PERMISSION_DENIED: If the caller is not an OIDC-authenticated admin
+                identity (listed in MICROMEGAS_ADMINS) or a --disable-auth
+                deployment. API-key credentials always fail this check.
 
         Example:
             >>> import pyarrow as pa

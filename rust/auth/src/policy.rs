@@ -14,6 +14,7 @@
 //! it. No code here derives an audience from a caller's identity -- see `AudienceGrants` and
 //! `tasks/1372_audience_on_keys_plan.md` §1-§2 for the reasoning.
 
+use crate::env::resolve_prefixed_var;
 use crate::types::AuthContext;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -49,37 +50,6 @@ pub fn is_valid_audience(aud: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Resolves `{prefix}_AUDIENCE_GRANTS`, falling back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`
-/// when the prefixed name is unset -- the same convention as every other knob this crate resolves
-/// (`{prefix}_API_KEYS`, `{prefix}_ADMINS`, `{prefix}_OIDC_CONFIG`).
-fn audience_grants_var(prefix: &str) -> String {
-    if prefix.is_empty() {
-        "MICROMEGAS_AUDIENCE_GRANTS".to_string()
-    } else {
-        let prefixed = format!("{prefix}_AUDIENCE_GRANTS");
-        if std::env::var(&prefixed).is_ok() {
-            prefixed
-        } else {
-            "MICROMEGAS_AUDIENCE_GRANTS".to_string()
-        }
-    }
-}
-
-/// Resolves `{prefix}_DEFAULT_KEY_AUDIENCE`, falling back to unprefixed
-/// `MICROMEGAS_DEFAULT_KEY_AUDIENCE` when the prefixed name is unset.
-fn default_key_audience_var(prefix: &str) -> String {
-    if prefix.is_empty() {
-        "MICROMEGAS_DEFAULT_KEY_AUDIENCE".to_string()
-    } else {
-        let prefixed = format!("{prefix}_DEFAULT_KEY_AUDIENCE");
-        if std::env::var(&prefixed).is_ok() {
-            prefixed
-        } else {
-            "MICROMEGAS_DEFAULT_KEY_AUDIENCE".to_string()
-        }
-    }
-}
-
 /// Resolves `{prefix}_DEFAULT_KEY_AUDIENCE` (falling back to `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) --
 /// resolved **once at startup** (`web_server.rs`) so a typo fails fast rather than surfacing as a
 /// per-request 400. `None` when neither is set or the value is empty. Invalid ⇒ `Err`.
@@ -89,7 +59,7 @@ fn default_key_audience_var(prefix: &str) -> String {
 /// `tasks/1372_audience_on_keys_plan.md` §5 for why the two routes differ only when this knob is
 /// unset.
 pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>> {
-    let var = default_key_audience_var(prefix);
+    let var = resolve_prefixed_var(prefix, "DEFAULT_KEY_AUDIENCE");
     let resolved = match std::env::var(&var) {
         Ok(raw) => {
             let raw = raw.trim().to_string();
@@ -281,7 +251,7 @@ impl AudienceGrants {
 
     /// Resolves [`audience_grants_var`] and parses it. Unset ⇒ [`Self::empty`].
     pub fn from_env(prefix: &str) -> Result<Self> {
-        let var = audience_grants_var(prefix);
+        let var = resolve_prefixed_var(prefix, "AUDIENCE_GRANTS");
         let grants = match std::env::var(&var) {
             Ok(raw) if raw.trim().is_empty() => Self::empty(),
             Ok(raw) => Self::parse(&raw).map_err(|e| anyhow!("{var}: {e}"))?,

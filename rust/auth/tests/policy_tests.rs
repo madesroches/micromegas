@@ -7,6 +7,7 @@
 //! test-only prefix keeps the *prefixed* var name from colliding with any other test/process
 //! env.
 
+use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, MintPolicy, PUBLIC_AUDIENCE,
     ReadPolicy, default_key_audience_from_env, is_valid_audience,
@@ -554,5 +555,70 @@ fn default_key_audience_from_env_prefixed_var_wins_over_unprefixed_fallback() {
     assert_eq!(
         default_key_audience_from_env(DKA_PREFIX).expect("from_env"),
         Some("prefixed-audience".to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// resolve_prefixed_var (`rust/auth/src/env.rs`) -- shared by every `{prefix}_*`-with-fallback
+// knob in this crate, including the new `{prefix}_REQUIRE_WRITE_AUDIENCE` (AbAC Stage 5, #1373).
+// Env-mutating, so `#[serial]` like its neighbours above.
+// ---------------------------------------------------------------------------
+
+const RPV_SUFFIX: &str = "1373_POLICY_TESTS_KNOB";
+const RPV_PREFIX: &str = "MICROMEGAS_1373A";
+const RPV_PREFIXED_VAR: &str = "MICROMEGAS_1373A_1373_POLICY_TESTS_KNOB";
+const RPV_UNPREFIXED_VAR: &str = "MICROMEGAS_1373_POLICY_TESTS_KNOB";
+
+/// Clears both vars on drop so a failing assertion in one test can't leak state into the next.
+struct ResolvePrefixedVarEnvGuard;
+
+impl Drop for ResolvePrefixedVarEnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: tests are serialized with `#[serial]`.
+        unsafe {
+            std::env::remove_var(RPV_PREFIXED_VAR);
+            std::env::remove_var(RPV_UNPREFIXED_VAR);
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn resolve_prefixed_var_empty_prefix_always_resolves_unprefixed() {
+    let _guard = ResolvePrefixedVarEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(RPV_PREFIXED_VAR, "irrelevant");
+    }
+    assert_eq!(resolve_prefixed_var("", RPV_SUFFIX), RPV_UNPREFIXED_VAR);
+}
+
+#[test]
+#[serial]
+fn resolve_prefixed_var_falls_back_to_unprefixed_when_prefixed_unset() {
+    let _guard = ResolvePrefixedVarEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(RPV_PREFIXED_VAR);
+        std::env::remove_var(RPV_UNPREFIXED_VAR);
+    }
+    assert_eq!(
+        resolve_prefixed_var(RPV_PREFIX, RPV_SUFFIX),
+        RPV_UNPREFIXED_VAR
+    );
+}
+
+#[test]
+#[serial]
+fn resolve_prefixed_var_prefixed_wins_when_set() {
+    let _guard = ResolvePrefixedVarEnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(RPV_PREFIXED_VAR, "anything");
+        std::env::remove_var(RPV_UNPREFIXED_VAR);
+    }
+    assert_eq!(
+        resolve_prefixed_var(RPV_PREFIX, RPV_SUFFIX),
+        RPV_PREFIXED_VAR
     );
 }

@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use micromegas_otel_ingestion::block::{ProcessFromResource, split_logs};
+use micromegas_otel_ingestion::identity::IdentityContext;
 use micromegas_otel_ingestion::proto::{
     AnyValue, ExportLogsServiceRequest, KeyValue, LogRecord, Resource, ResourceLogs, ScopeLogs,
     any_value::Value as AvValue,
@@ -57,7 +58,7 @@ fn split_logs_one_block_per_resource() {
             resource_logs("svc-b", vec![empty_log_record(1_700_000_001_000_000_000)]),
         ],
     };
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 2);
     assert_ne!(blocks[0].process_id, blocks[1].process_id);
     assert_eq!(blocks[0].nb_records, 1);
@@ -76,20 +77,26 @@ fn split_logs_skips_empty_resource() {
             schema_url: String::new(),
         }],
     };
-    let blocks = split_logs(req).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert!(blocks.is_empty());
 }
 
 #[test]
 fn block_id_changes_when_payload_changes() {
     let mk = |svc: &str| resource_logs(svc, vec![empty_log_record(1)]);
-    let a = split_logs(ExportLogsServiceRequest {
-        resource_logs: vec![mk("a")],
-    })
+    let a = split_logs(
+        ExportLogsServiceRequest {
+            resource_logs: vec![mk("a")],
+        },
+        IdentityContext::default(),
+    )
     .unwrap();
-    let b = split_logs(ExportLogsServiceRequest {
-        resource_logs: vec![mk("b")],
-    })
+    let b = split_logs(
+        ExportLogsServiceRequest {
+            resource_logs: vec![mk("b")],
+        },
+        IdentityContext::default(),
+    )
     .unwrap();
     assert_ne!(a[0].block.block_id, b[0].block.block_id);
 }

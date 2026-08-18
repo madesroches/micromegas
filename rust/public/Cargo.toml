@@ -160,3 +160,8 @@ required-features = ["server"]
 name = "http_utils_tests"
 path = "tests/http_utils_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "ingestion_stamping_tests"
+path = "tests/ingestion_stamping_tests.rs"
+required-features = ["server"]

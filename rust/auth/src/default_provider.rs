@@ -8,6 +8,7 @@ use crate::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use crate::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, key_store_has_live_rows,
 };
+use crate::env::resolve_prefixed_var;
 use crate::multi::MultiAuthProvider;
 use crate::oidc::{OidcAuthProvider, OidcConfig};
 use crate::types::AuthProvider;
@@ -49,40 +50,19 @@ impl ProviderBuilder {
     /// Resolves the API-keys env var name for this builder's prefix, with
     /// fallback to the unprefixed name.
     fn api_keys_json(&self) -> Option<String> {
-        if self.prefix.is_empty() {
-            std::env::var("MICROMEGAS_API_KEYS").ok()
-        } else {
-            std::env::var(format!("{}_API_KEYS", self.prefix))
-                .or_else(|_| std::env::var("MICROMEGAS_API_KEYS"))
-                .ok()
-        }
+        std::env::var(resolve_prefixed_var(&self.prefix, "API_KEYS")).ok()
     }
 
     /// Resolves the OIDC config env var name for this builder's prefix, with
     /// fallback to the unprefixed name.
     fn oidc_config_var(&self) -> String {
-        if self.prefix.is_empty() {
-            "MICROMEGAS_OIDC_CONFIG".to_string()
-        } else if std::env::var(format!("{}_OIDC_CONFIG", self.prefix)).is_ok() {
-            format!("{}_OIDC_CONFIG", self.prefix)
-        } else {
-            "MICROMEGAS_OIDC_CONFIG".to_string()
-        }
+        resolve_prefixed_var(&self.prefix, "OIDC_CONFIG")
     }
 
     /// Resolves the admin-users env var name for this builder's prefix, with
     /// fallback to the unprefixed name.
     fn admin_var(&self) -> String {
-        if self.prefix.is_empty() {
-            "MICROMEGAS_ADMINS".to_string()
-        } else {
-            let prefixed = format!("{}_ADMINS", self.prefix);
-            if std::env::var(&prefixed).is_ok() {
-                prefixed
-            } else {
-                "MICROMEGAS_ADMINS".to_string()
-            }
-        }
+        resolve_prefixed_var(&self.prefix, "ADMINS")
     }
 
     /// Builds the composed provider.

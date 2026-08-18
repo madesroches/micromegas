@@ -17,6 +17,7 @@ micromegas-tracing = { workspace = true, features = ["tokio"] }
 anyhow.workspace = true
 bytes.workspace = true
 ciborium.workspace = true
+moka = { workspace = true, features = ["sync"] }
 object_store.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
