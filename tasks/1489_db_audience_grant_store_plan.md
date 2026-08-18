@@ -46,8 +46,14 @@ migration. Open and per-team deployments keep working untouched.
 - **Admin HTTP routes** for keys (`rust/analytics-web-srv/src/ingestion_keys.rs`, mirrored by
   `analytics_keys.rs`) are the shape the new grants route copies: `POST`/`GET`/`DELETE` handlers,
   gated by the `AdminUser` extractor (`rust/analytics-web-srv/src/auth/handlers.rs:563-579`),
-  layered via `Extension<...State>` in `web_server.rs::build_protected_routes`, with a
-  `key_management_disabled_router` fallback (503) when the DB pool is unconfigured.
+  layered via `Extension<...State>` in `web_server.rs::build_protected_routes`. Under
+  `--disable-auth` (`auth_state.is_none()`), the real routers are not merged at all: that mode
+  layers a hardcoded `ValidatedUser { is_admin: true, .. }` on every request in place of running
+  `cookie_auth_middleware`, which would otherwise let any unauthenticated caller pass the
+  `AdminUser` gate, so `key_management_disabled_router` is merged instead, answering both
+  key-management prefixes with a fixed 503 (`web_server.rs:260-290`). This is a separate mechanism
+  from the per-request 503 each `*KeysState.pool: Option<PgPool>` already returns when the DB pool
+  itself is unconfigured.
 - **CLI precedent**: no Rust binary; Python CLIs under `python/micromegas/micromegas/cli/`, each
   registered as a Poetry script (`pyproject.toml:36-40`) and talking to `analytics-web-srv` over
   HTTP via `WebClient` (`python/micromegas/micromegas/web_client.py`) — never direct Postgres
@@ -205,9 +211,15 @@ builds there — one shared snapshot cache per process, not one per policy.
 
 New file `rust/analytics-web-srv/src/audience_grants.rs`, directly mirroring
 `ingestion_keys.rs`'s shape (`AudienceGrantsState { pool: Option<PgPool> }`, an `IntoResponse`
-error enum, `AdminUser`-gated handlers, registered in `web_server.rs::build_protected_routes`
-beside `ingestion_keys_router`/`analytics_keys_router`, with the same 503-when-unconfigured
-fallback router):
+error enum, `AdminUser`-gated handlers). Wired into `web_server.rs::build_protected_routes`
+exactly like `ingestion_keys_router`/`analytics_keys_router`, on both sides of the
+`auth_state.is_some()` branch: `audience_grants_router` merged (and its `Extension` layered)
+only in the `is_some()` arm, alongside the other two key-management routers, and
+`/api/audience-grants` plus its `/{*rest}` wildcard added to `key_management_disabled_router`
+so the route is structurally unreachable under `--disable-auth` rather than merged
+unconditionally — this route is exactly as sensitive as the other two (see Security), so it
+needs the same disable-auth treatment, not just the same per-request `pool: Option<PgPool>`
+503.
 
 - `POST {base_path}/api/audience-grants` — body `{audience, axis, selector}`
   (`deny_unknown_fields`), validated with `is_valid_audience`/the same selector-shape check
@@ -318,7 +330,10 @@ never see the table shape.
 
 ### Phase 3 — Admin API (`analytics-web-srv`)
 6. Add `rust/analytics-web-srv/src/audience_grants.rs` (state, error type, three handlers, router
-   function), registered in `web_server.rs::build_protected_routes` with the 503 fallback.
+   function). In `web_server.rs::build_protected_routes`: merge `audience_grants_router` and layer
+   its `Extension` only in the `auth_state.is_some()` arm, beside `analytics_keys_router`/
+   `ingestion_keys_router`; add `/api/audience-grants` and `/api/audience-grants/{*rest}` to
+   `key_management_disabled_router` for the `--disable-auth` arm.
 
 ### Phase 4 — CLI
 7. Add `create_audience_grant`/`list_audience_grants`/`delete_audience_grant` to `web_client.py`.
@@ -340,7 +355,10 @@ never see the table shape.
 - `rust/monolith/src/main.rs` — same wiring, alongside its existing `AudienceReadPolicy::from_env`
   call.
 - `rust/analytics-web-srv/src/audience_grants.rs` — new.
-- `rust/analytics-web-srv/src/web_server.rs` — register the new router + state.
+- `rust/analytics-web-srv/src/web_server.rs` — merge `audience_grants_router` + layer its state
+  in the `auth_state.is_some()` arm of `build_protected_routes`, alongside
+  `analytics_keys_router`/`ingestion_keys_router`; add `/api/audience-grants` (+ `/{*rest}`) to
+  `key_management_disabled_router`.
 - `python/micromegas/micromegas/web_client.py` — three new client methods.
 - `python/micromegas/micromegas/cli/grants.py` — new.
 - `python/micromegas/pyproject.toml` — new script entry.
@@ -407,7 +425,10 @@ never see the table shape.
   `{prefix}_AUDIENCE_GRANTS` section, the new `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
   and the staleness-on-outage note from design question 1.
 - `mkdocs/docs/admin/api-keys.md` — cross-reference the new admin route and CLI the way it already
-  cross-references `{prefix}_AUDIENCE_GRANTS`.
+  cross-references `{prefix}_AUDIENCE_GRANTS`; update the `--disable-auth` wording at line 343
+  ("both key-management route groups return a fixed 503...") to reflect three route groups, not
+  two, now that the audience-grants routes are wired into the same
+  `key_management_disabled_router` mechanism.
 - `CHANGELOG.md` — an `## Unreleased` entry, following every prior AbAC stage's precedent: the new
   `audience_grants` table/migration (v7), the `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
   the new admin routes, and the `micromegas-grants` CLI.
