@@ -152,10 +152,9 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knobs consumed by
-    /// Prong A (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, `OwnershipRewrite`,
-    /// #1370, AbAC Stage 2) and Prong B (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, the mutating-
-    /// function registration gate, #1371, AbAC Stage 3). Mirrors `with_read_policy`: wins on
+    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knobs
+    /// (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by Prong A
+    /// (`OwnershipRewrite`, #1370, AbAC Stage 2). Mirrors `with_read_policy`: wins on
     /// every `build_and_serve` branch, overriding that branch's own default
     /// (`IsolationConfig::from_env("")` on the `use_default_auth` branch, `IsolationConfig::default()`
     /// on the other two).
@@ -312,6 +311,14 @@ impl FlightSqlServerBuilder {
         let read_policy = self.read_policy.unwrap_or(default_policy);
         let isolation_config = self.isolation_config.unwrap_or(default_isolation_config);
 
+        // Whether this deployment can ever produce an admin principal at all -- computed once
+        // here, ahead of every request, so it covers all three branches above (including the
+        // injected-provider branch the monolith takes via `with_auth_provider`), not just
+        // `use_default_auth`. A `None` provider means auth is disabled, where every caller is
+        // already treated as admin by the absent-header convention (`user_attribution.rs`), so
+        // `true` is both correct and the conservative choice there.
+        let admin_principal_possible = auth_provider.as_ref().is_none_or(|p| p.can_grant_admin());
+
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
             partition_provider,
@@ -319,6 +326,7 @@ impl FlightSqlServerBuilder {
             session_configurator,
             read_policy,
             isolation_config,
+            admin_principal_possible,
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 

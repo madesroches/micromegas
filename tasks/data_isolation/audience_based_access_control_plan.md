@@ -444,8 +444,8 @@ struct, then:
 
   `list_view_sets` **stays unfiltered (decided):** it returns view-set schema/definitions only, which
   contain no PII or per-principal data.
-- **Mutating functions (decided, revised 2026-07-30): maintenance-only unless the deployment opts
-  user sessions in.** The mutating set is now **five** entries: `retire_partitions`
+- **Mutating functions (decided, revised 2026-07-30): maintenance-only unless no admin principal
+  can exist for the deployment.** The mutating set is now **five** entries: `retire_partitions`
   (`query.rs:120`) destructively deletes `lakehouse_partitions` rows for a
   `(view_set_name, view_instance_id)` pair (`write_partition.rs:116`), and `view_instance_id` is a
   `process_id` for process-scoped view sets — the same opaque, unchecked argument as `process_spans`,
@@ -459,15 +459,16 @@ struct, then:
   audit covered UDTFs only) are likewise mutating/destructive. None is a read, so none gets an
   audience filter; instead `register_lakehouse_functions` registers the set only when the session
   is an internal maintenance context (`ReadScope::All`), **or** the caller's authenticated
-  `AuthContext.is_admin` is set, **or** the operator sets
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` — the knob open deployments use to let
-  non-admins keep calling them. Otherwise a user calling any of them gets "function not found".
+  `AuthContext.is_admin` is set, **or** no admin principal can exist for the deployment's resolved
+  auth provider — derived once at startup, not an operator-set knob (see the Stage 3 correction
+  below). Otherwise a user calling any of them gets "function not found".
   The admin arm is tracked independently as issue #1377 (it closes a hole that exists today,
   before any isolation work: every authenticated caller can invoke these functions) and may land
   ahead of this stage; `is_admin` must be threaded from the authenticated `AuthContext`, never
-  from client-claimed attribution. (Recorded caveat: the knob is deployment-wide — in a hybrid
-  deployment mixing an everyone-group with personal audiences, enabling it lets users retire
-  partitions of personal audiences too; tighten to per-audience checks if hybrid becomes real.)
+  from client-claimed attribution. (Recorded caveat: this stays deployment-wide — none of the five
+  functions filters by audience, so in a hybrid deployment mixing an everyone-group with personal
+  audiences, an admin-less auth provider hands every authenticated caller destructive access to
+  personal audiences too; tighten to per-audience checks if hybrid becomes real.)
 
 **Implemented (Stage 3, #1371) — corrections to the sketch above, recorded here now that Prong B
 has landed as `AudienceGuard`/`AudienceIndex` (`rust/analytics/src/lakehouse/audience_guard.rs`):**
@@ -505,6 +506,25 @@ has landed as `AudienceGuard`/`AudienceIndex` (`rust/analytics/src/lakehouse/aud
   up" precondition. The two prongs consequently read different copies of the same property in the
   general case (documented as an accepted trade-off in `tasks/1371_udtf_udf_guards_plan.md` §11,
   not fixed here).
+- **No `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` knob — the registration gate derives
+  `admin_principal_possible` instead.** The sketch above specified an operator-set boolean opening
+  the five mutating functions to non-admin sessions. It didn't ship, because the fact it asked the
+  operator to declare is one the server already knows: `AuthProvider` gained a `can_grant_admin()`
+  method (`rust/auth/src/types.rs`, default `false`); `OidcAuthProvider` returns `true` only when
+  its admin-users list is non-empty, and `MultiAuthProvider` returns `true` if any provider in its
+  chain does (`rust/auth/src/oidc.rs`, `rust/auth/src/multi.rs`) — both API-key providers keep the
+  default, since an API key can never be admin. `FlightSqlServer` derives
+  `admin_principal_possible` once at startup from the resolved auth provider (a `None` provider
+  means auth is disabled, where every caller is already admin by the absent-header convention, so
+  it derives `true`) and threads it onto every `CallerContext`; the gate in `query.rs` is
+  `caller.is_admin || !caller.admin_principal_possible`. Deriving removes two configurations the
+  knob would have let an operator express that should never exist: OIDC with admins *and* the knob
+  on (destructive cross-audience access silently handed to every authenticated caller), and
+  no-OIDC with the knob off (the five functions registered for nobody at all, which is not a
+  security posture, just the gap #1382 opened, preserved). One capability is deliberately not
+  carried over: a hardened deployment that wants the five functions permanently unreachable over
+  the wire (relying only on the in-process maintenance daemon, which never goes through this gate)
+  can no longer express that — a conscious call, with no extension point until something needs it.
 
 In a privacy deployment (no implicit groups, no groups claim), `ps` is a singleton, so Prong A
 reduces to `… IN ('user:alice@…')` — the exact per-user filter, same DataFusion plan — and Prong B
@@ -632,9 +652,13 @@ startup).
 |---|---|---|---|
 | `MICROMEGAS_IMPLICIT_GROUPS` (removed, #1372) | comma-separated groups every authenticated principal belongs to (added to both readable and mintable sets) | `everyone` | unset |
 | `MICROMEGAS_UNSTAMPED_AUDIENCE` | audience attributed at query time to data with no `micromegas.audience` property, and the visibility rule for `'global'` partition rows (§4) | `public` (was `group:everyone`) | unset (unstamped data hidden) |
-| `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` | register the five mutating UDTFs/UDFs (§4) for **non-admin** user sessions (admin sessions always get them — issue #1377) | `true` | unset/false |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | §5b public view-set allowlist | — | optional |
 | `{prefix}_AUDIENCE_GRANTS` (added, #1372) | JSON grant map, keyed by audience name — see `mkdocs/docs/admin/authentication.md#audiences-and-grants` | unset (`public` alone covers it) | e.g. `{"team-alpha": ["group:eng"]}` |
+
+Registration of the five mutating UDTFs/UDFs (§4) for non-admin user sessions is **not** a knob:
+Stage 3 (#1371) derives it from whether the deployment's resolved auth provider can ever produce
+an admin principal (`AuthProvider::can_grant_admin`) — no `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`
+ever shipped.
 
 `MICROMEGAS_UNSTAMPED_AUDIENCE` is the migration-pain killer: an open deployment can turn
 enforcement on **before any stamping exists** — legacy `NULL`-audience data coalesces to
@@ -1159,7 +1183,7 @@ extension rather than a new header).
    `perfetto_trace_chunks`, `parse_block`, **`get_payload`**) verify the named process's audience
    at async scan time, failing closed; `list_partitions` row-filters by readable audience incl.
    the `'global'`-row rule (§4); the five mutating functions are registered only for maintenance
-   contexts, admin sessions, or under `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` (the admin arm
+   contexts, admin sessions, or when no admin principal can exist for the deployment (the admin arm
    is issue #1377 and may land ahead of this stage). Build the `moka` caches
    (`process_id → audience`, `stream_id → process_id`, `block_id → process_id`). Internal
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
@@ -1452,9 +1476,10 @@ status update near the top of this document):
   `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are not read
   paths; they are excluded from user sessions (registered only for maintenance contexts, admin
   sessions — issue #1377, which also closes the pre-isolation hole where every authenticated
-  caller can invoke them — or under the explicit `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`
-  opt-in that open deployments use to keep them for non-admins) rather than audience-filtered — an
-  integrity/availability control, not a confidentiality one. Without it, a non-admin could name
+  caller can invoke them — or when no admin principal can exist for the deployment, which is
+  derived from the resolved auth provider rather than an operator opt-in) rather than
+  audience-filtered — an integrity/availability control, not a confidentiality one. Without it, a
+  non-admin could name
   another principal's `process_id` via `retire_partitions`' `view_instance_id` argument to destroy
   their partitions.
 - **Identity holes closed in Stage 1** (would otherwise be full enforcement bypasses): the
@@ -1525,9 +1550,9 @@ status update near the top of this document):
   `coalesce` form when `MICROMEGAS_UNSTAMPED_AUDIENCE` is set. Prong B: each guarded UDTF/UDF
   (incl. `get_payload`) rejects an unowned `process_id`/`block_id` and `list_partitions`
   row-filters — assert both fail closed; assert all five mutating functions are absent
-  ("function not found") from a registration built with any non-`All` `ReadScope` for a non-admin
-  session unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`, and present for an admin session
-  regardless of the knob (#1377). Public views (§5b): with a view
+  ("function not found") from a non-admin session's registration when an admin principal can
+  exist for the deployment, present when one cannot (`admin_principal_possible`), and present for
+  an admin session regardless (#1377). Public views (§5b): with a view
   set on the allowlist, `OwnershipRewrite` injects no predicate for it and `list_partitions` shows
   its `'global'` rows; with an empty allowlist behavior is unchanged (every set filtered).
 - **Integration (privacy profile):** two audiences seeded; assert each sees only its own rows
@@ -1536,9 +1561,9 @@ status update near the top of this document):
   rows are hidden; assert the daemon (`ReadScope::All`) sees everything and that an **admin user
   session is still filtered** (no bypass); assert the prepared-statement path is filtered
   identically to `do_get`.
-- **Integration (open profile — equivalence with today):** with `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
-  and `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` (no `MICROMEGAS_IMPLICIT_GROUPS` — removed by
-  Stage 4/#1372, since `public` is a built-in read grant needing no companion knob) and
+- **Integration (open profile — equivalence with today):** with `MICROMEGAS_UNSTAMPED_AUDIENCE=public`,
+  no admin principal possible for the deployment (no `MICROMEGAS_IMPLICIT_GROUPS` — removed by
+  Stage 4/#1372, since `public` is a built-in read grant needing no companion knob), and
   a mix of stamped (`public`) and unstamped data: every caller sees every row, `'global'`
   partition rows are listed, and the mutating functions are registered — byte-for-byte the
   pre-isolation behavior.
@@ -1603,14 +1628,16 @@ Resolved by research (kept here for the record; details in Appendix A):
   no PII or per-principal data. Only `list_partitions` is row-filtered. See §4 Prong B.
 - ~~**`retire_partitions` / `materialize_partitions` exposure.**~~ **Decided (revised 2026-07-30):
   registered for maintenance contexts, admin sessions (issue #1377), or under
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`.** Both were missing from
+  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true`.** (Superseded by Stage 3, #1371: no such knob
+  shipped — the third arm derives from whether an admin principal can exist for the deployment;
+  see the correction in §4.) Both were missing from
   the original Prong B audit despite being registered unconditionally alongside the other UDTFs;
   the 2026-07-30 audit added `regenerate_partitions` and the `retire_partition_by_file` /
   `retire_partition_by_metadata` UDFs to the set. All mutate lakehouse state, so none gets an
   audience read-filter — instead `register_lakehouse_functions` skips registering them for
-  non-admin user sessions unless the deployment opts in (the knob open deployments set to keep
-  them for non-admins). The admin arm also closes a pre-isolation hole (today every authenticated
-  caller can invoke them) and may land first. See §4 Prong B and Appendices A–B.
+  non-admin user sessions unless no admin principal can exist for the deployment (derived
+  automatically, not an operator opt-in). The admin arm also closes a pre-isolation hole (today
+  every authenticated caller can invoke them) and may land first. See §4 Prong B and Appendices A–B.
 - ~~**Scan-time check cost.**~~ **Resolved:** `process_id → audience` is immutable, so an
   invalidation-free size-bounded `moka` cache (backed by `find_process`) makes the check an O(1)
   in-memory lookup on warm hits, one indexed PG query per process ever on cold miss. `ReadScope` is
@@ -1656,10 +1683,12 @@ Decided 2026-07-30 (deployment-staging revision, from issue #1334 follow-up disc
 - **Unstamped data: query-time coalesce knob** (`MICROMEGAS_UNSTAMPED_AUDIENCE`), not a backfill
   and not a retention wait. Unset = hidden (fail-closed, privacy profile).
 - **Mutating functions: registration gate — maintenance ∨ admin ∨ deployment opt-in**
-  (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) rather than unconditionally maintenance-only. Admin
+  (`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) rather than unconditionally maintenance-only.
+  (Superseded by Stage 3, #1371: the opt-in arm derives from whether an admin principal can exist
+  for the deployment rather than from an operator-set knob; see the correction in §4.) Admin
   sessions always get them (issue #1377 — standalone, closes today's
-  any-authenticated-caller hole, may land before the isolation stages); the knob keeps them
-  available to non-admins in open deployments.
+  any-authenticated-caller hole, may land before the isolation stages); the derived arm keeps them
+  available to non-admins in deployments where no admin principal can exist.
 - **Prong B coverage extended** after the 2026-07-30 drift audit: `regenerate_partitions`,
   `retire_partition_by_file`, `retire_partition_by_metadata` join the mutating set; `get_payload`
   gets the arg-addressed read guard. See Appendix B.

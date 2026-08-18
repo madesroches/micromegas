@@ -24,6 +24,24 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// The 15-column projection shared by every `lakehouse_partitions` query in [`ListPartitionsTableProvider::scan`],
+/// kept in sync with [`ListPartitionsTableProvider::schema`]'s field order.
+const SELECT_PARTITION_COLUMNS: &str = "SELECT view_set_name,
+             view_instance_id,
+             begin_insert_time,
+             end_insert_time,
+             min_event_time,
+             max_event_time,
+             updated,
+             file_path,
+             file_size,
+             file_schema_hash,
+             source_data_hash,
+             num_rows,
+             partition_format_version,
+             sort_order,
+             max_sort_key_time";
+
 /// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
 #[derive(Debug)]
 pub struct ListPartitionsTableFunction {
@@ -124,79 +142,27 @@ impl TableProvider for ListPartitionsTableProvider {
         // limit would return fewer rows than asked for while more matching rows exist, silently
         // wrong.
         let restricted = *self.guard.read_scope() != ReadScope::All;
-        let query = if !restricted {
-            // Build query with optional LIMIT clause pushed down to PostgreSQL.
-            // DataFusion only pushes the limit when it's safe to do so (i.e., when there
-            // are no WHERE clauses that could filter rows). When filters are present,
-            // DataFusion passes limit=None and applies the limit after filtering.
-            // Important: DataFusion trusts us to apply the limit - if we ignore it,
-            // too many rows will be returned to the client.
-            if let Some(n) = limit {
-                format!(
-                    "SELECT view_set_name,
-                            view_instance_id,
-                            begin_insert_time,
-                            end_insert_time,
-                            min_event_time,
-                            max_event_time,
-                            updated,
-                            file_path,
-                            file_size,
-                            file_schema_hash,
-                            source_data_hash,
-                            num_rows,
-                            partition_format_version,
-                            sort_order,
-                            max_sort_key_time
-                     FROM lakehouse_partitions
-                     LIMIT {n};"
-                )
-            } else {
-                "SELECT view_set_name,
-                        view_instance_id,
-                        begin_insert_time,
-                        end_insert_time,
-                        min_event_time,
-                        max_event_time,
-                        updated,
-                        file_path,
-                        file_size,
-                        file_schema_hash,
-                        source_data_hash,
-                        num_rows,
-                        partition_format_version,
-                        sort_order,
-                        max_sort_key_time
-                 FROM lakehouse_partitions;"
-                    .to_string()
-            }
-        } else {
-            // Deliberately unbounded (no `LIMIT`/`OFFSET` paging here): paginating this fetch
-            // would need either (a) holding a connection/transaction across the paging loop while
-            // `filter_rows` re-enters this same `db_pool` for every audience-resolution chunk --
-            // self-deadlocking once concurrent restricted scans exceed the pool's connection
-            // count -- or (b) a stable, indexable ordering key to page on, which
-            // `lakehouse_partitions` doesn't have (no primary key, `file_path` is nullable, and
-            // the only exclusion constraint covers just overlap within one `(view_set_name,
-            // view_instance_id, file_schema_hash)` group). A single unbounded fetch avoids both.
-            "SELECT view_set_name,
-                    view_instance_id,
-                    begin_insert_time,
-                    end_insert_time,
-                    min_event_time,
-                    max_event_time,
-                    updated,
-                    file_path,
-                    file_size,
-                    file_schema_hash,
-                    source_data_hash,
-                    num_rows,
-                    partition_format_version,
-                    sort_order,
-                    max_sort_key_time
-             FROM lakehouse_partitions;"
-                .to_string()
+
+        // Build query with optional LIMIT clause pushed down to PostgreSQL, but only when
+        // unrestricted. DataFusion only pushes the limit when it's safe to do so (i.e., when
+        // there are no WHERE clauses that could filter rows). When filters are present,
+        // DataFusion passes limit=None and applies the limit after filtering.
+        // Important: DataFusion trusts us to apply the limit - if we ignore it, too many rows
+        // will be returned to the client. A restricted caller must never push the limit down --
+        // see the comment on `filter_rows` for why (deliberately unbounded fetch below).
+        let limit_clause = match (restricted, limit) {
+            (false, Some(n)) => format!("\n             LIMIT {n}"),
+            _ => String::new(),
         };
+        // Deliberately unbounded when restricted (no `LIMIT`/`OFFSET` paging here): paginating
+        // this fetch would need either (a) holding a connection/transaction across the paging
+        // loop while `filter_rows` re-enters this same `db_pool` for every audience-resolution
+        // chunk -- self-deadlocking once concurrent restricted scans exceed the pool's connection
+        // count -- or (b) a stable, indexable ordering key to page on, which
+        // `lakehouse_partitions` doesn't have (no primary key, `file_path` is nullable, and the
+        // only exclusion constraint covers just overlap within one `(view_set_name,
+        // view_instance_id, file_schema_hash)` group). A single unbounded fetch avoids both.
+        let query = format!("{SELECT_PARTITION_COLUMNS} FROM lakehouse_partitions{limit_clause};");
 
         let rows = instrument_named!(
             sqlx::query(&query).fetch_all(&self.lake.db_pool),
@@ -205,29 +171,23 @@ impl TableProvider for ListPartitionsTableProvider {
         .await
         .map_err(|e| DataFusionError::External(e.into()))?;
 
-        let rb = if !restricted {
-            if rows.is_empty() {
-                // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
-                // (`make_empty_record_batch`), which doesn't match this provider's 15-column
-                // schema and fails once `MemoryStream` projects it. Build the empty batch
-                // directly from this provider's own schema instead -- this is the normal state
-                // of a fresh deployment with no partitions materialized yet.
-                RecordBatch::new_empty(self.schema())
-            } else {
-                rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
-            }
+        let rows = if restricted {
+            self.filter_rows(rows, limit).await?
         } else {
-            let filtered = self.filter_rows(rows, limit).await?;
-            if filtered.is_empty() {
-                // Same zero-field-batch pitfall as above: a `ReadScope::Audiences` caller with
-                // no readable partitions hits this as its steady state, not just an edge case.
-                RecordBatch::new_empty(self.schema())
-            } else {
-                // `filter_rows` already stops as soon as `limit` matching rows have been kept
-                // (see its doc comment), so `filtered.len() <= limit.unwrap_or(usize::MAX)`
-                // always holds here -- no further truncation needed.
-                rows_to_record_batch(&filtered).map_err(|e| DataFusionError::External(e.into()))?
-            }
+            rows
+        };
+        // `rows_to_record_batch` maps an empty slice to a **zero-field** empty batch
+        // (`make_empty_record_batch`), which doesn't match this provider's 15-column schema and
+        // fails once `MemoryStream` projects it. Build the empty batch directly from this
+        // provider's own schema instead -- this is the normal state of both a fresh deployment
+        // with no partitions materialized yet, and a `ReadScope::Audiences` caller with no
+        // readable partitions. Note `filter_rows` already stops as soon as `limit` matching rows
+        // have been kept (see its doc comment), so `rows.len() <= limit.unwrap_or(usize::MAX)`
+        // always holds here -- no further truncation needed.
+        let rb = if rows.is_empty() {
+            RecordBatch::new_empty(self.schema())
+        } else {
+            rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?
         };
 
         let source = MemorySourceConfig::try_new(

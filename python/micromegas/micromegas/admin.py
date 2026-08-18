@@ -100,10 +100,10 @@ def retire_incompatible_partitions(
     permanently deleted from metadata and their data files removed from object storage.
 
     **Requires admin**: internally calls `retire_partition_by_metadata()`, which requires
-    an authenticated admin -- or any authenticated caller when
-    `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not per-audience).
-    Non-admin callers, including API keys, will otherwise see this fail with an
-    "Invalid function" error.
+    an authenticated admin -- or any authenticated caller when this deployment can never
+    produce an admin principal at all (deployment-wide, not per-audience). Non-admin
+    callers, including API keys, will otherwise see this fail with an "Invalid function"
+    error.
 
     Args:
         client: FlightSQLClient instance for executing queries.

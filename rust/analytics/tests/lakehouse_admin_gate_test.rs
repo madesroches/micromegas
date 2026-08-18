@@ -1,10 +1,11 @@
 //! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
-//! `make_session_context`'s `is_admin` parameter gates registration of the five mutating
-//! lakehouse UDTFs/UDFs (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-//! `retire_partition_by_file`, `retire_partition_by_metadata`). These tests only assert on
-//! DataFusion *planning*, never execution: the gated functions' own `call_with_args`
-//! implementations only parse arguments and return a lazy provider, so planning-only assertions
-//! never touch the lazy Postgres pool or the in-memory object store below.
+//! `make_session_context`'s `CallerContext::is_admin`/`admin_principal_possible` gate
+//! registration of the five mutating lakehouse UDTFs/UDFs (`retire_partitions`,
+//! `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
+//! `retire_partition_by_metadata`). These tests only assert on DataFusion *planning*, never
+//! execution: the gated functions' own `call_with_args` implementations only parse arguments and
+//! return a lazy provider, so planning-only assertions never touch the lazy Postgres pool or the
+//! in-memory object store below.
 
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
@@ -33,16 +34,14 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
 
 async fn make_gated_session_context(
     is_admin: bool,
-    user_maintenance_functions: bool,
+    admin_principal_possible: bool,
 ) -> datafusion::execution::context::SessionContext {
     let lakehouse = make_offline_lakehouse_context().await;
     let caller = CallerContext {
         read_scope: micromegas_analytics::lakehouse::read_scope::ReadScope::All,
         is_admin,
-        isolation_config: Arc::new(IsolationConfig {
-            user_maintenance_functions,
-            ..IsolationConfig::default()
-        }),
+        isolation_config: Arc::new(IsolationConfig::default()),
+        admin_principal_possible,
     };
     make_session_context(
         lakehouse,
@@ -74,7 +73,7 @@ const NON_MUTATING_CALLS: &[&str] = &[
 
 #[tokio::test]
 async fn non_admin_session_cannot_plan_mutating_udtfs() {
-    let ctx = make_gated_session_context(false, false).await;
+    let ctx = make_gated_session_context(false, true).await;
     for sql in MUTATING_UDTF_CALLS {
         let err = ctx
             .sql(sql)
@@ -90,7 +89,7 @@ async fn non_admin_session_cannot_plan_mutating_udtfs() {
 
 #[tokio::test]
 async fn non_admin_session_cannot_plan_mutating_udfs() {
-    let ctx = make_gated_session_context(false, false).await;
+    let ctx = make_gated_session_context(false, true).await;
     for sql in MUTATING_UDF_CALLS {
         let err = ctx
             .sql(sql)
@@ -106,7 +105,7 @@ async fn non_admin_session_cannot_plan_mutating_udfs() {
 
 #[tokio::test]
 async fn admin_session_can_plan_all_mutating_functions() {
-    let ctx = make_gated_session_context(true, false).await;
+    let ctx = make_gated_session_context(true, true).await;
     for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
         ctx.sql(sql)
             .await
@@ -114,30 +113,30 @@ async fn admin_session_can_plan_all_mutating_functions() {
     }
 }
 
-/// #1371: `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`'s registration gate --
-/// `caller.is_admin || isolation_config.user_maintenance_functions` -- lets a non-admin plan the
-/// mutating functions once the knob is set, the API-key-only deployment's way back after #1382
-/// gated them on `is_admin` alone.
+/// #1371: the registration gate -- `caller.is_admin || !caller.admin_principal_possible` --
+/// lets a non-admin plan the mutating functions whenever the deployment can never produce an
+/// admin principal at all, the API-key-only deployment's way back after #1382 gated them on
+/// `is_admin` alone.
 #[tokio::test]
-async fn non_admin_session_with_maintenance_knob_can_plan_all_mutating_functions() {
-    let ctx = make_gated_session_context(false, true).await;
+async fn non_admin_session_without_admin_principal_can_plan_all_mutating_functions() {
+    let ctx = make_gated_session_context(false, false).await;
     for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
-        ctx.sql(sql)
-            .await
-            .unwrap_or_else(|e| panic!("expected non-admin+knob session to plan {sql}, got: {e}"));
+        ctx.sql(sql).await.unwrap_or_else(|e| {
+            panic!("expected non-admin session to plan {sql} when no admin principal is possible, got: {e}")
+        });
     }
 }
 
-/// An admin session is unaffected by the knob either way -- `is_admin` alone is already
-/// sufficient, and the knob is additive, never a restriction.
+/// An admin session is unaffected by `admin_principal_possible` either way -- `is_admin` alone
+/// is already sufficient, and the fallback is additive, never a restriction.
 #[tokio::test]
-async fn admin_session_can_plan_all_mutating_functions_regardless_of_knob() {
-    for user_maintenance_functions in [false, true] {
-        let ctx = make_gated_session_context(true, user_maintenance_functions).await;
+async fn admin_session_can_plan_all_mutating_functions_regardless_of_admin_principal_possible() {
+    for admin_principal_possible in [false, true] {
+        let ctx = make_gated_session_context(true, admin_principal_possible).await;
         for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
             ctx.sql(sql).await.unwrap_or_else(|e| {
                 panic!(
-                    "expected admin session to plan {sql} with knob={user_maintenance_functions}, got: {e}"
+                    "expected admin session to plan {sql} with admin_principal_possible={admin_principal_possible}, got: {e}"
                 )
             });
         }
@@ -147,7 +146,7 @@ async fn admin_session_can_plan_all_mutating_functions_regardless_of_knob() {
 #[tokio::test]
 async fn non_mutating_functions_plan_identically_for_admin_and_non_admin() {
     for is_admin in [false, true] {
-        let ctx = make_gated_session_context(is_admin, false).await;
+        let ctx = make_gated_session_context(is_admin, true).await;
         for sql in NON_MUTATING_CALLS {
             ctx.sql(sql).await.unwrap_or_else(|e| {
                 panic!("expected {sql} to plan with is_admin={is_admin}, got: {e}")

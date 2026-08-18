@@ -264,10 +264,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_read_policy` (#1370, AbAC Stage 2; #1371, AbAC Stage 3): the
-    // data-isolation deployment knobs (`OwnershipRewrite`'s two plus Prong B's mutating-function
-    // registration knob), parsed in `micromegas-analytics` (the crate that consumes them) rather
-    // than `micromegas-auth`.
+    // Resolved alongside `analytics_read_policy` (#1370, AbAC Stage 2): `OwnershipRewrite`'s two
+    // data-isolation deployment knobs, parsed in `micromegas-analytics` (the crate that consumes
+    // them) rather than `micromegas-auth`. The mutating-function registration gate (#1371, AbAC
+    // Stage 3) is derived from the auth provider at server startup instead, not a knob here.
     let analytics_isolation_config = if roles.flightsql && !args.disable_auth {
         Some(Arc::new(IsolationConfig::from_env("MICROMEGAS_ANALYTICS")?))
     } else {

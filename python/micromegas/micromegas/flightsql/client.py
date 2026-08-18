@@ -713,9 +713,9 @@ class FlightSQLClient:
 
         Requires admin:
             Only callable by an authenticated admin -- or by any authenticated caller
-            when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not
-            per-audience). Non-admin callers, including API keys, otherwise get a
-            "function not found" error.
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -771,9 +771,9 @@ class FlightSQLClient:
 
         Requires admin:
             Only callable by an authenticated admin -- or by any authenticated caller
-            when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not
-            per-audience). Non-admin callers, including API keys, otherwise get a
-            "function not found" error.
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg
@@ -839,9 +839,9 @@ class FlightSQLClient:
 
         Requires admin:
             Only callable by an authenticated admin -- or by any authenticated caller
-            when `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is set (deployment-wide, not
-            per-audience). Non-admin callers, including API keys, otherwise get a
-            "function not found" error.
+            when this deployment can never produce an admin principal at all
+            (deployment-wide, not per-audience). Non-admin callers, including API keys,
+            otherwise get a "function not found" error.
         """
         sql = """
           SELECT time, msg

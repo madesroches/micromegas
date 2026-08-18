@@ -173,14 +173,9 @@ pub fn register_lakehouse_functions(
         )))
         .into_scalar_udf(),
     );
-    // `caller.is_admin`: an authenticated admin. `caller.isolation_config
-    // .user_maintenance_functions`: the deployment-wide, opt-in escape hatch for an
-    // API-key-only deployment that has no admin principal at all -- see
-    // `IsolationConfig::user_maintenance_functions`'s doc comment for the cross-audience
-    // caveat that comes with it. No `ReadScope::All` arm: `CallerContext::maintenance()`
-    // already sets `is_admin: true`, and `CallerContext::internal()`'s exclusion from this gate
-    // is deliberate.
-    if caller.is_admin || caller.isolation_config.user_maintenance_functions {
+    // An admin, or a deployment that can never produce one at all (`CallerContext::
+    // admin_principal_possible`'s doc comment).
+    if caller.is_admin || !caller.admin_principal_possible {
         ctx.register_udtf(
             "retire_partitions",
             Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),

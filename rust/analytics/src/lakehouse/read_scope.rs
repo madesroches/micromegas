@@ -12,8 +12,8 @@
 //! `query.rs::make_session_context` and injects an audience predicate into every
 //! `MaterializedView`-backed scan. **Stage 3 (#1371) adds Prong B**: the UDTF/UDF guards
 //! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
-//! structurally cannot reach, plus the [`IsolationConfig::user_maintenance_functions`]
-//! registration knob.
+//! structurally cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function
+//! registration gate.
 
 use std::sync::Arc;
 
@@ -34,9 +34,10 @@ pub enum ReadScope {
     Audiences(Arc<[String]>),
 }
 
-/// Bundles the two orthogonal authorization inputs `make_session_context` and friends need --
-/// audience scope (`read_scope`) and the `is_admin` mutating-function-registration capability
-/// (#1376/#1377) -- into one struct instead of two adjacent, transposable positional parameters.
+/// Bundles the orthogonal authorization inputs `make_session_context` and friends need --
+/// audience scope (`read_scope`) and the `is_admin`/`admin_principal_possible`
+/// mutating-function-registration capability (#1376/#1377, #1371) -- into one struct instead of
+/// adjacent, transposable positional parameters.
 ///
 /// Required (not `Option`/defaulted) at every call site by design: a defaulting parameter would
 /// let a future call site inherit `ReadScope::All` by omission, which is exactly the failure this
@@ -52,48 +53,57 @@ pub struct CallerContext {
     /// today's `is_admin: bool` parameter).
     pub is_admin: bool,
     /// Per-service data-isolation deployment config (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
-    /// `MICROMEGAS_PUBLIC_VIEW_SETS`, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`) -- resolved once
-    /// at server startup, not per request, but bundled here rather than as a new
-    /// `make_session_context` parameter (#1370 Design §8): per-request resolved values ride the
-    /// context, per-service objects live on the service, and this rides along with `read_scope`
-    /// at every real call site anyway. Named `isolation_config`, not `ownership_config`: it
-    /// carries knobs consumed by both Prong A (`OwnershipRewrite`, #1370) and Prong B
-    /// (`AudienceGuard`'s registration gate, #1371), not just the ownership rewrite.
+    /// `MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved once at server startup, not per request, but
+    /// bundled here rather than as a new `make_session_context` parameter (#1370 Design §8):
+    /// per-request resolved values ride the context, per-service objects live on the service,
+    /// and this rides along with `read_scope` at every real call site anyway.
     pub isolation_config: Arc<IsolationConfig>,
+    /// Whether this *deployment* -- not this caller -- can ever produce an admin principal at
+    /// all, derived once at startup from `AuthProvider::can_grant_admin`
+    /// (`rust/public/src/servers/flight_sql_server.rs`) and copied onto every `CallerContext`
+    /// unchanged, the same treatment `isolation_config` gets. Consumed by `query.rs`'s mutating
+    /// UDTF/UDF registration gate (#1371, AbAC Stage 3, Prong B):
+    /// `caller.is_admin || !caller.admin_principal_possible`. Named for the fact it represents
+    /// (can this deployment ever produce an admin?), not its effect -- when `false` (an
+    /// API-key-only deployment, which can never mint an admin), the mutating functions are
+    /// registered for any authenticated caller rather than staying admin-only, since otherwise
+    /// they would be unreachable by anyone.
+    pub admin_principal_possible: bool,
 }
 
 impl CallerContext {
     /// For background/materialization callers that are not serving a user request at all
     /// (`is_admin: false`, `ReadScope::All`). Distinct from [`Self::maintenance`] only in
     /// `is_admin` -- use this for internal call sites that must not register the mutating
-    /// UDTFs/UDFs.
+    /// UDTFs/UDFs. `admin_principal_possible: true` so the gate's fallback (any-caller
+    /// registration when a deployment has no admin principal) never fires for this
+    /// non-user-request caller -- it is `is_admin` alone that must decide, same as today.
     pub fn internal() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: false,
             isolation_config: Arc::new(IsolationConfig::default()),
+            admin_principal_possible: true,
         }
     }
 
     /// For background/materialization callers performing maintenance work (`is_admin: true`,
-    /// `ReadScope::All`) -- never a user session.
+    /// `ReadScope::All`) -- never a user session. `admin_principal_possible`'s value is moot here
+    /// (the gate's `caller.is_admin` arm already passes), kept `true` for consistency with
+    /// [`Self::internal`].
     pub fn maintenance() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: true,
             isolation_config: Arc::new(IsolationConfig::default()),
+            admin_principal_possible: true,
         }
     }
 }
 
 /// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
-/// (#1370, AbAC Stage 2, Prong A) and the mutating-function registration gate
-/// (#1371, AbAC Stage 3, Prong B). Per-service, resolved once at server startup from environment
-/// variables -- see [`IsolationConfig::from_env`]. Named for what it configures (data isolation),
-/// not for either prong individually -- it predates Prong B's own name and was renamed from
-/// `OwnershipRewriteConfig` when this third knob landed, per `CLAUDE.md`'s "Rust API surface may
-/// change freely" stance: a clean name beats a compatible one here, and this rename touches only
-/// Rust construction sites, none of them SQL-layer surface.
+/// (#1370, AbAC Stage 2, Prong A). Per-service, resolved once at server startup from environment
+/// variables -- see [`IsolationConfig::from_env`].
 #[derive(Debug, Clone, Default)]
 pub struct IsolationConfig {
     /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
@@ -107,20 +117,6 @@ pub struct IsolationConfig {
     /// fail-closed" framing for this operator-responsibility allowlist. Parsed from
     /// `{prefix}_PUBLIC_VIEW_SETS`, falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub public_view_sets: Vec<String>,
-    /// Registers the five mutating lakehouse UDTFs/UDFs (`retire_partitions`,
-    /// `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
-    /// `retire_partition_by_metadata`) for *every* caller, not just an admin (`query.rs`'s gate
-    /// becomes `caller.is_admin || isolation_config.user_maintenance_functions`). Off (`false`)
-    /// by default. Meant for an API-key-only deployment: an API key can never be admin
-    /// (`api_key.rs`), so without this knob such a deployment has no admin principal at all and
-    /// no access to these functions whatsoever. **Deployment-wide, not per-audience** -- none of
-    /// the five functions filters by audience, so enabling this grants *any* authenticated caller
-    /// destructive access to *every* audience's partitions, not just their own; safe only when no
-    /// admin principal exists, unsafe the moment the same deployment also has personal or
-    /// per-team audiences (tighten to per-audience checks if that becomes real; out of scope
-    /// here). Parsed from `{prefix}_USER_MAINTENANCE_FUNCTIONS`, falling back to
-    /// `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`.
-    pub user_maintenance_functions: bool,
 }
 
 /// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the same
@@ -169,31 +165,9 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     Ok(values)
 }
 
-/// Parses a `{var}` env var as a strict boolean: `"true"`/`"false"` (case-insensitive), `Err` on
-/// anything else -- matching the fail-fast posture of the other two knobs rather than silently
-/// defaulting a typo to `false`. Unset *or* empty/whitespace-only ⇒ `false` (the knob's
-/// off-by-default posture), the same "empty means unset" treatment `unstamped_audience` and
-/// `public_view_sets` give their own vars -- routine in k8s manifests, docker-compose
-/// `environment:` lists, and systemd `EnvironmentFile`s, where declaring a var with an empty
-/// value is common.
-fn parse_bool_var(var: &str) -> anyhow::Result<bool> {
-    match std::env::var(var) {
-        Ok(raw) if raw.trim().is_empty() => Ok(false),
-        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
-            "true" => Ok(true),
-            "false" => Ok(false),
-            _ => anyhow::bail!(
-                "{var}: {raw:?} is not a valid boolean -- must be \"true\" or \"false\" \
-                 (case-insensitive)"
-            ),
-        },
-        Err(_) => Ok(false),
-    }
-}
-
 /// Resolves `{prefix}_{suffix}` (falling back to `MICROMEGAS_{suffix}` if unset, or always if
-/// `prefix` is empty). Shared by all three `IsolationConfig::from_env` knobs
-/// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`, `"USER_MAINTENANCE_FUNCTIONS"`).
+/// `prefix` is empty). Shared by both `IsolationConfig::from_env` knobs
+/// (`"UNSTAMPED_AUDIENCE"`, `"PUBLIC_VIEW_SETS"`).
 fn resolved_var(prefix: &str, suffix: &str) -> String {
     if prefix.is_empty() {
         format!("MICROMEGAS_{suffix}")
@@ -208,11 +182,10 @@ fn resolved_var(prefix: &str, suffix: &str) -> String {
 }
 
 impl IsolationConfig {
-    /// Resolves all three knobs from the environment. Unset ⇒ `IsolationConfig::default()`
-    /// (unstamped processes stay invisible, no public view sets, mutating functions stay
-    /// admin-only). A malformed `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`),
-    /// a malformed `{prefix}_PUBLIC_VIEW_SETS` entry, or a `{prefix}_USER_MAINTENANCE_FUNCTIONS`
-    /// value other than `true`/`false` is `Err`, not silently ignored -- a startup `?` turns a
+    /// Resolves both knobs from the environment. Unset ⇒ `IsolationConfig::default()`
+    /// (unstamped processes stay invisible, no public view sets). A malformed
+    /// `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
+    /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
     /// typo into a fail-fast instead of a silently-inert knob.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
@@ -232,12 +205,9 @@ impl IsolationConfig {
         };
         let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");
         let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;
-        let user_maintenance_functions_var = resolved_var(prefix, "USER_MAINTENANCE_FUNCTIONS");
-        let user_maintenance_functions = parse_bool_var(&user_maintenance_functions_var)?;
         Ok(Self {
             unstamped_audience,
             public_view_sets,
-            user_maintenance_functions,
         })
     }
 }

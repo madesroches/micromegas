@@ -48,11 +48,14 @@ mutating functions on `caller.is_admin` (`query.rs:154-179`) — the parent plan
   `is_admin: true`, `internal()` sets `false` (deliberately: internal callers that must not get the
   mutating functions). No `ReadScope::All`-based arm needs adding; the current shape is the intended
   one, and this plan records that rather than adding a redundant condition.
-- **`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`** — not implemented, deferred to this stage by #1382 on
+- **The API-key-only deployment's way back** — not implemented, deferred to this stage by #1382 on
   purpose. It is still wanted, and not as a loosening for its own sake: API keys can never be admin
   (`api_key.rs:124`), so an **API-key-only deployment has no admin principal at all** and lost
-  access to `retire_partitions`/`materialize_partitions`/… outright in #1382. This knob is that
-  deployment's way back.
+  access to `retire_partitions`/`materialize_partitions`/… outright in #1382. **Shipped as a derived
+  capability, not an env-var knob** (see §9 below): a new `AuthProvider::can_grant_admin()` method
+  lets the server ask, once at startup, whether *any* configured provider could ever produce an
+  admin principal; when none can, the five functions register for any authenticated caller instead
+  of admin-only. No operator-set variable — the deployment finds out on its own.
 
 ### Where an audience actually lives
 
@@ -424,36 +427,44 @@ any `ReadScope::Audiences` caller with no readable partitions. Guard it: if the 
 is empty, build the empty batch directly from `ListPartitionsTableProvider::schema()`
 (`RecordBatch::new_empty`) instead of calling `rows_to_record_batch`.
 
-### 9. The mutating-function registration knob, and where its config lives
+### 9. The mutating-function registration gate — derived, not a knob
 
-Gate becomes `caller.is_admin || config.user_maintenance_functions` (`query.rs:154`). No
+**Superseded from the design below**: this section originally specified a
+`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` env var. What shipped instead derives the same capability
+from the auth layer at startup, with no env var at all — see the CHANGELOG's Stage 3 entry for the
+final shape. The reasoning kept from the original design: an env-var knob makes the operator assert
+"my deployment has no admin principal," a fact the auth layer already knows and can get wrong only
+by the operator forgetting to flip it. Deriving it removes that failure mode entirely.
+
+`AuthProvider` (`rust/auth/src/types.rs`) gains `fn can_grant_admin(&self) -> bool`, defaulted
+`false`. `OidcAuthProvider` overrides it to `true` only when its `admin_users` list is non-empty (an
+OIDC deployment configured with zero admins has no admin principal either, same as an API-key-only
+one); `MultiAuthProvider` overrides it to `true` if any provider in its chain does; both API-key
+providers keep the default. `flight_sql_server.rs` computes
+`auth_provider.as_ref().map_or(true, |p| p.can_grant_admin())` once, covering all three
+auth-resolution branches (including the monolith's injected-provider path, not just
+`use_default_auth`) — a `None` provider means auth is disabled, where every caller is already
+trusted as admin by the absent-header convention, so `true` is correct and conservative there too.
+
+The result rides on `CallerContext` as `admin_principal_possible: bool`, not on `IsolationConfig`
+(that type keeps only Prong A's two knobs — `unstamped_audience`/`public_view_sets` — since this
+capability isn't parsed from the environment). `FlightSqlServiceImpl` carries the derived value and
+copies it onto every `CallerContext` it resolves, the same treatment `isolation_config` gets.
+`query.rs`'s gate becomes `caller.is_admin || !caller.admin_principal_possible` — self-describing
+enough that the six-line comment the original design would have needed collapses to one line. No
 `ReadScope::All` arm — see Current State: `maintenance()` already implies `is_admin`, and
-`internal()`'s exclusion is deliberate.
+`internal()`'s exclusion is deliberate (`internal()` sets `admin_principal_possible: true` so the
+fallback arm never fires for it).
 
-`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` (`{prefix}_…` with an unprefixed fallback, like every other
-knob) is a per-service deployment value, so it belongs on the object that already carries
-`unstamped_audience`/`public_view_sets` — but that object is named `OwnershipRewriteConfig`, and a
-UDTF-registration knob has nothing to do with the rewrite. **Rename it to `IsolationConfig`**, with
-`CallerContext.isolation_config`, `FlightSqlServiceImpl::new`'s parameter, and
-`FlightSqlServerBuilder::with_ownership_config()` → `with_isolation_config()` following. Rust API
-churn is explicitly cheaper than a misleading name in this codebase (`CLAUDE.md` §Interface
-stability), and the compiler enumerates all ~6 construction sites (three servers, three test files).
-**Decided: rename, not an additive field** — `CLAUDE.md` §Interface stability states the Rust API
-surface may change freely, that "a clean design beats a compatible one", and that the preferred
-shape is the one that makes the compiler enumerate every affected call site; the rename touches only
-Rust construction sites, none of them SQL-layer surface. Parse the knob with the existing
-`resolved_var` helper (`read_scope.rs:151-162`); accept exactly `true`/`false` (case-insensitive) and
-`Err` on anything else, matching the fail-fast posture of the other two knobs.
-
-**Carried caveat from the parent plan (§4): the knob is deployment-wide, not per-audience.** None of
+**Carried caveat from the parent plan (§4): still deployment-wide, not per-audience.** None of
 the five mutating functions carries an audience filter — `retire_partitions` takes an arbitrary
-`(view_set_name, view_instance_id)` pair (`query.rs:155-158`) — so once
-`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS=true` is set, *any* authenticated caller can retire or
-materialize partitions belonging to *any* audience, not just their own. This is fine for the
-API-key-only deployment the knob is meant for (no admin principal exists at all, so the alternative
-is no access to these functions for anyone); it stops being fine the moment that deployment also has
-personal or per-team audiences, where it hands every user destructive access to every other user's
-data. Tighten to per-audience checks if such a hybrid deployment becomes real; out of scope here.
+`(view_set_name, view_instance_id)` pair (`query.rs:155-158`) — so whenever no admin principal is
+possible, *any* authenticated caller can retire or materialize partitions belonging to *any*
+audience, not just their own. This is fine for the API-key-only deployment this exists for (no admin
+principal exists at all, so the alternative is no access to these functions for anyone); it stops
+being fine the moment that deployment also has personal or per-team audiences, where it hands every
+user destructive access to every other user's data. Tighten to per-audience checks if such a hybrid
+deployment becomes real; out of scope here.
 
 ### 10. Denial is indistinguishable from absence
 
@@ -533,18 +544,22 @@ and the aggregate-scan cost this design was chosen to avoid.
    `MICROMEGAS_METADATA_CACHE_MB` whose per-entry weight genuinely varies.
 4. Offline unit tests for `is_readable` and for `AudienceIndex`'s cache behavior that needs no DB.
 
-### Phase 2 — `IsolationConfig` and the registration knob
+### Phase 2 — `IsolationConfig`, `can_grant_admin`, and the derived gate
 
 5. Rename `OwnershipRewriteConfig` → `IsolationConfig`, `CallerContext.ownership_config` →
-   `isolation_config`, add `user_maintenance_functions: bool` parsed from
-   `{prefix}_USER_MAINTENANCE_FUNCTIONS`/`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`
-   (`read_scope.rs:84-193`). Follow the compiler through `flight_sql_service_impl.rs:500-565`,
-   `flight_sql_server.rs`, `monolith`, and the test files. Also fix the doc comment in
-   `rust/auth/tests/policy_tests.rs:529` (`"OwnershipRewriteConfig::from_env"` → `"IsolationConfig::
-   from_env"`) — a comment in a crate with no compile-time dependency on the type, so the compiler
-   won't flag it.
-6. Extend the gate at `query.rs:154` to `caller.is_admin || caller.isolation_config
-   .user_maintenance_functions`; extend `lakehouse_admin_gate_test.rs` with the knob's two states.
+   `isolation_config` (`read_scope.rs`). Follow the compiler through
+   `flight_sql_service_impl.rs:500-565`, `flight_sql_server.rs`, `monolith`, and the test files.
+   Also fix the doc comment in `rust/auth/tests/policy_tests.rs:529` (`"OwnershipRewriteConfig::
+   from_env"` → `"IsolationConfig::from_env"`) — a comment in a crate with no compile-time
+   dependency on the type, so the compiler won't flag it.
+6. Add `AuthProvider::can_grant_admin(&self) -> bool` (defaulted `false`) to
+   `rust/auth/src/types.rs`; override in `OidcAuthProvider` (`true` iff `admin_users` non-empty)
+   and `MultiAuthProvider` (`true` if any chained provider is). Compute
+   `admin_principal_possible` once in `flight_sql_server.rs::build_and_serve`, covering all three
+   auth-resolution branches; thread it through `FlightSqlServiceImpl::new` and onto
+   `CallerContext.admin_principal_possible`. Extend the gate at `query.rs:154` to
+   `caller.is_admin || !caller.admin_principal_possible`; extend `lakehouse_admin_gate_test.rs`
+   with the gate's two states, driving `admin_principal_possible` directly instead of an env var.
 
 ### Phase 3 — arg-addressed guards
 
@@ -668,11 +683,12 @@ and the aggregate-scan cost this design was chosen to avoid.
 - **Unchanged bypasses, by design:** no admin read bypass (`is_admin` never feeds `ReadScope`);
   `list_view_sets` unfiltered; public view sets relax only `list_partitions`' `'global'` rows, never
   the arg-addressed guards (which are process-scoped, so the public exemption cannot apply).
-- **`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is a deployment-wide grant, not a per-audience one
-  (§9).** None of the five mutating functions filters by audience, so enabling the knob lets any
-  authenticated caller retire or materialize partitions belonging to any audience — acceptable for
-  its intended API-key-only deployment (no admin principal exists), a real cross-audience
-  destructive-access hole in a hybrid deployment that also has personal or per-team audiences.
+- **The derived mutating-function fallback is a deployment-wide grant, not a per-audience one
+  (§9).** None of the five mutating functions filters by audience, so on a deployment with no
+  admin principal, any authenticated caller can retire or materialize partitions belonging to any
+  audience — acceptable for the intended API-key-only deployment (no admin principal exists), a
+  real cross-audience destructive-access hole in a hybrid deployment that also has personal or
+  per-team audiences.
 
 ## Performance
 
@@ -687,31 +703,28 @@ and the aggregate-scan cost this design was chosen to avoid.
 
 ## Documentation
 
-- `mkdocs/docs/admin/flight-sql.md` env-var table: add a `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` row
-  alongside `MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`, with the API-key-only-
-  deployment rationale from Current State **and the §9 deployment-wide-not-per-audience caveat**.
-- `mkdocs/docs/admin/monolith.md` env-var table: add the `MICROMEGAS_ANALYTICS_`-prefixed
-  `MICROMEGAS_ANALYTICS_USER_MAINTENANCE_FUNCTIONS` row (falls back to unprefixed
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, following the table's existing prefixed-knob rows), with
-  the same caveat.
+- No env-var row to add: `mkdocs/docs/admin/flight-sql.md` and `monolith.md`'s env-var tables gain
+  nothing for this gate, since there is no knob to document.
 - `mkdocs/docs/admin/authentication.md` §"Audience Filtering Activation" (:152-175): extend from
   "every query plan gets a predicate" to also cover Prong B — the four guarded functions and their
   uniform denial, `list_partitions` row filtering including the `'global'`-row rule and its
   dependence on `MICROMEGAS_UNSTAMPED_AUDIENCE`, and the freshness difference between the prongs
-  (§11). Add `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` to the knob list with the API-key-only-
-  deployment rationale **and the caveat that it grants cross-audience destructive access in a
-  hybrid deployment (§9)**.
+  (§11). State the derived rule in full once: the five functions are admin-only when this
+  deployment can produce an admin principal, and open to any authenticated caller when it cannot
+  — **with the caveat that this grants cross-audience destructive access in a hybrid deployment
+  (§9)**.
 - `mkdocs/docs/admin/functions-reference.md`: `list_partitions()` (:42) gains a note that rows are
-  audience-filtered for a scoped caller and that `'global'` rows follow the knob; the five mutating
-  functions gain the knob alongside the existing admin requirement.
+  audience-filtered for a scoped caller and that `'global'` rows follow the unstamped-audience
+  knob; the five mutating functions gain a short pointer to `authentication.md`'s derived rule
+  alongside the existing admin requirement.
 - `mkdocs/docs/query-guide/functions-reference.md`: `perfetto_trace_chunks` (:85),
   `process_spans` (:138), `parse_block` (:196) and `get_payload` gain one line each — the id
   argument must name data in an audience the caller can read, otherwise the call fails with a
   not-found-shaped error. The 🔒 legend line (:5) and the five 🔒-marked entries it describes
   (`retire_partitions` :49, `materialize_partitions` :55, `regenerate_partitions` :61,
   `retire_partition_by_metadata` :73, `retire_partition_by_file` :79) currently state admin-only
-  access unconditionally; qualify both the legend and the five entries with "...unless
-  `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled", matching the admin-gate caveat already
+  access unconditionally; qualify both the legend and the five entries with "...unless this
+  deployment can never produce an admin principal at all", matching the admin-gate caveat already
   planned for `admin/functions-reference.md` above.
 - `tasks/data_isolation/audience_based_access_control_plan.md`: record the two deviations (§6's
   guard-then-internal instead of scope inheritance; one cache instead of three, and no

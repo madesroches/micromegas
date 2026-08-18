@@ -12,33 +12,33 @@
 //! and, for `process_spans`/`perfetto_trace_chunks`, whatever `get_process_thread_list`/
 //! `get_process_exe` need to run without error, which is `blocks` and `processes` respectively.
 
+mod common;
+
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
+use common::db_fixtures::{
+    caller_with_unstamped_audience, ensure_telemetry_guard, reset_global_view,
+};
 use micromegas_analytics::dfext::string_column_accessor::string_column_by_name;
-use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
-use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
-use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
-use micromegas_analytics::response_writer::{Logger, ResponseWriter};
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::levels::LevelFilter;
 use micromegas_tracing::spans::{
     BeginAsyncNamedSpanEvent, BeginThreadNamedSpanEvent, EndAsyncNamedSpanEvent,
     EndThreadNamedSpanEvent, SpanLocation, ThreadBlock, ThreadStream,
@@ -54,66 +54,6 @@ static SPAN_LOCATION: SpanLocation = SpanLocation {
     file: "prong_b_guard_db_test.rs",
     line: 1,
 };
-
-/// See `ownership_rewrite_db_test.rs`'s identical helper.
-fn ensure_telemetry_guard() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let guard = TelemetryGuardBuilder::default()
-            .with_ctrlc_handling()
-            .with_local_sink_max_level(LevelFilter::Info)
-            .build()
-            .expect("telemetry guard");
-        std::mem::forget(guard);
-    });
-}
-
-/// See `ownership_rewrite_db_test.rs`'s identical helper.
-async fn regenerate_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
-            .await?,
-    );
-    regenerate_partition_range(
-        partitions,
-        lakehouse,
-        view,
-        insert_range,
-        TimeDelta::hours(1),
-        logger,
-    )
-    .await?;
-    Ok(())
-}
-
-/// See `ownership_rewrite_db_test.rs`'s identical helper.
-async fn reset_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let mut tr = lakehouse.lake().db_pool.begin().await?;
-    retire_partitions(
-        &mut tr,
-        &view.get_view_set_name(),
-        &view.get_view_instance_id(),
-        insert_range.begin,
-        insert_range.end,
-        RetireMatch::Overlap,
-        &[],
-        logger.clone(),
-    )
-    .await
-    .with_context(|| "retiring overlapping partitions before regeneration")?;
-    tr.commit().await.with_context(|| "commit")?;
-    regenerate_global_view(lakehouse, view, insert_range, logger).await
-}
 
 /// One seeded process with a "cpu" stream (one thread span pair, for `thread_spans`/
 /// `process_spans`/`perfetto_trace_chunks`; one async span pair, for `async_events`) and its
@@ -216,21 +156,7 @@ fn caller(read_scope: ReadScope) -> CallerContext {
         read_scope,
         is_admin: false,
         isolation_config: Arc::new(IsolationConfig::default()),
-    }
-}
-
-fn caller_with_unstamped_audience(
-    read_scope: ReadScope,
-    unstamped_audience: &str,
-) -> CallerContext {
-    CallerContext {
-        read_scope,
-        is_admin: false,
-        isolation_config: Arc::new(IsolationConfig {
-            unstamped_audience: Some(unstamped_audience.to_string()),
-            public_view_sets: vec![],
-            user_maintenance_functions: false,
-        }),
+        admin_principal_possible: true,
     }
 }
 

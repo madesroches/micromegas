@@ -188,14 +188,18 @@ telemetry-ingestion-srv --disable-auth
     a merged/compacted lakehouse partition of its data still exists. See the CHANGELOG's AbAC
     Stage 3 entry for the full mechanism and its accepted trade-offs.
 
-    **`MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`** (also `{prefix}_USER_MAINTENANCE_FUNCTIONS` for a
-    monolith deployment) registers the five mutating lakehouse UDTFs/UDFs for *every*
-    authenticated caller, not just an admin — meant for an API-key-only deployment, which
-    otherwise has no admin principal at all (an API key can never be admin) and so no access to
-    these functions whatsoever. **Deployment-wide, not per-audience**: none of the five functions
-    filters by audience, so enabling this grants any authenticated caller destructive access to
-    every audience's partitions, not just their own — safe only when no admin principal exists in
-    the deployment, unsafe the moment it also has personal or per-team audiences.
+    **The five mutating lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
+    `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are
+    gated on whether this *deployment* can ever produce an admin principal at all — not on a
+    knob an operator sets. An OIDC provider can grant admin whenever it has at least one
+    configured admin user; an API-key provider never can. At startup, the server asks every
+    configured auth provider "can you ever produce an admin?" and, if none of them can, registers
+    these five functions for *any* authenticated caller instead of admin-only — otherwise an
+    API-key-only deployment would have no path to them at all. **Deployment-wide, not
+    per-audience**: none of the five functions filters by audience, so on a deployment with no
+    admin principal, every authenticated caller gets destructive access to every audience's
+    partitions, not just their own — safe only when no admin principal exists in the deployment,
+    unsafe the moment it also has personal or per-team audiences.
 
 ### Write-Side Stamping (AbAC Stage 5)
 

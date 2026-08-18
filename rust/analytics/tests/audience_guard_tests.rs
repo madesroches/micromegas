@@ -1,11 +1,10 @@
 //! Offline (no live DB) tests for Query Enforcement Prong B (#1371, AbAC Stage 3):
 //! `is_readable`'s truth table and `AudienceGuard`'s no-I/O short-circuit under `ReadScope::All`.
 //!
-//! `IsolationConfig::from_env`'s three knobs (including the new
-//! `user_maintenance_functions`) are covered by `ownership_rewrite_config_tests.rs`; the
-//! mutating-function registration gate's two states are covered by
-//! `lakehouse_admin_gate_test.rs`. Both predate this file and already exercise the pieces this
-//! stage added to them.
+//! `IsolationConfig::from_env`'s two knobs are covered by `ownership_rewrite_config_tests.rs`;
+//! the mutating-function registration gate's states (driven by
+//! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`. Both
+//! predate this file and already exercise the pieces this stage added to them.
 
 use micromegas_analytics::lakehouse::audience_guard::{
     AudienceGuard, AudienceIndex, IdKind, OwnerAudience, is_readable,

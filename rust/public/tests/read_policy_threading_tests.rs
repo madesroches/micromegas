@@ -128,6 +128,7 @@ async fn start_server(
     let part_provider = Arc::new(NullPartitionProvider {});
     let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
     let session_configurator = Arc::new(NoOpSessionConfigurator);
+    let admin_principal_possible = auth_provider.as_ref().is_none_or(|p| p.can_grant_admin());
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
         part_provider,
@@ -135,6 +136,7 @@ async fn start_server(
         session_configurator,
         read_policy,
         Arc::new(IsolationConfig::default()),
+        admin_principal_possible,
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

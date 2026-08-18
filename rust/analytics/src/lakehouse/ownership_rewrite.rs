@@ -2,11 +2,10 @@
 //!
 //! An `AnalyzerRule` that injects an audience-filtering predicate into every
 //! `MaterializedView`-backed `TableScan` a query plan touches, based on the caller's `ReadScope`
-//! (#1369, AbAC Stage 1, `read_scope.rs`) and two of the three deployment knobs bundled in
+//! (#1369, AbAC Stage 1, `read_scope.rs`) and the two deployment knobs bundled in
 //! [`super::read_scope::IsolationConfig`] (`MICROMEGAS_UNSTAMPED_AUDIENCE`,
-//! `MICROMEGAS_PUBLIC_VIEW_SETS` -- the third, `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS`, is Prong
-//! B's, #1371). See `tasks/1370_ownership_rewrite_plan.md` for the full design rationale; this
-//! comment records only what a future reader of this file needs close at hand.
+//! `MICROMEGAS_PUBLIC_VIEW_SETS`). See `tasks/1370_ownership_rewrite_plan.md` for the full design
+//! rationale; this comment records only what a future reader of this file needs close at hand.
 //!
 //! ## `ReadScope::All` is a true no-op
 //!

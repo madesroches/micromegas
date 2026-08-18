@@ -77,6 +77,12 @@ impl MultiAuthProvider {
 
 #[async_trait]
 impl AuthProvider for MultiAuthProvider {
+    /// `true` if any provider in the chain can grant admin -- the chain as a whole can produce
+    /// an admin `AuthContext` whenever one of its links can.
+    fn can_grant_admin(&self) -> bool {
+        self.providers.iter().any(|p| p.can_grant_admin())
+    }
+
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,

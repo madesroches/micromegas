@@ -577,6 +577,12 @@ impl OidcAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for OidcAuthProvider {
+    /// `true` only when `admin_users` is non-empty -- an OIDC deployment configured with no
+    /// admins has no admin principal at all, same as the two API-key providers.
+    fn can_grant_admin(&self) -> bool {
+        !self.admin_users.is_empty()
+    }
+
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,

@@ -97,50 +97,37 @@ pub const DEFAULT_AUDIENCE_CACHE_ENTRIES: u64 = 100_000;
 /// how long a re-derived process's audience can serve a stale answer.
 pub const DEFAULT_AUDIENCE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// One row of the id -> owning-process-audience resolution, tagged with which arm of the
-/// (possibly `UNION ALL`) query produced it. Only `ProcessOrStream`'s query can produce both tags
-/// for the same id (a `process_id`/`stream_id` collision); `Process`/`Block` only ever produce
-/// `Process`-tagged rows. Kept only for `debug!` diagnostics in [`merge_owner_rows`] -- it no
-/// longer picks a winner between the two arms.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum OwnerSource {
-    Process,
-    Stream,
-}
-
-/// Merges possibly-duplicated `(id, audience, source)` rows into one [`OwnerAudience`] per id.
+/// Merges possibly-duplicated `(id, audience)` rows into one [`OwnerAudience`] per id.
 /// Fail-closed on a collision: when `ProcessOrStream`'s two arms resolve the same id to
 /// *different* audiences (a `process_id`/`stream_id` collision -- both ids are client-supplied at
 /// ingestion, with no cross-table uniqueness constraint), neither arm wins over the other --
 /// the id maps to [`OwnerAudience::Ambiguous`], which [`is_readable`] only passes when every
 /// resolved audience is independently readable. `Process`/`Block` queries never produce more than
 /// one row per id, so this never triggers for them.
-fn merge_owner_rows(
-    rows: Vec<(Uuid, Option<String>, OwnerSource)>,
-) -> HashMap<Uuid, OwnerAudience> {
-    let mut by_id: HashMap<Uuid, Vec<(OwnerAudience, OwnerSource)>> = HashMap::new();
-    for (id, audience, source) in rows {
+fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAudience> {
+    let mut by_id: HashMap<Uuid, Vec<OwnerAudience>> = HashMap::new();
+    for (id, audience) in rows {
         let owner = match audience {
             Some(a) => OwnerAudience::Audience(Arc::from(a)),
             None => OwnerAudience::Unstamped,
         };
         let distinct_owners = by_id.entry(id).or_default();
-        if !distinct_owners.iter().any(|(o, _)| *o == owner) {
-            distinct_owners.push((owner, source));
+        if !distinct_owners.contains(&owner) {
+            distinct_owners.push(owner);
         }
     }
     by_id
         .into_iter()
         .map(|(id, mut owners)| {
             let owner = if owners.len() == 1 {
-                owners.pop().expect("checked len() == 1 above").0
+                owners.pop().expect("checked len() == 1 above")
             } else {
                 debug!(
                     "audience_guard: '{id}' resolved to {} distinct owners across process_id/stream_id \
                      collision ({owners:?}), treating as Ambiguous (fail-closed)",
                     owners.len()
                 );
-                OwnerAudience::Ambiguous(owners.into_iter().map(|(o, _)| o).collect())
+                OwnerAudience::Ambiguous(owners)
             };
             (id, owner)
         })
@@ -154,7 +141,7 @@ fn merge_owner_rows(
 fn owner_query_sql(kind: IdKind) -> &'static str {
     match kind {
         IdKind::Process => {
-            "SELECT p.process_id AS id, a.value AS audience, 'process' AS source
+            "SELECT p.process_id AS id, a.value AS audience
              FROM processes p
              LEFT JOIN LATERAL (
                  SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
@@ -162,7 +149,7 @@ fn owner_query_sql(kind: IdKind) -> &'static str {
              WHERE p.process_id = ANY($1::uuid[])"
         }
         IdKind::Block => {
-            "SELECT b.block_id AS id, a.value AS audience, 'process' AS source
+            "SELECT b.block_id AS id, a.value AS audience
              FROM blocks b
              JOIN processes p ON p.process_id = b.process_id
              LEFT JOIN LATERAL (
@@ -171,14 +158,14 @@ fn owner_query_sql(kind: IdKind) -> &'static str {
              WHERE b.block_id = ANY($1::uuid[])"
         }
         IdKind::ProcessOrStream => {
-            "SELECT p.process_id AS id, a.value AS audience, 'process' AS source
+            "SELECT p.process_id AS id, a.value AS audience
              FROM processes p
              LEFT JOIN LATERAL (
                  SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
              ) a ON TRUE
              WHERE p.process_id = ANY($1::uuid[])
              UNION ALL
-             SELECT s.stream_id AS id, a.value AS audience, 'stream' AS source
+             SELECT s.stream_id AS id, a.value AS audience
              FROM streams s
              JOIN processes p ON p.process_id = s.process_id
              LEFT JOIN LATERAL (
@@ -193,7 +180,7 @@ async fn fetch_owner_rows(
     pool: &sqlx::Pool<sqlx::Postgres>,
     ids: &[Uuid],
     kind: IdKind,
-) -> anyhow::Result<Vec<(Uuid, Option<String>, OwnerSource)>> {
+) -> anyhow::Result<Vec<(Uuid, Option<String>)>> {
     let rows = sqlx::query(owner_query_sql(kind))
         .bind(ids)
         .bind(AUDIENCE_PROPERTY)
@@ -205,13 +192,7 @@ async fn fetch_owner_rows(
             let id: Uuid = row.try_get("id").context("reading id column")?;
             let audience: Option<String> =
                 row.try_get("audience").context("reading audience column")?;
-            let source: String = row.try_get("source").context("reading source column")?;
-            let source = if source == "process" {
-                OwnerSource::Process
-            } else {
-                OwnerSource::Stream
-            };
-            Ok((id, audience, source))
+            Ok((id, audience))
         })
         .collect()
 }

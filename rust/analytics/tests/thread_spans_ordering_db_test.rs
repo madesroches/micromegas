@@ -5,13 +5,15 @@
 //! (see `histo_view_test.rs` / `sql_view_test.rs` for the same harness pattern); does not run
 //! under a plain `cargo test`.
 
+mod common;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use common::db_fixtures::{ensure_telemetry_guard, regenerate_global_view, reset_global_view};
 use datafusion::arrow::array::TimestampNanosecondArray;
 use micromegas_analytics::dfext::typed_column::{
     get_single_row_primitive_value_by_name, typed_column_by_name,
 };
-use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
     BlockOrder, JitPartitionConfig, generate_stream_jit_partitions,
@@ -31,20 +33,17 @@ use micromegas_analytics::lakehouse::streams_view::make_streams_view;
 use micromegas_analytics::lakehouse::thread_spans_view::{ThreadSpansView, update_partition};
 use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
-use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::metadata::{find_process_with_latest_timing, find_stream_from_view};
-use micromegas_analytics::response_writer::{Logger, ResponseWriter};
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::{TimeRange, make_time_converter_from_latest_timing};
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::levels::LevelFilter;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::process_info::ProcessInfo;
 use micromegas_tracing::spans::{
@@ -122,89 +121,6 @@ async fn push_pairs_and_insert_block(
         .await
         .map_err(|e| anyhow::anyhow!("insert_block: {e}"))?;
     Ok(())
-}
-
-/// Force-regenerates a global view's bucket(s) covering `insert_range` (which must exactly tile
-/// `TimeDelta::hours(1)`, matching `materialize_global_view`'s own bucket size), bypassing
-/// `materialize_partition_range`'s "already covered by *an* (even if stale) overlapping
-/// partition" freshness check. Needed to make a re-materialization after new source rows have
-/// been added (rather than the initial, first-time materialization) actually pick them up.
-async fn regenerate_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
-            .await?,
-    );
-    regenerate_partition_range(
-        partitions,
-        lakehouse,
-        view,
-        insert_range,
-        TimeDelta::hours(1),
-        logger,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Retires every partition of `view` that *overlaps* `insert_range`, then regenerates the range
-/// from source.
-///
-/// `regenerate_global_view` alone is not enough on a shared, persistent dev lake:
-/// `regenerate_partition_range` refuses a bucket that does not *fully contain* each existing
-/// partition it would replace, so a single partition straddling a bucket boundary -- e.g. one an
-/// older, non-hour-aligned version of a test left behind, or one written with a different
-/// partition delta -- fails the run with "regeneration bucket ... does not fully contain existing
-/// partition ...". Retiring by overlap first (`RetireMatch::Overlap`, which unlike
-/// `RetireMatch::Containment` matches a partition that merely straddles the boundary) makes the
-/// subsequent regeneration independent of whatever shape the lake happened to be in. Global
-/// metadata views are derived from Postgres tables, so discarding and rebuilding them is free of
-/// data loss.
-async fn reset_global_view(
-    lakehouse: Arc<LakehouseContext>,
-    view: Arc<dyn View>,
-    insert_range: TimeRange,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    let mut tr = lakehouse.lake().db_pool.begin().await?;
-    retire_partitions(
-        &mut tr,
-        &view.get_view_set_name(),
-        &view.get_view_instance_id(),
-        insert_range.begin,
-        insert_range.end,
-        RetireMatch::Overlap,
-        &[],
-        logger.clone(),
-    )
-    .await
-    .with_context(|| "retiring overlapping partitions before regeneration")?;
-    tr.commit().await.with_context(|| "commit")?;
-    regenerate_global_view(lakehouse, view, insert_range, logger).await
-}
-
-/// Ensures the process-wide telemetry guard (ctrlc handler, global tracing subscriber) is
-/// initialized exactly once for a `#[tokio::test]` in this file. `TelemetryGuardBuilder::build`
-/// does process-global, one-time setup (`ctrlc::set_handler` allows exactly one handler; the
-/// global tracing subscriber can only be installed once), and this file has more than one
-/// DB-backed test, all of which can run in the same test binary process -- so only the first
-/// caller actually builds and installs it. The guard is intentionally leaked (never dropped):
-/// there is no natural per-test teardown point when initialization is process-wide, and the
-/// process exits at the end of the test binary regardless.
-fn ensure_telemetry_guard() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let guard = TelemetryGuardBuilder::default()
-            .with_ctrlc_handling()
-            .with_local_sink_max_level(LevelFilter::Info)
-            .build()
-            .expect("telemetry guard");
-        std::mem::forget(guard);
-    });
 }
 
 #[ignore]

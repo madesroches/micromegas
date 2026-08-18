@@ -207,6 +207,7 @@ async fn optimized_plan_with_factory(
         read_scope,
         is_admin: false,
         isolation_config: Arc::new(isolation_config),
+        admin_principal_possible: true,
     };
     let ctx: SessionContext = make_session_context(
         lakehouse,
@@ -248,7 +249,6 @@ async fn public_view_set_plans_with_no_injected_predicate() {
     let config = IsolationConfig {
         unstamped_audience: None,
         public_view_sets: vec!["blocks".to_string()],
-        ..IsolationConfig::default()
     };
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM blocks")
         .await

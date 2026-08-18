@@ -2,7 +2,7 @@
 
 This page provides a complete reference to all SQL functions available in Micromegas queries, including both standard DataFusion functions and Micromegas-specific extensions.
 
-**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error, unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled (deployment-wide, not per-audience — see [Authentication](../admin/authentication.md#audience-filtering-activation)). See [Authentication](../admin/flight-sql.md#authentication).
+**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error, unless this deployment can never produce an admin principal at all, in which case any authenticated caller may call it (deployment-wide, not per-audience — see [Authentication](../admin/authentication.md#audience-filtering-activation)). See [Authentication](../admin/flight-sql.md#authentication).
 
 ## Micromegas Extensions
 
@@ -48,19 +48,19 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_partitions)
 
 #### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
-**Administrative Function** - Retires data partitions from the lakehouse for a specified time range. Admin-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled.
+**Administrative Function** - Retires data partitions from the lakehouse for a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partitionsview_set-view_instance-start_time-end_time) for details.
 
 #### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Materializes data partitions for a view over a specified time range. Admin-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled.
+**Administrative Function** - Materializes data partitions for a view over a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at. Admin-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled.
+**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
@@ -72,13 +72,13 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) 
 
 #### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled.
+**Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time) for details.
 
 #### `retire_partition_by_file(file_path)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code. Admin-only unless `MICROMEGAS_USER_MAINTENANCE_FUNCTIONS` is enabled.
+**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_filefile_path) for details.
 
