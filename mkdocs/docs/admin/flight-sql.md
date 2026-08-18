@@ -68,7 +68,11 @@ the key-only deployment (no OIDC) some Grafana setups use — see
 `--disable-auth` treats every FlightSQL caller as admin — it is a development-only
 flag, never for production use. API-key (`MICROMEGAS_API_KEYS`) callers are never
 admin, so they cannot call the [admin SQL functions](functions-reference.md); admin
-access requires an OIDC identity matched against `MICROMEGAS_ADMINS`.
+access requires an OIDC identity matched against `MICROMEGAS_ADMINS`. `bulk_ingest`
+(`CommandStatementIngest`) is likewise admin-gated, via a separate mechanism from
+the admin SQL functions — see
+[bulk_ingest(table_name, table)](../query-guide/python-api.md#bulk_ingesttable_name-table)
+for detail.
 
 ## Health and readiness
 

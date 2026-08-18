@@ -37,7 +37,7 @@ async fn cloudwatch_logs_firehose_handler(
     let request_id_header = request_id_from(&headers);
 
     // AbAC Stage 5 (#1373, §5) -- see `firehose.rs::firehose_handler`'s identical comment.
-    let audience = match resolve_write_audience(ctx.as_ref().map(|Extension(c)| c), &stamping) {
+    let audience = match resolve_write_audience(ctx.as_ref(), &stamping) {
         Ok(a) => a,
         Err(_) => {
             return firehose_response(

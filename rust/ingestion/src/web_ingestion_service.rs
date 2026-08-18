@@ -580,10 +580,10 @@ impl WebIngestionService {
             );
             return Ok(());
         }
-        let properties: Vec<Property> = instrument_named!(
+        let properties: Option<Vec<Property>> = instrument_named!(
             sqlx::query_scalar("SELECT properties FROM processes WHERE process_id = $1")
                 .bind(process_id)
-                .fetch_one(&self.lake.db_pool),
+                .fetch_optional(&self.lake.db_pool),
             "sql_select_process_properties"
         )
         .await
@@ -592,6 +592,15 @@ impl WebIngestionService {
                 "reading existing process properties for conflict check: {e}"
             ))
         })?;
+        let Some(properties) = properties else {
+            // The row disappeared between our INSERT ... ON CONFLICT DO NOTHING and this SELECT
+            // (a concurrent delete_empty_processes sweep, or an operator's manual recovery
+            // DELETE) -- nothing left to conflict with.
+            debug!(
+                "duplicate process_id={process_id} skipped (row deleted concurrently, no conflict)"
+            );
+            return Ok(());
+        };
         let existing = properties
             .iter()
             .find(|p| p.key_str() == PROPERTY_AUDIENCE)

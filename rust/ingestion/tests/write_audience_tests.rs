@@ -75,11 +75,6 @@ fn write_audience_rejects_non_ascii() {
     assert!(WriteAudience::new(Some("team-\u{e9}")).is_err()); // "team-é"
 }
 
-#[test]
-fn write_audience_default_is_none() {
-    assert_eq!(WriteAudience::default(), WriteAudience::none());
-}
-
 // ---------------------------------------------------------------------------
 // strip_reserved_properties
 // ---------------------------------------------------------------------------

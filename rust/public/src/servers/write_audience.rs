@@ -1,10 +1,11 @@
 //! Resolving the authenticated write audience at the HTTP edge (AbAC Stage 5, #1373, §5).
 //!
 //! `rust/public` is the only crate that sees both `AuthContext` (`micromegas-auth`) and the
-//! ingestion service (`micromegas-ingestion`), so this is where an `Option<&AuthContext>` --
-//! the request extension every ingestion route now carries -- turns into a
+//! ingestion service (`micromegas-ingestion`), so this is where an `Option<&Extension<AuthContext>>`
+//! -- the request extension every ingestion route now carries -- turns into a
 //! [`micromegas_ingestion::write_audience::WriteAudience`].
 
+use axum::Extension;
 use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::types::AuthContext;
 use micromegas_ingestion::write_audience::WriteAudience;
@@ -75,10 +76,10 @@ impl std::error::Error for WriteAudienceError {}
 /// `Err` is a 403 at every call site -- never a silent unstamped write when the operator asked
 /// for enforcement.
 pub fn resolve_write_audience(
-    ctx: Option<&AuthContext>,
+    ctx: Option<&Extension<AuthContext>>,
     cfg: &StampingConfig,
 ) -> Result<WriteAudience, WriteAudienceError> {
-    let audience = ctx.and_then(|c| c.bound_audience.as_deref());
+    let audience = ctx.and_then(|Extension(c)| c.bound_audience.as_deref());
     match audience {
         Some(_) => WriteAudience::new(audience).map_err(|e| {
             warn!("bound_audience failed WriteAudience validation, rejecting: {e:#}");

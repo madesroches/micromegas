@@ -149,12 +149,10 @@ fn resolve_otlp_write_audience(
     stamping: &StampingConfig,
     signal: Signal,
 ) -> Result<WriteAudience, OtelError> {
-    resolve_write_audience(ctx.as_ref().map(|Extension(c)| c), stamping).map_err(|_| {
-        OtelError::Denied {
-            signal,
-            message: "write audience required".to_string(),
-            public_message: "write audience required",
-        }
+    resolve_write_audience(ctx.as_ref(), stamping).map_err(|_| OtelError::Denied {
+        signal,
+        message: "write audience required".to_string(),
+        public_message: "write audience required",
     })
 }
 

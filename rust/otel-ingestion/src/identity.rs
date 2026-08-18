@@ -41,7 +41,7 @@ pub const NS_OTEL_BLOCK_V1: Uuid = uuid!("5829a6f7-0577-4c8c-862f-cf4fdab445cc")
 /// audience-tagged prefix ahead of its own hash input using this exact separator, rather than a
 /// `\x1F` string literal, so the two modules can never drift on what the separator character is.
 pub(crate) const SEPARATOR: char = '\x1F';
-pub(crate) const SEPARATOR_STR: &str = "\x1F";
+const SEPARATOR_STR: &str = "\x1F";
 
 /// Identity inputs beyond the OTLP payload itself (AbAC Stage 5, #1373, §4).
 ///

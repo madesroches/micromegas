@@ -47,7 +47,7 @@ async fn firehose_handler(
     // decode work. Rendered through the Firehose ack shape (non-2xx + `errorMessage`), not a
     // clean 403: Firehose doesn't distinguish 4xx from 5xx, so this is a retry-then-spill, not
     // an immediate rejection.
-    let audience = match resolve_write_audience(ctx.as_ref().map(|Extension(c)| c), &stamping) {
+    let audience = match resolve_write_audience(ctx.as_ref(), &stamping) {
         Ok(a) => a,
         Err(_) => {
             return firehose_response(

@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// audience explicitly -- there is no `Default` impl, so a call site that has no audience to
 /// pass must say so with [`WriteAudience::none`], and the compiler enumerates every site that
 /// needs updating when this type's callers change.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteAudience(Option<Arc<str>>);
 
 impl WriteAudience {

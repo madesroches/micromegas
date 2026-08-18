@@ -613,7 +613,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_unstamped_audience(audiences_scope(&["group:everyone"]), "group:everyone",),
+            caller_with_unstamped_audience(audiences_scope(&["everyone"]), "everyone",),
             None,
             &processes_c_sql,
         )
@@ -626,7 +626,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_unstamped_audience(audiences_scope(&["team-a"]), "group:everyone"),
+            caller_with_unstamped_audience(audiences_scope(&["team-a"]), "everyone"),
             None,
             &processes_c_sql,
         )

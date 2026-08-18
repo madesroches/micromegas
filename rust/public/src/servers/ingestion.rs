@@ -66,7 +66,7 @@ fn resolve_native_write_audience(
     ctx: &Option<Extension<AuthContext>>,
     stamping: &StampingConfig,
 ) -> Result<WriteAudience, IngestionError> {
-    resolve_write_audience(ctx.as_ref().map(|Extension(ctx)| ctx), stamping)
+    resolve_write_audience(ctx.as_ref(), stamping)
         .map_err(|_| IngestionError::Forbidden("write audience required".to_string()))
 }
 

@@ -73,7 +73,7 @@ fn ctx_without_bound_audience() -> AuthContext {
 
 #[test]
 fn bound_audience_stamps_regardless_of_the_knob() {
-    let ctx = ctx_with_bound_audience("team-a");
+    let ctx = Extension(ctx_with_bound_audience("team-a"));
     for require in [false, true] {
         let cfg = StampingConfig::new(require);
         let audience =
@@ -84,7 +84,7 @@ fn bound_audience_stamps_regardless_of_the_knob() {
 
 #[test]
 fn audience_less_credential_is_unstamped_when_knob_off() {
-    let ctx = ctx_without_bound_audience();
+    let ctx = Extension(ctx_without_bound_audience());
     let cfg = StampingConfig::new(false);
     let audience = resolve_write_audience(Some(&ctx), &cfg).expect("off -> unstamped, not Err");
     assert_eq!(audience, WriteAudience::none());
@@ -92,7 +92,7 @@ fn audience_less_credential_is_unstamped_when_knob_off() {
 
 #[test]
 fn audience_less_credential_is_rejected_when_knob_on() {
-    let ctx = ctx_without_bound_audience();
+    let ctx = Extension(ctx_without_bound_audience());
     let cfg = StampingConfig::new(true);
     assert!(resolve_write_audience(Some(&ctx), &cfg).is_err());
 }
@@ -143,7 +143,7 @@ fn stamping_config_from_env_unset_is_off() {
         std::env::remove_var(RWA_UNPREFIXED_VAR);
     }
     let cfg = StampingConfig::from_env(RWA_PREFIX).expect("from_env");
-    let ctx = ctx_without_bound_audience();
+    let ctx = Extension(ctx_without_bound_audience());
     assert!(resolve_write_audience(Some(&ctx), &cfg).is_ok());
 }
 
@@ -157,7 +157,7 @@ fn stamping_config_from_env_reads_unprefixed_fallback() {
         std::env::set_var(RWA_UNPREFIXED_VAR, "true");
     }
     let cfg = StampingConfig::from_env(RWA_PREFIX).expect("from_env");
-    let ctx = ctx_without_bound_audience();
+    let ctx = Extension(ctx_without_bound_audience());
     assert!(resolve_write_audience(Some(&ctx), &cfg).is_err());
 }
 
@@ -171,7 +171,7 @@ fn stamping_config_from_env_prefixed_wins_over_unprefixed() {
         std::env::set_var(RWA_UNPREFIXED_VAR, "true");
     }
     let cfg = StampingConfig::from_env(RWA_PREFIX).expect("from_env");
-    let ctx = ctx_without_bound_audience();
+    let ctx = Extension(ctx_without_bound_audience());
     assert!(resolve_write_audience(Some(&ctx), &cfg).is_ok());
 }
 

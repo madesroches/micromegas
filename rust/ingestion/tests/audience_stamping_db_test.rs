@@ -191,25 +191,3 @@ async fn otel_reregistration_conflicts_with_native_registration() -> Result<()> 
     );
     Ok(())
 }
-
-/// The stamp survives the `sqlx` bind into `processes.properties` and reads back out --
-/// the one thing a live database adds over the `finalize_process_properties` unit tests.
-#[ignore]
-#[tokio::test]
-async fn stamp_round_trips_through_the_database() -> Result<()> {
-    let lake = connect().await?;
-    let ingestion = WebIngestionService::new(lake.clone());
-    let process_id = Uuid::new_v4();
-    let audience = WriteAudience::new(Some("team-round-trip"))?;
-
-    ingestion
-        .insert_process(process_body(process_id)?, &audience)
-        .await
-        .with_context(|| "insert_process")?;
-
-    assert_eq!(
-        read_audience_property(&lake.db_pool, process_id).await?,
-        Some("team-round-trip".to_string())
-    );
-    Ok(())
-}

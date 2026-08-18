@@ -127,7 +127,7 @@ async fn webhook_handler(
     // AbAC Stage 5 (#1373, §5): reuses `OtelError::Denied`'s meaning but renders it through
     // this route's own `build_error_response` (text/plain, non-retryable) rather than the OTLP
     // `google.rpc.Status` shape -- a denied write is not a transient condition worth retrying.
-    let audience = match resolve_write_audience(ctx.as_ref().map(|Extension(c)| c), &stamping) {
+    let audience = match resolve_write_audience(ctx.as_ref(), &stamping) {
         Ok(a) => a,
         Err(_) => {
             return build_error_response(StatusCode::FORBIDDEN, "write audience required", false);
