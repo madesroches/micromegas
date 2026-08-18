@@ -242,6 +242,59 @@ And one result drives the design:
    thing worth engineering is not the interpreter; it is making sure text-scanning predicates are
    pruned before they run.
 
+#### How a text predicate is lowered — and why there is no anchor requirement
+
+An earlier version of this section required every rule to carry a top-level `column = 'literal'`
+conjunct, on the grounds that a text-scanning rule costs ~150 ns per query. That requirement was
+wrong twice over, and both errors are worth recording:
+
+- It **forbids legitimate rules.** `sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'` — "stop
+  anything scanning thread_spans, and anything from that host" — is exactly what an on-call admin
+  reaches for. A top-level disjunction has no conjunct to anchor *on*, so the advice to "add an
+  anchor" was incoherent; and splitting it into two rules does not help either, since
+  `sql LIKE '%thread_spans%'` alone is unanchorable by construction. A blanket "nothing may scan
+  this view right now" is one of the strongest levers the deny list offers, and forbidding it to
+  save nanoseconds is the wrong trade.
+- The 150 ns figure came from a `(?i)…\s+` **regex**, and was generalized to all text matching. It
+  does not survive measurement:
+
+| Text predicate against a 127-char statement | miss | match |
+|---|---|---|
+| `str::contains` — what `LIKE '%literal%'` lowers to | **6.9 ns** | 7.4 ns |
+| `Regex::is_match`, plain literal pattern | 12.2 ns | 12.9 ns |
+| `Regex::is_match`, `(?i)` + `\s+` pattern | 51.9 ns | 58.5 ns |
+| 4 / 8 / 32 separate `str::contains` | 27.9 / 55.3 / 217.3 ns | |
+| 4 / 8 / 32 separate `Regex::is_match` | 49.3 / 107.1 / 414.7 ns | |
+| **`RegexSet::is_match` over 4 / 8 / 32 patterns** | **21.7 / 21.5 / 21.7 ns** | |
+
+A rule that scans the SQL text costs ~7 ns, not 150. That is the same order as the hash probe it
+was supposed to be avoiding, and `RegexSet` collapses any number of such patterns into a single
+flat ~22 ns pass. There is no performance problem to legislate against, so the anchor requirement
+is dropped: **any boolean expression over the match context is accepted, anchored or not.**
+
+What survives from that idea is the *optimization*, applied where it happens to fit rather than
+demanded of the admin:
+
+1. **Pattern lowering.** A `LIKE` literal is inspected at compile time and lowered to the cheapest
+   equivalent: `'%lit%'` → `str::contains` (memchr-accelerated, ~7 ns), `'lit%'` → `str::starts_with`,
+   `'%lit'` → `str::ends_with`, `'lit'` → equality. Only patterns with interior `_`/`%` become a
+   `Regex`, and `ILIKE` adds `(?i)`. This is where most of the win is, and it costs one match
+   statement at compile time.
+2. **Anchor index, when a rule has one.** A rule with a top-level `column = 'literal'` conjunct is
+   filed under it, so a query disagreeing on that field never evaluates the rule at all — one hash
+   probe, flat in rule count.
+3. **`RegexSet` for the residue.** Unanchored rules whose top-level predicate is a single text match
+   share one compiled `RegexSet`, evaluated in one pass (~22 ns for up to 32 patterns) to decide
+   which of them can match at all. Anything left over is walked directly.
+
+So the per-query cost is a hash probe plus, if any unanchored text rules exist, one `RegexSet` pass:
+**~13–35 ns, zero allocation, flat in the number of rules** for every realistic rule set.
+
+The only expression still rejected on principle is one with **no column reference at all** (`true`,
+`1 = 1`) — a rule that would deny every query in the deployment. That is a semantic guard, and
+conflating it with the performance guard is what produced the mistaken anchor rule in the first
+place.
+
 #### The design that follows
 
 Everything expensive happens at refresh, since rules are few and static:
@@ -249,46 +302,38 @@ Everything expensive happens at refresh, since rules are few and static:
 1. **Parse** with `ctx.parse_sql_expr(match_expr, &match_schema())`. DataFusion's parser and name
    resolution, so there is no grammar of ours to specify or keep in sync.
 2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
-   scalar function that is not `Immutable` (which is what keeps `now()`/`random()` out, so a rule
-   means the same thing on every replica); require a `Boolean` result.
-3. **Require an anchor** — at least one top-level `AND` conjunct of the form `column = 'literal'`.
-   This is both the performance contract and the safety rule that replaces "at least one matcher":
-   a rule with no anchor is one that must be evaluated against every query forever, and — per
-   finding 3 — a single anchorless `sql LIKE '%…%'` rule taxes every query in the deployment. An
-   incident rule always has something to target on; requiring it costs the admin nothing and makes
-   the worst case bounded instead of unbounded. `sql LIKE '%thread_spans%' OR client_ip = '10.0.0.1'`
-   is rejected, with a message saying to anchor it.
-4. **Compile** to a compact tree: field names resolved to indices, literals owned inline,
-   `LIKE`/`ILIKE`/`regexp_like` patterns precompiled to `regex::Regex`.
+   scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
+   same thing on every replica); require a `Boolean` result and at least one column reference.
+3. **Compile** to a compact tree — field names resolved to indices, literals owned inline, patterns
+   lowered per the table above:
 
    ```rust
    enum MatchExpr {
        And(Vec<MatchExpr>), Or(Vec<MatchExpr>), Not(Box<MatchExpr>),
        Eq(FieldIdx, Box<str>), NotEq(FieldIdx, Box<str>), In(FieldIdx, Box<[Box<str>]>),
-       IsNull(FieldIdx), Like(FieldIdx, Regex),
+       IsNull(FieldIdx),
+       Contains(FieldIdx, Box<str>), StartsWith(FieldIdx, Box<str>), EndsWith(FieldIdx, Box<str>),
+       Regex(FieldIdx, Regex),
    }
    /// Kleene three-valued logic; `None` is SQL NULL, and only `Some(true)` denies.
    fn eval(&self, a: &QueryAttribution<'_>) -> Option<bool>;
    ```
-5. **Index by anchor**: `HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>`, plus the short list of
-   fields any anchor uses.
+4. **Index what can be indexed**: rules with a top-level equality go in
+   `HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>`; unanchored single-text-predicate rules go into a
+   shared `RegexSet`; the rest into a short walk-always list.
 
-Per query, `check` then does: empty snapshot → return; otherwise one hash probe per anchored field
-— usually one — and on a miss returns having touched no rule at all (**~13–20 ns, zero
-allocation**); on a candidate, walks that rule's tree (~10–150 ns). Nothing allocates on either
-path: the attribution is borrowed `&str`, the tree is in the snapshot `Arc`, and `Regex::is_match`
-does not allocate.
-
-The anchor requirement is what makes the cost flat in rule count: 20 ns at a hundred rules, versus
-the 763 ns a tree walk over all hundred would cost and the 37 µs an anchorless regex rule set would.
+Per query, `check` does: empty snapshot → return; otherwise probe the anchor index (one hash lookup
+per anchored field, usually one), run the `RegexSet` pass if there is one, and walk only the
+candidates those two steps produce. Nothing allocates: the attribution is borrowed `&str`, the
+trees live in the snapshot `Arc`, and neither `str::contains` nor `Regex::is_match` allocates.
 
 **The custom evaluator is the accepted price, and DataFusion is the oracle that keeps it honest.**
-Owning Kleene logic and `LIKE`-to-regex lowering is where hand-rolled implementations go subtly
+Owning Kleene logic and `LIKE`-to-predicate lowering is where hand-rolled implementations go subtly
 wrong. So a differential test compiles the same expression down both paths — `MatchExpr` and
 DataFusion's own `PhysicalExpr` — and asserts they agree over a corpus of expressions × attributions
-(including NULL attributes, `NOT` over NULL, `%`/`_` patterns, and regex metacharacters in `LIKE`
-literals). DataFusion stays in the test binary as the reference implementation; production never
-calls it.
+(NULL attributes, `NOT` over NULL, `%`/`_` patterns, regex metacharacters inside a `LIKE` literal,
+`ILIKE` casing). DataFusion stays in the test binary as the reference implementation; production
+never calls it.
 
 #### Compiling the rules to native code — considered, not adopted
 
@@ -320,9 +365,9 @@ a head start either: `datafusion-wasm` is DataFusion compiled **to** `wasm32` to
 the opposite direction from embedding a host runtime, and no `wasmtime`/`wasmi` dependency exists in
 the workspace.
 
-**What would flip this**: rules in the thousands, or an anchor requirement that proves too strict in
-practice and has to be relaxed. The next step then is `regex::RegexSet` — one linear pass over N
-patterns instead of N passes — and only after that, native compilation.
+**What would flip this**: rules in the thousands. `RegexSet` is already in the design for text
+predicates; the equivalent for the rest would be widening the anchor index (multi-field probes,
+a faster hasher), and only after that would native compilation be the next lever.
 
 #### Grammar
 
@@ -332,15 +377,15 @@ over the match-context columns and string literals. Anything else — arithmetic
 aggregates, non-`Immutable` functions, column-to-column comparison — is rejected at insert with the
 parser's own diagnostic where there is one.
 
-Every rule must additionally carry an **anchor**: a top-level `AND` conjunct of the form
-`column = 'literal'` (see §3). That is what keeps the per-query cost flat, and it doubles as the
-"this rule cannot match everything" guard.
+The only expression rejected on principle is one with no column reference at all (`true`, `1 = 1`),
+which would deny every query in the deployment. There is no anchor requirement: any boolean shape,
+including a top-level `OR`, is accepted (§3).
 
 Regex is safe: the `regex` crate does not backtrack and guarantees linear-time matching, and
 patterns are compiled once per rule rather than per query. (This corrects an earlier version of this
 plan, which excluded regex on ReDoS grounds — a hazard of backtracking engines, not of this one.)
-It is not, however, *free*: a regex over the SQL text costs ~150 ns per rule per query, which is why
-it must sit behind an anchor.
+It is also cheap: a `LIKE '%literal%'` lowers to a ~7 ns substring search, and many text patterns
+share one ~22 ns `RegexSet` pass.
 
 Examples, all valid:
 
@@ -352,16 +397,23 @@ client = 'grafana' AND regexp_like(sql, '(?i)from\s+view_instance')
 email = 'jean@example.com' AND (notebook IS NOT NULL OR entrypoint = 'notebook')
 ```
 
-All five are anchored: each has a top-level `col = 'literal'` conjunct, so each is pruned by a
-single hash probe and its `LIKE`/regex work only ever runs for a query that already matched the
-anchor. A rule whose top level is a disjunction — `sql LIKE '%thread_spans%' OR client_ip =
-'10.4.9.221'` — is **rejected**, with a message asking for an anchor; unanchored, it would run a
-substring scan over the SQL text of every query in the deployment forever.
+A blanket rule with no equality to key on is equally valid, and is the strongest lever the deny
+list offers during an incident:
+
+```sql
+sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'
+sql LIKE '%thread_spans%'
+```
+
+The first five are anchored, so a single hash probe prunes them. The last two are not; their text
+predicates lower to `str::contains` and share the `RegexSet` pass, costing tens of nanoseconds per
+query for as long as they stand (§3).
 
 A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
-`property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules for both the anchor
-miss and the matching hit, so the numbers above stay true instead of decaying into folklore. The
-table above came from a throwaway version of exactly that bench.
+`property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules, for anchored and
+unanchored rule sets, on both the miss and the matching hit — so the numbers above stay true
+instead of decaying into folklore. Both tables came from throwaway versions of exactly that
+bench.
 
 #### Where this can go next
 
@@ -370,9 +422,8 @@ a migration and mostly without code: numeric comparison the moment the match con
 numeric attribute, a structured `deny_queries` variant that renders an expression for a UI builder,
 cost predicates once an estimate is available at check time, or a `test_query_denial(expr)` function
 that dry-runs an expression against recent audit records before it goes live. Performance is an
-independent axis: if the anchor requirement ever has to be relaxed, `regex::RegexSet` over the
-unanchored residue is the next step, and compiling the rule set to native code the one after that
-(§3).
+independent axis: the anchor index and the `RegexSet` pass both widen without touching the stored
+form, and native compilation stays available behind them (§3).
 
 ### 4. Rule model, evaluation, and cache
 
@@ -396,7 +447,7 @@ pub struct QueryDenyRule {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
     pub reason: String, pub match_expr: String,
     compiled: MatchExpr,                  // parsed, validated, lowered at refresh (§3)
-    anchor: (FieldIdx, Box<str>),         // mandatory; what the index keys this rule on
+    anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
     hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
@@ -406,7 +457,9 @@ pub struct QueryDenyRule {
 pub struct DenySnapshot {
     rules: Vec<Arc<QueryDenyRule>>,
     index: HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>,
-    anchored_fields: Vec<FieldIdx>,  // usually one; probed in order on every query
+    anchored_fields: Vec<FieldIdx>,        // usually one; probed on every query
+    text_set: Option<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // unanchored text rules, one pass
+    walk_always: Vec<RuleIdx>,             // whatever neither structure covers
 }
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
@@ -428,11 +481,11 @@ impl QueryDenyList {
 
 - **Zero rules cost nothing.** `check` returns on an empty-snapshot test — the steady state of
   every deployment that is not mid-incident.
-- With rules present, `check` probes the anchor index: one hash lookup per anchored field, usually
-  one. **~13–20 ns and zero allocation, flat in the number of rules** (§3). A miss returns having
-  touched no rule.
-- A candidate's `MatchExpr` is then walked directly against the borrowed attribution (~10–150 ns,
-  the upper end only when the rule regexes the SQL text), first `Some(true)` winning.
+- With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
+  one) and runs the shared `RegexSet` pass if any unanchored text rules exist. **~13–35 ns and zero
+  allocation, flat in the number of rules** (§3).
+- Only the candidates those steps produce have their `MatchExpr` walked against the borrowed
+  attribution, first `Some(true)` winning.
 - `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it flushes each rule's
   accumulated `hits`/`last_hit` (`UPDATE query_deny_list SET hit_count = hit_count + $1,
   last_hit_at = greatest(coalesce(last_hit_at, $2), $2) WHERE rule_id = $3`, skipping rules with a
@@ -605,9 +658,9 @@ SELECT * FROM deny_queries(
 ```
 
 Validation, all fail-loud with `plan_err!`/a returned error: any `compile_match_expr` failure (§3),
-reported with the offending token where the parser gives one; an expression with no anchor (a
-top-level `col = 'literal'` conjunct), whose message says so and suggests adding one; an empty
-`reason`; rule count already at `MICROMEGAS_QUERY_DENY_MAX_RULES`.
+reported with the offending token where the parser gives one; an expression with no column reference
+at all, which would deny every query; an empty `reason`; rule count already at
+`MICROMEGAS_QUERY_DENY_MAX_RULES`.
 
 **`remove_query_denial(rule_id)`** — scalar UDF returning a status string; deletes the row (returns
 a clear "no such rule" message when it matched nothing). The audit log is the durable record of
@@ -671,9 +724,10 @@ Open Questions.
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
 2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match-context
-   schema, `compile_match_expr` (parse → validate → require an anchor → lower to `MatchExpr` with
-   precompiled patterns), `MatchExpr::eval`, `QueryAttribution`, `QueryDenyRule`, `DenySnapshot`
-   (rules + anchor index), `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
+   schema, `compile_match_expr` (parse → validate → lower to `MatchExpr`, lowering `LIKE` to
+   `contains`/`starts_with`/`ends_with`/`Regex`), `MatchExpr::eval`, `QueryAttribution`,
+   `QueryDenyRule`, `DenySnapshot` (rules + anchor index + `RegexSet`), `QueryDenyList`
+   (`check` / `refresh` / `insert` / `delete` / `list` /
    `spawn_refresh_task`), env knobs. Add `sha2` and `regex` to `analytics/Cargo.toml` (both are
    already workspace/transitive dependencies).
    Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2` to `analytics/Cargo.toml`.
@@ -781,12 +835,15 @@ a `MatchExpr` for evaluation buys the whole gap while leaving no grammar of ours
 price is owning Kleene logic and `LIKE` lowering, which a differential test against DataFusion's
 own evaluator keeps honest — the oracle stays in the test binary, never in production.
 
-**Every rule must be anchored on an equality.** The measurement that forced this: a rule that
-regexes the SQL text costs ~150 ns *per query*, so ten unanchored ones would tax every query in the
-deployment by 1.5 µs, forever, and a hundred by 37 µs. Requiring one top-level `col = 'literal'`
-conjunct makes the common path a single hash probe — flat at 13–20 ns whatever the rule count — and
-costs the admin nothing, since an incident rule always has something to target on. It also
-subsumes the "a rule must not match everything" guard the matcher columns used to provide.
+**Any boolean shape is accepted; the optimizer works around it rather than the admin.** An earlier
+draft required every rule to carry a top-level equality "anchor", which would have rejected
+`sql LIKE '%thread_spans%' OR client_ip = '…'` — a legitimate and powerful incident rule that cannot
+be anchored at all, since a disjunction has no conjunct to anchor on. It rested on a bad number too:
+a text scan costs ~7 ns once `LIKE '%lit%'` is lowered to `str::contains`, not the ~150 ns measured
+for an elaborate regex, and a `RegexSet` collapses any number of such patterns into one ~22 ns pass.
+Anchoring survives as an optimization applied where it fits, never as a demand on the author. The
+"must not match everything" guard is a separate, semantic rule: an expression referencing no column
+is rejected.
 
 **Cleverness measured worse than straight-line code.** Interning literals into symbols and running a
 bytecode program — the obvious "pre-compile it properly" design — benchmarked at 32 ns against
@@ -846,10 +903,13 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
   are absorbed; unparseable SQL still yields a fingerprint.
 - `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
   non-boolean result, subquery, aggregate, window function, a non-`Immutable` function (`now()`),
-  arithmetic, column-to-column comparison, and an expression with no anchor (`true`, `1 = 1`, or a
-  top-level `OR`).
-- Anchor extraction: found for a top-level `AND` chain containing `col = 'literal'`, including when
-  nested under further `AND`s; the most selective conjunct is preferred when several qualify.
+  arithmetic, column-to-column comparison, and an expression referencing no column (`true`, `1 = 1`).
+- `LIKE` lowering picks the right predicate: `'%lit%'` → `Contains`, `'lit%'` → `StartsWith`,
+  `'%lit'` → `EndsWith`, `'lit'` → `Eq`, `'l_t'` → `Regex`; `ILIKE` is case-insensitive in every
+  form; a literal containing regex metacharacters (`'100%'`, `'a.b'`) matches literally.
+- Anchor extraction: found for a top-level `AND` chain containing `col = 'literal'` (including
+  nested `AND`s), and correctly *absent* for a top-level `OR` — a rule that must still be evaluated
+  on every query, and must still deny when it matches.
 - **Differential test against DataFusion (the important one).** Every expression in a corpus is
   compiled both to `MatchExpr` and to DataFusion's `PhysicalExpr`, and evaluated against a corpus of
   attributions; the two must agree on every pair. Coverage aimed at where a hand-rolled evaluator
