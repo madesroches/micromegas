@@ -82,7 +82,10 @@ never be an admin principal.
 - Row-returning UDTF over Postgres: `list_partitions_table_function.rs`. Mutating UDTF:
   `retire_partitions_table_function.rs` (streams a log via `LogStreamTableProvider`).
 - `sqlparser` 0.62 (with the `visitor` feature) is reachable as `datafusion::sql::sqlparser`;
-  `sha2` is a workspace dependency; `regex` is **not** a direct dependency anywhere.
+  `sha2` is a workspace dependency; `regex` is **not** a direct dependency anywhere, so it needs its
+  own `[workspace.dependencies]` entry in `rust/Cargo.toml` alongside `sha2`'s, not just an
+  `analytics/Cargo.toml` line — every other non-dev dependency in that crate is declared as
+  `<name>.workspace = true`, and `regex` should follow the same convention.
 
 ### Web app
 
@@ -388,7 +391,8 @@ produced was measured, because bundling every rule into one evaluation removes a
 interpreter entry per rule: no recursion, no `Box` chasing between nodes, ops and literals
 contiguous in memory, short-circuit as a forward jump.
 
-Per-rule boxed trees versus one flat program (same rules, same semantics, miss = no rule matches):
+Per-rule boxed trees versus one flat program, restricted to the conjunctive subset with NULL
+treated as false (same rules, same semantics, miss = no rule matches):
 
 | Rule shape | rules | per-rule tree walk | bundled flat program |
 |---|---|---|---|
@@ -399,18 +403,22 @@ Per-rule boxed trees versus one flat program (same rules, same semantics, miss =
 | equality + substring on SQL, miss | 10 | 36.8 ns | **17.0 ns** |
 | | 100 | 359.3 ns | **186.6 ns** |
 
-A consistent **~2×**, on both the miss and the hit, at every rule count. So the compiled form is a
-flat program, not a tree:
+A consistent **~2×** on the conjunctive, NULL-as-false subset measured above, on both the miss and
+the hit, at every rule count. So the compiled form is a flat program, not a tree — and since the
+grammar (below) admits `OR`/`NOT` and NULL is three-valued, every test carries all three jump
+targets rather than a single `jf`:
 
 ```rust
 /// All rules in one contiguous op array; every literal in one contiguous blob, referenced by
-/// (offset, len). No pointer chasing, no recursion, no per-rule call.
-enum Op {
-    Eq       { field: u8, off: u32, len: u32, jf: u32 },
-    Contains { field: u8, off: u32, len: u32, jf: u32 },
-    StartsWith { .. }, EndsWith { .. }, Regex { field: u8, re: u32, jf: u32 },
-    IsNull   { field: u8, jf: u32 },
-    Match(RuleIdx),           // fell through every test of this rule
+/// (offset, len). No pointer chasing, no recursion, no per-rule call. Every test carries explicit
+/// true/false/null jump targets so OR, NOT, and Kleene-logic NULL propagation are representable
+/// directly in the op stream, not bolted on later.
+pub enum Op {
+    Eq       { field: u8, off: u32, len: u32, jt: u32, jf: u32, jn: u32 },
+    Contains { field: u8, off: u32, len: u32, jt: u32, jf: u32, jn: u32 },
+    StartsWith { .. }, EndsWith { .. }, Regex { field: u8, re: u32, jt: u32, jf: u32, jn: u32 },
+    IsNull   { field: u8, jt: u32, jf: u32 },
+    Match(RuleIdx),           // reached with the rule's expression evaluating to true
 }
 struct Program { ops: Vec<Op>, blob: Vec<u8>, regexes: Vec<Regex>, rule_ranges: Vec<Range<u32>> }
 ```
@@ -426,9 +434,10 @@ capturing the speed.
 Two caveats recorded honestly:
 
 - **The 2× was measured on conjunctive rules with NULL treated as failure**, which is the dominant
-  shape. General expressions with `OR`/`NOT` need genuine three-valued logic, which in a flat
-  program means a three-way branch per test (true / false / null targets) rather than a single
-  `jf`. That costs a little of the margin; it does not change the representation.
+  shape. General expressions with `OR`/`NOT` need genuine three-valued logic, which the `jt`/`jf`/
+  `jn` layout above provides for every test, not only conjunctions. Exercising all three targets on
+  the conjunctive/NULL-as-false subset costs a little of the measured margin; it does not change
+  the representation.
 - **Under DataFusion, bundling remains a wash** — OR-folding ten rules measured 7 338 ns against
   6 230 ns separately, and a `CASE` behaves the same, since a columnar engine evaluates every branch
   as its own array operation and then selects. The bundling win is specific to the compiled
@@ -596,8 +605,8 @@ pub struct QueryDenyRow {
 /// `DenySnapshot`.
 pub struct QueryDenyRule {
     pub row: QueryDenyRow,
-    ops: Range<u32>,                      // this rule's slice of DenySnapshot::program
-    anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
+    ops: Range<u32>,                          // this rule's slice of DenySnapshot::program
+    pub anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
     hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
@@ -731,10 +740,14 @@ if let Some(rule) = denied
   mutating functions are registered for every caller, exactly the deployment this hatch most needs to
   work in. A non-admin cannot exploit the wider gate: the mutating functions are registered under the
   identical predicate, so any caller for whom the escape hatch opens is, by construction, a caller who
-  could call them directly anyway. This is the primary recovery path, so it carries its own test,
-  including the `admin_principal_possible == false` deployment shape.
-- **Prepared statements**: the same check is applied at the top of
-  `do_action_create_prepared_statement` (which plans, and is therefore worth protecting from a
+  could call them directly anyway. `skip_for_admin_recovery(caller_is_admin, admin_principal_possible,
+  sql_tokens)` lives in `query_deny_list.rs` alongside the rest of the matching logic — it only needs
+  the token stream and the two booleans, no `flight_sql_service_impl.rs`-private state — so it is a
+  `pub` function in the analytics crate and its unit tests sit with the rest of that crate's tests.
+  This is the primary recovery path, so it carries its own test, including the
+  `admin_principal_possible == false` deployment shape.
+- **Prepared statements**: `skip_for_admin_recovery` gates the same check, on identical terms, at the
+  top of `do_action_create_prepared_statement` (which plans, and is therefore worth protecting from a
   prepare loop). That path does not resolve attribution today; building the same `QueryAttribution`
   used in `execute_query` means also calling `validate_and_resolve_user_attribution_grpc`,
   `get_client_ip` for `client_ip`, and reading the same `x-client-*`/`-agent`/`-entrypoint`/
@@ -937,8 +950,9 @@ Open Questions.
 4. Replace the `PhysicalExpr` evaluation with the bundled flat program (§3): resolve field indices,
    append literals to one blob, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, lay
    every rule out as its own op range with the unanchored ones contiguous, and build the anchor
-   index and shared `RegexSet`. Add `regex` to `analytics/Cargo.toml` (already in the tree
-   transitively via `datafusion-functions`).
+   index and shared `RegexSet`. Add `regex = "1"` to `rust/Cargo.toml`'s `[workspace.dependencies]`
+   (already in the tree transitively via `datafusion-functions`, but not declared there today) and
+   `regex.workspace = true` to `analytics/Cargo.toml`, matching the crate's existing convention.
 5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
    the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
    moment we stop using it in production.
@@ -1021,7 +1035,10 @@ Open Questions.
 
 - `rust/analytics/src/lakehouse/migration.rs`, `mod.rs`, `query.rs`, `read_scope.rs`,
   `lakehouse_context.rs`
-- `rust/analytics/Cargo.toml` (`sha2`, `regex`)
+- `rust/Cargo.toml` (add `regex` to `[workspace.dependencies]`)
+- `rust/analytics/Cargo.toml` (`sha2.workspace = true`, `regex.workspace = true`, plus a new
+  `[[bench]] name = "query_deny_match"` stanza alongside the existing `property_get`/`parse_block`
+  entries)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
 - `rust/analytics-web-srv/src/stream_query.rs` (narrow `contains_blocked_function` to call position)
   and its existing test block, `rust/analytics-web-srv/tests/stream_query_tests.rs`
@@ -1136,6 +1153,10 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 
 **Unit (`rust/analytics/tests/query_deny_list_tests.rs`, no DB)**
 
+This is an external integration-test crate for `micromegas-analytics`, so it can only see `pub`
+items — `CompiledExpr`, `Op` (and its variants), and `QueryDenyRule::anchor` are `pub` for exactly
+this reason, so the lowering and anchor-extraction assertions below compile.
+
 - `tokenize`/`fingerprint_of`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
@@ -1160,11 +1181,14 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 - **Anchor-index equivalence (property test).** `check` through the index returns exactly what
   evaluating every rule by brute force returns.
 - Every example expression in the docs compiles and evaluates as documented.
-- `skip_for_admin_recovery`: an admin statement calling `remove_query_denial` is exempt; the same
-  statement from a non-admin is not; a non-admin query that merely aliases a column
+- `skip_for_admin_recovery` (defined and tested here, in `query_deny_list.rs`, since it only takes a
+  token stream and two booleans): an admin statement calling `remove_query_denial` is exempt; the
+  same statement from a non-admin is not; a non-admin query that merely aliases a column
   `remove_query_denial` is not exempt; with `admin_principal_possible == false` (no admin principal
   configured), a non-admin caller's `remove_query_denial` statement is exempt too, matching
-  `register_lakehouse_functions`' gate.
+  `register_lakehouse_functions`' gate; the same cases apply unchanged to the
+  `do_action_create_prepared_statement` call site (§5), since the function takes the same inputs
+  regardless of which RPC tokenized the statement.
 
 **Integration (`rust/analytics/tests/query_deny_list_db_test.rs` — `#[ignore]`d `#[tokio::test]`
 requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`, `mod common;` for `db_fixtures`, same
