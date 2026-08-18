@@ -172,6 +172,14 @@ impl AudienceReadPolicy {
 }
 ```
 
+`AudienceMintPolicy::with_store` is built the same way for symmetry, but — unlike the read side —
+this stage wires nothing to it: no production code constructs a `dyn MintPolicy` today
+(`ingestion_keys.rs::mint_key` has its own unrelated, module-local `resolve_audience` and never
+calls `MintPolicy::resolve_audience`), and the trait's own doc comment already defers that wiring
+to Stage 6, when `mint_key` gains a real call site. This stage's mint-side scope is exactly
+`AudienceMintPolicy::with_store` existing and unit-tested, with no call site — not "wiring the
+store into both policies" as a completed integration.
+
 `resolve`/`resolve_audience` consult the store when present, merging it with the env map before
 matching selectors:
 
@@ -185,9 +193,13 @@ async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences> {
 }
 ```
 
-`default_provider.rs`'s `ProviderBuilder::build()` constructs one `Arc<DbAudienceGrantsSource>`
-(when a telemetry-DB pool is configured, via `dedicated_key_store_pool`) and passes it to both
-policies — one shared snapshot cache per process, not one per policy.
+`default_provider.rs::ProviderBuilder::build()` only constructs authentication (`Arc<dyn
+AuthProvider>`) and has no reference to `ReadPolicy`/`MintPolicy` — it is not the wiring point.
+The actual construction sites are where `AudienceReadPolicy::from_env(...)` already lives today:
+`rust/public/src/servers/flight_sql_server.rs::build_and_serve` and `rust/monolith/src/main.rs`.
+Each constructs one `Arc<DbAudienceGrantsSource>` (when a telemetry-DB pool is configured, via
+`dedicated_key_store_pool`) and calls `.with_store(...)` on the `AudienceReadPolicy` it already
+builds there — one shared snapshot cache per process, not one per policy.
 
 ### 5. Admin write surface — `analytics-web-srv`
 
@@ -199,15 +211,36 @@ fallback router):
 
 - `POST {base_path}/api/audience-grants` — body `{audience, axis, selector}`
   (`deny_unknown_fields`), validated with `is_valid_audience`/the same selector-shape check
-  `policy.rs` uses. `INSERT ... ON CONFLICT (audience, axis, selector) DO NOTHING RETURNING ...`;
-  if nothing came back, the row already existed — re-`SELECT` it and report
-  `{created: false, ...}` instead of erroring, the same idempotent-create shape `import_key` uses.
-  `201`/`200` accordingly.
-- `GET {base_path}/api/audience-grants?audience=&axis=` — lists rows, optionally filtered,
-  ordered by `created_at DESC`. Admin-gated like the write side: this route reveals who can read
-  which audience, which is itself confidentiality-sensitive.
-- `DELETE {base_path}/api/audience-grants/{audience}/{axis}/{selector}` — three path segments
-  (the natural key), not a surrogate id (see Trade-offs). `404` if no such row.
+  `policy.rs` uses. Unlike `import_key`'s insert-then-re-`SELECT` (safe there only because that
+  table never physically deletes rows), this table has a hard `DELETE`, so a concurrent delete
+  between a failed insert and a re-`SELECT` could otherwise find nothing. One round trip instead,
+  via a CTE that unions the just-inserted row with the pre-existing one:
+  ```sql
+  WITH ins AS (
+      INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+      VALUES ($1, $2, $3, now(), $4)
+      ON CONFLICT (audience, axis, selector) DO NOTHING
+      RETURNING audience, axis, selector, created_at, created_by
+  )
+  SELECT audience, axis, selector, created_at, created_by, true AS created FROM ins
+  UNION ALL
+  SELECT audience, axis, selector, created_at, created_by, false AS created
+  FROM audience_grants
+  WHERE audience = $1 AND axis = $2 AND selector = $3
+    AND NOT EXISTS (SELECT 1 FROM ins);
+  ```
+  `created = true` ⇒ `201`; `created = false` ⇒ `200`, reporting the pre-existing row — no
+  re-`SELECT` after the fact, so no window for a concurrent `DELETE` to invalidate it.
+- `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` — lists rows, optionally
+  filtered, ordered by `created_at DESC`, paginated with the same `DEFAULT_LIMIT`/`MAX_LIMIT`
+  clamping convention `ingestion_keys.rs::list_keys` uses. Admin-gated like the write side: this
+  route reveals who can read which audience, which is itself confidentiality-sensitive.
+- `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` — natural key passed as query
+  parameters, not path segments: `valid_selector` places no charset restriction on a `group:<id>`
+  selector (a hierarchical IdP group name can contain `/`, `?`, or other URL-significant
+  characters), so encoding it as a raw path segment the way every other route's `Uuid` id does
+  would be unsafe here. Query parameters avoid that without adding a new charset restriction to
+  `valid_selector` itself. `404` if no such row.
 
 ### 6. `micromegas-grants` CLI
 
@@ -277,9 +310,11 @@ never see the table shape.
    the snapshot cache with serve-stale-on-failure semantics.
 4. Add `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store`; extend `resolve`/
    `resolve_audience` to merge in the store's snapshot.
-5. Wire `DbAudienceGrantsSource` construction into `default_provider.rs::ProviderBuilder::build()`,
-   sharing one `Arc<DbAudienceGrantsSource>` between both policies, built via
-   `dedicated_key_store_pool` when a telemetry-DB pool is configured.
+5. Wire `DbAudienceGrantsSource` construction into
+   `flight_sql_server.rs::build_and_serve` and `monolith/src/main.rs`, alongside their existing
+   `AudienceReadPolicy::from_env(...)` calls — one `Arc<DbAudienceGrantsSource>` per process, built
+   via `dedicated_key_store_pool` when a telemetry-DB pool is configured, passed to
+   `AudienceReadPolicy::with_store`.
 
 ### Phase 3 — Admin API (`analytics-web-srv`)
 6. Add `rust/analytics-web-srv/src/audience_grants.rs` (state, error type, three handlers, router
@@ -300,7 +335,10 @@ never see the table shape.
 - `rust/auth/src/policy.rs` — `GrantAxis`, `AudienceGrants::from_rows`/`merge`, `with_store` on
   both policies, `resolve`/`resolve_audience` changes.
 - `rust/auth/src/db_audience_grants.rs` — new.
-- `rust/auth/src/default_provider.rs` — construct and wire `DbAudienceGrantsSource`.
+- `rust/public/src/servers/flight_sql_server.rs` — construct `DbAudienceGrantsSource` and wire it
+  into `AudienceReadPolicy::with_store` in `build_and_serve`.
+- `rust/monolith/src/main.rs` — same wiring, alongside its existing `AudienceReadPolicy::from_env`
+  call.
 - `rust/analytics-web-srv/src/audience_grants.rs` — new.
 - `rust/analytics-web-srv/src/web_server.rs` — register the new router + state.
 - `python/micromegas/micromegas/web_client.py` — three new client methods.
@@ -308,6 +346,8 @@ never see the table shape.
 - `python/micromegas/pyproject.toml` — new script entry.
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/api-keys.md` — document the store,
   the new env knob, and the CLI.
+- `CHANGELOG.md` — `## Unreleased` entry for the new table/migration, the cache-TTL knob, the
+  admin routes, and the CLI.
 
 ## Trade-offs
 
@@ -315,7 +355,8 @@ never see the table shape.
   has no secret component to keep unlinkable from its own identity the way a key's hash does — the
   natural key `(audience, axis, selector)` already is the row's identity, so a surrogate key would
   add a second name for the same thing with no new capability. The `DELETE` route takes the three
-  path segments instead.
+  fields as query parameters instead (see §5) — not path segments, since a `group:<id>` selector's
+  charset isn't restricted enough to make it a safe raw path segment.
 - **No `revoked_at`/`revoked_by`, hard `DELETE`.** Loses the ability to answer "who removed this
   grant and when" after the fact. Accepted for this stage because the issue's own DDL sketch
   carries no such columns and the row count is expected to stay small enough that this is a minor
@@ -367,12 +408,12 @@ never see the table shape.
   and the staleness-on-outage note from design question 1.
 - `mkdocs/docs/admin/api-keys.md` — cross-reference the new admin route and CLI the way it already
   cross-references `{prefix}_AUDIENCE_GRANTS`.
+- `CHANGELOG.md` — an `## Unreleased` entry, following every prior AbAC stage's precedent: the new
+  `audience_grants` table/migration (v7), the `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` knob,
+  the new admin routes, and the `micromegas-grants` CLI.
 
 ## Open Questions
 
 - Exact config-knob name and namespace-restriction shape for Stage 6/#1374's first-claim helper —
   intentionally left to that issue's own design, per "Design questions to settle in the plan" §2
   above.
-- Whether `GET /api/audience-grants` needs pagination (`limit`/`offset` like the key-list routes)
-  from day one, or can wait until grant counts actually grow — leaning toward adding it now for
-  consistency with `ingestion_keys.rs`'s `list_keys`, cheap to include in Phase 3.
