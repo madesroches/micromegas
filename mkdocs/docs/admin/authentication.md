@@ -237,15 +237,23 @@ Two consequences worth knowing before you flip this stage on:
     `{prefix}_REQUIRE_WRITE_AUDIENCE=true` closes this gap by rejecting the audience-less write
     that would create the squatted row in the first place.
 
-    **Whichever party registers second gets the 403, and recovery is manual.** In both squatting
-    scenarios above, it is the *victim's* genuine, later registration that hits the conflict
-    guard and is rejected -- not the squatter's. Since a stamped process's audience is immutable
+    **The two scenarios recover differently.** In the *first* scenario above (a stamped
+    squatter), it is the victim's genuine, later registration that hits the conflict guard and is
+    rejected with a 403 -- not the squatter's. Since a stamped process's audience is immutable
     (there is no `UPDATE processes` path anywhere in the codebase), the victim's producer can
     never successfully register that `process_id` again until an operator manually deletes the
     squatted row (e.g. `DELETE FROM processes WHERE process_id = ...`). The maintenance daemon's
     automatic `delete_empty_processes` sweep (`rust/analytics/src/delete.rs`) only reclaims it on
     its own once the squatted row has no streams and the retention window has elapsed -- a
     squatter that also writes a stream keeps the row alive indefinitely.
+
+    The *second* scenario (unstamped pre-registration) is different: there is no 403 and no
+    manual recovery step. As described above, the victim's later registration hits the
+    `NULL`→no-op branch and returns `Ok` -- the row is simply never stamped and stays silently
+    unstamped forever, which is exactly what makes it a confidentiality gap rather than an
+    outage. `DELETE`-ing the squatted row doesn't help here either, since nothing rejected the
+    write in the first place; the fix is preventing the unstamped pre-registration itself via
+    `{prefix}_REQUIRE_WRITE_AUDIENCE=true`.
 
 ## Audiences and Grants
 

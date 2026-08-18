@@ -134,6 +134,64 @@ async fn existing_null_audience_reregistration_is_ok_and_stays_unstamped() -> Re
     Ok(())
 }
 
+/// Cross-path squatting guard (§6, AbAC Stage 5, #1373): a `process_id` registered via the
+/// native `insert_process` path under one audience must reject a later `register_otel_process`
+/// re-registration of that *same* `process_id` under a *different* audience. This is the
+/// headline confidentiality fix on this branch -- without it, a credential could pre-register
+/// (via `insert_process`) the exact `process_id` a victim audience's OTLP producer would later
+/// derive, and `register_otel_process`'s `ON CONFLICT DO NOTHING` would silently let the
+/// victim's stream/blocks land on the squatter's row.
+#[ignore]
+#[tokio::test]
+async fn otel_reregistration_conflicts_with_native_registration() -> Result<()> {
+    let lake = connect().await?;
+    let ingestion = WebIngestionService::new(lake.clone());
+    let process_id = Uuid::new_v4();
+    let audience_a = WriteAudience::new(Some("team-a"))?;
+    let audience_b = WriteAudience::new(Some("team-b"))?;
+
+    ingestion
+        .insert_process(process_body(process_id)?, &audience_a)
+        .await
+        .with_context(|| "first insert_process (native path)")?;
+
+    let result = ingestion
+        .register_otel_process(
+            process_id,
+            "exe".to_string(),
+            "username".to_string(),
+            "computer".to_string(),
+            "distro".to_string(),
+            "cpu_brand".to_string(),
+            1_000_000_000,
+            sqlx::types::chrono::Utc::now(),
+            0,
+            vec![],
+            &audience_b,
+        )
+        .await;
+    match result {
+        Err(IngestionServiceError::AudienceConflict {
+            process_id: conflicting_id,
+            existing,
+            incoming,
+        }) => {
+            assert_eq!(conflicting_id, process_id);
+            assert_eq!(existing, "team-a");
+            assert_eq!(incoming, "team-b");
+        }
+        other => panic!("expected AudienceConflict, got {other:?}"),
+    }
+
+    // The row must keep its original, natively-stamped audience -- a rejected conflicting
+    // OTLP re-registration must never retro-stamp.
+    assert_eq!(
+        read_audience_property(&lake.db_pool, process_id).await?,
+        Some("team-a".to_string())
+    );
+    Ok(())
+}
+
 /// The stamp survives the `sqlx` bind into `processes.properties` and reads back out --
 /// the one thing a live database adds over the `finalize_process_properties` unit tests.
 #[ignore]
