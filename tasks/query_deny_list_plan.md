@@ -304,60 +304,87 @@ Everything expensive happens at refresh, since rules are few and static:
 2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
    scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
    same thing on every replica); require a `Boolean` result and at least one column reference.
-3. **Compile** to a compact tree — field names resolved to indices, literals owned inline, patterns
-   lowered per the table above:
-
-   ```rust
-   enum MatchExpr {
-       And(Vec<MatchExpr>), Or(Vec<MatchExpr>), Not(Box<MatchExpr>),
-       Eq(FieldIdx, Box<str>), NotEq(FieldIdx, Box<str>), In(FieldIdx, Box<[Box<str>]>),
-       IsNull(FieldIdx),
-       Contains(FieldIdx, Box<str>), StartsWith(FieldIdx, Box<str>), EndsWith(FieldIdx, Box<str>),
-       Regex(FieldIdx, Regex),
-   }
-   /// Kleene three-valued logic; `None` is SQL NULL, and only `Some(true)` denies.
-   fn eval(&self, a: &QueryAttribution<'_>) -> Option<bool>;
-   ```
+3. **Compile** into the shared flat program — field names resolved to indices, literals appended to
+   one contiguous blob, patterns lowered per the table above, each rule occupying its own op range
+   (see "One bundled program" below for the opcode set and the ~2× it is worth over boxed trees).
+   Kleene three-valued logic is preserved: a test carries true/false/null jump targets, and only a
+   fall-through to `Op::Match` denies.
 4. **Index what can be indexed**: rules with a top-level equality go in
    `HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>`; unanchored single-text-predicate rules go into a
-   shared `RegexSet`; the rest into a short walk-always list.
+   shared `RegexSet`; unanchored rules are laid out contiguously in the program so they run as one
+   bundled pass.
 
 Per query, `check` does: empty snapshot → return; otherwise probe the anchor index (one hash lookup
-per anchored field, usually one), run the `RegexSet` pass if there is one, and walk only the
-candidates those two steps produce. Nothing allocates: the attribution is borrowed `&str`, the
-trees live in the snapshot `Arc`, and neither `str::contains` nor `Regex::is_match` allocates.
+per anchored field, usually one), run the `RegexSet` pass if there is one, run the unanchored range
+of the program, and run the op ranges of whatever candidates the index produced. Nothing allocates:
+the attribution is borrowed `&str`, the program and its literal blob live in the snapshot `Arc`, and
+neither `str::contains` nor `Regex::is_match` allocates.
 
-#### One expression per rule, not one blob over all rules
+#### One bundled program, not one tree per rule
 
-`check` returns `Option<Arc<QueryDenyRule>>` — effectively "denied, and by which rule" — but that
-identity comes from *which* compiled expression returned true, not from an expression that computes
-it. Each rule owns its own compiled form; the rule set is never folded into a single predicate.
+`check` returns `Option<Arc<QueryDenyRule>>` — "denied, and by which rule". How that identity is
+produced was measured, because bundling every rule into one evaluation removes a layer of
+interpreter entry per rule: no recursion, no `Box` chasing between nodes, ops and literals
+contiguous in memory, short-circuit as a forward jump.
 
-The alternative — bundling every rule into one expression, e.g.
-`CASE WHEN <r0> THEN 'r0' WHEN <r1> THEN 'r1' … END`, evaluated once per query — is the obvious way
-to turn N evaluations into one, and it was measured. It does not pay:
+Per-rule boxed trees versus one flat program (same rules, same semantics, miss = no rule matches):
 
-- **Under DataFusion it is a wash**: OR-folding ten rules into one expression measured 7 338 ns
-  against 6 230 ns evaluated separately, and 45 373 ns against 44 983 ns at a hundred (§3). A
-  columnar engine evaluates every branch of a `CASE` as its own array operation and then selects, so
-  there is no short-circuit to win and no batch build to save — the batch is already built once and
-  shared across all rules.
-- **Under the compiled evaluator the useful bundling is not an expression at all.** What actually
-  collapses N rules into one operation is the anchor index (one hash probe → candidate ids) and the
-  shared `RegexSet` (one DFA pass → matching ids). Both are cross-rule structures that return rule
-  identities directly, which is the bundling the user of a `CASE` blob is really after — and they
-  are sublinear where the blob would still be linear.
-- Keeping expressions per-rule also keeps the failure domain per-rule: one rule that no longer
-  compiles is dropped with a warning while the rest stay enforced. A single fused expression fails
-  as a unit, which would turn one bad rule into a deny list that enforces nothing.
+| Rule shape | rules | per-rule tree walk | bundled flat program |
+|---|---|---|---|
+| two equality conjuncts, miss | 1 | 6.5 ns | **4.9 ns** |
+| | 10 | 59.6 ns | **33.0 ns** |
+| | 100 | 609.6 ns | **310.0 ns** |
+| two equality conjuncts, hit | 100 | 600.9 ns | **302.8 ns** |
+| equality + substring on SQL, miss | 10 | 36.8 ns | **17.0 ns** |
+| | 100 | 359.3 ns | **186.6 ns** |
 
-Cross-rule common-subexpression sharing (five rules all testing `client = 'grafana'`) would be the
-remaining argument for fusing, and it is weak here: rules target different offenders and rarely
-share predicates beyond the anchor, which the index already shares.
+A consistent **~2×**, on both the miss and the hit, at every rule count. So the compiled form is a
+flat program, not a tree:
+
+```rust
+/// All rules in one contiguous op array; every literal in one contiguous blob, referenced by
+/// (offset, len). No pointer chasing, no recursion, no per-rule call.
+enum Op {
+    Eq       { field: u8, off: u32, len: u32, jf: u32 },
+    Contains { field: u8, off: u32, len: u32, jf: u32 },
+    StartsWith { .. }, EndsWith { .. }, Regex { field: u8, re: u32, jf: u32 },
+    IsNull   { field: u8, jf: u32 },
+    Match(RuleIdx),           // fell through every test of this rule
+}
+struct Program { ops: Vec<Op>, blob: Vec<u8>, regexes: Vec<Regex>, rule_ranges: Vec<Range<u32>> }
+```
+
+Note what this does *not* change: bundling is a representation choice, not a fusion of the rules
+into a single predicate. Each rule still occupies its own op range, `rule_ranges` records where,
+and `Op::Match` carries the rule index — so first-match-wins ordering, per-rule identity, and
+per-rule failure isolation all survive. A rule that no longer compiles is simply left out of the
+program at build time, with a warning; the rest still run. That was the decisive objection to a
+fused `CASE WHEN r0 THEN … WHEN r1 THEN … END` expression, and a bundled *program* avoids it while
+capturing the speed.
+
+Two caveats recorded honestly:
+
+- **The 2× was measured on conjunctive rules with NULL treated as failure**, which is the dominant
+  shape. General expressions with `OR`/`NOT` need genuine three-valued logic, which in a flat
+  program means a three-way branch per test (true / false / null targets) rather than a single
+  `jf`. That costs a little of the margin; it does not change the representation.
+- **Under DataFusion, bundling remains a wash** — OR-folding ten rules measured 7 338 ns against
+  6 230 ns separately, and a `CASE` behaves the same, since a columnar engine evaluates every branch
+  as its own array operation and then selects. The bundling win is specific to the compiled
+  evaluator, so Phase 1 (DataFusion) evaluates candidates per rule and Phase 1b introduces the
+  program.
+
+**The index still matters more than the bundle.** At a hundred rules the flat program costs 310 ns
+where the anchor probe costs 20.6 ns, so pruning remains the primary lever and the program is what
+runs on what pruning leaves behind:
+
+- anchored rules → the index yields candidate rule ids → run those rules' op ranges;
+- unanchored rules → their ranges are laid out contiguously and run as one bundled pass on every
+  query, which is exactly where the 2× is collected, since that is the set that cannot be pruned.
 
 **The custom evaluator is the accepted price, and DataFusion is the oracle that keeps it honest.**
 Owning Kleene logic and `LIKE`-to-predicate lowering is where hand-rolled implementations go subtly
-wrong. So a differential test compiles the same expression down both paths — `MatchExpr` and
+wrong. So a differential test compiles the same expression down both paths — the flat program and
 DataFusion's own `PhysicalExpr` — and asserts they agree over a corpus of expressions × attributions
 (NULL attributes, `NOT` over NULL, `%`/`_` patterns, regex metacharacters inside a `LIKE` literal,
 `ILIKE` casing). DataFusion stays in the test binary as the reference implementation; production
@@ -396,7 +423,7 @@ What a JIT would additionally cost, if that residue ever mattered:
 **Cranelift (`cranelift-jit`)** is the strongest version — compile the whole rule set into one
 function, no loop, no dispatch. But Cranelift IR has no string type: `sql_hash = 'X'` becomes a
 length compare plus an emitted `memcmp` call, and `LIKE`, regex, and three-valued logic must all be
-generated or called out to. That is strictly more custom machinery than the `MatchExpr` evaluator,
+generated or called out to. That is strictly more custom machinery than the flat program above,
 with a much harder correctness story (a miscompile is a wrongly allowed or wrongly denied query with
 no stack to inspect), plus `PROT_EXEC` pages in the service process — a security review in most
 hardened deployments — and a large dependency.
@@ -417,7 +444,7 @@ them rather than assumed to win.
 #### Grammar
 
 DataFusion parses, so the syntax is SQL's; the compiler accepts the subset it can lower to
-`MatchExpr`: `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`, `IS [NOT] NULL`, and `regexp_like`,
+the program: `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`, `IS [NOT] NULL`, and `regexp_like`,
 over the match-context columns and string literals. Anything else — arithmetic, subqueries,
 aggregates, non-`Immutable` functions, column-to-column comparison — is rejected at insert with the
 parser's own diagnostic where there is one.
@@ -484,14 +511,14 @@ pub struct QueryAttribution<'a> {      // borrowed view of what execute_query al
 
 impl QueryAttribution<'_> {
     /// Borrowed field by match-context index -- what both the anchor probe and
-    /// `MatchExpr::eval` read. Nothing here copies or allocates.
+    /// the program's tests read. Nothing here copies or allocates.
     fn field(&self, idx: FieldIdx) -> Option<&str>;
 }
 
 pub struct QueryDenyRule {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
     pub reason: String, pub match_expr: String,
-    compiled: MatchExpr,                  // parsed, validated, lowered at refresh (§3)
+    ops: Range<u32>,                      // this rule's slice of DenySnapshot::program
     anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
     hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
@@ -501,10 +528,11 @@ pub struct QueryDenyRule {
 /// which is cheap because rules are few and change rarely.
 pub struct DenySnapshot {
     rules: Vec<Arc<QueryDenyRule>>,
+    program: Program,                      // every rule's ops + one literal blob (§3)
     index: HashMap<(FieldIdx, Box<str>), Vec<RuleIdx>>,
     anchored_fields: Vec<FieldIdx>,        // usually one; probed on every query
     text_set: Option<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // unanchored text rules, one pass
-    walk_always: Vec<RuleIdx>,             // whatever neither structure covers
+    unanchored: Range<u32>,                // contiguous program range, run as one pass
 }
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
@@ -529,8 +557,8 @@ impl QueryDenyList {
 - With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
   one) and runs the shared `RegexSet` pass if any unanchored text rules exist. **~13–35 ns and zero
   allocation, flat in the number of rules** (§3).
-- Only the candidates those steps produce have their `MatchExpr` walked against the borrowed
-  attribution, first `Some(true)` winning.
+- The unanchored program range runs as one bundled pass, and the candidates the index produced have
+  their own op ranges run — first `Op::Match` winning.
 - **Candidates are walked in a stable rule order** — by `created_at`, `rule_id` breaking ties — not
   in whatever order the index buckets yield. Two replicas must name the same rule for the same
   query, since the rule id reaches the caller's error message, the `warn!` line, the audit record,
@@ -792,10 +820,11 @@ Open Questions.
 
 ### Phase 1b — Swap in the compiled evaluator (optional, measurable)
 
-4. Replace the `PhysicalExpr` evaluation with the lowered `MatchExpr` (§3): resolve field indices,
-   own literals inline, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, build the
-   anchor index and the shared `RegexSet`. Add `regex` to `analytics/Cargo.toml` (already in the
-   tree transitively via `datafusion-functions`).
+4. Replace the `PhysicalExpr` evaluation with the bundled flat program (§3): resolve field indices,
+   append literals to one blob, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, lay
+   every rule out as its own op range with the unanchored ones contiguous, and build the anchor
+   index and shared `RegexSet`. Add `regex` to `analytics/Cargo.toml` (already in the tree
+   transitively via `datafusion-functions`).
 5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
    the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
    moment we stop using it in production.
@@ -900,11 +929,11 @@ cost is that the stored form is no longer directly queryable in SQL (`WHERE matc
 the rules table is gone) — which the rules table's size, and the fact that nobody queries it
 programmatically, makes a non-issue.
 
-**DataFusion parses; a compiled tree evaluates.** This check is a tax on every query for as long as
+**DataFusion parses; a bundled flat program evaluates.** This check is a tax on every query for as long as
 a rule stands, so it was benchmarked (§3). DataFusion costs 3.4 µs per query, 2.8 µs of which is
 just building the one-row batch — 200× a compiled tree walk and 2000× a plain scan, plus tens of
 allocations on the front door. Keeping DataFusion for parsing and name resolution but lowering to
-a `MatchExpr` for evaluation buys the whole gap while leaving no grammar of ours to specify. The
+a flat program for evaluation buys the whole gap while leaving no grammar of ours to specify. The
 price is owning Kleene logic and `LIKE` lowering, which a differential test against DataFusion's
 own evaluator keeps honest — the oracle stays in the test binary, never in production.
 
@@ -990,7 +1019,7 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
   nested `AND`s), and correctly *absent* for a top-level `OR` — a rule that must still be evaluated
   on every query, and must still deny when it matches.
 - **Differential test against DataFusion (the important one).** Every expression in a corpus is
-  compiled both to `MatchExpr` and to DataFusion's `PhysicalExpr`, and evaluated against a corpus of
+  compiled both to the flat program and to DataFusion's `PhysicalExpr`, and evaluated against a corpus of
   attributions; the two must agree on every pair. Coverage aimed at where a hand-rolled evaluator
   goes wrong: NULL attributes, `NOT` over NULL, `AND`/`OR` with a NULL operand, `%`/`_` patterns,
   regex metacharacters inside a `LIKE` literal (`sql LIKE '100%'` must not become a quantifier),
