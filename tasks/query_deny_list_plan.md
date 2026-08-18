@@ -952,8 +952,10 @@ Triage does not belong on this screen: **finding the offender is a notebook's jo
 over the audit log listing the queries the service ran in the last few minutes, grouped by
 `sql_hash` with their cost and attribution. That is an interactive, exploratory task where the
 useful next step is usually another query, not a button; a fixed panel would answer one shape of
-question and get in the way of the rest. The screen stays a front end for the three SQL functions,
-and the admin pastes the fingerprint the notebook surfaced into the dialog.
+question and get in the way of the rest. That notebook is out of scope here — this plan owes it
+only the `sql_hash` field it groups by and the documented query it builds on. The screen stays a
+front end for the three SQL functions, and the admin pastes the fingerprint the notebook surfaced
+into the dialog.
 
 ## Implementation Steps
 
@@ -1037,17 +1039,14 @@ and the admin pastes the fingerprint the notebook surfaced into the dialog.
 19. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
 20. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
     plus the "find the offender, copy its fingerprint" query.
-21. `python/notebooks/query_load.ipynb`: the triage notebook built on that query — recent queries
-    grouped by `sql_hash` with cost and attribution. This is the "find the offender" step the
-    runbook sends operators to; the admin screen deliberately does not host it (see Mockups).
-22. `mkdocs/docs/admin/flight-sql.md`: the three env knobs, propagation delay, fail-open behavior.
-23. `mkdocs/docs/admin/web-app.md`: the new admin screen.
-24. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
+21. `mkdocs/docs/admin/flight-sql.md`: the three env knobs, propagation delay, fail-open behavior.
+22. `mkdocs/docs/admin/web-app.md`: the new admin screen.
+23. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
     apart" guidance (§ Exception types) — a denial is also `ResourceExhausted` /
     `pyarrow.lib.ArrowInvalid` with the same message prefix as a resource-budget failure, so both
     existing discriminators (message prefix, `error_class: "resource"`) stop being sufficient; add
     the deny-list row and point readers at `error_class: "denied"`.
-25. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
+24. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
 
 ## Files to Modify
 
@@ -1065,10 +1064,6 @@ and the admin pastes the fingerprint the notebook surfaced into the dialog.
 - `analytics-web-app/src/lib/__tests__/query-deny-list-api.test.ts`
 - `analytics-web-app/src/routes/__tests__/QueryDenyListPage.test.tsx`
 - `python/micromegas/tests/test_query_deny_list.py`
-- `python/notebooks/query_load.ipynb` — the triage entry point (see Mockups): the queries the
-  service ran over a recent window, grouped by `sql_hash` with cost and attribution, so an operator
-  can identify the offender and copy its fingerprint. Alongside the existing notebooks in that
-  directory, and built on the audit-log query documented in `query-audit-log.md`.
 
 **Modify**
 
@@ -1174,11 +1169,12 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 
 - `mkdocs/docs/admin/functions-reference.md` — reference for the three functions, the **match
   context** columns and the **expression language** (§3) with worked examples, plus an "incident
-  runbook" section: find the offender in the query-load notebook → copy `sql_hash` → `deny_queries`
-  → confirm rejections → `remove_query_denial` once the offending client is fixed.
+  runbook" section: find the offender (a notebook over the audit log, out of scope here) → copy
+  `sql_hash` → `deny_queries` → confirm rejections → `remove_query_denial` once the offending
+  client is fixed.
 - `mkdocs/docs/query-guide/query-audit-log.md` — the new `sql_hash` field, `error_class = "denied"`,
-  and the top-offenders query the notebook is built around, so it is documented once and reusable
-  outside the notebook.
+  and the top-offenders query an operator runs to find the fingerprint, documented here so it is
+  usable directly and reusable by a triage notebook.
 - `mkdocs/docs/admin/flight-sql.md` — env knobs, propagation delay, fail-open behavior, the admin
   escape hatch, and a **"Watching for denials"** section carrying both dashboard queries from §6
   (the warning-level `log_entries` panel and the per-rule `query_denied` rate panel) so an operator
