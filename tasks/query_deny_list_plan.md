@@ -102,34 +102,30 @@ never be an admin principal.
 
 ```sql
 CREATE TABLE query_deny_list (
-  rule_id             UUID PRIMARY KEY,
-  created_at          TIMESTAMPTZ  NOT NULL,
-  created_by          VARCHAR(255) NOT NULL,
-  reason              TEXT         NOT NULL,
-  -- matchers: every non-NULL column must match for the rule to fire (AND)
-  match_user          VARCHAR(255),
-  match_email         VARCHAR(255),
-  match_service_account VARCHAR(255),
-  match_client        VARCHAR(255),
-  match_agent         VARCHAR(255),
-  match_entrypoint    VARCHAR(255),
-  match_session       VARCHAR(255),
-  match_notebook      VARCHAR(255),
-  match_cell          VARCHAR(255),
-  match_client_ip     VARCHAR(255),
-  match_sql_hash      VARCHAR(64),
-  match_sql_contains  TEXT,
-  hit_count           BIGINT       NOT NULL DEFAULT 0
+  rule_id      UUID PRIMARY KEY,
+  created_at   TIMESTAMPTZ  NOT NULL,
+  created_by   VARCHAR(255) NOT NULL,
+  reason       TEXT         NOT NULL,
+  -- a boolean SQL expression over the match context (§3)
+  match_expr   TEXT         NOT NULL,
+  hit_count    BIGINT       NOT NULL DEFAULT 0,
+  -- NULL until the rule first fires; the "is this rule still doing anything?" signal
+  last_hit_at  TIMESTAMPTZ
 );
 ```
 
-Flat nullable columns rather than a JSONB blob: `list_query_denials()` then returns a flat, stable
-Arrow schema (the SQL layer is the stable interface — a new matcher is added as a **last** column),
-and validation happens at insert time in one place. The *input* encoding for `deny_queries` is
-still JSON (§3), so adding a matcher never changes a function signature.
+One `match_expr` column, not a column per matcher. A fixed column set fossilizes the matching
+language into the schema: every new attribute is a migration, and the only combinator it can ever
+express is AND. A single expression column carries an arbitrary predicate today and can grow
+richer semantics later without touching the schema at all — the evolution path §3 describes.
+
+`hit_count` and `last_hit_at` are both flushed on the refresh tick (§4). `last_hit_at` matters more
+here than it would with expiring rules: with rules standing until removed, "last fired three weeks
+ago" is what tells an operator a rule is stale and safe to remove, and "last fired four seconds
+ago" is what tells them the offender has not been fixed.
 
 No expiry column: a rule is in force from insertion until `remove_query_denial` deletes it. The
-table holds at most `MICROMEGAS_QUERY_DENY_MAX_RULES` rows (§9) and needs no index — every replica
+table holds at most `MICROMEGAS_QUERY_DENY_MAX_RULES` rows (§10) and needs no index — every replica
 reads all of it on each refresh tick.
 
 `LATEST_LAKEHOUSE_SCHEMA_VERSION` 8 → 9, `upgrade_v8_to_v9`. No `SCHEMA_VERSION` (partition
@@ -161,13 +157,152 @@ always exists.
 This is what makes the dashboard case work: consecutive refreshes differ only in their time-range
 literals, so they collapse to one fingerprint. A 64-bit fingerprint's collision odds across a
 realistic query population are negligible, and the consequence of a collision is bounded by the
-rule's other matchers.
+rule's other match predicates.
 
 The fingerprint is computed once per query in `execute_query` and stored on `QueryAuditState`, so
-it costs nothing extra to also emit it in the audit record (§6) — which is how an operator gets the
+it costs nothing extra to also emit it in the audit record (§7) — which is how an operator gets the
 value to paste into `deny_queries`.
 
-### 3. Rule model, evaluation, and cache
+### 3. Match expression
+
+#### Prior art
+
+"Express a predicate over request attributes, store it, evaluate it safely" is a well-trodden
+problem, with a few established answers:
+
+| Approach | Where it's used | Fit here |
+|---|---|---|
+| **CEL** (Common Expression Language) | Kubernetes admission policies & CRD validation, Envoy RBAC and rate-limit matching, Istio | The closest thing to a standard for exactly this job — typed, non-Turing-complete, bounded evaluation. Rust support exists (`cel-interpreter`), but it means a new dependency and a second expression language in a product whose interface is already SQL. |
+| **OPA / Rego** | Cluster-wide authorization policy | A whole policy language and runtime (`regorus` in Rust). Far past what an incident valve needs. |
+| **Envoy Unified Matcher API** | Envoy xDS | A protobuf matcher *tree*, not a text language. Useful as a shape reference (predicate tree over typed inputs); nothing to adopt directly. |
+| **JsonLogic** | Assorted rules engines | JSON-encoded predicate trees; trivial to build a form UI over and to serialize. Not really a standard, and painful to write by hand. |
+| **A boolean SQL expression** | — | Not a "matcher standard", but a standard *language* — already this product's stable interface, already parseable by a crate in the tree, and already what an admin reading the audit log thinks in. |
+
+**This plan uses a boolean SQL expression** as the authoring and storage form, parsed by the
+`sqlparser` already in the tree and compiled to a small interpreted IR for evaluation (next
+subsection). No new language for the admin to learn, no bespoke grammar to specify from scratch,
+and no engine on the hot path. CEL becomes the better answer the day the matcher has to be authored
+by non-admins, or evaluated somewhere with no Rust — and that is the trigger to revisit this.
+
+#### The match context
+
+Every rule is a predicate over one fixed, documented set of string attributes — what
+`execute_query` has already resolved by the time the check runs:
+
+| Column | NULL when |
+|---|---|
+| `user`, `email` | never |
+| `service_account` | the caller is not a service account |
+| `client`, `agent`, `entrypoint` | never (`'unknown'` when the header is absent) |
+| `session`, `notebook`, `cell` | the caller sent no such header |
+| `client_ip` | never |
+| `sql` | never — the raw statement text |
+| `sql_hash` | never — the normalized fingerprint (§2) |
+
+Every attribute is a string, so there is no type system to speak of and no coercion rules to get
+wrong. Adding an attribute later means appending one entry to this list: existing expressions keep
+compiling, and no migration is involved. That is the point of the single-column design.
+
+NULL semantics come from SQL and are the ones we want: `notebook = 'fleet-overview'` evaluates to
+NULL — not true — for a query that carried no notebook header, so the rule does not fire.
+
+#### Compile once, evaluate without Arrow
+
+SQL is the *authoring* language; it is deliberately **not** the evaluation machinery. DataFusion is
+a columnar engine, and single-row expression evaluation is the shape it is worst at: building a
+one-row `RecordBatch` over 12 string columns is ~25 heap allocations before any predicate runs, and
+every `PhysicalExpr` node then allocates its own one-element output array. A few microseconds and
+tens of allocations per query, on the front door of every query including the cheap ones, to answer
+a question that is really a handful of string comparisons.
+
+So a rule is compiled — once, at refresh — into a small interpreted IR that holds no Arrow:
+
+```rust
+/// Compiled form of a match expression. Column names are resolved to match-context
+/// field indices, LIKE/regex patterns are precompiled, literals are interned.
+pub enum MatchExpr {
+    And(Vec<MatchExpr>), Or(Vec<MatchExpr>), Not(Box<MatchExpr>),
+    Eq(FieldIdx, String), NotEq(FieldIdx, String),
+    In(FieldIdx, Vec<String>),
+    Like { field: FieldIdx, re: Regex },        // LIKE / ILIKE, lowered to a regex
+    Regexp { field: FieldIdx, re: Regex },      // regexp_like(field, '...')
+    Contains(FieldIdx, String), StartsWith(FieldIdx, String),
+    IsNull(FieldIdx), IsNotNull(FieldIdx),
+}
+
+impl MatchExpr {
+    /// SQL three-valued logic: `None` is NULL. Borrowed `&str`s straight off the
+    /// attribution — no allocation, no Arrow, no engine.
+    fn eval(&self, ctx: &QueryAttribution<'_>) -> Option<bool>;
+}
+```
+
+Evaluating `sql_hash = '9f2c…' AND entrypoint = 'grafana-alert'` is then two `str` comparisons and
+a branch — tens of nanoseconds, zero allocations — against the ~µs-with-allocations an Arrow round
+trip would cost. The gap does not matter for one rule on a 5 ms query; it matters because this sits
+on the front door, the rule cap is 100, and a check that is free is a check nobody has to reason
+about later.
+
+**Compilation pipeline** (`compile_match_expr`), run at insert time so the admin gets the error, and
+again at refresh so a rule written by a newer version can never take down an older replica:
+
+1. `sqlparser::Parser::parse_expr` over `GenericDialect` — the parser already reachable as
+   `datafusion::sql::sqlparser`, and the same one that parses the admin's queries. No
+   `SessionContext` is constructed and no logical planner runs.
+2. Lower the AST to `MatchExpr`, resolving identifiers against the match context and rejecting
+   anything outside the grammar below. Lowering *is* the validation: the evaluator can only ever
+   see node kinds it implements, because nothing else survives this step.
+3. Precompile every pattern into a `regex::Regex` — `LIKE` by escaping regex metacharacters and
+   mapping `%`→`.*`, `_`→`.`; `ILIKE` the same with `(?i)`; `regexp_like` verbatim.
+
+**Supported grammar** — small on purpose, and documented as the contract:
+
+```
+expr    := expr AND expr | expr OR expr | NOT expr | '(' expr ')' | pred
+pred    := col '=' lit | col '!=' lit | col IN (lit, ...)
+         | col LIKE lit | col ILIKE lit | col IS [NOT] NULL
+         | regexp_like(col, lit) | contains(col, lit) | starts_with(col, lit)
+col     := a match-context column name (§3)
+lit     := a single-quoted string literal
+```
+
+Rejected with a clear, specific message: an unknown column or function; a comparison between two
+columns or two literals; arithmetic; subqueries; aggregates; anything non-`Immutable` (`now()`,
+`random()`) — none of which the grammar admits in the first place; and an expression with **no
+column reference at all** (`true`, `1 = 1`), the replacement for the old "at least one matcher"
+rule. A determined admin can still write a tautology over a real column; the rule is visible in
+`list_query_denials()`, and `hit_count`/`last_hit_at` make it obvious.
+
+Regex is safe here and comes free: the `regex` crate has no backtracking and guarantees linear-time
+matching, and patterns are compiled once per rule rather than per query. (This corrects an earlier
+version of this plan, which excluded regex on ReDoS grounds — a hazard of backtracking engines, not
+of this one.) `regex` becomes a direct dependency of `micromegas-analytics`; it is already in the
+tree transitively, via `datafusion-functions`' `regex_expressions` feature.
+
+A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
+`property_get`/`parse_block` benches) pins the per-query cost of `check` at 0, 1, 10, and 100 rules,
+so the "free" claim above stays true rather than merely being asserted here.
+
+Examples, all valid:
+
+```sql
+sql_hash = '9f2c41ab73de0155' AND entrypoint = 'grafana-alert'
+service_account = 'dashboards-svc' AND notebook = 'fleet-overview'
+client_ip = '10.4.9.221' AND sql LIKE '%thread_spans%'
+client = 'grafana' AND regexp_like(sql, '(?i)from\s+view_instance')
+email = 'jean@example.com' AND (notebook IS NOT NULL OR entrypoint = 'notebook')
+```
+
+#### Where this can go next
+
+The column holds text and the compiler is one function over a documented grammar, so richer
+semantics land without a migration: more predicates (numeric comparison once the match context
+carries numbers), a structured `deny_queries` variant that renders the expression for a UI builder,
+cost predicates once an estimate is available at check time, or a `test_query_denial(expr)` function
+that dry-runs an expression against recent audit records before it goes live. If the grammar ever
+outgrows hand-lowering, the fallback is CEL (§3, prior art) — not a bigger bespoke language.
+
+### 4. Rule model, evaluation, and cache
 
 ```rust
 pub struct QueryAttribution<'a> {      // borrowed view of what execute_query already resolved
@@ -179,27 +314,20 @@ pub struct QueryAttribution<'a> {      // borrowed view of what execute_query al
     pub sql: &'a str, pub sql_hash: &'a str,
 }
 
+impl QueryAttribution<'_> {
+    /// Borrowed field by match-context index, for `MatchExpr::eval`. `None` is SQL NULL.
+    fn field(&self, idx: FieldIdx) -> Option<&str>;
+}
+
 pub struct QueryDenyRule {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
-    pub reason: String,
-    pub matchers: QueryDenyMatchers,     // 12 Option<String> fields, mirrors the columns
+    pub reason: String, pub match_expr: String,
+    compiled: MatchExpr,                  // from compile_match_expr, built at refresh
     hits: AtomicU64,                      // in-process delta since the last flush
+    last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
 
-impl QueryDenyRule {
-    /// Pure, offline-testable. Every `Some` matcher must match; a rule with no
-    /// matcher at all can never be constructed (rejected at insert).
-    pub fn matches(&self, q: &QueryAttribution<'_>) -> bool;
-}
-```
-
-Matching semantics: exact, case-sensitive string equality for every field except
-`match_sql_contains`, which is a case-insensitive substring test on the raw SQL. `Some(x)` against
-an absent optional attribute (e.g. `match_notebook` when the query has no notebook) does not match.
-A rule is in force for as long as its row exists — there is no time component to evaluate.
-
-```rust
-pub struct QueryDenyList {              // owned by LakehouseContext, like AudienceIndex
+pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
     pool: sqlx::Pool<sqlx::Postgres>,
     snapshot: std::sync::RwLock<Arc<Vec<Arc<QueryDenyRule>>>>,  // `arc-swap` is not a
                                    // workspace dep; a read lock held for one clone is enough
@@ -207,26 +335,36 @@ pub struct QueryDenyList {              // owned by LakehouseContext, like Audie
 
 impl QueryDenyList {
     pub fn check(&self, q: &QueryAttribution<'_>) -> Option<Arc<QueryDenyRule>>;
-    pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload the rule set
-    pub async fn insert(&self, ...) -> Result<QueryDenyRule>;
+    pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload + recompile
+    pub async fn insert(&self, match_expr: &str, reason: &str, created_by: &str)
+        -> Result<QueryDenyRule>;
     pub async fn delete(&self, rule_id: Uuid) -> Result<bool>;
     pub async fn list(&self) -> Result<Vec<QueryDenyRule>>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
 }
 ```
 
-- `check` is a linear scan over a small `Vec` — no index. The number of rules is capped
-  (`MICROMEGAS_QUERY_DENY_MAX_RULES`, default 100) at insert time, which bounds the per-query
-  cost at a few hundred string comparisons on already-hot data.
-- `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it first flushes each
-  rule's accumulated `hits` delta (`UPDATE query_deny_list SET hit_count = hit_count + $1 WHERE
-  rule_id = $2`, skipping zero deltas) and then reloads the whole table into a fresh snapshot.
-  Batching the counter this way keeps a denied 4-QPS offender at one write per tick instead of one
-  per rejection.
+- **Zero rules cost nothing.** `check` returns on an empty-snapshot test — the steady state of
+  every deployment that is not mid-incident.
+- With rules present, `check` evaluates each rule's `MatchExpr` directly against the borrowed
+  attribution and returns the first yielding `Some(true)` (`Some(false)`/`None` do not match). No
+  allocation, no Arrow, no engine: a short-circuiting walk over a few string comparisons, bounded
+  by `MICROMEGAS_QUERY_DENY_MAX_RULES` (default 100) and single-digit in practice.
+- `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it flushes each rule's
+  accumulated `hits`/`last_hit` (`UPDATE query_deny_list SET hit_count = hit_count + $1,
+  last_hit_at = greatest(coalesce(last_hit_at, $2), $2) WHERE rule_id = $3`, skipping rules with a
+  zero delta), then reloads the table and recompiles each `match_expr`. Batching keeps a denied
+  4-QPS offender at one write per tick instead of one per rejection, and `last_hit_at` is therefore
+  accurate to within one tick — which is all "is this rule still firing?" needs.
+- **A rule that fails to compile is skipped, never fatal.** It is dropped from the snapshot with a
+  `warn!` naming the rule id and the compile error, plus
+  `imetric!("query_deny_compile_error_count", ...)`. This is what makes it safe to extend the match
+  context later: an older replica that cannot compile a newer rule declines to enforce it rather
+  than denying everything or crashing.
 - **Fail-open by design.** A failed refresh keeps the previous snapshot and emits
-  `imetric!("query_deny_refresh_error_count", ...)` + a `warn!`. A failed *initial* load starts
-  with an empty snapshot. The deny list is an availability valve, not a security control — failing
-  closed would deny every query on a DB blip.
+  `imetric!("query_deny_refresh_error_count", ...)` + a `warn!`. A failed *initial* load starts with
+  an empty snapshot. The deny list is an availability valve, not a security control — failing closed
+  would deny every query on a DB blip.
 - The refresh task is spawned only by the FlightSQL server builder
   (`flight_sql_server.rs::build_and_serve`, which the monolith also uses). Other `LakehouseContext`
   holders (maintenance daemon, tests) keep an empty snapshot and never deny anything.
@@ -234,7 +372,7 @@ impl QueryDenyList {
   created a rule sees it in their own `list_query_denials()` immediately; other replicas pick it up
   within one tick.
 
-### 4. The check in `execute_query`
+### 5. The check in `execute_query`
 
 Inserted immediately after `QueryAuditState` is constructed (`flight_sql_service_impl.rs:718`) and
 before `scoped_runtime`/`caller_context`/`make_session_context`:
@@ -264,7 +402,7 @@ if let Some(rule) = denied
   rejection out of the `query_failed`/`error!` internal-error path. The message is the
   distinguishing part: it names the rule id and the reason, and — since a rule has no expiry to
   wait out — tells the caller exactly what an admin has to run to lift it.
-- **Warning log (§5)**: every denial emits a `warn!` line, so a denied query is visible on any
+- **Warning log (§6)**: every denial emits a `warn!` line, so a denied query is visible on any
   dashboard already watching warning-level logs — not only to someone who thought to query the
   audit target. This is the one new log point on the deny path; without it the rejection would be
   silent at log level, since the deny site builds its `Status` directly and never passes through
@@ -287,7 +425,7 @@ if let Some(rule) = denied
   `validate_and_resolve_user_attribution_grpc` for this. No audit record exists on that RPC, so the
   rejection is logged and counted but not audited.
 
-### 5. Making a denial visible
+### 6. Making a denial visible
 
 Three signals, deliberately at three different volumes:
 
@@ -336,7 +474,7 @@ line to at most once per rule per window, using the same checked-and-set `Atomic
 `db_api_key.rs::maybe_log_error`. The metric and the audit record are never throttled, so the exact
 count survives regardless of what the log does.
 
-### 6. `CallerContext` gains the caller's identity
+### 7. `CallerContext` gains the caller's identity
 
 `deny_queries` must record `created_by`, and the UDTF only ever sees `CallerContext`. Add:
 
@@ -356,7 +494,7 @@ enumerates every construction site, which is the intended failure mode.
 `QueryAuditRecord` gains `pub sql_hash: String` — appended **last**, so existing JSON consumers are
 unaffected. The doc comment on `error_class` is updated to enumerate `"denied"`.
 
-### 7. Admin SQL surface
+### 8. Admin SQL surface
 
 Registered inside the existing `caller.is_admin || !caller.admin_principal_possible` block in
 `register_lakehouse_functions`.
@@ -369,27 +507,29 @@ Registered inside the existing `caller.is_admin || !caller.admin_principal_possi
 | `created_at` | Timestamp(ns, UTC) | |
 | `created_by` | Utf8 | |
 | `reason` | Utf8 | |
+| `match_expr` | Utf8 | the expression as written |
 | `hit_count` | Int64 | last flushed value |
-| `match_user` … `match_sql_contains` | Utf8, nullable | one column per matcher, in table order |
+| `last_hit_at` | Timestamp(ns, UTC), nullable | NULL until the rule first fires |
 
-**`deny_queries(matchers_json, reason)`** — UDTF returning a single row (`rule_id`). JSON keys are
-the matcher names without the `match_` prefix:
+**`deny_queries(match_expr, reason)`** — UDTF returning a single row (`rule_id`). The expression is
+a boolean SQL predicate over the match context (§3); inner quotes are doubled, as anywhere else in
+SQL:
 
 ```sql
 SELECT * FROM deny_queries(
-  '{"sql_hash": "9f2c41ab73de0155", "entrypoint": "grafana-alert"}',
+  'sql_hash = ''9f2c41ab73de0155'' AND entrypoint = ''grafana-alert''',
   'alert rule re-firing on failure; owner notified');
 ```
 
-Validation, all fail-loud with `plan_err!`/a returned error:
-unknown JSON key; non-string value; empty object or all-empty values (a rule that would match
-everything); empty `reason`; rule count already at `MICROMEGAS_QUERY_DENY_MAX_RULES`.
+Validation, all fail-loud with `plan_err!`/a returned error: any `compile_match_expr` failure (§3),
+reported with the offending token where the parser gives one; an expression with no column
+reference; an empty `reason`; rule count already at `MICROMEGAS_QUERY_DENY_MAX_RULES`.
 
 **`remove_query_denial(rule_id)`** — scalar UDF returning a status string; deletes the row (returns
 a clear "no such rule" message when it matched nothing). The audit log is the durable record of
 what was denied and what it rejected, so the row itself does not need to survive its removal.
 
-### 8. Web app — Admin → Query Deny List
+### 9. Web app — Admin → Query Deny List
 
 The screen drives the **same SQL functions** through the existing `useStreamQuery` →
 `/api/stream-query` path, against the data source the admin selects. No new REST routes and no
@@ -399,18 +539,21 @@ API-key pages' single-DB assumption would be wrong here).
 
 Layout — a single rules table plus a create dialog (`tasks/query_deny_list_mockups/query-deny-list-screen.html`):
 
-- **Rules table** — `SELECT * FROM list_query_denials()`: matcher chips, reason, creator, created-at,
-  hit count, **Remove** (via `ConfirmDialog`). Empty state points at the audit-log doc for finding
-  an offender's fingerprint.
-- **Deny a Query dialog** — one field per matcher plus the required reason. The admin brings the
-  `sql_hash` over from the query audit log by hand (`mkdocs/docs/query-guide/query-audit-log.md`
-  gains the query that surfaces it; the page links to it).
+- **Rules table** — `SELECT * FROM list_query_denials()`: the match expression in monospace, reason,
+  creator, created-at, hit count, **last hit** (relative — "4 s ago" reads as "still firing", "3
+  weeks ago" as "probably removable"), **Remove** (via `ConfirmDialog`). Empty state points at the
+  audit-log doc for finding an offender's fingerprint.
+- **Deny a Query dialog** — an expression textarea plus the required reason, with insert-chips for
+  the common predicates and a link to the match-context reference. A textarea rather than a field
+  grid: the expression *is* the rule, and a grid can only ever express the AND-of-equalities
+  subset. A compile error from the server is shown inline against the expression, not as a
+  page-level banner.
 
-The dialog composes the JSON matcher object client-side and issues
-`SELECT * FROM deny_queries('<json>', '<reason>')`. **SQL literal escaping**: both the JSON blob and
-the reason are user-supplied and must go through a single `escapeSqlLiteral` helper (`'` → `''`),
-applied at the one place that builds these statements — the same rule `substitute_macros` already
-follows server-side.
+The dialog issues `SELECT * FROM deny_queries('<expr>', '<reason>')`. **SQL literal escaping**: both
+the expression and the reason are user-supplied and must go through a single `escapeSqlLiteral`
+helper (`'` → `''`), applied at the one place that builds these statements — the same rule
+`substitute_macros` already follows server-side. The expression itself already contains doubled
+quotes by the time it reaches that helper, so the round trip is worth a dedicated test.
 
 Non-admins never reach the page (`AuthGuard requireAdmin`), and a non-admin who hand-typed the SQL
 would get "function not found" from `flight-sql-srv` — the gate is server-side, the guard is UX.
@@ -418,7 +561,7 @@ would get "function not found" from `flight-sql-srv` — the gate is server-side
 `BLOCKED_FUNCTIONS` in `stream_query.rs` is deliberately **not** extended: these three functions are
 admin-gated at `flight-sql-srv` and are precisely what the web screen needs to call.
 
-### 9. Configuration
+### 10. Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
@@ -443,9 +586,10 @@ Open Questions.
 
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
-2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, `QueryDenyMatchers`
-   (+ JSON parse/validate), `QueryDenyRule::matches`, `QueryAttribution`, `QueryDenyList`
-   (`check` / `refresh` / `insert` / `delete` / `list` / `spawn_refresh_task`), env knobs.
+2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `sql_fingerprint`, the match context,
+   `MatchExpr` + `compile_match_expr` (parse → lower → precompile patterns), `QueryAttribution`,
+   `QueryDenyRule`, `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
+   `spawn_refresh_task`), env knobs. Add `sha2` and `regex` to `analytics/Cargo.toml`.
    Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2` to `analytics/Cargo.toml`.
 3. Unit tests for `sql_fingerprint` and `matches` (see Testing Strategy).
 
@@ -456,7 +600,7 @@ Open Questions.
    the compiler flags.
 6. `flight_sql_service_impl.rs`: compute the fingerprint once; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
-   is built, with its `warn!` line and the rule-tagged `query_denied` metric (§5); populate
+   is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
    `CallerContext::identity` in `caller_context`; add the check + attribution resolution to
    `do_action_create_prepared_statement`.
 7. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
@@ -498,6 +642,7 @@ Open Questions.
 - `rust/analytics/src/lakehouse/list_query_denials_table_function.rs`
 - `rust/analytics/src/lakehouse/deny_queries_table_function.rs`
 - `rust/analytics/src/lakehouse/remove_query_denial_udf.rs`
+- `rust/analytics/benches/query_deny_match.rs` (criterion, per-query `check` cost)
 - `rust/analytics/tests/query_deny_list_tests.rs` (unit)
 - `rust/analytics/tests/query_deny_list_db_test.rs` (DB-backed, `#[ignore]`d)
 - `analytics-web-app/src/lib/query-deny-list-api.ts`
@@ -510,7 +655,7 @@ Open Questions.
 
 - `rust/analytics/src/lakehouse/migration.rs`, `mod.rs`, `query.rs`, `read_scope.rs`,
   `lakehouse_context.rs`
-- `rust/analytics/Cargo.toml` (`sha2`)
+- `rust/analytics/Cargo.toml` (`sha2`, `regex`)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
@@ -535,10 +680,26 @@ the `"internal"` `error_class` bucket, which would fire `query_failed` and `erro
 a deliberate, expected rejection. `ResourceExhausted` already means "refused to spend resources
 here"; the rule id, the reason, and the command that lifts it carry the distinguishing detail.
 
-**Substring, not regex, for SQL text matching.** `regex` is not a workspace dependency, and running
-caller-influenced regexes on the hot path of every query invites ReDoS. The normalized fingerprint
-covers the case the issue actually cares about (repeated dashboard refreshes), and substring covers
-the rest. Regex can be added later behind the same JSON key set without a signature change.
+**One expression column, not a column per matcher.** A fixed matcher schema fossilizes the matching
+language: every new attribute is a migration, and AND-of-equalities is the only combinator it can
+ever express. A text column plus a compiler moves that evolution out of the schema entirely. The
+cost is that the stored form is no longer directly queryable in SQL (`WHERE match_user = 'bob'` over
+the rules table is gone) — which the rules table's size, and the fact that nobody queries it
+programmatically, makes a non-issue.
+
+**SQL to author, a compiled IR to evaluate.** Using DataFusion end-to-end would have been less code,
+but single-row evaluation is exactly the shape a columnar engine is worst at — a one-row batch plus
+per-node output arrays, some microseconds and tens of allocations on the front door of every query.
+Parsing with `sqlparser` and lowering to a small `MatchExpr` keeps the authoring language identical
+while making evaluation allocation-free. The price is a hand-written evaluator and an explicitly
+bounded grammar; the grammar being explicit is arguably worth it on its own, since it is what gets
+documented and what the validator enforces.
+
+**Regex is in, and the earlier ReDoS objection was wrong.** An earlier version of this plan excluded
+regex because "caller-influenced regexes on a hot path invite ReDoS". That reasoning applies to
+backtracking engines; Rust's `regex` crate does not backtrack and guarantees linear time, and
+patterns here are compiled once per rule rather than per query. Regex costs nothing to allow, so it
+is allowed.
 
 **Fail-open on store errors.** A deny list that fails closed turns a Postgres blip into a total
 outage — strictly worse than the problem it exists to solve. This is an availability valve, not an
@@ -551,8 +712,8 @@ and let the offender back in while nobody is looking, and it forces an operator 
 up front. Standing rules keep the state of the world explicit: what is denied is exactly what
 `list_query_denials()` shows. The cost is that a forgotten rule stays forgotten, which is mitigated
 by three things — the mandatory `reason` and recorded `created_by`, the rejection message telling
-the caller precisely what to ask for, and `hit_count`, which makes a stale rule that is still
-rejecting traffic visible on the screen.
+the caller precisely what to ask for, and `hit_count`/`last_hit_at`, which separate a rule still
+rejecting traffic from one that has not fired in weeks and is safe to remove.
 
 **Hard delete rather than soft delete.** `analytics_api_keys` keeps revoked rows with
 `revoked_at`/`revoked_by`; the deny list does not, because the audit log already records every
@@ -561,17 +722,18 @@ trail turns out to be wanted, a `removed_at`/`removed_by` pair plus a `WHERE rem
 filter in the refresh query is an additive change.
 
 **64-bit fingerprint.** Short enough to read off a log line and paste into a terminal; collisions
-are astronomically unlikely and bounded in blast radius by the rule's other matchers.
+are astronomically unlikely and bounded in blast radius by the rule's other predicates.
 
 ## Documentation
 
-- `mkdocs/docs/admin/functions-reference.md` — reference for the three functions, plus an "incident
-  runbook" section: find the offender in the audit log → copy `sql_hash` → `deny_queries` →
-  confirm rejections → `remove_query_denial` once the offending client is fixed.
+- `mkdocs/docs/admin/functions-reference.md` — reference for the three functions, the **match
+  context** columns and the **supported grammar** (§3) with worked examples, plus an "incident
+  runbook" section: find the offender in the audit log → copy `sql_hash` → `deny_queries` → confirm
+  rejections → `remove_query_denial` once the offending client is fixed.
 - `mkdocs/docs/query-guide/query-audit-log.md` — the new `sql_hash` field, `error_class = "denied"`,
   and the top-offenders query an operator runs to find the fingerprint.
 - `mkdocs/docs/admin/flight-sql.md` — env knobs, propagation delay, fail-open behavior, the admin
-  escape hatch, and a **"Watching for denials"** section carrying both dashboard queries from §5
+  escape hatch, and a **"Watching for denials"** section carrying both dashboard queries from §6
   (the warning-level `log_entries` panel and the per-rule `query_denied` rate panel) so an operator
   can paste them straight into a dashboard.
 - `mkdocs/docs/admin/web-app.md` — the Admin → Query Deny List screen.
@@ -583,10 +745,16 @@ are astronomically unlikely and bounded in blast radius by the rule's other matc
 - `sql_fingerprint`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
-- `QueryDenyRule::matches`: AND semantics across combinations; `Some` matcher vs. absent optional
-  attribute; case-insensitive `sql_contains`.
-- Matcher JSON parsing: unknown key, non-string value, empty object, all-blank values, oversized
-  reason — each rejected with a distinct message.
+- `compile_match_expr` accepts every construct in the documented grammar and rejects everything
+  outside it — unknown column, unknown function, column-to-column comparison, arithmetic, subquery,
+  aggregate, `now()`, and a no-column expression (`true`, `1 = 1`) — each with a distinct message.
+- `MatchExpr::eval` three-valued logic: a predicate on an absent optional attribute
+  (`notebook = 'x'` with no notebook) yields `None`, and `None` does not deny; `NOT NULL` stays
+  `None`; `OR` short-circuits over it correctly.
+- `LIKE`/`ILIKE` lowering: `%`/`_` map correctly, regex metacharacters in the pattern are escaped
+  (`sql LIKE '100%'` must not become a regex quantifier), `ILIKE` is case-insensitive.
+- Round-trip: every example expression in the docs compiles, and evaluates as documented against a
+  hand-built attribution.
 - `skip_for_admin_recovery`: an admin statement calling `remove_query_denial` is exempt; the same
   statement from a non-admin is not; a non-admin query that merely aliases a column
   `remove_query_denial` is not exempt.
@@ -597,8 +765,12 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 - Migration v8 → v9 applies cleanly on a pre-existing lakehouse schema.
 - `insert` → `refresh` → `check` matches; `delete` → `refresh` → no longer matches.
-- Hit-count flush: N `record_hit` calls then `refresh` leaves `hit_count = N` in Postgres.
+- Hit flush: N `record_hit` calls then `refresh` leaves `hit_count = N` and a `last_hit_at` at the
+  most recent of them; a rule with no hits this tick is not written at all (and keeps its earlier
+  `last_hit_at`).
 - Refresh failure keeps the previous snapshot (point the pool at a closed connection).
+- A row whose `match_expr` does not compile (written directly with `INSERT`, simulating a newer
+  version) is skipped with a warning while every other rule stays enforced.
 
 **Rust service tests (`rust/public/tests/`)**
 
@@ -610,22 +782,24 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 **End-to-end (`python/micromegas/tests/test_query_deny_list.py`, against `local_test_env`)**
 
-- `deny_queries` with a `sql_hash` matcher → the matching query fails with a `ResourceExhausted`
+- `deny_queries` with a `sql_hash` predicate → the matching query fails with a `ResourceExhausted`
   naming the rule id → `remove_query_denial` → the query succeeds again.
 - A non-matching query is unaffected while the rule is in force.
 - Each denial lands one `Warn`-level `log_entries` row (`msg LIKE 'query denied%'`) and one
-  `query_denied` measure tagged with the rule id — the two dashboard signals from §5, checked
+  `query_denied` measure tagged with the rule id — the two dashboard signals from §6, checked
   end-to-end rather than only at the call site.
-- An empty-matcher rule is rejected.
+- A no-column expression is rejected, as is a syntactically invalid one, each with a message that
+  names the problem.
 - `list_query_denials()` shows the rule while it stands and drops it after removal; `hit_count`
   reflects the rejections once a refresh tick has flushed.
 - A rule matching *everything the test client sends* still leaves `remove_query_denial` callable —
-  the escape hatch (§4), and the only recovery path now that rules do not expire.
+  the escape hatch (§5), and the only recovery path now that rules do not expire.
 - Note: `local_test_env` runs with auth disabled, so every caller is an admin there.
 
 **Web app (Vitest)**
 
-- SQL builders: a reason containing `'` is escaped exactly once; the matcher JSON round-trips.
+- SQL builders: a reason containing `'` is escaped exactly once, and an expression already
+  containing doubled quotes survives the round trip unchanged.
 - Page: renders rules, opens the deny dialog, calls the right SQL on confirm, shows the error
   banner on a failed query.
 
