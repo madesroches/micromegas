@@ -16,8 +16,11 @@ use anyhow::{Result, anyhow};
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_flight::sql::CommandStatementIngest;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use async_trait::async_trait;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::Schema;
 use futures::TryStreamExt;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
@@ -473,4 +476,39 @@ async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffect
         .expect("collecting batches");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 1, "SELECT 1 must still return exactly one row");
+}
+
+// ---------------------------------------------------------------------------
+// bulk_ingest admin gate (AbAC Stage 5, #1373): non-admin callers must be rejected
+// ---------------------------------------------------------------------------
+
+/// `do_put_statement_ingest`'s `is_admin` check (AbAC Stage 5, #1373) rejects a non-admin
+/// caller before it ever reaches `bulk_ingest`, so this needs no live Postgres or object
+/// store: an `ApiKeyAuthProvider` credential is always non-admin (see `api_key.rs`), and a
+/// single empty (zero-row, zero-column) record batch is enough to reach the check -- the
+/// gate denies before any ingestion work happens. A genuinely empty stream (no batches at
+/// all) never reaches the server: `FlightDataEncoderBuilder` only emits a message once it
+/// sees a schema or a first batch, so the command/descriptor would never be sent.
+#[tokio::test]
+async fn bulk_ingest_denies_non_admin_caller() {
+    let auth_provider = api_key_provider("test", "secret");
+    let policy = Arc::new(RecordingReadPolicy::default());
+    let addr = start_server(Some(auth_provider), policy).await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+
+    let command = CommandStatementIngest {
+        table: "processes".to_string(),
+        ..Default::default()
+    };
+    let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+    let result = client
+        .execute_ingest(command, futures::stream::once(async { Ok(batch) }))
+        .await;
+
+    assert_eq!(
+        expect_status_code(result),
+        Code::PermissionDenied,
+        "a non-admin caller must be rejected by the bulk_ingest admin gate"
+    );
 }

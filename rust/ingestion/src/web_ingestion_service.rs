@@ -128,9 +128,13 @@ pub fn finalize_process_properties(
 }
 
 /// Bound on [`WebIngestionService::process_audience_cache`]. A handful of thousand entries
-/// comfortably covers the distinct processes any one deployment has live at once; this is a
-/// memory bound, not a staleness one -- see the field's doc comment for why no TTL is needed.
+/// comfortably covers the distinct processes any one deployment has live at once. See the
+/// field's doc comment for the separate, time-based bound that limits staleness.
 const PROCESS_AUDIENCE_CACHE_CAPACITY: u64 = 10_000;
+
+/// Time-to-live on [`WebIngestionService::process_audience_cache`]. See the field's doc comment
+/// for why a bounded TTL is required rather than relying on capacity eviction alone.
+const PROCESS_AUDIENCE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -140,8 +144,20 @@ pub struct WebIngestionService {
     /// has already confirmed conflict-free, so a steady-state re-registration (the common case:
     /// `otel-ingestion`'s `write_blocks` calls `register_otel_process` once per prepared block on
     /// every export request, not once per process lifetime) skips the `SELECT` entirely instead
-    /// of re-querying it on every call. No TTL: a process_id's audience is immutable once
-    /// established (§6, AbAC Stage 5, #1373) -- this bounds memory, not staleness.
+    /// of re-querying it on every call.
+    ///
+    /// Bounded by a TTL ([`PROCESS_AUDIENCE_CACHE_TTL`]), not just capacity: a `process_id`'s
+    /// audience is immutable *while the row exists*, but the row itself is not permanent. The
+    /// maintenance sweep's `delete_empty_processes` (`rust/analytics/src/delete.rs`, driven by
+    /// `delete_old_data`) deletes a `processes` row once it has no streams and is past the
+    /// retention window, and `mkdocs/docs/admin/authentication.md` documents a manual
+    /// `DELETE FROM processes WHERE process_id = ...` as the operator recovery path after a
+    /// squatted-process conflict. Either path lets the same `process_id` be deleted and later
+    /// re-registered under a genuinely different audience, which this in-memory cache -- scoped
+    /// to a single server process -- would otherwise keep serving indefinitely (bounded only by
+    /// 10,000-entry LRU eviction or a restart). The TTL closes that staleness window to a small,
+    /// fixed size instead of leaving it open for the server's entire uptime; capacity remains a
+    /// separate, memory-only bound.
     process_audience_cache: Cache<Uuid, WriteAudience>,
 }
 
@@ -152,6 +168,7 @@ impl WebIngestionService {
             ready_ok_until: Arc::new(Mutex::new(None)),
             process_audience_cache: Cache::builder()
                 .max_capacity(PROCESS_AUDIENCE_CACHE_CAPACITY)
+                .time_to_live(PROCESS_AUDIENCE_CACHE_TTL)
                 .build(),
         }
     }
@@ -543,9 +560,9 @@ impl WebIngestionService {
     ///
     /// Consults [`Self::process_audience_cache`] before touching the database: a hit for this
     /// `process_id` whose cached audience matches `audience` means a prior call already proved
-    /// there's no conflict, so the `SELECT` below is skipped entirely. A miss (including a cached
-    /// audience that doesn't match -- which can't happen once a process is stamped, since the
-    /// audience is immutable, but falls through safely regardless) re-runs the real check.
+    /// there's no conflict, so the `SELECT` below is skipped entirely. A miss (including an
+    /// expired entry, or a cached audience that doesn't match) falls through and re-runs the real
+    /// check against the database, which is authoritative.
     async fn check_process_audience_conflict(
         &self,
         process_id: Uuid,
@@ -600,7 +617,8 @@ impl WebIngestionService {
                 debug!(
                     "duplicate process_id={process_id} skipped (already exists, unstamped -- no retro-stamp)"
                 );
-                self.remember_process_audience(process_id, audience);
+                // Not cached: the row's audience is still NULL (never stamped), so caching
+                // `audience` here would record a value the database row never actually held.
                 Ok(())
             }
         }
