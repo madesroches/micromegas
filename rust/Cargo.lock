@@ -3787,6 +3787,7 @@ dependencies = [
  "micromegas-object-cache",
  "micromegas-telemetry",
  "micromegas-tracing",
+ "moka",
  "object_store",
  "serial_test",
  "sqlx",

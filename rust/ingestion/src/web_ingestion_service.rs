@@ -13,6 +13,7 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
+use moka::sync::Cache;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 use thiserror::Error;
@@ -126,10 +127,22 @@ pub fn finalize_process_properties(
     properties
 }
 
+/// Bound on [`WebIngestionService::process_audience_cache`]. A handful of thousand entries
+/// comfortably covers the distinct processes any one deployment has live at once; this is a
+/// memory bound, not a staleness one -- see the field's doc comment for why no TTL is needed.
+const PROCESS_AUDIENCE_CACHE_CAPACITY: u64 = 10_000;
+
 #[derive(Clone)]
 pub struct WebIngestionService {
     lake: DataLakeConnection,
     ready_ok_until: Arc<Mutex<Option<Instant>>>,
+    /// Memoizes `process_id -> audience` for processes [`Self::check_process_audience_conflict`]
+    /// has already confirmed conflict-free, so a steady-state re-registration (the common case:
+    /// `otel-ingestion`'s `write_blocks` calls `register_otel_process` once per prepared block on
+    /// every export request, not once per process lifetime) skips the `SELECT` entirely instead
+    /// of re-querying it on every call. No TTL: a process_id's audience is immutable once
+    /// established (§6, AbAC Stage 5, #1373) -- this bounds memory, not staleness.
+    process_audience_cache: Cache<Uuid, WriteAudience>,
 }
 
 impl WebIngestionService {
@@ -137,6 +150,9 @@ impl WebIngestionService {
         Self {
             lake,
             ready_ok_until: Arc::new(Mutex::new(None)),
+            process_audience_cache: Cache::builder()
+                .max_capacity(PROCESS_AUDIENCE_CACHE_CAPACITY)
+                .build(),
         }
     }
 
@@ -181,6 +197,27 @@ impl WebIngestionService {
     pub fn set_ready_until(&self, until: Instant) {
         let mut guard = self.ready_ok_until.lock().expect("readiness cache lock");
         *guard = Some(until);
+    }
+
+    /// Pre-seeds [`Self::process_audience_cache`] with `process_id -> audience`, bypassing the
+    /// database entirely. Intended for testing only: lets a test exercise
+    /// [`Self::check_process_audience_conflict`]'s cache-hit path against a service whose
+    /// database is unreachable, proving that path never touches the database.
+    #[doc(hidden)]
+    pub fn prime_process_audience_cache_for_test(&self, process_id: Uuid, audience: WriteAudience) {
+        self.process_audience_cache.insert(process_id, audience);
+    }
+
+    /// Exposes [`Self::check_process_audience_conflict`] to integration tests, which otherwise
+    /// can't reach a private method. Intended for testing only.
+    #[doc(hidden)]
+    pub async fn check_process_audience_conflict_for_test(
+        &self,
+        process_id: Uuid,
+        audience: &WriteAudience,
+    ) -> Result<(), IngestionServiceError> {
+        self.check_process_audience_conflict(process_id, audience)
+            .await
     }
 
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
@@ -492,6 +529,8 @@ impl WebIngestionService {
         if result.rows_affected() == 0 {
             self.check_process_audience_conflict(process_info.process_id, audience)
                 .await?;
+        } else {
+            self.remember_process_audience(process_info.process_id, audience);
         }
         Ok(())
     }
@@ -501,6 +540,12 @@ impl WebIngestionService {
     /// audience at all, or when the existing row's audience is `NULL` or matches `audience`
     /// exactly; `Err(IngestionServiceError::AudienceConflict)` when the existing row was stamped
     /// with a *different* audience than this request carries.
+    ///
+    /// Consults [`Self::process_audience_cache`] before touching the database: a hit for this
+    /// `process_id` whose cached audience matches `audience` means a prior call already proved
+    /// there's no conflict, so the `SELECT` below is skipped entirely. A miss (including a cached
+    /// audience that doesn't match -- which can't happen once a process is stamped, since the
+    /// audience is immutable, but falls through safely regardless) re-runs the real check.
     async fn check_process_audience_conflict(
         &self,
         process_id: Uuid,
@@ -510,6 +555,14 @@ impl WebIngestionService {
             debug!("duplicate process_id={process_id} skipped (already exists)");
             return Ok(());
         };
+        if let Some(cached) = self.process_audience_cache.get(&process_id)
+            && cached.as_str() == Some(incoming)
+        {
+            debug!(
+                "duplicate process_id={process_id} skipped (already exists, same audience, cached)"
+            );
+            return Ok(());
+        }
         let properties: Vec<Property> = instrument_named!(
             sqlx::query_scalar("SELECT properties FROM processes WHERE process_id = $1")
                 .bind(process_id)
@@ -540,14 +593,30 @@ impl WebIngestionService {
             }
             Some(_) => {
                 debug!("duplicate process_id={process_id} skipped (already exists, same audience)");
+                self.remember_process_audience(process_id, audience);
                 Ok(())
             }
             None => {
                 debug!(
                     "duplicate process_id={process_id} skipped (already exists, unstamped -- no retro-stamp)"
                 );
+                self.remember_process_audience(process_id, audience);
                 Ok(())
             }
+        }
+    }
+
+    /// Records `audience` as the confirmed-conflict-free audience for `process_id` in
+    /// [`Self::process_audience_cache`], so a later call with the same `process_id`/`audience`
+    /// pair can skip [`Self::check_process_audience_conflict`]'s `SELECT`. A no-op when
+    /// `audience` carries no audience at all -- that path never queries the database in the
+    /// first place, so there's nothing worth memoizing. Only ever called with an audience already
+    /// known to be conflict-free (a fresh `INSERT`, or a guard check that just passed) -- never
+    /// on a rejection.
+    fn remember_process_audience(&self, process_id: Uuid, audience: &WriteAudience) {
+        if audience.as_str().is_some() {
+            self.process_audience_cache
+                .insert(process_id, audience.clone());
         }
     }
 
@@ -616,6 +685,8 @@ impl WebIngestionService {
         if result.rows_affected() == 0 {
             self.check_process_audience_conflict(process_id, audience)
                 .await?;
+        } else {
+            self.remember_process_audience(process_id, audience);
         }
         Ok(())
     }
