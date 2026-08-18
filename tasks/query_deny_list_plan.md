@@ -41,8 +41,9 @@ Steps 5-6 are where the money goes: JIT partition materialization, object-store 
 reservations. Step 4 is the natural insertion point for the check.
 
 `do_get_statement` (line 1036) and `do_get_fallback` (line 866) are the only callers of
-`execute_query`. `do_action_create_prepared_statement` (line 1235) is a second, cheaper planning
-path that builds a session context and plans without executing.
+`execute_query`. `do_action_create_prepared_statement` (line 1235) builds a session context and
+plans without executing, and `do_get_prepared_statement` (line 1046) is `api_entry_not_implemented!()`
+— so every executed query reaches `execute_query`, prepared or not (§5).
 
 ### Audit record
 
@@ -758,15 +759,18 @@ if let Some(rule) = denied
   `pub` function in the analytics crate and its unit tests sit with the rest of that crate's tests.
   This is the primary recovery path, so it carries its own test, including the
   `admin_principal_possible == false` deployment shape.
-- **Prepared statements**: `skip_for_admin_recovery` gates the same check, on identical terms, at the
-  top of `do_action_create_prepared_statement` (which plans, and is therefore worth protecting from a
-  prepare loop). That path does not resolve attribution today; building the same `QueryAttribution`
-  used in `execute_query` means also calling `validate_and_resolve_user_attribution_grpc`,
-  `get_client_ip` for `client_ip`, and reading the same `x-client-*`/`-agent`/`-entrypoint`/
-  `-session`/`-notebook`/`-cell` headers `execute_query` reads (Current State, "Query path" steps
-  2-3) — a rule keyed on `client_ip` or `sql_hash` cannot be evaluated without them — plus tokenizing
-  the statement to derive `sql_hash` the same way (§2). No audit record exists on that RPC, so the
-  rejection is logged and counted but not audited.
+- **Prepared statements are deliberately not checked.** `do_action_create_prepared_statement` is not
+  a second insertion point, because nothing executes through it. It only plans — `ctx.sql()` to
+  recover the result schema — and echoes the SQL back as the handle; `do_get_prepared_statement` is
+  `api_entry_not_implemented!()`, so a prepared handle can never be executed. The Python client's
+  `prepared_statement_stream` reflects this: it calls `query_stream(statement.query)`, which returns
+  through `do_get_statement` → `execute_query`, where the check already sits. So there is no bypass
+  to close and no scan cost to shed on that path — planning touches the catalog, not the data.
+  Checking there would buy only earlier feedback during schema discovery, at the price of resolving
+  attribution, `get_client_ip`, the `x-client-*` headers, and a tokenize pass on an RPC that has none
+  of them today and no audit record to write them to. One check site, on the path that actually
+  spends the money, is the whole design. If `do_get_prepared_statement` is ever implemented, the
+  check has to be added there — that is the trigger to revisit this, not the prepare RPC itself.
 
 ### 6. Making a denial visible
 
@@ -999,11 +1003,9 @@ Open Questions.
    the escape-hatch identifier check from its result; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
    is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
-   `CallerContext::identity` in `caller_context`; add the check to
-   `do_action_create_prepared_statement`, including resolving attribution
-   (`validate_and_resolve_user_attribution_grpc`), `get_client_ip`, the same `x-client-*` headers, and
-   tokenizing the statement for `sql_hash` — everything `QueryAttribution` needs, not attribution
-   alone.
+   `CallerContext::identity` in `caller_context`. `do_action_create_prepared_statement` is left
+   untouched — it plans without executing and cannot be executed through, so it is not a check site
+   (§5).
 10. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
 
 ### Phase 3 — Admin SQL functions
@@ -1215,9 +1217,7 @@ this reason, so the lowering and anchor-extraction assertions below compile.
   both would otherwise pass a bare identifier-token check; with `admin_principal_possible == false`
   (no admin principal
   configured), a non-admin caller's `remove_query_denial` statement is exempt too, matching
-  `register_lakehouse_functions`' gate; the same cases apply unchanged to the
-  `do_action_create_prepared_statement` call site (§5), since the function takes the same inputs
-  regardless of which RPC tokenized the statement.
+  `register_lakehouse_functions`' gate.
 
 **Integration (`rust/analytics/tests/query_deny_list_db_test.rs` — `#[ignore]`d `#[tokio::test]`
 requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`, `mod common;` for `db_fixtures`, same
