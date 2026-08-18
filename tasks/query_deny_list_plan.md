@@ -152,15 +152,18 @@ the tokens.
 Implementation: `sqlparser::tokenizer::Tokenizer` over `GenericDialect`, then
 
 - every `Token::Number`, `SingleQuotedString`, `NationalStringLiteral`, `HexStringLiteral`,
-  `EscapedStringLiteral` → `?`
-- `DoubleQuotedString` is **not** stripped, even though `sqlparser` tokenizes it identically to a
-  string literal: this product's views expose dotted column names that require double-quoting
-  (e.g. `b."processes.exe"`), and mapping it to `?` would collapse `"processes.exe"` and
-  `"processes.username"` into the same fingerprint, making a rule keyed on `sql_hash` deny queries
-  it was never meant to. It is kept verbatim, case included, as an identifier.
+  `EscapedStringLiteral`, `TripleSingleQuotedString`, `TripleDoubleQuotedString` → `?`
 - whitespace runs collapse to one space; comments dropped
-- keywords/unquoted identifiers lowercased (identifiers are already case-insensitive in DataFusion
-  unless quoted)
+- `Token::Word` is lowercased only when `quote_style.is_none()` — keywords and unquoted identifiers
+  fold to lowercase (identifiers are already case-insensitive in DataFusion unless quoted), but a
+  quoted word is kept verbatim, case included. This, not a separate `DoubleQuotedString` carve-out,
+  is what protects this product's dotted column names: under `GenericDialect`, a double-quoted
+  identifier like `b."processes.exe"` tokenizes as `Token::Word { quote_style: Some('"') }`, not
+  `Token::DoubleQuotedString` (the tokenizer's double-quote arm is gated on
+  `is_delimited_identifier_start`, which `GenericDialect` sets true for `"`). Lowercasing on
+  `quote_style` rather than stripping a `DoubleQuotedString` token that never actually appears here
+  is what keeps `"processes.exe"` and `"processes.username"` from collapsing into the same
+  fingerprint and denying a query never meant to match.
 - tokens joined with a single space, then SHA-256, hex, truncated to 16 chars (64 bits)
 
 Tokenization failure falls back to hashing the whitespace-collapsed raw text, so a fingerprint
@@ -208,13 +211,18 @@ runs:
 
 | Column | NULL when |
 |---|---|
-| `user`, `email` | never |
-| `service_account` | the caller is not a service account |
+| `user_id`, `email` | never — `user_id` always carries the authenticated principal: the OIDC subject for a human caller, or a service account's own subject when it is not delegating (see `service_account` below) |
+| `service_account` | the caller is a service account that is **not delegating** — i.e. also NULL for an ordinary human caller. It is set only when a service account calls on behalf of a user (`x-user-id`/`x-user-email` present alongside its own credentials); a non-delegating service account's identity is in `user_id` instead, so a rule meant to target one should match on `user_id`, not `service_account` |
 | `client`, `agent`, `entrypoint` | never (`'unknown'` when the header is absent) |
 | `session`, `notebook`, `cell` | the caller sent no such header |
 | `client_ip` | never |
 | `sql` | never — the raw statement text |
 | `sql_hash` | never — the normalized fingerprint (§2) |
+
+The identity column is named `user_id`, not `user`: DataFusion's default (`Generic`) SQL dialect
+parses a bare `user` in expression position as the zero-argument function call `user()`, not a
+column reference, and no such scalar function is registered — `user = 'jean'` would fail at
+planning with "Invalid function 'user'". None of the other columns collide with a reserved word.
 
 Every attribute is a string, so there are no coercion surprises. Adding an attribute later means
 appending one field to this schema: existing expressions keep compiling, and no migration is
@@ -223,7 +231,7 @@ involved. That is the point of the single-column design.
 NULL semantics come from SQL and are the ones we want: `notebook = 'fleet-overview'` evaluates to
 NULL — not true — for a query that carried no notebook header, so the rule does not fire.
 
-`user` and `email` match exactly, case-sensitive — `=` with no case folding — matching the existing
+`user_id` and `email` match exactly, case-sensitive — `=` with no case folding — matching the existing
 precedent at `OidcProvider::is_admin` (`rust/auth/src/oidc.rs`), which already compares admin
 identities against the configured list with plain `==` and has no case-insensitive path anywhere in
 `rust/auth/src`. This is not a new decision, just the same rule applied here.
@@ -333,8 +341,12 @@ place.
 
 Everything expensive happens at refresh, since rules are few and static:
 
-1. **Parse** with `ctx.parse_sql_expr(match_expr, &match_schema())`. DataFusion's parser and name
-   resolution, so there is no grammar of ours to specify or keep in sync.
+1. **Parse** with `ctx.parse_sql_expr(match_expr, &match_schema())`. `ctx` is a bare
+   `SessionContext::new()` held on `QueryDenyList` for exactly this call — no lakehouse tables or
+   catalog registered against it, just DataFusion's parser and name resolution, so there is no
+   grammar of ours to specify or keep in sync. `compile_match_expr(ctx: &SessionContext, match_expr:
+   &str) -> Result<CompiledExpr>` is the function that owns steps 1-3; `refresh` and `insert` both
+   call it with `&self.ctx`.
 2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
    scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
    same thing on every replica); require a `Boolean` result and at least one column reference.
@@ -500,7 +512,7 @@ Examples, all valid:
 
 ```sql
 sql_hash = '9f2c41ab73de0155' AND entrypoint = 'grafana-alert'
-service_account = 'dashboards-svc' AND notebook = 'fleet-overview'
+user_id = 'dashboards-svc' AND notebook = 'fleet-overview'
 client_ip = '10.4.9.221' AND sql LIKE '%thread_spans%'
 client = 'grafana' AND regexp_like(sql, '(?i)from\s+view_instance')
 email = 'jean@example.com' AND (notebook IS NOT NULL OR entrypoint = 'notebook')
@@ -540,7 +552,7 @@ form, and native compilation stays available behind them (§3).
 
 ```rust
 pub struct QueryAttribution<'a> {      // borrowed view of what execute_query already resolved
-    pub user: &'a str, pub email: &'a str,
+    pub user_id: &'a str, pub email: &'a str,
     pub service_account: Option<&'a str>,
     pub client: &'a str, pub agent: &'a str, pub entrypoint: &'a str,
     pub session: Option<&'a str>, pub notebook: Option<&'a str>, pub cell: Option<&'a str>,
@@ -588,6 +600,10 @@ pub struct DenySnapshot {
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
     pool: sqlx::Pool<sqlx::Postgres>,
+    // Bare `SessionContext::new()` — no lakehouse tables or catalog registered, held only so
+    // `compile_match_expr` can call `ctx.parse_sql_expr(expr, &match_schema())`; both `refresh`
+    // and `insert` compile through it.
+    ctx: SessionContext,
     snapshot: std::sync::RwLock<Arc<DenySnapshot>>,  // `arc-swap` is not a workspace dep;
                                    // a read lock held for one clone is enough
 }
@@ -651,7 +667,7 @@ before `scoped_runtime`/`caller_context`/`make_session_context`:
 ```rust
 let denied = self.lakehouse.query_denials().check(&QueryAttribution { .. });
 if let Some(rule) = denied
-    && !skip_for_admin_recovery(caller_is_admin, &sql_tokens)
+    && !skip_for_admin_recovery(caller_is_admin, self.admin_principal_possible, &sql_tokens)
 {
     let status = Status::resource_exhausted(format!(
         "query denied by rule {} (reason: {}); ask an admin to lift it with \
@@ -685,15 +701,27 @@ if let Some(rule) = denied
   operator confirms the offender actually backed off.
 - **Anti-jam escape hatch.** A rule keyed on identity alone (e.g. `client_ip`) could match the
   admin's own recovery query and lock the valve shut — and with no expiry, nothing lifts it on its
-  own. So the check is skipped when the caller is admin **and** the statement references one of
-  `deny_queries` / `remove_query_denial` / `list_query_denials` as an *identifier token* (checked
-  over the token stream already produced for the fingerprint — not a substring match on the raw
-  text). A non-admin cannot exploit this: those functions are not registered for them, and the skip
-  requires `is_admin`. This is the primary recovery path, so it carries its own test.
+  own. So the check is skipped when the caller can reach the admin functions at all —
+  `is_admin || !admin_principal_possible`, the same predicate `register_lakehouse_functions` gates
+  `deny_queries`/`remove_query_denial` on (Current State, "Admin gating") — **and** the statement
+  references one of `deny_queries` / `remove_query_denial` / `list_query_denials` as an *identifier
+  token* (checked over the token stream already produced for the fingerprint — not a substring match
+  on the raw text). Gating on `is_admin` alone would leave the hatch permanently shut in any
+  deployment where `admin_principal_possible` is false (no admin principal configured: every API-key
+  provider, or OIDC with an empty `admin_users` list) — `is_admin` is then always false while the
+  mutating functions are registered for every caller, exactly the deployment this hatch most needs to
+  work in. A non-admin cannot exploit the wider gate: the mutating functions are registered under the
+  identical predicate, so any caller for whom the escape hatch opens is, by construction, a caller who
+  could call them directly anyway. This is the primary recovery path, so it carries its own test,
+  including the `admin_principal_possible == false` deployment shape.
 - **Prepared statements**: the same check is applied at the top of
   `do_action_create_prepared_statement` (which plans, and is therefore worth protecting from a
-  prepare loop). That path does not resolve attribution today; it will call
-  `validate_and_resolve_user_attribution_grpc` for this. No audit record exists on that RPC, so the
+  prepare loop). That path does not resolve attribution today; building the same `QueryAttribution`
+  used in `execute_query` means also calling `validate_and_resolve_user_attribution_grpc`,
+  `get_client_ip` for `client_ip`, and reading the same `x-client-*`/`-agent`/`-entrypoint`/
+  `-session`/`-notebook`/`-cell` headers `execute_query` reads (Current State, "Query path" steps
+  2-3) — a rule keyed on `client_ip` or `sql_hash` cannot be evaluated without them — plus tokenizing
+  the statement to derive `sql_hash` the same way (§2). No audit record exists on that RPC, so the
   rejection is logged and counted but not audited.
 
 ### 6. Making a denial visible
@@ -792,7 +820,9 @@ SELECT * FROM deny_queries(
   'alert rule re-firing on failure; owner notified');
 ```
 
-Validation, all fail-loud with `plan_err!`/a returned error: any `compile_match_expr` failure (§3),
+The table function itself is handed no `SessionContext` (`TableFunctionImpl::call` doesn't get one);
+validation runs through `QueryDenyList::insert`, which compiles against the bare `SessionContext` the
+list holds for exactly this (§3, §4). Validation, all fail-loud with `plan_err!`/a returned error: any `compile_match_expr` failure (§3),
 reported with the offending token where the parser gives one; an expression with no column reference
 at all, which would deny every query; an empty `reason`; rule count already at
 `MICROMEGAS_QUERY_DENY_MAX_RULES`.
@@ -833,8 +863,17 @@ worth a dedicated test.
 Non-admins never reach the page (`AuthGuard requireAdmin`), and a non-admin who hand-typed the SQL
 would get "function not found" from `flight-sql-srv` — the gate is server-side, the guard is UX.
 
-`BLOCKED_FUNCTIONS` in `stream_query.rs` is deliberately **not** extended: these three functions are
-admin-gated at `flight-sql-srv` and are precisely what the web screen needs to call.
+`BLOCKED_FUNCTIONS` in `stream_query.rs` is deliberately **not** extended for the three new admin
+functions themselves: they are admin-gated at `flight-sql-srv`, which is precisely what the web
+screen needs to call. But `contains_blocked_function` substring-matches the entire lowercased SQL
+text, not just call position, so a `deny_queries(...)` statement whose *expression* merely mentions
+one of the blocked names — e.g. `SELECT * FROM deny_queries('sql LIKE ''%retire_partitions%''',
+'…')`, a reasonable incident rule aimed at exactly that function — would be rejected by
+`/api/stream-query` with a misleading "destructive function" error before it ever reaches
+`flight-sql-srv`. `contains_blocked_function` is narrowed alongside this feature to match a blocked
+name only in call position (the name immediately followed by `(`, allowing whitespace), which also
+closes the same false positive for any other statement that merely quotes one of those names without
+calling it.
 
 ### 10. Configuration
 
@@ -901,8 +940,11 @@ Open Questions.
    the escape-hatch identifier check from its result; add `sql_hash` to `QueryAuditState`
    and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
    is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
-   `CallerContext::identity` in `caller_context`; add the check + attribution resolution to
-   `do_action_create_prepared_statement`.
+   `CallerContext::identity` in `caller_context`; add the check to
+   `do_action_create_prepared_statement`, including resolving attribution
+   (`validate_and_resolve_user_attribution_grpc`), `get_client_ip`, the same `x-client-*` headers, and
+   tokenizing the statement for `sql_hash` — everything `QueryAttribution` needs, not attribution
+   alone.
 10. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
 
 ### Phase 3 — Admin SQL functions
@@ -962,6 +1004,7 @@ Open Questions.
   `lakehouse_context.rs`
 - `rust/analytics/Cargo.toml` (`sha2`, `regex`)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
+- `rust/analytics-web-srv/src/stream_query.rs` (narrow `contains_blocked_function` to call position)
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
   `query-guide/query-audit-log.md`, `query-guide/python-api.md`
@@ -1079,6 +1122,9 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 - `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
   non-boolean result, subquery, aggregate, window function, a non-`Immutable` function (`now()`),
   arithmetic, column-to-column comparison, and an expression referencing no column (`true`, `1 = 1`).
+- `user_id = 'svc-acct'` compiles and matches — pinning the reason the identity column is named
+  `user_id` rather than `user`: under `GenericDialect`, a bare `user` parses as the zero-arg
+  function `user()`, not a column reference.
 - `LIKE` lowering picks the right predicate: `'%lit%'` → `Contains`, `'lit%'` → `StartsWith`,
   `'%lit'` → `EndsWith`, `'lit'` → `Eq`, `'l_t'` → `Regex`; `ILIKE` is case-insensitive in every
   form; a literal containing regex metacharacters (`'100%'`, `'a.b'`) matches literally.
@@ -1096,7 +1142,9 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 - Every example expression in the docs compiles and evaluates as documented.
 - `skip_for_admin_recovery`: an admin statement calling `remove_query_denial` is exempt; the same
   statement from a non-admin is not; a non-admin query that merely aliases a column
-  `remove_query_denial` is not exempt.
+  `remove_query_denial` is not exempt; with `admin_principal_possible == false` (no admin principal
+  configured), a non-admin caller's `remove_query_denial` statement is exempt too, matching
+  `register_lakehouse_functions`' gate.
 
 **Integration (`rust/analytics/tests/query_deny_list_db_test.rs` — `#[ignore]`d `#[tokio::test]`
 requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`, `mod common;` for `db_fixtures`, same
