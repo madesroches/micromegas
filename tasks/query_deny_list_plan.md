@@ -55,7 +55,7 @@ would want to match on: `client_ip`, `client`, `agent`, `entrypoint`, `session`,
 `rust/public/src/servers/flight_sql_service_impl.rs:314,369,406`). It does **not** currently
 carry a normalized-SQL fingerprint.
 
-`error_class` is derived from the gRPC code by `error_class()` (`flight_sql_service_impl.rs:116`): `InvalidArgument` /
+`error_class` is derived from the gRPC code by `error_class()` (`flight_sql_service_impl.rs:117`): `InvalidArgument` /
 `Unimplemented` → `"user"`, `ResourceExhausted` → `"resource"`, everything else → `"internal"`.
 
 ### Admin gating
@@ -85,10 +85,8 @@ never be an admin principal.
 - Row-returning UDTF over Postgres: `list_partitions_table_function.rs`. Mutating UDTF:
   `retire_partitions_table_function.rs` (streams a log via `LogStreamTableProvider`).
 - `sqlparser` 0.62 (with the `visitor` feature) is reachable as `datafusion::sql::sqlparser`;
-  `sha2` is a workspace dependency; `regex` is **not** a direct dependency anywhere, so it needs its
-  own `[workspace.dependencies]` entry in `rust/Cargo.toml` alongside `sha2`'s, not just an
-  `analytics/Cargo.toml` line — every other non-dev dependency in that crate is declared as
-  `<name>.workspace = true`, and `regex` should follow the same convention.
+  `sha2` is a workspace dependency, declared in `analytics/Cargo.toml` as `sha2.workspace = true`
+  like every other non-dev dependency of that crate.
 
 ### Web app
 
@@ -142,18 +140,11 @@ file-schema) change: no partition content is affected.
 New in `rust/analytics/src/lakehouse/query_deny_list.rs`:
 
 ```rust
-/// Tokenizes once; both the fingerprint and the anti-jam escape hatch (§5) consume the same
-/// token stream instead of each re-tokenizing the statement.
-pub fn tokenize(sql: &str) -> Vec<Token>;
-
 /// Literal-stripped fingerprint of a statement: the first 16 hex chars of the
-/// SHA-256 of the normalized token stream.
-pub fn fingerprint_of(tokens: &[Token]) -> String;
+/// SHA-256 of the normalized token stream. Tokenizes internally; the token stream is an
+/// implementation detail and does not appear in the signature.
+pub fn fingerprint_of(sql: &str) -> String;
 ```
-
-`execute_query` calls `tokenize` once per query and derives both the fingerprint and the escape-hatch
-check from the result; there is no standalone `sql_fingerprint(sql: &str) -> String` that discards
-the tokens.
 
 Implementation: `sqlparser::tokenizer::Tokenizer` over `GenericDialect`, then
 
@@ -184,9 +175,8 @@ The fingerprint is computed once per query in `execute_query` and stored on `Que
 it costs nothing extra to also emit it in the audit record (§7) — which is how an operator gets the
 value to paste into `deny_queries`. Unlike the deny-list check itself, this cost is **not**
 conditional on any rule existing: `QueryAuditState::emit` writes `sql_hash` on every terminal path
-(success, failure, and abandoned-mid-drain), so `tokenize` + `fingerprint_of` run on every query
-regardless of whether the deny list is empty. This fingerprint cost is measured alongside the
-evaluator in §3's bench, and accounted for there rather than assumed away.
+(success, failure, and abandoned-mid-drain), so `fingerprint_of` runs on every query regardless of
+whether the deny list is empty. That cost is accounted for in §3 rather than assumed away.
 
 ### 3. Match expression
 
@@ -203,9 +193,9 @@ problem, with a few established answers:
 | **JsonLogic** | Assorted rules engines | JSON-encoded predicate trees; trivial to build a form UI over and to serialize. Not really a standard, and painful to write by hand. |
 | **A boolean SQL expression** | — | Not a "matcher standard", but a standard *language* — already this product's stable interface, already parsed by an engine in the process, and already what an admin reading the audit log thinks in. |
 
-**This plan uses a boolean SQL expression**, parsed by DataFusion and compiled to a small evaluator
-of our own (next subsection — the split is driven by measurement). No new language for the admin to
-learn and no grammar of ours to specify. CEL becomes the better answer the day the matcher has to be
+**This plan uses a boolean SQL expression**, parsed *and evaluated* by DataFusion. No new language
+for the admin to learn and no grammar of ours to specify, and no evaluator of ours to get subtly
+wrong. CEL becomes the better answer the day the matcher has to be
 authored by non-admins, or evaluated somewhere with no DataFusion to parse it — and that is the
 trigger to revisit this.
 
@@ -246,106 +236,45 @@ precedent at `OidcProvider::is_admin` (`rust/auth/src/oidc.rs`), which already c
 identities against the configured list with plain `==` and has no case-insensitive path anywhere in
 `rust/auth/src`. This is not a new decision, just the same rule applied here.
 
-#### Measured: what evaluation actually costs
+#### Measured: what evaluation costs
 
-This check runs in front of **every** query, for as long as a rule stands, so it was measured
-rather than argued about. Release build, one rule set evaluated against one query's attribution
-(12 string attributes), development machine. Two columns matter: the **miss** — no rule matches,
-which is what nearly every query does — and the **hit**, paid only by a query about to be rejected.
+This check runs in front of **every** query, for as long as a rule stands, so it was measured rather
+than argued about. Release build, one rule set evaluated against one query's attribution (12 string
+attributes), development machine: DataFusion `PhysicalExpr` on a one-row `RecordBatch` costs
+**~3.4 µs at one rule, ~6.2 µs at ten, and ~45 µs at the 100-rule cap** (§10). Most of the
+single-rule figure — 2.8 µs — is building the one-row batch; only ~400 ns per rule is evaluation.
+Entering Arrow at all is the cost.
 
-| Evaluation strategy | miss @1 rule | miss @10 | miss @100 |
-|---|---|---|---|
-| DataFusion `PhysicalExpr` on a one-row `RecordBatch` | 3 384 ns | 6 230 ns | 44 983 ns |
-| Bytecode program over interned symbols | 31.9 ns | 39.2 ns | 158.6 ns |
-| Compiled tree walk (resolved indices, owned literals) | **7.3 ns** | 71.8 ns | 763 ns |
-| Flat conjunction scan (the shape most rules reduce to) | **1.1 ns** | 6.0 ns | 72.6 ns |
-| Anchor probe only (one hash lookup, no rule touched) | 12.4 ns | 13.9 ns | **20.6 ns** |
-| Compiled tree walk where each rule regexes the SQL text | 72.5 ns | 1 490 ns | 37 769 ns |
-| `tokenize` + `fingerprint_of` (SHA-256, ~130-char statement) | **paid unconditionally, on every query, rule count irrelevant** | 1 180 ns | |
+That is affordable here. The check sits immediately in front of a phase the server already measures
+in *milliseconds*: `make_session_context` registers ~16 UDF/UDTFs and awaits a `register_table` per
+global view, and the audit record's own `context_init_ms` field is there to track it. And `check`
+returns immediately on an empty snapshot, so the cost is only paid while a rule stands — the steady
+state of a deployment that is not mid-incident is zero. A compiled evaluator of our own would be
+much faster (throwaway prototypes measured in tens of nanoseconds), and it remains the escape hatch
+behind an unchanged `check` signature if a profile ever justifies it; until then it is not worth
+owning Kleene logic and `LIKE` lowering.
 
-Of the DataFusion figure, 2 804 ns is building the one-row batch and only ~400 ns per rule is
-evaluation — entering Arrow at all is the cost.
+What is **not** conditional on a rule existing is the fingerprint: `fingerprint_of` costs ~1.2 µs on
+a ~130-character statement and runs on every query, because `QueryAuditRecord` carries `sql_hash` on
+every terminal path (§7). "Zero rules cost nothing" is true of the evaluator but not of the feature.
+That cost is accepted because the audit log needs the fingerprint for the "paste it into
+`deny_queries`" workflow whether or not the deny list is in active use.
 
-The `tokenize` + `fingerprint_of` cost is not a `check` cost at all — it runs whether or not any rule exists, because
-`QueryAuditRecord` carries `sql_hash` on every terminal path (§7). So "zero rules cost nothing"
-is true of the evaluator but not of the feature: every query pays ~1.2 µs of tokenizing and
-hashing it did not pay before this plan, and that is roughly a third of the 3.4 µs Phase 1b exists
-to remove. Phase 1b's payoff is therefore not "3.4 µs → ~20 ns"; it is "3.4 µs of evaluation
-collapses to ~20 ns, sitting behind a ~1.2 µs fingerprint cost that exists independently of the
-evaluator and of how many rules are configured." That fingerprint cost is accepted because the
-audit log needs it for the "paste the fingerprint into `deny_queries`" workflow regardless of
-whether the deny list is in active use — it is not something either evaluation strategy can shed.
-
-Two further results were surprises worth recording,
-because both contradict what this plan previously proposed:
-
-1. **OR-folding all rules into one DataFusion expression does not help** (7 338 ns vs 6 230 ns at
-   ten rules). Each disjunct is still its own array operation with its own allocation.
-2. **Interning literals into symbols and running a bytecode program is a pessimization at this
-   scale** — 31.9 ns against 1.1 ns for a plain scan at one rule. Hashing a string costs more than
-   comparing it, and a length check rejects a mismatched literal in about a nanosecond. Cleverness
-   loses to straight-line code until the rule count is in the hundreds.
-
-And one result drives the design:
-
-3. **Running a regex or `LIKE` over the SQL text is the only genuinely expensive predicate** —
-   ~150 ns per rule against a 130-character statement, i.e. 1.5 µs at ten such rules and 37 µs at a
-   hundred. That is DataFusion-grade cost, and it is incurred by the *evaluator we control*. The
-   thing worth engineering is not the interpreter; it is making sure text-scanning predicates are
-   pruned before they run.
-
-#### How a text predicate is lowered — and why there is no anchor requirement
+#### No anchor requirement
 
 An earlier version of this section required every rule to carry a top-level `column = 'literal'`
-conjunct, on the grounds that a text-scanning rule costs ~150 ns per query. That requirement was
-wrong twice over, and both errors are worth recording:
+conjunct, so that a query disagreeing on that field could skip the rule after one hash probe. That
+requirement **forbids legitimate rules**: `sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'` —
+"stop anything scanning thread_spans, and anything from that host" — is exactly what an on-call
+admin reaches for, and a top-level disjunction has no conjunct to anchor *on*. Splitting it in two
+does not help either, since `sql LIKE '%thread_spans%'` alone is unanchorable by construction. A
+blanket "nothing may scan this view right now" is one of the strongest levers the deny list offers,
+and forbidding it to save microseconds is the wrong trade. So: **any boolean expression over the
+match context is accepted, anchored or not.**
 
-- It **forbids legitimate rules.** `sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'` — "stop
-  anything scanning thread_spans, and anything from that host" — is exactly what an on-call admin
-  reaches for. A top-level disjunction has no conjunct to anchor *on*, so the advice to "add an
-  anchor" was incoherent; and splitting it into two rules does not help either, since
-  `sql LIKE '%thread_spans%'` alone is unanchorable by construction. A blanket "nothing may scan
-  this view right now" is one of the strongest levers the deny list offers, and forbidding it to
-  save nanoseconds is the wrong trade.
-- The 150 ns figure came from a `(?i)…\s+` **regex**, and was generalized to all text matching. It
-  does not survive measurement:
-
-| Text predicate against a 127-char statement | miss | match |
-|---|---|---|
-| `str::contains` — what `LIKE '%literal%'` lowers to | **6.9 ns** | 7.4 ns |
-| `Regex::is_match`, plain literal pattern | 12.2 ns | 12.9 ns |
-| `Regex::is_match`, `(?i)` + `\s+` pattern | 51.9 ns | 58.5 ns |
-| 4 / 8 / 32 separate `str::contains` | 27.9 / 55.3 / 217.3 ns | |
-| 4 / 8 / 32 separate `Regex::is_match` | 49.3 / 107.1 / 414.7 ns | |
-| **`RegexSet::is_match` over 4 / 8 / 32 patterns** | **21.7 / 21.5 / 21.7 ns** | |
-
-A rule that scans the SQL text costs ~7 ns, not 150. That is the same order as the hash probe it
-was supposed to be avoiding, and `RegexSet` collapses any number of such patterns into a single
-flat ~22 ns pass. There is no performance problem to legislate against, so the anchor requirement
-is dropped: **any boolean expression over the match context is accepted, anchored or not.**
-
-What survives from that idea is the *optimization*, applied where it happens to fit rather than
-demanded of the admin:
-
-1. **Pattern lowering.** A `LIKE` literal is inspected at compile time and lowered to the cheapest
-   equivalent: `'%lit%'` → `str::contains` (memchr-accelerated, ~7 ns), `'lit%'` → `str::starts_with`,
-   `'%lit'` → `str::ends_with`, `'lit'` → equality. Only patterns with interior `_`/`%` become a
-   `Regex`, and `ILIKE` adds `(?i)`. This is where most of the win is, and it costs one match
-   statement at compile time.
-2. **Anchor index, when a rule has one.** A rule with a top-level `column = 'literal'` conjunct is
-   filed under it, so a query disagreeing on that field never evaluates the rule at all — one hash
-   probe, flat in rule count.
-3. **`RegexSet` for the residue.** Unanchored rules whose top-level predicate is a single text match
-   share one compiled `RegexSet`, evaluated in one pass (~22 ns for up to 32 patterns) to decide
-   which of them can match at all. Anything left over is walked directly.
-
-So the per-query cost is a hash probe plus, if any unanchored text rules exist, one `RegexSet` pass:
-**~13–35 ns, zero allocation, flat in the number of rules** for every realistic rule set.
-
-The only expression still rejected on principle is one with **no column reference at all** (`true`,
+The only expression rejected on principle is one with **no column reference at all** (`true`,
 `1 = 1`) — a rule that would deny every query in the deployment. That is a semantic guard, and
-conflating it with the performance guard is what produced the mistaken anchor rule in the first
-place.
+conflating it with a performance guard is what produced the mistaken anchor rule in the first place.
 
 #### The design that follows
 
@@ -355,186 +284,36 @@ Everything expensive happens at refresh, since rules are few and static:
    `SessionContext::new()` held on `QueryDenyList` for exactly this call — no lakehouse tables or
    catalog registered against it, just DataFusion's parser and name resolution, so there is no
    grammar of ours to specify or keep in sync. `compile_match_expr(ctx: &SessionContext, match_expr:
-   &str) -> Result<CompiledExpr>` is the function that owns steps 1-3; `refresh` calls it with
-   `&self.ctx` on every reload, and `deny_queries`'s `call_with_args` calls it the same way, still
-   synchronously, before `insert` ever runs (§8).
+   &str) -> Result<Arc<dyn PhysicalExpr>>` is the function that owns all three steps; `refresh`
+   calls it with `&self.ctx` on every reload, and `deny_queries`'s `call_with_args` calls it the
+   same way, still synchronously, before `insert` ever runs (§8).
 2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
    scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
    same thing on every replica); require a `Boolean` result and at least one column reference.
-3. **Compile** into the shared flat program — field names resolved to indices, literals appended to
-   one contiguous blob, patterns lowered per the table above, each rule occupying its own op range
-   (see "One bundled program" below for the opcode set and the ~2× it is worth over boxed trees).
-   Kleene three-valued logic is preserved: a test carries true/false/null jump targets, and only a
-   fall-through to `Op::Match` denies.
-4. **Index what can be indexed**: rules with a top-level equality go in a per-field
-   `Vec<HashMap<Box<str>, Vec<RuleIdx>>>` indexed by `FieldIdx` — keying each field's map on
-   `Box<str>` alone (rather than a `(FieldIdx, Box<str>)` tuple) is what lets a probe use a
-   borrowed `&str` with no allocation, since `Borrow` does not decompose through tuples and a
-   tuple-keyed map could only be probed by building a new `Box<str>` per lookup. Unanchored
-   single-text-predicate rules go into a `RegexSet`, one per field that has any — a query denies
-   nothing on a text match alone, so this is still gated by which field's `RegexSet` actually hits.
-   The remaining unanchored rules (no top-level equality and not a single text predicate) are laid
-   out contiguously in the program as the `unanchored` range, which the `RegexSet`-gated rules are
-   *not* part of, so nothing is evaluated twice.
+3. **Plan** the validated `Expr` into an `Arc<dyn PhysicalExpr>` with `create_physical_expr` against
+   `match_schema()`, so the per-query path never touches the planner.
 
-`RuleIdx` is assigned at compile time in stable rule order — by `(created_at, rule_id)`, oldest
-first — so a lower `RuleIdx` always means an older rule. Per query, `check` does: empty snapshot →
-return; otherwise probe the anchor index (one hash lookup per anchored field, usually one), run each
-field's `RegexSet` pass and collect the `RuleIdx`s of the patterns that hit, run the `unanchored`
-range of the program, and run the op ranges of whatever candidates the anchor index and the
-`RegexSet` passes produced — and returns the rule behind the **minimum** matching `RuleIdx` across
-all of that, not the first `Op::Match` encountered in evaluation order. This is what keeps "oldest
-matching rule wins" (§4) true regardless of which pass happens to run first. Nothing allocates: the
-attribution is borrowed `&str`, the program and its literal blob live in the snapshot `Arc`, and
-neither `str::contains` nor `Regex::is_match` allocates.
-
-#### One bundled program, not one tree per rule
-
-`check` returns `Option<Arc<QueryDenyRule>>` — "denied, and by which rule". How that identity is
-produced was measured, because bundling every rule into one evaluation removes a layer of
-interpreter entry per rule: no recursion, no `Box` chasing between nodes, ops and literals
-contiguous in memory, short-circuit as a forward jump.
-
-Per-rule boxed trees versus one flat program, restricted to the conjunctive subset with NULL
-treated as false (same rules, same semantics, miss = no rule matches):
-
-| Rule shape | rules | per-rule tree walk | bundled flat program |
-|---|---|---|---|
-| two equality conjuncts, miss | 1 | 6.5 ns | **4.9 ns** |
-| | 10 | 59.6 ns | **33.0 ns** |
-| | 100 | 609.6 ns | **310.0 ns** |
-| two equality conjuncts, hit | 100 | 600.9 ns | **302.8 ns** |
-| equality + substring on SQL, miss | 10 | 36.8 ns | **17.0 ns** |
-| | 100 | 359.3 ns | **186.6 ns** |
-
-A consistent **~2×** on the conjunctive, NULL-as-false subset measured above, on both the miss and
-the hit, at every rule count. So the compiled form is a flat program, not a tree — and since the
-grammar (below) admits `OR`/`NOT` and NULL is three-valued, every test carries all three jump
-targets rather than a single `jf`:
-
-```rust
-/// All rules in one contiguous op array; every literal in one contiguous blob, referenced by
-/// (offset, len). No pointer chasing, no recursion, no per-rule call. Every test carries explicit
-/// true/false/null jump targets so OR, NOT, and Kleene-logic NULL propagation are representable
-/// directly in the op stream, not bolted on later.
-pub enum Op {
-    Eq       { field: u8, off: u32, len: u32, jt: u32, jf: u32, jn: u32 },
-    Contains { field: u8, off: u32, len: u32, jt: u32, jf: u32, jn: u32 },
-    StartsWith { .. }, EndsWith { .. }, Regex { field: u8, re: u32, jt: u32, jf: u32, jn: u32 },
-    IsNull   { field: u8, jt: u32, jf: u32 },
-    Match(RuleIdx),           // reached with the rule's expression evaluating to true
-}
-struct Program { ops: Vec<Op>, blob: Vec<u8>, regexes: Vec<Regex>, rule_ranges: Vec<Range<u32>> }
-```
-
-Note what this does *not* change: bundling is a representation choice, not a fusion of the rules
-into a single predicate. Each rule still occupies its own op range, `rule_ranges` records where,
-and `Op::Match` carries the rule index — so first-match-wins ordering, per-rule identity, and
-per-rule failure isolation all survive. A rule that no longer compiles is simply left out of the
-program at build time, with a warning; the rest still run. That was the decisive objection to a
-fused `CASE WHEN r0 THEN … WHEN r1 THEN … END` expression, and a bundled *program* avoids it while
-capturing the speed.
-
-Two caveats recorded honestly:
-
-- **The 2× was measured on conjunctive rules with NULL treated as failure**, which is the dominant
-  shape. General expressions with `OR`/`NOT` need genuine three-valued logic, which the `jt`/`jf`/
-  `jn` layout above provides for every test, not only conjunctions. Exercising all three targets on
-  the conjunctive/NULL-as-false subset costs a little of the measured margin; it does not change
-  the representation.
-- **Under DataFusion, bundling remains a wash** — OR-folding ten rules measured 7 338 ns against
-  6 230 ns separately, and a `CASE` behaves the same, since a columnar engine evaluates every branch
-  as its own array operation and then selects. The bundling win is specific to the compiled
-  evaluator, so Phase 1 (DataFusion) evaluates candidates per rule and Phase 1b introduces the
-  program.
-
-**The index still matters more than the bundle.** At a hundred rules the flat program costs 310 ns
-where the anchor probe costs 20.6 ns, so pruning remains the primary lever and the program is what
-runs on what pruning leaves behind:
-
-- anchored rules → the index yields candidate rule ids → run those rules' op ranges;
-- unanchored single-text-predicate rules → gated by their field's `RegexSet` → only a hit runs that
-  rule's op range;
-- everything else unanchored → laid out contiguously as the `unanchored` range and run as one
-  bundled pass on every query, which is exactly where the 2× is collected, since that is the set
-  that cannot be pruned at all.
-
-**The custom evaluator is the accepted price, and DataFusion is the oracle that keeps it honest.**
-Owning Kleene logic and `LIKE`-to-predicate lowering is where hand-rolled implementations go subtly
-wrong. So a differential test compiles the same expression down both paths — the flat program and
-DataFusion's own `PhysicalExpr` — and asserts they agree over a corpus of expressions × attributions
-(NULL attributes, `NOT` over NULL, `%`/`_` patterns, regex metacharacters inside a `LIKE` literal,
-`ILIKE` casing). DataFusion stays in the test binary as the reference implementation; production
-never calls it.
-
-#### Compiling the rules to native code — considered, not adopted
-
-**A JIT would beat this evaluator at evaluating.** That is not in dispute, and nothing below claims
-otherwise. A tree walk pays enum dispatch, pointer chasing, and bounds checks per node; compiled
-code with literals as immediates and lengths known pays none of that. On the measured 763 ns tree
-walk over 100 rules, native code would plausibly be several times faster. **No JIT was built or
-measured here** — every Cranelift figure in this section is an estimate, and should be read as one.
-
-The argument is narrower, and it is about *which* work survives:
-
-- The amortization case for a compiler is sound, and I had it backwards earlier: the unit is
-  **queries**, not rows. A rule compiled once and evaluated on every query for a week amortizes
-  across millions of evaluations — a better ratio than a columnar scan gets.
-- But after the anchor probe and the `RegexSet` pass, what remains on the common path is **one hash
-  lookup and one regex-crate scan**. A JIT emits the same hash function and calls into the same
-  `regex` machinery; there is no dispatch left for it to remove. The cheap win on the hash is a
-  faster hasher (`rustc-hash`/FxHash) — perhaps 3–5 ns off the 12–20 ns measured, one line, no code
-  generator.
-- At small rule counts the residual work is already at the floor: 1.1 ns for a single rule is one
-  length comparison that fails. Nothing — interpreted, compiled, or hand-written in assembly — gets
-  meaningfully under that.
-
-So the honest framing is not "the interpreter beats a JIT". It is that **pruning beat code
-generation**: an index that skips 99 of 100 rules (20.6 ns) does better than compiling all 100 into
-fast code would, and the two compose rather than compete — a JIT layered on the pruned design would
-be optimizing the ~13–35 ns that is left. That is the general principle at work; better asymptotics
-beat better constants, and the deny list had an asymptotic fix available.
-
-What a JIT would additionally cost, if that residue ever mattered:
-
-**Cranelift (`cranelift-jit`)** is the strongest version — compile the whole rule set into one
-function, no loop, no dispatch. But Cranelift IR has no string type: `sql_hash = 'X'` becomes a
-length compare plus an emitted `memcmp` call, and `LIKE`, regex, and three-valued logic must all be
-generated or called out to. That is strictly more custom machinery than the flat program above,
-with a much harder correctness story (a miscompile is a wrongly allowed or wrongly denied query with
-no stack to inspect), plus `PROT_EXEC` pages in the service process — a security review in most
-hardened deployments — and a large dependency.
-
-**Wasmtime** has the same code-generation problem plus a boundary the Cranelift case does not: the
-SQL text and every attribute must be copied into guest linear memory on each call, which puts its
-floor *above* a native evaluator rather than below it. Its value proposition is sandboxing untrusted
-code, and there is none here — rules come from admins, and whatever runs was generated by us. The
-repo's existing WASM work is not a head start either: `datafusion-wasm` is DataFusion compiled
-**to** `wasm32` to run in the browser, the opposite direction from embedding a host runtime, and no
-`wasmtime`/`wasmi` dependency exists in the workspace.
-
-**What would flip this**: rules in the thousands, where pruning stops being enough. `RegexSet`
-already covers the text predicates; the next levers are a faster hasher and multi-field probes in
-the anchor index. Native compilation is the step after those, and it should be measured against
-them rather than assumed to win.
+Rules are held in one `Vec` ordered by `(created_at, rule_id)`, oldest first. Per query, `check`
+does: empty snapshot → return; otherwise build a one-row `RecordBatch` from the borrowed attribution
+and evaluate each rule's `PhysicalExpr` in that order, returning the first rule that evaluates to
+true. Every replica orders the rules identically, so "oldest matching rule wins" (§4) is simply the
+first match, and two replicas name the same rule for the same query.
 
 #### Grammar
 
-DataFusion parses, so the syntax is SQL's; the compiler accepts the subset it can lower to
-the program: `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`, `IS [NOT] NULL`, and `regexp_like`,
-over the match-context columns and string literals. Anything else — arithmetic, subqueries,
-aggregates, non-`Immutable` functions, column-to-column comparison — is rejected at insert with the
-parser's own diagnostic where there is one.
+DataFusion parses and evaluates, so the syntax is SQL's; validation accepts the subset that means
+something over a one-row match context: `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`,
+`IS [NOT] NULL`, and `regexp_like`, over the match-context columns and string literals. Anything
+else — arithmetic, subqueries, aggregates, non-`Immutable` functions, column-to-column comparison —
+is rejected at insert with the parser's own diagnostic where there is one.
 
 The only expression rejected on principle is one with no column reference at all (`true`, `1 = 1`),
 which would deny every query in the deployment. There is no anchor requirement: any boolean shape,
 including a top-level `OR`, is accepted (§3).
 
-Regex is safe: the `regex` crate does not backtrack and guarantees linear-time matching, and
-patterns are compiled once per rule rather than per query. (This corrects an earlier version of this
-plan, which excluded regex on ReDoS grounds — a hazard of backtracking engines, not of this one.)
-It is also cheap: a `LIKE '%literal%'` lowers to a ~7 ns substring search, and many text patterns
-share one ~22 ns `RegexSet` pass.
+Regex is safe: the `regex` crate behind DataFusion's `regexp_like` does not backtrack and
+guarantees linear-time matching. (This corrects an earlier version of this plan, which excluded
+regex on ReDoS grounds — a hazard of backtracking engines, not of this one.)
 
 Examples, all valid:
 
@@ -554,18 +333,6 @@ sql LIKE '%thread_spans%' OR client_ip = '10.4.9.221'
 sql LIKE '%thread_spans%'
 ```
 
-The first five are anchored, so a single hash probe prunes them. The last two are not; their text
-predicates lower to `str::contains` and share the `RegexSet` pass, costing tens of nanoseconds per
-query for as long as they stand (§3).
-
-A `criterion` bench (`rust/analytics/benches/query_deny_match.rs`, alongside the existing
-`property_get`/`parse_block` benches) pins `check` at 0, 1, 10, and 100 rules, for anchored and
-unanchored rule sets, on both the miss and the matching hit — so the numbers above stay true
-instead of decaying into folklore. The same bench also pins the `tokenize` + `fingerprint_of` cost on
-a representative statement, since that cost sits in front of `check` on every query regardless of rule count and is
-otherwise easy to let decay unmeasured. Both tables came from throwaway versions of exactly that
-bench.
-
 #### Where this can go next
 
 The column holds text and the expression language is DataFusion's, so richer semantics land without
@@ -573,8 +340,8 @@ a migration and mostly without code: numeric comparison the moment the match con
 numeric attribute, a structured `deny_queries` variant that renders an expression for a UI builder,
 cost predicates once an estimate is available at check time, or a `test_query_denial(expr)` function
 that dry-runs an expression against recent audit records before it goes live. Performance is an
-independent axis: the anchor index and the `RegexSet` pass both widen without touching the stored
-form, and native compilation stays available behind them (§3).
+independent axis: an evaluator of our own can replace DataFusion behind the same `check` signature
+without touching the stored form (§3).
 
 ### 4. Rule model, evaluation, and cache
 
@@ -589,13 +356,13 @@ pub struct QueryAttribution<'a> {      // borrowed view of what execute_query al
 }
 
 impl QueryAttribution<'_> {
-    /// Borrowed field by match-context index -- what both the anchor probe and
-    /// the program's tests read. Nothing here copies or allocates.
-    fn field(&self, idx: FieldIdx) -> Option<&str>;
+    /// One-row `RecordBatch` over `match_schema()`, in column order -- the only thing `check`
+    /// builds per query, and the only allocation on the path.
+    fn to_batch(&self) -> RecordBatch;
 }
 
 /// The DB row, exactly as `list_query_denials()` returns it (§8) and as `insert` echoes back.
-/// No `ops`/`anchor`/in-process counters here — those exist only for a rule that has been
+/// No compiled expression or in-process counters here — those exist only for a rule that has been
 /// compiled into a `DenySnapshot`, and a freshly inserted or listed row has not necessarily
 /// been through that yet on every replica.
 pub struct QueryDenyRow {
@@ -605,31 +372,19 @@ pub struct QueryDenyRow {
     pub last_hit_at: Option<DateTime<Utc>>,   // None until the rule first fires
 }
 
-/// A row compiled into one snapshot: adds the pieces `check` needs and lives only inside
-/// `DenySnapshot`. **This is the Phase-1b form** (Implementation Steps, Phase 1b step 4) — it is
-/// what the bundled flat program (§3) needs. Phase 1's `check` runs DataFusion `PhysicalExpr`s
-/// directly and has no `ops`/`anchor`; its snapshot is a plain
-/// `Vec<(QueryDenyRow, Arc<dyn PhysicalExpr>)>`.
+/// A row compiled into one snapshot: the row, its planned expression, and the in-process hit
+/// counters. Lives only inside `DenySnapshot`.
 pub struct QueryDenyRule {
     pub row: QueryDenyRow,
-    ops: Range<u32>,                          // this rule's slice of DenySnapshot::program
-    pub anchor: Option<(FieldIdx, Box<str>)>, // Some when the rule has a top-level equality
+    expr: Arc<dyn PhysicalExpr>,          // planned once at refresh, evaluated per query (§3)
     hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
 
-/// Rule vector plus the anchor index built from it (§3). Rebuilt wholesale on every refresh,
-/// which is cheap because rules are few and change rarely. **This is the Phase-1b form**; see
-/// `QueryDenyRule` above for Phase 1's minimal stand-in.
+/// One vector of compiled rules, ordered by `(created_at, rule_id)`, oldest first. Rebuilt
+/// wholesale on every refresh, which is cheap because rules are few and change rarely.
 pub struct DenySnapshot {
     rules: Vec<Arc<QueryDenyRule>>,
-    program: Program,                      // every rule's ops + one literal blob (§3)
-    index: Vec<HashMap<Box<str>, Vec<RuleIdx>>>,  // indexed by FieldIdx; each map probes with &str, no allocation
-    anchored_fields: Vec<FieldIdx>,        // usually one; probed on every query
-    text_sets: Vec<(FieldIdx, RegexSet, Vec<RuleIdx>)>,  // one per field with unanchored text rules;
-                                            // NOT part of `unanchored` below — RegexSet-gated
-                                            // rules are pruned there, not bundled
-    unanchored: Range<u32>,                // remaining unanchored rules; contiguous, run as one pass
 }
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
@@ -647,8 +402,8 @@ impl QueryDenyList {
     pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload + recompile
     // `compiled` was already produced by `call_with_args`'s synchronous `compile_match_expr`
     // (§8); `insert` stores `match_expr` verbatim and does not re-validate it.
-    pub async fn insert(&self, match_expr: &str, compiled: CompiledExpr, reason: &str, created_by: &str)
-        -> Result<QueryDenyRow>;
+    pub async fn insert(&self, match_expr: &str, compiled: Arc<dyn PhysicalExpr>, reason: &str,
+                        created_by: &str) -> Result<QueryDenyRow>;
     pub async fn delete(&self, rule_id: Uuid) -> Result<bool>;
     pub async fn list(&self) -> Result<Vec<QueryDenyRow>>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
@@ -657,17 +412,13 @@ impl QueryDenyList {
 
 - **Zero rules make `check` itself free.** `check` returns on an empty-snapshot test — the steady
   state of every deployment that is not mid-incident. This is a claim about `check`, not about the
-  feature end to end: `tokenize` + `fingerprint_of` run unconditionally regardless of rule count, at
-  ~1.2 µs per query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
-- With rules present, `check` probes the anchor index (one hash lookup per anchored field, usually
-  one) and runs each field's `RegexSet` pass, if any exist. **~13–35 ns and zero
-  allocation, flat in the number of rules** (§3).
-- The `unanchored` program range runs as one bundled pass, and the candidates the anchor index and
-  the `RegexSet` passes produced have their own op ranges run — the minimum matching `RuleIdx`
-  across all of it winning, not the first `Op::Match` evaluated.
-- **Candidates are compared by a stable rule order** — `RuleIdx`, assigned by `created_at`, `rule_id`
-  breaking ties — not the order the index buckets or the program happen to evaluate them in. Two
-  replicas must name the same rule for the same
+  feature end to end: `fingerprint_of` runs unconditionally regardless of rule count, at ~1.2 µs per
+  query (§3, §7), because the audit record carries `sql_hash` on every terminal path.
+- With rules present, `check` builds one `RecordBatch` from the borrowed attribution and evaluates
+  each rule's `PhysicalExpr` against it, in order — ~3.4 µs at one rule, ~45 µs at the 100-rule cap
+  (§3, §10).
+- **Rules are kept in a stable order** — `created_at`, `rule_id` breaking ties — so the first match
+  is the oldest matching rule, on every replica. Two replicas must name the same rule for the same
   query, since the rule id reaches the caller's error message, the `warn!` line, the audit record,
   and the per-rule metric. The oldest matching rule wins, which is also the one an operator is most
   likely to have forgotten about.
@@ -705,7 +456,7 @@ before `scoped_runtime`/`caller_context`/`make_session_context`:
 ```rust
 let denied = self.lakehouse.query_denials().check(&QueryAttribution { .. });
 if let Some(rule) = denied
-    && !skip_for_admin_recovery(caller_is_admin, self.admin_principal_possible, &sql_tokens)
+    && !skip_for_admin_recovery(&sql, caller_is_admin, self.admin_principal_possible)
 {
     let status = Status::resource_exhausted(format!(
         "query denied by rule {} (reason: {}); ask an admin to lift it with \
@@ -742,20 +493,19 @@ if let Some(rule) = denied
   own. So the check is skipped when the caller can reach the admin functions at all —
   `is_admin || !admin_principal_possible`, the same predicate `register_lakehouse_functions` gates
   `deny_queries`/`remove_query_denial` on (Current State, "Admin gating") — **and** the statement
-  *calls* one of `deny_queries` / `remove_query_denial` / `list_query_denials` — the name token
-  immediately followed by a `(` token (checked over the token stream already produced for the
-  fingerprint, which has already dropped comments and collapsed whitespace runs, so no intervening
-  trivia can separate the two). Call position, not mere identifier presence, is required: a column
-  alias (`SELECT x AS remove_query_denial FROM …`) is an identifier token too, and would otherwise
-  exempt any statement carrying it. Gating on `is_admin` alone would leave the hatch permanently shut in any
+  mentions one of `deny_queries` / `remove_query_denial` / `list_query_denials`: three `contains`
+  checks over the lowercased SQL text, nothing more. No call-position or token analysis: the let-chain
+  above short-circuits, so this only ever runs for a query that is *already* being denied, and the
+  gate it sits behind means any caller it opens for could call those three functions directly anyway.
+  A caller who evaded a rule by mentioning `remove_query_denial` in a comment could equally just call
+  it and delete the rule; nothing that was actually enforced is lost by matching the name loosely.
+  Gating on `is_admin` alone would leave the hatch permanently shut in any
   deployment where `admin_principal_possible` is false (no admin principal configured: every API-key
   provider, or OIDC with an empty `admin_users` list) — `is_admin` is then always false while the
   mutating functions are registered for every caller, exactly the deployment this hatch most needs to
-  work in. A non-admin cannot exploit the wider gate: the mutating functions are registered under the
-  identical predicate, so any caller for whom the escape hatch opens is, by construction, a caller who
-  could call them directly anyway. `skip_for_admin_recovery(caller_is_admin, admin_principal_possible,
-  sql_tokens)` lives in `query_deny_list.rs` alongside the rest of the matching logic — it only needs
-  the token stream and the two booleans, no `flight_sql_service_impl.rs`-private state — so it is a
+  work in. `skip_for_admin_recovery(sql, caller_is_admin, admin_principal_possible)`
+  lives in `query_deny_list.rs` alongside the rest of the matching logic — it only needs
+  the statement text and the two booleans, no `flight_sql_service_impl.rs`-private state — so it is a
   `pub` function in the analytics crate and its unit tests sit with the rest of that crate's tests.
   This is the primary recovery path, so it carries its own test, including the
   `admin_principal_possible == false` deployment shape.
@@ -767,8 +517,8 @@ if let Some(rule) = denied
   through `do_get_statement` → `execute_query`, where the check already sits. So there is no bypass
   to close and no scan cost to shed on that path — planning touches the catalog, not the data.
   Checking there would buy only earlier feedback during schema discovery, at the price of resolving
-  attribution, `get_client_ip`, the `x-client-*` headers, and a tokenize pass on an RPC that has none
-  of them today and no audit record to write them to. One check site, on the path that actually
+  attribution, `get_client_ip`, the `x-client-*` headers, and a fingerprint pass on an RPC that has
+  none of them today and no audit record to write them to. One check site, on the path that actually
   spends the money, is the whole design. If `do_get_prepared_statement` is ever implemented, the
   check has to be added there — that is the trigger to revisit this, not the prepare RPC itself.
 
@@ -815,25 +565,28 @@ full attribution. It is what an operator drills into once a panel says something
 
 **Volume.** A denied 4-QPS dashboard produces ~4 warnings/second for as long as its rule stands,
 and rules no longer expire. That is the intended behavior — a standing denial *should* keep saying
-so — but a deployment that finds a long-lived rule too chatty can set
-`MICROMEGAS_QUERY_DENY_WARN_WINDOW_SECONDS` (default `0` = warn on every denial) to throttle the
-line to at most once per rule per window, using the same checked-and-set `AtomicI64` pattern as
-`db_api_key.rs::maybe_log_error`. The metric and the audit record are never throttled, so the exact
-count survives regardless of what the log does.
+so — and the metric and the audit record carry the exact rate regardless. If per-denial warning
+volume ever proves too chatty in practice, the fix is the shape `db_api_key.rs::maybe_log_error`
+already uses — a window derived from an existing interval with a fixed floor, so it cannot be
+switched off — not a new env knob defaulting to disabled.
 
 ### 7. `CallerContext` gains the caller's identity
 
 `deny_queries` must record `created_by`, and the UDTF only ever sees `CallerContext`. Add:
 
 ```rust
-pub struct CallerIdentity { pub user: String, pub email: String, pub service_account: Option<String> }
-
 pub struct CallerContext {
     // ... existing fields ...
-    pub identity: Option<CallerIdentity>,   // None on internal/maintenance paths; such a caller
-                                             // cannot call `deny_queries`, which requires `Some` (§8)
+    pub identity: Option<String>,   // the caller's identity as recorded in `created_by` (§1);
+                                    // None on internal/maintenance paths, and such a caller cannot
+                                    // call `deny_queries`, which requires `Some` (§8)
 }
 ```
+
+One string, not a struct: `created_by` is the only consumer anywhere in this plan, so an email or a
+service-account field would be written at every construction site and read nowhere. (The
+`service_account` *match-context column* in §3 is unrelated and stays — it carries the authenticated
+identity in the delegation case, where `user_id` is client-asserted.)
 
 `FlightSqlServiceImpl::caller_context` takes the already-resolved attribution and populates it.
 This is a **minor breaking change** to a `pub` Rust struct (CHANGELOG entry required); the compiler
@@ -921,16 +674,14 @@ would get "function not found" from `flight-sql-srv` — the gate is server-side
 
 `BLOCKED_FUNCTIONS` in `stream_query.rs` is deliberately **not** extended for the three new admin
 functions themselves: they are admin-gated at `flight-sql-srv`, which is precisely what the web
-screen needs to call. But `contains_blocked_function` substring-matches the entire lowercased SQL
-text, not just call position, so a `deny_queries(...)` statement whose *expression* merely mentions
-one of the blocked names — e.g. `SELECT * FROM deny_queries('sql LIKE ''%retire_partitions%''',
-'…')`, a reasonable incident rule aimed at exactly that function — would be rejected by
-`/api/stream-query` with a misleading "destructive function" error before it ever reaches
-`flight-sql-srv`. `contains_blocked_function` is narrowed alongside this feature to match a blocked
-name only in call position — the name immediately followed by `(`, skipping intervening whitespace
-**and SQL comments** (`/* … */` and `-- …`), so a comment inserted between the name and the
-parenthesis cannot slip a real call past the check. This also closes the same false positive for any
-other statement that merely quotes one of those names without calling it.
+screen needs to call. It is also left otherwise **untouched**. It substring-matches the entire
+lowercased SQL text, so a deny expression that merely *mentions* one of the three
+`BLOCKED_FUNCTIONS` names — e.g. `deny_queries('sql LIKE ''%retire_partitions%''', '…')` — is
+rejected by the web dialog with a "destructive function" error, and that rule has to be authored
+from `micromegas-query` or a notebook instead. Narrowing the guard to call position would mean
+teaching it to skip comments as well, to keep `retire_partitions/*x*/()` from slipping through — a
+bypass created by the narrowing, not by this feature. The existing guard is left as it is rather
+than weakened as a side effect of shipping a deny list.
 
 ### 10. Configuration
 
@@ -938,7 +689,6 @@ other statement that merely quotes one of those names without calling it.
 |---|---|---|
 | `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | 10 | Snapshot refresh / hit-count flush interval; also the bound on cross-replica propagation |
 | `MICROMEGAS_QUERY_DENY_MAX_RULES` | 100 | Cap on rules in force at once (bounds per-query cost) |
-| `MICROMEGAS_QUERY_DENY_WARN_WINDOW_SECONDS` | 0 | `0` warns on every denial; `>0` throttles the `warn!` line to once per rule per window (metric/audit unaffected) |
 
 ## Mockups
 
@@ -963,90 +713,64 @@ into the dialog.
 
 1. `rust/analytics/src/lakehouse/migration.rs`: `upgrade_v8_to_v9` creating `query_deny_list`;
    `LATEST_LAKEHOUSE_SCHEMA_VERSION = 9`.
-2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `tokenize`/`fingerprint_of`, the match-context
-   schema, `compile_match_expr` (parse → validate → `Arc<dyn PhysicalExpr>` in this phase),
-   `QueryAttribution`, `QueryDenyRow`, and Phase 1's own minimal snapshot shape — a
-   `Vec<(QueryDenyRow, Arc<dyn PhysicalExpr>)>`, with none of `QueryDenyRule`'s `ops`/`anchor` or
-   `DenySnapshot`'s `program`/`index`/`text_sets`/`unanchored` (those are the Phase-1b form built in
-   step 4, §4) — plus `QueryDenyList` (`check` / `refresh` / `insert` / `delete` / `list` /
-   `spawn_refresh_task`), env knobs. Register in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2`
-   to `analytics/Cargo.toml`.
+2. New `rust/analytics/src/lakehouse/query_deny_list.rs`: `fingerprint_of`, the match-context
+   schema, `compile_match_expr` (parse → validate → `Arc<dyn PhysicalExpr>`), `QueryAttribution`,
+   `QueryDenyRow`, `QueryDenyRule`, `DenySnapshot`, `skip_for_admin_recovery`, and `QueryDenyList`
+   (`check` / `refresh` / `insert` / `delete` / `list` / `spawn_refresh_task`), env knobs. Register
+   in `rust/analytics/src/lakehouse/mod.rs`. Add `sha2` to `analytics/Cargo.toml`.
 
-   **Evaluate with DataFusion's `PhysicalExpr` in this step** — `create_physical_expr` on the
-   validated `Expr`, one row batch per candidate. It is a handful of lines, owns no SQL semantics,
-   and is correct by construction. `check`'s signature and the whole rest of this plan are
-   unchanged by which evaluator sits behind it.
-3. Unit tests for `tokenize`/`fingerprint_of` and validation (see Testing Strategy), plus the corpus that
-   Phase 1b's differential test will reuse.
-
-### Phase 1b — Swap in the compiled evaluator (optional, measurable)
-
-4. Replace the `PhysicalExpr` evaluation with the bundled flat program (§3): resolve field indices,
-   append literals to one blob, lower `LIKE` to `contains`/`starts_with`/`ends_with`/`Regex`, lay
-   every rule out as its own op range with the unanchored ones contiguous, and build the anchor
-   index and shared `RegexSet` — this is where `QueryDenyRule`'s `ops`/`anchor` and `DenySnapshot`'s
-   `program`/`index`/`text_sets`/`unanchored` (§4) get built for the first time. Add `regex = "1"` to
-   `rust/Cargo.toml`'s `[workspace.dependencies]`
-   (already in the tree transitively via `datafusion-functions`, but not declared there today) and
-   `regex.workspace = true` to `analytics/Cargo.toml`, matching the crate's existing convention.
-5. Turn the Phase 1 corpus into the **differential test**: every expression compiled both ways, and
-   the two evaluators must agree on every attribution. DataFusion becomes the oracle exactly at the
-   moment we stop using it in production.
-6. Land `benches/query_deny_match.rs`, including a `tokenize` + `fingerprint_of` bench, and confirm
-   the §3 numbers on the target hardware.
-
-   Splitting here is deliberate: Phase 1 is correct and shippable on its own at 3.4 µs/query, and
-   Phase 1b is a pure optimization behind an unchanged interface, with the oracle test already
-   written. If the deny list turns out to be used a few times a year, Phase 1b can simply wait for
-   a profile to justify it.
+   **Evaluation is DataFusion's `PhysicalExpr`** — `create_physical_expr` on the validated `Expr`,
+   one row batch per query. It is a handful of lines, owns no SQL semantics, and is correct by
+   construction (§3).
+3. Unit tests for `fingerprint_of`, validation, and `skip_for_admin_recovery` (see Testing Strategy).
 
 ### Phase 2 — Wiring and enforcement
 
-7. `lakehouse_context.rs`: construct and expose `query_denials()` (mirrors `audience_index()`).
-8. `read_scope.rs`: add `CallerIdentity` + `CallerContext::identity`; fix every construction site
+4. `lakehouse_context.rs`: construct and expose `query_denials()` (mirrors `audience_index()`).
+5. `read_scope.rs`: add `CallerContext::identity: Option<String>`; fix every construction site
    the compiler flags.
-9. `flight_sql_service_impl.rs`: call `tokenize` once per query and derive both `fingerprint_of` and
-   the escape-hatch identifier check from its result; add `sql_hash` to `QueryAuditState`
-   and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after `QueryAuditState`
-   is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6); populate
-   `CallerContext::identity` in `caller_context`. `do_action_create_prepared_statement` is left
-   untouched — it plans without executing and cannot be executed through, so it is not a check site
-   (§5).
-10. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
+6. `flight_sql_service_impl.rs`: call `fingerprint_of` once per query; add `sql_hash` to
+   `QueryAuditState` and `QueryAuditRecord`; add `fail_with_class`; insert the deny-list check after
+   `QueryAuditState` is built, with its `warn!` line and the rule-tagged `query_denied` metric (§6);
+   populate `CallerContext::identity` in `caller_context`. `do_action_create_prepared_statement` is
+   left untouched — it plans without executing and cannot be executed through, so it is not a check
+   site (§5).
+7. `flight_sql_server.rs`: spawn the refresh task with the existing shutdown fanout.
 
 ### Phase 3 — Admin SQL functions
 
-11. `list_query_denials_table_function.rs` (pattern: `list_partitions_table_function.rs`).
-12. `deny_queries_table_function.rs` — validates, inserts, refreshes the local snapshot, returns
+8. `list_query_denials_table_function.rs` (pattern: `list_partitions_table_function.rs`).
+9. `deny_queries_table_function.rs` — validates, inserts, refreshes the local snapshot, returns
    one row.
-13. `remove_query_denial_udf.rs` (pattern: `retire_partition_by_file_udf.rs`).
-14. Register all three in `query.rs`'s admin block.
+10. `remove_query_denial_udf.rs` (pattern: `retire_partition_by_file_udf.rs`).
+11. Register all three in `query.rs`'s admin block.
 
 ### Phase 4 — Web app screen
 
-15. `analytics-web-app/src/lib/query-deny-list-api.ts` — SQL builders (`escapeSqlLiteral`, the
+12. `analytics-web-app/src/lib/query-deny-list-api.ts` — SQL builders (`escapeSqlLiteral`, the
     three statements) and Arrow→row decoding.
-16. `analytics-web-app/src/routes/QueryDenyListPage.tsx` — the page, reusing
+13. `analytics-web-app/src/routes/QueryDenyListPage.tsx` — the page, reusing
     `PageLayout` / `AuthGuard requireAdmin` / `ErrorBanner` / `ConfirmDialog` / `Button` /
     `DataSourceField`.
-17. Register the route (`/admin/query-deny-list`) in `router.tsx` and add the card to
+14. Register the route (`/admin/query-deny-list`) in `router.tsx` and add the card to
     `AdminPage.tsx` (lucide `ShieldBan` or `Ban` icon).
-18. Vitest coverage for the SQL builders (escaping in particular) and a page render test, matching
+15. Vitest coverage for the SQL builders (escaping in particular) and a page render test, matching
     `routes/__tests__/AnalyticsApiKeysPage.test.tsx`.
 
 ### Phase 5 — Docs and changelog
 
-19. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
-20. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
+16. `mkdocs/docs/admin/functions-reference.md`: the three functions, with the incident runbook.
+17. `mkdocs/docs/query-guide/query-audit-log.md`: document `sql_hash` and `error_class = "denied"`,
     plus the "find the offender, copy its fingerprint" query.
-21. `mkdocs/docs/admin/flight-sql.md`: the three env knobs, propagation delay, fail-open behavior.
-22. `mkdocs/docs/admin/web-app.md`: the new admin screen.
-23. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
+18. `mkdocs/docs/admin/flight-sql.md`: the two env knobs, propagation delay, fail-open behavior.
+19. `mkdocs/docs/admin/web-app.md`: the new admin screen, including the note that a deny expression
+    naming a `BLOCKED_FUNCTIONS` function must be authored outside the web app (§9).
+20. `mkdocs/docs/query-guide/python-api.md`: update the exception-types table and the "tell them
     apart" guidance (§ Exception types) — a denial is also `ResourceExhausted` /
     `pyarrow.lib.ArrowInvalid` with the same message prefix as a resource-budget failure, so both
     existing discriminators (message prefix, `error_class: "resource"`) stop being sufficient; add
     the deny-list row and point readers at `error_class: "denied"`.
-24. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
+21. `CHANGELOG.md`: feature entry + **Minor breaking change** clause for `CallerContext`.
 
 ## Files to Modify
 
@@ -1056,7 +780,6 @@ into the dialog.
 - `rust/analytics/src/lakehouse/list_query_denials_table_function.rs`
 - `rust/analytics/src/lakehouse/deny_queries_table_function.rs`
 - `rust/analytics/src/lakehouse/remove_query_denial_udf.rs`
-- `rust/analytics/benches/query_deny_match.rs` (criterion, per-query `check` cost)
 - `rust/analytics/tests/query_deny_list_tests.rs` (unit)
 - `rust/analytics/tests/query_deny_list_db_test.rs` (DB-backed, `#[ignore]`d)
 - `analytics-web-app/src/lib/query-deny-list-api.ts`
@@ -1069,13 +792,8 @@ into the dialog.
 
 - `rust/analytics/src/lakehouse/migration.rs`, `mod.rs`, `query.rs`, `read_scope.rs`,
   `lakehouse_context.rs`
-- `rust/Cargo.toml` (add `regex` to `[workspace.dependencies]`)
-- `rust/analytics/Cargo.toml` (`sha2.workspace = true`, `regex.workspace = true`, plus a new
-  `[[bench]] name = "query_deny_match"` stanza alongside the existing `property_get`/`parse_block`
-  entries)
+- `rust/analytics/Cargo.toml` (`sha2.workspace = true`)
 - `rust/public/src/servers/flight_sql_service_impl.rs`, `query_audit.rs`, `flight_sql_server.rs`
-- `rust/analytics-web-srv/src/stream_query.rs` (narrow `contains_blocked_function` to call position)
-  and its existing test block, `rust/analytics-web-srv/tests/stream_query_tests.rs`
 - `analytics-web-app/src/router.tsx`, `src/routes/AdminPage.tsx`
 - `mkdocs/docs/admin/functions-reference.md`, `admin/flight-sql.md`, `admin/web-app.md`,
   `query-guide/query-audit-log.md`, `query-guide/python-api.md`
@@ -1106,41 +824,26 @@ cost is that the stored form is no longer directly queryable in SQL (`WHERE matc
 the rules table is gone) — which the rules table's size, and the fact that nobody queries it
 programmatically, makes a non-issue.
 
-**DataFusion parses; a bundled flat program evaluates.** This check is a tax on every query for as long as
-a rule stands, so it was benchmarked (§3). DataFusion costs 3.4 µs per query, 2.8 µs of which is
-just building the one-row batch — 200× a compiled tree walk and 2000× a plain scan, plus tens of
-allocations on the front door. Keeping DataFusion for parsing and name resolution but lowering to
-a flat program for evaluation buys the whole gap while leaving no grammar of ours to specify. The
-price is owning Kleene logic and `LIKE` lowering, which a differential test against DataFusion's
-own evaluator keeps honest — the oracle stays in the test binary, never in production.
+**DataFusion parses *and* evaluates.** This check is a tax on every query for as long as a rule
+stands, so it was measured (§3): 3.4 µs at one rule, ~45 µs at the 100-rule cap, most of the
+single-rule figure being the one-row batch rather than the predicate. An evaluator of our own would
+be two orders of magnitude faster, and prototypes confirmed it — but it would buy microseconds
+inside a phase already measured in milliseconds, in exchange for owning Kleene logic, `LIKE`
+lowering, and a differential test to keep them honest. The cheap thing was the correct thing:
+DataFusion evaluates, `check` returns immediately when no rule stands, and a compiled evaluator
+stays available behind an unchanged signature if a profile ever asks for it.
 
-**Any boolean shape is accepted; the optimizer works around it rather than the admin.** An earlier
-draft required every rule to carry a top-level equality "anchor", which would have rejected
+**Any boolean shape is accepted.** An earlier draft required every rule to carry a top-level
+equality "anchor" so it could be pruned by a hash probe, which would have rejected
 `sql LIKE '%thread_spans%' OR client_ip = '…'` — a legitimate and powerful incident rule that cannot
-be anchored at all, since a disjunction has no conjunct to anchor on. It rested on a bad number too:
-a text scan costs ~7 ns once `LIKE '%lit%'` is lowered to `str::contains`, not the ~150 ns measured
-for an elaborate regex, and a `RegexSet` collapses any number of such patterns into one ~22 ns pass.
-Anchoring survives as an optimization applied where it fits, never as a demand on the author. The
-"must not match everything" guard is a separate, semantic rule: an expression referencing no column
-is rejected.
-
-**Cleverness measured worse than straight-line code.** Interning literals into symbols and running a
-bytecode program — the obvious "pre-compile it properly" design — benchmarked at 32 ns against
-1.1 ns for a plain comparison scan at one rule. Hashing a string costs more than comparing it. That
-result, and OR-folding rules into a single DataFusion expression turning out to be a wash, are both
-recorded in §3 so the next person does not re-derive them.
-
-**A JIT was not rejected on speed.** Compiled code would evaluate faster than the tree walk — that
-is not contested, and no JIT was measured to claim otherwise. It was rejected because pruning
-removes the work it would have optimized: after the anchor index and the `RegexSet` pass, the common
-path is a hash lookup and a regex scan, both of which compiled code would perform identically. The
-lever a JIT competes with here is a faster hasher, not an interpreter.
+be anchored at all, since a disjunction has no conjunct to anchor on. Nothing about the evaluation
+cost justifies constraining what an admin may write. The "must not match everything" guard is a
+separate, semantic rule: an expression referencing no column is rejected.
 
 **Regex is in, and the earlier ReDoS objection was wrong.** An earlier version of this plan excluded
 regex because "caller-influenced regexes on a hot path invite ReDoS". That reasoning applies to
-backtracking engines; Rust's `regex` crate does not backtrack and guarantees linear time, and
-patterns here are compiled once per rule rather than per query. Regex costs nothing to allow, so it
-is allowed.
+backtracking engines; the `regex` crate behind DataFusion's `regexp_like` does not backtrack and
+guarantees linear time. Regex costs nothing to allow, so it is allowed.
 
 **Fail-open on store errors.** A deny list that fails closed turns a Postgres blip into a total
 outage — strictly worse than the problem it exists to solve. This is an availability valve, not an
@@ -1179,7 +882,10 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
   escape hatch, and a **"Watching for denials"** section carrying both dashboard queries from §6
   (the warning-level `log_entries` panel and the per-rule `query_denied` rate panel) so an operator
   can paste them straight into a dashboard.
-- `mkdocs/docs/admin/web-app.md` — the Admin → Query Deny List screen.
+- `mkdocs/docs/admin/web-app.md` — the Admin → Query Deny List screen, noting that a deny
+  expression that mentions one of the destructive-function names the web app blocks
+  (`retire_partitions` and friends) is rejected by that guard and has to be created from
+  `micromegas-query` or a notebook instead (§9).
 - `mkdocs/docs/query-guide/python-api.md` — a denial is `ResourceExhausted` /
   `pyarrow.lib.ArrowInvalid` with the same message prefix as a resource-budget failure, so update
   the exception-types table with a deny-list row and tell readers to use `error_class: "denied"`
@@ -1189,11 +895,11 @@ are astronomically unlikely and bounded in blast radius by the rule's other pred
 
 **Unit (`rust/analytics/tests/query_deny_list_tests.rs`, no DB)**
 
-This is an external integration-test crate for `micromegas-analytics`, so it can only see `pub`
-items — `CompiledExpr`, `Op` (and its variants), and `QueryDenyRule::anchor` are `pub` for exactly
-this reason, so the lowering and anchor-extraction assertions below compile.
+This is an external integration-test crate for `micromegas-analytics`, so it exercises the crate
+through its `pub` surface: `fingerprint_of`, `compile_match_expr`, `check`, and
+`skip_for_admin_recovery`.
 
-- `tokenize`/`fingerprint_of`: two dashboard refreshes differing only in timestamp/limit literals produce the
+- `fingerprint_of`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
 - `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
@@ -1202,30 +908,16 @@ this reason, so the lowering and anchor-extraction assertions below compile.
 - `user_id = 'svc-acct'` compiles and matches — pinning the reason the identity column is named
   `user_id` rather than `user`: under `GenericDialect`, a bare `user` parses as the zero-arg
   function `user()`, not a column reference.
-- `LIKE` lowering picks the right predicate: `'%lit%'` → `Contains`, `'lit%'` → `StartsWith`,
-  `'%lit'` → `EndsWith`, `'lit'` → `Eq`, `'l_t'` → `Regex`; `ILIKE` is case-insensitive in every
-  form; a literal containing regex metacharacters (`'100%'`, `'a.b'`) matches literally.
-- Anchor extraction: found for a top-level `AND` chain containing `col = 'literal'` (including
-  nested `AND`s), and correctly *absent* for a top-level `OR` — a rule that must still be evaluated
-  on every query, and must still deny when it matches.
-- **Differential test against DataFusion (the important one).** Every expression in a corpus is
-  compiled both to the flat program and to DataFusion's `PhysicalExpr`, and evaluated against a corpus of
-  attributions; the two must agree on every pair. Coverage aimed at where a hand-rolled evaluator
-  goes wrong: NULL attributes, `NOT` over NULL, `AND`/`OR` with a NULL operand, `%`/`_` patterns,
-  regex metacharacters inside a `LIKE` literal (`sql LIKE '100%'` must not become a quantifier),
-  `ILIKE` case-insensitivity, and empty-string vs absent attributes.
-- **Anchor-index equivalence (property test).** `check` through the index returns exactly what
-  evaluating every rule by brute force returns.
+- `check` semantics over a rule set: NULL attributes do not match an equality (`notebook =
+  'fleet-overview'` does not fire for a query that sent no notebook header), a top-level `OR` rule
+  denies when either side matches, and with two matching rules the older one — by
+  `(created_at, rule_id)` — is the one returned.
 - Every example expression in the docs compiles and evaluates as documented.
-- `skip_for_admin_recovery` (defined and tested here, in `query_deny_list.rs`, since it only takes a
-  token stream and two booleans): an admin statement calling `remove_query_denial` is exempt; the
-  same statement from a non-admin is not; an admin (or `admin_principal_possible == false`)
-  statement that merely aliases a column `remove_query_denial`, or references it as a quoted
-  identifier, without calling it, is **not** exempt — pinning the call-position requirement, since
-  both would otherwise pass a bare identifier-token check; with `admin_principal_possible == false`
-  (no admin principal
-  configured), a non-admin caller's `remove_query_denial` statement is exempt too, matching
-  `register_lakehouse_functions`' gate.
+- `skip_for_admin_recovery` (defined and tested here, in `query_deny_list.rs`, since it only takes
+  the statement text and two booleans): an admin statement calling `remove_query_denial` is exempt;
+  the same statement from a non-admin is not; with `admin_principal_possible == false` (no admin
+  principal configured), a non-admin caller's `remove_query_denial` statement is exempt too,
+  matching `register_lakehouse_functions`' gate.
 
 **Integration (`rust/analytics/tests/query_deny_list_db_test.rs` — `#[ignore]`d `#[tokio::test]`
 requiring a live `MICROMEGAS_SQL_CONNECTION_STRING`, `mod common;` for `db_fixtures`, same
@@ -1247,17 +939,6 @@ convention as `ownership_rewrite_db_test.rs`)**
 - The denial `warn!` line contains the rule id, `sql_hash`, and caller attribution — asserted
   against the formatted string the same way `build_log_line`'s content is asserted today, rather
   than by capturing log output.
-
-**`contains_blocked_function` (extend `rust/analytics-web-srv/tests/stream_query_tests.rs`)** — the
-existing five cases all use call position and would pass unchanged against either the old or the new
-behavior, so cases are added to actually exercise the narrowing:
-
-- a blocked name appearing only inside a string literal, e.g.
-  `deny_queries('sql LIKE ''%retire_partitions%''', 'reason')`, is **allowed** (not flagged as a
-  destructive call);
-- a blocked name in call position is still **blocked**: with no whitespace (`retire_partitions()`),
-  with whitespace before the parenthesis (`retire_partitions ()`), and with a comment between the
-  name and the parenthesis (`retire_partitions/*x*/()`).
 
 **End-to-end (`python/micromegas/tests/test_query_deny_list.py`, against `local_test_env`)**
 
