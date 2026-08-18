@@ -327,6 +327,34 @@ per anchored field, usually one), run the `RegexSet` pass if there is one, and w
 candidates those two steps produce. Nothing allocates: the attribution is borrowed `&str`, the
 trees live in the snapshot `Arc`, and neither `str::contains` nor `Regex::is_match` allocates.
 
+#### One expression per rule, not one blob over all rules
+
+`check` returns `Option<Arc<QueryDenyRule>>` — effectively "denied, and by which rule" — but that
+identity comes from *which* compiled expression returned true, not from an expression that computes
+it. Each rule owns its own compiled form; the rule set is never folded into a single predicate.
+
+The alternative — bundling every rule into one expression, e.g.
+`CASE WHEN <r0> THEN 'r0' WHEN <r1> THEN 'r1' … END`, evaluated once per query — is the obvious way
+to turn N evaluations into one, and it was measured. It does not pay:
+
+- **Under DataFusion it is a wash**: OR-folding ten rules into one expression measured 7 338 ns
+  against 6 230 ns evaluated separately, and 45 373 ns against 44 983 ns at a hundred (§3). A
+  columnar engine evaluates every branch of a `CASE` as its own array operation and then selects, so
+  there is no short-circuit to win and no batch build to save — the batch is already built once and
+  shared across all rules.
+- **Under the compiled evaluator the useful bundling is not an expression at all.** What actually
+  collapses N rules into one operation is the anchor index (one hash probe → candidate ids) and the
+  shared `RegexSet` (one DFA pass → matching ids). Both are cross-rule structures that return rule
+  identities directly, which is the bundling the user of a `CASE` blob is really after — and they
+  are sublinear where the blob would still be linear.
+- Keeping expressions per-rule also keeps the failure domain per-rule: one rule that no longer
+  compiles is dropped with a warning while the rest stay enforced. A single fused expression fails
+  as a unit, which would turn one bad rule into a deny list that enforces nothing.
+
+Cross-rule common-subexpression sharing (five rules all testing `client = 'grafana'`) would be the
+remaining argument for fusing, and it is weak here: rules target different offenders and rarely
+share predicates beyond the anchor, which the index already shares.
+
 **The custom evaluator is the accepted price, and DataFusion is the oracle that keeps it honest.**
 Owning Kleene logic and `LIKE`-to-predicate lowering is where hand-rolled implementations go subtly
 wrong. So a differential test compiles the same expression down both paths — `MatchExpr` and
@@ -503,6 +531,11 @@ impl QueryDenyList {
   allocation, flat in the number of rules** (§3).
 - Only the candidates those steps produce have their `MatchExpr` walked against the borrowed
   attribution, first `Some(true)` winning.
+- **Candidates are walked in a stable rule order** — by `created_at`, `rule_id` breaking ties — not
+  in whatever order the index buckets yield. Two replicas must name the same rule for the same
+  query, since the rule id reaches the caller's error message, the `warn!` line, the audit record,
+  and the per-rule metric. The oldest matching rule wins, which is also the one an operator is most
+  likely to have forgotten about.
 - `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it flushes each rule's
   accumulated `hits`/`last_hit` (`UPDATE query_deny_list SET hit_count = hit_count + $1,
   last_hit_at = greatest(coalesce(last_hit_at, $2), $2) WHERE rule_id = $3`, skipping rules with a
