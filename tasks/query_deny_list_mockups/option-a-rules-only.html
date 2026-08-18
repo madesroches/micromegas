@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option A — Query Blocks (rules only)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-success: #22c55e;
+    --accent-highlight: #ffb300;
+    --accent-error: #f87171;
+    --accent-warning: #ffb300;
+    --radius: 0.5rem;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .topbar {
+    height: 48px; background: var(--header-bg); border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+  }
+  .logo { width: 22px; height: 22px; border-radius: 5px; background: linear-gradient(135deg, #bf360c, #1565c0); }
+  .topbar .name { font-weight: 600; letter-spacing: .2px; }
+  .topbar .spacer { flex: 1; }
+  .topbar .user { color: var(--text-secondary); font-size: 13px; }
+  .page { padding: 24px; max-width: 1280px; }
+  .crumbs { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; display: flex; gap: 6px; }
+  .crumbs a { color: var(--accent-link); text-decoration: none; }
+  .crumbs a:hover { text-decoration: underline; }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; }
+  .sub { margin: 4px 0 0; color: var(--text-secondary); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 8px 14px;
+    font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer;
+    background: var(--accent-link); color: #fff;
+  }
+  .btn:hover { background: var(--accent-link-hover); }
+  .btn.outline { background: transparent; border-color: var(--border-color); color: var(--text-primary); }
+  .btn.outline:hover { border-color: var(--border-hover); background: var(--card-bg); }
+  .btn.danger { background: transparent; border-color: rgba(248,113,113,.35); color: var(--accent-error); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+  select, input[type=text] {
+    background: var(--app-bg); border: 1px solid var(--border-color); border-radius: 6px;
+    color: var(--text-primary); padding: 7px 10px; font-size: 13px; font-family: inherit; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent-link); }
+  .tablewrap { border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--panel-bg); }
+  th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+  }
+  td { padding: 12px 16px; border-top: 1px solid var(--border-color); vertical-align: top; }
+  tbody tr:hover { background: rgba(26,26,46,.6); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    border-radius: 999px; padding: 2px 9px; letter-spacing: .03em; text-transform: uppercase;
+  }
+  .pill.active { background: rgba(248,113,113,.14); color: var(--accent-error); }
+  .pill.expired { background: rgba(107,114,128,.18); color: var(--text-muted); }
+  .matcher {
+    display: inline-block; font-size: 12px; background: var(--app-bg); border: 1px solid var(--border-color);
+    border-radius: 5px; padding: 2px 7px; margin: 0 5px 5px 0; color: var(--text-primary);
+  }
+  .matcher .k { color: var(--text-muted); }
+  .muted { color: var(--text-muted); }
+  .sec { color: var(--text-secondary); }
+  .hits { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .banner {
+    border: 1px solid rgba(255,179,0,.4); background: rgba(255,179,0,.1); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-primary);
+  }
+  /* dialog */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 100%; max-width: 560px; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: var(--radius); box-shadow: 0 24px 60px rgba(0,0,0,.6); }
+  .dialog h2 { font-size: 17px; font-weight: 500; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border-color); }
+  .dialog .body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  .dialog .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); }
+  label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 5px; }
+  .hint { margin-top: 5px; font-size: 12px; color: var(--text-muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .mockup-note { padding: 10px 24px; font-size: 12px; color: var(--text-muted); border-top: 1px dashed var(--border-color); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo"></div>
+  <div class="name">micromegas</div>
+  <div class="spacer"></div>
+  <div class="user">admin@example.com</div>
+</div>
+
+<div class="page">
+  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Query Blocks</span></div>
+
+  <div class="head">
+    <div>
+      <h1>Query Blocks</h1>
+      <p class="sub">Temporarily reject matching queries at the FlightSQL front door while an offending dashboard or alert is fixed.</p>
+    </div>
+    <button class="btn">+ Block a Query</button>
+  </div>
+
+  <div class="banner">
+    Blocks are an incident valve, not a policy surface. Every rule expires (24&nbsp;h maximum) and applies to all
+    <code>flight-sql-srv</code> replicas within one refresh interval (~10&nbsp;s).
+  </div>
+
+  <div class="toolbar">
+    <div class="field">
+      <span>Data source</span>
+      <select><option>default (prod-flightsql)</option><option>staging</option></select>
+    </div>
+    <div class="field">
+      <label style="margin:0"><input type="checkbox" checked> Show recently expired</label>
+    </div>
+    <div style="flex:1"></div>
+    <button class="btn outline small">Refresh</button>
+  </div>
+
+  <div class="tablewrap">
+    <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Matchers</th>
+          <th>Reason</th>
+          <th>Created by</th>
+          <th>Expires</th>
+          <th style="text-align:right">Hits</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="pill active">Active</span><div class="muted" style="font-size:11px;margin-top:6px" class="mono">#a41f</div></td>
+          <td>
+            <span class="matcher"><span class="k">sql_hash</span> 9f2c41ab73de0155</span>
+            <span class="matcher"><span class="k">entrypoint</span> grafana-alert</span>
+          </td>
+          <td class="sec">alert rule re-firing on failure, 4 QPS of full-day thread_spans scan</td>
+          <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 14:02</div></td>
+          <td class="sec">in 26 min<div class="muted" style="font-size:12px">2026-08-18 14:32</div></td>
+          <td style="text-align:right" class="hits">1,284</td>
+          <td style="text-align:right"><button class="btn danger small">Unblock</button></td>
+        </tr>
+        <tr>
+          <td><span class="pill active">Active</span><div class="muted mono" style="font-size:11px;margin-top:6px">#c07b</div></td>
+          <td>
+            <span class="matcher"><span class="k">service_account</span> dashboards-svc</span>
+            <span class="matcher"><span class="k">notebook</span> fleet-overview</span>
+          </td>
+          <td class="sec">30 s refresh on a 7-day range; owner pinged, fix in flight</td>
+          <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 13:51</div></td>
+          <td class="sec">in 9 min<div class="muted" style="font-size:12px">2026-08-18 14:15</div></td>
+          <td style="text-align:right" class="hits">37</td>
+          <td style="text-align:right"><button class="btn danger small">Unblock</button></td>
+        </tr>
+        <tr>
+          <td><span class="pill expired">Expired</span><div class="muted mono" style="font-size:11px;margin-top:6px">#5d13</div></td>
+          <td>
+            <span class="matcher"><span class="k">client_ip</span> 10.4.9.221</span>
+          </td>
+          <td class="sec">notebook retry loop from a workstation</td>
+          <td class="sec">other-admin@example.com<div class="muted" style="font-size:12px">2026-08-18 11:20</div></td>
+          <td class="muted">expired 42 min ago<div style="font-size:12px">2026-08-18 12:20</div></td>
+          <td style="text-align:right" class="hits">612</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- Block dialog, shown open -->
+<div class="overlay">
+  <div class="dialog">
+    <h2>Block a Query</h2>
+    <div class="body">
+      <div>
+        <label>Normalized SQL fingerprint</label>
+        <input type="text" class="mono" value="9f2c41ab73de0155" placeholder="9f2c41ab73de0155">
+        <div class="hint">Copy <code>sql_hash</code> from the query audit log. Literals are stripped before hashing, so every refresh of the same dashboard shares one fingerprint.</div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>User / email</label>
+          <input type="text" placeholder="any">
+        </div>
+        <div>
+          <label>Service account</label>
+          <input type="text" placeholder="any">
+        </div>
+        <div>
+          <label>Client</label>
+          <input type="text" placeholder="any (python, web, grafana…)">
+        </div>
+        <div>
+          <label>Entrypoint</label>
+          <input type="text" value="grafana-alert">
+        </div>
+        <div>
+          <label>Notebook / cell</label>
+          <input type="text" placeholder="any">
+        </div>
+        <div>
+          <label>Client IP</label>
+          <input type="text" placeholder="any">
+        </div>
+      </div>
+      <div>
+        <label>SQL contains (substring)</label>
+        <input type="text" class="mono" placeholder="any">
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Expires in</label>
+          <select><option>15 minutes</option><option selected>30 minutes</option><option>2 hours</option><option>24 hours</option></select>
+        </div>
+        <div>
+          <label>Reason (required)</label>
+          <input type="text" value="alert rule re-firing on failure">
+        </div>
+      </div>
+      <div class="hint">All fields you fill in must match for a query to be rejected. At least one matcher is required — a rule that would match everything is refused.</div>
+    </div>
+    <div class="foot">
+      <button class="btn outline">Cancel</button>
+      <button class="btn">Block</button>
+    </div>
+  </div>
+</div>
+
+<div class="mockup-note">Mockup — Option A: rules table only. The admin brings the fingerprint over from the audit log by hand.</div>
+</body>
+</html>
