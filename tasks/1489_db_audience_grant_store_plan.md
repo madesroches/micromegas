@@ -181,8 +181,17 @@ impl DbAudienceGrantsSource {
     /// `db_api_key.rs::maybe_log_error` rate-limits its own log line), the
     /// post-success path via `Snapshot::fetched_at` as before. A `current()`
     /// call that lands inside an already-throttled window returns the last
-    /// snapshot if one exists, or the prior cold-start error if not — it never
-    /// skips the query silently with nothing to show for it.
+    /// snapshot if one exists; if not, it returns a freshly synthesized error
+    /// describing the throttled cold-start state ("audience grant store
+    /// unavailable; last attempt at T, retry after TTL") rather than storing
+    /// and re-handing-out the prior attempt's `anyhow::Error` — that error
+    /// isn't `Clone` and this store deliberately has none of `db_api_key.rs`'s
+    /// moka/`Arc<E>` sharing machinery to make it so. A concurrent caller that
+    /// loses the `last_attempt_at` compare-exchange while the very first
+    /// cold-start attempt is still in flight gets that same synthesized
+    /// throttled-state error too, not the in-flight attempt's eventual
+    /// result — it never blocks on another caller's query, and it never skips
+    /// the query silently with nothing to show for it.
     ///
     /// `Err` only when there has never been one successful load — a fresh
     /// process whose first query hits a down DB has no "last good" to serve, so
