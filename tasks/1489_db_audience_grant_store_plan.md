@@ -145,8 +145,9 @@ impl DbAudienceGrantsConfig {
 struct Snapshot {
     grants: AudienceGrants,
     /// Time of the last *successful* load — never advanced on a failed refresh.
-    /// This is the number an ops dashboard should chart: "how stale is the grant
-    /// view right now", independent of `fetched_at`.
+    /// Feeds the age reported in the refresh-failure log/error context ("how
+    /// stale is the grant view right now"), independent of `fetched_at`; it is
+    /// not itself emitted as a metric.
     loaded_at: Instant,
     /// Time of the last refresh *attempt*, successful or not — gates how often a
     /// failing DB is re-queried once at least one load has succeeded, so a
@@ -220,8 +221,9 @@ path's steady-state query frequency, not the boundary race itself.
 
 ### 4. Wiring into `AudienceReadPolicy` / `AudienceMintPolicy`
 
-Both gain an optional store, added as a builder method so `from_env` keeps working unchanged for
-every caller that has no DB pool (disabled-auth, tests):
+Both gain an optional store, added as a builder method so `AudienceReadPolicy::from_env` and both
+policies' `new` constructors keep working unchanged for every caller that has no DB pool
+(disabled-auth, tests):
 
 ```rust
 impl AudienceReadPolicy {
