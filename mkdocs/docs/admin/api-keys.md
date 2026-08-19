@@ -415,7 +415,18 @@ GRANT SELECT, INSERT ON ingestion_api_keys TO micromegas_web;
 GRANT UPDATE (revoked_at, revoked_by) ON ingestion_api_keys TO micromegas_web;
 GRANT SELECT, INSERT ON analytics_api_keys TO micromegas_web;
 GRANT UPDATE (revoked_at, revoked_by) ON analytics_api_keys TO micromegas_web;
+
+-- analytics role: read-only on the audience grant store -- DbAudienceGrantsSource
+-- re-queries this table on every snapshot refresh
+GRANT SELECT ON audience_grants TO micromegas_analytics;
+
+-- analytics-web-srv's own role: the sole admin surface for audience_grants too
+GRANT SELECT, INSERT, DELETE ON audience_grants TO micromegas_web;
 ```
+
+Note the last grant is `DELETE`, not `UPDATE`: `audience_grants` rows are
+hard-deleted on revocation (there is no `revoked_at`/`revoked_by` column to
+update in place, unlike the key tables above).
 
 Note `micromegas_web` (`analytics-web-srv`'s role) is the only role granted
 `INSERT` on either table in a fully separated-role deployment — mint/import

@@ -452,6 +452,19 @@ a row that somehow bypassed them (a manual `psql` fix, a future migration)
 fails the *whole* snapshot load loudly instead of silently producing an
 unparseable or unreadable grant.
 
+**Deploy-order requirement.** `audience_grants` is created by migration v7,
+which only `telemetry-ingestion-srv` and the monolith run (via
+`connect_to_remote_data_lake`/`migrate_db`). A standalone `flight-sql-srv`
+builds its lakehouse context with `LakehouseContext::from_env()`, which runs
+only `migrate_lakehouse` and never touches `migrate_db` — so it never creates
+the table itself. Roll the v7 migration (by upgrading ingestion or the
+monolith) before or in the same deploy as upgrading `flight-sql-srv` to a
+build that wires `DbAudienceGrantsSource`. Upgrading `flight-sql-srv` first
+against a still-v6 database is not a startup failure: the process comes up
+fine and then fails every `resolve()` call with "relation audience_grants
+does not exist" (throttled to one DB attempt per cache-TTL window), denying
+every non-`public` audience to every caller until the migration catches up.
+
 ## Client Configuration
 
 ### Python Client with OIDC

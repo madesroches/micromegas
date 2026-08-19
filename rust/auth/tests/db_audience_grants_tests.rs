@@ -73,7 +73,7 @@ async fn cold_start_failure_is_throttled_within_the_ttl_window() {
         .await
         .expect_err("second attempt is still cold-start with no snapshot to serve");
     assert!(
-        second.to_string().contains("retry after"),
+        second.to_string().contains("retry available in"),
         "expected the throttled-state message, got: {second}"
     );
 }

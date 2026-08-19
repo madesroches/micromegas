@@ -11,7 +11,6 @@
 use crate::env::resolve_prefixed_var;
 use crate::policy::{AudienceGrants, GrantAxis};
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -69,12 +68,23 @@ pub struct DbAudienceGrantsSource {
     pool: PgPool,
     ttl: Duration,
     snapshot: tokio::sync::RwLock<Option<Snapshot>>,
-    /// Unix-epoch seconds of the last refresh *attempt*, recorded outside `Snapshot` so it
-    /// exists even before any load has ever succeeded -- mirrors `db_api_key.rs`'s
-    /// `last_logged_at`. This is what gates cold-start retries: with no `Snapshot` yet, there is
-    /// nowhere else to remember "we just tried and failed a moment ago", so without this field
-    /// every `current()` call during process startup against a still-coming-up DB would re-query
-    /// with no throttling at all, unlike the post-success path which `fetched_at` already gates.
+    /// Process-start baseline every `last_attempt_at` reading is measured from -- captured once
+    /// here, not `Instant::now()` at each read, so `last_attempt_at` values are comparable across
+    /// calls the same way a wall-clock timestamp would be, but monotonic: unlike
+    /// `Utc::now().timestamp()`, a backwards clock step (NTP correction, VM migration, manual
+    /// clock set) can never make a later reading smaller than an earlier one.
+    start: Instant,
+    /// Milliseconds since `start` of the last refresh *attempt*, recorded outside `Snapshot` so
+    /// it exists even before any load has ever succeeded -- mirrors `db_api_key.rs`'s
+    /// `last_logged_at`, but monotonic rather than a Unix-epoch-seconds value (see [`Self::start`]).
+    /// This is what gates cold-start retries: with no `Snapshot` yet, there is nowhere else to
+    /// remember "we just tried and failed a moment ago", so without this field every `current()`
+    /// call during process startup against a still-coming-up DB would re-query with no throttling
+    /// at all, unlike the post-success path which `fetched_at` already gates. Initialized to
+    /// `i64::MIN` -- not `0`, which (being only milliseconds after `start`) would be indistinguishable
+    /// from a real attempt made moments after construction and would incorrectly throttle the very
+    /// first cold-start call -- so the first real attempt's `saturating_sub` against it is always
+    /// far past `ttl` regardless of how soon after construction it lands.
     last_attempt_at: Arc<AtomicI64>,
 }
 
@@ -87,8 +97,15 @@ impl DbAudienceGrantsSource {
             pool,
             ttl: Duration::from_secs(config.cache_ttl_secs),
             snapshot: tokio::sync::RwLock::new(None),
-            last_attempt_at: Arc::new(AtomicI64::new(0)),
+            start: Instant::now(),
+            last_attempt_at: Arc::new(AtomicI64::new(i64::MIN)),
         }
+    }
+
+    /// Milliseconds elapsed since `self.start` -- the monotonic clock `last_attempt_at` is
+    /// measured against.
+    fn elapsed_millis(&self) -> i64 {
+        i64::try_from(self.start.elapsed().as_millis()).unwrap_or(i64::MAX)
     }
 
     /// Queries the whole table and builds an `AudienceGrants` via
@@ -124,14 +141,22 @@ impl DbAudienceGrantsSource {
     /// comment) -- never a stored, re-handed-out `anyhow::Error` from a prior attempt, since that
     /// type isn't `Clone` and this store deliberately carries none of `db_api_key.rs`'s
     /// moka/`Arc<E>` sharing machinery to make it so.
-    fn throttled_error(&self, last_attempt_epoch_secs: i64) -> anyhow::Error {
-        let last_attempt = chrono::DateTime::from_timestamp(last_attempt_epoch_secs, 0)
-            .map(|t| t.to_rfc3339())
-            .unwrap_or_else(|| last_attempt_epoch_secs.to_string());
+    ///
+    /// `last_attempt_millis` is measured against `self.start` (see that field's doc comment), not
+    /// a wall-clock instant, so there is no absolute timestamp left to report here -- the message
+    /// reports the throttle window's remaining duration instead, which stays meaningful (and never
+    /// goes backwards) regardless of the system clock.
+    fn throttled_error(&self, last_attempt_millis: i64) -> anyhow::Error {
+        let since_last_attempt = Duration::from_millis(
+            self.elapsed_millis()
+                .saturating_sub(last_attempt_millis)
+                .max(0) as u64,
+        );
+        let retry_in = self.ttl.saturating_sub(since_last_attempt);
         anyhow!(
-            "audience grant store unavailable; last attempt at {last_attempt}, retry after \
+            "audience grant store unavailable; cold-start retry throttled, retry available in \
              {} seconds",
-            self.ttl.as_secs()
+            retry_in.as_secs()
         )
     }
 
@@ -212,11 +237,13 @@ impl DbAudienceGrantsSource {
         } else {
             // Cold-start path: `last_attempt_at`'s compare-exchange *is* the dedup mechanism, so
             // only one caller per TTL window fires the query and the rest get the synthesized
-            // throttled-state error instead of racing in.
-            let now = Utc::now().timestamp();
+            // throttled-state error instead of racing in. Measured against `self.start`
+            // (monotonic), not `Utc::now()` -- a backwards wall-clock step can never widen this
+            // window the way it could with an epoch-seconds comparison.
+            let now = self.elapsed_millis();
             let prev = self.last_attempt_at.load(Ordering::Relaxed);
-            let ttl_secs = self.ttl.as_secs().max(1) as i64;
-            if now.saturating_sub(prev) < ttl_secs
+            let ttl_millis = self.ttl.as_millis().max(1) as i64;
+            if now.saturating_sub(prev) < ttl_millis
                 || self
                     .last_attempt_at
                     .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
