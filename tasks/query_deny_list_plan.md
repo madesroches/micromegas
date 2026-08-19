@@ -91,13 +91,15 @@ never be an admin principal.
 ### Web app
 
 - `AdminPage.tsx` is a card grid of admin destinations, each `AuthGuard requireAdmin`.
-- `ApiKeysAdminPage.tsx` is the closest full-page precedent (table + create dialog + `ConfirmDialog`
-  + `ErrorBanner`), but it talks to `analytics-web-srv` REST routes backed by the telemetry DB.
+- `components/ApiKeysAdminPage.tsx` is the closest full-page precedent (table + create dialog +
+  `ConfirmDialog` + `ErrorBanner`) — a shared component, not a route: `routes/AnalyticsApiKeysPage.tsx`
+  and `routes/IngestionApiKeysPage.tsx` both configure it. It talks to `analytics-web-srv` REST routes
+  backed by the telemetry DB, which is the part this screen does *not* copy (§9).
 - SQL-driven pages (`ProcessesPage.tsx`, `ProcessLogPage.tsx`, …) use `useStreamQuery` →
   `POST /api/stream-query` (`rust/analytics-web-srv/src/stream_query.rs`), which forwards the
   browser user's own bearer token to FlightSQL via `BearerFlightSQLClientFactory`. So an admin's
   web query resolves `is_admin: true` at `flight-sql-srv` and sees the admin functions.
-- `stream_query.rs:89` holds `BLOCKED_FUNCTIONS`, a substring blocklist that refuses
+- `stream_query.rs:90` holds `BLOCKED_FUNCTIONS`, a substring blocklist that refuses
   `retire_partitions*` in web queries.
 
 ## Design
@@ -112,7 +114,6 @@ CREATE TABLE query_deny_list (
   reason       TEXT         NOT NULL,
   -- a boolean SQL expression over the match context (§3)
   match_expr   TEXT         NOT NULL,
-  hit_count    BIGINT       NOT NULL DEFAULT 0,
   -- NULL until the rule first fires; the "is this rule still doing anything?" signal
   last_hit_at  TIMESTAMPTZ
 );
@@ -123,10 +124,17 @@ language into the schema: every new attribute is a migration, and the only combi
 express is AND. A single expression column carries an arbitrary predicate today and can grow
 richer semantics later without touching the schema at all — the evolution path §3 describes.
 
-`hit_count` and `last_hit_at` are both flushed on the refresh tick (§4). `last_hit_at` matters more
-here than it would with expiring rules: with rules standing until removed, "last fired three weeks
-ago" is what tells an operator a rule is stale and safe to remove, and "last fired four seconds
-ago" is what tells them the offender has not been fixed.
+`last_hit_at` is flushed on the refresh tick (§4), and matters more here than it would with expiring
+rules: with rules standing until removed, "last fired three weeks ago" is what tells an operator a
+rule is stale and safe to remove, and "last fired four seconds ago" is what tells them the offender
+has not been fixed.
+
+There is deliberately **no `hit_count`**. A per-rule denial count is already emitted as the
+`query_denied` metric (§6), tagged with the rule id, at full time resolution and with history — a
+stored counter would be a strictly worse copy of a signal the deployment already has, and it would
+cost a column, an atomic, half the flush `UPDATE`, and a test to keep in sync. `last_hit_at` is not
+redundant with the metric in the same way: it is the one thing `list_query_denials()` must answer
+without a second query against `measures`.
 
 No expiry column: a rule is in force from insertion until `remove_query_denial` deletes it. The
 table holds at most `MICROMEGAS_QUERY_DENY_MAX_RULES` rows (§10) and needs no index — every replica
@@ -272,7 +280,7 @@ blanket "nothing may scan this view right now" is one of the strongest levers th
 and forbidding it to save microseconds is the wrong trade. So: **any boolean expression over the
 match context is accepted, anchored or not.**
 
-The only expression rejected on principle is one with **no column reference at all** (`true`,
+The only *shape* rejected on principle is one with **no column reference at all** (`true`,
 `1 = 1`) — a rule that would deny every query in the deployment. That is a semantic guard, and
 conflating it with a performance guard is what produced the mistaken anchor rule in the first place.
 
@@ -287,13 +295,32 @@ Everything expensive happens at refresh, since rules are few and static:
    &str) -> Result<Arc<dyn PhysicalExpr>>` is the function that owns all three steps; `refresh`
    calls it with `&self.ctx` on every reload, and `deny_queries`'s `call_with_args` calls it the
    same way, still synchronously, before `insert` ever runs (§8).
-2. **Validate** by walking the `Expr`: reject subqueries, aggregates, window functions, and any
-   scalar function that is not `Immutable` (which keeps `now()`/`random()` out, so a rule means the
-   same thing on every replica); require a `Boolean` result and at least one column reference.
+2. **Validate** with exactly two checks: the result type is `Boolean`, and at least one column is
+   referenced. Nothing else is enumerated. An unknown column or function already fails at step 1,
+   and a subquery, aggregate, or window function cannot be lowered to a scalar `PhysicalExpr` and
+   fails at step 3 — each with DataFusion's own diagnostic, which is a better message than one of
+   ours. Rules are authored by admins, the same people who can call `retire_partitions`, so
+   validation is not a trust boundary: it catches the two mistakes that would otherwise be silent,
+   a rule that means nothing (non-boolean) and a rule that denies everything (no column reference).
+   Everything else is the admin's business, including arithmetic and column-to-column comparison,
+   which are harmless over a one-row all-`Utf8` batch and cost a visitor arm each to forbid.
 3. **Plan** the validated `Expr` into an `Arc<dyn PhysicalExpr>` with `create_physical_expr` against
-   `match_schema()`, so the per-query path never touches the planner.
+   `match_schema()`, so the per-query path never touches the planner. Closest precedent in the crate:
+   `analytics/src/dfext/predicate.rs:21`, which already does `state.create_physical_expr(expr,
+   &df_schema)` for the same reason.
 
-Rules are held in one `Vec` ordered by `(created_at, rule_id)`, oldest first. Per query, `check`
+   **This path runs no type-coercion pass.** Neither `parse_sql_expr` nor `create_physical_expr`
+   applies the analyzer's `TypeCoercion` rule, so an expression that would need an inserted cast
+   fails to plan instead of being quietly coerced. Over an all-`Utf8` match context compared against
+   string literals that is exactly the behavior we want — a type mismatch (`client = 42`,
+   `notebook = now()`) becomes a compile error the admin sees at `deny_queries` time, rather than a
+   rule that silently never fires. But it makes the accepted subset a property of DataFusion's
+   *physical* planner rather than of anything we wrote, so the subset is pinned by tests (Testing
+   Strategy, "No coercion pass"). If some expression that ought to be accepted turns out to need a
+   cast, the fix is to run the `Expr` through the `TypeCoercion` analyzer rule here in step 3 — one
+   place, applied identically on every replica — not to widen or hand-code the accepted subset.
+
+Rules are held in one slice ordered by `(created_at, rule_id)`, oldest first. Per query, `check`
 does: empty snapshot → return; otherwise build a one-row `RecordBatch` from the borrowed attribution
 and evaluate each rule's `PhysicalExpr` in that order, returning the first rule that evaluates to
 true. Every replica orders the rules identically, so "oldest matching rule wins" (§4) is simply the
@@ -301,15 +328,21 @@ first match, and two replicas name the same rule for the same query.
 
 #### Grammar
 
-DataFusion parses and evaluates, so the syntax is SQL's; validation accepts the subset that means
-something over a one-row match context: `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`,
-`IS [NOT] NULL`, and `regexp_like`, over the match-context columns and string literals. Anything
-else — arithmetic, subqueries, aggregates, non-`Immutable` functions, column-to-column comparison —
-is rejected at insert with the parser's own diagnostic where there is one.
+DataFusion parses and evaluates, so the syntax is SQL's. The useful subset over a one-row match
+context is `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`, `IS [NOT] NULL`, and `regexp_like`, over
+the match-context columns and string literals — but that subset is documentation, not a code path.
+Nothing enumerates it: an expression outside it either fails to parse, fails to plan, or works.
 
-The only expression rejected on principle is one with no column reference at all (`true`, `1 = 1`),
-which would deny every query in the deployment. There is no anchor requirement: any boolean shape,
-including a top-level `OR`, is accepted (§3).
+The two expressions rejected on principle are the ones the parser and planner accept but that mean
+something the admin did not intend: one whose result is not `Boolean`, and one with no column
+reference at all (`true`, `1 = 1`), which would deny every query in the deployment. There is no
+anchor requirement: any boolean shape, including a top-level `OR`, is accepted (§3).
+
+Non-deterministic functions are not forbidden either, and the reach of forbidding them would have
+been close to nil: `now()` returns a `Timestamp` and cannot be compared to a `Utf8` match-context
+column at all, and a `random()`-only expression references no column and is already rejected. What
+survives — `sql LIKE '%x%' AND random() < 0.1`, a sampling rule — makes a rule fire on some replicas
+and not others, which is what an admin who writes it asked for.
 
 Regex is safe: the `regex` crate behind DataFusion's `regexp_like` does not backtrack and
 guarantees linear-time matching. (This corrects an earlier version of this plan, which excluded
@@ -362,30 +395,34 @@ impl QueryAttribution<'_> {
 }
 
 /// The DB row, exactly as `list_query_denials()` returns it (§8) and as `insert` echoes back.
-/// No compiled expression or in-process counters here — those exist only for a rule that has been
+/// No compiled expression or in-process timestamp here — those exist only for a rule that has been
 /// compiled into a `DenySnapshot`, and a freshly inserted or listed row has not necessarily
 /// been through that yet on every replica.
 pub struct QueryDenyRow {
     pub rule_id: Uuid, pub created_at: DateTime<Utc>, pub created_by: String,
     pub reason: String, pub match_expr: String,
-    pub hit_count: i64,                       // last flushed value
     pub last_hit_at: Option<DateTime<Utc>>,   // None until the rule first fires
 }
 
-/// A row compiled into one snapshot: the row, its planned expression, and the in-process hit
-/// counters. Lives only inside `DenySnapshot`.
+/// A row compiled into one snapshot: the row, its planned expression, and the one piece of
+/// in-process state a rule accumulates. Lives only inside `DenySnapshot`.
 pub struct QueryDenyRule {
     pub row: QueryDenyRow,
     expr: Arc<dyn PhysicalExpr>,          // planned once at refresh, evaluated per query (§3)
-    hits: AtomicU64,                      // in-process delta since the last flush
     last_hit: AtomicI64,                  // unix seconds, 0 = not hit since the last flush
 }
 
-/// One vector of compiled rules, ordered by `(created_at, rule_id)`, oldest first. Rebuilt
-/// wholesale on every refresh, which is cheap because rules are few and change rarely.
-pub struct DenySnapshot {
-    rules: Vec<Arc<QueryDenyRule>>,
-}
+/// The compiled rules, ordered by `(created_at, rule_id)`, oldest first. Rebuilt wholesale on every
+/// refresh, which is cheap because rules are few and change rarely.
+///
+/// An alias, not a newtype: nothing hangs behind it. `check` and `refresh` are methods on
+/// `QueryDenyList`, the ordering invariant is established by the one `ORDER BY` in `refresh` rather
+/// than enforced by a constructor, and the slice is never handed out — so a wrapper struct would add
+/// a field access at every use and nothing else. `Arc<[_]>` rather than `Arc<Vec<_>>` for the same
+/// reason `ReadScope::Audiences` holds `Arc<[String]>`: the snapshot is immutable once built, and
+/// this drops a pointer hop off the per-query path. If a snapshot ever grows a lookup structure (an
+/// index by fingerprint, say), that is the point to promote it to a struct.
+pub type DenySnapshot = Arc<[Arc<QueryDenyRule>]>;
 
 pub struct QueryDenyList {               // owned by LakehouseContext, like AudienceIndex
     pool: sqlx::Pool<sqlx::Postgres>,
@@ -393,13 +430,13 @@ pub struct QueryDenyList {               // owned by LakehouseContext, like Audi
     // `compile_match_expr` can call `ctx.parse_sql_expr(expr, &match_schema())`; both `refresh`
     // and `insert` compile through it.
     ctx: SessionContext,
-    snapshot: std::sync::RwLock<Arc<DenySnapshot>>,  // `arc-swap` is not a workspace dep;
+    snapshot: std::sync::RwLock<DenySnapshot>,  // `arc-swap` is not a workspace dep;
                                    // a read lock held for one clone is enough
 }
 
 impl QueryDenyList {
     pub fn check(&self, q: &QueryAttribution<'_>) -> Option<Arc<QueryDenyRule>>;
-    pub async fn refresh(&self) -> Result<()>;     // flush hit deltas, reload + recompile
+    pub async fn refresh(&self) -> Result<()>;     // flush `last_hit`, reload + recompile
     // `compiled` was already produced by `call_with_args`'s synchronous `compile_match_expr`
     // (§8); `insert` stores `match_expr` verbatim and does not re-validate it.
     pub async fn insert(&self, match_expr: &str, compiled: Arc<dyn PhysicalExpr>, reason: &str,
@@ -418,16 +455,19 @@ impl QueryDenyList {
   each rule's `PhysicalExpr` against it, in order — ~3.4 µs at one rule, ~45 µs at the 100-rule cap
   (§3, §10).
 - **Rules are kept in a stable order** — `created_at`, `rule_id` breaking ties — so the first match
-  is the oldest matching rule, on every replica. Two replicas must name the same rule for the same
+  is the oldest matching rule, on every replica. Two replicas should name the same rule for the same
   query, since the rule id reaches the caller's error message, the `warn!` line, the audit record,
   and the per-rule metric. The oldest matching rule wins, which is also the one an operator is most
-  likely to have forgotten about.
+  likely to have forgotten about. Stable ordering is what this buys; it holds for any deterministic
+  expression, and an admin who deliberately writes a non-deterministic one (§3, Grammar) gives it up
+  knowingly rather than being prevented.
 - `refresh` runs every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10): it flushes each rule's
-  accumulated `hits`/`last_hit` (`UPDATE query_deny_list SET hit_count = hit_count + $1,
-  last_hit_at = greatest(coalesce(last_hit_at, $2), $2) WHERE rule_id = $3`, skipping rules with a
-  zero delta), then reloads the table and recompiles each `match_expr`. Batching keeps a denied
-  4-QPS offender at one write per tick instead of one per rejection, and `last_hit_at` is therefore
-  accurate to within one tick — which is all "is this rule still firing?" needs.
+  `last_hit` (`UPDATE query_deny_list SET last_hit_at = greatest(coalesce(last_hit_at, $1), $1)
+  WHERE rule_id = $2`, skipping rules not hit since the last flush), then reloads the table and
+  recompiles each `match_expr`. Batching keeps a denied 4-QPS offender at one write per tick
+  instead of one per rejection, and `last_hit_at` is therefore accurate to within one tick — which
+  is all "is this rule still firing?" needs. The denial *rate* comes from the `query_denied` metric
+  (§6), not from this table.
 - **A rule that fails to compile is skipped, never fatal.** It is dropped from the snapshot with a
   `warn!` naming the rule id and the compile error, plus
   `imetric!("query_deny_compile_error_count", ...)`. This is what makes it safe to extend the match
@@ -609,8 +649,7 @@ Registered inside the existing `caller.is_admin || !caller.admin_principal_possi
 | `created_by` | Utf8 | |
 | `reason` | Utf8 | |
 | `match_expr` | Utf8 | the expression as written |
-| `hit_count` | Int64 | last flushed value |
-| `last_hit_at` | Timestamp(ns, UTC), nullable | NULL until the rule first fires |
+| `last_hit_at` | Timestamp(ns, UTC), nullable | NULL until the rule first fires; accurate to within one refresh tick |
 
 **`deny_queries(match_expr, reason)`** — UDTF returning a single row (`rule_id`). The expression is
 a boolean SQL predicate over the match context (§3); inner quotes are doubled, as anywhere else in
@@ -651,7 +690,7 @@ API-key pages' single-DB assumption would be wrong here).
 Layout — a single rules table plus a create dialog (`tasks/query_deny_list_mockups/query-deny-list-screen.html`):
 
 - **Rules table** — `SELECT * FROM list_query_denials()`: the match expression in monospace, reason,
-  creator, created-at, hit count, **last hit** (relative — "4 s ago" reads as "still firing", "3
+  creator, created-at, **last hit** (relative — "4 s ago" reads as "still firing", "3
   weeks ago" as "probably removable"), **Remove** (via `ConfirmDialog`). Empty state points at the
   audit-log doc for finding an offender's fingerprint.
 - **Deny a Query dialog** — an expression textarea plus the required reason, with insert-chips for
@@ -750,8 +789,10 @@ into the dialog.
 12. `analytics-web-app/src/lib/query-deny-list-api.ts` — SQL builders (`escapeSqlLiteral`, the
     three statements) and Arrow→row decoding.
 13. `analytics-web-app/src/routes/QueryDenyListPage.tsx` — the page, reusing
-    `PageLayout` / `AuthGuard requireAdmin` / `ErrorBanner` / `ConfirmDialog` / `Button` /
-    `DataSourceField`.
+    `PageLayout` (via the `@/components/layout` barrel) / `AuthGuard requireAdmin` / `ErrorBanner` /
+    `ConfirmDialog` / `DataSourceField` (exported from `components/DataSourceSelector.tsx`). There is
+    no shared `Button` component in this app — buttons are inline Tailwind, as in
+    `components/ApiKeysAdminPage.tsx`.
 14. Register the route (`/admin/query-deny-list`) in `router.tsx` and add the card to
     `AdminPage.tsx` (lucide `ShieldBan` or `Ban` icon).
 15. Vitest coverage for the SQL builders (escaping in particular) and a page render test, matching
@@ -856,8 +897,8 @@ and let the offender back in while nobody is looking, and it forces an operator 
 up front. Standing rules keep the state of the world explicit: what is denied is exactly what
 `list_query_denials()` shows. The cost is that a forgotten rule stays forgotten, which is mitigated
 by three things — the mandatory `reason` and recorded `created_by`, the rejection message telling
-the caller precisely what to ask for, and `hit_count`/`last_hit_at`, which separate a rule still
-rejecting traffic from one that has not fired in weeks and is safe to remove.
+the caller precisely what to ask for, and `last_hit_at`, which separates a rule still rejecting
+traffic from one that has not fired in weeks and is safe to remove.
 
 **Hard delete rather than soft delete.** `analytics_api_keys` keeps revoked rows with
 `revoked_at`/`revoked_by`; the deny list does not, because the audit log already records every
@@ -902,9 +943,26 @@ through its `pub` surface: `fingerprint_of`, `compile_match_expr`, `check`, and
 - `fingerprint_of`: two dashboard refreshes differing only in timestamp/limit literals produce the
   same fingerprint; different column lists produce different ones; whitespace/comment/case changes
   are absorbed; unparseable SQL still yields a fingerprint.
-- `compile_match_expr` rejects, each with a distinct message: unknown column, unknown function,
-  non-boolean result, subquery, aggregate, window function, a non-`Immutable` function (`now()`),
-  arithmetic, column-to-column comparison, and an expression referencing no column (`true`, `1 = 1`).
+- `compile_match_expr` rejects, each with a message naming the problem: a non-boolean result and an
+  expression referencing no column (`true`, `1 = 1`) — its own two checks — plus unknown column,
+  unknown function, and an aggregate, which DataFusion rejects for it at parse or plan time. The
+  last three are tested to pin that the diagnostic reaches the admin, not that we produced it.
+- **No coercion pass** (§3, step 3). Because `compile_match_expr` plans without `TypeCoercion`, the
+  accepted subset is a property of DataFusion's physical planner, so it is pinned rather than
+  assumed. Each of these compiles *and* evaluates against a batch from `QueryAttribution::to_batch`,
+  since a `Utf8`-vs-`Utf8View`-style mismatch between `match_schema()` and `to_batch` would surface
+  only at per-query evaluation on a replica that happens to hold a rule, never at compile time:
+  `client IN ('grafana', 'python')` (in-list, the shape most likely to want a cast),
+  `sql LIKE '%thread_spans%'` and its `ILIKE` form, `regexp_like(sql, '(?i)from\s+view_instance')`
+  (a two-arg UDF signature matched with no coercion to help it), `notebook IS NOT NULL`, and a
+  top-level `NOT`. Plus a direct assertion that `to_batch().schema()` equals `match_schema()` field
+  for field — same names, same order, `DataType::Utf8` throughout — which is the invariant those
+  evaluations depend on.
+- **Type mismatches fail loudly, at compile time, not silently at match time**: `client = 42`
+  (`Utf8` vs `Int64`) and `notebook = now()` (`Utf8` vs `Timestamp`) are both rejected by
+  `compile_match_expr` with a message naming the two types, and neither is accepted as a rule that
+  would then never fire. The second of these is also what covers the dropped non-`Immutable` guard
+  (§3, Grammar): `now()` cannot reach a `Utf8` column in the first place.
 - `user_id = 'svc-acct'` compiles and matches — pinning the reason the identity column is named
   `user_id` rather than `user`: under `GenericDialect`, a bare `user` parses as the zero-arg
   function `user()`, not a column reference.
@@ -925,9 +983,8 @@ convention as `ownership_rewrite_db_test.rs`)**
 
 - Migration v8 → v9 applies cleanly on a pre-existing lakehouse schema.
 - `insert` → `refresh` → `check` matches; `delete` → `refresh` → no longer matches.
-- Hit flush: N `record_hit` calls then `refresh` leaves `hit_count = N` and a `last_hit_at` at the
-  most recent of them; a rule with no hits this tick is not written at all (and keeps its earlier
-  `last_hit_at`).
+- Hit flush: several `record_hit` calls then `refresh` leaves `last_hit_at` at the most recent of
+  them; a rule not hit this tick is not written at all and keeps its earlier `last_hit_at`.
 - Refresh failure keeps the previous snapshot (point the pool at a closed connection).
 - A row whose `match_expr` does not compile (written directly with `INSERT`, simulating a newer
   version) is skipped with a warning while every other rule stays enforced.
@@ -953,8 +1010,8 @@ convention as `ownership_rewrite_db_test.rs`)**
   comfortably above `MICROMEGAS_FLUSH_PERIOD` (5 s in `local_test_env`), not a fixed sleep.
 - A no-column expression is rejected, as is a syntactically invalid one, each with a message that
   names the problem.
-- `list_query_denials()` shows the rule while it stands and drops it after removal; `hit_count`
-  reflects the rejections once a refresh tick has flushed.
+- `list_query_denials()` shows the rule while it stands and drops it after removal; `last_hit_at` is
+  populated once a refresh tick has flushed.
 - A rule matching *everything the test client sends* still leaves `remove_query_denial` callable —
   the escape hatch (§5), and the only recovery path now that rules do not expire.
 - Note: `local_test_env` runs with auth disabled, so every caller is an admin there.

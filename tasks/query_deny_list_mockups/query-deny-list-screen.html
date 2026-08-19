@@ -84,7 +84,6 @@
   .pill.active { background: rgba(248,113,113,.14); color: var(--accent-error); }
   .muted { color: var(--text-muted); }
   .sec { color: var(--text-secondary); }
-  .hits { font-variant-numeric: tabular-nums; font-weight: 600; }
   .banner {
     border: 1px solid rgba(255,179,0,.4); background: rgba(255,179,0,.1); border-radius: var(--radius);
     padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-primary);
@@ -155,7 +154,6 @@
           <th>Match expression</th>
           <th>Reason</th>
           <th>Created by</th>
-          <th style="text-align:right">Hits</th>
           <th>Last hit</th>
           <th></th>
         </tr>
@@ -166,16 +164,14 @@
           <td class="expr"><code>sql_hash = '9f2c41ab73de0155'<br>&nbsp;&nbsp;AND entrypoint = 'grafana-alert'</code></td>
           <td class="sec">alert rule re-firing on failure, 4 QPS of full-day thread_spans scan</td>
           <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 14:02</div></td>
-          <td style="text-align:right" class="hits">1,284</td>
           <td class="sec">4 s ago<div class="muted" style="font-size:12px">still firing</div></td>
           <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
         <tr>
           <td class="mono muted">#c07b</td>
-          <td class="expr"><code>service_account = 'dashboards-svc'<br>&nbsp;&nbsp;AND notebook = 'fleet-overview'</code></td>
+          <td class="expr"><code>user_id = 'dashboards-svc'<br>&nbsp;&nbsp;AND notebook = 'fleet-overview'</code></td>
           <td class="sec">30 s refresh on a 7-day range; owner pinged, fix in flight</td>
           <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-08-18 13:51</div></td>
-          <td style="text-align:right" class="hits">37</td>
           <td class="sec">2 min ago</td>
           <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
@@ -184,7 +180,6 @@
           <td class="expr"><code>client_ip = '10.4.9.221'<br>&nbsp;&nbsp;AND sql LIKE '%thread_spans%'</code></td>
           <td class="sec">notebook retry loop from a workstation</td>
           <td class="sec">other-admin@example.com<div class="muted" style="font-size:12px">2026-07-29 11:20</div></td>
-          <td style="text-align:right" class="hits">612</td>
           <td class="muted">20 days ago<div style="font-size:12px">probably removable</div></td>
           <td style="text-align:right"><button class="btn danger small">Remove</button></td>
         </tr>
@@ -206,13 +201,13 @@
           <span class="muted" style="font-size:12px">insert:</span>
           <button class="chip mono">sql_hash = '…'</button>
           <button class="chip mono">entrypoint = '…'</button>
-          <button class="chip mono">service_account = '…'</button>
+          <button class="chip mono">user_id = '…'</button>
           <button class="chip mono">client_ip = '…'</button>
           <button class="chip mono">sql LIKE '%…%'</button>
         </div>
         <div class="hint">
           A boolean SQL predicate over the match context —
-          <code>user</code>, <code>email</code>, <code>service_account</code>, <code>client</code>,
+          <code>user_id</code>, <code>email</code>, <code>service_account</code>, <code>client</code>,
           <code>agent</code>, <code>entrypoint</code>, <code>session</code>, <code>notebook</code>,
           <code>cell</code>, <code>client_ip</code>, <code>sql</code>, <code>sql_hash</code>.
           Supports <code>AND</code>/<code>OR</code>/<code>NOT</code>, <code>=</code>,
