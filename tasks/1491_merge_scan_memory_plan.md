@@ -177,17 +177,23 @@ This plan fixes `QueryMerger` only. `BatchPartitionMerger` keeps its current sca
 and all: `batch_partition_merger.rs:106-190` builds its own session via `make_session_context`,
 registers an `Unordered` `PartitionedTableProvider` over the *whole* partition set being merged,
 and re-executes the same `$begin`/`$end`-templated query once per batch — `nb_batches` times,
-`try_buffered(2)` — with `repartition_file_scans` at its default `true`. Unlike `QueryMerger`,
-nothing downstream serializes that pipeline the way a single writer task does (Design §5), so
-forcing `repartition_file_scans = false` here would not bound memory for free: it would multiply
-each of those `nb_batches` re-executions' scan wall-clock by roughly `target_partitions`, the
-opposite of what a bounded-memory merger should cost. Since no in-repo view constructs a
-`BatchPartitionMerger` today, this plan leaves its scan as-is rather than trade an unmeasured
-memory gap for a measured wall-clock one, and records the trade explicitly instead: the first view
-that adopts `BatchPartitionMerger` inherits its current unbounded-scan memory cost, unchanged by
-#1491. Bounding that scan without the wall-clock cost above — e.g. a small pinned
-`target_partitions` for its session, rather than a full serial scan repeated `nb_batches` times —
-is follow-up work for whoever takes that on, not part of this plan.
+`try_buffered(2)` — with `repartition_file_scans` at its default `true`. Its output feeds the same
+single writer task as `QueryMerger` (`create_merged_partition` drains whichever merger's stream
+through the same `mpsc::channel(1)`), so the two are not asymmetric in *who* drains the scan — the
+asymmetry is in how much is buffered ahead of that writer: the producer publishes into a 10-batch
+`RecordBatchReceiverStreamBuilder` channel, and `try_buffered(2)` runs two of the `nb_batches`
+re-executions concurrently, each independently fanning out to `target_partitions` readers. Per-batch
+merge queries are also typically aggregating (batching only pays off when a batch's result is small
+enough to hold, which usually means a `GROUP BY`), so the writer may not be the bottleneck the way
+it is for `QueryMerger`'s single full-size scan. Forcing `repartition_file_scans = false` here would
+therefore be an unmeasured trade, not a free one, on a shape this plan hasn't exercised. Since no
+in-repo view constructs a `BatchPartitionMerger` today, and its `nb_batches`-times re-execution shape
+needs its own measurement before changing its scan settings, this plan leaves its scan as-is rather
+than guess, and records the gap explicitly instead: the first view that adopts `BatchPartitionMerger`
+inherits its current unbounded-scan memory cost, unchanged by #1491. Bounding that scan without an
+unmeasured wall-clock risk — e.g. a small pinned `target_partitions` for its session, rather than a
+full serial scan repeated `nb_batches` times — is follow-up work for whoever takes that on, not part
+of this plan.
 
 `QueryMerger` gets the fix via one extracted helper, `make_merge_session_context(...)`, a thin
 wrapper around `make_session_context` (`query.rs:256`) that applies the merge-only setting before
@@ -205,9 +211,14 @@ Move `repartition_file_scans = false` out of the two ordering-aware paths and in
 // benefits from scan parallelism. Left at DataFusion's default (`true`), `EnforceDistribution`
 // splits the source scan into `target_partitions` byte-range file groups and `execute_stream`
 // coalesces them, so the reader working set is multiplied by the host's core count for no
-// throughput the writer can absorb. Forcing one sequential file group here makes every
-// `QueryMerger` merge -- ordered or not -- read one file at a time. Downstream parallelism is
-// untouched: a merge query with a GROUP BY still gets its round-robin fan-out above the scan.
+// throughput the writer can absorb. Forcing one sequential file group here fixes that for the
+// `Unordered` and `Concatenated` shapes, which both start from a single file group spanning every
+// input partition: left unsplit, one reader works through that group's files one at a time instead
+// of `target_partitions` concurrent byte-range readers. `PerFile` already builds one file group per
+// input partition and is unaffected either way -- it intentionally keeps one reader per input file
+// for its k-way ordered merge; this setting only stops those per-partition groups from being split
+// further. Downstream parallelism is untouched: a merge query with a GROUP BY still gets its
+// round-robin fan-out above the scan.
 pub async fn make_merge_session_context(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
@@ -248,10 +259,14 @@ which is the desirable shape, not something to bail on.
 
 ### 2. What this changes about the output — and what it recovers for queries
 
-Merged row order becomes deterministic: file concatenation in the order
-`create_merged_partition` already sorts them (`filtered_partitions.sort_by_key(|p|
-p.begin_insert_time())`, `merge.rs:371`), instead of today's nondeterministic byte-range interleave
-from `CoalescePartitionsExec`.
+For a non-aggregating merge query — the default `SELECT * FROM source` shape most views use —
+merged row order becomes deterministic: file concatenation in the order `create_merged_partition`
+already sorts them (`filtered_partitions.sort_by_key(|p| p.begin_insert_time())`, `merge.rs:371`),
+instead of today's nondeterministic byte-range interleave from `CoalescePartitionsExec`. This does
+not extend to aggregating `Unordered` merges: a `GROUP BY` merge query (§5 — `processes`, `streams`,
+and `log_stats`'s unordered fallback) still gets round-robin and hash repartitioning above the
+sequential scan and is coalesced back nondeterministically, so those views' merged row order stays
+as nondeterministic as it is today.
 
 That is not a cosmetic difference — **it restores row-group pruning on the merged partition**, which
 today is effectively dead:
@@ -548,14 +563,17 @@ has the same fan-out; `measures` is merely the one large enough to make it visib
 `measures`-only change to make.
 
 `BatchPartitionMerger`, the other `PartitionMerger` implementation, is deliberately left out of this
-fix rather than folded in alongside `QueryMerger`. It has the same unbounded scan today (and a worse
-one: `2 × target_partitions` concurrent readers from its `try_buffered(2)`), but its scan is
-re-executed once per batch, `nb_batches` times, with no single writer task downstream to hide a
-serialized scan behind (Design §1, §5); forcing the same setting there would multiply each batch's
-wall-clock by roughly `target_partitions` rather than bound its memory for free. Since no in-repo
-view constructs a `BatchPartitionMerger` today, this plan leaves the gap explicit — documented as
-the first adopter's problem to solve, with a bounded-but-not-fully-serial scan — rather than hand
-that adopter an unmeasured wall-clock regression along with the memory fix.
+fix rather than folded in alongside `QueryMerger`. It drains into the same single writer task as
+`QueryMerger` (Design §1), so the reason to leave it out isn't a difference in who serializes the
+pipeline — it's that its scan is buffered ahead of that writer by a 10-slot channel plus
+`try_buffered(2)` running two of its `nb_batches` re-executions concurrently (each independently
+fanning out to `target_partitions` readers — worse than `QueryMerger`'s single scan today), and its
+per-batch queries are typically aggregating, so the writer may not be the bottleneck the way it is
+here. Forcing the same setting there is therefore an unmeasured trade, not a free one: since no
+in-repo view constructs a `BatchPartitionMerger` today, and its `nb_batches`-times re-execution shape
+needs its own measurement, this plan leaves the gap explicit — documented as the first adopter's
+problem to solve, with a bounded-but-not-fully-serial scan — rather than guess at a wall-clock
+regression along with the memory fix.
 
 **Rejected: declare `ScanOrdering::Concatenated` on `MetricsView`** (the issue's proposal). Both
 preconditions fail, and the failure mode is mixed rather than uniformly loud:
@@ -594,11 +612,12 @@ changes; the key would be `(name, time)`, not `time`.
 ## Documentation
 
 - `CHANGELOG.md` — Unreleased / Analytics: merges now scan their source partitions sequentially
-  regardless of declared ordering; note it changes merged-partition row order (previously
-  nondeterministic, now source-partition concatenation order), that no sort guarantee is claimed,
-  and that the resulting time-local row groups restore row-group pruning for time-filtered queries
-  on merged partitions. No SQL-surface change: no schema, view name, or UDF signature moves, and no
-  `SCHEMA_VERSION` bump is needed (the file schema is untouched).
+  regardless of declared ordering; note that for a non-aggregating merge query this changes
+  merged-partition row order (previously nondeterministic, now source-partition concatenation
+  order) and restores row-group pruning for time-filtered queries via the resulting time-local row
+  groups, that no sort guarantee is claimed, and that an aggregating (`GROUP BY`) merge query's
+  output order stays nondeterministic as before. No SQL-surface change: no schema, view name, or
+  UDF signature moves, and no `SCHEMA_VERSION` bump is needed (the file schema is untouched).
 - `mkdocs/docs/admin/maintenance.md` — the `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` row already
   explains that daemon merges run on the shared unscoped pool; add a short note that merge scans
   are single-reader by design, so merge memory does not scale with host core count. Relevant to
