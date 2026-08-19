@@ -208,6 +208,7 @@ async fn optimized_plan_with_factory(
         is_admin: false,
         isolation_config: Arc::new(isolation_config),
         admin_principal_possible: true,
+        identity: None,
     };
     let ctx: SessionContext = make_session_context(
         lakehouse,

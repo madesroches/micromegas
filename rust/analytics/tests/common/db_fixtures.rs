@@ -116,5 +116,6 @@ pub fn caller_with_unstamped_audience(
             public_view_sets: vec![],
         }),
         admin_principal_possible: true,
+        identity: None,
     }
 }

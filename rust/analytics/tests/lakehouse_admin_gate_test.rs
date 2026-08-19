@@ -42,6 +42,7 @@ async fn make_gated_session_context(
         is_admin,
         isolation_config: Arc::new(IsolationConfig::default()),
         admin_principal_possible,
+        identity: None,
     };
     make_session_context(
         lakehouse,

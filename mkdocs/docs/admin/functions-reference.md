@@ -245,6 +245,171 @@ SELECT retire_partition_by_file('s3://bucket/data/log_entries/process-123/2024/0
 
 ---
 
+## Query Deny List
+
+The admin-managed query deny list (see `tasks/query_deny_list_plan.md`) is the manual valve an
+on-call admin can pull, without a deploy, to stop a misbehaving query in flight — a dashboard on a
+short refresh interval, an alert rule re-firing on failure, a notebook cell stuck in a retry loop.
+A matching query is rejected at the front of the FlightSQL service, before any object-store reads
+or memory-pool reservation. Rules stay in force until an admin removes them explicitly — there is
+no expiry. See also the [Admin → Query Deny List](web-app.md) screen, which is a front end for
+the three functions below, and the [query audit log](../query-guide/query-audit-log.md), where an
+operator finds the fingerprint to paste into `deny_queries`.
+
+### The match context
+
+Every rule is a boolean SQL expression over this fixed set of columns — the attribution
+`execute_query` has already resolved by the time the check runs. All columns are nullable
+`Utf8`; standard SQL NULL semantics apply (`notebook = 'x'` is NULL, not true, for a query that
+sent no notebook header, so such a rule does not fire on it).
+
+| Column | NULL when | Client can change it? |
+|---|---|---|
+| `user_id` | never (`'unknown'` when no auth is configured) | Yes — client-asserted except for a non-delegating OIDC caller |
+| `email` | never | Yes, same caveat as `user_id` |
+| `service_account` | the caller is not a delegating service account (also NULL for an ordinary human caller) | No — server-derived |
+| `client` | never (`'unknown'` if `x-client-type` is absent) | Yes |
+| `agent` | never (`'unknown'` if `x-client-agent` is absent) | Yes |
+| `entrypoint` | never (`'unknown'` if `x-client-entrypoint` is absent) | Yes |
+| `session` | the caller sent no `x-client-session` | Yes |
+| `notebook` | the query did not originate from a notebook cell | Yes |
+| `cell` | the query did not originate from a notebook cell | Yes |
+| `client_ip` | never | No — network-level truth |
+| `sql` | never | No — the raw statement text |
+| `sql_hash` | never | No — the normalized fingerprint (see below) |
+
+The identity column is named `user_id`, not `user`: a bare `user` parses as the zero-argument
+function `user()` under DataFusion's default dialect, not a column reference, so `user = 'jean'`
+fails with "Invalid function 'user'" — use `user_id`.
+
+### The expression language
+
+DataFusion itself parses and evaluates the expression — there is no grammar of this product's
+own to learn. The useful subset is `AND`/`OR`/`NOT`, `=`/`!=`, `IN`, `LIKE`/`ILIKE`,
+`IS [NOT] NULL`, and `regexp_like`, over the match-context columns and string literals — but
+that's documentation, not an enforced grammar; anything DataFusion's planner accepts over this
+schema works, including a top-level `OR` with no "anchor" equality (a blanket rule such as
+`sql LIKE '%thread_spans%'` is a legitimate, powerful incident lever, and is accepted).
+
+Exactly two shapes are rejected, both at `deny_queries` time, with DataFusion's own diagnostic
+where there is one:
+
+- The expression's result is not `Boolean`.
+- The expression references **no column at all** (`true`, `1 = 1`) — such a rule would deny
+  *every* query in the deployment.
+
+Type mismatches (`client = 42`, `notebook = now()`) fail to compile rather than silently never
+firing, since every match-context column is `Utf8` with no implicit cast to a different type.
+
+```sql
+-- deny one specific, fingerprinted query from one entrypoint
+SELECT * FROM deny_queries(
+  'sql_hash = ''9f2c41ab73de0155'' AND entrypoint = ''grafana-alert''',
+  'alert rule re-firing on failure; owner notified');
+
+-- deny everything from one service account, on one notebook
+SELECT * FROM deny_queries(
+  'user_id = ''dashboards-svc'' AND notebook = ''fleet-overview''',
+  'dashboard stuck at a 1s refresh interval');
+
+-- a blanket rule: stop anything scanning thread_spans, or anything from one host
+SELECT * FROM deny_queries(
+  'sql LIKE ''%thread_spans%'' OR client_ip = ''10.4.9.221''',
+  'incident: thread_spans scan storm');
+```
+
+### `list_query_denials()`
+
+!!! note "Requires admin"
+    Same gate as `retire_partitions()` and friends — see [Authentication](authentication.md#audience-filtering-activation).
+
+**Description**: Lists every query-deny-list rule currently in force.
+
+**Usage**:
+```sql
+SELECT * FROM list_query_denials();
+```
+
+**Returns**: Table with columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `rule_id` | String | The rule's id — pass this to `remove_query_denial(rule_id)` |
+| `created_at` | Timestamp | When the rule was created |
+| `created_by` | String | The identity of the admin who created it |
+| `reason` | String | The mandatory, free-text reason given at creation |
+| `match_expr` | String | The expression exactly as written |
+| `last_hit_at` | Timestamp, nullable | `NULL` until the rule first fires; otherwise the most recent match, accurate to within one refresh tick (`MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`) — "4 s ago" means the offender is still calling in, "3 weeks ago" means the rule is probably safe to remove |
+
+### `deny_queries(match_expr, reason)`
+
+!!! note "Requires admin"
+    Same gate as `retire_partitions()` and friends.
+
+**Description**: Validates and inserts a new query-deny-list rule. Both arguments are SQL string
+literals — double any inner `'` the same as anywhere else in SQL.
+
+**Parameters**:
+- `match_expr` (String): A boolean SQL expression over the match context above
+- `reason` (String): Free-text, required — recorded alongside the rule and shown to a denied
+  caller
+
+**Usage**:
+```sql
+SELECT * FROM deny_queries(
+  'sql_hash = ''9f2c41ab73de0155'' AND entrypoint = ''grafana-alert''',
+  'alert rule re-firing on failure; owner notified');
+```
+
+**Returns**: A single row (the log-stream shape every mutating admin UDTF uses: `time`, `msg`) —
+`msg` carries the new rule's id. Alias it for clarity: `SELECT msg AS rule_id FROM deny_queries(...)`.
+
+**Validation** (fails loudly, before anything is written): the expression must compile against
+the match context (see "The expression language" above); `reason` must not be empty; the caller
+must carry an identity (always true for an authenticated admin); and the deployment must be under
+`MICROMEGAS_QUERY_DENY_MAX_RULES` (default 100) rules already.
+
+### `remove_query_denial(rule_id)`
+
+!!! note "Requires admin"
+    Same gate as `retire_partition_by_file()` and friends.
+
+**Description**: Deletes a single query-deny-list rule by id, so callers it was rejecting can
+reach the service again. Hard delete — no soft-revoke trail, since the [query audit
+log](../query-guide/query-audit-log.md) already records every denial the rule ever caused, which
+is the part worth keeping.
+
+**Parameters**:
+- `rule_id` (String): The rule's id, from `list_query_denials()`
+
+**Usage**:
+```sql
+SELECT remove_query_denial('9f2c41ab-73de-4015-9d2e-000000000000') as result;
+```
+
+**Returns**: String message indicating success or failure:
+- Success: `"SUCCESS: removed rule <rule_id>"`
+- Failure: `"ERROR: no such rule: <rule_id>"`
+
+**Escape hatch, no expiry to wait out**: since rules stand until removed, an admin (or, in a
+deployment with no admin principal at all, any authenticated caller — the same
+`admin_principal_possible` fallback `retire_partitions()` uses) can always call
+`remove_query_denial`/`deny_queries`/`list_query_denials`, even from behind a rule that would
+otherwise match every query they send — the check is skipped for a statement naming one of these
+three functions, from a caller who could reach them anyway.
+
+### Incident runbook
+
+1. **Find the offender.** Query the [audit log](../query-guide/query-audit-log.md), grouping by
+   `sql_hash`, to find the fingerprint of the query that's hurting the service. (A notebook that
+   does this well is planned but out of scope here — see the audit-log doc's top-offenders query
+   in the meantime.)
+2. **Deny it.** `SELECT * FROM deny_queries('sql_hash = ''<fingerprint>''', '<why>')`.
+3. **Confirm.** The offending client starts seeing `ResourceExhausted`; the audit log shows
+   `error_class = "denied"` rows, and `measures` shows the `query_denied` metric ticking up,
+   tagged with the rule's id.
+4. **Lift it once the client is fixed.** `SELECT remove_query_denial('<rule_id>')`.
+
 ## Python API Functions
 
 ### `micromegas.admin.list_incompatible_partitions(client, view_set_name=None)`

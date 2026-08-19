@@ -969,20 +969,24 @@ Flight client surfaces as a different Python exception type:
 | Bad query (typo'd function/column, syntax error, ...) | `InvalidArgument` | `pyarrow.lib.ArrowInvalid` (a `ValueError` subclass) |
 | Unimplemented feature | `Unimplemented` | `pyarrow.lib.ArrowNotImplementedError` (a `NotImplementedError` subclass) |
 | Query exceeded a resource budget (e.g. memory) | `ResourceExhausted` | `pyarrow.lib.ArrowInvalid` (a `ValueError` subclass, message prefixed `gRPC returned resource exhausted error`) |
+| Query rejected by an admin-managed [query deny list](../admin/functions-reference.md#query-deny-list) rule | `ResourceExhausted` | Same as the row above: `pyarrow.lib.ArrowInvalid`, same `gRPC returned resource exhausted error` message prefix -- the message itself additionally names the rule id and reason and tells you the `remove_query_denial(...)` call that lifts it |
 | Genuine server-side bug | `Internal` | `pyarrow._flight.FlightInternalError` |
 
 This lets you distinguish "fix my query" from "something broke server-side" without parsing the
-error message:
+error message -- except that a resource-budget failure and a deny-list rejection share both the
+same gRPC code and the same message prefix, so telling those two apart *does* need one more
+signal: `error_class` in the [query audit log](query-audit-log.md) is `"resource"` for the
+former and `"denied"` for the latter.
 
 ```python
 try:
     df = client.query(sql, begin, end)
 except (ValueError, NotImplementedError) as e:
     # ArrowInvalid (a ValueError) or ArrowNotImplementedError (a NotImplementedError):
-    # the query itself needs fixing -- except that a resource-budget failure also
-    # raises ArrowInvalid. Tell the two apart by the message prefix
-    # ("gRPC returned resource exhausted error") or by error_class: "resource"
-    # in the server-side audit log.
+    # the query itself needs fixing -- except that a resource-budget failure and a
+    # query-deny-list rejection both also raise ArrowInvalid with the same
+    # "gRPC returned resource exhausted error" message prefix. Tell all three apart
+    # by error_class in the server-side audit log: "user" / "resource" / "denied".
     print(f"Bad query: {e}")
 except Exception as e:
     # FlightInternalError / anything else: a genuine server-side problem, not

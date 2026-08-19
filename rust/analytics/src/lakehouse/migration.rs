@@ -5,7 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 8;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 9;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -105,6 +105,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v8");
         let mut tr = pool.begin().await?;
         upgrade_v7_to_v8(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 8 == current_version {
+        info!("upgrade lakehouse schema to v9");
+        let mut tr = pool.begin().await?;
+        upgrade_v8_to_v9(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -535,5 +542,28 @@ async fn upgrade_v7_to_v8(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("UPDATE lakehouse_migration SET version=8;")
         .await
         .with_context(|| "Updating lakehouse schema version to 8")?;
+    Ok(())
+}
+
+async fn upgrade_v8_to_v9(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Admin-managed query deny list (tasks/query_deny_list_plan.md §1). One `match_expr` column,
+    // not a column per matcher -- see the plan for why. No index: the table holds at most
+    // `MICROMEGAS_QUERY_DENY_MAX_RULES` rows and every replica reads all of it on each refresh
+    // tick. No `SCHEMA_VERSION` (partition file-schema) change -- no partition content is affected.
+    tr.execute(
+        "CREATE TABLE query_deny_list(
+             rule_id      UUID PRIMARY KEY,
+             created_at   TIMESTAMPTZ  NOT NULL,
+             created_by   VARCHAR(255) NOT NULL,
+             reason       TEXT         NOT NULL,
+             match_expr   TEXT         NOT NULL,
+             last_hit_at  TIMESTAMPTZ
+         );",
+    )
+    .await
+    .with_context(|| "creating query_deny_list table")?;
+    tr.execute("UPDATE lakehouse_migration SET version=9;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 9")?;
     Ok(())
 }

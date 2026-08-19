@@ -1,6 +1,8 @@
 use super::{
-    answer::Answer, get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
+    answer::Answer, deny_queries_table_function::DenyQueriesTableFunction,
+    get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
     list_partitions_table_function::ListPartitionsTableFunction,
+    list_query_denials_table_function::ListQueryDenialsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     parse_block_table_function::ParseBlockTableFunction, partition::Partition,
@@ -8,6 +10,7 @@ use super::{
     perfetto_trace_table_function::PerfettoTraceTableFunction,
     process_spans_table_function::ProcessSpansTableFunction, reader_factory::ReaderFactory,
     regenerate_partitions_table_function::RegeneratePartitionsTableFunction,
+    remove_query_denial_udf::make_remove_query_denial_udf,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partition_by_metadata_udf::make_retire_partition_by_metadata_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction,
@@ -199,6 +202,24 @@ pub fn register_lakehouse_functions(
         );
         ctx.register_udf(
             make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
+        );
+        // Admin-managed query deny list (tasks/query_deny_list_plan.md §8): same admin gate as
+        // the five functions above.
+        ctx.register_udtf(
+            "list_query_denials",
+            Arc::new(ListQueryDenialsTableFunction::new(
+                lakehouse.query_denials().clone(),
+            )),
+        );
+        ctx.register_udtf(
+            "deny_queries",
+            Arc::new(DenyQueriesTableFunction::new(
+                lakehouse.query_denials().clone(),
+                caller.identity.clone(),
+            )),
+        );
+        ctx.register_udf(
+            make_remove_query_denial_udf(lakehouse.query_denials().clone()).into_scalar_udf(),
         );
     }
 }

@@ -200,6 +200,7 @@ fn full_record(sql: &str) -> QueryAuditRecord {
         service_account: false,
         service_account_name: None,
         sql: sql.to_string(),
+        sql_hash: "9f2c41ab73de0155".to_string(),
         range_begin: Some("2024-01-01T00:00:00+00:00".to_string()),
         range_end: Some("2024-01-02T00:00:00+00:00".to_string()),
         limit: Some(100),
@@ -271,6 +272,7 @@ fn query_audit_record_omits_absent_optionals() {
         service_account: true,
         service_account_name: Some("svc-ci".to_string()),
         sql: "SELECT 2".to_string(),
+        sql_hash: "abcdefabcdefabcd".to_string(),
         range_begin: None,
         range_end: None,
         limit: None,
@@ -344,4 +346,42 @@ fn query_audit_record_round_trips_sql_with_braces_and_quotes() {
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
     assert_eq!(value["sql"], sql);
+}
+
+// -------------------------------------------------------------------------------------------
+// query_deny_list_plan.md §2/§7: `sql_hash` and `error_class = "denied"`.
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn query_audit_record_serializes_sql_hash() {
+    let record = full_record("SELECT 1");
+    let json = serde_json::to_string(&record).expect("serialization should succeed");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(value["sql_hash"], "9f2c41ab73de0155");
+}
+
+#[test]
+fn query_audit_record_sql_hash_is_always_present_even_when_status_is_ok() {
+    // Unlike `error_class` (present only on error), `sql_hash` is computed on every terminal
+    // path regardless of whether the deny list is in active use (Design §2).
+    let record = full_record("SELECT 1");
+    assert_eq!(record.status, "ok");
+    let json = serde_json::to_string(&record).expect("serialization should succeed");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert!(value.as_object().expect("object").contains_key("sql_hash"));
+}
+
+#[test]
+fn query_audit_record_serializes_denied_error_class() {
+    let mut record = full_record("SELECT * FROM thread_spans_view");
+    record.status = "error";
+    record.error = Some(
+        "query denied by rule 11111111-1111-1111-1111-111111111111 (reason: incident)".to_string(),
+    );
+    record.error_class = Some("denied");
+
+    let json = serde_json::to_string(&record).expect("serialization should succeed");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(value["error_class"], "denied");
+    assert_eq!(value["status"], "error");
 }

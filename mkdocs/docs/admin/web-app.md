@@ -111,6 +111,35 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 
 `start_analytics_web.py` defaults this to `<MICROMEGAS_OBJECT_STORE_URI>/maps/` — i.e. a `maps/` sibling of the telemetry lake — so a single lake root supplies both telemetry blobs and map assets for local dev.
 
+## Query Deny List
+
+**Admin → Query Deny List** (`/admin/query-deny-list`) is a front end for the three SQL functions
+described in [Admin Functions → Query Deny List](functions-reference.md#query-deny-list) —
+`list_query_denials()`, `deny_queries(match_expr, reason)`, `remove_query_denial(rule_id)` —
+issued through the same `useStreamQuery` → `POST /api/query-stream` path every other SQL-driven
+page in this app uses, against whichever data source the admin has selected. There is no
+dedicated REST route and no second copy of the rule store: the screen manages the deny list of
+the deployment it's pointed at.
+
+The screen shows a table of rules (match expression, reason, creator, created time, and a
+relative "last hit" — "4 s ago" reads as "still firing", "3 weeks ago" as "probably safe to
+remove") plus a **Deny a Query** dialog: an expression textarea, insert-chips for the common
+predicates, a link to the match-context reference, and a required reason field. A compile error
+from the server (e.g. a non-boolean expression, or one with no column reference) is shown inline
+against the expression, not as a page-level banner.
+
+Like every admin route, this one is gated by `AuthGuard requireAdmin` client-side and by
+`flight-sql-srv`'s own admin check server-side — the client-side guard is UX only; a non-admin
+who hand-typed the SQL would get "function not found" regardless.
+
+**One interaction with the existing web-query guard.** `analytics-web-srv`'s `BLOCKED_FUNCTIONS`
+substring check (`stream_query.rs`) rejects any web query merely *mentioning* `retire_partitions`,
+`retire_partition_by_metadata`, or `retire_partition_by_file` — including inside a deny
+expression's own string literal, e.g. `deny_queries('sql LIKE ''%retire_partitions%''', '...')`.
+That guard is deliberately left as-is (narrowing it to call position would open a comment-based
+bypass), so a deny rule that needs to mention one of those names has to be created from
+`micromegas-query` or a notebook instead of this screen.
+
 ## Production Notes
 
 **CORS Origin must match OAuth redirect URI origin:**

@@ -35,6 +35,8 @@ The gRPC listener binds to `0.0.0.0:50051`. The Docker image
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` | No | Query engine memory budget in MB; unset means an unbounded pool (the local-development default). This **is** set in real deployments — each FlightSQL query gets its own `ScopedMemoryPool` wrapper over this shared budget, and its peak usage is reported per query as `peak_memory_bytes` in the [query audit log](../query-guide/query-audit-log.md) |
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent queries, in MB; default 100 GB (DataFusion's own default), far larger than a typical Fargate container's local disk. Exceeding the cap fails whichever query's spill write pushes past it — not necessarily the query that consumed most of the budget |
+| `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | No | [Query deny list](functions-reference.md#query-deny-list) snapshot refresh / hit-count flush interval; default `10`. Also the bound on cross-replica propagation of a newly created or removed rule — the inserting replica applies its own rule immediately, other replicas within one tick |
+| `MICROMEGAS_QUERY_DENY_MAX_RULES` | No | [Query deny list](functions-reference.md#query-deny-list) rule cap; default `100`. Bounds the per-query evaluation cost (~3.4 µs at one rule, ~45 µs at the cap) |
 
 ## CLI flags
 
@@ -73,6 +75,61 @@ access requires an OIDC identity matched against `MICROMEGAS_ADMINS`. `bulk_inge
 the admin SQL functions — see
 [bulk_ingest(table_name, table)](../query-guide/python-api.md#bulk_ingesttable_name-table)
 for detail.
+
+## Query deny list
+
+Every replica checks each query against a small, shared set of admin-managed deny rules before
+spending any real work on it — see [Query Deny List](functions-reference.md#query-deny-list) for
+the SQL functions and [Admin → Query Deny List](web-app.md) for the web screen. Two things worth
+knowing operationally:
+
+- **Propagation is polled, not pushed.** Rules live in Postgres; each replica refreshes its own
+  in-memory copy every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` (default 10s). The replica that
+  creates or removes a rule applies it to itself immediately; every other replica picks it up
+  within one tick — negligible against an incident measured in minutes.
+- **Fail-open, by design.** A refresh that can't reach Postgres keeps the previous snapshot
+  (with a `warn!` and a `query_deny_refresh_error_count` metric) rather than denying every query;
+  a rule whose expression a given replica can't compile (e.g. after a downgrade) is dropped from
+  that replica's snapshot alone (`query_deny_compile_error_count`), never enforced blindly and
+  never fatal. This is an availability valve, not an authorization control — those (`ReadScope`,
+  audience guards) fail closed and are unaffected.
+
+**Anti-jam escape hatch.** A rule that happens to match every query an admin's own recovery
+statement would send can't lock the valve shut: the check is skipped for a statement naming
+`deny_queries`/`remove_query_denial`/`list_query_denials`, from a caller who could reach those
+functions anyway (an admin, or any authenticated caller on a deployment with no admin principal
+at all — see [Admin SQL Functions](functions-reference.md) above).
+
+### Watching for denials
+
+A denial shows up at three different volumes, deliberately: a `warn!` line per denial (visible to
+anything already watching warning-level logs), a per-rule rate metric, and the full-detail audit
+row. Paste these straight into a dashboard:
+
+```sql
+-- every denial in the last hour, one row each
+SELECT time, msg
+FROM log_entries
+WHERE level <= 3          -- Fatal, Error, Warn
+  AND msg LIKE 'query denied%'
+  AND time >= NOW() - INTERVAL '1 hour'
+ORDER BY time DESC;
+```
+
+```sql
+-- denial rate per rule, per minute
+SELECT date_bin(INTERVAL '1 minute', time) AS minute,
+       property_get(properties, 'rule_id')  AS rule_id,
+       sum(value)                           AS denied
+FROM measures
+WHERE name = 'query_denied'
+  AND time >= NOW() - INTERVAL '6 hours'
+GROUP BY minute, rule_id
+ORDER BY minute;
+```
+
+For the full-detail row (SQL text, fingerprint, complete attribution), see the [query audit
+log](../query-guide/query-audit-log.md) — filter on `error_class = "denied"`.
 
 ## Health and readiness
 

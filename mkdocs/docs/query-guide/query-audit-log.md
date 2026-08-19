@@ -96,12 +96,42 @@ ORDER BY peak_memory_bytes DESC
 LIMIT 20;
 ```
 
+### Top offenders by fingerprint, for the query deny list
+
+Groups by `sql_hash` (the normalized fingerprint, literals stripped) rather than raw `sql`, so a
+dashboard re-issuing the same query with a different time-range literal on every refresh
+collapses into one row instead of one per refresh -- the workflow the [admin-managed query deny
+list](../admin/functions-reference.md#query-deny-list) is built around: find the fingerprint
+here, then `SELECT * FROM deny_queries('sql_hash = ''<fingerprint>''', '<reason>')`.
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '15 minutes'
+)
+SELECT
+  jsonb_as_string(jsonb_get(j, 'sql_hash')) AS sql_hash,
+  count(*)                                             AS queries,
+  sum(jsonb_as_f64(jsonb_get(j, 'total_ms')))          AS total_ms,
+  sum(jsonb_as_i64(jsonb_get(j, 'bytes_scanned')))     AS bytes_scanned,
+  min(jsonb_as_string(jsonb_get(j, 'sql')))            AS sample_sql,
+  min(jsonb_as_string(jsonb_get(j, 'client')))         AS sample_client,
+  min(jsonb_as_string(jsonb_get(j, 'entrypoint')))     AS sample_entrypoint
+FROM q
+GROUP BY sql_hash
+ORDER BY total_ms DESC
+LIMIT 20;
+```
+
 ### Failed queries grouped by `error_class`
 
 `error_class` distinguishes "the caller's SQL/input was bad" (`"user"`), "the query exceeded a
-resource budget" (`"resource"`), and "a genuine server-side failure" (`"internal"`) -- useful for
-telling how much of your error rate is actually actionable by the caller versus a real service
-problem.
+resource budget" (`"resource"`), "the query was rejected by an admin-managed [deny
+list](../admin/functions-reference.md#query-deny-list) rule" (`"denied"`), and "a genuine
+server-side failure" (`"internal"`) -- useful for telling how much of your error rate is
+actually actionable by the caller versus a real service problem.
 
 ```sql
 WITH q AS (
@@ -137,6 +167,7 @@ ORDER BY failures DESC;
 | `service_account` | bool | always | `true` when the request was made by a service account delegating on behalf of a user |
 | `service_account_name` | string | if delegated | Name of the delegating service account |
 | `sql` | string | always | The full SQL text of the query |
+| `sql_hash` | string | always | Normalized fingerprint of `sql`: the first 16 hex chars of the SHA-256 of the literal-stripped, whitespace-collapsed token stream. Two queries differing only in a time-range literal or a `LIMIT` value share a fingerprint -- this is what a top-offenders-by-fingerprint query groups by, and what you paste into `deny_queries` (see [admin functions](../admin/functions-reference.md#query-deny-list)) |
 | `range_begin` | string (RFC3339) | if the request specified a time range | Requested query range start |
 | `range_end` | string (RFC3339) | if the request specified a time range | Requested query range end |
 | `limit` | integer | if the request specified a row limit | Requested row limit |
@@ -147,7 +178,7 @@ ORDER BY failures DESC;
 | `total_ms` | float | always | End-to-end duration, including draining the response stream to the client |
 | `status` | string | always | `"ok"`, `"error"`, or `"incomplete"` (stream abandoned mid-drain, e.g. client disconnect or cancellation) |
 | `error` | string | on error | Error message, when `status` is `"error"` |
-| `error_class` | string | on error | `"user"` (bad SQL/input), `"resource"` (query exceeded a resource budget), or `"internal"` (a genuine server-side failure), derived from the gRPC status code the query failed with |
+| `error_class` | string | on error | `"user"` (bad SQL/input), `"resource"` (query exceeded a resource budget), `"denied"` (rejected by a [query deny list](../admin/functions-reference.md#query-deny-list) rule), or `"internal"` (a genuine server-side failure). The first three are derived from the gRPC status code the query failed with, except `"denied"`, which the deny-list check stamps directly (it also fails with `ResourceExhausted`, so it cannot be told apart from `"resource"` by status code alone) |
 | `output_rows` | integer | if available | Rows produced by the query's physical plan root |
 | `bytes_scanned` | integer | always | Bytes read from the lakehouse's parquet reader (object-store bytes requested, which may be served from the in-process L1 cache rather than fetched from origin) |
 | `peak_memory_bytes` | integer | always | Peak tracked DataFusion reservation for this query alone |
@@ -199,9 +230,9 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
   — by far the highest-volume source of audit records — all report `analytics-web-srv`'s address.
   Direct FlightSQL access (e.g. the Python client talking straight to `flight-sql-srv`, no gateway
   or web app in between) is unaffected and reports a true client IP.
-- **No fingerprint field (yet).** The raw `sql` field is enough to drill down into individual
-  expensive queries; a normalized fingerprint (with literals stripped) could be added later as an
-  additive field without breaking existing consumers.
+- **`sql_hash` is computed on every query, whether or not the deny list is in active use.** It
+  costs about 1.2 µs on a ~130-character statement -- accepted because the audit log needs it for
+  the "paste it into `deny_queries`" workflow regardless of whether any rule currently stands.
 - **`peak_memory_bytes` is a per-query lower bound on process cost, not the full picture.** It's the
   peak of *tracked* DataFusion reservation — the same mechanism DataFusion's own memory-limit
   enforcement uses — but it doesn't count in-flight `RecordBatch`es and parquet decode buffers
