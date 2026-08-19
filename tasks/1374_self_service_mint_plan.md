@@ -875,11 +875,17 @@ extractor (§1), not `AdminUser`:
 /// `WebClient`, which authenticates purely with a Bearer header. Caller-scoped, so
 /// `AuthenticatedUser` (any authenticated caller), not `AdminUser`: unlike `list_grants`, this can
 /// never reveal another principal's selector, only whether *this* caller's own email/groups match
-/// one, plus a fact about the caller's own identity.
+/// one, plus a fact about the caller's own identity. `mint_prefix` carries the caller-scoped
+/// namespace prefix `micromegas-setup-telemetry` (§6) mints fresh audiences under -- for the same
+/// reason `is_admin` rides here rather than being derived client-side, the caller cannot compute
+/// this itself (no route reachable from a CLI caller exposes its own email, `/auth/me` included),
+/// and computing it server-side keeps one canonical rule so the prefix this response hands out can
+/// never drift from the `user:<email>` selector a claim (§4a) actually writes.
 #[derive(Serialize)]
 struct MineResponse {
     is_admin: bool,
     audiences: Vec<String>,
+    mint_prefix: Option<String>,
 }
 
 async fn my_mint_grants(
@@ -908,9 +914,30 @@ async fn my_mint_grants(
         .collect();
     audiences.sort();
     audiences.dedup();
-    Ok(Json(MineResponse { is_admin: caller.is_admin, audiences }))
+    let mint_prefix = mint_prefix_for(&caller.email);
+    Ok(Json(MineResponse { is_admin: caller.is_admin, audiences, mint_prefix }))
 }
 ```
+
+**Deriving `mint_prefix`.** A plain function, `mint_prefix_for(email: &Option<String>) ->
+Option<String>` (Phase 2 tests it directly, no DB, no `AuthContext` needed): take the local part
+of `caller.email` (everything before the first `@`), lowercase it, replace every character outside
+`[a-z0-9_-]` with `-`, collapse any run of `-` to a single `-`, trim leading/trailing `-`, and
+append one more `-` as the separator. `Alice.Smith+ci@example.com` yields `alice-smith-ci-`. The
+result is `None` when `caller.email` is `None` (a client-credentials service-account caller, same
+condition §4a already gates the claim path on) or when sanitizing leaves an empty string. A `None`
+`mint_prefix` means this caller cannot use the claim path at all — exactly `mint_key`'s existing
+`caller.email` is `Some` requirement (§4a) — so `micromegas-setup-telemetry` must fall back to
+requiring a `--audience` the caller already has a grant for.
+
+This sanitization is deliberately not injective: `alice.smith@example.com` and
+`alice-smith@example.com` both yield `alice-smith-`, and two different email domains with the same
+local part collide too. That's harmless, not a security problem — authorization is still the exact
+`user:<email>` selector §4a writes, which is indifferent to the prefix; a collision just means the
+second caller's claim attempt hits §4a's ordinary "audience already exists and this caller has no
+grant for it" denial. `mint_prefix` plus the audience name the caller supplies must still satisfy
+`is_valid_audience`'s 255-byte limit; an over-long combination fails with that existing 400 rather
+than being silently truncated.
 
 **`/mine` is gated on the same off-by-default knob as the mint route, for the same reason (§3,
 Security "Both new caller-facing behaviors are opt-in").** `AudienceGrantsState` gains its own
@@ -979,8 +1006,31 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   fresh name to claim per §4a, an existing audience the caller already has a grant for, or
   omitted entirely to use §5's `/mine` endpoint: exactly one match is used silently, more than one
   is printed for the caller to choose from with `--audience`, and none prints a hint to either
-  claim a fresh name or ask an admin for a grant), `--otlp-endpoint` (see below),
+  claim a fresh name or ask an admin for a grant — see the prefixing rule below for how a
+  non-admin's fresh-claim `--audience` is actually resolved), `--otlp-endpoint` (see below),
   `--env-file PATH` (optional — write to a file instead of stdout).
+- **Non-admin fresh claims are prefixed into the caller's own namespace; already-granted audiences
+  and admin callers are not.** The script always calls `/mine` first — even when `--audience` is
+  passed explicitly — because applying this rule needs both `mint_prefix` and the caller's own
+  `audiences` list from that one response:
+  - `--audience X` where `X` is already in `/mine`'s `audiences` (the caller has a real grant for
+    it, e.g. a shared team audience): used verbatim, never prefixed. Prefixing here would break the
+    intended case of minting into an audience someone already granted the caller.
+  - `--audience X` where `X` is *not* in that list (a fresh claim per §4a) **and the caller is not
+    an admin**: the script mints against `f"{mint_prefix}{X}"` instead of `X`, and prints the
+    resolved full audience name to stderr, so the caller sees what was actually claimed rather than
+    being surprised by a name they didn't type.
+  - **Admin callers are never prefixed.** An admin passing `--audience ci` is doing deliberate
+    operational naming, and an admin's `/mine` `audiences` is always `[]` by construction (§5), so
+    an unconditional prefix would mangle every admin invocation. The script tells the two cases
+    apart using `/mine`'s own `is_admin` field — the same field it already uses to pick which hint
+    to print when `--audience` is omitted.
+
+  One upside of always calling `/mine`: a knob-off caller gets §5's clear 403 up front, instead of
+  a confusing denial only once the mint itself is attempted. A non-admin has no escape hatch through
+  this script to claim an unprefixed fresh name — that's deliberate, not an oversight: it's the
+  entire mechanism by which operationally meaningful bare names (`prod`, `ci`, `staging`) stay out
+  of self-service reach. There is no `--no-prefix`/`--exact-audience` flag.
 - **`--otlp-endpoint` default.** `MICROMEGAS_TELEMETRY_URL` (default `http://localhost:9000`) is
   the repo's established ingestion-endpoint convention — `telemetry-sink/src/lib.rs:453` reads it
   directly, and `local_test_env/claude_code_otel.py:73-91` and `mkdocs/docs/otlp/index.md:26,30`
@@ -1050,7 +1100,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 6. `audience_grants.rs`: add the `GET {base_path}/api/audience-grants/mine` route and handler,
    gated by `AuthenticatedUser` plus the same off-by-default `self_service_mint_enabled` check
    `MintGate` uses (§3, §5); add `self_service_mint_enabled: bool` to `AudienceGrantsState` and
-   `AudienceGrantError::Forbidden` (403, `FORBIDDEN`) for the gate to return.
+   `AudienceGrantError::Forbidden` (403, `FORBIDDEN`) for the gate to return; add the
+   `mint_prefix_for` derivation helper and the `mint_prefix` field on `MineResponse` (§5).
 
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
@@ -1102,16 +1153,25 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    `Unauthenticated` rejection. Add tests for `GET /api/audience-grants/mine` (§5) — a caller with a
    matching selector sees the audience, a caller without one doesn't, `AdminUser` is not required,
    the response's `is_admin` field matches the caller, and — for the new gate (§3, §5) — a knob-off
-   non-admin gets a 403 while a knob-off admin still gets a normal response.
+   non-admin gets a 403 while a knob-off admin still gets a normal response. Also add unit tests for
+   `mint_prefix_for` (§5) directly — it's pure and sync, no DB or `AuthContext` needed, so these are
+   cheap: a plain local part (e.g. `alice@example.com` → `Some("alice-")`); a local part containing
+   `.`/`+` (e.g. `alice.smith+ci@example.com` → `Some("alice-smith-ci-")`); a mixed-case address
+   (lowercased in the result); a local part that sanitizes to empty (e.g. an address whose local
+   part is all illegal characters) → `None`; and `caller.email == None` → `None`.
 
 ### Phase 3 — Python setup script
 9. `web_client.py`: add `mint_ingestion_api_key`, which reads `resp.status_code`/the response
    body's `code` field itself (before calling `_check_response`) to retry once on a 409
    `CLAIM_CONTENDED` (§6), and a `my_audience_grants`/`list_mine` call for
-   `GET .../audience-grants/mine` (§5), returning both fields of the `{is_admin, audiences}`
-   response.
+   `GET .../audience-grants/mine` (§5), returning all three fields of the
+   `{is_admin, audiences, mint_prefix}` response.
 10. New `cli/setup_telemetry.py` + `pyproject.toml` entry point; `--otlp-endpoint` defaults from
-    `MICROMEGAS_TELEMETRY_URL` when set (§6).
+    `MICROMEGAS_TELEMETRY_URL` when set (§6). The script must implement the three-way prefix rule
+    (§6): an `--audience` already in `/mine`'s `audiences` is used verbatim; a fresh, non-admin
+    `--audience` is minted as `f"{mint_prefix}{audience}"`, with the resolved full audience name
+    printed to stderr; an admin caller's `--audience` is never prefixed. This requires calling
+    `/mine` unconditionally, even when `--audience` is passed explicitly.
 11. Tests: `tests/test_web_client.py` (mint + `/mine` methods), new
     `tests/cli/test_setup_telemetry.py` (arg parsing + output formatting, mocked `WebClient`,
     including the `--audience`-omitted / `/mine` resolution paths).
@@ -1150,7 +1210,11 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     mint/list/revoke/import handler ever runs") all need the same correction; also correct
     `:218-222`'s claim that who may "read or mint into" an audience comes from "the
     `{prefix}_AUDIENCE_GRANTS` env map, unioned with the DB-backed `audience_grants` table" — true
-    for read, false for mint under §3's DB-only decision.
+    for read, false for mint under §3's DB-only decision. Also document `micromegas-setup-telemetry`'s
+    caller-derived prefix (§5, §6) wherever the claim flow is described here: a non-admin's fresh
+    claim through the script lands under a namespace derived from the caller's own email, admin
+    callers are exempt, and the prefix is a client-side naming convention the script applies, not
+    a rule the mint route itself enforces.
 14. `tasks/data_isolation/audience_based_access_control_plan.md`: append a "Stage 6 landed" status
     block, following the Stage 5/6a convention already in the doc.
 15. `CHANGELOG.md`: add an `## Unreleased` entry, following the Stage 1/2/4/6a precedent (#1370,
@@ -1163,7 +1227,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 16. `mkdocs/docs/query-guide/python-api.md`: add a `### micromegas-setup-telemetry` subsection
     under `## Command-Line Interface`, alongside `micromegas-logout`/`micromegas-import-keys`/
     `micromegas-grants` (the last added by Stage 6a for its own new CLI), and document
-    `WebClient.mint_ingestion_api_key`/the `/mine` call under `## Client Methods`.
+    `WebClient.mint_ingestion_api_key`/the `/mine` call under `## Client Methods`. The
+    `micromegas-setup-telemetry` subsection must document the three-way prefix rule (§6): a fresh
+    `--audience` from a non-admin caller is minted under a prefix derived from the caller's own
+    email, the resolved full name is printed to stderr, and admin callers are exempt — call out
+    that this is a client-side naming convention the script applies, not something the mint route
+    itself enforces.
 
 ## Files to Modify
 
@@ -1176,7 +1245,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - `rust/analytics-web-srv/src/ingestion_keys.rs`: `mint_key`, `MintGate`, `try_claim_and_mint`,
   `IngestionKeysState`, `IngestionKeyError`.
 - `rust/analytics-web-srv/src/audience_grants.rs`: new `GET .../audience-grants/mine` route;
-  `AudienceGrantsState.self_service_mint_enabled`; `AudienceGrantError::Forbidden`.
+  `AudienceGrantsState.self_service_mint_enabled`; `AudienceGrantError::Forbidden`;
+  `mint_prefix_for` derivation helper and `MineResponse.mint_prefix`.
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`: state construction, router-building
   helper, new/updated tests (including new live-DB claim tests).
 - `rust/analytics-web-srv/tests/routing_tests.rs`: `IngestionKeysState` construction (line 406)
@@ -1221,14 +1291,27 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   can open a local port and a browser, which is the actual target — this is a developer/operator
   setup script, not a headless/TV-remote scenario device-code flow exists for). Building a second,
   redundant interactive flow was rejected as unjustified scope.
-- **Naming is first-come-first-served** (§4a): any non-admin who can authenticate can claim any
-  unclaimed, non-reserved audience name merely by minting against it first. This means squatting is
+- **Naming is first-come-first-served at the route level** (§4a): the mint route and §4a's claim
+  path accept any valid, unclaimed, non-reserved audience name from any authorized non-admin
+  caller, with no server-side awareness of who "should" own a given name. This means squatting is
   possible in the literal sense — a caller can claim a name someone else expected to use (a
-  teammate's planned `ci-runner` audience, say) before they do. Accepted, with two mitigations: (1)
-  reserved names (`public`, at minimum — Design §4a) keep the one built-in, universally-readable
+  teammate's planned `ci-runner` audience, say) before they do, or permanently burn an
+  operationally meaningful name like `prod`/`ci`/`staging`. Accepted, with three mitigations, the
+  first of which is the practical one that makes the scenario improbable rather than merely
+  recoverable: (1) `micromegas-setup-telemetry` (§6) prefixes every non-admin fresh claim with a
+  namespace derived from the caller's own identity (§5's `mint_prefix`), so a non-admin claiming
+  through the supported, documented path can only create names inside their own caller-derived
+  namespace — the realistic squatting scenarios above require deliberately bypassing the script and
+  POSTing to the mint route directly. This is a client-side naming convention only, not a new
+  authorization boundary: the route itself still accepts any valid name from any authorized caller,
+  unchanged, so this reduces the probability of the scenario, not its possibility — the
+  permanent-unclaimability consequence below still applies to any name that does get claimed this
+  way. It does, however, make the residual risk easier to accept: within a caller's own namespace, a
+  name they burn is a name only they would plausibly have claimed in the first place. (2) reserved
+  names (`public`, at minimum — Design §4a) keep the one built-in, universally-readable
   audience un-squattable; an operator who wants more names reserved from self-service claiming
   achieves it the ordinary way, by pre-creating a DB grant for that name (any selector, even one
-  matching nobody) so §4a's existence check already finds it and refuses the claim outright. (2)
+  matching nobody) so §4a's existence check already finds it and refuses the claim outright. (3)
   Claims are fully visible through the existing admin surface — `GET
   /api/audience-grants?audience=<name>` lists exactly who claimed what and when
   (`created_at`/`created_by`) — and correctable, though not by simply deleting the grant:
@@ -1339,6 +1422,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   write or direct mint for the same fresh audience racing a claim takes no lock and is not covered;
   the resulting dual-owner state is a documented, admin-correctable outcome (Trade-offs), not one
   this design prevents structurally (§4a, Race outcomes).
+- **`mint_prefix` (§5, §6) is a client-side naming convention, not an authorization boundary.** It
+  shrinks the practical squatting surface (Trade-offs) by steering `micromegas-setup-telemetry`
+  toward caller-scoped names, but it is enforced nowhere on the server: authorization for every
+  claim remains exactly `MintPolicy::resolve_audience` plus §4a's existence check, both of which
+  are indifferent to the shape of the requested name. A caller who bypasses the script and POSTs
+  directly can still claim a bare name; nothing about this design makes that request fail.
 - **Both new caller-facing behaviors are opt-in, not automatic on upgrade.**
   `MICROMEGAS_SELF_SERVICE_MINT` defaults to `false` (§3), so a deployment that upgrades to this
   stage keeps its exact pre-stage mint authorization surface — every non-admin request is denied
