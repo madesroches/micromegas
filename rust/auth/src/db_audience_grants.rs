@@ -254,12 +254,21 @@ impl DbAudienceGrantsSource {
             let now = self.elapsed_millis();
             let prev = self.last_attempt_at.load(Ordering::Relaxed);
             let ttl_millis = self.ttl.as_millis().max(1) as i64;
-            if now.saturating_sub(prev) < ttl_millis
-                || self
-                    .last_attempt_at
+            // `throttled_millis`, when set, is the timestamp that actually explains the
+            // remaining wait: on the throttle-hit branch that's `prev` (still accurate, no
+            // exchange attempted); on the CAS-loss branch it's the value the failed
+            // `compare_exchange` reports as *currently* stored, not the stale `prev` this
+            // caller read before attempting the exchange -- using `prev` there would report
+            // the wrong (often ancient/sentinel) retry window instead of the window the
+            // winning caller just started.
+            let throttled_millis = if now.saturating_sub(prev) < ttl_millis {
+                Some(prev)
+            } else {
+                self.last_attempt_at
                     .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_err()
-            {
+                    .err()
+            };
+            if let Some(last_attempt_millis) = throttled_millis {
                 // The winner of the compare-exchange may have already finished its first query
                 // and populated the snapshot by the time we lost the race -- re-check before
                 // treating this as a throttled cold start, so concurrent callers during the very
@@ -269,7 +278,7 @@ impl DbAudienceGrantsSource {
                 if let Some(snap) = self.snapshot.read().await.as_ref() {
                     return Ok(Arc::clone(&snap.grants));
                 }
-                return Err(self.throttled_error(prev));
+                return Err(self.throttled_error(last_attempt_millis));
             }
 
             match self.fetch().await {

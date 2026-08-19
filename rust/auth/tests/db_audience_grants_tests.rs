@@ -447,3 +447,46 @@ async fn live_mint_policy_with_store_merges_a_store_granted_selector() {
     drop_schema(&setup_pool, schema).await;
     test_result.expect("test assertions");
 }
+
+/// End to end on the read axis: `AudienceReadPolicy::with_store` is the only store-wiring path
+/// with a real production call site (`flight_sql_server.rs`, `monolith/src/main.rs`), so this
+/// proves the store snapshot's `readers()` loop in `AudienceReadPolicy::resolve` actually grants
+/// access, not merely that a store-backed policy doesn't error -- the counterpart to
+/// `live_mint_policy_with_store_merges_a_store_granted_selector` above, on the axis that is
+/// actually wired in production.
+#[ignore]
+#[tokio::test]
+async fn live_read_policy_with_store_grants_a_store_granted_selector() {
+    let schema = "mm_1489_grants_test_read_store";
+    let (setup_pool, pool, _conn) = throwaway_pool(schema).await;
+
+    let test_result: Result<(), String> = async {
+        sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('team-alpha', 'read', 'group:eng', now(), 'test')",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("seeding a row: {e:#}"))?;
+
+        let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), test_config(60)));
+        let policy = AudienceReadPolicy::new(AudienceGrants::empty()).with_store(Some(store));
+        let ctx = caller(None, vec!["eng".to_string()]);
+        let resolved = policy
+            .resolve(&ctx)
+            .await
+            .map_err(|e| format!("expected the store-granted read to resolve: {e:#}"))?
+            .into_inner();
+        if !resolved.contains(&"team-alpha".to_string()) {
+            return Err(format!(
+                "expected team-alpha (store-granted) in resolved set, got {resolved:?}"
+            ));
+        }
+        Ok(())
+    }
+    .await;
+
+    pool.close().await;
+    drop_schema(&setup_pool, schema).await;
+    test_result.expect("test assertions");
+}
