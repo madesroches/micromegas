@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
-/// `{prefix}`-less env var: snapshot refresh / hit-count flush interval, and the bound on
+/// `{prefix}`-less env var: snapshot refresh / `last_hit_at` flush interval, and the bound on
 /// cross-replica propagation of a newly inserted or removed rule.
 pub const MICROMEGAS_QUERY_DENY_REFRESH_SECONDS: &str = "MICROMEGAS_QUERY_DENY_REFRESH_SECONDS";
 /// Default value of [`MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`].
@@ -687,9 +687,9 @@ impl QueryDenyList {
         tokio::spawn(async move {
             let mut shutdown = Box::pin(shutdown);
             loop {
-                if let Err(e) = self.refresh().await {
-                    warn!("query_deny_list: initial/periodic refresh failed: {e:#}");
-                }
+                // Ignore the `Err`: `refresh()` has already warn!-logged and metered a failed
+                // reload before returning it.
+                let _ = self.refresh().await;
                 tokio::select! {
                     _ = &mut shutdown => break,
                     _ = tokio::time::sleep(refresh_interval()) => {}

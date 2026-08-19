@@ -588,10 +588,8 @@ impl FlightSqlServiceImpl {
     ) -> Result<CallerContext, Status> {
         // `deny_queries` requires `Some` (query_deny_list_plan.md §7/§8) -- resolved from the
         // same attribution `execute_query` already validates, so a query already carries this by
-        // the time it could call `deny_queries`. `email` is preferred over `user_id` when the
-        // caller resolved to `"unknown"` for one but not the other, but in practice the two are
-        // resolved together (`user_attribution::validate_and_resolve_user_attribution_grpc`), so
-        // this is simply "the caller's resolved user id".
+        // the time it could call `deny_queries`. This is simply "the caller's resolved user id"
+        // (`user_attribution::validate_and_resolve_user_attribution_grpc`).
         let identity = validate_and_resolve_user_attribution_grpc(md)
             .ok()
             .map(|attr| attr.user_id);

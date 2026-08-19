@@ -4,7 +4,7 @@
  *
  * The screen is a front end for three SQL functions -- `list_query_denials()`,
  * `deny_queries(match_expr, reason)`, `remove_query_denial(rule_id)` -- issued through the same
- * `useStreamQuery` -> `/api/stream-query` path every other SQL-driven page uses, against
+ * `useStreamQuery` -> `/api/query-stream` path every other SQL-driven page uses, against
  * whichever data source the admin has selected. No REST routes of its own.
  */
 import type { Table } from 'apache-arrow'

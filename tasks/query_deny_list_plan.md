@@ -726,7 +726,7 @@ than weakened as a side effect of shipping a deny list.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | 10 | Snapshot refresh / hit-count flush interval; also the bound on cross-replica propagation |
+| `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | 10 | Snapshot refresh / `last_hit_at` flush interval; also the bound on cross-replica propagation |
 | `MICROMEGAS_QUERY_DENY_MAX_RULES` | 100 | Cap on rules in force at once (bounds per-query cost) |
 
 ## Mockups
