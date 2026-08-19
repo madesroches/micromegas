@@ -370,8 +370,11 @@ impl ReadableAudiences {
 ///
 /// `async` and fallible because the AbAC plan's recorded *Long-term model* resolves grants from a
 /// store -- nested groups, plus group→audience grants -- which cannot live behind a sync,
-/// infallible signature. Today's only implementation (`AudienceReadPolicy`) cannot fail; the
-/// signature is future-proofing, not present-tense necessity.
+/// infallible signature. This is no longer just future-proofing: `AudienceReadPolicy` is fallible
+/// today whenever a [`DbAudienceGrantsSource`] is attached via `with_store` -- a cold-start store
+/// outage with no prior successful load returns `Err`, which `caller_context`
+/// (`flight_sql_service_impl.rs`) maps to `Status::unavailable`. Without a store attached it still
+/// cannot fail.
 ///
 /// **Every caller must deny on `Err`.** An `Err` here means "the policy could not be evaluated" --
 /// never soften it into `ReadableAudiences::new(Arc::from([]))` (that would read as a legitimate,
@@ -402,14 +405,16 @@ pub trait MintPolicy: Send + Sync + Debug {
     ) -> Result<String>;
 }
 
-/// The shipped `ReadPolicy`: a pure lookup over an [`AudienceGrants`] map, with no identity
-/// derivation anywhere. Resolves the readable set:
+/// The shipped `ReadPolicy`: a lookup over an [`AudienceGrants`] map -- and, when a
+/// [`DbAudienceGrantsSource`] is attached via `with_store`, a second lookup over that store's
+/// snapshot -- with no identity derivation anywhere. Resolves the readable set:
 ///
 /// ```text
 /// { PUBLIC_AUDIENCE }
 ///   ∪ { a : "*"            ∈ grants[a].read }
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
 ///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.groups }
+///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
 ///   ∪ caller.read_audiences                                    // Stage 4b per-key direct grant
 /// ```
 ///

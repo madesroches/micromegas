@@ -450,8 +450,12 @@ fn from_rows_rejects_an_invalid_selector() {
     assert!(err.to_string().contains("not-a-selector"));
 }
 
-/// A selector present in both sources grants exactly the same access as being present in
-/// either alone -- no dedup, no special-cased "duplicate" handling.
+/// `AudienceGrants::merge` as a standalone utility (#1489, AbAC Stage 6a) -- **not** a test of
+/// `resolve`'s runtime union behavior, which checks the env map and the DB store snapshot as two
+/// separate sources and never calls `merge` (see the doc comment on `merge` itself). This test
+/// merges two maps directly, then wraps the *single* merged result in one `AudienceReadPolicy` to
+/// exercise it; a selector present in both input maps grants exactly the same access as being
+/// present in either alone -- no dedup, no special-cased "duplicate" handling.
 #[tokio::test]
 async fn merge_unions_disjoint_and_overlapping_audiences() {
     let env_grants = grants(r#"{"team-alpha": ["group:eng"], "team-beta": ["*"]}"#);
@@ -491,9 +495,11 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
     assert!(resolved.contains(&"team-gamma".to_string()));
 }
 
-/// A selector present in *both* the env map and the store for the same audience costs a
-/// redundant comparison, never a wrong answer -- still resolves, no error, no duplicate entry
-/// visible in the resolved set (which is a `BTreeSet` regardless).
+/// `AudienceGrants::merge` as a standalone utility (#1489, AbAC Stage 6a) -- again not a test of
+/// `resolve`'s two-source runtime check (see the previous test's doc comment). A selector present
+/// in *both* input maps for the same audience costs a redundant comparison when `merge`'s result
+/// is later resolved, never a wrong answer -- still resolves, no error, no duplicate entry visible
+/// in the resolved set (which is a `BTreeSet` regardless).
 #[tokio::test]
 async fn merge_tolerates_an_identical_selector_in_both_sources() {
     let env_grants = grants(r#"{"team-alpha": ["group:eng"]}"#);

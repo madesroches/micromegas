@@ -436,6 +436,12 @@ other knob on this page:
 |---|---|---|
 | `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` | `60` | How long a process serves its in-memory snapshot before re-querying `audience_grants`. Accepts a role prefix on the monolith (`MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), falling back to the unprefixed name. |
 
+**Revocation takes effect within the cache TTL (default 60s), not
+instantly.** This is a stated property, not an oversight: a `DELETE` above
+removes the row from `audience_grants` immediately, but every flight-sql
+process keeps serving its cached snapshot — and so keeps granting the removed
+read access — until its next refresh, up to one full TTL window later.
+
 **Outage behavior is deliberately different from the DB-backed key store's.**
 Once a process has loaded the table successfully at least once, a later
 refresh failure keeps serving that last good snapshot — unbounded, for as
