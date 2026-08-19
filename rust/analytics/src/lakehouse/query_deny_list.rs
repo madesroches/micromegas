@@ -590,7 +590,22 @@ impl QueryDenyList {
                 }
             }
         }
-        *self.snapshot.write().expect("lock") = sorted_snapshot(compiled);
+        {
+            // Carry each new rule's `last_hit` forward from its predecessor in the outgoing
+            // snapshot, so a `record_hit()` landing on the old `Arc` between `flush_hits` and this
+            // swap (two DB round-trips plus the compile loop above) isn't discarded along with it.
+            // Held across the read-merge-write so the window in which such a hit could still be
+            // lost is just the in-memory work below, not the whole refresh.
+            let mut snapshot = self.snapshot.write().expect("lock");
+            for rule in &compiled {
+                if let Some(previous) = snapshot.iter().find(|p| p.row.rule_id == rule.row.rule_id)
+                {
+                    let carried = previous.last_hit.load(Ordering::Relaxed);
+                    rule.last_hit.fetch_max(carried, Ordering::Relaxed);
+                }
+            }
+            *snapshot = sorted_snapshot(compiled);
+        }
         Ok(())
     }
 
@@ -612,6 +627,11 @@ impl QueryDenyList {
             .execute(&self.pool)
             .await
             {
+                // Re-arm rather than leaving the atomic at the `swap(0)` above: a failed UPDATE
+                // must not permanently lose the hit, since it's the next tick's only chance to
+                // retry the write. `fetch_max` so a hit recorded concurrently (after our swap,
+                // above) isn't clobbered by this re-arm.
+                rule.last_hit.fetch_max(last_hit, Ordering::Relaxed);
                 warn!(
                     "query_deny_list: failed to flush last_hit for rule {}: {e:#}",
                     rule.row.rule_id
