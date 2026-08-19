@@ -27,17 +27,22 @@ def _marker_sql(marker):
 
 
 def _discover_sql_hash(marker, timeout_s=30):
-    """Finds the `sql_hash` the server computed for a query containing `marker`, by polling the
-    audit log -- it only lands once the telemetry sink flushes and the maintenance role
+    """Finds the `sql_hash` the server computed for the `_marker_sql(marker)` query, by polling
+    the audit log -- it only lands once the telemetry sink flushes and the maintenance role
     materializes `log_entries` (comfortably above `MICROMEGAS_FLUSH_PERIOD`, 5s in
-    `local_test_env`)."""
+    `local_test_env`). Matches the audit record's `sql` field exactly: a LIKE on the marker
+    would also match this poll query's own audit record (whose SQL quotes the marker as a
+    literal), and once one poll's record materializes, ORDER BY time DESC would return the
+    poll's fingerprint instead of the marker query's."""
+
+    marker_sql = _marker_sql(marker)
 
     def query():
         sql = (
             "SELECT jsonb_as_string(jsonb_get(jsonb_parse(msg), 'sql_hash')) AS sql_hash "
             "FROM log_entries "
             "WHERE target = 'flightsql_query_audit' "
-            f"AND msg LIKE '%deny_test_marker_{marker}%' "
+            f"AND jsonb_as_string(jsonb_get(jsonb_parse(msg), 'sql')) = '{marker_sql}' "
             "ORDER BY time DESC LIMIT 1"
         )
         return client.query(sql, begin, end)
