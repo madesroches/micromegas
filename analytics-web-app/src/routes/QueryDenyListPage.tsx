@@ -16,6 +16,7 @@ import {
   buildListQueryDenialsSql,
   buildRemoveQueryDenialSql,
   decodeQueryDenyRules,
+  extractRemoveResult,
   extractRuleId,
   formatRelativeTime,
   type QueryDenyRule,
@@ -160,7 +161,13 @@ function QueryDenyListPageContent() {
   const [listError, setListError] = useState<string | null>(null)
   const [showDenyDialog, setShowDenyDialog] = useState(false)
   const [denyError, setDenyError] = useState<string | null>(null)
+  // True only while a denyQuery.execute() call from *this* dialog session is outstanding or has
+  // just completed and not yet been consumed -- guards the completion effect below against
+  // reading denyQuery's leftover isComplete/error/getTable() from a previous, already-closed
+  // submission when the dialog is reopened (see query_deny_list_plan.md review notes).
+  const [denySubmitted, setDenySubmitted] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<QueryDenyRule | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
 
   const listQuery = useStreamQuery()
   // Two independent instances -- deny and remove can each be mid-flight in their own dialog
@@ -200,6 +207,7 @@ function QueryDenyListPageContent() {
   const handleDeny = useCallback(
     async (matchExpr: string, reason: string) => {
       setDenyError(null)
+      setDenySubmitted(true)
       await denyQuery.execute({
         sql: buildDenyQueriesSql(matchExpr, reason),
         dataSource,
@@ -211,7 +219,8 @@ function QueryDenyListPageContent() {
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
     void (() => {
-      if (!showDenyDialog || !denyQuery.isComplete) return
+      if (!showDenyDialog || !denySubmitted || !denyQuery.isComplete) return
+      setDenySubmitted(false)
       if (denyQuery.error) {
         setDenyError(denyQuery.error.message)
       } else {
@@ -223,10 +232,11 @@ function QueryDenyListPageContent() {
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDenyDialog, denyQuery.isComplete, denyQuery.error])
+  }, [showDenyDialog, denySubmitted, denyQuery.isComplete, denyQuery.error])
 
   const handleRemove = useCallback(async () => {
     if (!removeTarget) return
+    setRemoveError(null)
     await removeQuery.execute({
       sql: buildRemoveQueryDenialSql(removeTarget.ruleId),
       dataSource,
@@ -236,9 +246,20 @@ function QueryDenyListPageContent() {
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
     void (() => {
-      if (removeTarget && removeQuery.isComplete && !removeQuery.error) {
+      if (!removeTarget || !removeQuery.isComplete) return
+      if (removeQuery.error) {
+        setRemoveError(removeQuery.error.message)
+        return
+      }
+      // remove_query_denial reports failure in-band, as a successful row whose value is
+      // "ERROR: ..." rather than a stream error -- inspect it before treating the call as done.
+      const table = removeQuery.getTable()
+      const result = table ? extractRemoveResult(table) : null
+      if (result && result.startsWith('SUCCESS')) {
         setRemoveTarget(null)
         loadRules()
+      } else {
+        setRemoveError(result ?? 'remove_query_denial returned no result')
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -296,13 +317,17 @@ function QueryDenyListPageContent() {
 
           <ConfirmDialog
             isOpen={removeTarget !== null}
-            onClose={() => setRemoveTarget(null)}
+            onClose={() => {
+              setRemoveTarget(null)
+              setRemoveError(null)
+            }}
             onConfirm={handleRemove}
             title="Remove Query Denial"
             message={`Remove the rule "${removeTarget?.reason ?? ''}"? Queries matching this expression will be allowed through again.`}
             confirmLabel="Remove"
             isLoading={removeQuery.isStreaming}
             variant="danger"
+            error={removeError}
           />
 
           {listQuery.isStreaming && rules.length === 0 ? (
