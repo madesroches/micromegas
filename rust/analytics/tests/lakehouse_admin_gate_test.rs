@@ -1,6 +1,6 @@
 //! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
 //! `make_session_context`'s `CallerContext::is_admin`/`admin_principal_possible` gate
-//! registration of the eight mutating lakehouse UDTFs/UDFs (`retire_partitions`,
+//! registration of the eight admin-gated lakehouse UDTFs/UDFs (`retire_partitions`,
 //! `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
 //! `retire_partition_by_metadata`, and the query deny list's `list_query_denials`,
 //! `deny_queries`, `remove_query_denial`). These tests only assert on DataFusion *planning*,

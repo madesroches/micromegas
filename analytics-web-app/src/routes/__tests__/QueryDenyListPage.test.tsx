@@ -234,4 +234,86 @@ describe('QueryDenyListPage', () => {
     // The dialog stays open on error so the admin can fix the expression.
     expect(screen.getByRole('button', { name: 'Deny query' })).toBeInTheDocument()
   })
+  it('opens the remove confirm dialog and issues remove_query_denial on confirm', async () => {
+    mockStreamQuery.mockImplementation(({ sql }: { sql: string }) => {
+      if (sql.includes('remove_query_denial')) {
+        const result = tableFromArrays({
+          result: ['SUCCESS: removed rule 11111111-1111-1111-1111-111111111111'],
+        })
+        return createMockGenerator([
+          { type: 'schema', schema: result.schema },
+          { type: 'batch', batch: result.batches[0] },
+          { type: 'done' },
+        ])
+      }
+      return createMockGenerator([
+        { type: 'schema', schema: oneRuleTable.schema },
+        ...oneRuleTable.batches.map((batch) => ({ type: 'batch' as const, batch })),
+        { type: 'done' },
+      ])
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('alert re-firing')).toBeInTheDocument())
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove rule 11111111-1111-1111-1111-111111111111' })
+    )
+    expect(screen.getByText('Remove Query Denial')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    })
+
+    await waitFor(() => {
+      const removeCall = mockStreamQuery.mock.calls.find(
+        (c) => (c[0] as { sql: string }).sql.includes('remove_query_denial')
+      )
+      expect(removeCall).toBeDefined()
+      expect((removeCall![0] as { sql: string }).sql).toContain(
+        "remove_query_denial('11111111-1111-1111-1111-111111111111')"
+      )
+    })
+
+    // Dialog closes once the in-band result reports SUCCESS.
+    await waitFor(() => expect(screen.queryByText('Remove Query Denial')).not.toBeInTheDocument())
+  })
+
+  it('shows an in-band ERROR result inside the remove dialog and keeps it open', async () => {
+    mockStreamQuery.mockImplementation(({ sql }: { sql: string }) => {
+      if (sql.includes('remove_query_denial')) {
+        // remove_query_denial reports failure as a successful row whose value is "ERROR: ...",
+        // not as a stream error -- the page must read it out of the result.
+        const result = tableFromArrays({
+          result: ['ERROR: no such rule: 11111111-1111-1111-1111-111111111111'],
+        })
+        return createMockGenerator([
+          { type: 'schema', schema: result.schema },
+          { type: 'batch', batch: result.batches[0] },
+          { type: 'done' },
+        ])
+      }
+      return createMockGenerator([
+        { type: 'schema', schema: oneRuleTable.schema },
+        ...oneRuleTable.batches.map((batch) => ({ type: 'batch' as const, batch })),
+        { type: 'done' },
+      ])
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('alert re-firing')).toBeInTheDocument())
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove rule 11111111-1111-1111-1111-111111111111' })
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    })
+
+    await waitFor(() => expect(screen.getByText(/no such rule/i)).toBeInTheDocument())
+    // The dialog stays open so the admin can see what happened.
+    expect(screen.getByText('Remove Query Denial')).toBeInTheDocument()
+  })
 })

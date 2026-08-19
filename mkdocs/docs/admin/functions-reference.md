@@ -350,7 +350,7 @@ SELECT * FROM list_query_denials();
 |---|---|---|
 | `rule_id` | String | The rule's id — pass this to `remove_query_denial(rule_id)` |
 | `created_at` | Timestamp | When the rule was created |
-| `created_by` | String | The identity of the admin who created it |
+| `created_by` | String | The identity of the caller who created it — the resolved `user_id`, with the same client-asserted caveats as the `user_id` match-context column above |
 | `reason` | String | The mandatory, free-text reason given at creation |
 | `match_expr` | String | The expression exactly as written |
 | `last_hit_at` | Timestamp, nullable | `NULL` until the rule first fires; otherwise the most recent match, accurate to within one refresh tick (`MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`) — "4 s ago" means the offender is still calling in, "3 weeks ago" means the rule is probably safe to remove |

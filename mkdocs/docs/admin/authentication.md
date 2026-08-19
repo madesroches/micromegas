@@ -188,7 +188,7 @@ telemetry-ingestion-srv --disable-auth
     a merged/compacted lakehouse partition of its data still exists. See the CHANGELOG's AbAC
     Stage 3 entry for the full mechanism and its accepted trade-offs.
 
-    **Eight mutating lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
+    **Eight admin-gated lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
     `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, and the
     [query deny list](functions-reference.md#query-deny-list)'s `list_query_denials`,
     `deny_queries`, `remove_query_denial`) are gated on whether this *deployment* can ever

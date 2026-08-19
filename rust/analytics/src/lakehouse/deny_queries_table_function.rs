@@ -59,6 +59,10 @@ impl TableFunctionImpl for DenyQueriesTableFunction {
                  does not carry"
             );
         };
+        // Checked against the local snapshot only, with no re-check under `insert`'s write lock
+        // and no DB-side constraint -- so concurrent inserts (or another replica's insert within
+        // one refresh tick) can overshoot the cap by a rule or two. Advisory by design: the cap
+        // bounds per-query evaluation cost (~0.45 us/rule), where an off-by-a-few is harmless.
         let rule_count = self.query_denials.rule_count();
         let cap = max_rules();
         if rule_count >= cap {

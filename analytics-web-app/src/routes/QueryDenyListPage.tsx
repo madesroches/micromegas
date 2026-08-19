@@ -206,6 +206,10 @@ function QueryDenyListPageContent() {
 
   const handleDeny = useCallback(
     async (matchExpr: string, reason: string) => {
+      if (!dataSource) {
+        setDenyError('No data source selected')
+        return
+      }
       setDenyError(null)
       setDenySubmitted(true)
       await denyQuery.execute({
@@ -228,6 +232,10 @@ function QueryDenyListPageContent() {
         if (table && extractRuleId(table)) {
           setShowDenyDialog(false)
           loadRules()
+        } else {
+          // Mirrors the remove path below: a stream that completes without an error but also
+          // without a rule id must not leave the dialog open with no feedback.
+          setDenyError('deny_queries returned no rule id')
         }
       }
     })()
@@ -236,6 +244,10 @@ function QueryDenyListPageContent() {
 
   const handleRemove = useCallback(async () => {
     if (!removeTarget) return
+    if (!dataSource) {
+      setRemoveError('No data source selected')
+      return
+    }
     setRemoveError(null)
     await removeQuery.execute({
       sql: buildRemoveQueryDenialSql(removeTarget.ruleId),

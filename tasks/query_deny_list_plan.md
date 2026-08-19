@@ -96,7 +96,7 @@ never be an admin principal.
   and `routes/IngestionApiKeysPage.tsx` both configure it. It talks to `analytics-web-srv` REST routes
   backed by the telemetry DB, which is the part this screen does *not* copy (§9).
 - SQL-driven pages (`ProcessesPage.tsx`, `ProcessLogPage.tsx`, …) use `useStreamQuery` →
-  `POST /api/stream-query` (`rust/analytics-web-srv/src/stream_query.rs`), which forwards the
+  `POST /api/query-stream` (`rust/analytics-web-srv/src/stream_query.rs`), which forwards the
   browser user's own bearer token to FlightSQL via `BearerFlightSQLClientFactory`. So an admin's
   web query resolves `is_admin: true` at `flight-sql-srv` and sees the admin functions.
 - `stream_query.rs:90` holds `BLOCKED_FUNCTIONS`, a substring blocklist that refuses
@@ -682,7 +682,7 @@ what was denied and what it rejected, so the row itself does not need to survive
 ### 9. Web app — Admin → Query Deny List
 
 The screen drives the **same SQL functions** through the existing `useStreamQuery` →
-`/api/stream-query` path, against the data source the admin selects. No new REST routes and no
+`/api/query-stream` path, against the data source the admin selects. No new REST routes and no
 second copy of the rule store — which also means the screen manages the deny list of the
 deployment it is pointed at, instead of whatever DB `analytics-web-srv` happens to hold (the
 API-key pages' single-DB assumption would be wrong here).
