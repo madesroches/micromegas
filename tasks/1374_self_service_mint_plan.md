@@ -1509,6 +1509,76 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 
 ## Open Questions
 
-None. The setup script is named `micromegas-setup-telemetry` — from the user's point of view the
-script sets up telemetry transmission ("send my data"), so the server-side term "ingestion" stays
-out of the user-facing name.
+Four items below. None is a defect — the plan is implementable as written with the design as
+specified, and each question asks whether a mechanism the plan currently *has* earns its place, or
+pins down a detail the plan currently leaves to the implementer. They are recorded here because
+they surfaced from a reviewer's judgment about complexity rather than from verification against the
+code, so nothing else in this document marks them.
+
+Questions 1 and 2 are a matched pair: both propose **removing** a mechanism this plan added, and
+both would delete more text than they add. A reviewer's overall read after five review rounds was
+that the authorization logic has converged and the write-up is sound, but that the design has not
+been re-simplified since the hazards that motivated each guard were found — each round added a
+guard for the previous round's hazard rather than removing the hazard's source. If a subtractive
+pass happens, these two are it.
+
+**1. Should the mint-side grant store cache at all?**
+
+§3 gives `analytics-web-srv`'s `DbAudienceGrantsSource` its own snapshot with a ~60s TTL
+(`{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, `db_audience_grants.rs:33-42`), mirroring how the
+read side is wired. The argument for dropping it (TTL `0`, or a point query
+`SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'`): the read side is a
+per-query hot path in a *different* process (flight-sql-srv / the monolith's analytics role),
+whereas this mint route is admin-console-rate — its own pool is capped at `max_connections(2)`
+(`web_server.rs`) precisely because it is not hot. Paying a staleness window here buys no
+measurable throughput, and it costs real complexity that exists only to compensate for it: the
+whole "Cache TTL" subsection (§4a), the uncached self-healing recheck inside the claim transaction
+(§4a, "The claim itself"), the arm-specific logging split that recheck forces, and the reserved-name
+ordering constraint that recheck imposes (§4a). Dropping the cache deletes all of it in exchange for
+one extra round trip per mint on a route an operator hits by hand. The argument against: it breaks
+symmetry with the read-side wiring, and the recheck is already written and already tested here.
+
+**2. Should the `ingestion_api_keys` half of the ownership check become a v8 migration instead?**
+
+§4a's existence check treats an audience as owned if *either* a grant row or an
+`ingestion_api_keys` row names it. The key-row half exists to catch one specific case: audiences an
+admin minted into before any grant existed. That is a **migration-era** set, and this repo closes
+migration-era sets with migrations — v6 backfilled `audience = 'public'` onto every pre-existing key
+for exactly this kind of gap. A v8 that inserts a placeholder grant row for each distinct
+`ingestion_api_keys.audience` with no grant row would collapse the ownership predicate to a single
+table and, more importantly, remove the irreversibility the plan currently documents as a
+consequence: because `revoke_key` only sets `revoked_at` and no delete path for key rows exists, a
+name with any minted key can never be re-claimed by anyone, including its rightful owner
+(Trade-offs). It also removes the one-time manual step §4a currently requires of operators for
+unstamped-audience labels (Implementation step 12). The argument against: a migration touching
+customer data carries its own risk, and the caller-derived prefix (§5, §6) already makes the
+squatting scenario that motivated the concern improbable in practice.
+
+**3. What is the parse contract for the two integer knobs?**
+
+§3 says `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` and
+`MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` are "resolved onto `IngestionKeysState` the same way"
+as `MICROMEGAS_SELF_SERVICE_MINT` — but that points at a *boolean* parse, and the two conventions
+available here genuinely conflict. `resolve_u64` (`rust/auth/src/db_api_key.rs:81`) warns and
+defaults, but it is `pub(crate)` to `micromegas-auth` and therefore not callable from
+`analytics-web-srv`; meanwhile `MICROMEGAS_DEFAULT_KEY_AUDIENCE` fails fast at startup
+(`policy.rs:62-84`, resolved in `web_server.rs`), and `mkdocs/docs/admin/authentication.md`
+advertises fail-fast as "the convention every other knob on this page follows". Also unspecified:
+whether `0` means "no claims permitted" or "unlimited", and what a negative value does. Left as
+written, an implementer picks one silently and an operator's typo behaves differently from every
+neighbouring knob. Recommended resolution unless overridden: fail fast at startup, matching the
+documented convention, with `0` meaning "none permitted" and a negative value rejected.
+
+**4. What happens to the one-time cleartext key if the script fails after minting?**
+
+The mint response carries the cleartext key exactly once and it is unrecoverable afterwards. §6 then
+has the script do up to two more things that can fail: the admin `POST /api/audience-grants` calls
+on the admin path, and the `--env-file` write (which can fail on a permissions or disk error after
+the key is already in hand). The plan does not say what happens to the key in either case. Whether
+the script prints it to stderr as a last resort is a security-relevant decision — it trades
+shoulder-surfing and shell-history exposure against silently destroying a credential the caller
+must otherwise revoke through an admin and mint again.
+
+**Resolved, recorded for the record.** The setup script is named `micromegas-setup-telemetry` — from
+the user's point of view the script sets up telemetry transmission ("send my data"), so the
+server-side term "ingestion" stays out of the user-facing name.
