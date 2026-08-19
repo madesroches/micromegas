@@ -14,6 +14,7 @@
 //! it. No code here derives an audience from a caller's identity -- see `AudienceGrants` and
 //! `tasks/1372_audience_on_keys_plan.md` §1-§2 for the reasoning.
 
+use crate::db_audience_grants::DbAudienceGrantsSource;
 use crate::env::resolve_prefixed_var;
 use crate::types::AuthContext;
 use anyhow::{Result, anyhow};
@@ -86,7 +87,11 @@ pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>> {
 /// principal), `user:<email>` (matches `AuthContext.email`), or `group:<g>` (matches any raw
 /// value in `AuthContext.groups`). Validated at parse time; `resolve`/`resolve_audience` never
 /// see an unrecognized shape.
-fn valid_selector(selector: &str) -> bool {
+///
+/// `pub` (#1489, AbAC Stage 6a) -- `analytics-web-srv`'s admin grant-write route (a separate
+/// crate) needs to run this exact same selector-shape check `parse`/`from_rows` run, not a
+/// re-implementation of it.
+pub fn valid_selector(selector: &str) -> bool {
     selector == "*"
         || selector
             .strip_prefix("user:")
@@ -116,6 +121,14 @@ fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
 struct GrantEntry {
     read: Vec<String>,
     mint: Vec<String>,
+}
+
+/// The Rust side of `audience_grants.axis` (#1489, AbAC Stage 6a) -- which selector list a DB row
+/// contributes to, mirroring the JSON grant map's `"read"`/`"mint"` keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantAxis {
+    Read,
+    Mint,
 }
 
 /// The bare-array-or-object shape a single grant-map value may take on the wire, before content
@@ -266,6 +279,50 @@ impl AudienceGrants {
         Ok(grants)
     }
 
+    /// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
+    /// analogue of [`Self::parse`] (#1489, AbAC Stage 6a). Runs the *same* [`is_valid_audience`]/
+    /// [`valid_selector`] checks `parse` runs, so a row that slipped past `audience_grants`'s own
+    /// `CHECK` constraints (e.g. via a direct `psql` session) still can't reach a policy decision:
+    /// this is the one place both the JSON path and the DB path fail closed on a malformed row.
+    pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Result<Self> {
+        let mut entries: BTreeMap<String, GrantEntry> = BTreeMap::new();
+        for (audience, axis, selector) in rows {
+            if !is_valid_audience(&audience) {
+                return Err(anyhow!(
+                    "invalid audience grant row: {audience:?} is not a valid audience name -- \
+                     must match [A-Za-z0-9_-]{{1,255}}"
+                ));
+            }
+            if !valid_selector(&selector) {
+                return Err(anyhow!(
+                    "invalid audience grant row: selector {selector:?} for audience \
+                     {audience:?} must be '*', 'user:<id>', or 'group:<id>'"
+                ));
+            }
+            let entry = entries.entry(audience).or_default();
+            match axis {
+                GrantAxis::Read => entry.read.push(selector),
+                GrantAxis::Mint => entry.mint.push(selector),
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    /// Unions each audience's `read`/`mint` selector lists across `self` and `other` (#1489, AbAC
+    /// Stage 6a) -- what makes the env map and the DB store additive, per design: a selector
+    /// present in either source grants exactly the same access as being present in both. No dedup
+    /// -- `selector_matches` is called with `.any()`, so a selector present in both sources costs
+    /// one redundant comparison, never a wrong answer.
+    pub fn merge(&self, other: &Self) -> Self {
+        let mut entries = self.entries.clone();
+        for (audience, other_entry) in &other.entries {
+            let entry = entries.entry(audience.clone()).or_default();
+            entry.read.extend(other_entry.read.iter().cloned());
+            entry.mint.extend(other_entry.mint.iter().cloned());
+        }
+        Self { entries }
+    }
+
     fn readers(&self) -> impl Iterator<Item = (&String, &[String])> {
         self.entries.iter().map(|(a, e)| (a, e.read.as_slice()))
     }
@@ -363,12 +420,19 @@ pub trait MintPolicy: Send + Sync + Debug {
 #[derive(Debug, Clone, Default)]
 pub struct AudienceReadPolicy {
     grants: AudienceGrants,
+    /// The DB-backed grant store (#1489, AbAC Stage 6a), when this process has one configured --
+    /// merged into `grants` on every `resolve` call. `None` for every disabled-auth/test caller
+    /// that has no DB pool to back one.
+    store: Option<Arc<DbAudienceGrantsSource>>,
 }
 
 impl AudienceReadPolicy {
     /// Builds a policy with an explicit grant map (bypassing env resolution).
     pub fn new(grants: AudienceGrants) -> Self {
-        Self { grants }
+        Self {
+            grants,
+            store: None,
+        }
     }
 
     /// Resolves the grant map from `{prefix}_AUDIENCE_GRANTS` (falling back to
@@ -379,16 +443,33 @@ impl AudienceReadPolicy {
     /// silently-inactive knob.
     pub fn from_env(prefix: &str) -> Result<Self> {
         let grants = AudienceGrants::from_env(prefix)?;
-        Ok(Self { grants })
+        Ok(Self {
+            grants,
+            store: None,
+        })
+    }
+
+    /// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). A
+    /// builder method, not a constructor argument, so `new`/`from_env` keep working unchanged for
+    /// every caller with no DB pool to back one (disabled-auth, tests).
+    pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
+        self.store = store;
+        self
     }
 }
 
 #[async_trait]
 impl ReadPolicy for AudienceReadPolicy {
     async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences> {
+        let mut grants = self.grants.clone();
+        if let Some(store) = &self.store {
+            // `Err` only on a cold-start outage (no snapshot has ever loaded successfully) --
+            // propagated as-is, so `resolve` denies exactly as documented on its own trait.
+            grants = grants.merge(&store.current().await?);
+        }
         let mut set = BTreeSet::new();
         set.insert(PUBLIC_AUDIENCE.to_string());
-        for (audience, read) in self.grants.readers() {
+        for (audience, read) in grants.readers() {
             if read.iter().any(|s| selector_matches(s, caller)) {
                 set.insert(audience.clone());
             }
@@ -417,12 +498,28 @@ impl ReadPolicy for AudienceReadPolicy {
 #[derive(Debug, Clone, Default)]
 pub struct AudienceMintPolicy {
     grants: AudienceGrants,
+    /// The DB-backed grant store (#1489, AbAC Stage 6a). Built for symmetry with
+    /// [`AudienceReadPolicy::with_store`] and unit-tested, but this stage wires nothing to it: no
+    /// production code constructs a `dyn MintPolicy` today -- see [`with_store`](Self::with_store).
+    store: Option<Arc<DbAudienceGrantsSource>>,
 }
 
 impl AudienceMintPolicy {
     /// Builds a policy with an explicit grant map.
     pub fn new(grants: AudienceGrants) -> Self {
-        Self { grants }
+        Self {
+            grants,
+            store: None,
+        }
+    }
+
+    /// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). Built
+    /// alongside [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, this
+    /// stage wires no call site to it: `resolve_audience` has no production caller today, and the
+    /// stage's mint-side scope is exactly this method existing and unit-tested.
+    pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
+        self.store = store;
+        self
     }
 }
 
@@ -445,8 +542,11 @@ impl MintPolicy for AudienceMintPolicy {
                 ))
             };
         }
-        if self
-            .grants
+        let mut grants = self.grants.clone();
+        if let Some(store) = &self.store {
+            grants = grants.merge(&store.current().await?);
+        }
+        if grants
             .mint_selectors(aud)
             .iter()
             .any(|s| selector_matches(s, caller))

@@ -10,6 +10,7 @@
 //! must WRAP the router using `layer()` method, not be added via `Router::layer()`.
 
 use analytics_web_srv::analytics_keys::AnalyticsKeysState;
+use analytics_web_srv::audience_grants::AudienceGrantsState;
 use analytics_web_srv::data_source_cache::DataSourceCache;
 use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
@@ -406,6 +407,7 @@ fn disabled_auth_app() -> Router {
         pool: None,
         default_audience: None,
     };
+    let audience_grants_state = AudienceGrantsState { pool: None };
     build_protected_routes(
         "",
         &None,
@@ -414,6 +416,7 @@ fn disabled_auth_app() -> Router {
         maps_state,
         analytics_keys_state,
         ingestion_keys_state,
+        audience_grants_state,
     )
 }
 
@@ -457,6 +460,16 @@ async fn disable_auth_ingestion_keys_sub_path_returns_503() {
         &format!("/api/ingestion-api-keys/{key_id}"),
     )
     .await;
+}
+
+#[tokio::test]
+async fn disable_auth_audience_grants_base_route_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/audience-grants").await;
+}
+
+#[tokio::test]
+async fn disable_auth_audience_grants_sub_path_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/audience-grants/anything").await;
 }
 
 // ---------------------------------------------------------------------------

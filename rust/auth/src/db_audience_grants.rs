@@ -1,0 +1,252 @@
+//! DB-backed audience grant store (#1489, AbAC Stage 6a): a whole-table snapshot cache over the
+//! `audience_grants` table (migration v7, `rust/ingestion/src/sql_migration.rs`), unioned with
+//! the existing `{prefix}_AUDIENCE_GRANTS` env map by [`crate::policy::AudienceReadPolicy`]/
+//! [`crate::policy::AudienceMintPolicy`] via `AudienceGrants::merge`. This is what makes a grant
+//! creatable without a service restart -- the env map stays the static/bootstrap layer.
+//!
+//! Modeled on `db_api_key.rs`'s config/pool conventions, but a single cached value rather than a
+//! per-key `moka` cache: the issue is explicit that the whole map is small enough to hold as one
+//! snapshot, so `moka`'s eviction/LRU machinery has nothing to do here.
+
+use crate::env::resolve_prefixed_var;
+use crate::policy::{AudienceGrants, GrantAxis};
+use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
+use sqlx::{PgPool, Row};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, Instant};
+
+fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
+    let var = resolve_prefixed_var(prefix, suffix);
+    match std::env::var(&var) {
+        Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
+            micromegas_tracing::warn!("Invalid {var} value '{s}', using default {default}");
+            default
+        }),
+        Err(_) => default,
+    }
+}
+
+/// Cache-TTL knob for [`DbAudienceGrantsSource`], read from env with a default.
+#[derive(Clone, Copy, Debug)]
+pub struct DbAudienceGrantsConfig {
+    /// `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, falling back to
+    /// `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, default 60 -- mirrors
+    /// `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`'s name, default, and prefix-fallback shape.
+    pub cache_ttl_secs: u64,
+}
+
+impl DbAudienceGrantsConfig {
+    /// Resolves the knob as `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS` first, falling back to
+    /// the unprefixed name -- the same `resolve_u64`-based pattern
+    /// `DbApiKeyConfig::from_env_with_prefix` (`db_api_key.rs`) already uses for its four knobs,
+    /// so this config follows the same prefix contract every other knob at its wiring sites does.
+    /// With an empty prefix this is identical to the unprefixed var.
+    pub fn from_env_with_prefix(prefix: &str) -> Self {
+        Self {
+            cache_ttl_secs: resolve_u64(prefix, "AUDIENCE_GRANT_CACHE_TTL_SECONDS", 60),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Snapshot {
+    grants: AudienceGrants,
+    /// Time of the last *successful* load -- never advanced on a failed refresh. Feeds the age
+    /// reported in the refresh-failure log/error context ("how stale is the grant view right
+    /// now"), independent of `fetched_at`; it is not itself emitted as a metric.
+    loaded_at: Instant,
+    /// Time of the last refresh *attempt*, successful or not -- gates how often a failing DB is
+    /// re-queried once at least one load has succeeded, so a post-first-success outage costs one
+    /// query per TTL, not one per request.
+    fetched_at: Instant,
+}
+
+/// The whole-table snapshot cache described in the module doc comment.
+#[derive(Debug)]
+pub struct DbAudienceGrantsSource {
+    pool: PgPool,
+    ttl: Duration,
+    snapshot: tokio::sync::RwLock<Option<Snapshot>>,
+    /// Unix-epoch seconds of the last refresh *attempt*, recorded outside `Snapshot` so it
+    /// exists even before any load has ever succeeded -- mirrors `db_api_key.rs`'s
+    /// `last_logged_at`. This is what gates cold-start retries: with no `Snapshot` yet, there is
+    /// nowhere else to remember "we just tried and failed a moment ago", so without this field
+    /// every `current()` call during process startup against a still-coming-up DB would re-query
+    /// with no throttling at all, unlike the post-success path which `fetched_at` already gates.
+    last_attempt_at: Arc<AtomicI64>,
+}
+
+impl DbAudienceGrantsSource {
+    /// Builds a source over `pool` (expected to be a [`crate::db_api_key::dedicated_key_store_pool`],
+    /// not the caller's lake pool directly), with no snapshot loaded yet -- the first `current()`
+    /// call performs the first query.
+    pub fn new(pool: PgPool, config: DbAudienceGrantsConfig) -> Self {
+        Self {
+            pool,
+            ttl: Duration::from_secs(config.cache_ttl_secs),
+            snapshot: tokio::sync::RwLock::new(None),
+            last_attempt_at: Arc::new(AtomicI64::new(0)),
+        }
+    }
+
+    /// Queries the whole table and builds an `AudienceGrants` via
+    /// [`AudienceGrants::from_rows`]. The one place a malformed row (one that slipped past the
+    /// table's own `CHECK` constraints, e.g. via a direct `psql` session) surfaces as a load
+    /// failure rather than a silently-inert or silently-unreadable grant.
+    async fn fetch(&self) -> Result<AudienceGrants> {
+        let rows = sqlx::query("SELECT audience, axis, selector FROM audience_grants")
+            .fetch_all(&self.pool)
+            .await
+            .context("querying audience_grants")?;
+        let mut triples = Vec::with_capacity(rows.len());
+        for row in rows {
+            let audience: String = row.try_get("audience").context("reading audience")?;
+            let axis: String = row.try_get("axis").context("reading axis")?;
+            let selector: String = row.try_get("selector").context("reading selector")?;
+            let axis = match axis.as_str() {
+                "read" => GrantAxis::Read,
+                "mint" => GrantAxis::Mint,
+                other => {
+                    return Err(anyhow!(
+                        "audience_grants row for {audience:?}/{selector:?} has unrecognized \
+                         axis {other:?}"
+                    ));
+                }
+            };
+            triples.push((audience, axis, selector));
+        }
+        AudienceGrants::from_rows(triples)
+    }
+
+    /// The synthesized error for a throttled cold-start window (see [`Self::current`]'s doc
+    /// comment) -- never a stored, re-handed-out `anyhow::Error` from a prior attempt, since that
+    /// type isn't `Clone` and this store deliberately carries none of `db_api_key.rs`'s
+    /// moka/`Arc<E>` sharing machinery to make it so.
+    fn throttled_error(&self, last_attempt_epoch_secs: i64) -> anyhow::Error {
+        let last_attempt = chrono::DateTime::from_timestamp(last_attempt_epoch_secs, 0)
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| last_attempt_epoch_secs.to_string());
+        anyhow!(
+            "audience grant store unavailable; last attempt at {last_attempt}, retry after \
+             {} seconds",
+            self.ttl.as_secs()
+        )
+    }
+
+    /// Returns the current grant snapshot, refreshing it first if stale.
+    ///
+    /// Both the cold-start path (no `Snapshot` yet) and the post-success path are throttled to at
+    /// most one DB query per TTL window: cold-start via `last_attempt_at` (checked-and-set the
+    /// same compare-exchange way `db_api_key.rs::maybe_log_error` rate-limits its own log line),
+    /// the post-success path via `Snapshot::fetched_at` as before. A `current()` call that lands
+    /// inside an already-throttled window returns the last snapshot if one exists; if not, it
+    /// returns a freshly synthesized error describing the throttled cold-start state rather than
+    /// storing and re-handing-out the prior attempt's `anyhow::Error`. A concurrent caller that
+    /// loses the `last_attempt_at` compare-exchange while the very first cold-start attempt is
+    /// still in flight gets that same synthesized throttled-state error too, not the in-flight
+    /// attempt's eventual result -- it never blocks on another caller's query, and it never skips
+    /// the query silently with nothing to show for it.
+    ///
+    /// `Err` only when there has never been one successful load -- a fresh process whose first
+    /// query hits a down DB has no "last good" to serve, so it fails closed like everything else
+    /// on this seam, at a rate capped by `last_attempt_at` rather than once per request. Once any
+    /// load has succeeded, a later refresh failure is logged + counted
+    /// (`imetric!("audience_grant_refresh_error_count", ...)`) and the last good snapshot keeps
+    /// serving, unbounded -- this store has no per-item TTL eviction to fall back on the way
+    /// `db_api_key.rs`'s cache does, so an outage degrades to staleness for as long as it lasts,
+    /// not just one TTL window.
+    pub async fn current(&self) -> Result<AudienceGrants> {
+        // Fast path: an unexpired snapshot needs no refresh attempt at all.
+        {
+            let guard = self.snapshot.read().await;
+            if let Some(snap) = guard.as_ref()
+                && snap.fetched_at.elapsed() < self.ttl
+            {
+                return Ok(snap.grants.clone());
+            }
+        }
+
+        let had_snapshot = self.snapshot.read().await.is_some();
+
+        if had_snapshot {
+            // Post-success path: no single-flight/dedup lock -- a plain `SELECT` with no side
+            // effect to de-duplicate, gated only by `fetched_at` above. A few concurrent callers
+            // landing right at the TTL boundary can each re-run this; strictly simpler and still
+            // cheap (the whole point of "the map is small").
+            match self.fetch().await {
+                Ok(grants) => {
+                    let mut guard = self.snapshot.write().await;
+                    *guard = Some(Snapshot {
+                        grants: grants.clone(),
+                        loaded_at: Instant::now(),
+                        fetched_at: Instant::now(),
+                    });
+                    Ok(grants)
+                }
+                Err(err) => {
+                    micromegas_tracing::imetric!(
+                        "audience_grant_refresh_error_count",
+                        "count",
+                        1_u64
+                    );
+                    let mut guard = self.snapshot.write().await;
+                    match guard.as_mut() {
+                        Some(snap) => {
+                            let age_secs = snap.loaded_at.elapsed().as_secs();
+                            micromegas_tracing::error!(
+                                "audience grant store refresh failed, serving stale snapshot \
+                                 (age={age_secs}s): {err:#}"
+                            );
+                            snap.fetched_at = Instant::now();
+                            Ok(snap.grants.clone())
+                        }
+                        // Snapshot vanished between the check above and now -- this store never
+                        // clears a snapshot once set, so this is unreachable in practice; treat
+                        // it as a cold-start failure rather than panicking.
+                        None => Err(err),
+                    }
+                }
+            }
+        } else {
+            // Cold-start path: `last_attempt_at`'s compare-exchange *is* the dedup mechanism, so
+            // only one caller per TTL window fires the query and the rest get the synthesized
+            // throttled-state error instead of racing in.
+            let now = Utc::now().timestamp();
+            let prev = self.last_attempt_at.load(Ordering::Relaxed);
+            let ttl_secs = self.ttl.as_secs().max(1) as i64;
+            if now.saturating_sub(prev) < ttl_secs
+                || self
+                    .last_attempt_at
+                    .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+            {
+                return Err(self.throttled_error(prev));
+            }
+
+            match self.fetch().await {
+                Ok(grants) => {
+                    let mut guard = self.snapshot.write().await;
+                    *guard = Some(Snapshot {
+                        grants: grants.clone(),
+                        loaded_at: Instant::now(),
+                        fetched_at: Instant::now(),
+                    });
+                    Ok(grants)
+                }
+                Err(err) => {
+                    micromegas_tracing::imetric!(
+                        "audience_grant_refresh_error_count",
+                        "count",
+                        1_u64
+                    );
+                    micromegas_tracing::error!(
+                        "audience grant store cold-start load failed: {err:#}"
+                    );
+                    Err(err)
+                }
+            }
+        }
+    }
+}

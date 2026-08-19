@@ -124,6 +124,67 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
+    def create_audience_grant(self, audience, axis, selector):
+        """Create (or report the pre-existing) audience grant row (#1489, AbAC
+        Stage 6a) via `POST /api/audience-grants`.
+
+        `axis` is `"read"` or `"mint"`; `selector` is `"*"`, `"user:<id>"`, or
+        `"group:<id>"` -- the server re-validates both. Returns
+        `{"audience", "axis", "selector", "created_at", "created_by"}`; the
+        response reports the pre-existing row's own fields when the grant
+        already existed (the server answers `200` in that case, `201` for a
+        fresh create -- `WebClient` doesn't surface the status code itself,
+        only the body, matching every other create/import method here).
+        """
+        resp = self.session.post(
+            self._api_url("audience-grants"),
+            headers=self._headers(),
+            json={"audience": audience, "axis": axis, "selector": selector},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def list_audience_grants(self, audience=None, axis=None, limit=None, offset=None):
+        """List audience grant rows via `GET /api/audience-grants`, optionally
+        filtered by `audience`/`axis` and paginated with `limit`/`offset`.
+
+        Returns a list of `{"audience", "axis", "selector", "created_at",
+        "created_by"}` dicts, newest first.
+        """
+        params = {}
+        if audience is not None:
+            params["audience"] = audience
+        if axis is not None:
+            params["axis"] = axis
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        resp = self.session.get(
+            self._api_url("audience-grants"),
+            headers=self._headers(),
+            params=params,
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def delete_audience_grant(self, audience, axis, selector):
+        """Delete one audience grant row via `DELETE /api/audience-grants`,
+        keyed by its natural `(audience, axis, selector)` triple passed as
+        query parameters -- a `group:<id>` selector isn't restricted enough in
+        charset to be a safe raw path segment. Raises `RuntimeError` (via
+        `_check_response`) with a 404 if no such row exists.
+        """
+        resp = self.session.delete(
+            self._api_url("audience-grants"),
+            headers=self._headers(),
+            params={"audience": audience, "axis": axis, "selector": selector},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+
     def import_analytics_api_key(self, name, key):
         """Import an existing analytics API key string (#1411).
 

@@ -216,10 +216,13 @@ which one it *writes*).
 
 **An audience is an opaque label, not a principal encoding** — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. It carries no meaning by itself;
-who may read or mint into it is separate, editable configuration (a grant
-map, `{prefix}_AUDIENCE_GRANTS` — see [Audiences and Grants](authentication.md#audiences-and-grants)
-for the full model). `public` is the one built-in: every authenticated
-principal can read it, with no grant map entry needed.
+who may read or mint into it is separate, editable configuration — the
+`{prefix}_AUDIENCE_GRANTS` env map, unioned with the DB-backed
+`audience_grants` table (`POST`/`GET`/`DELETE {base_path}/api/audience-grants`,
+or the `micromegas-grants` CLI) — see [Audiences and
+Grants](authentication.md#audiences-and-grants) for the full model. `public`
+is the one built-in: every authenticated principal can read it, with no grant
+entry needed in either source.
 
 **The binding is immutable by design.** Once a key is minted or imported with
 an audience, that audience never changes for that key — not through a later
@@ -340,12 +343,16 @@ lists separate (i.e. ran with the proxy unconfigured on purpose) must
 re-audit `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS` **before**
 upgrading, not after.
 
-**Under `--disable-auth` on `analytics-web-srv`, both key-management route
-groups are unavailable — not just gated, but not merged at all.** With auth
-disabled, every request would otherwise be treated as an admin, which would
-let an unauthenticated caller mint/revoke real keys; instead both path
-prefixes are answered by a fixed 503 (`{"code": "AUTH_DISABLED", ...}`),
-including any sub-path.
+**Under `--disable-auth` on `analytics-web-srv`, all three key/grant-management
+route groups are unavailable — not just gated, but not merged at all.** With
+auth disabled, every request would otherwise be treated as an admin, which
+would let an unauthenticated caller mint/revoke real keys or grants; instead
+all three path prefixes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`,
+and `/api/audience-grants`) are answered by a fixed 503
+(`{"code": "AUTH_DISABLED", ...}`), including any sub-path. The third prefix
+is the DB-backed audience grant store's own admin route — see [Audiences and
+Grants](authentication.md#audiences-and-grants) and the `micromegas-grants`
+CLI.
 
 ## Cache and audit env vars
 

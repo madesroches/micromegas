@@ -1,6 +1,7 @@
 //! Extracted web-server builder used by both the standalone binary and the monolith.
 
 use crate::app_db;
+use crate::audience_grants;
 use crate::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
 use crate::data_source_cache::DataSourceCache;
 use crate::ingestion_keys;
@@ -257,10 +258,11 @@ async fn key_management_disabled() -> Response {
         .into_response()
 }
 
-/// Answers both key-management path prefixes with a fixed 503 instead of the
-/// real routers — merged only under `--disable-auth`, in place of
-/// `analytics_keys::analytics_keys_router` /
-/// `ingestion_keys::ingestion_keys_router`. Under
+/// Answers all three key-management/grant-management path prefixes with a
+/// fixed 503 instead of the real routers — merged only under
+/// `--disable-auth`, in place of `analytics_keys::analytics_keys_router` /
+/// `ingestion_keys::ingestion_keys_router` /
+/// `audience_grants::audience_grants_router`. Under
 /// `--disable-auth`, `build_protected_routes` layers a hardcoded
 /// `ValidatedUser { is_admin: true, .. }` on every request instead of running
 /// `cookie_auth_middleware`, so the `AdminUser` extractor would pass for any
@@ -287,6 +289,14 @@ fn key_management_disabled_router(base_path: &str) -> Router {
             &format!("{base_path}/api/ingestion-api-keys/{{*rest}}"),
             any(key_management_disabled),
         )
+        .route(
+            &format!("{base_path}/api/audience-grants"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/audience-grants/{{*rest}}"),
+            any(key_management_disabled),
+        )
 }
 
 /// `pub` (unlike the other `build_*` helpers here) so integration tests
@@ -295,6 +305,7 @@ fn key_management_disabled_router(base_path: &str) -> Router {
 /// key-management prefixes and that the real routers are never merged in
 /// that mode — rather than reimplementing the merge logic standalone and
 /// risking it drifting out of sync with production.
+#[expect(clippy::too_many_arguments)]
 pub fn build_protected_routes(
     base_path: &str,
     auth_state: &Option<AuthState>,
@@ -303,6 +314,7 @@ pub fn build_protected_routes(
     maps_state: maps::MapsState,
     analytics_keys_state: analytics_keys::AnalyticsKeysState,
     ingestion_keys_state: ingestion_keys::IngestionKeysState,
+    audience_grants_state: audience_grants::AudienceGrantsState,
 ) -> Router {
     let routes = Router::new()
         .route(
@@ -369,8 +381,10 @@ pub fn build_protected_routes(
         routes
             .merge(analytics_keys::analytics_keys_router(base_path))
             .merge(ingestion_keys::ingestion_keys_router(base_path))
+            .merge(audience_grants::audience_grants_router(base_path))
             .layer(Extension(analytics_keys_state))
             .layer(Extension(ingestion_keys_state))
+            .layer(Extension(audience_grants_state))
     } else {
         routes.merge(key_management_disabled_router(base_path))
     };
@@ -645,8 +659,15 @@ pub async fn run_web_server(
     // in `MICROMEGAS_DEFAULT_KEY_AUDIENCE` fails fast rather than surfacing as a per-request
     // 400 (AbAC Stage 4, #1372).
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
-        pool: analytics_keys_pool,
+        pool: analytics_keys_pool.clone(),
         default_audience: micromegas::auth::policy::default_key_audience_from_env("")?,
+    };
+
+    // Same telemetry-DB pool as the two key-management states above (#1489, AbAC Stage 6a) --
+    // `audience_grants` lives in the same database behind the same
+    // `MICROMEGAS_SQL_CONNECTION_STRING`.
+    let audience_grants_state = audience_grants::AudienceGrantsState {
+        pool: analytics_keys_pool,
     };
 
     let auth_state = if config.disable_auth {
@@ -668,6 +689,7 @@ pub async fn run_web_server(
             maps_state.clone(),
             analytics_keys_state,
             ingestion_keys_state,
+            audience_grants_state,
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));
 

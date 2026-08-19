@@ -9,8 +9,8 @@
 
 use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::policy::{
-    AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, MintPolicy, PUBLIC_AUDIENCE,
-    ReadPolicy, default_key_audience_from_env, is_valid_audience,
+    AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE,
+    ReadPolicy, default_key_audience_from_env, is_valid_audience, valid_selector,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
@@ -370,6 +370,150 @@ fn grants_parse_rejects_a_duplicate_audience_key() {
         .expect_err("a duplicate key must be rejected, not silently resolved to the last value");
     assert!(err.to_string().contains("team-alpha"));
 }
+
+// ---------------------------------------------------------------------------
+// valid_selector (#1489, AbAC Stage 6a: now `pub` for `analytics-web-srv`'s admin route)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn valid_selector_accepts_star_user_and_group() {
+    for selector in ["*", "user:alice@example.com", "group:eng"] {
+        assert!(
+            valid_selector(selector),
+            "expected {selector:?} to be valid"
+        );
+    }
+}
+
+#[test]
+fn valid_selector_rejects_empty_or_unrecognized_prefixes() {
+    for selector in ["", "user:", "group:", "users:alice", "eng"] {
+        assert!(
+            !valid_selector(selector),
+            "expected {selector:?} to be rejected"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AudienceGrants::from_rows / merge (#1489, AbAC Stage 6a)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn from_rows_builds_read_and_mint_lists_from_axis() {
+    let grants = AudienceGrants::from_rows([
+        (
+            "team-alpha".to_string(),
+            GrantAxis::Read,
+            "group:eng".to_string(),
+        ),
+        (
+            "team-alpha".to_string(),
+            GrantAxis::Mint,
+            "user:alice@example.com".to_string(),
+        ),
+    ])
+    .expect("valid rows");
+
+    let read_policy = AudienceReadPolicy::new(grants.clone());
+    let reader = caller(None, vec!["eng".to_string()], vec![], false);
+    let resolved = read_policy.resolve(&reader).await.expect("resolve");
+    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+
+    let mint_policy = AudienceMintPolicy::new(grants);
+    let minter = caller(Some("alice@example.com"), vec![], vec![], false);
+    let resolved = mint_policy
+        .resolve_audience(&minter, Some("team-alpha"))
+        .await;
+    assert_eq!(resolved.expect("alice can mint"), "team-alpha");
+}
+
+#[test]
+fn from_rows_rejects_an_invalid_audience() {
+    let err = AudienceGrants::from_rows([(
+        "group:everyone".to_string(),
+        GrantAxis::Read,
+        "*".to_string(),
+    )])
+    .expect_err("group:everyone is not a valid audience name");
+    assert!(err.to_string().contains("group:everyone"));
+}
+
+#[test]
+fn from_rows_rejects_an_invalid_selector() {
+    let err = AudienceGrants::from_rows([(
+        "team-alpha".to_string(),
+        GrantAxis::Read,
+        "not-a-selector".to_string(),
+    )])
+    .expect_err("expected an invalid selector to be rejected");
+    assert!(err.to_string().contains("not-a-selector"));
+}
+
+/// A selector present in both sources grants exactly the same access as being present in
+/// either alone -- no dedup, no special-cased "duplicate" handling.
+#[tokio::test]
+async fn merge_unions_disjoint_and_overlapping_audiences() {
+    let env_grants = grants(r#"{"team-alpha": ["group:eng"], "team-beta": ["*"]}"#);
+    let store_grants = AudienceGrants::from_rows([
+        (
+            "team-alpha".to_string(),
+            GrantAxis::Read,
+            "group:eng".to_string(),
+        ),
+        (
+            "team-gamma".to_string(),
+            GrantAxis::Read,
+            "user:carol@example.com".to_string(),
+        ),
+    ])
+    .expect("valid rows");
+
+    let merged = env_grants.merge(&store_grants);
+    let policy = AudienceReadPolicy::new(merged);
+
+    let eng_caller = caller(None, vec!["eng".to_string()], vec![], false);
+    let resolved = sorted(
+        policy
+            .resolve(&eng_caller)
+            .await
+            .expect("resolve")
+            .into_inner(),
+    );
+    assert!(resolved.contains(&"team-alpha".to_string()));
+
+    let anyone = caller(None, vec![], vec![], false);
+    let resolved = sorted(policy.resolve(&anyone).await.expect("resolve").into_inner());
+    assert!(resolved.contains(&"team-beta".to_string()));
+
+    let carol = caller(Some("carol@example.com"), vec![], vec![], false);
+    let resolved = sorted(policy.resolve(&carol).await.expect("resolve").into_inner());
+    assert!(resolved.contains(&"team-gamma".to_string()));
+}
+
+/// A selector present in *both* the env map and the store for the same audience costs a
+/// redundant comparison, never a wrong answer -- still resolves, no error, no duplicate entry
+/// visible in the resolved set (which is a `BTreeSet` regardless).
+#[tokio::test]
+async fn merge_tolerates_an_identical_selector_in_both_sources() {
+    let env_grants = grants(r#"{"team-alpha": ["group:eng"]}"#);
+    let store_grants = AudienceGrants::from_rows([(
+        "team-alpha".to_string(),
+        GrantAxis::Read,
+        "group:eng".to_string(),
+    )])
+    .expect("valid rows");
+
+    let merged = env_grants.merge(&store_grants);
+    let policy = AudienceReadPolicy::new(merged);
+    let eng_caller = caller(None, vec!["eng".to_string()], vec![], false);
+    let resolved = policy.resolve(&eng_caller).await.expect("resolve");
+    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+}
+
+// `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store` (#1489, AbAC Stage 6a):
+// store-outage/merge behavior is exercised in `rust/auth/tests/db_audience_grants_tests.rs`,
+// which owns `DbAudienceGrantsSource` construction.
 
 // ---------------------------------------------------------------------------
 // {prefix}_AUDIENCE_GRANTS env fallback
