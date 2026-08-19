@@ -39,16 +39,17 @@ audience that already has any grant row in the DB store — admin-created, self-
 earlier claim, or someone else's in-flight claim — still requires a matching grant, exactly as
 originally planned; nothing about the grants-only authorization decision changes for that case.
 
-**Mint grants are DB-only; the env map is not wired into the mint policy at all.** §3 builds
-`AudienceMintPolicy` from an *empty* env grant map plus the DB store — unlike the read side
-(`AudienceReadPolicy`), which Stage 6a deliberately kept unioning `{prefix}_AUDIENCE_GRANTS` as
-"the static/bootstrap layer" (`tasks/completed/1489_db_audience_grant_store_plan.md:15`). That
-choice was right for reads (an open/team deployment's env-declared grants keep working
-untouched) but is wrong for mint once claims are lazy: the existence check a claim relies on
-("does this audience already have a grant?") can only see what the DB store can see, so a mint
-audience declared *only* in someone's env map would look unclaimed and be squattable (§4a,
-Security). Restricting mint grants to the DB closes that gap by construction — there is nothing
-env-side left for the claim's existence check to miss.
+**Mint grants are DB-only; the env map is not wired into the mint policy at all.** §4's `mint_key`
+builds a fresh, one-audience `AudienceMintPolicy` per request from an *empty* env grant map plus a
+point query against the DB (no persistent store, §3) — unlike the read side (`AudienceReadPolicy`),
+which Stage 6a deliberately kept unioning `{prefix}_AUDIENCE_GRANTS` as "the static/bootstrap
+layer" (`tasks/completed/1489_db_audience_grant_store_plan.md:15`). That choice was right for reads
+(an open/team deployment's env-declared grants keep working untouched) but is wrong for mint once
+claims are lazy: the existence check a claim relies on ("does this audience already have a
+grant?") can only see what a direct DB read can see, so a mint audience declared *only* in
+someone's env map would look unclaimed and be squattable (§4a, Security). Restricting mint grants
+to the DB closes that gap by construction — there is nothing env-side left for the claim's
+existence check to miss.
 
 ## Current State
 
@@ -64,12 +65,13 @@ env-side left for the claim's existence check to miss.
   - A non-admin caller may mint `aud` only if a selector in `grants.mint_selectors(aud)` (env map)
     or the attached `DbAudienceGrantsSource` snapshot matches `caller` (`selector_matches`,
     `policy.rs:104-117`, matching `*`, `user:<email>`, or `group:<g>` against `caller.email`/
-    `caller.groups`). This stage wires `grants` to always be `AudienceGrants::empty()` (§3) — only
-    the DB store side of this check is ever live for mint.
+    `caller.groups`). This stage never attaches a store at all: §4 builds a fresh, one-audience
+    `grants` per request from a point query against `audience_grants` — only the query-derived
+    side of this check is ever live for mint.
   - `AudienceMintPolicy::new(grants: AudienceGrants) -> Self` and
     `.with_store(Some(Arc<DbAudienceGrantsSource>)) -> Self` are the only constructors — there is
     **no `from_env`** (unlike `AudienceReadPolicy`, which has both `new` and `from_env`,
-    `policy.rs:440-461`).
+    `policy.rs:440-461`). This stage calls only `new`; `.with_store` stays unused for mint.
 - **The mint route** (`rust/analytics-web-srv/src/ingestion_keys.rs::mint_key`, lines 211-260) is
   `AdminUser`-gated (`AdminUser(user): AdminUser`, line 213) and resolves the audience via a local
   free function `resolve_audience` (lines 172-193: `requested → state.default_audience →
@@ -91,8 +93,9 @@ env-side left for the claim's existence check to miss.
   a whole-crate search, `AuthContext` is inserted into extensions **only** by the enabled-auth path
   (`handlers.rs:516`). A non-admin extractor reading `AuthContext` would break local/dev/test runs
   under `--disable-auth` without a fix here.
-- **`ReadPolicy` wiring is the pattern to mirror for `MintPolicy`**, but no `MintPolicy` wiring
-  exists anywhere to copy verbatim. `public/src/servers/flight_sql_server.rs:306-314` and
+- **`ReadPolicy` wiring is the existing pattern for a DB-backed, cached grant store — but this
+  stage's `MintPolicy` does not follow it (Design §3): there is no `MintPolicy` wiring anywhere to
+  copy, and this stage doesn't add a persistent one.** `public/src/servers/flight_sql_server.rs:306-314` and
   `monolith/src/main.rs:271-281` both do:
   ```rust
   let audience_grants_pool = dedicated_key_store_pool(&lake_pool);
@@ -238,49 +241,26 @@ the day someone changes the disabled-auth branch to merge the real routers for s
 Self-service mint itself remains **unavailable under `--disable-auth`** either way — anyone
 verifying this stage end-to-end needs auth enabled (Testing Strategy).
 
-### 3. Wire a `MintPolicy` in `analytics-web-srv` — DB store only, no env grant map
+### 3. Self-service mint knobs — no persistent `MintPolicy` wiring
 
-`web_server.rs::run_web_server`, beside the existing `ingestion_keys_state` construction
-(~line 667): build the first production `Arc<dyn MintPolicy>`, mirroring the `ReadPolicy` wiring
-in §"Current State" but built from parts since `AudienceMintPolicy` has no `from_env`, and
-**deliberately not** unioning `{prefix}_AUDIENCE_GRANTS` the way `AudienceReadPolicy::from_env`
-does for reads:
+Unlike the `ReadPolicy` wiring `analytics-web-srv` would otherwise mirror (§"Current State"), this
+stage builds no process-wide `Arc<dyn MintPolicy>` at startup, and no dedicated pool for one: there
+is nothing to prime or cache. §4's `mint_key` resolves each request's grants with a point query
+against `audience_grants` and builds a fresh, one-audience `AudienceMintPolicy::new(grants)` (its
+`store` left `None`, the `new` default) on the spot, on the same pool the handler already has —
+see §4 for the full mechanism and why a point query, not a `DbAudienceGrantsSource` with a TTL, is
+the right shape for this route. `AudienceGrants::empty()` plus
+`.with_store(Some(Arc<DbAudienceGrantsSource>))` — the shape the read side uses — is never
+constructed for mint at all (Overview, "Mint grants are DB-only").
 
-```rust
-let mint_policy: Arc<dyn MintPolicy> = Arc::new(
-    AudienceMintPolicy::new(AudienceGrants::empty()).with_store(
-        analytics_keys_pool.as_ref().map(|pool| {
-            Arc::new(DbAudienceGrantsSource::new(
-                dedicated_key_store_pool(pool),
-                DbAudienceGrantsConfig::from_env_with_prefix(""),
-            ))
-        }),
-    ),
-);
-```
+What *is* resolved once at startup is the feature gate that decides whether a non-admin caller
+reaches that per-request resolution in the first place.
 
-`AudienceGrants::empty()` (infallible — no `?`, unlike `AudienceReadPolicy::from_env`), not
-`AudienceGrants::from_env("")?`: mint grants are **DB-only** in this stage (see Overview). The
-Stage 6a DB store is the source of truth for who may mint into what; the env map remains, on the
-read side only, the static/bootstrap layer Stage 6a kept it as
-(`tasks/completed/1489_db_audience_grant_store_plan.md:15`, "unioned with the store"). A
-lazily-claiming self-service deployment manages every mint grant in the DB — first through §4a's
-claim, thereafter (revocation, re-grants, admin-created team grants) through the existing
-`/api/audience-grants` admin API — so there is no bootstrap need for mint the way there is for
-read. The store is `None` only when `analytics_keys_pool` is `None`
-(`MICROMEGAS_SQL_CONNECTION_STRING` unset) — same graceful-without-DB shape every other state in
-this module already uses; with no store attached, `AudienceGrants::empty()` alone denies every
-non-admin mint outright (no grant can ever be found), which is the correct fail-closed default
-for a deployment that hasn't configured the telemetry DB at all.
-
-Add `mint_policy: Arc<dyn MintPolicy>` as a new field on `IngestionKeysState`
-(`ingestion_keys.rs:53-61`), set from the value above.
-
-**Off by default: `MICROMEGAS_SELF_SERVICE_MINT`.** Everything above — building `mint_policy` and
-having `mint_key` consult it for non-admin callers — is otherwise unconditional for every
-deployment that upgrades to this stage: there is nothing else in this design that keeps an
-existing admin-only deployment's authorization surface from silently widening to "every
-authenticated user can mint standing credentials and create audiences" the moment it upgrades.
+**Off by default: `MICROMEGAS_SELF_SERVICE_MINT`.** Resolving mint authorization per request (§4)
+for a non-admin caller is otherwise unconditional for every deployment that upgrades to this
+stage: there is nothing else in this design that keeps an existing admin-only deployment's
+authorization surface from silently widening to "every authenticated user can mint standing
+credentials and create audiences" the moment it upgrades.
 `IngestionKeysState` gains a `self_service_mint_enabled: bool` field, resolved once at startup
 from `MICROMEGAS_SELF_SERVICE_MINT` (empty-prefix convention, parsed the same
 `v == "true" || v == "1"` way `web_server.rs:123` already parses its own boolean knob), default
@@ -302,23 +282,6 @@ backstop against a runaway client or an abusive caller, not a quota routine use 
 around or bump into: a caller with several machines and CI runners sits far below either default,
 so the defaults are set deliberately high precisely to keep the admin-only recovery path below a
 pathological case rather than routine friction.
-
-**Monolith prefix parity is automatic — no plumbing needed.** An earlier draft of this plan
-flagged that monolith namespaces the web role's other knobs under `MICROMEGAS_ANALYTICS`
-(`admin_var_name`, `main.rs:295-300`) while `AudienceGrants::from_env("")` would have read only
-the unprefixed `MICROMEGAS_AUDIENCE_GRANTS`. That mismatch is moot now: the mint policy never
-reads `{prefix}_AUDIENCE_GRANTS` in any form (above), so there is no prefixed env var for a
-monolith operator to set and have silently ignored. The only env knob the mint policy still reads
-is the TTL, `DbAudienceGrantsConfig::from_env_with_prefix("")` — an empty-prefix call always
-resolves to the unprefixed `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`
-(`resolve_prefixed_var`/`resolve_u64`, `env.rs:15-27`, `db_api_key.rs:81-91`), so a monolith
-operator who sets `MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` for the flightsql
-read-side store (which *does* check that prefixed name first, `main.rs:271-281`) won't have it
-picked up by the mint-side store too; both then fall back to the same unprefixed default (60s).
-Accepted without further plumbing — unlike the dropped `AUDIENCE_GRANTS` mismatch, getting this
-one "wrong" only means the mint store's cache staleness window can silently differ from the read
-store's under monolith, never an authorization decision, so it isn't worth the same threading
-effort `admin_var_name` gets.
 
 ### 4. `mint_key` calls `MintPolicy::resolve_audience`, preserving today's 400s
 
@@ -452,34 +415,61 @@ async fn mint_key(
         }
     }
 
-    let audience = match state.mint_policy.resolve_audience(&caller, Some(&candidate)).await {
+    // Mint authorization is a point query, not a cached snapshot (§3): no `DbAudienceGrantsSource`
+    // is attached for mint at all. `audience` is the leading column of `audience_grants`'s
+    // `PRIMARY KEY (audience, axis, selector)` (Current State) and there is no other index, so
+    // this is an index-only scan, not a table scan -- the full-table read
+    // `DbAudienceGrantsSource::fetch` does for the *read* axis would be pure overhead here, since
+    // `AudienceMintPolicy::resolve_audience` only ever consults `mint_selectors(&candidate)`,
+    // i.e. exactly one audience's selectors.
+    let mint_selectors: Vec<String> = sqlx::query_scalar(
+        "SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'",
+    )
+    .bind(&candidate)
+    .fetch_all(&pool)
+    .await
+    // A failed query is a DB outage, not a denial -- must not be misattributed as "you have no
+    // grant" (Security), so it is mapped to `Unavailable` explicitly rather than falling through
+    // the blanket `From<sqlx::Error>` this module otherwise uses for `Database` (500).
+    .map_err(|e| IngestionKeyError::Unavailable(e.to_string()))?;
+
+    let grants = AudienceGrants::from_rows(
+        mint_selectors
+            .into_iter()
+            .map(|selector| (candidate.clone(), GrantAxis::Mint, selector)),
+    )
+    // Every row read back out of `audience_grants` already passed its own `CHECK` constraints on
+    // write (Current State), so this arm is unreachable in practice; kept as a real status code
+    // rather than `.unwrap()`, for the same fail-closed reason `MintGate` (§4) gives its own
+    // `.ok_or(...)`.
+    .map_err(|e| IngestionKeyError::Unavailable(e.to_string()))?;
+
+    // `store: None` (the `new` default) -- this stage never attaches a `DbAudienceGrantsSource`
+    // to a mint policy (§3). No change to `micromegas-auth` is needed for any of this: `from_rows`,
+    // `GrantAxis`, `AudienceMintPolicy::new`, and `MintPolicy` are all already public, and the
+    // match decision below still happens inside the policy, so neither `mint_selectors` nor
+    // `selector_matches` needs to be exposed for it (`selector_matches` is made `pub` in §5, for
+    // an unrelated reason -- the `/my-audiences` route -- and stays that way).
+    let policy = AudienceMintPolicy::new(grants);
+
+    let audience = match policy.resolve_audience(&caller, Some(&candidate)).await {
         Ok(aud) => aud,
-        // The policy itself could not be evaluated (e.g. a grant-store cold-start outage,
-        // `DbAudienceGrantsSource::current`) -- not a denial, and must not be treated as one:
-        // surfacing it as `Forbidden` (or, worse, routing it into the claim path below) would
-        // misattribute a transient store outage as "you have no grant" for up to the store's
-        // cache TTL, and could even let a caller "claim" an audience whose real grant just
-        // happened to be unreadable at that moment.
-        Err(e) if e.downcast_ref::<ProviderUnavailable>().is_some() => {
-            return Err(IngestionKeyError::Unavailable(e.to_string()));
-        }
         Err(e) if caller.is_admin => return Err(IngestionKeyError::Forbidden(e.to_string())), // malformed-audience arm; `candidate` is already valid-format, so unreachable in practice
         Err(_) => {
-            // Non-admin, genuinely no grant for `candidate` (a store outage is ruled out above)
-            // -- try the lazy claim (§4a) only when the caller explicitly named this audience
-            // (not merely `state.default_audience`).
+            // Non-admin, no matching `mint` grant for `candidate` among the rows the point query
+            // above just read -- try the lazy claim (§4a) only when the caller explicitly named
+            // this audience (not merely `state.default_audience`).
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
             match (explicit, caller.email.as_deref()) {
                 (true, Some(_email)) => {
                     // The reserved-name check for `public`/`state.default_audience` lives inside
-                    // `try_claim_and_mint` itself now (§4a), *after* its uncached existence check
-                    // and self-healing recheck -- not here -- so a caller with a real, just-written
-                    // `mint` grant on either name still succeeds via that recheck instead of being
-                    // refused for up to the grant-store cache TTL.
+                    // `try_claim_and_mint` itself (§4a), *after* its existence check -- not here --
+                    // so a caller with a real, already-committed `mint` grant on either name would
+                    // already have succeeded above, via the point query just run, rather than
+                    // reaching this branch at all (§4a).
                     //
-                    // Commits its own grant + key rows (or, on a self-healing recheck, just the
-                    // key row -- §4a) and returns the finished response directly -- `mint_key`
-                    // never reaches the `INSERT` below for this path.
+                    // Commits its own grant + key rows and returns the finished response directly
+                    // -- `mint_key` never reaches the `INSERT` below for this path.
                     return try_claim_and_mint(
                         &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
                     )
@@ -509,8 +499,8 @@ callers who rely on it (§4a, Trade-offs).
 Add `IngestionKeyError::Forbidden(String)` (403, `{code: "FORBIDDEN", message}`),
 `IngestionKeyError::Unavailable(String)` (503, `{code: "UNAVAILABLE", message}` — distinct from
 the existing `NotConfigured`, whose message is specifically about an unset
-`MICROMEGAS_SQL_CONNECTION_STRING` and would mislead when the real cause is a *configured* store
-that failed to answer), `IngestionKeyError::Unauthenticated(String)` (401,
+`MICROMEGAS_SQL_CONNECTION_STRING` and would mislead when the real cause is a *configured*
+database that failed to answer the mint point query above), `IngestionKeyError::Unauthenticated(String)` (401,
 `{code: "UNAUTHENTICATED", message}`, with a matching `impl From<Unauthenticated> for
 IngestionKeyError` for `MintGate`'s `?`, above), and `IngestionKeyError::Conflict(String)` (409,
 `{code: "CLAIM_CONTENDED", message}` — the lock-contention arm in `try_claim_and_mint`, §4a, kept
@@ -527,8 +517,9 @@ this stage's decision (per the issue discussion) narrows only "who may call the 
 ### 4a. Lazy audience claim on mint
 
 **Trigger.** Only when: self-service minting is enabled (`state.self_service_mint_enabled`, §3),
-`state.mint_policy.resolve_audience` denied a **non-admin** caller (never a store-outage `Err` —
-ruled out in §4), the caller supplied `body.audience` explicitly (not merely the
+the per-request, point-query-backed `resolve_audience` check (§4) denied a **non-admin** caller
+(never a DB-outage `Err` — that failure mode is mapped to a 503 before this decision is even
+reached, §4), the caller supplied `body.audience` explicitly (not merely the
 `state.default_audience` fallback), and `caller.email` is `Some` (a claim writes `user:<email>`
 selectors — a caller authenticated only by `subject`, e.g. a non-OIDC service credential, has no
 selector form to claim with under today's model and is denied the ordinary way instead). This is
@@ -549,9 +540,7 @@ for `selector = 'user:<caller email>'` **and** `created_by = '<caller email>'` i
 the same locked transaction — the `created_by` filter scopes the bound to audiences the caller
 claimed themselves, so a `mint` row an admin wrote for the same selector (e.g. team access granted
 via `POST /api/audience-grants`) never counts against it — but only
-*after* the existence check below has determined the audience is genuinely unowned — a caller who
-turns out to already hold a matching grant (the self-healing recheck below) is minting, not
-claiming, writes no new grant row, and so is never charged against this bound. **This bound is
+*after* the existence check below has determined the audience is genuinely unowned. **This bound is
 exact only for sequential claims, or for concurrent claims that happen to name the same audience**
 (already serialized by the per-audience advisory lock below): the lock taken here is keyed on
 `audience`, not on the caller, so N concurrent claim requests from one caller naming N distinct,
@@ -565,20 +554,21 @@ or above the limit, the claim is refused with a `Forbidden` naming the limit, ne
 silent no-op. An admin can raise the knob, or free room by revoking one of the caller's existing
 claimed audiences through the existing `DELETE /api/audience-grants` admin route (Trade-offs).
 
-**Reserved-name check — inside `try_claim_and_mint`, after the existence check, not before.**
+**Reserved-name check — inside `try_claim_and_mint`'s `!exists` (genuinely-fresh) branch.**
 `candidate == PUBLIC_AUDIENCE` and `candidate == state.default_audience` are the two reserved
-names a claim must never originate. The check runs inside `try_claim_and_mint`'s `!exists`
-(genuinely-fresh) branch, *after* the existence check and its self-healing recheck below — not as
-a short-circuit before the transaction opens — so it restricts *claims* only: a caller who already
-holds a real, committed `mint` grant on `public` or `state.default_audience` (an admin-authored
-row, or the caller's own earlier claim) still succeeds via the self-healing recheck even when
-`state.mint_policy.resolve_audience`'s cached snapshot hasn't picked it up yet (Cache TTL, below).
-Rejecting up front, before the existence check ever ran, would instead refuse that caller for as
-long as the cache TTL window lasts. (`public` already can't be *read*-restricted since every
-authenticated caller reads it regardless of grants, `AudienceReadPolicy::resolve`; reserving it
-from *claims* keeps a non-admin from ever originating exclusive *mint* rights over the one
-audience every reader can see.) `state.default_audience` is analytics-web-srv's own knob, read
-under this process's own convention, so no cross-process prefix question arises.
+names a claim must never originate. This check belongs on the *claim* path, not the mint path
+(§4): a caller who already holds a real, committed `mint` grant on `public` or
+`state.default_audience` never reaches `try_claim_and_mint` at all, since `resolve_audience`'s
+point query (§4) reads that grant fresh, on every request, and approves the mint directly. Only a
+caller with *no* grant on one of these two names — genuinely attempting to originate one — reaches
+this check at all, so placing it inside the fresh-audience branch (after the existence check every
+claim already runs, rather than as a short-circuit before the transaction opens) restricts
+*claims* only, with no window during which a legitimately-granted caller could be refused.
+(`public` already can't be *read*-restricted since every authenticated caller reads it regardless
+of grants, `AudienceReadPolicy::resolve`; reserving it from *claims* keeps a non-admin from ever
+originating exclusive *mint* rights over the one audience every reader can see.)
+`state.default_audience` is analytics-web-srv's own knob, read under this process's own
+convention, so no cross-process prefix question arises.
 
 **The unstamped-audience label is *not* special-cased here — it is protected by a placeholder
 grant instead, the same mechanism already used for reserving any other name (Trade-offs).** An
@@ -639,9 +629,10 @@ async fn try_claim_and_mint(
     // request against any of those states would then fail pool acquisition after the pool's 2s
     // `acquire_timeout` -- a 500. The `_try_` form returns immediately instead. Postgres advisory
     // locks are server-instance-wide, not connection- or pool-scoped, so this still correctly
-    // serializes two concurrent claims for the *same* audience name across different
-    // pools/processes (mint_key's own pool here vs. the mint policy's dedicated
-    // DbAudienceGrantsSource pool, §3) -- a plain row lock can't be taken here instead, since
+    // serializes two concurrent claims for the *same* audience name across different processes --
+    // e.g. two `analytics-web-srv` replicas, each running its own mint point query and claim
+    // transaction on its own `analytics_keys_pool` (there is only ever one pool per process now,
+    // §3) -- a plain row lock can't be taken here instead, since
     // there is no pre-existing row for a genuinely-fresh audience to lock. `_xact_lock` (not the
     // session-level `pg_advisory_lock`) releases automatically at COMMIT/ROLLBACK either way, so
     // a claim that errors out never leaks a held lock into the next request the pool hands this
@@ -693,37 +684,23 @@ async fn try_claim_and_mint(
     .await?;
 
     if exists {
-        // Self-healing recheck, uncached -- unlike `state.mint_policy.resolve_audience`, which
-        // answers from `DbAudienceGrantsSource`'s <=`cache_ttl_secs` snapshot (Cache TTL, below).
-        // A mint-eligible caller lands in this function whenever a real `mint` grant already
-        // exists in the DB but hasn't reached this process's cached snapshot yet -- an admin's
-        // just-written grant, or the caller's own prior claim, both within the last
-        // `cache_ttl_secs`. Re-reading `audience_grants` directly, inside this same locked
-        // transaction, makes that window invisible to callers instead of turning it into a
-        // spurious "already exists" 403.
-        let mint_selectors: Vec<String> = sqlx::query_scalar(
-            "SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'",
-        )
-        .bind(audience)
-        .fetch_all(&mut *tx)
-        .await?;
-        if !mint_selectors.iter().any(|s| selector_matches(s, caller)) {
-            tx.rollback().await?;
-            return Err(IngestionKeyError::Forbidden(format!(
-                "audience {audience:?} already exists and the caller has no grant for it"
-            )));
-        }
-        // Caller already holds a matching `mint` grant -- this is an ordinary mint that
-        // `resolve_audience` would itself have approved on a fresher snapshot, not a claim: fall
-        // through to the key insert below without writing any new grant row.
+        // No recheck needed: reaching this function at all already means `resolve_audience` (§4)
+        // ran a fresh, uncached point query against exactly this audience's `mint` selectors
+        // moments earlier in this same request and found no match for the caller -- there is no
+        // cached snapshot here for a recheck to be self-healing against. An audience that already
+        // carries a grant row (any axis/selector) or a key row, and did not match the caller in
+        // that check, is an ordinary denial.
+        tx.rollback().await?;
+        return Err(IngestionKeyError::Forbidden(format!(
+            "audience {audience:?} already exists and the caller has no grant for it"
+        )));
     } else {
-        // Genuinely fresh audience -- no existing grant or key row, and (having reached here)
-        // no matching `mint` grant was found by the recheck above either, so this is a real claim
-        // attempt, not a stale-cache mint. Reject the two reserved names here, not before the
-        // transaction opened: `public` and `state.default_audience` must never be *originated* by
-        // a claim, but a caller who already holds a genuine `mint` grant on either name took the
-        // `if exists` branch above and already succeeded there, via the self-healing recheck --
-        // this check never overrides that.
+        // Genuinely fresh audience -- no grant row and no key row for it at all, so this is a
+        // real claim attempt. Reject the two reserved names here, not before the transaction
+        // opened: `public` and `state.default_audience` must never be *originated* by a claim,
+        // but a caller who already holds a genuine `mint` grant on either name never reaches this
+        // branch -- `resolve_audience`'s point query (§4) would already have found that grant and
+        // approved the mint directly.
         if audience == PUBLIC_AUDIENCE || Some(audience) == state.default_audience.as_deref() {
             tx.rollback().await?;
             return Err(IngestionKeyError::Forbidden(format!(
@@ -772,15 +749,13 @@ async fn try_claim_and_mint(
     tx.commit().await?;
 
     // `mint_key`'s own mint audit line (`ingestion_keys.rs:244`) is never reached for this path --
-    // it returns from here directly (§4) -- so log the mint here instead, same shape as that
-    // existing line. Separately, log the claim itself (the two new grant rows) only when this call
-    // actually wrote them (`!exists` above): the self-healing recheck (`exists` true) mints but
-    // claims nothing new, and gets only the mint line, matching what an ordinary
-    // `resolve_audience`-approved mint would have logged.
+    // it returns from here directly (§4) -- so log both the mint and the claim here instead. The
+    // `exists`-true branch above always returns early, so every call that reaches this point took
+    // the `else` (genuinely-fresh) branch and wrote both new grant rows -- the claim line is
+    // unconditional; there is no "mint an existing grant without claiming" path left to
+    // distinguish it from.
     info!(key_id = %key_id, audience = %audience, name = %body.name, created_by = %caller_email, "minted ingestion api key");
-    if !exists {
-        info!(audience = %audience, selector = %selector, created_by = %caller_email, axes = "mint,read", "claimed audience via lazy self-service mint");
-    }
+    info!(audience = %audience, selector = %selector, created_by = %caller_email, axes = "mint,read", "claimed audience via lazy self-service mint");
 
     Ok(MintResponse {
         key_id,
@@ -805,25 +780,6 @@ validation/SQL/error shapes.
 it. Without the read grant, a freshly self-served ingestion key would stamp data the creator could
 never see through `AudienceReadPolicy` (Security).
 
-**Cache TTL.** `DbAudienceGrantsSource` snapshots (this process's own store, and any other
-process's) have a ~60s TTL (`db_audience_grants.rs:33-42`), and two different directions matter:
-
-- *Into* the transaction: `state.mint_policy.resolve_audience`'s denial that routed this request
-  into `try_claim_and_mint` at all may itself be stale -- an admin grant, or the caller's own prior
-  claim, can already be committed in the DB without yet being visible to this process's cached
-  snapshot. `try_claim_and_mint`'s existence check reads `audience_grants` directly, uncached, so
-  this is a self-healing recheck rather than a real claim in that case (the code above) --
-  `mint_key`'s caller-visible outcome (success) is the same either way, so this window is invisible
-  to callers regardless of which arm actually ran.
-- *Out of* the transaction: after a successful claim, `mint_key` returns the `MintResponse` built
-  directly from the just-committed transaction, never re-calling
-  `state.mint_policy.resolve_audience` to "confirm" it — so this request is never re-denied by a
-  stale pre-claim snapshot. The TTL still matters for *other* processes: another
-  `analytics-web-srv` replica or flight-sql-srv/monolith's own `DbAudienceGrantsSource` may take up
-  to its own TTL to see the new read grant, so the creator's *next* FlightSQL query against the
-  freshly-claimed audience could still 0-row (not error) for up to that window if it lands on a
-  different process than the one that committed the claim.
-
 **Race outcomes, concretely:**
 - Two non-admin callers claim the same fresh audience name concurrently, same or different
   processes: `pg_try_advisory_xact_lock` lets exactly one of them proceed; the other gets `false`
@@ -837,11 +793,9 @@ process's) have a ~60s TTL (`db_audience_grants.rs:33-42`), and two different di
   `resolve_audience` denial, no claim attempted (the audience already has a `mint` selector row —
   just not one that matches this caller).
 - A caller with a real, already-committed `mint` grant for `candidate` (admin-created, or their own
-  earlier claim) requests it again before this process's `DbAudienceGrantsSource` snapshot has
-  refreshed (within `cache_ttl_secs`, default 60s): `resolve_audience` denies on the stale
-  snapshot, routing this into `try_claim_and_mint`, but the uncached existence-plus-match recheck
-  there finds the caller's own grant and mints the key without writing a new claim — a plain
-  success, never a "no grant" 403 and never counted against the per-caller claim bound.
+  earlier claim) requests it again: `resolve_audience`'s point query (§4) reads that grant fresh,
+  on every request, and approves the mint directly — this caller never reaches
+  `try_claim_and_mint` at all, and nothing is counted against the per-caller claim bound.
 - An admin writes a grant (`POST /api/audience-grants`) or mints directly for the very same fresh
   audience while a claim's existence check is in flight: `create_grant`/`insert_or_get` and the
   ordinary `mint_key` INSERT take no advisory lock, so this race is not serialized by §4a's lock at
@@ -853,9 +807,10 @@ process's) have a ~60s TTL (`db_audience_grants.rs:33-42`), and two different di
   matching `mint` grant already committed for it: denied by the reserved-name check inside
   `try_claim_and_mint`'s fresh-audience branch, after the same existence check every claim already
   runs — never claimable, but not before any DB access. A caller who *does* already hold a real,
-  committed `mint` grant on one of these two names succeeds instead, via the self-healing recheck
-  above. An unstamped-audience label, if the deployment uses one, is denied the same way, once its
-  placeholder grant row exists (§4a) — a DB round trip, but still denied, never claimable.
+  committed `mint` grant on one of these two names never reaches `try_claim_and_mint` at all --
+  `resolve_audience`'s point query (§4) already approved the mint directly. An unstamped-audience
+  label, if the deployment uses one, is denied the same way, once its placeholder grant row exists
+  (§4a) — a DB round trip, but still denied, never claimable.
 - A non-admin who already holds `state.max_claims_per_caller` claimed audiences requests a new,
   genuinely-fresh name: denied inside the transaction before either `INSERT` runs (per-caller
   claim bound), not a duplicate-owner outcome and not the ordinary "no grant" message.
@@ -1087,17 +1042,18 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 2. `auth/mod.rs`: add `AuthenticatedUser`/`Unauthenticated` to the `pub use handlers::{...}`
    re-export list, lines 33-36 (§1) — without this the new types are unreachable from
    `ingestion_keys.rs`/`audience_grants.rs`.
-3. `web_server.rs`: fix the `--disable-auth` `AuthContext` gap, as defensive parity only (§2);
-   build `mint_policy` from `AudienceGrants::empty()` + the DB store, no env map (§3), and add it,
-   along with the three new knob-derived fields — `self_service_mint_enabled: bool`,
-   `max_claims_per_caller: i64`, `max_keys_per_caller: i64` — to `IngestionKeysState`; also resolve
-   `self_service_mint_enabled` a second time onto `AudienceGrantsState`, for `/my-audiences` (§5) to gate on.
+3. `web_server.rs`: fix the `--disable-auth` `AuthContext` gap, as defensive parity only (§2); add
+   the three new knob-derived fields — `self_service_mint_enabled: bool`,
+   `max_claims_per_caller: i64`, `max_keys_per_caller: i64` — to `IngestionKeysState` (§3; there is
+   no `mint_policy` field to build, since mint authorization is resolved per request in `mint_key`
+   itself, §4); also resolve `self_service_mint_enabled` a second time onto `AudienceGrantsState`,
+   for `/my-audiences` (§5) to gate on.
 4. `policy.rs`: make `selector_matches` `pub` (§5, same precedent as `valid_selector` at Stage 6a).
 5. `ingestion_keys.rs`: add the `MintGate` `FromRequestParts` extractor (wraps `AuthenticatedUser`
    plus the off-by-default gate, §4) and switch `mint_key` to it, pre-validate via the untouched
-   free `resolve_audience` (preserving today's 400s), then consult
-   `state.mint_policy.resolve_audience` for authorization only (§4); add the lazy-claim path,
-   `try_claim_and_mint` (§4a); add `IngestionKeyError::Forbidden`, `IngestionKeyError::Unavailable`
+   free `resolve_audience` (preserving today's 400s), then resolve authorization with a
+   per-request point query against `audience_grants` plus a freshly-built `AudienceMintPolicy`
+   (§4); add the lazy-claim path, `try_claim_and_mint` (§4a); add `IngestionKeyError::Forbidden`, `IngestionKeyError::Unavailable`
    (503, distinct from `NotConfigured`, §4), `IngestionKeyError::Unauthenticated` (401, `MintGate`'s
    fallback, §4), and `IngestionKeyError::Conflict` (409 `CLAIM_CONTENDED`, distinct from
    `Forbidden`, for lock contention in `try_claim_and_mint`, §4a).
@@ -1110,10 +1066,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
    `analytics-web-srv/tests/routing_tests.rs:405-408` — both construct `IngestionKeysState`
-   directly (22 sites total, not just the 21 in `ingestion_keys_tests.rs`) and need all four new
-   `IngestionKeysState` fields: `mint_policy` (default:
-   `Arc::new(AudienceMintPolicy::new(AudienceGrants::empty()))`, reproducing today's "admin only, no
-   store" behavior for tests that don't care), `self_service_mint_enabled: false`,
+   directly (22 sites total, not just the 21 in `ingestion_keys_tests.rs`) and need all three new
+   `IngestionKeysState` fields: `self_service_mint_enabled: false`,
    `max_claims_per_caller: 25`, `max_keys_per_caller: 100`. In
    `ingestion_keys_tests.rs`: extend `build_handler_router_with_user` (line 68) to also layer an
    `AuthContext`; add an `AuthContext`-builder test helper (mirror
@@ -1123,8 +1077,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    knob-off non-admin and assert 403, not 422; needs no DB, same as the existing 400 tests. Confirm
    `mint_400_for_invalid_audience` and `mint_400_names_the_default_audience_knob` (lines 303-345)
    still pass unchanged (§4's whole point). Add: a **live-DB** positive test (non-admin with a
-   matching `mint` grant succeeds, no claim attempted — `state.mint_policy.resolve_audience` itself
-   reaches `DbAudienceGrantsSource`, a real DB round trip, regardless of whether the request goes on
+   matching `mint` grant succeeds, no claim attempted — the point query behind `resolve_audience`
+   (§4) itself reaches the DB, a real round trip, regardless of whether the request goes on
    to insert a key row); a negative test (`requested: None`, no `default_audience`,
    still rejected for a non-admin caller, still a 400 per §4 — not the claim path, since there's no
    explicit audience to claim); a **live-DB** claim test (fresh audience, non-admin, explicit
@@ -1183,7 +1137,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 ### Phase 4 — Docs
 12. `mkdocs/docs/admin/authentication.md`: replace the "deferred to Stage 6" placeholders
     (~334-335, ~363-364) with a worked mint-grant example and the new script's usage; state that
-    self-service claims require all mint grants to live in the DB store (§3) — a mint audience
+    self-service claims require all mint grants to live in the DB (§3) — a mint audience
     declared only via `{prefix}_AUDIENCE_GRANTS` is invisible to the claim's existence check and
     could be squatted (Security); document that a deployment using an unstamped-audience label
     (`{prefix}_UNSTAMPED_AUDIENCE`) must pre-create a placeholder `audience_grants` row for it (any
@@ -1196,15 +1150,17 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     (Trade-offs); add a `/my-audiences` row (noting it is non-admin-accessible, unlike every other
     row in the table) to the "**HTTP admin routes**, `AdminUser`-gated" route table (~408-416),
     since that header's blanket claim stops being accurate once this row exists; also correct
-    `:400-402`'s claim that `analytics-web-srv` "never constructs a `DbAudienceGrantsSource` and
-    caches nothing itself" — §3 has it construct exactly one, with its own cache TTL — and
     `:402-406`'s claim that "a selector present in the env map, the store, or both grants exactly
     the same access ... there is no precedence to reason about" — still true for read, but false
     for the mint axis now that mint grants are DB-only (§3): an env-only mint selector is inert.
+    (`:400-402`'s claim that `analytics-web-srv` "never constructs a `DbAudienceGrantsSource` and
+    caches nothing itself" needs no correction — it stays true, since this stage never attaches one
+    for mint either, §3.)
     `mkdocs/docs/admin/monolith.md:40-63`: add a row for each of the three new knobs to the env-var
-    table (the same table that documents `MICROMEGAS_DEFAULT_KEY_AUDIENCE`), including a mention in
-    its existing "one prefix asymmetry" note that these, too, stay unprefixed under monolith (§3,
-    "Monolith prefix parity is automatic").
+    table (the same table that documents `MICROMEGAS_DEFAULT_KEY_AUDIENCE`), noting in its existing
+    "one prefix asymmetry" note that these three, like `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, stay
+    unprefixed under monolith too — the standalone-service, empty-prefix convention every
+    analytics-web-srv-owned knob on this page already follows (Current State).
     `mkdocs/docs/admin/web-app.md:55-80`: add the same three knobs to the standalone-service env
     export block.
 13. `mkdocs/docs/admin/api-keys.md`: sweep for admin-gating claims that go stale once mint is
@@ -1223,7 +1179,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     block, following the Stage 5/6a convention already in the doc.
 15. `CHANGELOG.md`: add an `## Unreleased` entry, following the Stage 1/2/4/6a precedent (#1370,
     #1372, #1373, #1489) — a **Minor breaking change** clause for `IngestionKeysState` gaining
-    required `mint_policy`/`self_service_mint_enabled`/`max_claims_per_caller`/
+    required `self_service_mint_enabled`/`max_claims_per_caller`/
     `max_keys_per_caller` fields and `micromegas_auth::policy::selector_matches`
     becoming `pub`, plus a behavior-change upgrade note covering the new non-admin mint route
     behavior (off by default, `MICROMEGAS_SELF_SERVICE_MINT`), the new `/my-audiences` route, and the new
@@ -1242,9 +1198,10 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 
 - `rust/analytics-web-srv/src/auth/handlers.rs`: `AuthenticatedUser` extractor.
 - `rust/analytics-web-srv/src/auth/mod.rs`: re-export `AuthenticatedUser`/`Unauthenticated`.
-- `rust/analytics-web-srv/src/web_server.rs`: disable-auth `AuthContext` layer; `mint_policy`
-  construction (empty grants + DB store, no env map); `IngestionKeysState` and
-  `AudienceGrantsState` field wiring (both get their own `self_service_mint_enabled`).
+- `rust/analytics-web-srv/src/web_server.rs`: disable-auth `AuthContext` layer; `IngestionKeysState`
+  and `AudienceGrantsState` field wiring (the three self-service knobs; both states get their own
+  `self_service_mint_enabled`) — no `mint_policy` field, since mint authorization is resolved per
+  request in `mint_key` (§3, §4).
 - `rust/auth/src/policy.rs`: make `selector_matches` `pub`.
 - `rust/analytics-web-srv/src/ingestion_keys.rs`: `mint_key`, `MintGate`, `try_claim_and_mint`,
   `IngestionKeysState`, `IngestionKeyError`.
@@ -1254,7 +1211,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`: state construction, router-building
   helper, new/updated tests (including new live-DB claim tests).
 - `rust/analytics-web-srv/tests/routing_tests.rs`: `IngestionKeysState` construction (line 406)
-  needs the new `mint_policy` field.
+  needs the three new knob fields (`self_service_mint_enabled`, `max_claims_per_caller`,
+  `max_keys_per_caller`).
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs`: `/my-audiences` tests.
 - `python/micromegas/micromegas/web_client.py`: `mint_ingestion_api_key`, `/my-audiences` call.
 - `python/micromegas/micromegas/cli/setup_telemetry.py` (new).
@@ -1282,13 +1240,19 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   default to admin-only mints. Accepted because it can't escalate privilege — the (possibly
   defaulted) audience still goes through `MintPolicy`, so a non-admin without a grant for the
   default audience still gets denied.
-- **One dedicated pool for the mint-side grant store** (`dedicated_key_store_pool` off the same
-  `analytics_keys_pool`), not a shared `Arc<DbAudienceGrantsSource>` with the read side — there is
-  no read-side `DbAudienceGrantsSource` in `analytics-web-srv` at all today (that lives in
-  flight-sql-srv/monolith, a different process). Building analytics-web-srv's own store instance
-  is simplest and matches the existing "each process builds its own" pattern; the two processes'
-  independent cache TTLs are an accepted, already-documented property of the design (`AbAC plan`,
-  "revocation takes effect within the cache TTL").
+- **Mint-side grant reads are a point query, uncached — deliberately asymmetric with the read
+  side, which keeps its own ~60s `DbAudienceGrantsSource` cache in flight-sql-srv/the monolith.**
+  The two axes are different workloads: the read side is a per-query hot path in a different,
+  request-volume-bound process, where a cache is load-bearing; the mint route lives in
+  `analytics-web-srv` and is called at admin-console rate — its own pool is capped at
+  `max_connections(2)` precisely because it isn't hot — and it mints a *new* audience/key, not a
+  read of existing data. A staleness window would buy the mint path no measurable throughput, and
+  an earlier revision of this design paid real complexity for one anyway: a self-healing recheck
+  inside the claim transaction, an arm-specific logging split, and an ordering constraint on the
+  reserved-name check, all motivated purely by compensating for a cached snapshot that could lag
+  the DB (all now removed, §4). The point query runs on the same `analytics_keys_pool` `mint_key`
+  and the claim transaction already use (§3, §4) — with no store to serve, there is no dedicated
+  pool either.
 - **Setup script reuses the existing loopback-redirect flow, not a new device-code flow**, despite
   the original issue text saying "device-code/loopback." No device-code flow exists anywhere in
   the repo, and the loopback flow already does everything needed (works for any workstation that
@@ -1431,10 +1395,13 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   and only for a caller's own brand-new audience.
 - **`AudienceMintPolicy::resolve_audience` is the sole authorization decision for the non-claim
   path**; it is already unit-tested (Stage 4) for the admin/non-admin/no-grant/malformed-audience
-  cases. Its `Err` means "not evaluable" (a store outage) as often as "denied" (Stage 1's own trait
-  doc comment); `mint_key` (§4) must, and does, tell the two apart via `ProviderUnavailable` before
-  treating an `Err` as authoritative — an outage is a 503, never a 403 and never a route into the
-  claim path. This stage adds one new piece of authorization logic beyond wiring — the claim
+  cases. With `store: None` always (§3, §4), its `Err` here can only ever mean "denied" — the "not
+  evaluable" case Stage 1's own trait doc comment anticipates for a store outage never arises,
+  since this stage never attaches a store to the policy at all: a DB outage is caught earlier, at
+  the point query that builds the policy's one-audience grants (§4), and mapped directly to a 503
+  (`IngestionKeyError::Unavailable`) before `resolve_audience` is ever called — never a 403 and
+  never a route into the claim path. This stage adds one new piece of authorization logic beyond
+  wiring — the claim
   transaction itself (§4a) — which is new surface, not already-vetted logic; its correctness rests
   on the advisory-lock existence check being race-safe against **concurrent claims** (§4a), not on
   `resolve_audience`. That lock serializes claims against each other only — an admin's own grant
@@ -1484,10 +1451,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   `mint` grant for a test user via the existing `audience-grants` admin API/`micromegas-grants`
   CLI, then confirm end-to-end: (a) a non-admin without a grant, requesting an audience that
   already has a grant, gets a clean 403 from `mint_key`; (b) a non-admin with a matching grant
-  mints successfully -- including immediately after the grant is created, before the mint-side
-  `DbAudienceGrantsSource` snapshot would normally have refreshed, to exercise the uncached
-  self-healing recheck (§4a) rather than depending on the cache TTL having already elapsed -- and
-  `micromegas-setup-telemetry` prints usable `OTEL_EXPORTER_OTLP_*` exports; (c) a non-admin with
+  mints successfully and `micromegas-setup-telemetry` prints usable `OTEL_EXPORTER_OTLP_*`
+  exports; (c) a non-admin with
   no grant at all, requesting a brand-new audience name via
   `--audience`, mints successfully and claims it (§4a) — confirmed via `GET
   /api/audience-grants?audience=<name>` showing both the new `mint` and `read` rows; (d) a second
@@ -1509,36 +1474,21 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 
 ## Open Questions
 
-Four items below. None is a defect — the plan is implementable as written with the design as
-specified, and each question asks whether a mechanism the plan currently *has* earns its place, or
-pins down a detail the plan currently leaves to the implementer. They are recorded here because
-they surfaced from a reviewer's judgment about complexity rather than from verification against the
-code, so nothing else in this document marks them.
+Three items below. A fourth — whether the mint-side grant store should cache at all — has been
+resolved: it does not (see Trade-offs; §3 and §4 already reflect a point query, uncached,
+deliberately asymmetric with the read side's cache). None of the three remaining is a defect — the
+plan is implementable as written with the design as specified, and each question asks whether a
+mechanism the plan currently *has* earns its place, or pins down a detail the plan currently leaves
+to the implementer. They are recorded here because they surfaced from a reviewer's judgment about
+complexity rather than from verification against the code, so nothing else in this document marks
+them.
 
-Questions 1 and 2 are a matched pair: both propose **removing** a mechanism this plan added, and
-both would delete more text than they add. A reviewer's overall read after five review rounds was
-that the authorization logic has converged and the write-up is sound, but that the design has not
-been re-simplified since the hazards that motivated each guard were found — each round added a
-guard for the previous round's hazard rather than removing the hazard's source. If a subtractive
-pass happens, these two are it.
+Question 1 below is the other half of a subtractive pair a reviewer raised after five review
+rounds, alongside the now-resolved mint-cache question above: whether the `ingestion_api_keys`
+half of the ownership check should become a v8 migration instead. It is the last of the two
+**removing** proposals still open.
 
-**1. Should the mint-side grant store cache at all?**
-
-§3 gives `analytics-web-srv`'s `DbAudienceGrantsSource` its own snapshot with a ~60s TTL
-(`{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, `db_audience_grants.rs:33-42`), mirroring how the
-read side is wired. The argument for dropping it (TTL `0`, or a point query
-`SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'`): the read side is a
-per-query hot path in a *different* process (flight-sql-srv / the monolith's analytics role),
-whereas this mint route is admin-console-rate — its own pool is capped at `max_connections(2)`
-(`web_server.rs`) precisely because it is not hot. Paying a staleness window here buys no
-measurable throughput, and it costs real complexity that exists only to compensate for it: the
-whole "Cache TTL" subsection (§4a), the uncached self-healing recheck inside the claim transaction
-(§4a, "The claim itself"), the arm-specific logging split that recheck forces, and the reserved-name
-ordering constraint that recheck imposes (§4a). Dropping the cache deletes all of it in exchange for
-one extra round trip per mint on a route an operator hits by hand. The argument against: it breaks
-symmetry with the read-side wiring, and the recheck is already written and already tested here.
-
-**2. Should the `ingestion_api_keys` half of the ownership check become a v8 migration instead?**
+**1. Should the `ingestion_api_keys` half of the ownership check become a v8 migration instead?**
 
 §4a's existence check treats an audience as owned if *either* a grant row or an
 `ingestion_api_keys` row names it. The key-row half exists to catch one specific case: audiences an
@@ -1554,7 +1504,7 @@ unstamped-audience labels (Implementation step 12). The argument against: a migr
 customer data carries its own risk, and the caller-derived prefix (§5, §6) already makes the
 squatting scenario that motivated the concern improbable in practice.
 
-**3. What is the parse contract for the two integer knobs?**
+**2. What is the parse contract for the two integer knobs?**
 
 §3 says `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` and
 `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` are "resolved onto `IngestionKeysState` the same way"
@@ -1569,7 +1519,7 @@ written, an implementer picks one silently and an operator's typo behaves differ
 neighbouring knob. Recommended resolution unless overridden: fail fast at startup, matching the
 documented convention, with `0` meaning "none permitted" and a negative value rejected.
 
-**4. What happens to the one-time cleartext key if the script fails after minting?**
+**3. What happens to the one-time cleartext key if the script fails after minting?**
 
 The mint response carries the cleartext key exactly once and it is unrecoverable afterwards. §6 then
 has the script do up to two more things that can fail: the admin `POST /api/audience-grants` calls
