@@ -829,6 +829,31 @@ full recipe, including the exact keyring shape and the env var fallback conventi
 
 Pass `--version` to print the installed package and interpreter version and exit.
 
+### micromegas-grants
+
+Manages DB-backed audience grants (`audience_grants` table) via `analytics-web-srv`'s
+`/api/audience-grants` routes — never direct Postgres access. Requires OIDC admin access on the
+target service.
+
+```bash
+micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
+micromegas-grants --url https://analytics.example.com list --audience team-alpha
+micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
+```
+
+`--url` always points at `analytics-web-srv`'s base URL. Three subcommands:
+
+- `create <audience> <axis> <selector>` — creates (or reports the pre-existing) grant row.
+  `<axis>` is `read` or `mint`; `<selector>` is `*`, `user:<id>`, or `group:<id>`.
+- `list [--audience NAME] [--axis {read,mint}] [--limit N] [--offset N] [--format {table,json}]` —
+  lists grant rows, optionally filtered. `--format` defaults to `table`.
+- `delete <audience> <axis> <selector>` — deletes one grant row, keyed by its natural triple.
+
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`
+(`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
+
+Pass `--version` to print the installed package and interpreter version and exit.
+
 ## Time Utilities
 
 ### `format_datetime(value)`, `parse_datetime(value)`, and `parse_time_delta(user_string)`

@@ -14,7 +14,7 @@ use analytics_web_srv::audience_grants::AudienceGrantsState;
 use analytics_web_srv::data_source_cache::DataSourceCache;
 use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
-use analytics_web_srv::web_server::{build_auth_routes, build_protected_routes};
+use analytics_web_srv::web_server::{AdminRoutesState, build_auth_routes, build_protected_routes};
 use axum::{
     Router, body::Body, extract::State, http::StatusCode, response::IntoResponse, routing::get,
 };
@@ -414,9 +414,11 @@ fn disabled_auth_app() -> Router {
         pool,
         data_source_cache,
         maps_state,
-        analytics_keys_state,
-        ingestion_keys_state,
-        audience_grants_state,
+        AdminRoutesState {
+            analytics_keys: analytics_keys_state,
+            ingestion_keys: ingestion_keys_state,
+            audience_grants: audience_grants_state,
+        },
     )
 }
 

@@ -10,7 +10,7 @@
 //! per-key `moka` cache: the issue is explicit that the whole map is small enough to hold as one
 //! snapshot, so `moka`'s eviction/LRU machinery has nothing to do here.
 
-use crate::env::resolve_prefixed_var;
+use crate::db_api_key::resolve_u64;
 use crate::policy::{AudienceGrants, GrantAxis};
 use crate::types::ProviderUnavailable;
 use anyhow::{Context, Result, anyhow};
@@ -18,17 +18,6 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
-
-fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
-    let var = resolve_prefixed_var(prefix, suffix);
-    match std::env::var(&var) {
-        Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
-            micromegas_tracing::warn!("Invalid {var} value '{s}', using default {default}");
-            default
-        }),
-        Err(_) => default,
-    }
-}
 
 /// Cache-TTL knob for [`DbAudienceGrantsSource`], read from env with a default.
 #[derive(Clone, Copy, Debug)]
@@ -88,7 +77,7 @@ pub struct DbAudienceGrantsSource {
     /// from a real attempt made moments after construction and would incorrectly throttle the very
     /// first cold-start call -- so the first real attempt's `saturating_sub` against it is always
     /// far past `ttl` regardless of how soon after construction it lands.
-    last_attempt_at: Arc<AtomicI64>,
+    last_attempt_at: AtomicI64,
 }
 
 impl DbAudienceGrantsSource {
@@ -101,7 +90,7 @@ impl DbAudienceGrantsSource {
             ttl: Duration::from_secs(config.cache_ttl_secs),
             snapshot: tokio::sync::RwLock::new(None),
             start: Instant::now(),
-            last_attempt_at: Arc::new(AtomicI64::new(i64::MIN)),
+            last_attempt_at: AtomicI64::new(i64::MIN),
         }
     }
 
@@ -240,8 +229,11 @@ impl DbAudienceGrantsSource {
                         }
                         // Snapshot vanished between the check above and now -- this store never
                         // clears a snapshot once set, so this is unreachable in practice; treat
-                        // it as a cold-start failure rather than panicking.
-                        None => Err(err),
+                        // it as a cold-start failure rather than panicking. Wrapped in
+                        // `ProviderUnavailable` for the same reason `throttled_error` is: a real
+                        // DB failure here must surface to `caller_context` as
+                        // `Status::unavailable`, not `Status::permission_denied`.
+                        None => Err(ProviderUnavailable(err).into()),
                     }
                 }
             }

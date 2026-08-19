@@ -143,7 +143,7 @@ impl DbAudienceGrantsConfig {
 
 #[derive(Debug)]
 struct Snapshot {
-    grants: AudienceGrants,
+    grants: Arc<AudienceGrants>,
     /// Time of the last *successful* load — never advanced on a failed refresh.
     /// Feeds the age reported in the refresh-failure log/error context ("how
     /// stale is the grant view right now"), independent of `fetched_at`; it is
@@ -160,15 +160,22 @@ pub struct DbAudienceGrantsSource {
     pool: PgPool,
     ttl: Duration,
     snapshot: tokio::sync::RwLock<Option<Snapshot>>,
-    /// Unix-epoch seconds of the last refresh *attempt*, recorded outside
+    /// Process-start baseline every `last_attempt_at` reading is measured from — captured once
+    /// here, not `Instant::now()` at each read, so `last_attempt_at` values are comparable across
+    /// calls the same way a wall-clock timestamp would be, but monotonic: a backwards clock step
+    /// (NTP correction, VM migration, manual clock set) can never make a later reading smaller
+    /// than an earlier one.
+    start: Instant,
+    /// Milliseconds since `start` of the last refresh *attempt*, recorded outside
     /// `Snapshot` so it exists even before any load has ever succeeded —
-    /// mirrors `db_api_key.rs`'s `last_logged_at`. This is what gates
+    /// mirrors `db_api_key.rs`'s `last_logged_at`, but monotonic rather than a
+    /// Unix-epoch-seconds value (see `start`). This is what gates
     /// cold-start retries: with no `Snapshot` yet, there is nowhere else to
     /// remember "we just tried and failed a moment ago", so without this field
     /// every `current()` call during process startup against a still-coming-up
     /// DB would re-query with no throttling at all, unlike the post-success
     /// path which `fetched_at` already gates.
-    last_attempt_at: Arc<AtomicI64>,
+    last_attempt_at: AtomicI64,
 }
 
 impl DbAudienceGrantsSource {
@@ -183,15 +190,17 @@ impl DbAudienceGrantsSource {
     /// post-success path via `Snapshot::fetched_at` as before. A `current()`
     /// call that lands inside an already-throttled window returns the last
     /// snapshot if one exists; if not, it returns a freshly synthesized error
-    /// describing the throttled cold-start state ("audience grant store
-    /// unavailable; last attempt at T, retry after TTL") rather than storing
+    /// describing the throttled cold-start state (remaining retry window,
+    /// measured off the monotonic `start` baseline) rather than storing
     /// and re-handing-out the prior attempt's `anyhow::Error` — that error
     /// isn't `Clone` and this store deliberately has none of `db_api_key.rs`'s
     /// moka/`Arc<E>` sharing machinery to make it so. A concurrent caller that
     /// loses the `last_attempt_at` compare-exchange while the very first
-    /// cold-start attempt is still in flight gets that same synthesized
-    /// throttled-state error too, not the in-flight attempt's eventual
-    /// result — it never blocks on another caller's query, and it never skips
+    /// cold-start attempt is still in flight re-checks `self.snapshot` once
+    /// more before giving up: if the winning caller has since populated it,
+    /// the loser serves that snapshot instead of failing; only if it is still
+    /// empty does it get the synthesized throttled-state error. It never
+    /// blocks on another caller's still-in-flight query, and it never skips
     /// the query silently with nothing to show for it.
     ///
     /// `Err` only when there has never been one successful load — a fresh
@@ -204,7 +213,7 @@ impl DbAudienceGrantsSource {
     /// eviction to fall back on the way `db_api_key.rs`'s cache does, so an
     /// outage degrades to staleness for as long as it lasts, not just one TTL
     /// window. See design question 1 below for why that trade is deliberate.
-    pub async fn current(&self) -> Result<AudienceGrants> { ... }
+    pub async fn current(&self) -> Result<Arc<AudienceGrants>> { ... }
 }
 ```
 
@@ -239,16 +248,18 @@ to Stage 6, when `mint_key` gains a real call site. This stage's mint-side scope
 `AudienceMintPolicy::with_store` existing and unit-tested, with no call site — not "wiring the
 store into both policies" as a completed integration.
 
-`resolve`/`resolve_audience` consult the store when present, merging it with the env map before
-matching selectors:
+`resolve`/`resolve_audience` consult the store when present, checking it and the env map as two
+separate sources rather than merging them into one map -- so neither side is deep-cloned on every
+request:
 
 ```rust
 async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences> {
-    let mut grants = self.grants.clone();
-    if let Some(store) = &self.store {
-        grants = grants.merge(&store.current().await?);   // Err only on cold-start outage
-    }
-    // ... unchanged matching over `grants` instead of `self.grants` ...
+    // `Err` only on a cold-start outage (no snapshot has ever loaded successfully).
+    let store_grants = match &self.store {
+        Some(store) => Some(store.current().await?),
+        None => None,
+    };
+    // ... matching over `self.grants` as before, then again over `store_grants` if `Some` ...
 }
 ```
 

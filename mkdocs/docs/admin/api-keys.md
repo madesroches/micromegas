@@ -429,11 +429,16 @@ hard-deleted on revocation (there is no `revoked_at`/`revoked_by` column to
 update in place, unlike the key tables above).
 
 Note `micromegas_web` (`analytics-web-srv`'s role) is the only role granted
-`INSERT` on either table in a fully separated-role deployment — mint/import
-write fresh rows, revoke only ever touches `revoked_at`/`revoked_by` on an
-existing one. `micromegas_ingestion` and `micromegas_analytics` are each
-read + `last_used_at`-touch only, on their own table, with no overlap in
-column grants and no grant of any kind on the other service's table.
+`INSERT` on any of these tables in a fully separated-role deployment —
+mint/import write fresh rows, revoke only ever touches
+`revoked_at`/`revoked_by` (or, for `audience_grants`, deletes the row
+outright). `micromegas_ingestion` is read + `last_used_at`-touch only, on its
+own table, with no grant of any kind on either of the other two tables.
+`micromegas_analytics` is read + `last_used_at`-touch only on
+`analytics_api_keys`, plus a read-only `SELECT` on `audience_grants` (which
+has no `last_used_at` column, so there's no touch semantics there — just the
+periodic whole-table refresh `DbAudienceGrantsSource` runs). Neither service
+role has any grant on `ingestion_api_keys`.
 **`analytics-web-srv`'s role does gain write access to `ingestion_api_keys`**
 under this design — that is the point of removing ingestion's own admin
 routes, not a gap: every ingestion-key mint/revoke/import now goes through

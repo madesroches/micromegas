@@ -299,22 +299,28 @@ fn key_management_disabled_router(base_path: &str) -> Router {
         )
 }
 
+/// The three admin `Extension` states `build_protected_routes` layers onto the
+/// key-management routers — always constructed and passed together, so they're
+/// bundled here rather than taken as three separate parameters.
+pub struct AdminRoutesState {
+    pub analytics_keys: analytics_keys::AnalyticsKeysState,
+    pub ingestion_keys: ingestion_keys::IngestionKeysState,
+    pub audience_grants: audience_grants::AudienceGrantsState,
+}
+
 /// `pub` (unlike the other `build_*` helpers here) so integration tests
 /// (`tests/routing_tests.rs`) can exercise the real `--disable-auth`
 /// branching directly — asserting that the static 503 router answers both
 /// key-management prefixes and that the real routers are never merged in
 /// that mode — rather than reimplementing the merge logic standalone and
 /// risking it drifting out of sync with production.
-#[expect(clippy::too_many_arguments)]
 pub fn build_protected_routes(
     base_path: &str,
     auth_state: &Option<AuthState>,
     app_db_pool: PgPool,
     data_source_cache: DataSourceCache,
     maps_state: maps::MapsState,
-    analytics_keys_state: analytics_keys::AnalyticsKeysState,
-    ingestion_keys_state: ingestion_keys::IngestionKeysState,
-    audience_grants_state: audience_grants::AudienceGrantsState,
+    admin_state: AdminRoutesState,
 ) -> Router {
     let routes = Router::new()
         .route(
@@ -382,9 +388,9 @@ pub fn build_protected_routes(
             .merge(analytics_keys::analytics_keys_router(base_path))
             .merge(ingestion_keys::ingestion_keys_router(base_path))
             .merge(audience_grants::audience_grants_router(base_path))
-            .layer(Extension(analytics_keys_state))
-            .layer(Extension(ingestion_keys_state))
-            .layer(Extension(audience_grants_state))
+            .layer(Extension(admin_state.analytics_keys))
+            .layer(Extension(admin_state.ingestion_keys))
+            .layer(Extension(admin_state.audience_grants))
     } else {
         routes.merge(key_management_disabled_router(base_path))
     };
@@ -687,9 +693,11 @@ pub async fn run_web_server(
             app_db_pool,
             data_source_cache,
             maps_state.clone(),
-            analytics_keys_state,
-            ingestion_keys_state,
-            audience_grants_state,
+            AdminRoutesState {
+                analytics_keys: analytics_keys_state,
+                ingestion_keys: ingestion_keys_state,
+                audience_grants: audience_grants_state,
+            },
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));
 
