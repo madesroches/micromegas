@@ -15,9 +15,14 @@ Given the grant store already exists (Stage 6a, #1489), this stage opens a **non
 self-service path**: a caller with a matching `mint` grant selector (`user:<email>` or
 `group:<g>`) can mint their own key directly, with `MintPolicy::resolve_audience` as the
 authorization instead of an admin gate. Admins keep minting *any* audience unchanged (the policy's
-existing `is_admin` arm) — nothing regresses for the open/team deployment story. A companion
-Python setup script does an OIDC interactive login, mints a personal key, and writes the OTLP
-exporter env vars a user needs to point their own telemetry at the deployment.
+existing `is_admin` arm) — nothing regresses for the open/team deployment story. Both the
+grant-based non-admin mint path and the lazy claim below are gated behind a single off-by-default
+deployment knob, `MICROMEGAS_SELF_SERVICE_MINT` (§3): an existing deployment that upgrades to this
+stage keeps today's admin-only mint behavior, unchanged, until an operator explicitly opts in, and
+a pair of per-caller bounds (§4a) then limit how many audiences one caller may claim and how many
+live keys one caller may hold once it's on. A companion Python setup script does an OIDC
+interactive login, mints a personal key, and writes the OTLP exporter env vars a user needs to
+point their own telemetry at the deployment.
 
 **Audiences are created lazily, not pre-provisioned.** Consulting grants alone is not enough to
 make minting actually self-service: the DB grant store (Stage 6a, #1489) has no write path a
@@ -271,6 +276,23 @@ for a deployment that hasn't configured the telemetry DB at all.
 Add `mint_policy: Arc<dyn MintPolicy>` as a new field on `IngestionKeysState`
 (`ingestion_keys.rs:53-61`), set from the value above.
 
+**Off by default: `MICROMEGAS_SELF_SERVICE_MINT`.** Everything above — building `mint_policy` and
+having `mint_key` consult it for non-admin callers — is otherwise unconditional for every
+deployment that upgrades to this stage: there is nothing else in this design that keeps an
+existing admin-only deployment's authorization surface from silently widening to "every
+authenticated user can mint standing credentials and create audiences" the moment it upgrades.
+`IngestionKeysState` gains a `self_service_mint_enabled: bool` field, resolved once at startup
+from `MICROMEGAS_SELF_SERVICE_MINT` (empty-prefix convention, parsed the same
+`v == "true" || v == "1"` way `web_server.rs:123` already parses its own boolean knob), default
+`false`. `mint_key` (§4) checks it before ever calling `state.mint_policy.resolve_audience` for a
+non-admin caller: with the knob off, a non-admin gets exactly the denial this route always gave
+before this stage existed, and the lazy claim (§4a) — which only ever triggers off a non-admin
+denial — is never reached either. Admin minting is unaffected either way, since the knob only
+gates the caller branches this stage adds. Two more knobs, resolved onto `IngestionKeysState` the
+same way, bound the blast radius of turning it on: `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`
+(`max_claims_per_caller: i64`, default `5`) and `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`
+(`max_keys_per_caller: i64`, default `20`) — see §4a and §4 for where each is enforced.
+
 **Monolith prefix parity is automatic — no plumbing needed.** An earlier draft of this plan
 flagged that monolith namespaces the web role's other knobs under `MICROMEGAS_ANALYTICS`
 (`admin_var_name`, `main.rs:295-300`) while `AudienceGrants::from_env("")` would have read only
@@ -299,7 +321,9 @@ decision** — this is what keeps the two existing 400 tests passing unchanged
 to a new `Forbidden` (403) — the naive version of this change — would turn both into 403s, since
 `AudienceMintPolicy::resolve_audience`'s own `requested: None` and malformed-audience arms
 (`policy.rs:548-592`) produce generic messages that don't match `mint_400_names_the_default_audience_knob`'s
-assertion at all. Instead:
+assertion at all. Key material is generated up front, before the policy call, so both the ordinary
+and the lazy-claim path (§4a) share one value to insert — no path re-derives or double-inserts it.
+Instead:
 
 ```rust
 async fn mint_key(
@@ -315,15 +339,69 @@ async fn mint_key(
     // `requested: None` / malformed-audience arms are never reached from this route at all.
     let candidate = resolve_audience(&state, body.audience.as_deref(), None)?;
 
+    // Off-by-default gate (§3): with the knob unset, a non-admin gets exactly the denial this
+    // route always gave before this stage existed, and the lazy claim below (which only ever
+    // triggers off a non-admin denial) is never reached either.
+    if !caller.is_admin && !state.self_service_mint_enabled {
+        return Err(IngestionKeyError::Forbidden(
+            "self-service minting is disabled".to_string(),
+        ));
+    }
+
+    // Key material, generated here -- before the policy call, not after -- so both branches
+    // below share one value to insert; the claim path (§4a) needs it to mint inside the same
+    // transaction that writes the grant rows.
+    let key = generate_key();
+    let hash = hash_key(&key);
+    let key_id = Uuid::new_v4();
+    let created_at = Utc::now();
+
+    // Per-caller bound (§4a): caps how many *live* keys one non-admin may hold, regardless of
+    // which path below mints the next one. Admins are exempt -- this bounds self-service, not
+    // administration.
+    if !caller.is_admin {
+        let caller_id = caller.email.as_deref().unwrap_or(&caller.subject);
+        let key_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM ingestion_api_keys WHERE created_by = $1 AND revoked_at IS NULL",
+        )
+        .bind(caller_id)
+        .fetch_one(&pool)
+        .await?;
+        if key_count >= state.max_keys_per_caller {
+            return Err(IngestionKeyError::Forbidden(format!(
+                "caller already holds {key_count} live self-service keys (limit {})",
+                state.max_keys_per_caller
+            )));
+        }
+    }
+
     let audience = match state.mint_policy.resolve_audience(&caller, Some(&candidate)).await {
         Ok(aud) => aud,
+        // The policy itself could not be evaluated (e.g. a grant-store cold-start outage,
+        // `DbAudienceGrantsSource::current`) -- not a denial, and must not be treated as one:
+        // surfacing it as `Forbidden` (or, worse, routing it into the claim path below) would
+        // misattribute a transient store outage as "you have no grant" for up to the store's
+        // cache TTL, and could even let a caller "claim" an audience whose real grant just
+        // happened to be unreadable at that moment.
+        Err(e) if e.downcast_ref::<ProviderUnavailable>().is_some() => {
+            return Err(IngestionKeyError::Unavailable(e.to_string()));
+        }
         Err(e) if caller.is_admin => return Err(IngestionKeyError::Forbidden(e.to_string())), // malformed-audience arm; `candidate` is already valid-format, so unreachable in practice
         Err(_) => {
-            // Non-admin, no grant for `candidate` -- try the lazy claim (§4a) only when the
-            // caller explicitly named this audience (not merely `state.default_audience`).
+            // Non-admin, genuinely no grant for `candidate` (a store outage is ruled out above)
+            // -- try the lazy claim (§4a) only when the caller explicitly named this audience
+            // (not merely `state.default_audience`).
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
             match (explicit, caller.email.as_deref()) {
-                (true, Some(email)) => try_claim_and_mint(&pool, &candidate, email, &body, /* key material */).await?,
+                (true, Some(email)) => {
+                    // Commits its own grant + key rows and returns the finished response
+                    // directly -- `mint_key` never reaches the `INSERT` below for this path.
+                    return try_claim_and_mint(
+                        &pool, &state, &candidate, email, &body, key, key_id, &hash, created_at,
+                    )
+                    .await
+                    .map(|resp| (StatusCode::CREATED, Json(resp)));
+                }
                 _ => return Err(IngestionKeyError::Forbidden(format!(
                     "audience {candidate:?} is not in the caller's mintable set"
                 ))),
@@ -331,9 +409,8 @@ async fn mint_key(
         }
     };
 
-    // ... rest unchanged for the Ok(aud)-from-policy path: single INSERT, as today.
-    // The claim path (§4a) already committed its own INSERT inside `try_claim_and_mint` and
-    // returns early with the finished `MintResponse` instead of falling through here.
+    // Ordinary (non-claim) path: single INSERT, as today, using the `key`/`hash`/`key_id`/
+    // `created_at` generated above.
     let created_by = caller.email.clone().unwrap_or_else(|| caller.subject.clone());
     // ...
 }
@@ -345,11 +422,14 @@ default that a non-admin caller has no grant for is still a 403, and (per the `e
 above) never claimable, so a shared default audience can't be squatted out from under later
 callers who rely on it (§4a, Trade-offs).
 
-Add `IngestionKeyError::Forbidden(String)` (403, `{code: "FORBIDDEN", message}`) and update the
-enum's stale doc comment (currently: a `Forbidden` variant would be "dead code" since the admin
-gate handled it — no longer true for `mint_key`). `IngestionKeyError::BadRequest` needs no new
-variant or wiring — it is exactly the existing 400 path `resolve_audience`/`validate_name` already
-raise.
+Add `IngestionKeyError::Forbidden(String)` (403, `{code: "FORBIDDEN", message}`) and
+`IngestionKeyError::Unavailable(String)` (503, `{code: "UNAVAILABLE", message}` — distinct from
+the existing `NotConfigured`, whose message is specifically about an unset
+`MICROMEGAS_SQL_CONNECTION_STRING` and would mislead when the real cause is a *configured* store
+that failed to answer). Update the enum's stale doc comment (currently: a `Forbidden` variant
+would be "dead code" since the admin gate handled it — no longer true for `mint_key`).
+`IngestionKeyError::BadRequest` needs no new variant or wiring — it is exactly the existing 400
+path `resolve_audience`/`validate_name` already raise.
 
 `list_keys`, `revoke_key`, `import_key` stay `AdminUser`-gated, untouched — administration
 operations over *other* users' keys are a different authorization question than minting your own;
@@ -357,20 +437,46 @@ this stage's decision (per the issue discussion) narrows only "who may call the 
 
 ### 4a. Lazy audience claim on mint
 
-**Trigger.** Only when: `state.mint_policy.resolve_audience` denied a **non-admin** caller, the
-caller supplied `body.audience` explicitly (not merely the `state.default_audience` fallback), and
-`caller.email` is `Some` (a claim writes `user:<email>` selectors — a caller authenticated only by
-`subject`, e.g. a non-OIDC service credential, has no selector form to claim with under today's
-model and is denied the ordinary way instead).
+**Trigger.** Only when: self-service minting is enabled (`state.self_service_mint_enabled`, §3),
+`state.mint_policy.resolve_audience` denied a **non-admin** caller (never a store-outage `Err` —
+ruled out in §4), the caller supplied `body.audience` explicitly (not merely the
+`state.default_audience` fallback), and `caller.email` is `Some` (a claim writes `user:<email>`
+selectors — a caller authenticated only by `subject`, e.g. a non-OIDC service credential, has no
+selector form to claim with under today's model and is denied the ordinary way instead). This is
+deliberately non-admin-only: an admin's mint always succeeds via `AudienceMintPolicy`'s `is_admin`
+arm and so never falls into this branch — an admin minting a genuinely fresh audience gets **no**
+grant rows written server-side, exactly like an admin minting an existing one, since the admin arm
+is a pure authorization bypass, not a place this stage adds DB writes to (Current State). That
+means an admin who wants to read what their own newly-minted key uploads needs a `read` grant some
+other way — see §6, which has the setup script create one via the existing admin grants API when
+the caller minting a fresh audience is itself an admin.
+
+**Per-caller claim bound.** Nothing else in this design limits how many audiences one caller may
+claim — `analytics-web-srv` has no rate-limiting or quota machinery of any kind today, and a claim
+creates a new, standing audience plus a new key. `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`
+(empty-prefix, default `5`), resolved once at startup onto `IngestionKeysState` alongside
+`self_service_mint_enabled` (§3): the count of distinct audiences already carrying a `mint` row
+for `selector = 'user:<caller email>'` is checked inside the same locked transaction as the
+existence check below, before any new rows are inserted; at or above the limit, the claim is
+refused with a `Forbidden` naming the limit, never a 500 or a silent no-op. An admin can raise the
+knob, or free room by revoking one of the caller's existing claimed audiences through the existing
+`DELETE /api/audience-grants` admin route (Trade-offs).
 
 **Eligibility short-circuit (no DB round trip).** Before touching the DB, reject the claim outright
 if `candidate == PUBLIC_AUDIENCE` — the one reserved name, matching `is_valid_audience`'s format
 check plus this one extra rule. (`public` already can't be *read*-restricted since every
 authenticated caller reads it regardless of grants, `AudienceReadPolicy::resolve`; reserving it
 from mint-claims keeps a non-admin from ever claiming exclusive *mint* rights over the one
-audience every reader can see.) There is no env-map reservation to check here — mint grants are
-DB-only (§3), so the DB existence check below is already the complete "does this audience have an
-owner?" answer; nothing external can shadow it.
+audience every reader can see.) The same short-circuit also rejects `candidate` when it equals
+`state.default_audience` or the process's configured unstamped-audience fallback
+(`{prefix}_UNSTAMPED_AUDIENCE`/`MICROMEGAS_UNSTAMPED_AUDIENCE` — `IngestionKeysState` gains an
+`unstamped_audience: Option<String>` field, resolved at startup the same way `default_audience`
+already is): both name an audience the deployment has already assigned a deployment-wide meaning
+to via env config, not a DB grant row, so they must never look "unclaimed" merely because
+`audience_grants` happens to be empty for them. Mint grants are otherwise DB-only (§3) — the DB
+existence check below (extended to also cover `ingestion_api_keys`, not `audience_grants` alone)
+plus these two env-config names together are the complete "does this audience have an owner?"
+answer.
 
 **The claim itself — one transaction, on the same pool `mint_key` already has.** The
 `audience_grants` table's natural key is the full `(audience, axis, selector)` triple (Current
@@ -378,17 +484,26 @@ State) — there is no constraint that makes "this audience has zero rows, on an
 selector" atomic on its own. An `INSERT ... ON CONFLICT (audience, axis, selector) DO NOTHING`
 only guards the exact triple being inserted; it would happily co-insert a second claimant's
 `user:<their email>` mint/read rows alongside a first claimant's already-committed ones for the
-same audience, silently creating two "owners" instead of refusing the second. The claim therefore
-takes an explicit lock:
+same audience, silently creating two "owners" instead of refusing the second. Worse, `audience_grants`
+alone cannot tell a genuinely-fresh audience from one that already carries live keys and live data
+with zero grant rows: migration v6 backfilled every pre-existing key to `public` (a reserved name,
+already excluded above), but any audience an admin minted straight through
+`AudienceMintPolicy`'s `is_admin` arm before this stage's first grant ever existed for it —
+exactly the shape the AbAC master plan's own privacy-deployment example describes
+(`MICROMEGAS_AUDIENCE_GRANTS`+`MICROMEGAS_DEFAULT_KEY_AUDIENCE` naming an audience with live
+admin-minted keys and no grant rows) — would look unclaimed to a check that only reads
+`audience_grants`, letting a non-admin claim exclusive `read` access over that audience's
+already-ingested data. The claim therefore takes an explicit lock and checks both tables:
 
 ```rust
 async fn try_claim_and_mint(
     pool: &PgPool,
+    state: &IngestionKeysState,
     audience: &str,
     caller_email: &str,
     body: &MintRequest,
-    key_id: Uuid, hash: &[u8], created_at: DateTime<Utc>,
-) -> Result<String, IngestionKeyError> {
+    key: String, key_id: Uuid, hash: &[u8], created_at: DateTime<Utc>,
+) -> Result<MintResponse, IngestionKeyError> {
     let mut tx = pool.begin().await?;
 
     // Transaction-scoped advisory lock keyed by the audience name. Postgres advisory locks are
@@ -404,8 +519,28 @@ async fn try_claim_and_mint(
         .execute(&mut *tx)
         .await?;
 
+    let selector = format!("user:{caller_email}");
+
+    let claim_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT audience) FROM audience_grants WHERE axis = 'mint' AND selector = $1",
+    )
+    .bind(&selector)
+    .fetch_one(&mut *tx)
+    .await?;
+    if claim_count >= state.max_claims_per_caller {
+        tx.rollback().await?;
+        return Err(IngestionKeyError::Forbidden(format!(
+            "caller has already claimed {claim_count} audiences (limit {})",
+            state.max_claims_per_caller
+        )));
+    }
+
+    // "Does this audience already have an owner?" -- true for any grant row (any axis/selector)
+    // *or* any existing `ingestion_api_keys` row (see prose above: `audience_grants` alone misses
+    // admin-minted, ungranted audiences).
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1)",
+        "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1)
+            OR EXISTS(SELECT 1 FROM ingestion_api_keys WHERE audience = $1)",
     )
     .bind(audience)
     .fetch_one(&mut *tx)
@@ -417,7 +552,6 @@ async fn try_claim_and_mint(
         )));
     }
 
-    let selector = format!("user:{caller_email}");
     for axis in ["mint", "read"] {
         sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
@@ -437,7 +571,13 @@ async fn try_claim_and_mint(
     .await?;
 
     tx.commit().await?;
-    Ok(audience.to_string())
+    Ok(MintResponse {
+        key_id,
+        name: body.name.clone(),
+        created_at,
+        audience: audience.to_string(),
+        key,
+    })
 }
 ```
 
@@ -474,7 +614,11 @@ than the one that committed the claim.
 - A second caller (no grant) later requests the same, now-claimed audience: an ordinary
   `resolve_audience` denial, no claim attempted (the audience already has a `mint` selector row —
   just not one that matches this caller).
-- `public` requested by a non-admin: denied before any DB access (eligibility short-circuit).
+- `public` requested by a non-admin, or `candidate` equal to `state.default_audience`/the
+  unstamped-audience fallback: denied before any DB access (eligibility short-circuit).
+- A non-admin who already holds `state.max_claims_per_caller` claimed audiences requests a new,
+  genuinely-fresh name: denied inside the transaction before either `INSERT` runs (per-caller
+  claim bound), not a duplicate-owner outcome and not the ordinary "no grant" message.
 
 ### 5. Discoverability: `GET {base_path}/api/audience-grants/mine`
 
@@ -523,10 +667,20 @@ table.
 Deliberately not consulting the env grant map here: mint grants are DB-only in this stage (§3), so
 there is nothing there to fold in.
 
-`micromegas-setup-telemetry` calls this when `--audience` is omitted: if exactly one audience
-comes back, use it silently; if more than one, print the list and ask the caller to pick one via
-`--audience`; if none, print a message pointing at claiming a fresh name via `--audience
-<new-name>` instead (§4a) or asking an admin for a grant.
+**`/mine` has nothing useful to say for an admin caller.** An admin's mint authority never depends
+on a grant row (`AudienceMintPolicy`'s `is_admin` arm, Current State), so this endpoint — a filter
+over `audience_grants` — returns `[]` for every admin regardless of what they can mint or already
+own. The setup script (§6) must not treat that `[]` the way it treats a non-admin's: for a
+non-admin, `[]` really does mean "no mintable audience yet, claim one or ask an admin"; for an
+admin it means nothing at all. The script tells the two apart using the caller's own `is_admin`
+(already available from the auth response) before deciding which hint to print.
+
+`micromegas-setup-telemetry` calls this when `--audience` is omitted **and the caller is not an
+admin**: if exactly one audience comes back, use it silently; if more than one, print the list and
+ask the caller to pick one via `--audience`; if none, print a message pointing at claiming a fresh
+name via `--audience <new-name>` instead (§4a) or asking an admin for a grant. An admin caller with
+`--audience` omitted is asked to pass one explicitly instead — `/mine`'s `[]` would otherwise
+print exactly the non-admin "claim a fresh name" hint for a caller who doesn't need one.
 
 ### 6. Setup script
 
@@ -559,8 +713,26 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   `f"{os.environ['MICROMEGAS_TELEMETRY_URL'].rstrip('/')}/ingestion/otlp"` when that env var is
   set (mirroring `claude_code_otel.py`'s own derivation verbatim), and is a required flag only when
   it isn't. This closes the Open Question the earlier draft left here — no follow-up needed.
-- **Output**: `export OTEL_EXPORTER_OTLP_ENDPOINT=<--otlp-endpoint>` and
-  `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <key>"` — capitalized `Authorization=`
+- **Admin callers get their own read grant, since the mint route never writes one for them
+  (§4a, Trigger).** After a successful mint, if `--audience` named a brand-new audience and the
+  caller's own `is_admin` (from the auth response) is `true`, the script also calls the existing
+  admin `POST /api/audience-grants` (Stage 6a) to write `user:<caller email>` on both the `mint`
+  and `read` axes for that audience — the same two rows a non-admin's lazy claim (§4a) writes
+  server-side, just issued client-side through the admin API the caller's own session already has
+  access to. "Brand-new" here means the mint response's `audience` equals the `--audience` the
+  caller explicitly passed and no prior `GET /api/audience-grants?audience=<name>` row exists for
+  it — the same signal §4a itself uses server-side to distinguish a claim from an ordinary mint.
+  Without this step, an admin running the script against a fresh audience name mints successfully
+  and can never read what their own new key uploads. A non-fresh `--audience` (one the admin
+  already knows has a grant, or one resolved via `/mine`) needs no such step.
+- **Output**: `export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
+  `export OTEL_EXPORTER_OTLP_ENDPOINT=<--otlp-endpoint>`, and
+  `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <key>"` — the protocol export is
+  required because micromegas exposes OTLP over HTTP only
+  (`rust/public/src/servers/otlp.rs:227-229`; no gRPC OTLP receiver exists), so an SDK defaulting
+  to gRPC would otherwise fail to reach the endpoint this script just handed it — the same pairing
+  `local_test_env/claude_code_otel.py:92-93` and `mkdocs/docs/otlp/index.md:26-27,52-53` already
+  use. Capitalized `Authorization=`
   with `=`, matching the already-documented format in `mkdocs/docs/otlp/index.md:42-59` (not, as
   an earlier draft claimed, because the issue text's lowercase `authorization=Bearer <key>` is
   "stale relative to what OTLP ingestion actually parses" — it isn't: the header *name* is parsed
@@ -631,14 +803,31 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     (~334-335, ~363-364) with a worked mint-grant example and the new script's usage; state that
     self-service claims require all mint grants to live in the DB store (§3) — a mint audience
     declared only via `{prefix}_AUDIENCE_GRANTS` is invisible to the claim's existence check and
-    could be squatted (Security).
+    could be squatted (Security); document `MICROMEGAS_SELF_SERVICE_MINT` and the two per-caller
+    bound knobs (§3, §4a); add a `/mine` row (noting it is non-admin-accessible, unlike every other
+    row in the table) to the "**HTTP admin routes**, `AdminUser`-gated" route table (~408-416),
+    since that header's blanket claim stops being accurate once this row exists.
 13. `mkdocs/docs/admin/api-keys.md`: sweep for admin-gating claims that go stale once mint is
     non-admin, not just the two ranges an earlier draft named — `:7` ("sole admin HTTP surface"),
     `:90-91`, `:313-315`, `:323-326` ("Both route groups gate on the same ... admin check"),
     `:333-334`, and `:539-541` ("`AdminUser` extractor rejects any caller ... before a
-    mint/list/revoke/import handler ever runs") all need the same correction.
+    mint/list/revoke/import handler ever runs") all need the same correction; also correct
+    `:218-222`'s claim that who may "read or mint into" an audience comes from "the
+    `{prefix}_AUDIENCE_GRANTS` env map, unioned with the DB-backed `audience_grants` table" — true
+    for read, false for mint under §3's DB-only decision.
 14. `tasks/data_isolation/audience_based_access_control_plan.md`: append a "Stage 6 landed" status
     block, following the Stage 5/6a convention already in the doc.
+15. `CHANGELOG.md`: add an `## Unreleased` entry, following the Stage 1/2/4/6a precedent (#1370,
+    #1372, #1373, #1489) — a **Minor breaking change** clause for `IngestionKeysState` gaining
+    required `mint_policy`/`self_service_mint_enabled`/`max_claims_per_caller`/
+    `max_keys_per_caller`/`unstamped_audience` fields and `micromegas_auth::policy::selector_matches`
+    becoming `pub`, plus a behavior-change upgrade note covering the new non-admin mint route
+    behavior (off by default, `MICROMEGAS_SELF_SERVICE_MINT`), the new `/mine` route, and the new
+    `micromegas-setup-telemetry` CLI.
+16. `mkdocs/docs/query-guide/python-api.md`: add a `### micromegas-setup-telemetry` subsection
+    under `## Command-Line Interface`, alongside `micromegas-logout`/`micromegas-import-keys`/
+    `micromegas-grants` (the last added by Stage 6a for its own new CLI), and document
+    `WebClient.mint_ingestion_api_key`/the `/mine` call under `## Client Methods`.
 
 ## Files to Modify
 
@@ -662,6 +851,9 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   (new).
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/api-keys.md`.
 - `tasks/data_isolation/audience_based_access_control_plan.md`.
+- `CHANGELOG.md`: `## Unreleased` entry (minor breaking change + behavior-change upgrade note).
+- `mkdocs/docs/query-guide/python-api.md`: `micromegas-setup-telemetry` CLI section + client
+  methods.
 
 ## Trade-offs
 
@@ -701,14 +893,31 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   removes a wrongly-claimed grant, freeing the name for a legitimate claim. Nothing about this
   stage removes an admin's ability to see or undo a claim.
 - **Mint grants are DB-only in this stage** (§3) — a deliberate asymmetry with the read side, which
-  still unions the env map as its bootstrap layer. The residual hazard this creates: an audience
-  granted **only** via someone's `{prefix}_AUDIENCE_GRANTS` (read or mint) is invisible to §4a's
-  DB-only existence check and so looks unclaimed — a non-admin could claim it out from under the
-  env-declared grant, ending up with their own `user:<email>` mint/read rows for a name an operator
-  already meant to govern differently. Mitigation/stance: a deployment that turns on lazy
-  self-service claims must keep every mint-relevant audience's grants in the DB, never in the env
-  map — the env map remains appropriate only for open/team bootstrap profiles that don't use §4a
-  at all. Documented in the same place as the worked mint-grant example (Implementation step 12).
+  still unions the env map as its bootstrap layer. §4a's existence check now also covers
+  `ingestion_api_keys` and the deployment's configured `default_audience`/unstamped-audience
+  fallback names (Design §4a, Security), which closes the hazard for exactly those two
+  documented profiles. The residual hazard: an audience granted **only** via someone's
+  `{prefix}_AUDIENCE_GRANTS` (read or mint) — one that is neither of those two configured names
+  and has never had a key minted into it — is still invisible to §4a's checks and so still looks
+  unclaimed; a non-admin could claim it out from under the env-declared grant, ending up with
+  their own `user:<email>` mint/read rows for a name an operator already meant to govern
+  differently. Mitigation/stance: `MICROMEGAS_SELF_SERVICE_MINT` (§3) defaults to `false`
+  precisely so this hazard is opt-in, not automatic on upgrade; an operator turning it on must
+  keep every mint-relevant audience's grants in the DB, never in the env map — the env map remains
+  appropriate only for open/team bootstrap profiles that leave the knob off and don't use §4a at
+  all. Documented in the same place as the worked mint-grant example (Implementation step 12).
+- **Self-service mint (grant-based and claim-based) shares one knob, `MICROMEGAS_SELF_SERVICE_MINT`**
+  (§3), rather than separate knobs per sub-feature. An operator who wants DB mint grants honored
+  for non-admins but never wants a caller to create a brand-new audience via §4a cannot express
+  that split with this one knob — they can still reach nearly the same outcome by never granting
+  `mint` to a selector for an audience that doesn't already exist, since §4a's claim path is only
+  ever reached after an ordinary denial. A second, claim-specific knob was rejected as additional
+  surface for a distinction no deployment in scope for this stage needs yet.
+- **Per-caller claim/key bounds (§4a) are fixed, conservative defaults (5 claims, 20 live keys),
+  not derived from any existing quota system** — `analytics-web-srv` has none today. An operator
+  who needs a different ceiling raises the corresponding env knob (§3); hitting the default is
+  meant to be a rare, deliberate-abuse-shaped event for the developer/operator self-service
+  audience this stage targets, not a limit ordinary usage should approach.
 
 ## Security
 
@@ -741,20 +950,35 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   not exfiltrate it. The one exception is the claim path's own read grant, addressed below.
 - **The claim path (§4a) writes a `read` grant, and that cannot escalate.** A successful claim
   inserts `user:<email>` on *both* the `mint` and `read` axes for the newly-claimed audience — the
-  one place this stage grants read access at all. This cannot be used to read anyone else's data:
-  the read grant is over an audience that, by the claim's own existence check, had **zero** grant
-  rows of any kind a moment earlier, so no other caller could have written data under it yet
-  either; the claimant is granted read over data only they themselves could have produced. `mint`
-  and `read` grants otherwise stay strictly independent — `read_audiences` (a key's per-key direct
-  read grant) never enters the mintable set (`policy.rs:335-341`; unit-tested,
+  one place this stage grants read access at all. This cannot be used to read anyone else's data,
+  but the reason is narrower than "the audience had zero rows a moment earlier": the claim's
+  existence check (§4a) requires all of zero `audience_grants` rows, zero `ingestion_api_keys`
+  rows, and a name distinct from the deployment's configured `default_audience`/unstamped-audience
+  fallback — i.e. an audience genuinely unowned by any grant, any admin-minted key, or any
+  deployment-wide config, not merely one that happens to be absent from `audience_grants` alone.
+  Because no key could have existed for such an audience, no data could have been ingested under
+  it either; the claimant is granted read over data only they themselves can produce from here on.
+  `mint` and `read` grants otherwise stay strictly independent — `read_audiences` (a key's per-key
+  direct read grant) never enters the mintable set (`policy.rs:335-341`; unit-tested,
   `policy_tests.rs:264-274`) and, symmetrically, a `mint` grant never confers read power on its own
   (`policy_tests.rs:218-228`) — the claim is the sole place this stage ties the two axes together,
   and only for a caller's own brand-new audience.
 - **`AudienceMintPolicy::resolve_audience` is the sole authorization decision for the non-claim
   path**; it is already unit-tested (Stage 4) for the admin/non-admin/no-grant/malformed-audience
-  cases. This stage adds one new piece of authorization logic beyond wiring — the claim transaction
-  itself (§4a) — which is new surface, not already-vetted logic; its correctness rests on the
-  advisory-lock existence check being race-safe (§4a), not on `resolve_audience`.
+  cases. Its `Err` means "not evaluable" (a store outage) as often as "denied" (Stage 1's own trait
+  doc comment); `mint_key` (§4) must, and does, tell the two apart via `ProviderUnavailable` before
+  treating an `Err` as authoritative — an outage is a 503, never a 403 and never a route into the
+  claim path. This stage adds one new piece of authorization logic beyond wiring — the claim
+  transaction itself (§4a) — which is new surface, not already-vetted logic; its correctness rests
+  on the advisory-lock existence check being race-safe (§4a), not on `resolve_audience`.
+- **Both new caller-facing behaviors are opt-in, not automatic on upgrade.**
+  `MICROMEGAS_SELF_SERVICE_MINT` defaults to `false` (§3), so a deployment that upgrades to this
+  stage keeps its exact pre-stage mint authorization surface — every non-admin request is denied
+  the same way it was before this stage existed — until an operator explicitly turns it on. The
+  per-caller claim/key bounds (§4a) then limit the blast radius of that opt-in: once enabled, a
+  single credential can create at most `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` audiences
+  and hold at most `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` live keys, never an unbounded
+  number of either.
 - **The `--disable-auth` fix must exactly mirror the existing `is_admin: true` `ValidatedUser`** —
   getting this wrong (e.g. a *non*-admin `AuthContext`) would silently change dev/CI behavior in a
   way live deployments wouldn't hit, since `--disable-auth` is never used in production per its own
@@ -770,23 +994,32 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   `python/micromegas/`.
 - No automated test for the interactive browser login itself — no mock OIDC IdP exists in this
   repo (confirmed; every other interactive CLI has the same gap). Manual verification instead:
-  start services with auth enabled — `--disable-auth` structurally cannot exercise this path
-  (Design §2), so `python3 local_test_env/ai_scripts/start_services.py --monolith` must run against
-  a real OIDC provider, not the disabled-auth default — create a `mint` grant for a test user via
-  the existing `audience-grants` admin API/`micromegas-grants` CLI, then confirm end-to-end: (a) a
-  non-admin without a grant, requesting an audience that already has a grant, gets a clean 403 from
-  `mint_key`; (b) a non-admin with a matching grant mints successfully and
-  `micromegas-setup-telemetry` prints usable `OTEL_EXPORTER_OTLP_*` exports; (c) a non-admin with no
-  grant at all, requesting a brand-new audience name via `--audience`, mints successfully and claims
-  it (§4a) — confirmed via `GET /api/audience-grants?audience=<name>` showing both the new `mint`
-  and `read` rows; (d) a second non-admin then requesting that same, now-claimed audience gets the
-  ordinary 403; (e) an admin can still mint any audience unchanged.
+  start services with auth enabled and `MICROMEGAS_SELF_SERVICE_MINT=1` set (the knob defaults to
+  `false`, §3, so (b)-(d) below need it explicitly on) — `--disable-auth` structurally cannot
+  exercise this path (Design §2), so `python3 local_test_env/ai_scripts/start_services.py
+  --monolith` must run against a real OIDC provider, not the disabled-auth default — create a
+  `mint` grant for a test user via the existing `audience-grants` admin API/`micromegas-grants`
+  CLI, then confirm end-to-end: (a) a non-admin without a grant, requesting an audience that
+  already has a grant, gets a clean 403 from `mint_key`; (b) a non-admin with a matching grant
+  mints successfully and `micromegas-setup-telemetry` prints usable `OTEL_EXPORTER_OTLP_*`
+  exports; (c) a non-admin with no grant at all, requesting a brand-new audience name via
+  `--audience`, mints successfully and claims it (§4a) — confirmed via `GET
+  /api/audience-grants?audience=<name>` showing both the new `mint` and `read` rows; (d) a second
+  non-admin then requesting that same, now-claimed audience gets the ordinary 403; (e) an admin
+  minting an existing, already-granted audience is unchanged, and an admin minting a brand-new
+  audience via `micromegas-setup-telemetry` ends up with a working `read` grant for it too (the
+  script's own admin-grants call, §6) and can query the data their own new key uploads, not just
+  receive a successful mint response; (f) with `MICROMEGAS_SELF_SERVICE_MINT` unset (the default),
+  a non-admin with a matching grant still gets the pre-stage denial, confirming the knob is truly
+  off by default.
 
 ## Documentation
 
 - `mkdocs/docs/admin/authentication.md` and `mkdocs/docs/admin/api-keys.md` (see Implementation
   Steps 12-13).
 - `tasks/data_isolation/audience_based_access_control_plan.md` status block (step 14).
+- `CHANGELOG.md` `## Unreleased` entry (step 15).
+- `mkdocs/docs/query-guide/python-api.md` `micromegas-setup-telemetry` CLI section (step 16).
 
 ## Open Questions
 
