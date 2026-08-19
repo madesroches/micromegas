@@ -270,6 +270,11 @@ function QueryDenyListPageContent() {
     setShowDenyDialog(true)
   }
 
+  const openRemoveDialog = (rule: QueryDenyRule) => {
+    setRemoveError(null)
+    setRemoveTarget(rule)
+  }
+
   return (
     <AuthGuard requireAdmin>
       <PageLayout onRefresh={loadRules}>
@@ -387,7 +392,7 @@ function QueryDenyListPageContent() {
                       </td>
                       <td className="p-2.5 px-4 text-right">
                         <button
-                          onClick={() => setRemoveTarget(rule)}
+                          onClick={() => openRemoveDialog(rule)}
                           className="p-1.5 rounded-sm text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
                           title="Remove"
                           aria-label={`Remove rule ${rule.ruleId}`}
