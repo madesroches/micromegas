@@ -10,9 +10,14 @@ The issue asks two questions: is `measures`/`MetricsView` a good candidate for a
 
 **Answers: no, and none.** `measures` partitions satisfy neither precondition of
 `ScanOrdering::Concatenated` (rows inside a partition are not time-ordered; partition event-time
-ranges overlap heavily), so declaring it would not be a mis-optimization — it would make
-`sort_and_check_non_overlapping` return a hard error and **fail every `measures` query** (global and
-every JIT `view_instance`). `ScanOrdering::PerFile` would silently degrade to `Unordered`, because
+ranges overlap heavily), so declaring it would be unsafe in a mixed way rather than a single clean
+failure: `sort_and_check_non_overlapping` returns a hard error for any partition set that includes an
+overlapping adjacent pair, but for a partition set with none — a single partition, or a query whose
+time range selects a non-overlapping subset — the check passes, the declared ordering is attached,
+and rows sorted within a file (the other precondition) still isn't true, so the query **silently
+returns mis-ordered rows** instead of erroring. That silent branch is what most sampled `measures`
+traffic would actually hit: JIT `view_instance` partitions are typically a single small file per
+process (§3), which rarely has an adjacent pair to trip the error. `ScanOrdering::PerFile` would silently degrade to `Unordered`, because
 `measures` partitions record no `sort_order`. (Two separate knobs read this declaration: only
 `View::get_scan_output_ordering` — the user-query path — would break this way; `QueryMerger`'s
 merge-side ordering is set independently via `with_merge_scan_ordering`, defaults to `Unordered`,
@@ -138,9 +143,17 @@ has exactly one consumer: `MaterializedView::scan` (`materialized_view.rs:94`), 
 - **(b) fails for `time`.** `measures` partitions are cut on *insert* time, while `time` is event
   time; a block's rows precede its insert time by the block's fill duration, which varies per
   stream. Consecutive one-minute partitions therefore overlap on `[min_event_time,
-  max_event_time]`. `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:83`) returns
-  `DataFusionError::Internal` on the first overlapping adjacent pair — it does not degrade
-  gracefully. **Declaring `Concatenated` over `time` would break every `measures` query outright.**
+  max_event_time]`. `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:83`) walks
+  `partitions.windows(2)` and returns `DataFusionError::Internal` on the first overlapping *adjacent
+  pair* — but a partition set with no such pair (a single selected partition, or a query range that
+  happens to pick a non-overlapping subset) produces no pair and passes with `Ok`. That is not safe:
+  (a) still fails on its own, so the declared ordering gets attached anyway and the query silently
+  returns mis-ordered rows instead of erroring. **Declaring `Concatenated` over `time` would
+  therefore break `measures` queries in a mixed way — a hard error where selected partitions overlap,
+  silent mis-ordering where they don't** — and the JIT `view_instance` population, where most sampled
+  queries go (§3), lands mostly in the silent case: `MetricsView`'s JIT partitions use the default
+  `BlockOrder::InsertTime` and are typically a single small file per process, so there's usually no
+  adjacent pair to trip the check.
 - **`insert_time` + `OrderingBounds::InsertTime`** satisfies (b) by construction but still fails
   (a), for the same `buffer_unordered` reason. This is what `blocks_view` gets right and `measures`
   cannot: `BlocksView`'s extract query ends in `ORDER BY blocks.insert_time, blocks.block_id`
@@ -378,6 +391,17 @@ novel. Phase 2 measures it; the hourly budget for one view's merge is generous, 
 materializes views strictly sequentially (`materialize_all_views`, `public/src/servers/
 maintenance.rs`), so a slower merge delays only later views in the same pass.
 
+This 1.5-2× estimate is for `QueryMerger`, where the single writer task already serializes the
+pipeline and hides the scan's serial time behind it. It does not transfer to `BatchPartitionMerger`:
+`execute_merge_query` (`batch_partition_merger.rs:106-190`) re-executes the same `$begin`/`$end`
+`df_template` once per batch, `nb_batches` times, over the full source partition set at
+`try_buffered(2)` — there is no single-writer serialization analogous to
+`create_merged_partition`'s `mpsc::channel(1)` to hide behind. Dropping its scan concurrency from
+`2 × target_partitions` readers to `2` multiplies each batch's scan wall-clock by roughly
+`target_partitions`, repeated across `nb_batches` batches. This is accepted only because no in-repo
+view constructs a `BatchPartitionMerger` today; a view that adopts it should re-derive this cost
+rather than assume the `QueryMerger` estimate applies.
+
 If the wall-clock regression turns out to matter, the escape hatch is the already-scoped backlog
 item `tasks/backlog/datafusion_target_partitions_config.md` (`MICROMEGAS_DATAFUSION_TARGET_PARTITIONS`),
 which lets an operator trade memory for parallelism globally. That knob is **not** part of this
@@ -441,14 +465,16 @@ folded into Phase 1's before/after.
 7. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
    `jemalloc_allocated_bytes` / `jemalloc_resident_bytes` rather than host `used_memory`, plus the
    new duration line.
-8. Measure row-group pruning before/after: run the same narrow-window `measures` query against a
-   pre-change and a post-change merged hourly partition and compare `bytes_scanned` from
-   `log_entries WHERE target = 'flightsql_query_audit'` (see Testing Strategy) — the query-side
-   half of the result, and the baseline for step 10.
-9. Post the answer on #1491: `Concatenated` is unsafe for `measures` (with the two failing
-   preconditions and the hard `sort_and_check_non_overlapping` error — landing on the query path,
-   via `get_scan_output_ordering`, not the merge path), `PerFile` would be a no-op, the win was
-   never in the ordering, and here is the measured before/after — memory and pruning.
+8. Measure row-group pruning before/after: run the same narrow-window `measures` query — projecting
+   representative payload columns, not just `time`, so `bytes_scanned` is comparable to partition
+   size (see Testing Strategy) — against a pre-change and a post-change merged hourly partition and
+   compare `bytes_scanned` from `log_entries WHERE target = 'flightsql_query_audit'` — the
+   query-side half of the result, and the baseline for step 10.
+9. Post the answer on #1491: `Concatenated` is unsafe for `measures` (both preconditions fail, and
+   the failure is mixed — a hard `sort_and_check_non_overlapping` error where selected partitions
+   overlap, silent mis-ordered rows where they don't — landing on the query path, via
+   `get_scan_output_ordering`, not the merge path), `PerFile` would be a no-op, the win was never in
+   the ordering, and here is the measured before/after — memory and pruning.
 10. File the follow-up issue Design §3's evidence actually points at, which is **not** about
     ordering: `measures` queries through per-process JIT view instances spend their time in JIT
     freshness checking over requested ranges far wider than the process's data, not in scanning.
@@ -493,12 +519,17 @@ change would leave `log_entries`, `async_events`, `images`, and every unsorted `
 the same behavior — and, per Current State, there is no correct `measures`-only change to make.
 
 **Rejected: declare `ScanOrdering::Concatenated` on `MetricsView`** (the issue's proposal). Both
-preconditions fail, and the failure mode is loud and total: `sort_and_check_non_overlapping` errors
-out on the query path (`get_scan_output_ordering`, consumed only by `MaterializedView::scan`), so
-every `measures` query stops — global and every JIT `view_instance` — an even stronger reason to
-reject than a merge failure would be. (The merge path is unaffected either way: `QueryMerger`'s
-ordering is the separate `with_merge_scan_ordering` field, which `MetricsView` never sets.) Rejected
-on correctness, not on cost/benefit.
+preconditions fail, and the failure mode is mixed rather than uniformly loud:
+`sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:83`), on the query path
+(`get_scan_output_ordering`, consumed only by `MaterializedView::scan`), hard-errors whenever the
+selected partitions include an overlapping adjacent pair — but where they don't (a single partition,
+or a non-overlapping subset), the check passes, the declared ordering is attached, and the other
+precondition (rows sorted within a file) still isn't true, so the query silently returns mis-ordered
+rows instead of erroring. Either outcome is a reason to reject, and the silent one is the worse of
+the two: it would land unnoticed on exactly the JIT `view_instance` queries that dominate `measures`
+traffic (Design §3). (The merge path is unaffected either way: `QueryMerger`'s ordering is the
+separate `with_merge_scan_ordering` field, which `MetricsView` never sets.) Rejected on correctness,
+not on cost/benefit.
 
 **Rejected: `MICROMEGAS_DATAFUSION_TARGET_PARTITIONS` as the fix.** It is a real backlog item for
 user queries, but for merges the right number of readers is one, not "fewer", and a global knob
@@ -577,10 +608,16 @@ changes; the key would be `(name, time)`, not `time`.
   clustering), matched for comparable volume and window width. Run the same narrow-window query
   against each and compare bytes actually scanned:
   ```
-  micromegas-query "SELECT count(*) FROM measures WHERE time BETWEEN ... AND ..." --begin 1h
+  micromegas-query "SELECT count(*), min(value), max(name) FROM measures WHERE time BETWEEN ... AND ..." --begin 1h
   ```
-  with a 1-minute window inside a 1-hour partition. Expect the pre-change partition to scan bytes ≈
-  the whole partition; the post-change one, roughly the fraction of row groups covering the window.
+  with a 1-minute window inside a 1-hour partition. Project representative payload columns, not just
+  `time`: `bytes_scanned` is summed from bytes actually fetched from object storage
+  (`reader_factory.rs:100-118`), and a bare `SELECT count(*) ... WHERE time BETWEEN` only projects
+  `time`, so even with zero row-group pruning it fetches just the footer plus the `time` column
+  chunks — a small fraction of a 14-column `metrics_table_schema()` partition, not a stand-in for
+  "scanned the whole partition." With payload columns projected, expect the pre-change partition to
+  scan bytes comparable to the whole partition; the post-change one, roughly the fraction of row
+  groups covering the window.
   Note for the issue reply: existing merged partitions keep the old clustering until they age out of
   retention or are retired and rebuilt — this comparison only becomes moot once that has happened.
   Read scanned bytes from `log_entries WHERE target = 'flightsql_query_audit'` (the `bytes_scanned`
