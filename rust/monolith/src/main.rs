@@ -25,6 +25,7 @@ use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
+use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
@@ -259,7 +260,25 @@ async fn main() -> Result<()> {
     // `MICROMEGAS_UNSTAMPED_AUDIENCE=public` setting required to keep legacy, never-stamped
     // data visible once this ships.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
-        Some(Arc::new(AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?) as Arc<dyn ReadPolicy>)
+        // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
+        // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`
+        // above already uses. Resolved under the same `MICROMEGAS_ANALYTICS` prefix
+        // `AudienceReadPolicy::from_env` beside it uses, so the cache-TTL knob follows the same
+        // `{prefix}_` fallback every other knob at this wiring site does.
+        let pool = lake_pool
+            .clone()
+            .expect("lakehouse must be Some when flightsql role is enabled");
+        let audience_grants_pool = dedicated_key_store_pool(&pool);
+        let audience_grants_config =
+            DbAudienceGrantsConfig::from_env_with_prefix("MICROMEGAS_ANALYTICS");
+        let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
+            audience_grants_pool,
+            audience_grants_config,
+        ));
+        Some(Arc::new(
+            AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?
+                .with_store(Some(audience_grants_store)),
+        ) as Arc<dyn ReadPolicy>)
     } else {
         None
     };

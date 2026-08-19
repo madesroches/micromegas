@@ -6,6 +6,7 @@ use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas_auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
+use micromegas_auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas_auth::default_provider::ProviderBuilder;
 use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
@@ -292,7 +293,20 @@ impl FlightSqlServerBuilder {
                         );
                     }
                 };
-                let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::from_env("")?);
+                // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from
+                // its own dedicated pool -- not `key_store_pool` above, which
+                // `DbApiKeyAuthProvider` already owns -- via the same `dedicated_key_store_pool`
+                // convention. Same prefix (`""`) `AudienceReadPolicy::from_env` beside it
+                // resolves under, so the cache-TTL knob follows the same `{prefix}_` fallback.
+                let audience_grants_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
+                let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
+                    audience_grants_pool,
+                    audience_grants_config,
+                ));
+                let policy: Arc<dyn ReadPolicy> = Arc::new(
+                    AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
+                );
                 let isolation_config = Arc::new(IsolationConfig::from_env("")?);
                 (Some(provider), policy, isolation_config)
             } else {

@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 6;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 7;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -173,6 +173,42 @@ pub async fn upgrade_data_lake_schema_v6(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 7.
+/// Adds `audience_grants` (#1489, AbAC Stage 6a): the DB-backed audience grant store, a 1:1
+/// stand-in for the long-term model's `group_read_grants`/`group_mint_grants` tables. One table
+/// with an `axis` column (`'read'`/`'mint'`) rather than two, mirroring today's single env-var
+/// grant map (`{prefix}_AUDIENCE_GRANTS`); `(audience, axis, selector)` is the row's own natural
+/// key, so there is no surrogate `grant_id` the way `ingestion_api_keys.key_id` has one (a grant
+/// carries no secret to keep unlinkable from its own identity). No `revoked_at`/`revoked_by`
+/// either -- grants are hard-`DELETE`d, since a removed grant has no ongoing artifact whose
+/// provenance a caller might later need. The two `CHECK` constraints mirror the same validation
+/// `AudienceGrants::from_rows` (`rust/auth/src/policy.rs`) re-runs independently in Rust, so a row
+/// inserted by any means other than the admin API (a manual `psql` fix, a future migration) still
+/// can't produce an unparseable or unreadable grant silently.
+pub async fn upgrade_data_lake_schema_v7(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "CREATE TABLE audience_grants (
+           audience   VARCHAR(255) NOT NULL,
+           axis       VARCHAR(4) NOT NULL CHECK (axis IN ('read', 'mint')),
+           selector   VARCHAR(255) NOT NULL,
+           created_at TIMESTAMPTZ NOT NULL,
+           created_by VARCHAR(255) NOT NULL,
+           PRIMARY KEY (audience, axis, selector),
+           CONSTRAINT audience_grants_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$'),
+           CONSTRAINT audience_grants_selector_shape
+               CHECK (selector = '*' OR selector ~ '^(user|group):.+$')
+         );",
+    )
+    .await
+    .with_context(|| "creating table audience_grants")?;
+    tr.execute("UPDATE migration SET version=7;")
+        .await
+        .with_context(|| "updating data lake schema version to 7")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -290,6 +326,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v6");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v6(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 6 == current_version {
+        info!("upgrading data_lake_schema to v7");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v7(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

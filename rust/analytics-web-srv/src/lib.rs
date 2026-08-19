@@ -2,6 +2,7 @@
 
 pub mod analytics_keys;
 pub mod app_db;
+pub mod audience_grants;
 pub mod auth;
 pub mod data_source_cache;
 pub mod data_sources;

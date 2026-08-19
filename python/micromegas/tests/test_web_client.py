@@ -12,6 +12,10 @@ def _make_client():
     client.session.post.return_value.json.return_value = {}
     client.session.put.return_value.ok = True
     client.session.put.return_value.json.return_value = {}
+    client.session.get.return_value.ok = True
+    client.session.get.return_value.json.return_value = []
+    client.session.delete.return_value.ok = True
+    client.session.delete.return_value.json.return_value = {}
     return client
 
 
@@ -73,3 +77,50 @@ class TestImportIngestionApiKeyAudience:
         client.import_ingestion_api_key("k", "secret", audience="team-alpha")
         payload = client.session.post.call_args.kwargs["json"]
         assert payload["audience"] == "team-alpha"
+
+
+class TestAudienceGrants:
+    """#1489, AbAC Stage 6a: `create_audience_grant`/`list_audience_grants`/
+    `delete_audience_grant` payload/params construction."""
+
+    def test_create_audience_grant_payload(self):
+        client = _make_client()
+        client.create_audience_grant("team-alpha", "read", "group:eng")
+        call = client.session.post.call_args
+        assert call.args[0] == "http://localhost:9999/api/audience-grants"
+        assert call.kwargs["json"] == {
+            "audience": "team-alpha",
+            "axis": "read",
+            "selector": "group:eng",
+        }
+
+    def test_list_audience_grants_omits_unset_filters(self):
+        client = _make_client()
+        client.list_audience_grants()
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/audience-grants"
+        assert call.kwargs["params"] == {}
+
+    def test_list_audience_grants_includes_set_filters(self):
+        client = _make_client()
+        client.list_audience_grants(
+            audience="team-alpha", axis="mint", limit=10, offset=5
+        )
+        call = client.session.get.call_args
+        assert call.kwargs["params"] == {
+            "audience": "team-alpha",
+            "axis": "mint",
+            "limit": 10,
+            "offset": 5,
+        }
+
+    def test_delete_audience_grant_passes_natural_key_as_query_params(self):
+        client = _make_client()
+        client.delete_audience_grant("team-alpha", "read", "user:alice@example.com")
+        call = client.session.delete.call_args
+        assert call.args[0] == "http://localhost:9999/api/audience-grants"
+        assert call.kwargs["params"] == {
+            "audience": "team-alpha",
+            "axis": "read",
+            "selector": "user:alice@example.com",
+        }

@@ -65,6 +65,14 @@
 > Resolved Decisions) are updated in place; see **Appendix C** for the full drift audit. Nothing in
 > §1–§6 changes — only *where* `MintPolicy::resolve_audience` gets called.
 
+> **Stage 6a landed (#1489) 2026-08-19.** The audience grant map moves out of startup env config
+> (`{prefix}_AUDIENCE_GRANTS`) and into a new DB-backed store, `audience_grants` (data-lake schema
+> v7) — a flat, selector-based table that is a 1:1 stand-in for the long-term model's
+> `group_read_grants`/`group_mint_grants` tables described above, not an implementation of nested
+> groups itself. This is what makes a per-user grant creatable without a service restart: the env
+> map is kept as the static/bootstrap layer, unioned additively with the store. Full design in
+> `tasks/1489_db_audience_grant_store_plan.md`.
+
 ## Overview
 
 Isolate telemetry so that data produced under one identity is only **readable** by principals

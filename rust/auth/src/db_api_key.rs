@@ -78,7 +78,7 @@ pub struct DbApiKeyConfig {
     pub unknown_cache_size: u64,
 }
 
-fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
+pub(crate) fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
     let var = resolve_prefixed_var(prefix, suffix);
     let raw = std::env::var(&var).ok();
     match raw {

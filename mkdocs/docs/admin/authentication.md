@@ -362,6 +362,120 @@ Worked **mint** profiles (granting mint authority for a non-admin caller) are
 deferred to Stage 6 (#1374), the first stage with a real non-admin mint
 consumer.
 
+### DB-backed audience grants (#1489, AbAC Stage 6a)
+
+`{prefix}_AUDIENCE_GRANTS` is resolved once at startup, so creating one
+per-user grant means editing an env var and restarting every service that
+reads it — workable for a handful of teams, not for a per-user privacy
+profile where each new user needs one more grant row. The `audience_grants`
+Postgres table (migration v7) is the same grant model, minted, listed, and
+deleted over HTTP without a redeploy:
+
+```sql
+CREATE TABLE audience_grants (
+  audience   VARCHAR(255) NOT NULL,
+  axis       VARCHAR(4) NOT NULL CHECK (axis IN ('read', 'mint')),
+  selector   VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  created_by VARCHAR(255) NOT NULL,
+  PRIMARY KEY (audience, axis, selector),
+  CONSTRAINT audience_grants_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$'),
+  CONSTRAINT audience_grants_selector_shape
+      CHECK (selector = '*' OR selector ~ '^(user|group):.+$')
+);
+```
+
+One table with an `axis` column, not two — a 1:1 image of the env map's
+single map covering both the read and mint axes, kept splittable later
+(without any change to `ReadPolicy`/`MintPolicy`) if the long-term
+group-membership model ever needs it.
+
+**Additive, never a replacement.** Each flight-sql process — standalone
+`flight-sql-srv`, or the monolith's flight-sql role — holds one whole-table
+snapshot in memory (small enough that the issue treats "cache the whole map"
+as the right shape, unlike the per-key `moka` cache backing the [DB-backed
+key store](api-keys.md)), unioned with the env map before matching a
+caller's selectors. `analytics-web-srv` is the write surface only (the HTTP
+admin routes below) — it never constructs a `DbAudienceGrantsSource` and
+caches nothing itself. A selector present in
+the env map, the store, or both grants exactly the same access — there is no
+"the store wins" or "the env map wins" precedence to reason about, and no
+forced migration off `{prefix}_AUDIENCE_GRANTS`: a deployment that never
+touches the store keeps working exactly as documented above.
+
+**HTTP admin routes**, `AdminUser`-gated (same admin list as the [API-key
+routes](api-keys.md)) and unavailable under `--disable-auth` for the same
+reason those routes are:
+
+| Route | Body / result |
+|---|---|
+| `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
+| `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` | 200 `[{"audience","axis","selector","created_at","created_by"}]`, newest first |
+| `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404 |
+
+`GET` is admin-gated exactly like the write routes — who can read which
+audience is itself a confidentiality-sensitive fact, not a public listing.
+`DELETE` takes the natural key as query parameters rather than path
+segments: a `group:<id>` selector can contain `/` or other URL-significant
+characters a raw path segment can't safely carry.
+
+The `micromegas-grants` CLI wraps these three routes, the same
+HTTP-only-via-`analytics-web-srv` convention every CLI in this codebase
+follows (never direct Postgres access):
+
+```bash
+micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
+micromegas-grants --url https://analytics.example.com list --audience team-alpha
+micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
+```
+
+**Cache-TTL knob**, following the same `{prefix}_` fallback shape as every
+other knob on this page:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` | `60` | How long a process serves its in-memory snapshot before re-querying `audience_grants`. Accepts a role prefix on the monolith (`MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), falling back to the unprefixed name. |
+
+**Revocation takes effect within the cache TTL (default 60s), not
+instantly.** This is a stated property, not an oversight: a `DELETE` above
+removes the row from `audience_grants` immediately, but every flight-sql
+process keeps serving its cached snapshot — and so keeps granting the removed
+read access — until its next refresh, up to one full TTL window later.
+
+**Outage behavior is deliberately different from the DB-backed key store's.**
+Once a process has loaded the table successfully at least once, a later
+refresh failure keeps serving that last good snapshot — unbounded, for as
+long as the outage lasts, not just for one more TTL window the way the
+per-key cache's TTL eviction bounds a key-lookup outage. The trade favors a
+single, deployment-wide grant view degrading to *staleness* over degrading to
+*everyone loses every grant simultaneously* on a transient DB blip. A fresh
+process whose very first query hits a down DB has no "last good" to serve, so
+that case still fails closed like everything else on this seam — `resolve()`
+denies exactly as documented, at a rate capped by the same cache-TTL knob
+rather than once per request. A sustained outage surfaces on an operator's
+dashboard (`audience_grant_refresh_error_count`), not on the request path.
+
+**A malformed row still can't reach a policy decision.** The table's own
+`CHECK` constraints are re-validated independently in Rust on every load, so
+a row that somehow bypassed them (a manual `psql` fix, a future migration)
+fails the *whole* snapshot load loudly instead of silently producing an
+unparseable or unreadable grant.
+
+**Deploy-order requirement.** `audience_grants` is created by migration v7,
+which only `telemetry-ingestion-srv` and the monolith run (via
+`connect_to_remote_data_lake`/`migrate_db`). A standalone `flight-sql-srv`
+builds its lakehouse context with `LakehouseContext::from_env()`, which runs
+only `migrate_lakehouse` and never touches `migrate_db` — so it never creates
+the table itself. Roll the v7 migration (by upgrading ingestion or the
+monolith) before or in the same deploy as upgrading `flight-sql-srv` to a
+build that wires `DbAudienceGrantsSource`. Upgrading `flight-sql-srv` first
+against a still-v6 database is not a startup failure: the process comes up
+fine and then fails every `resolve()` call with "relation audience_grants
+does not exist" (throttled to one DB attempt per cache-TTL window), failing
+every authenticated query with `unavailable` -- `public`-only queries
+included -- until the migration lands (see the matching CHANGELOG entry for
+this change).
+
 ## Client Configuration
 
 ### Python Client with OIDC

@@ -18,7 +18,7 @@
 use micromegas_ingestion::sql_migration::{
     LATEST_DATA_LAKE_SCHEMA_VERSION, execute_migration, read_data_lake_schema_version,
     upgrade_data_lake_schema_v2, upgrade_data_lake_schema_v3, upgrade_data_lake_schema_v4,
-    upgrade_data_lake_schema_v5,
+    upgrade_data_lake_schema_v5, upgrade_data_lake_schema_v6,
 };
 use micromegas_ingestion::sql_telemetry_db::create_tables;
 use sqlx::Row;
@@ -62,6 +62,20 @@ async fn build_v5_schema(pool: &sqlx::PgPool) {
         .await
         .expect("v4 -> v5");
     tr.commit().await.expect("commit v5");
+}
+
+/// Builds a throwaway schema pinned to v6 (the pre-#1489 shape: no `audience_grants` table yet)
+/// by chaining `build_v5_schema` with the v6 step directly, for the same reason
+/// `build_v5_schema` bypasses `execute_migration` -- which, now that
+/// `LATEST_DATA_LAKE_SCHEMA_VERSION` is 7, would carry a fresh schema all the way to v7 in one
+/// call and leave nothing at v6 to migrate from.
+async fn build_v6_schema(pool: &sqlx::PgPool) {
+    build_v5_schema(pool).await;
+    let mut tr = pool.begin().await.expect("begin v6");
+    upgrade_data_lake_schema_v6(&mut tr)
+        .await
+        .expect("v5 -> v6");
+    tr.commit().await.expect("commit v6");
 }
 
 async fn schema_version(pool: &sqlx::PgPool) -> i32 {
@@ -170,6 +184,126 @@ async fn v6_backfills_existing_rows_and_rejects_invalid_audiences() {
 
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping throwaway schema");
+
+    test_result.expect("test assertions");
+}
+
+/// The v6 -> v7 step (#1489, AbAC Stage 6a): `execute_migration` against a v6 database creates
+/// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)` and its two `CHECK`
+/// constraints, both mirroring `AudienceGrants::from_rows`'s Rust-side validation
+/// (`rust/auth/src/policy.rs`) on the SQL side.
+const SCHEMA_V7: &str = "mm_1489_sql_migration_test_schema";
+
+#[ignore]
+#[tokio::test]
+async fn v7_creates_audience_grants_table_with_constraints() {
+    let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live Postgres");
+
+    let setup_pool = sqlx::PgPool::connect(&base_conn_str)
+        .await
+        .expect("connecting to metadata Postgres");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V7} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping any stale throwaway schema from a previous failed run");
+    sqlx::query(&format!("CREATE SCHEMA {SCHEMA_V7}"))
+        .execute(&setup_pool)
+        .await
+        .expect("creating throwaway schema");
+
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)
+        .expect("valid connection string")
+        .options([("search_path", SCHEMA_V7)]);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .expect("connecting with a throwaway search_path");
+
+    let test_result: Result<(), String> = async {
+        build_v6_schema(&pool).await;
+        if schema_version(&pool).await != 6 {
+            return Err("expected the throwaway schema to start at v6".to_string());
+        }
+
+        execute_migration(pool.clone())
+            .await
+            .map_err(|e| format!("migrating v6 -> v7: {e:#}"))?;
+
+        let version = schema_version(&pool).await;
+        if version != LATEST_DATA_LAKE_SCHEMA_VERSION {
+            return Err(format!(
+                "expected schema version {LATEST_DATA_LAKE_SCHEMA_VERSION} after migrating, got {version} \
+                 (a forgotten `UPDATE migration SET version=7;` would surface as a startup panic \
+                 in production, not a graceful error -- this is what catches it here instead)"
+            ));
+        }
+
+        // A well-formed row is accepted.
+        sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('team-alpha', 'read', 'group:eng', now(), 'test')",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("inserting a well-formed row should succeed: {e:#}"))?;
+
+        // The primary key rejects a duplicate natural-key row.
+        let dup = sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('team-alpha', 'read', 'group:eng', now(), 'test-2')",
+        )
+        .execute(&pool)
+        .await;
+        if dup.is_ok() {
+            return Err("expected the primary key to reject a duplicate row".to_string());
+        }
+
+        // `axis` must be 'read' or 'mint'.
+        let bad_axis = sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('team-alpha', 'write', '*', now(), 'test')",
+        )
+        .execute(&pool)
+        .await;
+        if bad_axis.is_ok() {
+            return Err("expected the axis CHECK to reject 'write'".to_string());
+        }
+
+        // The audience-name CHECK mirrors `is_valid_audience`'s charset -- assert agreement on a
+        // representative value, not the full accept/reject table (which
+        // `rust/auth/tests/policy_tests.rs`'s `is_valid_audience_*` tests already pin).
+        let bad_audience = sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('group:everyone', 'read', '*', now(), 'test')",
+        )
+        .execute(&pool)
+        .await;
+        if bad_audience.is_ok() {
+            return Err("expected the audience-name CHECK to reject 'group:everyone'".to_string());
+        }
+
+        // The selector-shape CHECK mirrors `valid_selector`.
+        let bad_selector = sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('team-alpha', 'read', 'not-a-selector', now(), 'test')",
+        )
+        .execute(&pool)
+        .await;
+        if bad_selector.is_ok() {
+            return Err("expected the selector-shape CHECK to reject 'not-a-selector'".to_string());
+        }
+
+        Ok(())
+    }
+    .await;
+
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V7} CASCADE"))
         .execute(&setup_pool)
         .await
         .expect("dropping throwaway schema");

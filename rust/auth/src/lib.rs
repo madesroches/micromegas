@@ -114,3 +114,6 @@ pub mod user_attribution;
 /// Authorization seam: `MintPolicy`, `ReadPolicy`, and their audience-based implementations
 /// (#1369, AbAC Stage 1)
 pub mod policy;
+
+/// DB-backed audience grant store (#1489, AbAC Stage 6a)
+pub mod db_audience_grants;

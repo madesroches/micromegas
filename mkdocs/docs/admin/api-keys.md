@@ -216,10 +216,13 @@ which one it *writes*).
 
 **An audience is an opaque label, not a principal encoding** — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. It carries no meaning by itself;
-who may read or mint into it is separate, editable configuration (a grant
-map, `{prefix}_AUDIENCE_GRANTS` — see [Audiences and Grants](authentication.md#audiences-and-grants)
-for the full model). `public` is the one built-in: every authenticated
-principal can read it, with no grant map entry needed.
+who may read or mint into it is separate, editable configuration — the
+`{prefix}_AUDIENCE_GRANTS` env map, unioned with the DB-backed
+`audience_grants` table (`POST`/`GET`/`DELETE {base_path}/api/audience-grants`,
+or the `micromegas-grants` CLI) — see [Audiences and
+Grants](authentication.md#audiences-and-grants) for the full model. `public`
+is the one built-in: every authenticated principal can read it, with no grant
+entry needed in either source.
 
 **The binding is immutable by design.** Once a key is minted or imported with
 an audience, that audience never changes for that key — not through a later
@@ -340,12 +343,16 @@ lists separate (i.e. ran with the proxy unconfigured on purpose) must
 re-audit `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS` **before**
 upgrading, not after.
 
-**Under `--disable-auth` on `analytics-web-srv`, both key-management route
-groups are unavailable — not just gated, but not merged at all.** With auth
-disabled, every request would otherwise be treated as an admin, which would
-let an unauthenticated caller mint/revoke real keys; instead both path
-prefixes are answered by a fixed 503 (`{"code": "AUTH_DISABLED", ...}`),
-including any sub-path.
+**Under `--disable-auth` on `analytics-web-srv`, all three key/grant-management
+route groups are unavailable — not just gated, but not merged at all.** With
+auth disabled, every request would otherwise be treated as an admin, which
+would let an unauthenticated caller mint/revoke real keys or grants; instead
+all three path prefixes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`,
+and `/api/audience-grants`) are answered by a fixed 503
+(`{"code": "AUTH_DISABLED", ...}`), including any sub-path. The third prefix
+is the DB-backed audience grant store's own admin route — see [Audiences and
+Grants](authentication.md#audiences-and-grants) and the `micromegas-grants`
+CLI.
 
 ## Cache and audit env vars
 
@@ -408,14 +415,30 @@ GRANT SELECT, INSERT ON ingestion_api_keys TO micromegas_web;
 GRANT UPDATE (revoked_at, revoked_by) ON ingestion_api_keys TO micromegas_web;
 GRANT SELECT, INSERT ON analytics_api_keys TO micromegas_web;
 GRANT UPDATE (revoked_at, revoked_by) ON analytics_api_keys TO micromegas_web;
+
+-- analytics role: read-only on the audience grant store -- DbAudienceGrantsSource
+-- re-queries this table on every snapshot refresh
+GRANT SELECT ON audience_grants TO micromegas_analytics;
+
+-- analytics-web-srv's own role: the sole admin surface for audience_grants too
+GRANT SELECT, INSERT, DELETE ON audience_grants TO micromegas_web;
 ```
 
+Note the last grant is `DELETE`, not `UPDATE`: `audience_grants` rows are
+hard-deleted on revocation (there is no `revoked_at`/`revoked_by` column to
+update in place, unlike the key tables above).
+
 Note `micromegas_web` (`analytics-web-srv`'s role) is the only role granted
-`INSERT` on either table in a fully separated-role deployment — mint/import
-write fresh rows, revoke only ever touches `revoked_at`/`revoked_by` on an
-existing one. `micromegas_ingestion` and `micromegas_analytics` are each
-read + `last_used_at`-touch only, on their own table, with no overlap in
-column grants and no grant of any kind on the other service's table.
+`INSERT` on any of these tables in a fully separated-role deployment —
+mint/import write fresh rows, revoke only ever touches
+`revoked_at`/`revoked_by` (or, for `audience_grants`, deletes the row
+outright). `micromegas_ingestion` is read + `last_used_at`-touch only, on its
+own table, with no grant of any kind on either of the other two tables.
+`micromegas_analytics` is read + `last_used_at`-touch only on
+`analytics_api_keys`, plus a read-only `SELECT` on `audience_grants` (which
+has no `last_used_at` column, so there's no touch semantics there — just the
+periodic whole-table refresh `DbAudienceGrantsSource` runs). Neither service
+role has any grant on `ingestion_api_keys`.
 **`analytics-web-srv`'s role does gain write access to `ingestion_api_keys`**
 under this design — that is the point of removing ingestion's own admin
 routes, not a gap: every ingestion-key mint/revoke/import now goes through
