@@ -285,7 +285,7 @@ authenticated user can mint standing credentials and create audiences" the momen
 from `MICROMEGAS_SELF_SERVICE_MINT` (empty-prefix convention, parsed the same
 `v == "true" || v == "1"` way `web_server.rs:123` already parses its own boolean knob), default
 `false`. The same flag is resolved a second time onto `AudienceGrantsState`, so `GET
-/api/audience-grants/mine` (§5) can gate itself on it too — that route is also new non-admin
+/api/audience-grants/my-audiences` (§5) can gate itself on it too — that route is also new non-admin
 surface, and must not widen on upgrade any more than the mint route itself does. A new
 `FromRequestParts` extractor, `MintGate` (§4), checks it — before `mint_key`'s body
 runs at all, and before `Json<MintRequest>` ever parses the request — for every non-admin caller:
@@ -296,8 +296,12 @@ off a non-admin `resolve_audience` denial *inside* the handler body, not off thi
 reached either. Admin minting is unaffected either way, since the knob only
 gates the caller branches this stage adds. Two more knobs, resolved onto `IngestionKeysState` the
 same way, bound the blast radius of turning it on: `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`
-(`max_claims_per_caller: i64`, default `5`) and `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`
-(`max_keys_per_caller: i64`, default `20`) — see §4a and §4 for where each is enforced.
+(`max_claims_per_caller: i64`, default `25`) and `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`
+(`max_keys_per_caller: i64`, default `100`) — see §4a and §4 for where each is enforced. Both are a
+backstop against a runaway client or an abusive caller, not a quota routine use is expected to plan
+around or bump into: a caller with several machines and CI runners sits far below either default,
+so the defaults are set deliberately high precisely to keep the admin-only recovery path below a
+pathological case rather than routine friction.
 
 **Monolith prefix parity is automatic — no plumbing needed.** An earlier draft of this plan
 flagged that monolith namespaces the web role's other knobs under `MICROMEGAS_ANALYTICS`
@@ -539,7 +543,7 @@ the caller minting a fresh audience is itself an admin.
 **Per-caller claim bound.** Nothing else in this design limits how many audiences one caller may
 claim — `analytics-web-srv` has no rate-limiting or quota machinery of any kind today, and a claim
 creates a new, standing audience plus a new key. `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`
-(empty-prefix, default `5`), resolved once at startup onto `IngestionKeysState` alongside
+(empty-prefix, default `25`), resolved once at startup onto `IngestionKeysState` alongside
 `self_service_mint_enabled` (§3): the count of distinct audiences already carrying a `mint` row
 for `selector = 'user:<caller email>'` **and** `created_by = '<caller email>'` is checked inside
 the same locked transaction — the `created_by` filter scopes the bound to audiences the caller
@@ -856,7 +860,7 @@ process's) have a ~60s TTL (`db_audience_grants.rs:33-42`), and two different di
   genuinely-fresh name: denied inside the transaction before either `INSERT` runs (per-caller
   claim bound), not a duplicate-owner outcome and not the ordinary "no grant" message.
 
-### 5. Discoverability: `GET {base_path}/api/audience-grants/mine`
+### 5. Discoverability: `GET {base_path}/api/audience-grants/my-audiences`
 
 The setup script needs a way to ask "what can I mint into?" without being an admin — today's only
 read route on this table, `list_grants` (`audience_grants.rs`), is `AdminUser`-gated (deliberately:
@@ -866,7 +870,7 @@ carries none of that sensitivity, so it gets its own route and the new `Authenti
 extractor (§1), not `AdminUser`:
 
 ```rust
-/// `GET {base_path}/api/audience-grants/mine` -- audiences `caller` may mint into today, per the
+/// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today, per the
 /// DB store's current rows (no cache -- this reads `pool` directly, same as `list_grants`), plus
 /// the caller's own `is_admin` flag. The flag rides on this response because there is no other way
 /// for a CLI caller to learn it: `is_admin` is computed server-side from `MICROMEGAS_ADMINS`
@@ -882,17 +886,17 @@ extractor (§1), not `AdminUser`:
 /// and computing it server-side keeps one canonical rule so the prefix this response hands out can
 /// never drift from the `user:<email>` selector a claim (§4a) actually writes.
 #[derive(Serialize)]
-struct MineResponse {
+struct MyAudiencesResponse {
     is_admin: bool,
     audiences: Vec<String>,
     mint_prefix: Option<String>,
 }
 
-async fn my_mint_grants(
+async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,
-) -> Result<Json<MineResponse>, AudienceGrantError> {
-    // Same off-by-default gate `MintGate` enforces for the mint route itself (§3, §4): `/mine` is
+) -> Result<Json<MyAudiencesResponse>, AudienceGrantError> {
+    // Same off-by-default gate `MintGate` enforces for the mint route itself (§3, §4): `/my-audiences` is
     // new non-admin surface, so it must not widen on upgrade either. `AudienceGrantsState` carries
     // its own copy of the knob (below) rather than reaching into `IngestionKeysState`, since the
     // two states are layered independently and this route has no other access to that one.
@@ -915,7 +919,7 @@ async fn my_mint_grants(
     audiences.sort();
     audiences.dedup();
     let mint_prefix = mint_prefix_for(&caller.email);
-    Ok(Json(MineResponse { is_admin: caller.is_admin, audiences, mint_prefix }))
+    Ok(Json(MyAudiencesResponse { is_admin: caller.is_admin, audiences, mint_prefix }))
 }
 ```
 
@@ -939,15 +943,15 @@ grant for it" denial. `mint_prefix` plus the audience name the caller supplies m
 `is_valid_audience`'s 255-byte limit; an over-long combination fails with that existing 400 rather
 than being silently truncated.
 
-**`/mine` is gated on the same off-by-default knob as the mint route, for the same reason (§3,
+**`/my-audiences` is gated on the same off-by-default knob as the mint route, for the same reason (§3,
 Security "Both new caller-facing behaviors are opt-in").** `AudienceGrantsState` gains its own
 `self_service_mint_enabled: bool` field, resolved from `MICROMEGAS_SELF_SERVICE_MINT` at startup
 the same way `IngestionKeysState`'s copy is (§3) — the two states are layered independently in
 `web_server.rs`, so the flag is threaded onto both rather than one route reaching into the other's
-state. Without this, `/mine` would be new non-admin surface that widens on upgrade regardless of
-the knob, and — worse — a knob-off non-admin could see a populated `audiences` list from `/mine`
+state. Without this, `/my-audiences` would be new non-admin surface that widens on upgrade regardless of
+the knob, and — worse — a knob-off non-admin could see a populated `audiences` list from `/my-audiences`
 and then have the matching `mint_key` call 403 with "self-service minting is disabled," since
-`/mine` reads the DB grant rows directly while `mint_key`'s `MintGate` checks the knob first. An
+`/my-audiences` reads the DB grant rows directly while `mint_key`'s `MintGate` checks the knob first. An
 admin caller is exempt from this check, matching `MintGate`'s own `!caller.is_admin` condition —
 an admin's mint authority never depends on the knob either (§4). `AudienceGrantError` (currently
 `BadRequest`/`NotFound`/`Database`/`NotConfigured`/`Internal`, `audience_grants.rs:67-80`) gains a
@@ -964,12 +968,12 @@ table.
 Deliberately not consulting the env grant map here: mint grants are DB-only in this stage (§3), so
 there is nothing there to fold in.
 
-**`/mine` has nothing useful to say for an admin caller.** An admin's mint authority never depends
+**`/my-audiences` has nothing useful to say for an admin caller.** An admin's mint authority never depends
 on a grant row (`AudienceMintPolicy`'s `is_admin` arm, Current State), so the `audiences` list in
-`/mine`'s response is `[]` for every admin regardless of what they can mint or already own. The
+`/my-audiences`'s response is `[]` for every admin regardless of what they can mint or already own. The
 setup script (§6) must not treat that `[]` the way it treats a non-admin's: for a non-admin, `[]`
 really does mean "no mintable audience yet, claim one or ask an admin"; for an admin it means
-nothing at all. The script tells the two apart using `/mine`'s own `is_admin` field (added above
+nothing at all. The script tells the two apart using `/my-audiences`'s own `is_admin` field (added above
 for exactly this reason — no other endpoint reachable from a CLI caller exposes it) before
 deciding which hint to print.
 
@@ -977,7 +981,7 @@ deciding which hint to print.
 admin**: if exactly one audience comes back, use it silently; if more than one, print the list and
 ask the caller to pick one via `--audience`; if none, print a message pointing at claiming a fresh
 name via `--audience <new-name>` instead (§4a) or asking an admin for a grant. An admin caller with
-`--audience` omitted is asked to pass one explicitly instead — `/mine`'s `[]` would otherwise
+`--audience` omitted is asked to pass one explicitly instead — `/my-audiences`'s `[]` would otherwise
 print exactly the non-admin "claim a fresh name" hint for a caller who doesn't need one.
 
 ### 6. Setup script
@@ -1004,16 +1008,16 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - **CLI args** (argparse, `import_keys.py`'s style): `--url` (required, analytics-web-srv base
   URL), `--profile` (optional), `--name` (required, e.g. hostname), `--audience` (optional — a
   fresh name to claim per §4a, an existing audience the caller already has a grant for, or
-  omitted entirely to use §5's `/mine` endpoint: exactly one match is used silently, more than one
+  omitted entirely to use §5's `/my-audiences` endpoint: exactly one match is used silently, more than one
   is printed for the caller to choose from with `--audience`, and none prints a hint to either
   claim a fresh name or ask an admin for a grant — see the prefixing rule below for how a
   non-admin's fresh-claim `--audience` is actually resolved), `--otlp-endpoint` (see below),
   `--env-file PATH` (optional — write to a file instead of stdout).
 - **Non-admin fresh claims are prefixed into the caller's own namespace; already-granted audiences
-  and admin callers are not.** The script always calls `/mine` first — even when `--audience` is
+  and admin callers are not.** The script always calls `/my-audiences` first — even when `--audience` is
   passed explicitly — because applying this rule needs both `mint_prefix` and the caller's own
   `audiences` list from that one response:
-  - `--audience X` where `X` is already in `/mine`'s `audiences` (the caller has a real grant for
+  - `--audience X` where `X` is already in `/my-audiences`'s `audiences` (the caller has a real grant for
     it, e.g. a shared team audience): used verbatim, never prefixed. Prefixing here would break the
     intended case of minting into an audience someone already granted the caller.
   - `--audience X` where `X` is *not* in that list (a fresh claim per §4a) **and the caller is not
@@ -1021,12 +1025,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     resolved full audience name to stderr, so the caller sees what was actually claimed rather than
     being surprised by a name they didn't type.
   - **Admin callers are never prefixed.** An admin passing `--audience ci` is doing deliberate
-    operational naming, and an admin's `/mine` `audiences` is always `[]` by construction (§5), so
+    operational naming, and an admin's `/my-audiences` `audiences` is always `[]` by construction (§5), so
     an unconditional prefix would mangle every admin invocation. The script tells the two cases
-    apart using `/mine`'s own `is_admin` field — the same field it already uses to pick which hint
+    apart using `/my-audiences`'s own `is_admin` field — the same field it already uses to pick which hint
     to print when `--audience` is omitted.
 
-  One upside of always calling `/mine`: a knob-off caller gets §5's clear 403 up front, instead of
+  One upside of always calling `/my-audiences`: a knob-off caller gets §5's clear 403 up front, instead of
   a confusing denial only once the mint itself is attempted. A non-admin has no escape hatch through
   this script to claim an unprefixed fresh name — that's deliberate, not an oversight: it's the
   entire mechanism by which operationally meaningful bare names (`prod`, `ci`, `staging`) stay out
@@ -1053,7 +1057,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   it — the same signal §4a itself uses server-side to distinguish a claim from an ordinary mint.
   Without this step, an admin running the script against a fresh audience name mints successfully
   and can never read what their own new key uploads. A non-fresh `--audience` (one the admin
-  already knows has a grant, or one resolved via `/mine`) needs no such step.
+  already knows has a grant, or one resolved via `/my-audiences`) needs no such step.
 - **Output**: `export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
   `export OTEL_EXPORTER_OTLP_ENDPOINT=<--otlp-endpoint>`, and
   `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <key>"` — the protocol export is
@@ -1087,7 +1091,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    build `mint_policy` from `AudienceGrants::empty()` + the DB store, no env map (§3), and add it,
    along with the three new knob-derived fields — `self_service_mint_enabled: bool`,
    `max_claims_per_caller: i64`, `max_keys_per_caller: i64` — to `IngestionKeysState`; also resolve
-   `self_service_mint_enabled` a second time onto `AudienceGrantsState`, for `/mine` (§5) to gate on.
+   `self_service_mint_enabled` a second time onto `AudienceGrantsState`, for `/my-audiences` (§5) to gate on.
 4. `policy.rs`: make `selector_matches` `pub` (§5, same precedent as `valid_selector` at Stage 6a).
 5. `ingestion_keys.rs`: add the `MintGate` `FromRequestParts` extractor (wraps `AuthenticatedUser`
    plus the off-by-default gate, §4) and switch `mint_key` to it, pre-validate via the untouched
@@ -1097,11 +1101,11 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    (503, distinct from `NotConfigured`, §4), `IngestionKeyError::Unauthenticated` (401, `MintGate`'s
    fallback, §4), and `IngestionKeyError::Conflict` (409 `CLAIM_CONTENDED`, distinct from
    `Forbidden`, for lock contention in `try_claim_and_mint`, §4a).
-6. `audience_grants.rs`: add the `GET {base_path}/api/audience-grants/mine` route and handler,
+6. `audience_grants.rs`: add the `GET {base_path}/api/audience-grants/my-audiences` route and handler,
    gated by `AuthenticatedUser` plus the same off-by-default `self_service_mint_enabled` check
    `MintGate` uses (§3, §5); add `self_service_mint_enabled: bool` to `AudienceGrantsState` and
    `AudienceGrantError::Forbidden` (403, `FORBIDDEN`) for the gate to return; add the
-   `mint_prefix_for` derivation helper and the `mint_prefix` field on `MineResponse` (§5).
+   `mint_prefix_for` derivation helper and the `mint_prefix` field on `MyAudiencesResponse` (§5).
 
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
@@ -1110,7 +1114,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    `IngestionKeysState` fields: `mint_policy` (default:
    `Arc::new(AudienceMintPolicy::new(AudienceGrants::empty()))`, reproducing today's "admin only, no
    store" behavior for tests that don't care), `self_service_mint_enabled: false`,
-   `max_claims_per_caller: 5`, `max_keys_per_caller: 20`. In
+   `max_claims_per_caller: 25`, `max_keys_per_caller: 100`. In
    `ingestion_keys_tests.rs`: extend `build_handler_router_with_user` (line 68) to also layer an
    `AuthContext`; add an `AuthContext`-builder test helper (mirror
    `auth/tests/policy_tests.rs::caller`, lines 19-38, since it isn't exported). Update the existing
@@ -1149,8 +1153,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    `audience_grants_tests.rs`, `analytics_keys_tests.rs`, and `maps_tests.rs`, since each file in
    `tests/` is a separate crate and there is no shared `tests/common` module) — its router today
    layers only `Extension(state)`/`Extension(AuthToken)`/`Extension(ValidatedUser)`, and the new
-   `AuthenticatedUser` extractor reads `AuthContext`, so every `/mine` test would otherwise hit the
-   `Unauthenticated` rejection. Add tests for `GET /api/audience-grants/mine` (§5) — a caller with a
+   `AuthenticatedUser` extractor reads `AuthContext`, so every `/my-audiences` test would otherwise hit the
+   `Unauthenticated` rejection. Add tests for `GET /api/audience-grants/my-audiences` (§5) — a caller with a
    matching selector sees the audience, a caller without one doesn't, `AdminUser` is not required,
    the response's `is_admin` field matches the caller, and — for the new gate (§3, §5) — a knob-off
    non-admin gets a 403 while a knob-off admin still gets a normal response. Also add unit tests for
@@ -1163,18 +1167,18 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 ### Phase 3 — Python setup script
 9. `web_client.py`: add `mint_ingestion_api_key`, which reads `resp.status_code`/the response
    body's `code` field itself (before calling `_check_response`) to retry once on a 409
-   `CLAIM_CONTENDED` (§6), and a `my_audience_grants`/`list_mine` call for
-   `GET .../audience-grants/mine` (§5), returning all three fields of the
+   `CLAIM_CONTENDED` (§6), and a `my_audiences` call for
+   `GET .../audience-grants/my-audiences` (§5), returning all three fields of the
    `{is_admin, audiences, mint_prefix}` response.
 10. New `cli/setup_telemetry.py` + `pyproject.toml` entry point; `--otlp-endpoint` defaults from
     `MICROMEGAS_TELEMETRY_URL` when set (§6). The script must implement the three-way prefix rule
-    (§6): an `--audience` already in `/mine`'s `audiences` is used verbatim; a fresh, non-admin
+    (§6): an `--audience` already in `/my-audiences`'s `audiences` is used verbatim; a fresh, non-admin
     `--audience` is minted as `f"{mint_prefix}{audience}"`, with the resolved full audience name
     printed to stderr; an admin caller's `--audience` is never prefixed. This requires calling
-    `/mine` unconditionally, even when `--audience` is passed explicitly.
-11. Tests: `tests/test_web_client.py` (mint + `/mine` methods), new
+    `/my-audiences` unconditionally, even when `--audience` is passed explicitly.
+11. Tests: `tests/test_web_client.py` (mint + `/my-audiences` methods), new
     `tests/cli/test_setup_telemetry.py` (arg parsing + output formatting, mocked `WebClient`,
-    including the `--audience`-omitted / `/mine` resolution paths).
+    including the `--audience`-omitted / `/my-audiences` resolution paths).
 
 ### Phase 4 — Docs
 12. `mkdocs/docs/admin/authentication.md`: replace the "deferred to Stage 6" placeholders
@@ -1189,7 +1193,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     bound knobs (§3, §4a), including that reaching `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`
     requires an admin to revoke one of the caller's keys — `list_keys`/`revoke_key` stay
     `AdminUser`-gated, so a non-admin has no self-service way to reduce their own live-key count
-    (Trade-offs); add a `/mine` row (noting it is non-admin-accessible, unlike every other
+    (Trade-offs); add a `/my-audiences` row (noting it is non-admin-accessible, unlike every other
     row in the table) to the "**HTTP admin routes**, `AdminUser`-gated" route table (~408-416),
     since that header's blanket claim stops being accurate once this row exists; also correct
     `:400-402`'s claim that `analytics-web-srv` "never constructs a `DbAudienceGrantsSource` and
@@ -1222,12 +1226,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     required `mint_policy`/`self_service_mint_enabled`/`max_claims_per_caller`/
     `max_keys_per_caller` fields and `micromegas_auth::policy::selector_matches`
     becoming `pub`, plus a behavior-change upgrade note covering the new non-admin mint route
-    behavior (off by default, `MICROMEGAS_SELF_SERVICE_MINT`), the new `/mine` route, and the new
+    behavior (off by default, `MICROMEGAS_SELF_SERVICE_MINT`), the new `/my-audiences` route, and the new
     `micromegas-setup-telemetry` CLI.
 16. `mkdocs/docs/query-guide/python-api.md`: add a `### micromegas-setup-telemetry` subsection
     under `## Command-Line Interface`, alongside `micromegas-logout`/`micromegas-import-keys`/
     `micromegas-grants` (the last added by Stage 6a for its own new CLI), and document
-    `WebClient.mint_ingestion_api_key`/the `/mine` call under `## Client Methods`. The
+    `WebClient.mint_ingestion_api_key`/the `/my-audiences` call under `## Client Methods`. The
     `micromegas-setup-telemetry` subsection must document the three-way prefix rule (§6): a fresh
     `--audience` from a non-admin caller is minted under a prefix derived from the caller's own
     email, the resolved full name is printed to stderr, and admin callers are exempt — call out
@@ -1244,15 +1248,15 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - `rust/auth/src/policy.rs`: make `selector_matches` `pub`.
 - `rust/analytics-web-srv/src/ingestion_keys.rs`: `mint_key`, `MintGate`, `try_claim_and_mint`,
   `IngestionKeysState`, `IngestionKeyError`.
-- `rust/analytics-web-srv/src/audience_grants.rs`: new `GET .../audience-grants/mine` route;
+- `rust/analytics-web-srv/src/audience_grants.rs`: new `GET .../audience-grants/my-audiences` route;
   `AudienceGrantsState.self_service_mint_enabled`; `AudienceGrantError::Forbidden`;
-  `mint_prefix_for` derivation helper and `MineResponse.mint_prefix`.
+  `mint_prefix_for` derivation helper and `MyAudiencesResponse.mint_prefix`.
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`: state construction, router-building
   helper, new/updated tests (including new live-DB claim tests).
 - `rust/analytics-web-srv/tests/routing_tests.rs`: `IngestionKeysState` construction (line 406)
   needs the new `mint_policy` field.
-- `rust/analytics-web-srv/tests/audience_grants_tests.rs`: `/mine` tests.
-- `python/micromegas/micromegas/web_client.py`: `mint_ingestion_api_key`, `/mine` call.
+- `rust/analytics-web-srv/tests/audience_grants_tests.rs`: `/my-audiences` tests.
+- `python/micromegas/micromegas/web_client.py`: `mint_ingestion_api_key`, `/my-audiences` call.
 - `python/micromegas/micromegas/cli/setup_telemetry.py` (new).
 - `python/micromegas/pyproject.toml`: new script entry.
 - `python/micromegas/tests/test_web_client.py`, `python/micromegas/tests/cli/test_setup_telemetry.py`
@@ -1348,23 +1352,38 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   `mint` to a selector for an audience that doesn't already exist, since §4a's claim path is only
   ever reached after an ordinary denial. A second, claim-specific knob was rejected as additional
   surface for a distinction no deployment in scope for this stage needs yet.
-- **Per-caller claim/key bounds (§4a) are fixed, conservative defaults (5 claims, 20 live keys),
-  not derived from any existing quota system** — `analytics-web-srv` has none today. An operator
-  who needs a different ceiling raises the corresponding env knob (§3); hitting the default is
-  meant to be a rare, deliberate-abuse-shaped event for the developer/operator self-service
-  audience this stage targets, not a limit ordinary usage should approach. The two bounds are not
+- **A claim writes `user:<email>` on both the `mint` and `read` axes, deliberately — an affirmed
+  product decision, not just an inferred one.** A reviewer asked whether the lazy claim (§4a)
+  should write only `mint`, leaving a non-admin unable to read back what their own new key uploads
+  until an admin granted `read` separately. The answer: a caller who registers a key against a
+  brand-new audience is the party who will send that data, so they are the party who should be able
+  to read it back; a mint-only claim would leave them shipping telemetry they cannot query
+  themselves until an admin intervened — reintroducing exactly the manual admin step this stage
+  exists to remove. Writing `mint` only, requiring an admin for `read`, was considered and rejected
+  on that basis. This is the one place in the AbAC design where the mint and read axes couple; the
+  narrower security argument for why it can't escalate (the claim only ever writes `read` for an
+  audience that had no prior owner, so it can't grant sight of anyone else's existing data) is
+  covered separately in Security, below.
+- **Per-caller claim/key bounds (§4a) are fixed defaults (25 claims, 100 live keys), sized as a
+  runaway/abuse backstop, not derived from any existing quota system** — `analytics-web-srv` has
+  none today. These are deliberately not a quota users are expected to plan around or bump into: a
+  user with several machines and CI runners sits far below either number, so hitting the default is
+  meant to be a rare, pathological, deliberate-abuse-shaped event for the developer/operator
+  self-service audience this stage targets, not a limit ordinary usage should approach. An operator
+  who needs a different ceiling raises the corresponding env knob (§3). The two bounds are not
   symmetric in how a caller recovers from hitting them: a claim can be freed by the caller's own
   admin revoking a grant (`DELETE /api/audience-grants`, already covered above), but
   `list_keys`/`revoke_key` stay `AdminUser`-gated (§4), so freeing a key slot always requires an
   admin to revoke one of the caller's keys on their behalf — there is no self-service path down for
   keys. This is accepted as a documented limitation, not fixed in this stage: widening
   `list_keys`/`revoke_key` to a caller's own keys is exactly the kind of additive follow-up the
-  first bullet above already anticipates, and the default of 20 is set generously (well above what
-  a normal multi-machine setup needs) precisely because reducing it is admin-only.
+  first bullet above already anticipates, and the default of 100 is set well above realistic
+  per-user need precisely so that reducing it remains an admin-only, pathological-case recovery
+  path rather than routine friction.
 
 ## Security
 
-- **The entire mint API — including the lazy-claim path and the `/mine` discovery endpoint — stays
+- **The entire mint API — including the lazy-claim path and the `/my-audiences` discovery endpoint — stays
   on `analytics-web-srv`, never the ingestion service, and must not move there.** Minting a key is a
   materially riskier operation than accepting an already-authenticated ingestion request (it creates
   a new, standing credential, and — as of §4a — can create a new audience and its grants in the same
@@ -1435,7 +1454,11 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   per-caller claim/key bounds (§4a) then limit the blast radius of that opt-in: once enabled, a
   single credential can create at most `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` audiences
   and hold at most `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` live keys **under sequential use
-  from one caller**. Neither check takes a per-caller lock (§4, §4a), so a caller issuing many
+  from one caller**. Both defaults (25, 100) are sized as a backstop against a runaway or abusive
+  caller, well above what routine multi-machine/CI use needs, not as a quota — so a caller actually
+  reaching either one is itself a signal something is wrong, and the admin-only recovery it then
+  requires (Trade-offs) is a pathological case, not routine friction. Neither check takes a
+  per-caller lock (§4, §4a), so a caller issuing many
   requests concurrently can transiently overshoot either bound by up to the request's own
   concurrency — a best-effort blast-radius control, not a hard ceiling, an accepted trade-off
   against the extra per-caller advisory lock closing it would need.
