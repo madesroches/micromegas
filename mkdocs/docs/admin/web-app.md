@@ -52,16 +52,18 @@ export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
 export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 
-# Key management (Admin -> Analytics API Keys / Ingestion API Keys /
-# Audience Grants); 503 if unset. Backs ALL THREE route groups --
-# analytics-web-srv is the sole admin HTTP surface for ingestion_api_keys,
-# analytics_api_keys, and audience_grants, writing directly to Postgres for
-# each (see mkdocs/docs/admin/api-keys.md). Must point at a telemetry DB
-# where the v7 migration has already run (via ingestion or a lakehouse-role
-# monolith) -- v7 is required, not just v5 or v6, since the ingestion-key
-# mint/import routes write a NOT NULL `audience` column added at v6 and the
-# audience-grants routes need the `audience_grants` table added at v7 -- or
-# the routes fail at request time with an opaque 500.
+# Key management (Admin -> Analytics API Keys / Ingestion API Keys);
+# audience grants are managed via /api/audience-grants or the
+# micromegas-grants CLI, not yet a web UI page. 503 if unset. Backs ALL
+# THREE route groups -- analytics-web-srv is the sole admin HTTP surface for
+# ingestion_api_keys, analytics_api_keys, and audience_grants, writing
+# directly to Postgres for each (see mkdocs/docs/admin/api-keys.md). Must
+# point at a telemetry DB where the v7 migration has already run (via
+# ingestion or a lakehouse-role monolith) -- v7 is required, not just v5 or
+# v6, since the ingestion-key mint/import routes write a NOT NULL `audience`
+# column added at v6 and the audience-grants routes need the
+# `audience_grants` table added at v7 -- or the routes fail at request time
+# with an opaque 500.
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 
 # Default write audience for newly-minted/imported ingestion keys, when a

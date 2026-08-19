@@ -465,8 +465,10 @@ monolith) before or in the same deploy as upgrading `flight-sql-srv` to a
 build that wires `DbAudienceGrantsSource`. Upgrading `flight-sql-srv` first
 against a still-v6 database is not a startup failure: the process comes up
 fine and then fails every `resolve()` call with "relation audience_grants
-does not exist" (throttled to one DB attempt per cache-TTL window), denying
-every non-`public` audience to every caller until the migration catches up.
+does not exist" (throttled to one DB attempt per cache-TTL window), failing
+every authenticated query with `unavailable` -- `public`-only queries
+included -- until the migration lands (see the matching CHANGELOG entry for
+this change).
 
 ## Client Configuration
 
