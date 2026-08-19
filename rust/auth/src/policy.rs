@@ -309,10 +309,15 @@ impl AudienceGrants {
     }
 
     /// Unions each audience's `read`/`mint` selector lists across `self` and `other` (#1489, AbAC
-    /// Stage 6a) -- what makes the env map and the DB store additive, per design: a selector
-    /// present in either source grants exactly the same access as being present in both. No dedup
-    /// -- `selector_matches` is called with `.any()`, so a selector present in both sources costs
-    /// one redundant comparison, never a wrong answer.
+    /// Stage 6a): a selector present in either map grants exactly the same access as being
+    /// present in both. No dedup -- `selector_matches` is called with `.any()`, so a selector
+    /// present in both sources costs one redundant comparison, never a wrong answer.
+    ///
+    /// A public utility for combining two `AudienceGrants` maps, exercised by this crate's own
+    /// integration tests (`rust/auth/tests/policy_tests.rs`); `resolve`/`resolve_audience` do
+    /// **not** call it -- they check the env map and the DB store snapshot as two separate
+    /// sources instead, specifically to avoid a per-request deep clone (see the comment in
+    /// [`AudienceReadPolicy::resolve`]).
     pub fn merge(&self, other: &Self) -> Self {
         let mut entries = self.entries.clone();
         for (audience, other_entry) in &other.entries {
