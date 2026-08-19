@@ -119,7 +119,7 @@ exists precisely because this fan-out is what happens by default.
   (`merge.rs:407` → `NamedColumnsTimeBounds::get_time_bounds`, `dataframe_time_bounds.rs:36`).
   Transient per batch, but thousands of plannings per hourly merge.
 - The writer flushes when `arrow_writer.in_progress_size() > 100 MB`
-  (`write_partition.rs:730`), with `max_row_group_row_count = 128 Ki`
+  (`write_partition.rs:731`), with `max_row_group_row_count = 128 Ki`
   (`write_partition.rs:923`) and a `BufWriter` at `max_concurrency(2)`. So the write side
   contributes a bounded ~100 MB of in-progress row group plus part buffers — it does **not** scale
   with core count.
@@ -131,7 +131,7 @@ exists precisely because this fan-out is what happens by default.
 `columns` and (b) partition ranges on the leading column do not overlap. `get_scan_output_ordering`
 has exactly one consumer: `MaterializedView::scan` (`materialized_view.rs:94`), the user-query path.
 `QueryMerger`'s merge-side ordering is a separate, independently-set field
-(`with_merge_scan_ordering`, `merge.rs:87-90`, defaulting to `Unordered`, `merge.rs:80`), and
+(`with_merge_scan_ordering`, `merge.rs:87-90`, defaulting to `Unordered`, `merge.rs:84`), and
 `MetricsView` never calls it — so everything below is about breaking `measures` **queries**, not
 `measures` merges.
 
@@ -195,11 +195,25 @@ unmeasured wall-clock risk — e.g. a small pinned `target_partitions` for its s
 full serial scan repeated `nb_batches` times — is follow-up work for whoever takes that on, not part
 of this plan.
 
+Partition-*creation* extract queries are out of scope for the same reason `BatchPartitionMerger` is:
+`SqlBatchView::make_batch_partition_spec` (`sql_batch_view.rs:256`) builds its session with the same
+plain `make_session_context`, and `SqlPartitionSpec::write` streams that query into
+`write_partition_from_rows` through a single-writer `mpsc::channel(1)` (`sql_partition_spec.rs:149`)
+— structurally the same single-writer shape this plan's rationale is built on. They're left alone
+because their queries are typically aggregating (a view's extract query usually does the `GROUP BY`
+or windowing that shapes a partition, not a bare `SELECT *`), so the writer is less likely to be the
+bottleneck and scan parallelism is less likely to be wasted the way it is for `QueryMerger`'s
+non-aggregating default. Forcing `repartition_file_scans = false` there is an unmeasured trade for
+the same reason as `BatchPartitionMerger`, not a free extension of this fix. This also matters for
+Phase 2: these extract scans run in the same daemon whose memory the before/after sample measures,
+so they're a potential confounder in that comparison, not just an unrelated code path.
+
 `QueryMerger` gets the fix via one extracted helper, `make_merge_session_context(...)`, a thin
 wrapper around `make_session_context` (`query.rs:256`) that applies the merge-only setting before
-handing back the session — so there is no separate "build the session, then remember to configure
-it" step that `QueryMerger::execute_merge_query` (or a future caller) could skip. The plan-shape
-test in step 5 asserts against this same wrapper.
+handing back the session, rather than each ordering-aware path building a session and then
+separately remembering to set it. The plan-shape test in step 4 asserts against this same wrapper,
+which guards the wrapper's own plan shape; it does not exercise `QueryMerger::execute_merge_query`
+itself, so it would not catch a future regression where that method stops calling the wrapper.
 
 Move `repartition_file_scans = false` out of the two ordering-aware paths and into the wrapper:
 
@@ -215,10 +229,12 @@ Move `repartition_file_scans = false` out of the two ordering-aware paths and in
 // `Unordered` and `Concatenated` shapes, which both start from a single file group spanning every
 // input partition: left unsplit, one reader works through that group's files one at a time instead
 // of `target_partitions` concurrent byte-range readers. `PerFile` already builds one file group per
-// input partition and is unaffected either way -- it intentionally keeps one reader per input file
-// for its k-way ordered merge; this setting only stops those per-partition groups from being split
-// further. Downstream parallelism is untouched: a merge query with a GROUP BY still gets its
-// round-robin fan-out above the scan.
+// input partition, and this setting is load-bearing there too: left at `true`, `repartition_file_groups`
+// (via `repartition_preserving_order`) splits each of those k per-partition groups into
+// `target_partitions` byte-range groups whenever k < `target_partitions`, so this setting is what keeps
+// `PerFile` at one reader per input file for its k-way ordered merge instead of `target_partitions`
+// concurrent readers per file. Downstream parallelism is untouched: a merge query with a GROUP BY still
+// gets its round-robin fan-out above the scan.
 pub async fn make_merge_session_context(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
@@ -403,7 +419,7 @@ The scan-side component of the spike is linear in `target_partitions`; this chan
 `1×`. On a 16-core daemon that is a ~16× reduction of that component. What remains is
 core-count-independent:
 
-- writer in-progress row group: ≤ ~100 MB (`write_partition.rs:730`)
+- writer in-progress row group: ≤ ~100 MB (`write_partition.rs:731`)
 - L1 range-cache budget: 200 MB (`MICROMEGAS_OBJECT_CACHE_L1_MB`, `l1_store.rs:26`)
 - one Parquet reader's row group + in-flight coalesced GETs: tens of MB
 
@@ -463,7 +479,9 @@ Shape: add a second, unwrapped `ReaderFactory` on `LakehouseContext` (reading
 `lake.blob_storage.inner()` directly, sharing the same `MetadataCache` — footer metadata *is* worth
 caching) and have `QueryMerger::execute_merge_query` use it for the `source` table. This is a
 separate change with a separate measurement; it is not needed to close #1491 and should not be
-folded into Phase 1's before/after.
+folded into Phase 1's before/after. Same reasoning `mkdocs/docs/architecture/caching.md`'s "What is
+intentionally not cached in L1" section already gives for raw telemetry blocks — read exactly once,
+no reuse benefit — so Phase 3 adds a bullet there for merge reads (see Documentation).
 
 ## Implementation Steps
 
@@ -480,13 +498,11 @@ folded into Phase 1's before/after.
    `execute_per_file_merge`'s optimizer block; update both methods' rustdoc, which currently
    describes setting it as part of their own path (`merge.rs:97-100`, `merge.rs:150-156`), to
    reference the shared setting instead.
-3. Same file: update `MergeQueryResult::ordering_honored`'s rustdoc if it references the per-path
-   setting.
-4. `rust/analytics/src/lakehouse/view.rs`: extend the `get_scan_output_ordering` rustdoc with a
+3. `rust/analytics/src/lakehouse/view.rs`: extend the `get_scan_output_ordering` rustdoc with a
    short note that a bounded merge scan is *not* a reason to declare an ordering — every merge is
    sequential regardless — so the next view author facing a big merge does not repeat #1491's
    reasoning.
-5. `rust/analytics/tests/merge_scan_partitioning_tests.rs` (new): offline plan-shape test, modelled
+4. `rust/analytics/tests/merge_scan_partitioning_tests.rs` (new): offline plan-shape test, modelled
    on `log_stats_ordering_tests.rs`'s `make_offline_lakehouse_context` helper (in-memory object
    store, no DB, lazily-connected) with fabricated `Partition`s (`file_size` above the 10 MB
    `repartition_file_min_size`) registered as the source table. Build two sessions — one from
@@ -500,39 +516,40 @@ folded into Phase 1's before/after.
    - with plain `make_session_context` (control, guarding that the test is meaningful):
      `partition_count() > 1`
    Asserting against the wrapper itself, rather than a bare config-mutating helper the test drives
-   by hand, is what makes this a guard on `QueryMerger` actually calling it — `QueryMerger` has no
-   other way to obtain its session (Design §1).
+   by hand, guards the wrapper's own plan shape — it does not exercise
+   `QueryMerger::execute_merge_query`, so it would not catch a future refactor that reverts that
+   method to call `make_session_context` directly instead of the wrapper (Design §1).
 
 ### Phase 2 — Measure and answer the issue
 
-6. `rust/analytics/src/lakehouse/merge.rs`: extend `create_merged_partition` to log a completion
+5. `rust/analytics/src/lakehouse/merge.rs`: extend `create_merged_partition` to log a completion
    line next to the existing `sum_size` line — elapsed wall-clock and output `file_size` — so
    before/after is queryable from `log_entries` without new instrumentation. (Deliberately a log
    line, not a metric: it pairs with the `sum_size` line the issue already quotes.)
-7. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
+6. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
    `jemalloc_allocated_bytes` / `jemalloc_resident_bytes` rather than host `used_memory`, plus the
    new duration line.
-8. Measure row-group pruning before/after: run the same narrow-window `measures` query — projecting
+7. Measure row-group pruning before/after: run the same narrow-window `measures` query — projecting
    representative payload columns, not just `time`, so `bytes_scanned` is comparable to partition
    size (see Testing Strategy) — against a pre-change and a post-change merged hourly partition and
    compare `bytes_scanned` from `log_entries WHERE target = 'flightsql_query_audit'` — the
-   query-side half of the result, and the baseline for step 10.
-9. Post the answer on #1491: `Concatenated` is unsafe for `measures` (both preconditions fail, and
+   query-side half of the result, and the baseline for step 9.
+8. Post the answer on #1491: `Concatenated` is unsafe for `measures` (both preconditions fail, and
    the failure is mixed — a hard `sort_and_check_non_overlapping` error where selected partitions
    overlap, silent mis-ordered rows where they don't — landing on the query path, via
    `get_scan_output_ordering`, not the merge path), `PerFile` would be a no-op, the win was never in
    the ordering, and here is the measured before/after — memory and pruning.
-10. File the follow-up issue Design §3's evidence actually points at, which is **not** about
-    ordering: `measures` queries through per-process JIT view instances spend their time in JIT
-    freshness checking over requested ranges far wider than the process's data, not in scanning.
-    That is the larger win in the sampled workload and nothing in this plan addresses it.
+9. File the follow-up issue Design §3's evidence actually points at, which is **not** about
+   ordering: `measures` queries through per-process JIT view instances spend their time in JIT
+   freshness checking over requested ranges far wider than the process's data, not in scanning.
+   That is the larger win in the sampled workload and nothing in this plan addresses it.
 
 ### Phase 3 — Optional, only if Phase 2 leaves the L1 component significant
 
-11. `rust/analytics/src/lakehouse/lakehouse_context.rs`: add an uncached `ReaderFactory` sharing
+10. `rust/analytics/src/lakehouse/lakehouse_context.rs`: add an uncached `ReaderFactory` sharing
     the existing `MetadataCache`.
-12. `rust/analytics/src/lakehouse/merge.rs`: use it for the `source` table.
-13. Re-measure independently.
+11. `rust/analytics/src/lakehouse/merge.rs`: use it for the `source` table.
+12. Re-measure independently.
 
 ## Files to Modify
 
@@ -543,10 +560,14 @@ folded into Phase 1's before/after.
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — Phase 3 only
 - `CHANGELOG.md` — Unreleased / Analytics entry
 - `mkdocs/docs/admin/maintenance.md` — see Documentation
+- `mkdocs/docs/admin/monolith.md` — see Documentation
+- `mkdocs/docs/architecture/caching.md` — Phase 3 only, see Documentation
 
 Not modified: `metrics_view.rs` (the conclusion of this plan is that `measures` needs no
-view-level change) and `rust/analytics/src/lakehouse/batch_partition_merger.rs` (Design §1: it
-keeps its current scan shape).
+view-level change), `rust/analytics/src/lakehouse/batch_partition_merger.rs` (Design §1: it
+keeps its current scan shape), and `rust/analytics/src/lakehouse/sql_batch_view.rs` /
+`sql_partition_spec.rs` (Design §1: partition-creation extract queries are out of scope for the
+same reason).
 
 ## Trade-offs
 
@@ -622,18 +643,25 @@ changes; the key would be `(name, time)`, not `time`.
   explains that daemon merges run on the shared unscoped pool; add a short note that merge scans
   are single-reader by design, so merge memory does not scale with host core count. Relevant to
   anyone sizing a daemon host.
-- Rustdoc as listed in Implementation Steps 2-4 — the `view.rs` note is the one that prevents this
+- `mkdocs/docs/admin/monolith.md` — the same `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` row appears
+  here too, and the monolith runs the maintenance role (merges included) under `--roles all`; add
+  the same one-line note so anyone sizing a monolith host sees it.
+- `mkdocs/docs/architecture/caching.md` (Phase 3 only) — add a bullet to "What is intentionally not
+  cached in L1" for merge reads, mirroring the existing raw-telemetry-blocks entry: read exactly
+  once during a merge, so caching them in L1 is pure cost.
+- Rustdoc as listed in Implementation Steps 2-3 — the `view.rs` note is the one that prevents this
   question from being asked again.
 
 ## Testing Strategy
 
-- **New offline plan-shape test** (step 5) — the regression guard. Builds one session via
-  `make_merge_session_context` and one via plain `make_session_context` (control), asserting one
-  output partition with the former and more than one with the latter, so a future DataFusion
-  upgrade that re-introduces the fan-out fails CI rather than production memory — and so does a
-  future refactor that stops `QueryMerger` from calling the wrapper, since `make_merge_session_context`
-  is asserted on directly rather than a bare config-mutating helper. Both sessions pin
-  `target_partitions` to 8 so the control assertion is meaningful on any CI runner regardless of
+- **New offline plan-shape test** (step 4) — the regression guard for the wrapper's own plan shape.
+  Builds one session via `make_merge_session_context` and one via plain `make_session_context`
+  (control), asserting one output partition with the former and more than one with the latter, so a
+  future DataFusion upgrade that re-introduces the fan-out fails CI rather than production memory.
+  This test does not call `QueryMerger::execute_merge_query`, so it would not catch a future
+  refactor that stops `QueryMerger` from calling the wrapper — that gap is not covered by this plan.
+  Both sessions pin `target_partitions` to 8 so the control assertion is meaningful on any CI runner
+  regardless of
   core count.
 - **Existing merge-path tests must stay green** — `blocks_view_merge_ordering_tests.rs`,
   `sql_batch_view_merge_ordering_tests.rs`, `per_file_scan_ordering_tests.rs`,
@@ -696,17 +724,7 @@ changes; the key would be `(name, time)`, not `time`.
    while `jemalloc_allocated_bytes` stays flat, the remaining footprint is jemalloc retention from
    streaming churn (consistent with the issue's "back to baseline within ~5 minutes"), and the next
    step is decay tuning, not further scan work. Worth knowing before opening Phase 3.
-3. ~~**Is concatenation-order pruning (§2) enough, or is a recorded sort worth its costs?**~~
-   **Answered** by the 6-hour query-audit sample in Design §3: a recorded sort is not currently
-   justified, because the global `measures` view — the only population this plan's merge produces —
-   sees ~2 queries per 6 hours, while the ~546 that matter go to per-process JIT partitions that
-   are too small and too JIT-freshness-bound to prune. Contingent on one deployment and one
-   dominant dashboard; re-ask if global-view traffic grows.
-4. ~~**`time` or `(name, time)` as the sort key?**~~ **Answered**: `(name, time)`. Every sampled
-   `measures` query filters `name = '<literal>'` and nothing else, so a time-leading key would
-   prune nothing for the observed workload. Recorded for whenever question 3 is re-opened; it also
-   forces `PerFile` rather than `Concatenated`.
-5. **Does anything outside this repo depend on merged-partition row order?** Nothing in-repo does
+3. **Does anything outside this repo depend on merged-partition row order?** Nothing in-repo does
    (no `sort_order` is recorded for these views, and it was nondeterministic before), but a
    downstream consumer relying on the incidental order would see a change. Flagged for the issue
    reply rather than blocking.
