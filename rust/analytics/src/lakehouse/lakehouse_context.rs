@@ -3,6 +3,7 @@ use super::audience_guard::{
 };
 use super::metadata_cache::MetadataCache;
 use super::migration::migrate_lakehouse;
+use super::query_deny_list::QueryDenyList;
 use super::reader_factory::ReaderFactory;
 use super::runtime::make_runtime_env;
 use anyhow::Context;
@@ -32,6 +33,11 @@ pub struct LakehouseContext {
     /// owning process's audience* from Postgres, size- and TTL-bounded. Fixed shape, no
     /// operational knob (see [`DEFAULT_AUDIENCE_CACHE_ENTRIES`]'s doc comment for why).
     audience_index: Arc<AudienceIndex>,
+    /// Admin-managed query deny list (`tasks/query_deny_list_plan.md`). The refresh task that
+    /// keeps its snapshot warm is spawned only by the FlightSQL server builder -- every other
+    /// holder of a `LakehouseContext` (maintenance daemon, tests) keeps an empty snapshot and
+    /// `check` never denies anything.
+    query_denials: Arc<QueryDenyList>,
 }
 
 impl LakehouseContext {
@@ -87,12 +93,14 @@ impl LakehouseContext {
             DEFAULT_AUDIENCE_CACHE_ENTRIES,
             DEFAULT_AUDIENCE_CACHE_TTL,
         ));
+        let query_denials = Arc::new(QueryDenyList::new(lake.db_pool.clone()));
         Self {
             lake,
             metadata_cache,
             runtime,
             reader_factory,
             audience_index,
+            query_denials,
         }
     }
 
@@ -111,12 +119,14 @@ impl LakehouseContext {
             DEFAULT_AUDIENCE_CACHE_ENTRIES,
             DEFAULT_AUDIENCE_CACHE_TTL,
         ));
+        let query_denials = Arc::new(QueryDenyList::new(lake.db_pool.clone()));
         Self {
             lake,
             metadata_cache,
             runtime,
             reader_factory,
             audience_index,
+            query_denials,
         }
     }
 
@@ -154,6 +164,11 @@ impl LakehouseContext {
     /// Returns the shared Prong B audience index (#1371, AbAC Stage 3).
     pub fn audience_index(&self) -> &Arc<AudienceIndex> {
         &self.audience_index
+    }
+
+    /// Returns the shared query deny list (`tasks/query_deny_list_plan.md`).
+    pub fn query_denials(&self) -> &Arc<QueryDenyList> {
+        &self.query_denials
     }
 }
 

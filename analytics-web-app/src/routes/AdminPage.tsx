@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Database, Download, Upload, Map, KeyRound, ShieldCheck } from 'lucide-react'
+import { Database, Download, Upload, Map, KeyRound, ShieldCheck, ShieldBan } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -88,6 +88,18 @@ function AdminPageContent() {
                 <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Analytics API Keys</h3>
                 <p className="text-sm text-theme-text-muted leading-relaxed">
                   Mint, list, and revoke read credentials for FlightSQL/analytics access.
+                </p>
+              </div>
+            </AppLink>
+
+            <AppLink href="/admin/query-deny-list" className="block">
+              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-red-500/15 text-red-500">
+                  <ShieldBan className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Query Deny List</h3>
+                <p className="text-sm text-theme-text-muted leading-relaxed">
+                  Reject a misbehaving query at the FlightSQL service, without a deploy.
                 </p>
               </div>
             </AppLink>

@@ -124,9 +124,11 @@ pub struct QueryAuditRecord {
     pub status: &'static str, // "ok" | "error" | "incomplete"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// "user" | "resource" | "internal", derived from the gRPC status code
-    /// (see `flight_sql_service_impl::error_class`). Omitted when `status ==
-    /// "ok"`, matching the `error` field's own "on error" convention.
+    /// "user" | "resource" | "internal" | "denied", derived from the gRPC status code
+    /// (see `flight_sql_service_impl::error_class`) -- "denied" is stamped directly by the
+    /// query-deny-list check (`tasks/query_deny_list_plan.md` §5) rather than derived from a
+    /// `DataFusionError`. Omitted when `status == "ok"`, matching the `error` field's own
+    /// "on error" convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,4 +137,10 @@ pub struct QueryAuditRecord {
     pub peak_memory_bytes: u64,
     pub spilled_bytes: u64,
     pub spill_count: u64,
+    /// Normalized SQL fingerprint (`tasks/query_deny_list_plan.md` §2) -- the first 16 hex chars
+    /// of the SHA-256 of the literal-stripped, whitespace-collapsed token stream. Computed once
+    /// per query and emitted on every terminal path regardless of whether the deny list is in
+    /// active use, since it's what an operator pastes into `deny_queries` after finding an
+    /// offender in the audit log. Appended last so existing JSON consumers are unaffected.
+    pub sql_hash: String,
 }

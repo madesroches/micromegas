@@ -24,8 +24,8 @@ use micromegas::datafusion::physical_plan::{
 };
 use micromegas::datafusion::sql::sqlparser::parser::ParserError;
 use micromegas::servers::flight_sql_service_impl::{
-    MAX_PLAN_CHARS, build_log_line, classify_datafusion_error, classify_flight_error, client_error,
-    error_class,
+    MAX_PLAN_CHARS, build_denial_warn_line, build_log_line, classify_datafusion_error,
+    classify_flight_error, client_error, error_class,
 };
 use micromegas::tonic::Code;
 use std::sync::Arc;
@@ -406,4 +406,31 @@ fn classify_flight_error_non_external_variant_is_internal() {
     let flight_err = FlightError::ProtocolError("unexpected message".to_string());
     let status = classify_flight_error(flight_err, "query-batch", None);
     assert_eq!(status.code(), Code::Internal);
+}
+
+// --- build_denial_warn_line (query_deny_list_plan.md §5/§6) -----------------
+
+#[test]
+fn build_denial_warn_line_contains_rule_id_sql_hash_and_attribution() {
+    let line = build_denial_warn_line(
+        "11111111-1111-1111-1111-111111111111",
+        "alert rule re-firing on failure",
+        "9f2c41ab73de0155",
+        "alice",
+        "alice@example.com",
+        "grafana",
+        "grafana-alert",
+        "10.4.9.221",
+        "query-42",
+    );
+    assert!(line.starts_with("query denied"));
+    assert!(line.contains("rule_id=11111111-1111-1111-1111-111111111111"));
+    assert!(line.contains("reason=\"alert rule re-firing on failure\""));
+    assert!(line.contains("sql_hash=9f2c41ab73de0155"));
+    assert!(line.contains("user=alice"));
+    assert!(line.contains("email=alice@example.com"));
+    assert!(line.contains("client=grafana"));
+    assert!(line.contains("entrypoint=grafana-alert"));
+    assert!(line.contains("client_ip=10.4.9.221"));
+    assert!(line.contains("query_id=query-42"));
 }

@@ -269,13 +269,6 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
                 "⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)"
             )
 
-    if not env.get("MICROMEGAS_TELEMETRY_URL"):
-        env["MICROMEGAS_TELEMETRY_URL"] = "http://127.0.0.1:9000"
-        print("Set MICROMEGAS_TELEMETRY_URL=http://127.0.0.1:9000")
-    if not env.get("MICROMEGAS_FLUSH_PERIOD"):
-        env["MICROMEGAS_FLUSH_PERIOD"] = "5"
-        print("Set MICROMEGAS_FLUSH_PERIOD=5")
-
     has_oidc = (
         "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
     )
@@ -364,6 +357,16 @@ def main():
     # Set environment variable for CPU tracing in development
     os.environ["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
     print("🔧 CPU tracing enabled for development")
+
+    # Self-telemetry sink: without these, the services don't report their own logs/metrics
+    # anywhere (split mode has no other default), so anything relying on self-observability
+    # (e.g. the flightsql_query_audit dogfood log) never becomes queryable.
+    if not os.environ.get("MICROMEGAS_TELEMETRY_URL"):
+        os.environ["MICROMEGAS_TELEMETRY_URL"] = "http://127.0.0.1:9000"
+        print("Set MICROMEGAS_TELEMETRY_URL=http://127.0.0.1:9000")
+    if not os.environ.get("MICROMEGAS_FLUSH_PERIOD"):
+        os.environ["MICROMEGAS_FLUSH_PERIOD"] = "5"
+        print("Set MICROMEGAS_FLUSH_PERIOD=5")
 
     # Default maps object store to a maps/ sibling of the telemetry lake
     if (

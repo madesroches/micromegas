@@ -24,6 +24,8 @@ pub mod blocks_view;
 /// Catalog utilities for discovering and managing view schemas
 pub mod catalog;
 pub mod dataframe_time_bounds;
+/// Admin UDTF that validates and inserts a query-deny-list rule
+pub mod deny_queries_table_function;
 /// Export mechanism that doubles as audit trail
 pub mod export_log_view;
 /// Fetch payload from the object store using SQL
@@ -38,6 +40,8 @@ pub mod jit_partitions;
 pub mod lakehouse_context;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
+/// Admin UDTF listing every query-deny-list rule currently in force
+pub mod list_query_denials_table_function;
 /// Read access to view sets with their schema information
 pub mod list_view_sets_table_function;
 /// Implementation of `BlockProcessor` for log entries
@@ -96,6 +100,10 @@ pub mod processes_view;
 /// property_get function support from SQL
 /// Datafusion integration
 pub mod query;
+/// Admin-managed query deny list (`tasks/query_deny_list_plan.md`): fingerprinting, the match
+/// context, and the Postgres-backed, TTL-refreshed cache `execute_query` checks every query
+/// against.
+pub mod query_deny_list;
 /// Authorization seam input: `ReadScope` and the `CallerContext` bundle threaded into
 /// `make_session_context` (#1369, AbAC Stage 1). Consumed by Prong A
 /// (`ownership_rewrite::OwnershipRewrite`, #1370) and Prong B (`audience_guard::AudienceGuard`,
@@ -107,6 +115,8 @@ pub mod reader_factory;
 /// Exposes regenerate_partitions as a table function that force-regenerates partitions directly
 /// from source data
 pub mod regenerate_partitions_table_function;
+/// Admin scalar UDF that removes a single query-deny-list rule by id
+pub mod remove_query_denial_udf;
 /// Scalar UDF to retire a single partition by file path
 pub mod retire_partition_by_file_udf;
 /// Scalar UDF to retire a single partition by metadata

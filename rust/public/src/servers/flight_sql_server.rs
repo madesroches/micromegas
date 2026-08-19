@@ -228,6 +228,11 @@ impl FlightSqlServerBuilder {
         };
         let data_lake = lakehouse.lake().clone();
         let probe_lake = lakehouse.lake().clone();
+        // Cloned here, before `lakehouse` is moved into `FlightSqlServiceImpl::new` below, so the
+        // refresh task (spawned further down, once the shutdown fanout exists) has its own
+        // handle. Only the FlightSQL server builder spawns this -- other `LakehouseContext`
+        // holders (maintenance daemon, tests) keep an empty snapshot and never deny anything.
+        let query_denials = lakehouse.query_denials().clone();
         info!(
             "created lakehouse context with metadata cache: {:?}",
             lakehouse.metadata_cache()
@@ -366,6 +371,11 @@ impl FlightSqlServerBuilder {
         let fanout = ShutdownFanout::new(shutdown_future);
         let grace_secs = self.shutdown_grace.as_secs();
         let grace = self.shutdown_grace;
+
+        // Admin-managed query deny list (tasks/query_deny_list_plan.md §4): refreshes the
+        // shared snapshot every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`, once immediately and
+        // then on a tick, until this replica shuts down.
+        query_denials.spawn_refresh_task(fanout.subscribe());
 
         if let Some(health_addr) = self.health_listen_addr {
             use super::readiness::ReadinessProbe;

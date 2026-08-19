@@ -12,6 +12,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   isLoading?: boolean
   variant?: 'danger' | 'default'
+  error?: string | null
 }
 
 export function ConfirmDialog({
@@ -24,6 +25,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   isLoading = false,
   variant = 'default',
+  error = null,
 }: ConfirmDialogProps) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -71,8 +73,13 @@ export function ConfirmDialog({
         </div>
 
         {/* Body */}
-        <div className="p-4">
+        <div className="p-4 space-y-3">
           <p className="text-sm text-theme-text-secondary">{message}</p>
+          {error && (
+            <div className="p-3 bg-accent-error/10 border border-accent-error/30 rounded-lg text-sm text-accent-error font-mono whitespace-pre-wrap">
+              {error}
+            </div>
+          )}
         </div>
 
         {/* Footer */}

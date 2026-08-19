@@ -38,6 +38,9 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query_deny_list::{
+    QueryAttribution, fingerprint_of, rule_tags, skip_for_admin_recovery,
+};
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
@@ -113,7 +116,12 @@ pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
 
 /// Maps a gRPC status code to the `QueryAuditRecord.error_class` bucket used
 /// both by the audit log and to gate the `query_failed`/
-/// `query_duration_with_error` metrics (see Design §4).
+/// `query_duration_with_error` metrics (see Design §4). This is the *derived* mapping used for
+/// every `DataFusionError`-rooted failure; the query-deny-list check (§5,
+/// `tasks/query_deny_list_plan.md`) stamps a fourth value, `"denied"`, directly via
+/// `QueryAuditState::fail_with_class` rather than through this function, since a denial's
+/// `ResourceExhausted` code would otherwise land in the `"resource"` bucket alongside a genuine
+/// resource-budget failure.
 pub fn error_class(code: tonic::Code) -> &'static str {
     match code {
         tonic::Code::InvalidArgument | tonic::Code::Unimplemented => "user",
@@ -164,6 +172,29 @@ pub fn build_log_line(
         ));
     }
     full
+}
+
+/// Builds the `warn!` line for a query-deny-list denial (Design §5/§6): the rule id, its
+/// reason, the query's normalized fingerprint, the caller's identity/client attribution, and
+/// the `query_id`. `pub` so a test can assert its content directly, the same way
+/// `build_log_line`'s content is asserted, rather than by capturing log output.
+#[allow(clippy::too_many_arguments)]
+pub fn build_denial_warn_line(
+    rule_id: &str,
+    reason: &str,
+    sql_hash: &str,
+    user: &str,
+    email: &str,
+    client: &str,
+    entrypoint: &str,
+    client_ip: &str,
+    query_id: &str,
+) -> String {
+    format!(
+        "query denied rule_id={rule_id} reason={reason:?} sql_hash={sql_hash} user={user} \
+         email={email} client={client} entrypoint={entrypoint} client_ip={client_ip} \
+         query_id={query_id}"
+    )
 }
 
 /// Logs `build_log_line`'s output at `error!` for `error_class == "internal"`,
@@ -283,6 +314,9 @@ struct QueryAuditState {
     service_account: bool,
     service_account_name: Option<String>,
     sql: String,
+    /// Normalized SQL fingerprint (`tasks/query_deny_list_plan.md` §2), computed once per query
+    /// regardless of whether the deny list is in active use.
+    sql_hash: String,
     range_begin: Option<String>,
     range_end: Option<String>,
     limit: Option<u64>,
@@ -339,6 +373,7 @@ impl QueryAuditState {
             service_account: self.service_account,
             service_account_name: self.service_account_name.clone(),
             sql: self.sql.clone(),
+            sql_hash: self.sql_hash.clone(),
             range_begin: self.range_begin.clone(),
             range_end: self.range_end.clone(),
             limit: self.limit,
@@ -362,17 +397,24 @@ impl QueryAuditState {
         }
     }
 
+    /// Emits an "error" audit record for an already-built client-facing `status`, with an
+    /// explicit `error_class` rather than one derived from the gRPC code -- used by the
+    /// query-deny-list check (Design §5), whose `error_class` is `"denied"`, a value
+    /// `error_class(status.code())` (`ResourceExhausted` -> `"resource"`) would get wrong.
+    /// Returns `status` unchanged.
+    fn fail_with_class(&self, status: Status, class: &'static str) -> Status {
+        self.emit("error", Some(status.message().to_string()), Some(class));
+        status
+    }
+
     /// Emits an "error" audit record for an already-built client-facing
     /// `status` (message + `error_class` derived from its code) and returns it
     /// unchanged -- the shared tail of every setup-phase `map_err` in
-    /// `execute_query`.
+    /// `execute_query`. A thin wrapper over [`Self::fail_with_class`] that derives the class
+    /// from the code.
     fn fail(&self, status: Status) -> Status {
-        self.emit(
-            "error",
-            Some(status.message().to_string()),
-            Some(error_class(status.code())),
-        );
-        status
+        let class = error_class(status.code());
+        self.fail_with_class(status, class)
     }
 }
 
@@ -544,6 +586,13 @@ impl FlightSqlServiceImpl {
         ext: &http::Extensions,
         md: &MetadataMap,
     ) -> Result<CallerContext, Status> {
+        // `deny_queries` requires `Some` (query_deny_list_plan.md §7/§8) -- resolved from the
+        // same attribution `execute_query` already validates, so a query already carries this by
+        // the time it could call `deny_queries`. This is simply "the caller's resolved user id"
+        // (`user_attribution::validate_and_resolve_user_attribution_grpc`).
+        let identity = validate_and_resolve_user_attribution_grpc(md)
+            .ok()
+            .map(|attr| attr.user_id);
         let read_scope = match ext.get::<AuthContext>() {
             Some(auth_ctx) => match self.read_policy.resolve(auth_ctx).await {
                 Ok(audiences) => ReadScope::Audiences(audiences.into_inner()),
@@ -567,6 +616,7 @@ impl FlightSqlServiceImpl {
             // Deployment-wide, derived once at startup (`flight_sql_server.rs`) -- same
             // treatment as `isolation_config` above.
             admin_principal_possible: self.admin_principal_possible,
+            identity,
         })
     }
 
@@ -690,6 +740,11 @@ impl FlightSqlServiceImpl {
         // Attribution is resolved from here on, so build the audit state now
         // (durations/limit/plan filled in as they become known) instead of
         // only after the physical plan exists.
+        // Computed once per query, regardless of whether the deny list is in active use --
+        // it's what an operator pastes into `deny_queries` after finding an offender in the
+        // audit log (Design §2/§7).
+        let sql_hash = fingerprint_of(sql);
+
         let mut audit_state = QueryAuditState {
             query_id: query_id.clone(),
             client_ip: client_ip.to_string(),
@@ -705,6 +760,7 @@ impl FlightSqlServiceImpl {
             service_account: attr.service_account.is_some(),
             service_account_name: attr.service_account.clone(),
             sql: sql.to_string(),
+            sql_hash: sql_hash.clone(),
             range_begin: query_range.as_ref().map(|r| r.begin.to_rfc3339()),
             range_end: query_range.as_ref().map(|r| r.end.to_rfc3339()),
             limit: None,
@@ -716,6 +772,48 @@ impl FlightSqlServiceImpl {
             plan: None,
             pool: scoped_pool.clone(),
         };
+
+        // Design §5: the deny-list check, in front of everything expensive -- before the scoped
+        // runtime/session context/planning below. `check` returns `None` immediately on an
+        // empty snapshot, so this costs nothing while the deny list stands empty.
+        if let Some(rule) = self.lakehouse.query_denials().check(&QueryAttribution {
+            user_id: &attr.user_id,
+            email: &attr.user_email,
+            service_account: attr.service_account.as_deref(),
+            client: client_type,
+            agent: client_agent,
+            entrypoint: client_entrypoint,
+            session: audit_state.session.as_deref(),
+            notebook: audit_state.notebook.as_deref(),
+            cell: audit_state.cell.as_deref(),
+            client_ip,
+            sql,
+            sql_hash: &sql_hash,
+        }) && !skip_for_admin_recovery(sql, is_admin(metadata), self.admin_principal_possible)
+        {
+            let status = Status::resource_exhausted(format!(
+                "query denied by rule {} (reason: {}); ask an admin to lift it with \
+                 remove_query_denial('{}'); query_id={query_id}",
+                rule.row.rule_id, rule.row.reason, rule.row.rule_id
+            ));
+            warn!(
+                "{}",
+                build_denial_warn_line(
+                    &rule.row.rule_id.to_string(),
+                    &rule.row.reason,
+                    &sql_hash,
+                    &attr.user_id,
+                    &attr.user_email,
+                    client_type,
+                    client_entrypoint,
+                    client_ip,
+                    &query_id,
+                )
+            );
+            imetric!("query_denied", "count", rule_tags(&rule.row.rule_id), 1_u64);
+            rule.record_hit();
+            return Err(audit_state.fail_with_class(status, "denied"));
+        }
 
         // Build a `RuntimeEnv`/`LakehouseContext` scoped to this query's memory-pool
         // wrapper, so every session context created from it (including nested ones,

@@ -29,3 +29,5 @@ export const QUERY_GUIDE_URL = `${DOCS_BASE_URL}/query-guide/`
 export const LOG_ENTRIES_SCHEMA_URL = `${SCHEMA_REF_URL}/#log_entries`
 export const PROCESSES_SCHEMA_URL = `${SCHEMA_REF_URL}/#processes`
 export const MEASURES_SCHEMA_URL = `${SCHEMA_REF_URL}/#measures`
+export const QUERY_DENY_LIST_FUNCTIONS_URL = `${DOCS_BASE_URL}/admin/functions-reference/#deny_queriesmatch_expr-reason`
+export const QUERY_AUDIT_LOG_URL = `${DOCS_BASE_URL}/query-guide/query-audit-log`

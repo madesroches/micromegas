@@ -1,11 +1,14 @@
 //! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
 //! `make_session_context`'s `CallerContext::is_admin`/`admin_principal_possible` gate
-//! registration of the five mutating lakehouse UDTFs/UDFs (`retire_partitions`,
+//! registration of the eight admin-gated lakehouse UDTFs/UDFs (`retire_partitions`,
 //! `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
-//! `retire_partition_by_metadata`). These tests only assert on DataFusion *planning*, never
-//! execution: the gated functions' own `call_with_args` implementations only parse arguments and
-//! return a lazy provider, so planning-only assertions never touch the lazy Postgres pool or the
-//! in-memory object store below.
+//! `retire_partition_by_metadata`, and the query deny list's `list_query_denials`,
+//! `deny_queries`, `remove_query_denial`). These tests only assert on DataFusion *planning*,
+//! never execution: the gated functions' own `call_with_args` implementations only parse
+//! arguments and return a lazy provider (or, for `deny_queries`, additionally compile the match
+//! expression and read `rule_count()` from the in-memory, empty deny-list snapshot), so
+//! planning-only assertions never touch the lazy Postgres pool or the in-memory object store
+//! below.
 
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
@@ -42,6 +45,11 @@ async fn make_gated_session_context(
         is_admin,
         isolation_config: Arc::new(IsolationConfig::default()),
         admin_principal_possible,
+        // `deny_queries`'s own plan-time identity check (`CallerContext::identity` must be
+        // `Some`) is not what this test suite is about -- give every fixture an identity so a
+        // gated `deny_queries` call fails (or succeeds) on the *registration gate* under test,
+        // never on this unrelated check.
+        identity: Some("test-caller".to_string()),
     };
     make_session_context(
         lakehouse,
@@ -59,11 +67,14 @@ const MUTATING_UDTF_CALLS: &[&str] = &[
     "SELECT * FROM retire_partitions('log_entries', 'i', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z')",
     "SELECT * FROM materialize_partitions('log_entries', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', 86400)",
     "SELECT * FROM regenerate_partitions('log_entries', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', 86400)",
+    "SELECT * FROM list_query_denials()",
+    "SELECT * FROM deny_queries('client = ''x''', 'r')",
 ];
 
 const MUTATING_UDF_CALLS: &[&str] = &[
     "SELECT retire_partition_by_file('s3://bucket/x/file.parquet')",
     "SELECT retire_partition_by_metadata('log_entries', 'global', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z')",
+    "SELECT remove_query_denial('9f2c41ab-73de-4015-9d2e-000000000000')",
 ];
 
 const NON_MUTATING_CALLS: &[&str] = &[

@@ -69,6 +69,12 @@ pub struct CallerContext {
     /// registered for any authenticated caller rather than staying admin-only, since otherwise
     /// they would be unreachable by anyone.
     pub admin_principal_possible: bool,
+    /// The caller's identity, as recorded in `deny_queries`'s `created_by` column
+    /// (`tasks/query_deny_list_plan.md` §1/§7). `None` on internal/maintenance paths -- such a
+    /// caller cannot call `deny_queries`, which requires `Some` (§8). One string, not a struct:
+    /// `created_by` is the only consumer anywhere in that plan, so a richer identity type would
+    /// be written at every construction site and read nowhere.
+    pub identity: Option<String>,
 }
 
 impl CallerContext {
@@ -84,6 +90,7 @@ impl CallerContext {
             is_admin: false,
             isolation_config: Arc::new(IsolationConfig::default()),
             admin_principal_possible: true,
+            identity: None,
         }
     }
 
@@ -97,6 +104,7 @@ impl CallerContext {
             is_admin: true,
             isolation_config: Arc::new(IsolationConfig::default()),
             admin_principal_possible: true,
+            identity: None,
         }
     }
 }
