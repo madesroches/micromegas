@@ -188,18 +188,20 @@ telemetry-ingestion-srv --disable-auth
     a merged/compacted lakehouse partition of its data still exists. See the CHANGELOG's AbAC
     Stage 3 entry for the full mechanism and its accepted trade-offs.
 
-    **The five mutating lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
-    `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are
-    gated on whether this *deployment* can ever produce an admin principal at all — not on a
-    knob an operator sets. An OIDC provider can grant admin whenever it has at least one
-    configured admin user; an API-key provider never can. At startup, the server asks every
-    configured auth provider "can you ever produce an admin?" and, if none of them can, registers
-    these five functions for *any* authenticated caller instead of admin-only — otherwise an
-    API-key-only deployment would have no path to them at all. **Deployment-wide, not
-    per-audience**: none of the five functions filters by audience, so on a deployment with no
-    admin principal, every authenticated caller gets destructive access to every audience's
-    partitions, not just their own — safe only when no admin principal exists in the deployment,
-    unsafe the moment it also has personal or per-team audiences.
+    **Eight mutating lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
+    `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, and the
+    [query deny list](functions-reference.md#query-deny-list)'s `list_query_denials`,
+    `deny_queries`, `remove_query_denial`) are gated on whether this *deployment* can ever
+    produce an admin principal at all — not on a knob an operator sets. An OIDC provider can
+    grant admin whenever it has at least one configured admin user; an API-key provider never
+    can. At startup, the server asks every configured auth provider "can you ever produce an
+    admin?" and, if none of them can, registers these eight functions for *any* authenticated
+    caller instead of admin-only — otherwise an API-key-only deployment would have no path to
+    them at all. **Deployment-wide, not per-audience**: none of the eight functions filters by
+    audience, so on a deployment with no admin principal, every authenticated caller gets
+    destructive access to every audience's partitions, not just their own, and can also deny
+    every query in the deployment via `deny_queries` — safe only when no admin principal exists
+    in the deployment, unsafe the moment it also has personal or per-team audiences.
 
 ### Write-Side Stamping (AbAC Stage 5)
 
@@ -899,7 +901,7 @@ Admin status is reachable only through an OIDC identity matched against
 `MICROMEGAS_ADMINS` (or the role-scoped `MICROMEGAS_ANALYTICS_ADMINS` in the
 monolith) — never through `MICROMEGAS_API_KEYS`. API keys always resolve to
 `is_admin: false`, so an API-key-only deployment has no admin principal and cannot
-call the five gated admin SQL functions (see
+call the eight gated admin SQL functions (see
 [Admin SQL Functions](functions-reference.md)).
 
 ### HTTPS/TLS

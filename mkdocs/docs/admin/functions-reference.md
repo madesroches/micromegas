@@ -274,13 +274,25 @@ sent no notebook header, so such a rule does not fire on it).
 | `session` | the caller sent no `x-client-session` | Yes |
 | `notebook` | the query did not originate from a notebook cell | Yes |
 | `cell` | the query did not originate from a notebook cell | Yes |
-| `client_ip` | never | No — network-level truth |
+| `client_ip` | never | Partly — derived from `X-Forwarded-For` when present, so only trustworthy behind a proxy that overwrites it |
 | `sql` | never | No — the raw statement text |
 | `sql_hash` | never | No — the normalized fingerprint (see below) |
 
 The identity column is named `user_id`, not `user`: a bare `user` parses as the zero-argument
 function `user()` under DataFusion's default dialect, not a column reference, so `user = 'jean'`
 fails with "Invalid function 'user'" — use `user_id`.
+
+!!! warning "`client_ip` is only network-level truth behind a trusted proxy"
+    `get_client_ip` trusts the rightmost entry of the last `X-Forwarded-For` header field line
+    before falling back to the raw socket address, and nothing strips or overwrites that header.
+    Deployed behind a proxy that appends its own observation (e.g. an AWS ALB in
+    `xff_header_processing.mode = append`), that entry is genuinely non-forgeable. Without such a
+    proxy in front of `flight-sql-srv`, a direct FlightSQL client can send its own
+    `x-forwarded-for` header and fully control the value a `client_ip` rule matches against,
+    evading the rule. Separately, every query proxied through `analytics-web-srv` reports *that
+    server's* address (see the [query audit log](../query-guide/query-audit-log.md)), so a
+    `client_ip` rule written against web traffic either matches nobody or matches every web user,
+    never one specific browser client.
 
 ### The expression language
 
@@ -313,6 +325,8 @@ SELECT * FROM deny_queries(
   'dashboard stuck at a 1s refresh interval');
 
 -- a blanket rule: stop anything scanning thread_spans, or anything from one host
+-- (client_ip is only trustworthy here behind a proxy that overwrites X-Forwarded-For --
+-- see the warning above)
 SELECT * FROM deny_queries(
   'sql LIKE ''%thread_spans%'' OR client_ip = ''10.4.9.221''',
   'incident: thread_spans scan storm');
