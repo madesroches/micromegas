@@ -390,6 +390,18 @@ pub struct QueryDenyList {
     pool: sqlx::Pool<sqlx::Postgres>,
     ctx: SessionContext,
     snapshot: RwLock<DenySnapshot>,
+    /// Serializes `insert`/`delete`/`refresh`'s DB-operation-plus-snapshot-swap against each
+    /// other, held across the whole sequence (including the `await`s) rather than just the
+    /// final snapshot edit. Without this, `refresh` reading the table in `load_rows` and a
+    /// concurrent `delete` performing its own DELETE-plus-snapshot-edit could interleave so that
+    /// `refresh`'s stale, pre-delete row set overwrites the snapshot `delete` just fixed up,
+    /// silently re-enforcing a rule the admin was just told was removed (or the mirror case,
+    /// losing a freshly inserted rule) until the next tick. Serializing the three methods means
+    /// a `delete`/`insert` either finishes entirely before a `refresh` starts reading the table,
+    /// or starts entirely after `refresh`'s swap -- either way it sees, and leaves, a consistent
+    /// snapshot. `flush_hits` is not covered: it only updates each rule's `last_hit` in place and
+    /// never replaces the snapshot, so it cannot lose an insert/delete.
+    write_lock: tokio::sync::Mutex<()>,
 }
 
 impl std::fmt::Debug for QueryDenyList {
@@ -406,6 +418,7 @@ impl QueryDenyList {
             pool,
             ctx: SessionContext::new(),
             snapshot: RwLock::new(empty_snapshot()),
+            write_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -418,6 +431,7 @@ impl QueryDenyList {
             pool,
             ctx: SessionContext::new(),
             snapshot: RwLock::new(snapshot),
+            write_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -520,6 +534,10 @@ impl QueryDenyList {
             match_expr: match_expr.to_string(),
             last_hit_at: None,
         };
+        // Held across the INSERT and the snapshot edit -- see `write_lock`'s doc comment -- so a
+        // concurrent `refresh` cannot read the table before this INSERT and then overwrite the
+        // snapshot edit below with that stale, pre-insert row set.
+        let _guard = self.write_lock.lock().await;
         sqlx::query(
             "INSERT INTO query_deny_list (rule_id, created_at, created_by, reason, match_expr) \
              VALUES ($1, $2, $3, $4, $5)",
@@ -546,6 +564,10 @@ impl QueryDenyList {
     /// was actually deleted -- `false` lets the caller (`remove_query_denial`) return a clear
     /// "no such rule" message rather than a silent no-op.
     pub async fn delete(&self, rule_id: Uuid) -> Result<bool> {
+        // Held across the DELETE and the snapshot edit -- see `write_lock`'s doc comment -- so a
+        // concurrent `refresh` cannot read the table before this DELETE and then overwrite the
+        // snapshot edit below with that stale, pre-delete row set.
+        let _guard = self.write_lock.lock().await;
         let result = sqlx::query("DELETE FROM query_deny_list WHERE rule_id = $1")
             .bind(rule_id)
             .execute(&self.pool)
@@ -573,6 +595,10 @@ impl QueryDenyList {
     /// not a security control, and failing closed would deny every query on a Postgres blip.
     pub async fn refresh(&self) -> Result<()> {
         self.flush_hits().await;
+        // Held from before `load_rows` through the final snapshot swap below -- see
+        // `write_lock`'s doc comment -- so a concurrent `insert`/`delete` cannot land its own
+        // DB-op-plus-snapshot-edit inside that window and have it clobbered by this stale read.
+        let _guard = self.write_lock.lock().await;
         let rows = match self.load_rows().await {
             Ok(rows) => rows,
             Err(e) => {
