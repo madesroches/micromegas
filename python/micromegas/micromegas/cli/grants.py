@@ -14,6 +14,8 @@ import json
 import os
 import sys
 
+import requests
+
 from micromegas.cli import config
 from micromegas.cli.version import add_version_argument
 from micromegas.web_client import WebClient
@@ -147,7 +149,11 @@ def main():
     args = parser.parse_args()
     try:
         args.func(args)
-    except (RuntimeError, config.ProfileError) as e:
+    except (
+        RuntimeError,
+        requests.exceptions.RequestException,
+        config.ProfileError,
+    ) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 

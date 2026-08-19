@@ -465,8 +465,10 @@ never see the table shape.
   the new env knob, and the CLI.
 - `CHANGELOG.md` — `## Unreleased` entry for the new table/migration, the cache-TTL knob, the
   admin routes, and the CLI. **Minor breaking change**: `build_protected_routes` (published,
-  `analytics-web-srv::web_server`) gains a new required `AudienceGrantsState`/router parameter —
-  same pattern as `IngestionKeysState` gaining `default_audience` in the #1372 entry above.
+  `analytics-web-srv::web_server`) replaces its separate `AnalyticsKeysState`/`IngestionKeysState`
+  parameters with a single new `AdminRoutesState` struct bundling those two plus the new
+  `AudienceGrantsState` — settled during review as a cleaner shape than a third positional
+  parameter, since all three admin states are always constructed and passed together.
 
 ## Trade-offs
 
@@ -537,8 +539,9 @@ never see the table shape.
   (falling back to `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), the new admin routes, and the
   `micromegas-grants` CLI. **Minor breaking change** clause required
   (per repo convention, e.g. the #1372 entry's `IngestionKeysState` line): `build_protected_routes`
-  is a published function whose signature changes to take the new `AudienceGrantsState`/router
-  parameter.
+  is a published function whose signature changes to take a single new `AdminRoutesState` struct
+  in place of its separate `AnalyticsKeysState`/`IngestionKeysState` parameters, bundling those two
+  plus the new `AudienceGrantsState`.
 - `tasks/data_isolation/audience_based_access_control_plan.md` — add a dated revision note at the
   top announcing Stage 6a (#1489), cross-referencing this plan file, following the doc's existing
   revision-log convention (e.g. "Stage 5 landed (#1373)", "Long-term model recorded 2026-08-12").
