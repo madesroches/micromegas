@@ -284,10 +284,14 @@ authenticated user can mint standing credentials and create audiences" the momen
 `IngestionKeysState` gains a `self_service_mint_enabled: bool` field, resolved once at startup
 from `MICROMEGAS_SELF_SERVICE_MINT` (empty-prefix convention, parsed the same
 `v == "true" || v == "1"` way `web_server.rs:123` already parses its own boolean knob), default
-`false`. A new `FromRequestParts` extractor, `MintGate` (§4), checks it — before `mint_key`'s body
+`false`. The same flag is resolved a second time onto `AudienceGrantsState`, so `GET
+/api/audience-grants/mine` (§5) can gate itself on it too — that route is also new non-admin
+surface, and must not widen on upgrade any more than the mint route itself does. A new
+`FromRequestParts` extractor, `MintGate` (§4), checks it — before `mint_key`'s body
 runs at all, and before `Json<MintRequest>` ever parses the request — for every non-admin caller:
-with the knob off, a non-admin gets exactly the denial this route always gave before this stage
-existed, without the body ever being parsed, and the lazy claim (§4a) — which only ever triggers
+with the knob off, a non-admin gets the same 403 status and `FORBIDDEN` error code this route
+always gave before this stage existed (the message text differs — see §4's `mint_key` comment),
+without the body ever being parsed, and the lazy claim (§4a) — which only ever triggers
 off a non-admin `resolve_audience` denial *inside* the handler body, not off this gate — is never
 reached either. Admin minting is unaffected either way, since the knob only
 gates the caller branches this stage adds. Two more knobs, resolved onto `IngestionKeysState` the
@@ -354,11 +358,19 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let AuthenticatedUser(caller) = AuthenticatedUser::from_request_parts(parts, state).await?;
+        // `.ok_or(...)`, not `.expect(...)`: every other extractor in this crate fails closed with
+        // a status code for a missing extension rather than panicking (`AdminUser::from_request_parts`
+        // uses `.ok_or(AdminRequired)` for the identical "extension should always be layered"
+        // situation, `handlers.rs:563-579`, and §1 adds `Unauthenticated` to `AuthenticatedUser`
+        // for the same reason) -- `MintGate` should not be the one exception.
         let ingestion_state = parts
             .extensions
             .get::<IngestionKeysState>()
             .cloned()
-            .expect("IngestionKeysState is always layered ahead of the key-management routes");
+            .ok_or(IngestionKeyError::NotConfigured)?; // reachable only if routing is misconfigured;
+            // the 503 body's wording (about `MICROMEGAS_SQL_CONNECTION_STRING`) doesn't literally
+            // describe this cause, but a 503 fail-closed beats a panic for a case that should never
+            // happen in a correctly wired router.
         if !caller.is_admin && !ingestion_state.self_service_mint_enabled {
             return Err(IngestionKeyError::Forbidden(
                 "self-service minting is disabled".to_string(),
@@ -387,7 +399,9 @@ async fn mint_key(
     // `require_pool`/`validate_name`/`resolve_audience` below. A knob-off non-admin never reaches
     // this line: no leaked configuration state (400 for a malformed/absent audience, 503 for an
     // unset pool, 422 for bad JSON, where the pre-stage route answered a flat 403), and no
-    // `mint_403_for_non_admin` regression. Admins are unaffected either way, since `MintGate`'s
+    // `mint_403_for_non_admin` regression -- same 403 status and `FORBIDDEN` code as
+    // `AdminRequired`'s pre-stage denial (the message text differs; `mint_403_for_non_admin` only
+    // asserts the status). Admins are unaffected either way, since `MintGate`'s
     // condition is always false for them -- this preserves their existing
     // `require_pool`/`validate_name`/`resolve_audience` ordering and both 400 tests unchanged. The
     // lazy claim below (which only ever triggers off a non-admin denial from `resolve_audience`,
@@ -453,15 +467,12 @@ async fn mint_key(
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
             match (explicit, caller.email.as_deref()) {
                 (true, Some(_email)) => {
-                    // Eligibility short-circuit (§4a), no DB round trip: `public` and the
-                    // deployment's own configured default must never become claimable.
-                    if candidate == PUBLIC_AUDIENCE
-                        || Some(candidate.as_str()) == state.default_audience.as_deref()
-                    {
-                        return Err(IngestionKeyError::Forbidden(format!(
-                            "audience {candidate:?} cannot be claimed"
-                        )));
-                    }
+                    // The reserved-name check for `public`/`state.default_audience` lives inside
+                    // `try_claim_and_mint` itself now (§4a), *after* its uncached existence check
+                    // and self-healing recheck -- not here -- so a caller with a real, just-written
+                    // `mint` grant on either name still succeeds via that recheck instead of being
+                    // refused for up to the grant-store cache TTL.
+                    //
                     // Commits its own grant + key rows (or, on a self-healing recheck, just the
                     // key row -- §4a) and returns the finished response directly -- `mint_key`
                     // never reaches the `INSERT` below for this path.
@@ -550,14 +561,20 @@ or above the limit, the claim is refused with a `Forbidden` naming the limit, ne
 silent no-op. An admin can raise the knob, or free room by revoking one of the caller's existing
 claimed audiences through the existing `DELETE /api/audience-grants` admin route (Trade-offs).
 
-**Eligibility short-circuit (no DB round trip).** Before touching the DB, reject the claim outright
-if `candidate == PUBLIC_AUDIENCE` — the one reserved name, matching `is_valid_audience`'s format
-check plus this one extra rule. (`public` already can't be *read*-restricted since every
+**Reserved-name check — inside `try_claim_and_mint`, after the existence check, not before.**
+`candidate == PUBLIC_AUDIENCE` and `candidate == state.default_audience` are the two reserved
+names a claim must never originate. The check runs inside `try_claim_and_mint`'s `!exists`
+(genuinely-fresh) branch, *after* the existence check and its self-healing recheck below — not as
+a short-circuit before the transaction opens — so it restricts *claims* only: a caller who already
+holds a real, committed `mint` grant on `public` or `state.default_audience` (an admin-authored
+row, or the caller's own earlier claim) still succeeds via the self-healing recheck even when
+`state.mint_policy.resolve_audience`'s cached snapshot hasn't picked it up yet (Cache TTL, below).
+Rejecting up front, before the existence check ever ran, would instead refuse that caller for as
+long as the cache TTL window lasts. (`public` already can't be *read*-restricted since every
 authenticated caller reads it regardless of grants, `AudienceReadPolicy::resolve`; reserving it
-from mint-claims keeps a non-admin from ever claiming exclusive *mint* rights over the one
-audience every reader can see.) The same short-circuit also rejects `candidate` when it equals
-`state.default_audience` — analytics-web-srv's own knob, read under this process's own convention,
-so no cross-process prefix question arises.
+from *claims* keeps a non-admin from ever originating exclusive *mint* rights over the one
+audience every reader can see.) `state.default_audience` is analytics-web-srv's own knob, read
+under this process's own convention, so no cross-process prefix question arises.
 
 **The unstamped-audience label is *not* special-cased here — it is protected by a placeholder
 grant instead, the same mechanism already used for reserving any other name (Trade-offs).** An
@@ -696,6 +713,19 @@ async fn try_claim_and_mint(
         // `resolve_audience` would itself have approved on a fresher snapshot, not a claim: fall
         // through to the key insert below without writing any new grant row.
     } else {
+        // Genuinely fresh audience -- no existing grant or key row, and (having reached here)
+        // no matching `mint` grant was found by the recheck above either, so this is a real claim
+        // attempt, not a stale-cache mint. Reject the two reserved names here, not before the
+        // transaction opened: `public` and `state.default_audience` must never be *originated* by
+        // a claim, but a caller who already holds a genuine `mint` grant on either name took the
+        // `if exists` branch above and already succeeded there, via the self-healing recheck --
+        // this check never overrides that.
+        if audience == PUBLIC_AUDIENCE || Some(audience) == state.default_audience.as_deref() {
+            tx.rollback().await?;
+            return Err(IngestionKeyError::Forbidden(format!(
+                "audience {audience:?} cannot be claimed"
+            )));
+        }
         // Genuinely fresh audience: this is a real claim, so it counts against the per-caller
         // bound, and writes the claim's own grant rows. Best-effort under concurrency (§4a
         // prose above): this count is exact against another claim for *this same* audience
@@ -815,10 +845,13 @@ process's) have a ~60s TTL (`db_audience_grants.rs:33-42`), and two different di
   documented, admin-correctable outcome (Trade-offs' recovery procedure), not one this design
   prevents structurally; the lock exists to serialize claims against each other, not against a
   concurrent admin write.
-- `public` requested by a non-admin, or `candidate` equal to `state.default_audience`: denied
-  before any DB access (eligibility short-circuit). An unstamped-audience label, if the deployment
-  uses one, is instead denied by the ordinary existence check once its placeholder grant row
-  exists (§4a) — a DB round trip, but still denied, never claimable.
+- `public` requested by a non-admin, or `candidate` equal to `state.default_audience`, with no
+  matching `mint` grant already committed for it: denied by the reserved-name check inside
+  `try_claim_and_mint`'s fresh-audience branch, after the same existence check every claim already
+  runs — never claimable, but not before any DB access. A caller who *does* already hold a real,
+  committed `mint` grant on one of these two names succeeds instead, via the self-healing recheck
+  above. An unstamped-audience label, if the deployment uses one, is denied the same way, once its
+  placeholder grant row exists (§4a) — a DB round trip, but still denied, never claimable.
 - A non-admin who already holds `state.max_claims_per_caller` claimed audiences requests a new,
   genuinely-fresh name: denied inside the transaction before either `INSERT` runs (per-caller
   claim bound), not a duplicate-owner outcome and not the ordinary "no grant" message.
@@ -853,6 +886,15 @@ async fn my_mint_grants(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,
 ) -> Result<Json<MineResponse>, AudienceGrantError> {
+    // Same off-by-default gate `MintGate` enforces for the mint route itself (§3, §4): `/mine` is
+    // new non-admin surface, so it must not widen on upgrade either. `AudienceGrantsState` carries
+    // its own copy of the knob (below) rather than reaching into `IngestionKeysState`, since the
+    // two states are layered independently and this route has no other access to that one.
+    if !caller.is_admin && !state.self_service_mint_enabled {
+        return Err(AudienceGrantError::Forbidden(
+            "self-service minting is disabled".to_string(),
+        ));
+    }
     let pool = require_pool(&state)?;
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT audience, selector FROM audience_grants WHERE axis = 'mint'",
@@ -869,6 +911,20 @@ async fn my_mint_grants(
     Ok(Json(MineResponse { is_admin: caller.is_admin, audiences }))
 }
 ```
+
+**`/mine` is gated on the same off-by-default knob as the mint route, for the same reason (§3,
+Security "Both new caller-facing behaviors are opt-in").** `AudienceGrantsState` gains its own
+`self_service_mint_enabled: bool` field, resolved from `MICROMEGAS_SELF_SERVICE_MINT` at startup
+the same way `IngestionKeysState`'s copy is (§3) — the two states are layered independently in
+`web_server.rs`, so the flag is threaded onto both rather than one route reaching into the other's
+state. Without this, `/mine` would be new non-admin surface that widens on upgrade regardless of
+the knob, and — worse — a knob-off non-admin could see a populated `audiences` list from `/mine`
+and then have the matching `mint_key` call 403 with "self-service minting is disabled," since
+`/mine` reads the DB grant rows directly while `mint_key`'s `MintGate` checks the knob first. An
+admin caller is exempt from this check, matching `MintGate`'s own `!caller.is_admin` condition —
+an admin's mint authority never depends on the knob either (§4). `AudienceGrantError` (currently
+`BadRequest`/`NotFound`/`Database`/`NotConfigured`/`Internal`, `audience_grants.rs:67-80`) gains a
+new `Forbidden(String)` variant (403, `{code: "FORBIDDEN", message}`) for this check to return.
 
 `selector_matches` (`policy.rs:104-117`) is today module-private to `policy.rs`; make it `pub`,
 the same call already made for `valid_selector` at Stage 6a for this exact reason (`policy.rs`'s
@@ -909,10 +965,15 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - **Mint**: add `WebClient.mint_ingestion_api_key(self, name, audience=None) -> dict` to
   `web_client.py`, mirroring `import_ingestion_api_key` (lines 99-124) — `POST
   ingestion-api-keys` with `{"name": name}` plus `"audience"` only when not `None`; returns the
-  mint response including the one-time cleartext `key`. On a 409 response with
-  `code == "CLAIM_CONTENDED"` (§4a) — lock contention with another concurrent claim, not a denial —
-  the script retries the same request once before surfacing an error; a 403 `FORBIDDEN` response is
-  a genuine denial and is never retried.
+  mint response including the one-time cleartext `key`. `_check_response` (`web_client.py:30-37`)
+  discards the response body's `code` field and raises a bare `RuntimeError` for any non-OK status,
+  so it cannot be reused to distinguish `CLAIM_CONTENDED` from a genuine denial. Instead,
+  `mint_ingestion_api_key` inspects `resp.status_code` and `resp.json().get("code")` itself, before
+  calling `_check_response`: on `409` with `code == "CLAIM_CONTENDED"` (§4a) — lock contention with
+  another concurrent claim, not a denial — it retries the same POST once and checks the retry's
+  response the same way; any other non-OK status (a 403 `FORBIDDEN`, a genuine denial, included) is
+  never retried and is handed to `_check_response` unchanged, raising the same `RuntimeError` shape
+  every other method already does.
 - **CLI args** (argparse, `import_keys.py`'s style): `--url` (required, analytics-web-srv base
   URL), `--profile` (optional), `--name` (required, e.g. hostname), `--audience` (optional — a
   fresh name to claim per §4a, an existing audience the caller already has a grant for, or
@@ -975,7 +1036,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 3. `web_server.rs`: fix the `--disable-auth` `AuthContext` gap, as defensive parity only (§2);
    build `mint_policy` from `AudienceGrants::empty()` + the DB store, no env map (§3), and add it,
    along with the three new knob-derived fields — `self_service_mint_enabled: bool`,
-   `max_claims_per_caller: i64`, `max_keys_per_caller: i64` — to `IngestionKeysState`.
+   `max_claims_per_caller: i64`, `max_keys_per_caller: i64` — to `IngestionKeysState`; also resolve
+   `self_service_mint_enabled` a second time onto `AudienceGrantsState`, for `/mine` (§5) to gate on.
 4. `policy.rs`: make `selector_matches` `pub` (§5, same precedent as `valid_selector` at Stage 6a).
 5. `ingestion_keys.rs`: add the `MintGate` `FromRequestParts` extractor (wraps `AuthenticatedUser`
    plus the off-by-default gate, §4) and switch `mint_key` to it, pre-validate via the untouched
@@ -986,7 +1048,9 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    fallback, §4), and `IngestionKeyError::Conflict` (409 `CLAIM_CONTENDED`, distinct from
    `Forbidden`, for lock contention in `try_claim_and_mint`, §4a).
 6. `audience_grants.rs`: add the `GET {base_path}/api/audience-grants/mine` route and handler,
-   gated by `AuthenticatedUser` (§5).
+   gated by `AuthenticatedUser` plus the same off-by-default `self_service_mint_enabled` check
+   `MintGate` uses (§3, §5); add `self_service_mint_enabled: bool` to `AudienceGrantsState` and
+   `AudienceGrantError::Forbidden` (403, `FORBIDDEN`) for the gate to return.
 
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
@@ -999,10 +1063,14 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    `ingestion_keys_tests.rs`: extend `build_handler_router_with_user` (line 68) to also layer an
    `AuthContext`; add an `AuthContext`-builder test helper (mirror
    `auth/tests/policy_tests.rs::caller`, lines 19-38, since it isn't exported). Update the existing
-   `mint_403_for_non_admin`-style tests for the new denial path; confirm
+   `mint_403_for_non_admin`-style tests for the new denial path; add a test locking in the central
+   ordering claim §4 makes for `MintGate` (gate before body parsing) — post malformed JSON as a
+   knob-off non-admin and assert 403, not 422; needs no DB, same as the existing 400 tests. Confirm
    `mint_400_for_invalid_audience` and `mint_400_names_the_default_audience_knob` (lines 303-345)
-   still pass unchanged (§4's whole point). Add: a positive test (non-admin with a matching `mint`
-   grant succeeds, no claim attempted); a negative test (`requested: None`, no `default_audience`,
+   still pass unchanged (§4's whole point). Add: a **live-DB** positive test (non-admin with a
+   matching `mint` grant succeeds, no claim attempted — `state.mint_policy.resolve_audience` itself
+   reaches `DbAudienceGrantsSource`, a real DB round trip, regardless of whether the request goes on
+   to insert a key row); a negative test (`requested: None`, no `default_audience`,
    still rejected for a non-admin caller, still a 400 per §4 — not the claim path, since there's no
    explicit audience to claim); a **live-DB** claim test (fresh audience, non-admin, explicit
    `--audience` — succeeds, and both a `mint` and a `read` row for `user:<caller email>` land in
@@ -1012,8 +1080,10 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    against the now-claimed audience — ordinary 403, no claim attempted); a concurrent-claim test
    (two claims for the same fresh name issued concurrently — exactly one succeeds, the other gets
    either the retry-contention 409 (`CLAIM_CONTENDED`) or, on a retry, the ordinary "no grant" 403 —
-   never a duplicate-owner state or a 500); `public` rejected for a
-   non-admin claim attempt (no DB access, per the eligibility short-circuit); and, reusing this same
+   never a duplicate-owner state or a 500); a **live-DB** test asserting `public` is rejected for a
+   non-admin claim attempt — the reserved-name check now runs inside `try_claim_and_mint`, after its
+   existence check (§4a), so this needs the same live DB as the other claim tests, not the
+   non-live-DB harness; and, reusing this same
    live-DB harness, four more tests exercising the two per-caller bounds directly (best-effort under
    sequential use, §4/§4a): for `max_claims_per_caller`, a caller who has already claimed the
    configured limit gets a `Forbidden` naming the limit on a claim of one more fresh audience, and a
@@ -1021,16 +1091,23 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    the configured limit of live keys gets a `Forbidden` naming the limit on the next mint, and a
    caller one below the limit still succeeds.
 8. `rust/analytics-web-srv/tests/audience_grants_tests.rs`: extend
-   `build_handler_router_with_user` (line 48) to also layer an `AuthContext` (reusing the same
-   `AuthContext`-builder test helper step 7 introduces) — its router today layers only
-   `Extension(state)`/`Extension(AuthToken)`/`Extension(ValidatedUser)`, and the new
+   `build_handler_router_with_user` (line 48) to also layer an `AuthContext` (duplicating the same
+   `AuthContext`-builder test helper step 7 introduces, per this crate's existing convention of
+   mirroring rather than sharing such helpers across `tests/*.rs` files — `admin_user()`/
+   `non_admin_user()` are already duplicated verbatim in `ingestion_keys_tests.rs`,
+   `audience_grants_tests.rs`, `analytics_keys_tests.rs`, and `maps_tests.rs`, since each file in
+   `tests/` is a separate crate and there is no shared `tests/common` module) — its router today
+   layers only `Extension(state)`/`Extension(AuthToken)`/`Extension(ValidatedUser)`, and the new
    `AuthenticatedUser` extractor reads `AuthContext`, so every `/mine` test would otherwise hit the
    `Unauthenticated` rejection. Add tests for `GET /api/audience-grants/mine` (§5) — a caller with a
    matching selector sees the audience, a caller without one doesn't, `AdminUser` is not required,
-   and the response's `is_admin` field matches the caller.
+   the response's `is_admin` field matches the caller, and — for the new gate (§3, §5) — a knob-off
+   non-admin gets a 403 while a knob-off admin still gets a normal response.
 
 ### Phase 3 — Python setup script
-9. `web_client.py`: add `mint_ingestion_api_key` and a `my_audience_grants`/`list_mine` call for
+9. `web_client.py`: add `mint_ingestion_api_key`, which reads `resp.status_code`/the response
+   body's `code` field itself (before calling `_check_response`) to retry once on a 409
+   `CLAIM_CONTENDED` (§6), and a `my_audience_grants`/`list_mine` call for
    `GET .../audience-grants/mine` (§5), returning both fields of the `{is_admin, audiences}`
    response.
 10. New `cli/setup_telemetry.py` + `pyproject.toml` entry point; `--otlp-endpoint` defaults from
@@ -1054,7 +1131,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     `AdminUser`-gated, so a non-admin has no self-service way to reduce their own live-key count
     (Trade-offs); add a `/mine` row (noting it is non-admin-accessible, unlike every other
     row in the table) to the "**HTTP admin routes**, `AdminUser`-gated" route table (~408-416),
-    since that header's blanket claim stops being accurate once this row exists.
+    since that header's blanket claim stops being accurate once this row exists; also correct
+    `:400-402`'s claim that `analytics-web-srv` "never constructs a `DbAudienceGrantsSource` and
+    caches nothing itself" — §3 has it construct exactly one, with its own cache TTL — and
+    `:402-406`'s claim that "a selector present in the env map, the store, or both grants exactly
+    the same access ... there is no precedence to reason about" — still true for read, but false
+    for the mint axis now that mint grants are DB-only (§3): an env-only mint selector is inert.
     `mkdocs/docs/admin/monolith.md:40-63`: add a row for each of the three new knobs to the env-var
     table (the same table that documents `MICROMEGAS_DEFAULT_KEY_AUDIENCE`), including a mention in
     its existing "one prefix asymmetry" note that these, too, stay unprefixed under monolith (§3,
@@ -1088,11 +1170,13 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 - `rust/analytics-web-srv/src/auth/handlers.rs`: `AuthenticatedUser` extractor.
 - `rust/analytics-web-srv/src/auth/mod.rs`: re-export `AuthenticatedUser`/`Unauthenticated`.
 - `rust/analytics-web-srv/src/web_server.rs`: disable-auth `AuthContext` layer; `mint_policy`
-  construction (empty grants + DB store, no env map); `IngestionKeysState` field wiring.
+  construction (empty grants + DB store, no env map); `IngestionKeysState` and
+  `AudienceGrantsState` field wiring (both get their own `self_service_mint_enabled`).
 - `rust/auth/src/policy.rs`: make `selector_matches` `pub`.
 - `rust/analytics-web-srv/src/ingestion_keys.rs`: `mint_key`, `MintGate`, `try_claim_and_mint`,
   `IngestionKeysState`, `IngestionKeyError`.
-- `rust/analytics-web-srv/src/audience_grants.rs`: new `GET .../audience-grants/mine` route.
+- `rust/analytics-web-srv/src/audience_grants.rs`: new `GET .../audience-grants/mine` route;
+  `AudienceGrantsState.self_service_mint_enabled`; `AudienceGrantError::Forbidden`.
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`: state construction, router-building
   helper, new/updated tests (including new live-DB claim tests).
 - `rust/analytics-web-srv/tests/routing_tests.rs`: `IngestionKeysState` construction (line 406)
