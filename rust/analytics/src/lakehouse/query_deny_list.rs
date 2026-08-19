@@ -25,6 +25,7 @@ use micromegas_tracing::property_set::{Property, PropertySet};
 use sqlx::Row;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
@@ -129,7 +130,12 @@ fn hash_hex16(s: &str) -> String {
 /// bare `user` in expression position as the zero-argument function call `user()`, not a column
 /// reference, and no such scalar function is registered here -- `user = 'jean'` would fail at
 /// planning with "Invalid function 'user'".
-pub fn match_schema() -> DFSchema {
+///
+/// Built once, in [`MATCH_SCHEMA`]: constructing a `DFSchema` runs `check_names()` (a `BTreeSet`
+/// insert per field) on top of allocating the `Fields`/`Schema` themselves, and this is called on
+/// every query while any deny rule stands -- so `match_schema()` and [`QueryAttribution::to_batch`]
+/// both clone the cached `DFSchema`/`Arc<Schema>` rather than rebuilding it.
+static MATCH_SCHEMA: LazyLock<DFSchema> = LazyLock::new(|| {
     let arrow_schema = Schema::new(vec![
         Field::new("user_id", DataType::Utf8, true),
         Field::new("email", DataType::Utf8, true),
@@ -145,6 +151,10 @@ pub fn match_schema() -> DFSchema {
         Field::new("sql_hash", DataType::Utf8, true),
     ]);
     DFSchema::try_from(arrow_schema).expect("match_schema is a fixed, valid schema")
+});
+
+pub fn match_schema() -> DFSchema {
+    MATCH_SCHEMA.clone()
 }
 
 /// Borrowed view of what `execute_query` has already resolved, in the same column order as
@@ -192,7 +202,7 @@ impl QueryAttribution<'_> {
     /// One-row `RecordBatch` over [`match_schema`], in column order -- the only thing
     /// [`QueryDenyList::check`] builds per query, and the only allocation on the deny-check path.
     pub fn to_batch(&self) -> RecordBatch {
-        let schema = match_schema().inner().clone();
+        let schema = MATCH_SCHEMA.inner().clone();
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(StringArray::from(vec![Some(self.user_id)])),
             Arc::new(StringArray::from(vec![Some(self.email)])),

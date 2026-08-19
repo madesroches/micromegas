@@ -12,6 +12,7 @@ read `sql_hash` back out of the audit record -- rather than duplicating the Rust
 
 import uuid
 
+import pandas
 import pyarrow
 import pytest
 
@@ -197,11 +198,11 @@ def test_last_hit_at_is_populated_after_a_refresh_tick(marker):
 
         row = assert_eventually(
             find_last_hit,
-            lambda r: not r.empty and r.iloc[0]["last_hit_at"] is not None,
+            lambda r: not r.empty and pandas.notna(r.iloc[0]["last_hit_at"]),
             timeout_s=30,
             msg="waiting for last_hit_at to be flushed by a refresh tick",
         )
-        assert row.iloc[0]["last_hit_at"] is not None
+        assert pandas.notna(row.iloc[0]["last_hit_at"])
     finally:
         _remove(rule_id)
 
