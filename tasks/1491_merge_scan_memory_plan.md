@@ -34,13 +34,13 @@ count, for a merge that can only ever consume rows as fast as its single downstr
 
 The fix is to stop coupling "bounded merge scan" to "declared ordering": hoist
 `repartition_file_scans = false` out of the two ordering-aware merge paths and apply it to every
-`QueryMerger` merge, `Unordered` included, and to `BatchPartitionMerger` (the other
-`PartitionMerger` implementation) alongside it. That is one small setting, it needs no correctness
-contract from any view, and it benefits every view whose merge goes through either path —
-`measures`, `log_entries`, `async_events`, `images`, `blocks`' plain-merger fallback, every
-`SqlBatchView` without a declared merge sort order, and `BatchPartitionMerger`'s bounded-memory
-fallback (currently unused in-repo, but documented as the escape hatch for a view whose merge
-output doesn't fit in memory in one pass).
+`QueryMerger` merge, `Unordered` included. That is one small setting, it needs no correctness
+contract from any view, and it benefits every view whose merge goes through `QueryMerger`'s default
+`Unordered` route — `measures`, `log_entries`, `async_events`, `images`, `blocks`' plain-merger
+fallback, and every `SqlBatchView` without a declared merge sort order. `BatchPartitionMerger` (the
+other `PartitionMerger` implementation, currently unused in-repo) keeps its current scan shape;
+Design §1 explains why applying the same setting there would trade its unbounded-memory scan for a
+wall-clock regression rather than fixing it.
 
 It also buys a **query** win in mechanism, though a modest one in practice. Today's interleaved
 merge scatters each source minute across every row group of the merged hourly partition, so `time`
@@ -166,23 +166,36 @@ has exactly one consumer: `MaterializedView::scan` (`materialized_view.rs:94`), 
 
 ## Design
 
-### 1. One setting, applied to every merge
+### 1. One setting, applied to every `QueryMerger` merge
 
 There are two `PartitionMerger` implementations: `QueryMerger` (the default, ordering-aware path)
 and `BatchPartitionMerger` (the bounded-memory fallback used when a merge's whole output can't be
 held in memory at once — `sql_batch_view.rs:179`; no in-repo view constructs one today, but it's
-one `session_configurator` call away, and its scan is currently unbounded too:
-`batch_partition_merger.rs:106-190` builds its own session via `make_session_context`, registers an
-`Unordered` `PartitionedTableProvider`, and calls `execute_stream()` with `repartition_file_scans`
-at its default `true` — and it runs two batches concurrently (`try_buffered(2)`), so its scan side
-is up to `2 × target_partitions` readers, worse than `QueryMerger`'s). Both get the fix by sharing
-one extracted helper, `configure_merge_session(&ctx)` (also needed for the plan-shape test in step
-5), rather than hoisting the setting into `QueryMerger::execute_merge_query` alone, which would not
-reach `BatchPartitionMerger` at all.
+one `session_configurator` call away).
 
-Move `repartition_file_scans = false` from the two ordering-aware paths into
-`QueryMerger::execute_merge_query`, before the `match` on `merge_scan_ordering`, and call the same
-helper from `BatchPartitionMerger::execute_merge_query` right after its session is built:
+This plan fixes `QueryMerger` only. `BatchPartitionMerger` keeps its current scan shape, unbounded
+and all: `batch_partition_merger.rs:106-190` builds its own session via `make_session_context`,
+registers an `Unordered` `PartitionedTableProvider` over the *whole* partition set being merged,
+and re-executes the same `$begin`/`$end`-templated query once per batch — `nb_batches` times,
+`try_buffered(2)` — with `repartition_file_scans` at its default `true`. Unlike `QueryMerger`,
+nothing downstream serializes that pipeline the way a single writer task does (Design §5), so
+forcing `repartition_file_scans = false` here would not bound memory for free: it would multiply
+each of those `nb_batches` re-executions' scan wall-clock by roughly `target_partitions`, the
+opposite of what a bounded-memory merger should cost. Since no in-repo view constructs a
+`BatchPartitionMerger` today, this plan leaves its scan as-is rather than trade an unmeasured
+memory gap for a measured wall-clock one, and records the trade explicitly instead: the first view
+that adopts `BatchPartitionMerger` inherits its current unbounded-scan memory cost, unchanged by
+#1491. Bounding that scan without the wall-clock cost above — e.g. a small pinned
+`target_partitions` for its session, rather than a full serial scan repeated `nb_batches` times —
+is follow-up work for whoever takes that on, not part of this plan.
+
+`QueryMerger` gets the fix via one extracted helper, `make_merge_session_context(...)`, a thin
+wrapper around `make_session_context` (`query.rs:256`) that applies the merge-only setting before
+handing back the session — so there is no separate "build the session, then remember to configure
+it" step that `QueryMerger::execute_merge_query` (or a future caller) could skip. The plan-shape
+test in step 5 asserts against this same wrapper.
+
+Move `repartition_file_scans = false` out of the two ordering-aware paths and into the wrapper:
 
 ```rust
 // merge.rs
@@ -192,25 +205,35 @@ helper from `BatchPartitionMerger::execute_merge_query` right after its session 
 // benefits from scan parallelism. Left at DataFusion's default (`true`), `EnforceDistribution`
 // splits the source scan into `target_partitions` byte-range file groups and `execute_stream`
 // coalesces them, so the reader working set is multiplied by the host's core count for no
-// throughput the writer can absorb. Forcing one sequential file group here makes every merge
-// path -- ordered or not, and for both PartitionMerger implementations -- read one file at a
-// time. Downstream parallelism is untouched: a merge query with a GROUP BY still gets its
-// round-robin fan-out above the scan.
-pub fn configure_merge_session(ctx: &SessionContext) {
+// throughput the writer can absorb. Forcing one sequential file group here makes every
+// `QueryMerger` merge -- ordered or not -- read one file at a time. Downstream parallelism is
+// untouched: a merge query with a GROUP BY still gets its round-robin fan-out above the scan.
+pub async fn make_merge_session_context(
+    lakehouse: Arc<LakehouseContext>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: Option<TimeRange>,
+    view_factory: Arc<ViewFactory>,
+    configurator: Arc<dyn SessionConfigurator>,
+    caller: CallerContext,
+) -> Result<SessionContext> {
+    let ctx = make_session_context(
+        lakehouse, part_provider, query_range, view_factory, configurator, caller,
+    )
+    .await?;
     ctx.state_ref()
         .write()
         .config_mut()
         .options_mut()
         .optimizer
         .repartition_file_scans = false;
+    Ok(ctx)
 }
 ```
 
-called from `QueryMerger::execute_merge_query` before the `match` on `merge_scan_ordering`, and from
-`BatchPartitionMerger::execute_merge_query` right after `make_session_context` returns. Delete the
-now-redundant assignment from `execute_concatenated_merge` (`merge.rs:106-111`) and from the block
-in `execute_per_file_merge` (`merge.rs:167`), leaving that path's other four settings where they
-are.
+Call it from `QueryMerger::execute_merge_query` in place of the direct `make_session_context` call.
+Delete the now-redundant assignment from `execute_concatenated_merge` (`merge.rs:106-111`) and from
+the block in `execute_per_file_merge` (`merge.rs:167`), leaving that path's other four settings where
+they are.
 
 Resulting plan for `SELECT * FROM source;`: a one-file-group `DataSourceExec`, one output
 partition, `execute_stream`'s `1 => plan.execute(0, ctx)` arm, one Parquet reader at a time.
@@ -391,16 +414,21 @@ novel. Phase 2 measures it; the hourly budget for one view's merge is generous, 
 materializes views strictly sequentially (`materialize_all_views`, `public/src/servers/
 maintenance.rs`), so a slower merge delays only later views in the same pass.
 
-This 1.5-2× estimate is for `QueryMerger`, where the single writer task already serializes the
-pipeline and hides the scan's serial time behind it. It does not transfer to `BatchPartitionMerger`:
-`execute_merge_query` (`batch_partition_merger.rs:106-190`) re-executes the same `$begin`/`$end`
-`df_template` once per batch, `nb_batches` times, over the full source partition set at
-`try_buffered(2)` — there is no single-writer serialization analogous to
-`create_merged_partition`'s `mpsc::channel(1)` to hide behind. Dropping its scan concurrency from
-`2 × target_partitions` readers to `2` multiplies each batch's scan wall-clock by roughly
-`target_partitions`, repeated across `nb_batches` batches. This is accepted only because no in-repo
-view constructs a `BatchPartitionMerger` today; a view that adopts it should re-derive this cost
-rather than assume the `QueryMerger` estimate applies.
+That 1.5-2× bound assumes the single writer stays the bottleneck, which needs the merge output to
+be close in size to the scan input. It does not hold for aggregating `Unordered` merges, where a
+`GROUP BY` shrinks the output by orders of magnitude: `processes` and `streams`
+(`SqlBatchView`s whose merge query is a `GROUP BY` aggregate on the default `Unordered`
+`QueryMerger` — `processes_view.rs:47-68`, `streams_view.rs:41-53`) and `log_stats`'s merge
+whenever it falls back to the plain merger because an input hasn't yet certified its `sort_order`
+(the gate at `partitioned_execution_plan.rs:291` — true of every existing partition until
+re-materialization). There the writer is idle most of the time, so the now-serial scan is the
+bottleneck: expect closer to `target_partitions`× on those merges, not 1.5-2×. In practice that's
+bounded by `processes`/`streams`' small partition volumes, and by `log_stats` shrinking to its
+ordered `PerFile` path as partitions re-materialize.
+
+`BatchPartitionMerger` is untouched by this change (Design §1), so this estimate does not apply to
+it either way: its scan shape, and whatever wall-clock cost that carries today, is unchanged by
+this plan.
 
 If the wall-clock regression turns out to matter, the escape hatch is the already-scoped backlog
 item `tasks/backlog/datafusion_target_partitions_config.md` (`MICROMEGAS_DATAFUSION_TARGET_PARTITIONS`),
@@ -426,12 +454,13 @@ folded into Phase 1's before/after.
 
 ### Phase 1 — Bounded merge scan (the fix)
 
-1. `rust/analytics/src/lakehouse/merge.rs`: extract `pub fn configure_merge_session(ctx:
-   &SessionContext)` with the comment from Design §1, and call it from `execute_merge_query` before
-   the `match self.merge_scan_ordering`. Also in `rust/analytics/src/lakehouse/batch_partition_merger.rs`:
-   call `configure_merge_session(&ctx)` in `BatchPartitionMerger::execute_merge_query` right after
-   `make_session_context` returns, so the bounded-memory fallback merger gets the same sequential
-   scan.
+1. `rust/analytics/src/lakehouse/merge.rs`: extract `pub async fn make_merge_session_context(...)
+   -> Result<SessionContext>` with the comment from Design §1 — same parameters as
+   `make_session_context`, calling it internally and applying `repartition_file_scans = false`
+   before returning. Change `QueryMerger::execute_merge_query` to call this wrapper instead of
+   `make_session_context` directly, before the `match self.merge_scan_ordering`.
+   `BatchPartitionMerger::execute_merge_query` (`batch_partition_merger.rs`) is **not** changed —
+   it keeps calling `make_session_context` as today (Design §1).
 2. Same file (`merge.rs`): remove the assignment from `execute_concatenated_merge` and from
    `execute_per_file_merge`'s optimizer block; update both methods' rustdoc, which currently
    describes setting it as part of their own path (`merge.rs:97-100`, `merge.rs:150-156`), to
@@ -443,18 +472,21 @@ folded into Phase 1's before/after.
    sequential regardless — so the next view author facing a big merge does not repeat #1491's
    reasoning.
 5. `rust/analytics/tests/merge_scan_partitioning_tests.rs` (new): offline plan-shape test, modelled
-   on `per_file_scan_ordering_tests.rs` (no DB, `object_store::memory::InMemory`, fabricated
-   `Partition`s with `file_size` above the 10 MB `repartition_file_min_size`). Register a
-   `PartitionedTableProvider` with `ScanOrdering::Unordered`, `create_physical_plan()` for
-   `SELECT * FROM source`, and assert:
-   - with the merge setting applied: `partition_count() == 1`
-   - without it (control, guarding that the test is meaningful): `partition_count() > 1`
-   Build both the control and the configured session from
-   `SessionConfig::new().with_target_partitions(8)`, matching the precedent in
+   on `log_stats_ordering_tests.rs`'s `make_offline_lakehouse_context` helper (in-memory object
+   store, no DB, lazily-connected) with fabricated `Partition`s (`file_size` above the 10 MB
+   `repartition_file_min_size`) registered as the source table. Build two sessions — one from
+   `make_merge_session_context(...)`, one from plain `make_session_context(...)` (control) — pinning
+   `target_partitions` to 8 on each returned `SessionContext`, matching the precedent in
    `sql_batch_view_merge_ordering_tests.rs` and `log_stats_ordering_tests.rs`, so the control
    assertion doesn't silently no-op on a low-core-count CI runner (DataFusion otherwise defaults
-   `target_partitions` to the host's core count). Calls the `configure_merge_session` helper from
-   Design §1 for the configured session.
+   `target_partitions` to the host's core count). `create_physical_plan()` for `SELECT * FROM
+   source` against each and assert:
+   - with `make_merge_session_context`: `partition_count() == 1`
+   - with plain `make_session_context` (control, guarding that the test is meaningful):
+     `partition_count() > 1`
+   Asserting against the wrapper itself, rather than a bare config-mutating helper the test drives
+   by hand, is what makes this a guard on `QueryMerger` actually calling it — `QueryMerger` has no
+   other way to obtain its session (Design §1).
 
 ### Phase 2 — Measure and answer the issue
 
@@ -489,17 +521,17 @@ folded into Phase 1's before/after.
 
 ## Files to Modify
 
-- `rust/analytics/src/lakehouse/merge.rs` — the setting, the `configure_merge_session` extraction,
-  rustdoc, the completion log line
-- `rust/analytics/src/lakehouse/batch_partition_merger.rs` — call `configure_merge_session`
+- `rust/analytics/src/lakehouse/merge.rs` — the setting, the `make_merge_session_context`
+  extraction, rustdoc, the completion log line
 - `rust/analytics/src/lakehouse/view.rs` — `get_scan_output_ordering` rustdoc note
 - `rust/analytics/tests/merge_scan_partitioning_tests.rs` — new plan-shape regression test
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — Phase 3 only
 - `CHANGELOG.md` — Unreleased / Analytics entry
 - `mkdocs/docs/admin/maintenance.md` — see Documentation
 
-Not modified: `metrics_view.rs`. The conclusion of this plan is that `measures` needs no view-level
-change.
+Not modified: `metrics_view.rs` (the conclusion of this plan is that `measures` needs no
+view-level change) and `rust/analytics/src/lakehouse/batch_partition_merger.rs` (Design §1: it
+keeps its current scan shape).
 
 ## Trade-offs
 
@@ -508,15 +540,22 @@ one writer task behind an `mpsc::channel(1)`; scan parallelism buys throughput t
 absorb while multiplying the reader working set by the core count. The cost is quantified in
 Design §4 and measured in Phase 2.
 
-**Fix the shared merge path vs. patch `measures`.** Chosen: the shared path — both
-`PartitionMerger` implementations. Every view whose merge takes `QueryMerger`'s default `Unordered`
-route has the same fan-out; `measures` is merely the one large enough to make it visible.
-`BatchPartitionMerger`, the bounded-memory fallback, has the same unbounded scan (and a worse one:
-`2 × target_partitions` concurrent readers from its `try_buffered(2)`) and gets the same fix via the
-shared `configure_merge_session` helper, even though no in-repo view constructs one today — it's
-one line to include and leaves no latent gap for the next view that opts into it. A `measures`-only
-change would leave `log_entries`, `async_events`, `images`, and every unsorted `SqlBatchView` with
-the same behavior — and, per Current State, there is no correct `measures`-only change to make.
+**Fix the shared merge path vs. patch `measures`.** Chosen: the shared path — `QueryMerger`, not a
+`measures`-specific change. Every view whose merge takes `QueryMerger`'s default `Unordered` route
+has the same fan-out; `measures` is merely the one large enough to make it visible. A
+`measures`-only change would leave `log_entries`, `async_events`, `images`, and every unsorted
+`SqlBatchView` with the same behavior — and, per Current State, there is no correct
+`measures`-only change to make.
+
+`BatchPartitionMerger`, the other `PartitionMerger` implementation, is deliberately left out of this
+fix rather than folded in alongside `QueryMerger`. It has the same unbounded scan today (and a worse
+one: `2 × target_partitions` concurrent readers from its `try_buffered(2)`), but its scan is
+re-executed once per batch, `nb_batches` times, with no single writer task downstream to hide a
+serialized scan behind (Design §1, §5); forcing the same setting there would multiply each batch's
+wall-clock by roughly `target_partitions` rather than bound its memory for free. Since no in-repo
+view constructs a `BatchPartitionMerger` today, this plan leaves the gap explicit — documented as
+the first adopter's problem to solve, with a bounded-but-not-fully-serial scan — rather than hand
+that adopter an unmeasured wall-clock regression along with the memory fix.
 
 **Rejected: declare `ScanOrdering::Concatenated` on `MetricsView`** (the issue's proposal). Both
 preconditions fail, and the failure mode is mixed rather than uniformly loud:
@@ -569,11 +608,14 @@ changes; the key would be `(name, time)`, not `time`.
 
 ## Testing Strategy
 
-- **New offline plan-shape test** (step 5) — the regression guard. Asserts one output partition
-  with the merge configuration and more than one without it, so a future DataFusion upgrade that
-  re-introduces the fan-out fails CI rather than production memory. Both sessions pin
-  `target_partitions` to 8 via `SessionConfig::new().with_target_partitions(8)` so the control
-  assertion is meaningful on any CI runner regardless of core count.
+- **New offline plan-shape test** (step 5) — the regression guard. Builds one session via
+  `make_merge_session_context` and one via plain `make_session_context` (control), asserting one
+  output partition with the former and more than one with the latter, so a future DataFusion
+  upgrade that re-introduces the fan-out fails CI rather than production memory — and so does a
+  future refactor that stops `QueryMerger` from calling the wrapper, since `make_merge_session_context`
+  is asserted on directly rather than a bare config-mutating helper. Both sessions pin
+  `target_partitions` to 8 so the control assertion is meaningful on any CI runner regardless of
+  core count.
 - **Existing merge-path tests must stay green** — `blocks_view_merge_ordering_tests.rs`,
   `sql_batch_view_merge_ordering_tests.rs`, `per_file_scan_ordering_tests.rs`,
   `log_stats_ordering_tests.rs`, `sql_partition_spec_sort_order_tests.rs`. These cover the
