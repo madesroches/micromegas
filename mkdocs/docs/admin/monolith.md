@@ -39,7 +39,7 @@ cargo run --bin micromegas-monolith -- \
 
 | Variable | Required | Description |
 |---|---|---|
-| `MICROMEGAS_SQL_CONNECTION_STRING` | Yes (lake roles) | PostgreSQL for the data lake. Also read by the `web` role to open its own small pool backing **both** key-management route groups (`/api/ingestion-api-keys*`, `/api/analytics-api-keys*` — the same pool serves both tables, see [API Keys](api-keys.md)) — a `--roles web`-only monolith never runs the v6 migration itself, so the target telemetry DB must already have had ingestion or a lakehouse-role monolith run against it at least once (reaching schema v6, which these routes require since #1372's `ingestion_api_keys.audience` column), or those routes fail at request time with an opaque `500` |
+| `MICROMEGAS_SQL_CONNECTION_STRING` | Yes (lake roles) | PostgreSQL for the data lake. Also read by the `web` role to open its own small pool backing **all three** key/grant-management route groups (`/api/ingestion-api-keys*`, `/api/analytics-api-keys*`, `/api/audience-grants*` — the same pool serves all three tables, see [API Keys](api-keys.md)) — a `--roles web`-only monolith never runs the migrations itself, so the target telemetry DB must already have had ingestion or a lakehouse-role monolith run against it at least once (reaching schema v7, which these routes require since #1372's `ingestion_api_keys.audience` column and #1489's `audience_grants` table), or those routes fail at request time with an opaque `500` |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes (lake roles) | Object store URI (`file:///path` or `s3://…`) |
 | `MICROMEGAS_APP_SQL_CONNECTION_STRING` | Yes (web role) | PostgreSQL for the web app |
 | `MICROMEGAS_WEB_CORS_ORIGIN` | Yes (web role) | Allowed CORS origin (e.g. `http://localhost:3000`) |
@@ -116,9 +116,9 @@ built from the shared lake connection, for *validating* incoming API keys —
 but exposes no HTTP routes of its own to mint, list, revoke, or import them.
 FlightSQL validates `analytics_api_keys` the same way. Minting, listing,
 revoking, and importing keys for **both** tables happens exclusively through
-the `web` role's own `/api/ingestion-api-keys*` / `/api/analytics-api-keys*`
-HTTP routes instead (a separate `analytics-web-srv` process, or the
-monolith's own `web` role) — see
+the `web` role's own `/api/ingestion-api-keys*` / `/api/analytics-api-keys*` /
+`/api/audience-grants*` HTTP routes instead (a separate `analytics-web-srv`
+process, or the monolith's own `web` role) — see
 [API Keys](api-keys.md#minting-an-analytics-key-over-http).
 
 ## Role selection

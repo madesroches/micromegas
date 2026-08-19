@@ -390,11 +390,14 @@ single map covering both the read and mint axes, kept splittable later
 (without any change to `ReadPolicy`/`MintPolicy`) if the long-term
 group-membership model ever needs it.
 
-**Additive, never a replacement.** Each `analytics-web-srv`/flight-sql/
-monolith process holds one whole-table snapshot in memory (small enough that
-the issue treats "cache the whole map" as the right shape, unlike the
-per-key `moka` cache backing the [DB-backed key store](api-keys.md)), unioned
-with the env map before matching a caller's selectors. A selector present in
+**Additive, never a replacement.** Each flight-sql process — standalone
+`flight-sql-srv`, or the monolith's flight-sql role — holds one whole-table
+snapshot in memory (small enough that the issue treats "cache the whole map"
+as the right shape, unlike the per-key `moka` cache backing the [DB-backed
+key store](api-keys.md)), unioned with the env map before matching a
+caller's selectors. `analytics-web-srv` is the write surface only (the HTTP
+admin routes below) — it never constructs a `DbAudienceGrantsSource` and
+caches nothing itself. A selector present in
 the env map, the store, or both grants exactly the same access — there is no
 "the store wins" or "the env map wins" precedence to reason about, and no
 forced migration off `{prefix}_AUDIENCE_GRANTS`: a deployment that never
