@@ -1,8 +1,10 @@
 //! DB-backed audience grant store (#1489, AbAC Stage 6a): a whole-table snapshot cache over the
-//! `audience_grants` table (migration v7, `rust/ingestion/src/sql_migration.rs`), unioned with
-//! the existing `{prefix}_AUDIENCE_GRANTS` env map by [`crate::policy::AudienceReadPolicy`]/
-//! [`crate::policy::AudienceMintPolicy`] via `AudienceGrants::merge`. This is what makes a grant
-//! creatable without a service restart -- the env map stays the static/bootstrap layer.
+//! `audience_grants` table (migration v7, `rust/ingestion/src/sql_migration.rs`), checked
+//! alongside the existing `{prefix}_AUDIENCE_GRANTS` env map by
+//! [`crate::policy::AudienceReadPolicy`]/[`crate::policy::AudienceMintPolicy`] -- a selector
+//! present in either source grants access, without either side being deep-cloned or merged into
+//! a combined map (`current()` hands back the cached grants behind an `Arc`). This is what makes
+//! a grant creatable without a service restart -- the env map stays the static/bootstrap layer.
 //!
 //! Modeled on `db_api_key.rs`'s config/pool conventions, but a single cached value rather than a
 //! per-key `moka` cache: the issue is explicit that the whole map is small enough to hold as one
@@ -10,6 +12,7 @@
 
 use crate::env::resolve_prefixed_var;
 use crate::policy::{AudienceGrants, GrantAxis};
+use crate::types::ProviderUnavailable;
 use anyhow::{Context, Result, anyhow};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
@@ -51,7 +54,7 @@ impl DbAudienceGrantsConfig {
 
 #[derive(Debug)]
 struct Snapshot {
-    grants: AudienceGrants,
+    grants: Arc<AudienceGrants>,
     /// Time of the last *successful* load -- never advanced on a failed refresh. Feeds the age
     /// reported in the refresh-failure log/error context ("how stale is the grant view right
     /// now"), independent of `fetched_at`; it is not itself emitted as a metric.
@@ -153,11 +156,16 @@ impl DbAudienceGrantsSource {
                 .max(0) as u64,
         );
         let retry_in = self.ttl.saturating_sub(since_last_attempt);
-        anyhow!(
+        // Wrapped in `ProviderUnavailable` (not a bare `anyhow!`) so `caller_context`
+        // (`flight_sql_service_impl.rs`) downcasts this to `Status::unavailable` rather than
+        // `Status::permission_denied` -- a throttled cold start is a store-outage symptom, not an
+        // authorization decision.
+        ProviderUnavailable(anyhow!(
             "audience grant store unavailable; cold-start retry throttled, retry available in \
              {} seconds",
             retry_in.as_secs()
-        )
+        ))
+        .into()
     }
 
     /// Returns the current grant snapshot, refreshing it first if stale.
@@ -170,9 +178,11 @@ impl DbAudienceGrantsSource {
     /// returns a freshly synthesized error describing the throttled cold-start state rather than
     /// storing and re-handing-out the prior attempt's `anyhow::Error`. A concurrent caller that
     /// loses the `last_attempt_at` compare-exchange while the very first cold-start attempt is
-    /// still in flight gets that same synthesized throttled-state error too, not the in-flight
-    /// attempt's eventual result -- it never blocks on another caller's query, and it never skips
-    /// the query silently with nothing to show for it.
+    /// still in flight re-checks `self.snapshot` once more before giving up: if the winning
+    /// caller has since populated it, the loser serves that snapshot instead of failing; only if
+    /// it is still empty does it get the synthesized throttled-state error. It never blocks on
+    /// another caller's still-in-flight query, and it never skips the query silently with nothing
+    /// to show for it.
     ///
     /// `Err` only when there has never been one successful load -- a fresh process whose first
     /// query hits a down DB has no "last good" to serve, so it fails closed like everything else
@@ -182,14 +192,14 @@ impl DbAudienceGrantsSource {
     /// serving, unbounded -- this store has no per-item TTL eviction to fall back on the way
     /// `db_api_key.rs`'s cache does, so an outage degrades to staleness for as long as it lasts,
     /// not just one TTL window.
-    pub async fn current(&self) -> Result<AudienceGrants> {
+    pub async fn current(&self) -> Result<Arc<AudienceGrants>> {
         // Fast path: an unexpired snapshot needs no refresh attempt at all.
         {
             let guard = self.snapshot.read().await;
             if let Some(snap) = guard.as_ref()
                 && snap.fetched_at.elapsed() < self.ttl
             {
-                return Ok(snap.grants.clone());
+                return Ok(Arc::clone(&snap.grants));
             }
         }
 
@@ -202,9 +212,10 @@ impl DbAudienceGrantsSource {
             // cheap (the whole point of "the map is small").
             match self.fetch().await {
                 Ok(grants) => {
+                    let grants = Arc::new(grants);
                     let mut guard = self.snapshot.write().await;
                     *guard = Some(Snapshot {
-                        grants: grants.clone(),
+                        grants: Arc::clone(&grants),
                         loaded_at: Instant::now(),
                         fetched_at: Instant::now(),
                     });
@@ -225,7 +236,7 @@ impl DbAudienceGrantsSource {
                                  (age={age_secs}s): {err:#}"
                             );
                             snap.fetched_at = Instant::now();
-                            Ok(snap.grants.clone())
+                            Ok(Arc::clone(&snap.grants))
                         }
                         // Snapshot vanished between the check above and now -- this store never
                         // clears a snapshot once set, so this is unreachable in practice; treat
@@ -249,14 +260,24 @@ impl DbAudienceGrantsSource {
                     .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
                     .is_err()
             {
+                // The winner of the compare-exchange may have already finished its first query
+                // and populated the snapshot by the time we lost the race -- re-check before
+                // treating this as a throttled cold start, so concurrent callers during the very
+                // first load don't get denied purely from contention on a healthy DB. A cheap
+                // re-check, not a full single-flight/wait: if the winner hasn't finished yet,
+                // this still falls through to the throttled error below.
+                if let Some(snap) = self.snapshot.read().await.as_ref() {
+                    return Ok(Arc::clone(&snap.grants));
+                }
                 return Err(self.throttled_error(prev));
             }
 
             match self.fetch().await {
                 Ok(grants) => {
+                    let grants = Arc::new(grants);
                     let mut guard = self.snapshot.write().await;
                     *guard = Some(Snapshot {
-                        grants: grants.clone(),
+                        grants: Arc::clone(&grants),
                         loaded_at: Instant::now(),
                         fetched_at: Instant::now(),
                     });
@@ -271,7 +292,10 @@ impl DbAudienceGrantsSource {
                     micromegas_tracing::error!(
                         "audience grant store cold-start load failed: {err:#}"
                     );
-                    Err(err)
+                    // Wrapped in `ProviderUnavailable` for the same reason `throttled_error` is:
+                    // a real DB failure here must surface to `caller_context` as
+                    // `Status::unavailable`, not `Status::permission_denied`.
+                    Err(ProviderUnavailable(err).into())
                 }
             }
         }

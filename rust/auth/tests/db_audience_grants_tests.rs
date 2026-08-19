@@ -258,7 +258,7 @@ async fn live_first_load_reflects_seeded_rows() {
             .await
             .map_err(|e| format!("first load should succeed: {e:#}"))?;
 
-        let policy = AudienceReadPolicy::new(grants);
+        let policy = AudienceReadPolicy::new((*grants).clone());
         let ctx = caller(None, vec!["eng".to_string()]);
         let resolved = policy
             .resolve(&ctx)
@@ -318,7 +318,7 @@ async fn live_refresh_failure_after_success_serves_stale_snapshot() {
         let ctx = caller(None, vec![]);
         // Exercise the served snapshot through the policy seam rather than reaching into
         // `AudienceGrants`'s private fields.
-        let policy = AudienceReadPolicy::new(grants);
+        let policy = AudienceReadPolicy::new((*grants).clone());
         let resolved = policy
             .resolve(&ctx)
             .await

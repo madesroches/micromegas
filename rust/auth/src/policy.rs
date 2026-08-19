@@ -421,8 +421,9 @@ pub trait MintPolicy: Send + Sync + Debug {
 pub struct AudienceReadPolicy {
     grants: AudienceGrants,
     /// The DB-backed grant store (#1489, AbAC Stage 6a), when this process has one configured --
-    /// merged into `grants` on every `resolve` call. `None` for every disabled-auth/test caller
-    /// that has no DB pool to back one.
+    /// checked alongside `grants` on every `resolve` call, as a separate source rather than
+    /// merged into it (see `resolve`). `None` for every disabled-auth/test caller that has no DB
+    /// pool to back one.
     store: Option<Arc<DbAudienceGrantsSource>>,
 }
 
@@ -461,17 +462,27 @@ impl AudienceReadPolicy {
 #[async_trait]
 impl ReadPolicy for AudienceReadPolicy {
     async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences> {
-        let mut grants = self.grants.clone();
-        if let Some(store) = &self.store {
-            // `Err` only on a cold-start outage (no snapshot has ever loaded successfully) --
-            // propagated as-is, so `resolve` denies exactly as documented on its own trait.
-            grants = grants.merge(&store.current().await?);
-        }
+        // `Err` only on a cold-start outage (no snapshot has ever loaded successfully) --
+        // propagated as-is, so `resolve` denies exactly as documented on its own trait.
+        let store_grants = match &self.store {
+            Some(store) => Some(store.current().await?),
+            None => None,
+        };
         let mut set = BTreeSet::new();
         set.insert(PUBLIC_AUDIENCE.to_string());
-        for (audience, read) in grants.readers() {
+        // The env map and the store snapshot are checked as two separate sources -- a selector
+        // present in either grants access -- rather than merged into one map, so neither side is
+        // deep-cloned on every request (#1489, AbAC Stage 6a).
+        for (audience, read) in self.grants.readers() {
             if read.iter().any(|s| selector_matches(s, caller)) {
                 set.insert(audience.clone());
+            }
+        }
+        if let Some(grants) = &store_grants {
+            for (audience, read) in grants.readers() {
+                if read.iter().any(|s| selector_matches(s, caller)) {
+                    set.insert(audience.clone());
+                }
             }
         }
         for audience in &caller.read_audiences {
@@ -542,15 +553,25 @@ impl MintPolicy for AudienceMintPolicy {
                 ))
             };
         }
-        let mut grants = self.grants.clone();
-        if let Some(store) = &self.store {
-            grants = grants.merge(&store.current().await?);
-        }
-        if grants
+        // The env map and the store snapshot are checked as two separate sources -- a selector
+        // present in either grants access -- rather than merged into one map, so neither side is
+        // deep-cloned on every request (#1489, AbAC Stage 6a).
+        let store_grants = match &self.store {
+            Some(store) => Some(store.current().await?),
+            None => None,
+        };
+        let granted = self
+            .grants
             .mint_selectors(aud)
             .iter()
             .any(|s| selector_matches(s, caller))
-        {
+            || store_grants.as_ref().is_some_and(|grants| {
+                grants
+                    .mint_selectors(aud)
+                    .iter()
+                    .any(|s| selector_matches(s, caller))
+            });
+        if granted {
             Ok(aud.to_string())
         } else {
             Err(anyhow!(
