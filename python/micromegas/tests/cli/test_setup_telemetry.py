@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import pytest
 
@@ -10,7 +11,9 @@ class FakeClient:
     """Records every call and returns canned responses, mirroring
     `test_import_keys.py`/`test_grants.py`'s `FakeClient` lightweight-mocking style."""
 
-    def __init__(self, my_audiences=None, mint_result=None, list_result=None):
+    def __init__(
+        self, my_audiences=None, mint_result=None, list_result=None, keys_result=None
+    ):
         self.calls = []
         self.my_audiences_result = my_audiences or {
             "is_admin": False,
@@ -25,6 +28,7 @@ class FakeClient:
             "key": "mmk_secret",
         }
         self.list_result = list_result if list_result is not None else []
+        self.keys_result = keys_result if keys_result is not None else []
 
     def my_audiences(self):
         self.calls.append(("my_audiences",))
@@ -40,6 +44,10 @@ class FakeClient:
     def list_audience_grants(self, audience=None, axis=None, limit=None, offset=None):
         self.calls.append(("list", audience, axis, limit, offset))
         return self.list_result
+
+    def list_ingestion_api_keys(self, limit=None, offset=None, include_revoked=None):
+        self.calls.append(("list_keys", limit, offset, include_revoked))
+        return self.keys_result
 
     def create_audience_grant(self, audience, axis, selector):
         self.calls.append(("create", audience, axis, selector))
@@ -257,7 +265,10 @@ def test_admin_audience_is_never_prefixed_even_when_not_in_my_audiences():
     )
     assert audience == "ci"
     assert brand_new is True
-    assert client.calls == [("list", "ci", None, None, None)]
+    assert client.calls == [
+        ("list", "ci", None, None, None),
+        ("list_keys", 500, 0, True),
+    ]
 
 
 def test_admin_audience_with_existing_grant_rows_is_not_brand_new():
@@ -284,6 +295,74 @@ def test_admin_audience_with_existing_grant_rows_is_not_brand_new():
     )
     assert audience == "ci"
     assert brand_new is False
+
+
+def test_admin_audience_with_no_grants_but_existing_key_is_not_brand_new():
+    """An audience an admin minted into before any grant row existed has no
+    `audience_grants` row at all, but does have an `ingestion_api_keys` row --
+    the CLI's brand-new check must catch this the same way the server's own
+    broader ownership predicate does (`try_claim_and_mint`), or the admin
+    would silently self-grant `read` on pre-existing data."""
+    client = FakeClient(
+        list_result=[],
+        keys_result=[
+            {
+                "key_id": "key-0",
+                "name": "old-key",
+                "audience": "ci",
+                "created_by": "someone@example.com",
+            }
+        ],
+    )
+    my_audiences = {
+        "is_admin": True,
+        "audiences": [],
+        "mint_prefix": None,
+        "email": "admin@example.com",
+    }
+    args = make_args(audience="ci")
+    audience, brand_new = setup_telemetry.resolve_audience(
+        client, args, FakeParser(), my_audiences
+    )
+    assert audience == "ci"
+    assert brand_new is False
+
+
+def test_admin_audience_check_pages_through_ingestion_keys():
+    """A match on a later page (not just the first) must still count."""
+    first_page = [
+        {"key_id": f"k{i}", "name": "n", "audience": "other", "created_by": "x"}
+        for i in range(setup_telemetry._KEY_PAGE_SIZE)
+    ]
+    second_page = [
+        {"key_id": "k-last", "name": "n", "audience": "ci", "created_by": "x"}
+    ]
+
+    class PagingClient(FakeClient):
+        def list_ingestion_api_keys(
+            self, limit=None, offset=None, include_revoked=None
+        ):
+            self.calls.append(("list_keys", limit, offset, include_revoked))
+            return first_page if offset == 0 else second_page
+
+    client = PagingClient(list_result=[])
+    my_audiences = {
+        "is_admin": True,
+        "audiences": [],
+        "mint_prefix": None,
+        "email": "admin@example.com",
+    }
+    args = make_args(audience="ci")
+    audience, brand_new = setup_telemetry.resolve_audience(
+        client, args, FakeParser(), my_audiences
+    )
+    assert audience == "ci"
+    assert brand_new is False
+    assert client.calls == [
+        ("list", "ci", None, None, None),
+        ("list_keys", 500, 0, True),
+        ("list_keys", 500, 500, True),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +487,63 @@ def test_run_writes_env_file_with_secure_permissions_and_prints_its_path(
 
     mode = env_file.stat().st_mode & 0o777
     assert mode == 0o600
+
+
+def test_run_env_file_write_failure_prints_key_to_stdout_and_reraises(
+    monkeypatch, capsys
+):
+    """A key is minted exactly once and is never retrievable again -- an
+    `--env-file` write failure must never silently discard it."""
+    client = FakeClient()
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+
+    def boom(path, content):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(setup_telemetry, "write_env_file", boom)
+
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint="http://ingest:9000/ingestion/otlp",
+        env_file="/no/such/place.env",
+    )
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+    }
+    client.my_audiences_result = my_audiences
+
+    with pytest.raises(OSError):
+        setup_telemetry.run(args, FakeParser())
+
+    captured = capsys.readouterr()
+    assert "Authorization=Bearer mmk_secret" in captured.out
+    assert "warning" in captured.err.lower()
+    assert "/no/such/place.env" in captured.err
+
+
+def test_main_exits_non_zero_on_env_file_os_error(monkeypatch, capsys):
+    def raise_os_error(args, parser):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(setup_telemetry, "run", raise_os_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "micromegas-setup-telemetry",
+            "--url",
+            "http://analytics:3000",
+            "--name",
+            "laptop",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        setup_telemetry.main()
+    assert exc_info.value.code == 1
+    assert "Error:" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

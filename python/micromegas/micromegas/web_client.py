@@ -147,6 +147,32 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
+    def list_ingestion_api_keys(self, limit=None, offset=None, include_revoked=None):
+        """List `ingestion_api_keys` rows (admin-only) via
+        `GET /api/ingestion-api-keys`, newest first. Never `key_hash`, never
+        the cleartext key.
+
+        `limit`/`offset`/`include_revoked` are omitted from the request
+        params when `None`, so the server applies its own defaults (a
+        limit of 100, capped at 500, and `include_revoked=true`) rather
+        than receiving an explicit value.
+        """
+        params = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        if include_revoked is not None:
+            params["include_revoked"] = include_revoked
+        resp = self.session.get(
+            self._api_url("ingestion-api-keys"),
+            headers=self._headers(),
+            params=params,
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
     def my_audiences(self):
         """List the audiences the caller may mint into today (AbAC Stage 6,
         #1374) via `GET /api/audience-grants/my-audiences`.

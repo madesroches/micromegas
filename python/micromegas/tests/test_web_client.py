@@ -232,6 +232,36 @@ class TestMintIngestionApiKey:
         assert client.session.post.call_count == 1
 
 
+class TestListIngestionApiKeys:
+    """`list_ingestion_api_keys`: `GET /api/ingestion-api-keys`, omitted/set
+    param convention matching `list_audience_grants`."""
+
+    def test_omits_unset_params(self):
+        client = _make_client()
+        client.list_ingestion_api_keys()
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/ingestion-api-keys"
+        assert call.kwargs["params"] == {}
+
+    def test_includes_set_params(self):
+        client = _make_client()
+        client.list_ingestion_api_keys(limit=500, offset=500, include_revoked=True)
+        call = client.session.get.call_args
+        assert call.kwargs["params"] == {
+            "limit": 500,
+            "offset": 500,
+            "include_revoked": True,
+        }
+
+    def test_returns_the_response_body(self):
+        client = _make_client()
+        client.session.get.return_value.json.return_value = [
+            {"key_id": "k1", "audience": "ci"}
+        ]
+        result = client.list_ingestion_api_keys()
+        assert result == [{"key_id": "k1", "audience": "ci"}]
+
+
 class TestMyAudiences:
     """`my_audiences` (AbAC Stage 6, #1374): `GET .../audience-grants/my-audiences`."""
 

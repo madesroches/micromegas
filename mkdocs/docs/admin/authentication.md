@@ -382,6 +382,16 @@ existence check (below) and so could be claimed out from under it by another
 caller. Keep every mint-relevant audience's grants in the DB once
 `MICROMEGAS_SELF_SERVICE_MINT` is on.
 
+This isn't only a mint-axis concern: the lazy claim's existence check reads
+only the DB (`audience_grants` and `ingestion_api_keys`), never
+`{prefix}_AUDIENCE_GRANTS` at all, on *either* axis. An audience named only
+in that env map for **read** — like `team-alpha` in the privacy-deployment
+example above — is just as invisible to the check as a mint-only one, and so
+just as squattable. Before turning on `MICROMEGAS_SELF_SERVICE_MINT`,
+pre-create a placeholder DB row (any axis, any selector) for **every**
+audience name that appears anywhere in `{prefix}_AUDIENCE_GRANTS`, not just
+the ones with a `mint` entry — see the placeholder-row example below.
+
 ### Self-service ingestion key mint (AbAC Stage 6, #1374)
 
 Given a `mint` grant already exists (the worked profile above), a non-admin
@@ -410,19 +420,24 @@ in-flight claim — still requires a matching grant exactly as above; only a
 genuinely fresh, unowned name is claimable this way. `public` and the
 deployment's own `MICROMEGAS_DEFAULT_KEY_AUDIENCE` can never be claimed.
 
-**A deployment using an unstamped-audience label
-(`{prefix}_UNSTAMPED_AUDIENCE`) must pre-create a placeholder grant row for
-it** — any selector, on either axis — via the admin grants API, before
-turning on `MICROMEGAS_SELF_SERVICE_MINT`:
+**Before turning on `MICROMEGAS_SELF_SERVICE_MINT`, pre-create a placeholder
+grant row — any selector, on either axis — for every audience name that
+exists only outside the DB:** an unstamped-audience label
+(`{prefix}_UNSTAMPED_AUDIENCE`), and *every* key of `{prefix}_AUDIENCE_GRANTS`
+(mint-relevant or read-only alike; see the note above). Via the admin grants
+API:
 
 ```bash
 micromegas-grants --url https://analytics.example.com create unstamped-legacy read '*'
+# ...and one such row per audience named in {prefix}_AUDIENCE_GRANTS, e.g.:
+micromegas-grants --url https://analytics.example.com create team-alpha read '*'
 ```
 
-Without that placeholder row, the lazy claim's existence check (which reads
+Without those placeholder rows, the lazy claim's existence check (which reads
 only `audience_grants` and `ingestion_api_keys`, never a role-prefixed env
-knob it has no reason to know about) would see the unstamped label as
-unowned and let a non-admin claim exclusive rights over it.
+knob it has no reason to know about) would see any of these names as unowned
+and let a non-admin claim exclusive mint+read rights over a name the operator
+already believes is spoken for.
 
 The setup script, `micromegas-setup-telemetry`, wraps all of this for an end
 user — OIDC login, mint, and printing the `OTEL_EXPORTER_OTLP_*` env vars

@@ -54,6 +54,29 @@ def resolve_otlp_endpoint(args, parser):
     return f"{base.rstrip('/')}/ingestion/otlp"
 
 
+_KEY_PAGE_SIZE = 500  # matches analytics-web-srv's own MAX_LIMIT for this route
+
+
+def _audience_has_existing_keys(client, audience):
+    """Mirrors the other half of the server's own ownership predicate in
+    `try_claim_and_mint` (rust/analytics-web-srv/src/ingestion_keys.rs):
+    an audience counts as already-owned if it has any `ingestion_api_keys`
+    row at all -- revoked or not -- not just a grant row. Pages through
+    `list_ingestion_api_keys` (admin-only) rather than trusting a single
+    page, since a deployment can hold more keys than one page returns.
+    """
+    offset = 0
+    while True:
+        page = client.list_ingestion_api_keys(
+            limit=_KEY_PAGE_SIZE, offset=offset, include_revoked=True
+        )
+        if any(entry.get("audience") == audience for entry in page):
+            return True
+        if len(page) < _KEY_PAGE_SIZE:
+            return False
+        offset += _KEY_PAGE_SIZE
+
+
 def resolve_audience(client, args, parser, my_audiences):
     """Applies the three-way `--audience` prefixing rule (§6):
 
@@ -75,9 +98,14 @@ def resolve_audience(client, args, parser, my_audiences):
 
     Returns `(resolved_audience, is_brand_new_admin_claim)`. The second
     element is `True` only when an admin explicitly named an audience with
-    no pre-existing `audience_grants` row at all -- the signal `main()` uses
-    to also write the admin's own `read`/`mint` grant afterwards (§4a
-    Trigger: the mint route itself never writes one for an admin).
+    no pre-existing `audience_grants` row *and* no pre-existing
+    `ingestion_api_keys` row -- mirroring the server's own broader
+    ownership predicate in `try_claim_and_mint` (see
+    `_audience_has_existing_keys`), since an audience an admin minted into
+    before any grant row existed must not be treated as brand-new either.
+    This is the signal `main()` uses to also write the admin's own
+    `read`/`mint` grant afterwards (§4a Trigger: the mint route itself
+    never writes one for an admin).
     """
     is_admin = my_audiences["is_admin"]
     audiences = my_audiences["audiences"]
@@ -106,8 +134,10 @@ def resolve_audience(client, args, parser, my_audiences):
         return args.audience, False
 
     if is_admin:
-        existing = client.list_audience_grants(audience=args.audience)
-        is_brand_new = not existing
+        existing_grants = client.list_audience_grants(audience=args.audience)
+        is_brand_new = not existing_grants and not _audience_has_existing_keys(
+            client, args.audience
+        )
         return args.audience, is_brand_new
 
     if mint_prefix is None:
@@ -238,7 +268,21 @@ def run(args, parser):
 
     content = format_env_exports(result["key"], otlp_endpoint)
     if args.env_file:
-        write_env_file(args.env_file, content)
+        try:
+            write_env_file(args.env_file, content)
+        except OSError as e:
+            # The key was already minted above and is never retrievable again -- a
+            # write failure here (permission denied, read-only/full filesystem, bad
+            # path) must never discard it. Fall back to emitting it on stdout, with a
+            # clear warning on stderr, before letting the error propagate to `main()`
+            # so the process still exits non-zero.
+            print(
+                f"warning: failed to write --env-file {args.env_file!r} ({e}); "
+                "printing the exports below instead so the key is not lost",
+                file=sys.stderr,
+            )
+            sys.stdout.write(content)
+            raise
         print(args.env_file)
     else:
         sys.stdout.write(content)
@@ -262,6 +306,7 @@ def main():
         RuntimeError,
         requests.exceptions.RequestException,
         config.ProfileError,
+        OSError,
     ) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
