@@ -1238,7 +1238,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 15. `CHANGELOG.md`: add an `## Unreleased` entry, following the Stage 1/2/4/6a precedent (#1370,
     #1372, #1373, #1489) — a **Minor breaking change** clause for `IngestionKeysState` gaining
     required `self_service_mint_enabled`/`max_claims_per_caller`/
-    `max_keys_per_caller` fields and `micromegas_auth::policy::selector_matches`
+    `max_keys_per_caller` fields, `AudienceGrantsState` gaining a required
+    `self_service_mint_enabled` field, and `micromegas_auth::policy::selector_matches`
     becoming `pub`, plus a behavior-change upgrade note covering the new non-admin mint route
     behavior (off by default, `MICROMEGAS_SELF_SERVICE_MINT`), the new `/my-audiences` route, and the new
     `micromegas-setup-telemetry` CLI.
