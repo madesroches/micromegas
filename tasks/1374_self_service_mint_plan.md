@@ -274,14 +274,25 @@ always gave before this stage existed (the message text differs — see §4's `m
 without the body ever being parsed, and the lazy claim (§4a) — which only ever triggers
 off a non-admin `resolve_audience` denial *inside* the handler body, not off this gate — is never
 reached either. Admin minting is unaffected either way, since the knob only
-gates the caller branches this stage adds. Two more knobs, resolved onto `IngestionKeysState` the
-same way, bound the blast radius of turning it on: `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`
-(`max_claims_per_caller: i64`, default `25`) and `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`
-(`max_keys_per_caller: i64`, default `100`) — see §4a and §4 for where each is enforced. Both are a
-backstop against a runaway client or an abusive caller, not a quota routine use is expected to plan
-around or bump into: a caller with several machines and CI runners sits far below either default,
-so the defaults are set deliberately high precisely to keep the admin-only recovery path below a
-pathological case rather than routine friction.
+gates the caller branches this stage adds. Two more knobs bound the blast radius of turning it on:
+`MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` (`max_claims_per_caller: i64`, default `25`) and
+`MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` (`max_keys_per_caller: i64`, default `100`) — see §4a
+and §4 for where each is enforced. Both are a backstop against a runaway client or an abusive
+caller, not a quota routine use is expected to plan around or bump into: a caller with several
+machines and CI runners sits far below either default, so the defaults are set deliberately high
+precisely to keep the admin-only recovery path below a pathological case rather than routine
+friction.
+
+**Parse contract for the two integer knobs.** These are resolved onto `IngestionKeysState` as
+unsigned (`u64`), parsed warn-and-default on an unparseable value — the same shape
+`resolve_u64` (`auth/src/db_api_key.rs:81-91`) and `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES`
+(`web_server.rs:84-86`, `.ok().and_then(|v| v.parse().ok())`) already use elsewhere in this
+codebase, not the fail-fast convention `auth::policy`'s grant-semantics knobs follow (that
+convention is specific to those knobs, not a crate-wide rule). Parsing unsigned settles both
+sub-questions for free: a negative value is simply a parse failure (warned and defaulted, same as
+any other unparseable value), and `0` is a valid, meaningful parse — "none permitted," since both
+enforcement checks (§4, §4a) compare with `count >= limit`. The parsed `u64` is converted to `i64`
+for the `IngestionKeysState` fields and the query binds (Implementation step 3).
 
 ### 4. `mint_key` calls `MintPolicy::resolve_audience`, preserving today's 400s
 
@@ -430,8 +441,14 @@ async fn mint_key(
     .await
     // A failed query is a DB outage, not a denial -- must not be misattributed as "you have no
     // grant" (Security), so it is mapped to `Unavailable` explicitly rather than falling through
-    // the blanket `From<sqlx::Error>` this module otherwise uses for `Database` (500).
-    .map_err(|e| IngestionKeyError::Unavailable(e.to_string()))?;
+    // the blanket `From<sqlx::Error>` this module otherwise uses for `Database` (500). Logs the
+    // real `sqlx::Error` server-side and renders a fixed, generic client message, the same split
+    // the existing `Database` arm already makes (`error!` plus "internal database error") -- the
+    // raw error text (connection strings, table/column names) must not reach the client.
+    .map_err(|e| {
+        error!("ingestion_keys: audience grant point query failed: {e}");
+        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
+    })?;
 
     let grants = AudienceGrants::from_rows(
         mint_selectors
@@ -441,8 +458,12 @@ async fn mint_key(
     // Every row read back out of `audience_grants` already passed its own `CHECK` constraints on
     // write (Current State), so this arm is unreachable in practice; kept as a real status code
     // rather than `.unwrap()`, for the same fail-closed reason `MintGate` (§4) gives its own
-    // `.ok_or(...)`.
-    .map_err(|e| IngestionKeyError::Unavailable(e.to_string()))?;
+    // `.ok_or(...)`. Same log-then-generic-message split as the query `map_err` above -- this
+    // `anyhow` message is as internal as a raw `sqlx::Error` and must not reach the client either.
+    .map_err(|e| {
+        error!("ingestion_keys: audience grant row parse failed: {e}");
+        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
+    })?;
 
     // `store: None` (the `new` default) -- this stage never attaches a `DbAudienceGrantsSource`
     // to a mint policy (§3). No change to `micromegas-auth` is needed for any of this: `from_rows`,
@@ -500,7 +521,12 @@ Add `IngestionKeyError::Forbidden(String)` (403, `{code: "FORBIDDEN", message}`)
 `IngestionKeyError::Unavailable(String)` (503, `{code: "UNAVAILABLE", message}` — distinct from
 the existing `NotConfigured`, whose message is specifically about an unset
 `MICROMEGAS_SQL_CONNECTION_STRING` and would mislead when the real cause is a *configured*
-database that failed to answer the mint point query above), `IngestionKeyError::Unauthenticated(String)` (401,
+database that failed to answer the mint point query above; mirroring the existing `Database`
+arm's split, every construction site logs the real error with `error!` server-side and the
+`String` payload itself is always the fixed, generic message rendered to the client — never
+`e.to_string()` on a raw `sqlx::Error`/`anyhow` message, which would leak DB internals the way
+`Database`'s own generic "internal database error" body is deliberately designed not to),
+`IngestionKeyError::Unauthenticated(String)` (401,
 `{code: "UNAUTHENTICATED", message}`, with a matching `impl From<Unauthenticated> for
 IngestionKeyError` for `MintGate`'s `?`, above), and `IngestionKeyError::Conflict(String)` (409,
 `{code: "CLAIM_CONTENDED", message}` — the lock-contention arm in `try_claim_and_mint`, §4a, kept
@@ -839,12 +865,16 @@ extractor (§1), not `AdminUser`:
 /// reason `is_admin` rides here rather than being derived client-side, the caller cannot compute
 /// this itself (no route reachable from a CLI caller exposes its own email, `/auth/me` included),
 /// and computing it server-side keeps one canonical rule so the prefix this response hands out can
-/// never drift from the `user:<email>` selector a claim (§4a) actually writes.
+/// never drift from the `user:<email>` selector a claim (§4a) actually writes. `email` rides here
+/// for the identical reason: no route reachable from a CLI caller (`/auth/me` included, see above)
+/// exposes the caller's own email otherwise, and §6's setup script needs it verbatim to write the
+/// admin self-grant's `user:<email>` selector for the caller minting a fresh audience.
 #[derive(Serialize)]
 struct MyAudiencesResponse {
     is_admin: bool,
     audiences: Vec<String>,
     mint_prefix: Option<String>,
+    email: Option<String>,
 }
 
 async fn my_audiences(
@@ -874,12 +904,17 @@ async fn my_audiences(
     audiences.sort();
     audiences.dedup();
     let mint_prefix = mint_prefix_for(&caller.email);
-    Ok(Json(MyAudiencesResponse { is_admin: caller.is_admin, audiences, mint_prefix }))
+    let email = caller.email.clone();
+    Ok(Json(MyAudiencesResponse { is_admin: caller.is_admin, audiences, mint_prefix, email }))
 }
 ```
 
-**Deriving `mint_prefix`.** A plain function, `mint_prefix_for(email: &Option<String>) ->
-Option<String>` (Phase 2 tests it directly, no DB, no `AuthContext` needed): take the local part
+**Deriving `mint_prefix`.** A plain, `pub` function, `mint_prefix_for(email: &Option<String>) ->
+Option<String>` (Phase 2 tests it directly, no DB, no `AuthContext` needed) — `pub`, not
+module-private, for the same reason `ingestion_keys::resolve_audience` already is (its own doc
+comment: sync, no pool access, so the whole resolution matrix is unit-testable without a database):
+`tests/audience_grants_tests.rs` is a separate crate that can only reach `pub` items of `pub mod
+audience_grants`, and step 8's unit tests call `mint_prefix_for` directly from there. Take the local part
 of `caller.email` (everything before the first `@`), lowercase it, replace every character outside
 `[a-z0-9_-]` with `-`, collapse any run of `-` to a single `-`, trim leading/trailing `-`, and
 append one more `-` as the separator. `Alice.Smith+ci@example.com` yields `alice-smith-ci-`. The
@@ -924,13 +959,19 @@ Deliberately not consulting the env grant map here: mint grants are DB-only in t
 there is nothing there to fold in.
 
 **`/my-audiences` has nothing useful to say for an admin caller.** An admin's mint authority never depends
-on a grant row (`AudienceMintPolicy`'s `is_admin` arm, Current State), so the `audiences` list in
-`/my-audiences`'s response is `[]` for every admin regardless of what they can mint or already own. The
-setup script (§6) must not treat that `[]` the way it treats a non-admin's: for a non-admin, `[]`
-really does mean "no mintable audience yet, claim one or ask an admin"; for an admin it means
-nothing at all. The script tells the two apart using `/my-audiences`'s own `is_admin` field (added above
-for exactly this reason — no other endpoint reachable from a CLI caller exposes it) before
-deciding which hint to print.
+on a grant row at all (`AudienceMintPolicy`'s `is_admin` arm, Current State) — an admin may mint
+*any* valid audience regardless of which grant rows exist. The `audiences` list, built by filtering
+`audience_grants` rows through `selector_matches` (`policy.rs:104-117`), has no `is_admin` special
+case, so it is *not* `[]` by construction for an admin: a `*` selector or a `user:`/`group:` row
+naming that admin matches exactly as it would for anyone else, and lands in the list. What makes the
+list unusable for an admin isn't its emptiness but its incompleteness — it reflects only what
+grant rows happen to exist, not the admin's actual (unconditional) mint authority, so it is neither
+a reliable "can mint" list nor a reliable "cannot mint yet" signal for that caller. The setup script
+(§6) must not use `audiences` to decide anything for an admin: for a non-admin, an empty list really
+does mean "no mintable audience yet, claim one or ask an admin"; for an admin, the list (empty or
+not) means nothing about what they can mint. The script tells the two apart using `/my-audiences`'s own
+`is_admin` field (added above for exactly this reason — no other endpoint reachable from a CLI
+caller exposes it) before deciding which hint to print, never by inspecting `audiences` itself.
 
 `micromegas-setup-telemetry` calls this when `--audience` is omitted **and the caller is not an
 admin**: if exactly one audience comes back, use it silently; if more than one, print the list and
@@ -980,10 +1021,13 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
     resolved full audience name to stderr, so the caller sees what was actually claimed rather than
     being surprised by a name they didn't type.
   - **Admin callers are never prefixed.** An admin passing `--audience ci` is doing deliberate
-    operational naming, and an admin's `/my-audiences` `audiences` is always `[]` by construction (§5), so
-    an unconditional prefix would mangle every admin invocation. The script tells the two cases
-    apart using `/my-audiences`'s own `is_admin` field — the same field it already uses to pick which hint
-    to print when `--audience` is omitted.
+    operational naming. This can't be decided from `/my-audiences`'s `audiences` list — it is not
+    reliably `[]` for an admin (§5: `selector_matches` has no `is_admin` arm, so a matching grant
+    row still lands in an admin's list too), and even when it is empty that says nothing about an
+    admin's mint authority, which never depends on grant rows at all. So the script tells the two
+    cases apart using `/my-audiences`'s own `is_admin` field instead — the same field it already uses to
+    pick which hint to print when `--audience` is omitted — never by checking whether `audiences` is
+    empty.
 
   One upside of always calling `/my-audiences`: a knob-off caller gets §5's clear 403 up front, instead of
   a confusing denial only once the mint itself is attempted. A non-admin has no escape hatch through
@@ -1003,11 +1047,13 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   it isn't. This closes the Open Question the earlier draft left here — no follow-up needed.
 - **Admin callers get their own read grant, since the mint route never writes one for them
   (§4a, Trigger).** After a successful mint, if `--audience` named a brand-new audience and the
-  caller's own `is_admin` (from the auth response) is `true`, the script also calls the existing
-  admin `POST /api/audience-grants` (Stage 6a) to write `user:<caller email>` on both the `mint`
-  and `read` axes for that audience — the same two rows a non-admin's lazy claim (§4a) writes
-  server-side, just issued client-side through the admin API the caller's own session already has
-  access to. "Brand-new" here means the mint response's `audience` equals the `--audience` the
+  caller's own `is_admin` (from the `/my-audiences` call already made above) is `true`, the script
+  also calls the existing admin `POST /api/audience-grants` (Stage 6a) to write `user:<caller
+  email>` — using the `email` field that same `/my-audiences` response carries (§5; no other route
+  reachable from this script exposes it) — on both the `mint` and `read` axes for that audience —
+  the same two rows a non-admin's lazy claim (§4a) writes server-side, just issued client-side
+  through the admin API the caller's own session already has access to. "Brand-new" here means the
+  mint response's `audience` equals the `--audience` the
   caller explicitly passed and no prior `GET /api/audience-grants?audience=<name>` row exists for
   it — the same signal §4a itself uses server-side to distinguish a claim from an ordinary mint.
   Without this step, an admin running the script against a fresh audience name mints successfully
@@ -1061,7 +1107,10 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    gated by `AuthenticatedUser` plus the same off-by-default `self_service_mint_enabled` check
    `MintGate` uses (§3, §5); add `self_service_mint_enabled: bool` to `AudienceGrantsState` and
    `AudienceGrantError::Forbidden` (403, `FORBIDDEN`) for the gate to return; add the
-   `mint_prefix_for` derivation helper and the `mint_prefix` field on `MyAudiencesResponse` (§5).
+   `mint_prefix_for` derivation helper, made `pub` (not module-private — mirroring
+   `ingestion_keys::resolve_audience`'s own doc-commented rationale, so that the external
+   `tests/audience_grants_tests.rs` crate can call it directly in step 8), and the `mint_prefix`
+   field on `MyAudiencesResponse` (§5).
 
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
@@ -1099,7 +1148,11 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    caller one below the limit still succeeds; for `max_keys_per_caller`, a caller who already holds
    the configured limit of live keys gets a `Forbidden` naming the limit on the next mint, and a
    caller one below the limit still succeeds.
-8. `rust/analytics-web-srv/tests/audience_grants_tests.rs`: extend
+8. `rust/analytics-web-srv/tests/audience_grants_tests.rs` **and**
+   `analytics-web-srv/tests/routing_tests.rs:410` — both construct `AudienceGrantsState` directly
+   (14 sites total, not just the 13 in `audience_grants_tests.rs`, at lines 88, 106, 121, 142, 160,
+   181, 200, 215, 230, 250, 263, 273, 307) and need the new `self_service_mint_enabled: false`
+   field. In `audience_grants_tests.rs`, also extend
    `build_handler_router_with_user` (line 48) to also layer an `AuthContext` (duplicating the same
    `AuthContext`-builder test helper step 7 introduces, per this crate's existing convention of
    mirroring rather than sharing such helpers across `tests/*.rs` files — `admin_user()`/
@@ -1122,8 +1175,8 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 9. `web_client.py`: add `mint_ingestion_api_key`, which reads `resp.status_code`/the response
    body's `code` field itself (before calling `_check_response`) to retry once on a 409
    `CLAIM_CONTENDED` (§6), and a `my_audiences` call for
-   `GET .../audience-grants/my-audiences` (§5), returning all three fields of the
-   `{is_admin, audiences, mint_prefix}` response.
+   `GET .../audience-grants/my-audiences` (§5), returning all four fields of the
+   `{is_admin, audiences, mint_prefix, email}` response.
 10. New `cli/setup_telemetry.py` + `pyproject.toml` entry point; `--otlp-endpoint` defaults from
     `MICROMEGAS_TELEMETRY_URL` when set (§6). The script must implement the three-way prefix rule
     (§6): an `--audience` already in `/my-audiences`'s `audiences` is used verbatim; a fresh, non-admin
@@ -1212,8 +1265,11 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
   helper, new/updated tests (including new live-DB claim tests).
 - `rust/analytics-web-srv/tests/routing_tests.rs`: `IngestionKeysState` construction (line 406)
   needs the three new knob fields (`self_service_mint_enabled`, `max_claims_per_caller`,
-  `max_keys_per_caller`).
-- `rust/analytics-web-srv/tests/audience_grants_tests.rs`: `/my-audiences` tests.
+  `max_keys_per_caller`); `AudienceGrantsState` construction (line 410) needs
+  `self_service_mint_enabled: false`.
+- `rust/analytics-web-srv/tests/audience_grants_tests.rs`: all 13 existing `AudienceGrantsState`
+  struct literals (lines 88, 106, 121, 142, 160, 181, 200, 215, 230, 250, 263, 273, 307) need
+  `self_service_mint_enabled: false`; plus `/my-audiences` tests.
 - `python/micromegas/micromegas/web_client.py`: `mint_ingestion_api_key`, `/my-audiences` call.
 - `python/micromegas/micromegas/cli/setup_telemetry.py` (new).
 - `python/micromegas/pyproject.toml`: new script entry.
@@ -1474,14 +1530,16 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 
 ## Open Questions
 
-Three items below. A fourth — whether the mint-side grant store should cache at all — has been
-resolved: it does not (see Trade-offs; §3 and §4 already reflect a point query, uncached,
-deliberately asymmetric with the read side's cache). None of the three remaining is a defect — the
-plan is implementable as written with the design as specified, and each question asks whether a
-mechanism the plan currently *has* earns its place, or pins down a detail the plan currently leaves
-to the implementer. They are recorded here because they surfaced from a reviewer's judgment about
-complexity rather than from verification against the code, so nothing else in this document marks
-them.
+Two items below. Two others have been resolved and are no longer open: whether the mint-side grant
+store should cache at all (it does not — see Trade-offs; §3 and §4 already reflect a point query,
+uncached, deliberately asymmetric with the read side's cache), and the parse contract for the two
+integer knobs (folded into §3: parsed unsigned, warn-and-default on an unparseable value, `0`
+meaning "none permitted," negatives rejected by the parse). Neither of the two remaining is a
+defect — the plan is implementable as written with the design as specified, and each question asks
+whether a mechanism the plan currently *has* earns its place, or pins down a detail the plan
+currently leaves to the implementer. They are recorded here because they surfaced from a reviewer's
+judgment about complexity rather than from verification against the code, so nothing else in this
+document marks them.
 
 Question 1 below is the other half of a subtractive pair a reviewer raised after five review
 rounds, alongside the now-resolved mint-cache question above: whether the `ingestion_api_keys`
@@ -1504,22 +1562,7 @@ unstamped-audience labels (Implementation step 12). The argument against: a migr
 customer data carries its own risk, and the caller-derived prefix (§5, §6) already makes the
 squatting scenario that motivated the concern improbable in practice.
 
-**2. What is the parse contract for the two integer knobs?**
-
-§3 says `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` and
-`MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` are "resolved onto `IngestionKeysState` the same way"
-as `MICROMEGAS_SELF_SERVICE_MINT` — but that points at a *boolean* parse, and the two conventions
-available here genuinely conflict. `resolve_u64` (`rust/auth/src/db_api_key.rs:81`) warns and
-defaults, but it is `pub(crate)` to `micromegas-auth` and therefore not callable from
-`analytics-web-srv`; meanwhile `MICROMEGAS_DEFAULT_KEY_AUDIENCE` fails fast at startup
-(`policy.rs:62-84`, resolved in `web_server.rs`), and `mkdocs/docs/admin/authentication.md`
-advertises fail-fast as "the convention every other knob on this page follows". Also unspecified:
-whether `0` means "no claims permitted" or "unlimited", and what a negative value does. Left as
-written, an implementer picks one silently and an operator's typo behaves differently from every
-neighbouring knob. Recommended resolution unless overridden: fail fast at startup, matching the
-documented convention, with `0` meaning "none permitted" and a negative value rejected.
-
-**3. What happens to the one-time cleartext key if the script fails after minting?**
+**2. What happens to the one-time cleartext key if the script fails after minting?**
 
 The mint response carries the cleartext key exactly once and it is unrecoverable afterwards. §6 then
 has the script do up to two more things that can fail: the admin `POST /api/audience-grants` calls
