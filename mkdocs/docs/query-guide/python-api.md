@@ -912,9 +912,10 @@ micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner 
   prefixing; it is what keeps operationally meaningful bare names (`prod`, `ci`, `staging`) out of
   self-service reach for the caller using this script.
 - A name from an **admin** caller is never prefixed — deliberate operational naming. If the named
-  audience is brand-new (no pre-existing `audience_grants` row), the script also grants that admin
-  their own `read`/`mint` access to it via the existing admin grants API, since the mint route
-  itself writes no grant for an admin caller.
+  audience is brand-new (no pre-existing `audience_grants` row and no pre-existing
+  `ingestion_api_keys` row), the script also grants that admin their own `read`/`mint` access to
+  it via the existing admin grants API, since the mint route itself writes no grant for an admin
+  caller.
 - Omitted entirely: resolved via `GET .../audience-grants/my-audiences` — exactly one match is used
   silently; more than one prints the choices and asks for `--audience`; none prints a hint to claim
   a fresh name or ask an admin. An admin caller must always pass `--audience` explicitly (an empty

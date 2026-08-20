@@ -15,9 +15,11 @@
 //!
 //! Every test here uses a lazily-connected pool (`sqlx::PgPool::connect_lazy`,
 //! per `firehose_tests.rs`'s precedent) and never actually reaches the
-//! database: the 403 cases are rejected by the `AdminUser` extractor before
-//! any handler runs, the 400 cases fail validation before touching the pool,
-//! and the `NotConfigured` cases use `IngestionKeysState { pool: None, .. }`,
+//! database: most 403 cases are rejected by the `AdminUser` extractor before
+//! any handler runs, except mint's non-admin denials, which come from
+//! `MintGate` instead (AbAC Stage 6, #1374) -- still before any handler body
+//! runs. The 400 cases fail validation before touching the pool, and the
+//! `NotConfigured` cases use `IngestionKeysState { pool: None, .. }`,
 //! which never touches `state.pool` at all. Live-DB round trips for
 //! mint/list/revoke/import are `#[ignore]`d, run manually against a real
 //! Postgres per `folders_tests.rs`'s precedent.
@@ -56,6 +58,20 @@ fn non_admin_user() -> ValidatedUser {
     ValidatedUser {
         subject: "reader".to_string(),
         email: Some("reader@example.com".to_string()),
+        issuer: "local".to_string(),
+        is_admin: false,
+    }
+}
+
+/// A non-admin caller with a fresh, per-call email, unlike `non_admin_user`'s fixed
+/// `reader@example.com` -- for the two per-caller-bound tests below, whose assertions turn on a
+/// *global* count of rows `created_by` this identity, so they must not share an identity with any
+/// other live test (four of which commit reader-owned rows) or with a leftover run of themselves.
+fn unique_non_admin_user() -> ValidatedUser {
+    let id = uuid::Uuid::new_v4();
+    ValidatedUser {
+        subject: format!("reader-{id}"),
+        email: Some(format!("limits-{id}@example.com")),
         issuer: "local".to_string(),
         is_admin: false,
     }
@@ -960,14 +976,18 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_public_audience() {
 #[tokio::test]
 async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
     let pool = live_pool().await;
+    let caller = unique_non_admin_user();
+    let caller_email = caller.email.clone().expect("caller has an email");
     let preclaimed_audience = format!("self-service-preclaimed-{}", uuid::Uuid::new_v4());
     for axis in ["mint", "read"] {
         sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
-             VALUES ($1, $2, 'user:reader@example.com', now(), 'reader@example.com')",
+             VALUES ($1, $2, $3, now(), $4)",
         )
         .bind(&preclaimed_audience)
         .bind(axis)
+        .bind(format!("user:{caller_email}"))
+        .bind(&caller_email)
         .execute(&pool)
         .await
         .expect("seed pre-existing claim");
@@ -983,7 +1003,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
             max_claims_per_caller: 1,
             max_keys_per_caller: 100,
         },
-        non_admin_user(),
+        caller.clone(),
     );
     let response = app
         .oneshot(post_request(
@@ -1010,7 +1030,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
             max_claims_per_caller: 2,
             max_keys_per_caller: 100,
         },
-        non_admin_user(),
+        caller,
     );
     let response = app
         .oneshot(post_request(
@@ -1033,17 +1053,20 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
 #[tokio::test]
 async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
     let pool = live_pool().await;
+    let caller = unique_non_admin_user();
+    let caller_email = caller.email.clone().expect("caller has an email");
     let audience = format!("self-service-keys-limit-{}", uuid::Uuid::new_v4());
-    insert_mint_grant(&pool, &audience, "user:reader@example.com").await;
+    insert_mint_grant(&pool, &audience, &format!("user:{caller_email}")).await;
 
     let seed_key_id = uuid::Uuid::new_v4();
     sqlx::query(
         "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
-         VALUES ($1, $2, $3, now(), 'reader@example.com', $4)",
+         VALUES ($1, $2, $3, now(), $4, $5)",
     )
     .bind(seed_key_id)
     .bind(vec![0u8; 32])
     .bind(format!("seed-key-{seed_key_id}"))
+    .bind(&caller_email)
     .bind(&audience)
     .execute(&pool)
     .await
@@ -1058,7 +1081,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
             max_claims_per_caller: 25,
             max_keys_per_caller: 1,
         },
-        non_admin_user(),
+        caller.clone(),
     );
     let response = app
         .oneshot(post_request(
@@ -1084,7 +1107,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
             max_claims_per_caller: 25,
             max_keys_per_caller: 2,
         },
-        non_admin_user(),
+        caller,
     );
     let response = app
         .oneshot(post_request(

@@ -7,11 +7,13 @@
 //! handler-as-function call, which never runs an extractor at all.
 //!
 //! Every non-`#[ignore]`d test here uses a lazily-connected pool (`sqlx::PgPool::connect_lazy`)
-//! and never actually reaches the database: the 403 cases are rejected by the `AdminUser`
-//! extractor before any handler runs, the 400 cases fail validation before touching the pool, and
-//! the `NotConfigured` cases use `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`, which never touches
-//! `state.pool` at all. Live-DB round trips are `#[ignore]`d, run manually against a real,
-//! v7-migrated Postgres, per `ingestion_keys_tests.rs`'s precedent.
+//! and never actually reaches the database: most 403 cases are rejected by the `AdminUser`
+//! extractor before any handler runs, except `/my-audiences`'s non-admin-when-disabled 403, which
+//! comes from the handler's own knob check instead (AbAC Stage 6, #1374) -- still before
+//! `require_pool`/any DB access. The 400 cases fail validation before touching the pool, and the
+//! `NotConfigured` cases use `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`,
+//! which never touches `state.pool` at all. Live-DB round trips are `#[ignore]`d, run manually
+//! against a real, v7-migrated Postgres, per `ingestion_keys_tests.rs`'s precedent.
 
 use analytics_web_srv::audience_grants::{
     AudienceGrantsState, audience_grants_router, mint_prefix_for,
@@ -365,9 +367,9 @@ fn mint_prefix_for_none_when_email_is_none() {
 }
 
 // ---------------------------------------------------------------------------
-// NotConfigured 503 -- `AudienceGrantsState { pool: None, self_service_mint_enabled: false }` never touches the
-// pool, so this needs no live DB either, same harness as every other test
-// here.
+// NotConfigured 503 -- `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`
+// never touches the pool, so this needs no live DB either, same harness as
+// every other test here.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

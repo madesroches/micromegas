@@ -101,10 +101,7 @@ pub fn valid_selector(selector: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty())
 }
 
-/// `pub` (AbAC Stage 6, #1374) -- `analytics-web-srv`'s `/api/audience-grants/my-audiences` route
-/// (a separate crate) needs to run this exact same selector-membership test against the caller's
-/// own identity, not a re-implementation of it.
-pub fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
+fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
     if selector == "*" {
         return true;
     }
@@ -395,8 +392,9 @@ pub trait ReadPolicy: Send + Sync + Debug {
 /// requested and none can be defaulted" -- under the opaque-label model there is no "myself"
 /// audience for a caller's identity to default to, so every implementation must return `Err` for
 /// `requested: None`, admin or not. Async and fallible for the same forward-looking reason as
-/// `ReadPolicy` -- the wiring waits for Stage 6 (`mint_key`), but the trait shape is settled now
-/// so Stage 6 adds no further seam.
+/// `ReadPolicy` -- wired by `mint_key` (`analytics-web-srv/src/ingestion_keys.rs`, AbAC Stage 6,
+/// #1374), its first production caller, gated by `MintGate`/`AuthenticatedUser` rather than
+/// `AdminUser`.
 #[async_trait]
 pub trait MintPolicy: Send + Sync + Debug {
     /// Resolves the audience to stamp on a newly minted key, or `Err` if `requested` is outside
@@ -512,13 +510,15 @@ impl ReadPolicy for AudienceReadPolicy {
 /// principal is, does not imply being able to *mint into* it, unless some grant names `public` in
 /// a `"mint"` list.
 ///
-/// `is_admin` callers may mint **any** valid audience, `public` included -- `mint_key` is
-/// `AdminUser`-gated (`analytics-web-srv/src/ingestion_keys.rs`), so without this arm the only
-/// shipped `MintPolicy` could not express the mint flow that exists today; the arm grants no
-/// power the route's gate does not already grant. This is deliberately **asymmetric** to the read
-/// path, where `is_admin` is never a bypass (AbAC plan §5): mint is an integrity decision (who may
-/// stamp a credential), reads are a confidentiality decision (who may see data), and the two axes
-/// are allowed to disagree.
+/// `is_admin` callers may mint **any** valid audience, `public` included -- `mint_key`
+/// (`analytics-web-srv/src/ingestion_keys.rs`) delegates authorization to this policy for every
+/// caller, admin included, rather than gating admin callers separately of its own accord (its own
+/// gate, `MintGate`, only enforces the self-service knob against non-admins); without this arm the
+/// only shipped `MintPolicy` could not express the admin mint flow that route depends on; the arm
+/// grants no power the route's gate does not already grant. This is deliberately **asymmetric** to
+/// the read path, where `is_admin` is never a bypass (AbAC plan §5): mint is an integrity decision
+/// (who may stamp a credential), reads are a confidentiality decision (who may see data), and the
+/// two axes are allowed to disagree.
 #[derive(Debug, Clone, Default)]
 pub struct AudienceMintPolicy {
     grants: AudienceGrants,
@@ -538,9 +538,11 @@ impl AudienceMintPolicy {
     }
 
     /// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). Built
-    /// alongside [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, this
-    /// stage wires no call site to it: `resolve_audience` has no production caller today, and the
-    /// stage's mint-side scope is exactly this method existing and unit-tested.
+    /// alongside [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, no
+    /// production call site attaches a store through this method: `mint_key` (AbAC Stage 6,
+    /// #1374) constructs its `AudienceMintPolicy` via `new`, so mint grants stay resolved by a
+    /// fresh, uncached point query against `audience_grants`, never a `DbAudienceGrantsSource`
+    /// snapshot, in this stage.
     pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
         self.store = store;
         self

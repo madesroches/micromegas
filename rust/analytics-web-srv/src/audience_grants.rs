@@ -504,6 +504,14 @@ pub fn mint_prefix_for(email: &Option<String>) -> Option<String> {
     }
 }
 
+#[derive(Serialize)]
+struct MyAudiencesResponse {
+    is_admin: bool,
+    audiences: Vec<String>,
+    mint_prefix: Option<String>,
+    email: Option<String>,
+}
+
 /// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
 /// per the DB store's current rows (no cache -- this reads `pool` directly, same as
 /// `list_grants`), plus the caller's own `is_admin` flag, `mint_prefix`, and `email` (AbAC Stage
@@ -521,14 +529,6 @@ pub fn mint_prefix_for(email: &Option<String>) -> Option<String> {
 /// mint route itself, for the same reason: this is new non-admin surface too, and must not widen
 /// on upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
 /// `!caller.is_admin` condition.
-#[derive(Serialize)]
-struct MyAudiencesResponse {
-    is_admin: bool,
-    audiences: Vec<String>,
-    mint_prefix: Option<String>,
-    email: Option<String>,
-}
-
 async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,

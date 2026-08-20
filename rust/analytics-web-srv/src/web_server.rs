@@ -144,9 +144,7 @@ fn build_auth_state(config: &WebServerConfig) -> Result<Option<AuthState>> {
         .map_err(|e| anyhow::anyhow!("Failed to load OIDC client config: {e}"))?;
 
     let cookie_domain = std::env::var("MICROMEGAS_COOKIE_DOMAIN").ok();
-    let secure_cookies = std::env::var("MICROMEGAS_SECURE_COOKIES")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
+    let secure_cookies = resolve_bool_env("MICROMEGAS_SECURE_COOKIES", false);
 
     let state_signing_secret = std::env::var("MICROMEGAS_STATE_SECRET")
         .context("MICROMEGAS_STATE_SECRET environment variable not set. Generate a secure random secret (e.g., openssl rand -base64 32)")?
