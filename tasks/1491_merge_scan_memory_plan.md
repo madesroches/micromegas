@@ -180,7 +180,8 @@ Resulting plan for `SELECT * FROM source;`: a one-file-group `DataSourceExec`, o
 **Deliberately not added:** an `assert_single_partition` check on the undeclared path. Unlike the
 other two, it carries no ordering claim to protect, and it is the path a `SqlBatchView` with no
 declared merge sort order uses with an arbitrary user-supplied `merge_partitions_query`
-(`sql_batch_view.rs:194`). A `GROUP BY` in such a query legitimately plans to multiple partitions,
+(the default `QueryMerger` built in `SqlBatchView::new`, `sql_batch_view.rs:123-131`). A `GROUP BY` in
+such a query legitimately plans to multiple partitions,
 and coalescing it is correct. With `repartition_file_scans = false` those queries keep their
 aggregation parallelism via round-robin repartition *above* a sequential scan — the desirable shape,
 not something to bail on.
@@ -248,10 +249,15 @@ match &self.merge_scan_ordering {
     }
     // Concatenate: one sequential reader over one file group. `Unordered` and `Concatenated`
     // are the same strategy -- they differ only in whether the resulting order is declared,
-    // which is what gates the checks inside.
-    ordering => {
-        self.execute_concatenated_merge(&ctx, ordering.concatenated_columns(), insert_range)
-            .await
+    // which is what gates the checks inside. Spelled out rather than a wildcard so a future
+    // `ScanOrdering` variant fails to compile here instead of silently taking this arm.
+    other @ (ScanOrdering::Unordered | ScanOrdering::Concatenated { .. }) => {
+        self.execute_concatenated_merge(
+            &ctx,
+            other.declares_concatenated_ordering(),
+            insert_range,
+        )
+        .await
     }
 }
 ```
@@ -261,26 +267,25 @@ backed by a small accessor on the enum:
 ```rust
 // partitioned_execution_plan.rs
 impl ScanOrdering {
-    /// The global ordering a *concatenating* scan of these partitions declares, if any.
-    /// `PerFile` returns `None` because a per-file ordering only becomes a global one through a
-    /// downstream merge -- it is the other strategy, not an undeclared version of this one.
-    pub fn concatenated_columns(&self) -> Option<&[ScanSortColumn]> {
-        match self {
-            ScanOrdering::Concatenated { columns, .. } => Some(columns),
-            ScanOrdering::Unordered | ScanOrdering::PerFile { .. } => None,
-        }
+    /// True when this ordering declares a concatenating scan's global order (`Concatenated`).
+    /// `PerFile` returns `false` because a per-file ordering only becomes a global one through a
+    /// downstream merge -- it is the other strategy, not an undeclared version of this one. A
+    /// bool, not the columns themselves: nothing on the concatenating path inspects the declared
+    /// columns, only whether an ordering was declared at all (see `execute_concatenated_merge`
+    /// below).
+    pub fn declares_concatenated_ordering(&self) -> bool {
+        matches!(self, ScanOrdering::Concatenated { .. })
     }
 }
 ```
 
-`execute_concatenated_merge` becomes the single concatenating path, taking
-`declared: Option<&[ScanSortColumn]>`:
+`execute_concatenated_merge` becomes the single concatenating path, taking `declared: bool`:
 
 - **Always**: build the physical plan with `create_physical_plan()` and run it with
   `execute_stream(plan, task_ctx)`, replacing the `Unordered` arm's `df.execute_stream()`. Not a
   behavior change — `DataFrame::execute_stream` is exactly those two steps — but it puts both
   concatenating merges on one code path and makes the plan available to inspect and log on either.
-- **Only when `declared.is_some()`**: `assert_single_partition` and the
+- **Only when `declared`**: `assert_single_partition` and the
   `SortExec`/`SortPreservingMergeExec` `ordering_honored` check, both unchanged. They exist to
   protect a declared ordering; with nothing declared there is nothing to protect, and §1's
   "deliberately not added" reasoning still holds.
@@ -380,8 +385,9 @@ close in size to the scan input. It does **not** hold for aggregating merges, wh
 shrinks the output by orders of magnitude: `processes` and `streams` (`SqlBatchView`s whose merge
 query is a `GROUP BY` aggregate on the default undeclared route — `processes_view.rs:47-68`,
 `streams_view.rs:41-53`) and `log_stats`'s merge whenever it falls back to the plain merger because an
-input hasn't yet certified its `sort_order` (the gate at `partitioned_execution_plan.rs:291` — true of
-every existing partition until re-materialization). There the writer is idle most of the time, so the
+input hasn't yet certified its `sort_order` (the gate is `SqlBatchView::merge_partitions`'s
+`all_inputs_certify` check, `sql_batch_view.rs:363-371` with `all_inputs_certify` at `:220-232` — true
+of every existing partition until re-materialization). There the writer is idle most of the time, so the
 now-serial scan is the bottleneck: expect closer to `target_partitions`× on those merges. In practice
 that's bounded by `processes`/`streams`' small partition volumes, and by `log_stats` shrinking to its
 ordered `PerFile` path as partitions re-materialize.
@@ -424,16 +430,23 @@ not cached in L1" section already gives for raw telemetry blocks.
    setting it as part of their own path (`merge.rs:97-100`, `merge.rs:150-156`), to reference the
    shared setting instead.
 3. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs`: add
-   `ScanOrdering::concatenated_columns(&self) -> Option<&[ScanSortColumn]>` with the rustdoc from §2,
+   `ScanOrdering::declares_concatenated_ordering(&self) -> bool` with the rustdoc from §2,
    and extend the `ScanOrdering` enum's own rustdoc to name the two scan shapes (single sequential
    file group vs. one group per file) and to say that `Unordered` and `Concatenated` are the same
    shape differing only in what they declare.
-4. `merge.rs`: collapse `execute_merge_query`'s three-arm `match` to the two arms in §2. Change
-   `execute_concatenated_merge`'s signature to take `declared: Option<&[ScanSortColumn]>`, gate
-   `assert_single_partition` and the `ordering_honored` plan-string check on `declared.is_some()`
-   (returning `ordering_honored: true` when it is `None`), and delete the `ScanOrdering::Unordered`
+4. `merge.rs`: collapse `execute_merge_query`'s three-arm `match` to the two arms in §2, spelling the
+   concatenating arm out as `other @ (ScanOrdering::Unordered | ScanOrdering::Concatenated { .. })`
+   rather than a wildcard, so a future `ScanOrdering` variant fails to compile here instead of
+   silently taking this arm. Change `execute_concatenated_merge`'s signature to take `declared: bool`,
+   gate `assert_single_partition` and the `ordering_honored` plan-string check on `declared`
+   (returning `ordering_honored: true` when it is `false`), and delete the `ScanOrdering::Unordered`
    arm's inline `df.execute_stream()` body — the concatenating path now builds the plan explicitly for
-   both. Rename `execute_per_file_merge` to `execute_sorted_merge`. Update
+   both. Rename `execute_per_file_merge` to `execute_sorted_merge`, and update the two shared-helper
+   rustdocs that still name it — `assert_single_partition`'s (`partitioned_execution_plan.rs:197-198`,
+   which also needs its "three paths" list corrected: `execute_concatenated_merge` now runs that check
+   conditionally, only for a declared ordering, not unconditionally) and
+   `assert_ordering_satisfied`'s (`partitioned_execution_plan.rs:223-224`) — plus the stale mention in
+   `sql_batch_view_merge_ordering_tests.rs:547`'s comment. Update
    `MergeQueryResult::ordering_honored`'s rustdoc (`merge.rs:38-46`), which describes the field
    per-variant, to describe it per-strategy.
 5. `rust/analytics/src/lakehouse/view.rs`: extend the `get_scan_output_ordering` rustdoc with a short
@@ -443,11 +456,13 @@ not cached in L1" section already gives for raw telemetry blocks.
    `log_stats_ordering_tests.rs`'s `make_offline_lakehouse_context` helper (in-memory object store, no
    DB, lazily-connected) with fabricated `Partition`s (`file_size` above the 10 MB
    `repartition_file_min_size`) registered as the source table. Build two sessions — one from
-   `make_merge_session_context(...)`, one from plain `make_session_context(...)` (control) — pinning
-   `target_partitions` to 8 on each returned `SessionContext`, matching the precedent in
-   `sql_batch_view_merge_ordering_tests.rs` and `log_stats_ordering_tests.rs`, so the control assertion
-   doesn't silently no-op on a low-core-count CI runner. `create_physical_plan()` for
-   `SELECT * FROM source` against each and assert:
+   `make_merge_session_context(...)`, one from plain `make_session_context(...)` (control) — and on
+   each returned `SessionContext` set
+   `ctx.state_ref().write().config_mut().options_mut().execution.target_partitions = 8` (neither
+   session-builder function takes a `SessionConfig` parameter, so this is done after the fact, the
+   same way `execute_concatenated_merge` mutates optimizer options on an already-built context today)
+   so the control assertion doesn't silently no-op on a low-core-count CI runner. `create_physical_plan()`
+   for `SELECT * FROM source` against each and assert:
    - with `make_merge_session_context`: `partition_count() == 1`
    - with plain `make_session_context` (control, guarding that the test is meaningful):
      `partition_count() > 1`
@@ -517,13 +532,17 @@ not cached in L1" section already gives for raw telemetry blocks.
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/merge.rs` — the setting, the `make_merge_session_context` extraction,
-  the two-arm dispatch collapse (`execute_concatenated_merge` taking `Option<&[ScanSortColumn]>`,
+  the two-arm dispatch collapse (`execute_concatenated_merge` taking `declared: bool`,
   `execute_per_file_merge` → `execute_sorted_merge`), rustdoc, the completion log line
-- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — `ScanOrdering::concatenated_columns`
-  and the enum's two-scan-shape rustdoc
+- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` —
+  `ScanOrdering::declares_concatenated_ordering`, the enum's two-scan-shape rustdoc, and the
+  `execute_per_file_merge` → `execute_sorted_merge` rename plus the corrected "three paths" claim in
+  `assert_single_partition`'s and `assert_ordering_satisfied`'s shared rustdoc
 - `rust/analytics/src/lakehouse/view.rs` — `get_scan_output_ordering` rustdoc note
 - `rust/analytics/tests/merge_scan_partitioning_tests.rs` — new plan-shape regression test plus the
   `execute_merge_query` concatenation-order test
+- `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` — update the stale
+  `execute_per_file_merge` mention in a comment (line ~547) to `execute_sorted_merge`
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — Phase 3 only
 - `CHANGELOG.md` — Unreleased / Analytics entry
 - `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/monolith.md` — see Documentation
@@ -593,10 +612,11 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   merged-partition row order (previously nondeterministic, now source-partition concatenation order)
   and restores row-group pruning for time-filtered queries via the resulting time-local row groups,
   that no sort guarantee is claimed, and that an aggregating (`GROUP BY`) merge query's output order
-  stays nondeterministic as before. No SQL-surface change: no schema, view name, or UDF signature
-  moves, and no `SCHEMA_VERSION` bump is needed (the file schema is untouched). No **Minor breaking
-  change** clause either: the dispatch collapse touches only private methods on `QueryMerger`, and
-  `ScanOrdering::concatenated_columns` is additive.
+  stays nondeterministic as before. Also note the new per-merge elapsed-time completion log line
+  alongside the existing `sum_size` line (step 8). No SQL-surface change: no schema, view name, or UDF
+  signature moves, and no `SCHEMA_VERSION` bump is needed (the file schema is untouched). No **Minor
+  breaking change** clause either: the dispatch collapse touches only private methods on
+  `QueryMerger`, and `ScanOrdering::declares_concatenated_ordering` is additive.
 - `mkdocs/docs/admin/maintenance.md` — the `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` row already
   explains that daemon merges run on the shared unscoped pool; add a short note that merge scans are
   single-reader by design, so merge memory does not scale with host core count. Relevant to anyone
@@ -616,7 +636,10 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   One session via `make_merge_session_context` and one via plain `make_session_context` (control),
   asserting one output partition with the former and more than one with the latter, so a future
   DataFusion upgrade that re-introduces the fan-out fails CI rather than production memory. Both
-  sessions pin `target_partitions` to 8 so the control assertion is meaningful on any CI runner.
+  sessions get `target_partitions` set to 8 via
+  `ctx.state_ref().write().config_mut().options_mut().execution.target_partitions = 8` after
+  construction (neither session-builder function takes a `SessionConfig`) so the control assertion is
+  meaningful on any CI runner.
 - **New `execute_merge_query` concatenation-order test** (step 7) — drives the collapsed dispatch (§2)
   end to end on the default `Unordered` ordering with `SELECT * FROM source`, over two real single-row
   Parquet files written into the offline context's `BlobStorage` (with `Partition::file_size` set to
@@ -635,9 +658,14 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   `execute_concatenated_merge` starts taking them conditionally.
 - **Full `cargo test` in `rust/`**, plus `cargo clippy --all-targets` and `cargo fmt --check`.
 - **Local end-to-end**: `python3 local_test_env/ai_scripts/start_services.py`, generate enough
-  telemetry for at least two one-minute partitions each of `measures` **and** `log_entries`, let the
-  hourly task merge them, and confirm from `/tmp/daemon.log` that both merges complete and each merged
-  partition's `num_rows` equals the sum of its inputs'
+  telemetry for at least two one-minute partitions each of `measures` **and** `log_entries`, then force
+  the hourly merge deterministically instead of waiting on `EveryHourTask`'s cron (which would need up
+  to ~2 hours to land in a fresh local run): call `materialize_partitions('measures'|'log_entries',
+  begin, end, 3600)` via `micromegas-query` or `client.materialize_partitions(...)`
+  (`rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`,
+  `python/micromegas/micromegas/flightsql/client.py:733`) with a `partition_delta_seconds` of 3600 to
+  produce the hourly merged partition on demand. Confirm from `/tmp/daemon.log` that both merges
+  complete and each merged partition's `num_rows` equals the sum of its inputs'
   (`micromegas-query "SELECT ... FROM list_partitions()"`). Covering both is what exercises the claim
   that this is a shared-path fix rather than a `measures` one.
 - **Row-group pruning, before/after** (§3) — the query-side half of the change. A partition's internal
