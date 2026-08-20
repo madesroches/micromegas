@@ -130,8 +130,13 @@ def write_env_file(path, content):
     """
     target = Path(path)
     parent = target.parent
+    parent_existed = parent.exists()
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    parent.chmod(0o700)
+    if not parent_existed:
+        # `mkdir(mode=...)` is subject to umask on some platforms, so re-assert
+        # explicitly -- but only for a directory this call created; a pre-existing
+        # directory's permissions are the caller's own business.
+        parent.chmod(0o700)
     fd = os.open(str(target), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     try:
         # Belt-and-suspenders: `mkdir(mode=...)`/`os.open(..., 0o600)` are
@@ -218,17 +223,12 @@ def run(args, parser):
         client, args, parser, my_audiences
     )
 
-    result = client.mint_ingestion_api_key(args.name, audience)
-
-    # Admin callers get their own read grant, since the mint route never writes one for
-    # them (§4a Trigger: the admin `is_admin` arm is a pure authorization bypass, not a
-    # place that stage adds DB writes to). Without this, an admin minting a brand-new
-    # audience could never read what their own new key uploads.
-    if is_brand_new_admin_claim and email:
-        for axis in ("mint", "read"):
-            client.create_audience_grant(result["audience"], axis, f"user:{email}")
-
+    # Resolved before the mint so a purely local validation error (e.g. missing
+    # --otlp-endpoint/MICROMEGAS_TELEMETRY_URL) can never strand an already-minted,
+    # never-retrievable-again key.
     otlp_endpoint = resolve_otlp_endpoint(args, parser)
+
+    result = client.mint_ingestion_api_key(args.name, audience)
 
     print(
         f"minted ingestion api key (key_id={result.get('key_id')}, "
@@ -242,6 +242,15 @@ def run(args, parser):
         print(args.env_file)
     else:
         sys.stdout.write(content)
+
+    # Admin callers get their own read grant, since the mint route never writes one for
+    # them (§4a Trigger: the admin `is_admin` arm is a pure authorization bypass, not a
+    # place that stage adds DB writes to). Without this, an admin minting a brand-new
+    # audience could never read what their own new key uploads. Done last, after the key
+    # material above has already been emitted, so a failure here never discards it.
+    if is_brand_new_admin_claim and email:
+        for axis in ("mint", "read"):
+            client.create_audience_grant(result["audience"], axis, f"user:{email}")
 
 
 def main():
