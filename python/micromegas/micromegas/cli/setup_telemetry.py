@@ -26,9 +26,11 @@ from micromegas.cli import config
 from micromegas.cli.import_keys import build_auth_provider, make_client
 from micromegas.cli.version import add_version_argument
 
-# Re-exported so tests can monkeypatch `setup_telemetry.build_auth_provider`/
-# `setup_telemetry.make_client` directly, the same convention `grants.py`/
-# `import_keys.py` follow for their own module-level functions.
+# Re-exported so tests can call `setup_telemetry.make_client` directly. Note
+# `make_client` still resolves `build_auth_provider` in `import_keys`'s own
+# module namespace (it's defined there), so tests must monkeypatch
+# `import_keys.build_auth_provider`, not this module's re-exported name --
+# patching `setup_telemetry.build_auth_provider` only rebinds an unused name.
 __all__ = ["build_auth_provider", "make_client", "main"]
 
 
@@ -267,6 +269,7 @@ def run(args, parser):
     )
 
     content = format_env_exports(result["key"], otlp_endpoint)
+    env_file_error = None
     if args.env_file:
         try:
             write_env_file(args.env_file, content)
@@ -274,16 +277,18 @@ def run(args, parser):
             # The key was already minted above and is never retrievable again -- a
             # write failure here (permission denied, read-only/full filesystem, bad
             # path) must never discard it. Fall back to emitting it on stdout, with a
-            # clear warning on stderr, before letting the error propagate to `main()`
-            # so the process still exits non-zero.
+            # clear warning on stderr. The error is re-raised below, but only after
+            # the admin self-grant block has had a chance to run, so a write failure
+            # never silently skips the grants too.
             print(
                 f"warning: failed to write --env-file {args.env_file!r} ({e}); "
                 "printing the exports below instead so the key is not lost",
                 file=sys.stderr,
             )
             sys.stdout.write(content)
-            raise
-        print(args.env_file)
+            env_file_error = e
+        else:
+            print(args.env_file)
     else:
         sys.stdout.write(content)
 
@@ -291,10 +296,16 @@ def run(args, parser):
     # them (§4a Trigger: the admin `is_admin` arm is a pure authorization bypass, not a
     # place that stage adds DB writes to). Without this, an admin minting a brand-new
     # audience could never read what their own new key uploads. Done last, after the key
-    # material above has already been emitted, so a failure here never discards it.
+    # material above has already been emitted, so a failure emitting/writing the key
+    # never discards it -- but still before re-raising an --env-file write failure, so a
+    # retry (which will find the audience no longer brand-new) doesn't silently skip
+    # these grants forever.
     if is_brand_new_admin_claim and email:
         for axis in ("mint", "read"):
             client.create_audience_grant(result["audience"], axis, f"user:{email}")
+
+    if env_file_error is not None:
+        raise env_file_error
 
 
 def main():
