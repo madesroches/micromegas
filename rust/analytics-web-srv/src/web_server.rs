@@ -19,6 +19,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
+use micromegas::auth::types::{AuthContext, AuthType};
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::tracing::prelude::*;
@@ -97,6 +98,30 @@ impl WebServerConfig {
             disable_auth: cli.disable_auth,
             admin_var_name: cli.admin_var_name,
         })
+    }
+}
+
+/// Parses a boolean env knob the same `v == "true" || v == "1"` way `secure_cookies` above
+/// already does -- one more instance of this codebase's existing boolean-knob convention, not a
+/// new one (AbAC Stage 6, #1374, Design §3).
+fn resolve_bool_env(var: &str, default: bool) -> bool {
+    std::env::var(var)
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(default)
+}
+
+/// Parses an unsigned integer env knob, warn-and-default on an unparseable value -- the same
+/// shape `micromegas_auth::db_api_key::resolve_u64` and `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` above
+/// already use elsewhere in this codebase (AbAC Stage 6, #1374, Design §3). Parsing unsigned
+/// settles both sub-questions for free: a negative value is simply a parse failure (warned and
+/// defaulted), and `0` is a valid, meaningful parse -- "none permitted."
+fn resolve_u64_env(var: &str, default: u64) -> u64 {
+    match std::env::var(var) {
+        Ok(raw) => raw.parse::<u64>().unwrap_or_else(|_| {
+            warn!("Invalid {var} value '{raw}', using default {default}");
+            default
+        }),
+        Err(_) => default,
     }
 }
 
@@ -415,6 +440,26 @@ pub fn build_protected_routes(
                 issuer: "local".to_string(),
                 is_admin: true,
             }))
+            // Defensive parity only (AbAC Stage 6, #1374, Design §2): the key-management routers
+            // are never merged in this branch at all (`key_management_disabled_router` above), so
+            // `AuthenticatedUser`/`MintGate` never actually run under `--disable-auth` today. This
+            // layer exists so `AuthenticatedUser` is never the one extractor in this crate that
+            // silently 500s (an unhandled `Extension<AuthContext>` miss) if a future refactor ever
+            // merges the real routers here. Mirrors the hardcoded admin `ValidatedUser` above
+            // exactly -- `is_admin: true`, no groups, no bound/read audiences.
+            .layer(Extension(AuthContext {
+                subject: "anonymous".to_string(),
+                email: None,
+                issuer: "local".to_string(),
+                audience: None,
+                expires_at: None,
+                auth_type: AuthType::Oidc,
+                is_admin: true,
+                allow_delegation: false,
+                bound_audience: None,
+                read_audiences: vec![],
+                groups: vec![],
+            }))
     }
 }
 
@@ -657,6 +702,22 @@ pub async fn run_web_server(
         pool: analytics_keys_pool.clone(),
     };
 
+    // Off by default (AbAC Stage 6, #1374, Design §3): an existing deployment that upgrades to
+    // this stage keeps today's admin-only mint behavior, unchanged, until an operator explicitly
+    // opts in. Resolved once at startup, empty-prefix convention (this service's own knobs never
+    // take a role prefix, unlike the monolith's per-role vars).
+    let self_service_mint_enabled = resolve_bool_env("MICROMEGAS_SELF_SERVICE_MINT", false);
+    let max_claims_per_caller =
+        resolve_u64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25) as i64;
+    let max_keys_per_caller =
+        resolve_u64_env("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER", 100) as i64;
+    if self_service_mint_enabled {
+        info!(
+            "MICROMEGAS_SELF_SERVICE_MINT enabled: max_claims_per_caller={max_claims_per_caller} \
+             max_keys_per_caller={max_keys_per_caller}"
+        );
+    }
+
     // Both tables live in the same telemetry DB behind the same
     // `MICROMEGAS_SQL_CONNECTION_STRING` — reuse the same pool rather than
     // opening a second one.
@@ -667,13 +728,20 @@ pub async fn run_web_server(
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
         pool: analytics_keys_pool.clone(),
         default_audience: micromegas::auth::policy::default_key_audience_from_env("")?,
+        self_service_mint_enabled,
+        max_claims_per_caller,
+        max_keys_per_caller,
     };
 
     // Same telemetry-DB pool as the two key-management states above (#1489, AbAC Stage 6a) --
     // `audience_grants` lives in the same database behind the same
-    // `MICROMEGAS_SQL_CONNECTION_STRING`.
+    // `MICROMEGAS_SQL_CONNECTION_STRING`. Carries its own copy of the knob above (AbAC Stage 6,
+    // #1374, Design §5) so `GET .../audience-grants/my-audiences` can gate itself the same way
+    // `MintGate` gates `mint_key` -- the two states are layered independently, so this route has
+    // no other access to `IngestionKeysState`'s copy.
     let audience_grants_state = audience_grants::AudienceGrantsState {
         pool: analytics_keys_pool,
+        self_service_mint_enabled,
     };
 
     let auth_state = if config.disable_auth {

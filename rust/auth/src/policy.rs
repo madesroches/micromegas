@@ -101,7 +101,10 @@ pub fn valid_selector(selector: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty())
 }
 
-fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
+/// `pub` (AbAC Stage 6, #1374) -- `analytics-web-srv`'s `/api/audience-grants/my-audiences` route
+/// (a separate crate) needs to run this exact same selector-membership test against the caller's
+/// own identity, not a re-implementation of it.
+pub fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
     if selector == "*" {
         return true;
     }

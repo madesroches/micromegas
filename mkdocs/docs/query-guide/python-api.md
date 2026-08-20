@@ -623,6 +623,33 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
 
 **⚠️ DESTRUCTIVE OPERATION:** Irreversible. Always preview first.
 
+### `WebClient` — self-service mint (AbAC Stage 6, #1374)
+
+`micromegas.web_client.WebClient` is the HTTP client `micromegas-setup-telemetry` (and every other
+`analytics-web-srv`-facing CLI — `-import-keys`, `-grants`, `-screens`) is built on, talking to
+`analytics-web-srv`'s REST API over Bearer auth. Two methods back the setup script:
+
+- **`mint_ingestion_api_key(name, audience=None)`** — `POST {base_path}/api/ingestion-api-keys`.
+  Mints a fresh key (unlike `import_ingestion_api_key`, which carries an existing key string
+  forward). On a `409` with `{"code": "CLAIM_CONTENDED"}` — transient advisory-lock contention
+  with another concurrent claim of the same brand-new audience, not a denial — retries the same
+  request exactly once before raising; any other non-OK status (including a second
+  `CLAIM_CONTENDED`) raises `RuntimeError` the same way every other `WebClient` method does.
+  Returns the mint response dict, including the one-time cleartext `key`.
+- **`my_audiences()`** — `GET {base_path}/api/audience-grants/my-audiences`. Caller-scoped, no
+  admin access required. Returns `{"is_admin", "audiences", "mint_prefix", "email"}` — the
+  audiences whose `mint` selector matches the caller today, the caller's own admin flag, the
+  caller-derived namespace prefix a fresh claim mints under, and the caller's own email.
+
+```python
+from micromegas.web_client import WebClient
+
+client = WebClient("https://analytics.example.com", auth_provider=auth_provider)
+info = client.my_audiences()
+result = client.mint_ingestion_api_key("my-laptop", audience=info["audiences"][0])
+print(result["key"])  # cleartext key, returned exactly once
+```
+
 ## Command-Line Interface
 
 The Micromegas Python client includes CLI tools for quick queries and administrative tasks.
@@ -851,6 +878,56 @@ micromegas-grants --url https://analytics.example.com delete team-alpha read gro
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`
 (`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
+
+Pass `--version` to print the installed package and interpreter version and exit.
+
+### micromegas-setup-telemetry
+
+Mints a personal `ingestion_api_keys` key for the caller and prints the OTLP exporter env vars
+needed to send that caller's own telemetry to the deployment (AbAC Stage 6, #1374). Named for what
+it does from the user's point of view ("set up telemetry"), not the server-side term
+("ingestion"). Requires self-service mint to be enabled on the target deployment
+(`MICROMEGAS_SELF_SERVICE_MINT`; see
+[Self-service mint](../admin/authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374))
+unless the caller is an admin.
+
+```bash
+# Resolve the audience automatically via GET .../audience-grants/my-audiences
+# (exactly one match is used silently; more than one asks you to pick with --audience).
+eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
+
+# Name an audience explicitly -- a fresh name to claim, or one you already have a grant for.
+micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
+    --audience ci-runner --env-file ~/.micromegas/telemetry.env
+```
+
+`--url` (required) is `analytics-web-srv`'s base URL. `--name` (required) names the minted key
+(e.g. a hostname). `--audience` is optional:
+
+- An audience already in `GET .../audience-grants/my-audiences`'s `audiences` list (the caller has
+  a real grant for it, e.g. a shared team audience) is used verbatim.
+- A name *not* in that list, from a **non-admin** caller, is a fresh claim (§4a): minted as
+  `f"{mint_prefix}{audience}"` — a namespace derived from the caller's own email, never the bare
+  name typed — with the resolved full name printed to stderr. There is no flag to bypass this
+  prefixing; it is what keeps operationally meaningful bare names (`prod`, `ci`, `staging`) out of
+  self-service reach for the caller using this script.
+- A name from an **admin** caller is never prefixed — deliberate operational naming. If the named
+  audience is brand-new (no pre-existing `audience_grants` row), the script also grants that admin
+  their own `read`/`mint` access to it via the existing admin grants API, since the mint route
+  itself writes no grant for an admin caller.
+- Omitted entirely: resolved via `GET .../audience-grants/my-audiences` — exactly one match is used
+  silently; more than one prints the choices and asks for `--audience`; none prints a hint to claim
+  a fresh name or ask an admin. An admin caller must always pass `--audience` explicitly (an empty
+  `audiences` list means nothing for an admin, whose mint authority never depends on a grant row).
+
+`--otlp-endpoint` defaults to `f"{MICROMEGAS_TELEMETRY_URL}/ingestion/otlp"` when that env var is
+set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a
+required flag only when that env var is unset. `--env-file PATH` writes the exports to a `0o600`
+file instead of stdout (parent directory created `0o700` if needed) — useful for sourcing from a
+shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, same
+as every other CLI here.
+
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`.
 
 Pass `--version` to print the installed package and interpreter version and exit.
 

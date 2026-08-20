@@ -96,6 +96,84 @@ class WebClient:
         )
         self._check_response(resp)
 
+    def mint_ingestion_api_key(self, name, audience=None):
+        """Mint a fresh ingestion API key (AbAC Stage 6, #1374) via
+        `POST /api/ingestion-api-keys`.
+
+        Unlike `import_ingestion_api_key`, this generates a brand-new key
+        server-side rather than carrying one forward -- the route is no
+        longer purely admin-gated: a non-admin caller with a matching
+        `mint` grant (or naming a brand-new audience explicitly, which
+        lazily claims it) can mint their own key once the deployment has
+        `MICROMEGAS_SELF_SERVICE_MINT` enabled. `audience` is omitted from
+        the request body when `None`, so the server applies its own
+        default/authorization rules rather than receiving an explicit
+        `null`.
+
+        Returns the mint response dict, including the one-time cleartext
+        `key` -- never retrievable again after this call returns.
+
+        On a `409` with `{"code": "CLAIM_CONTENDED"}` -- transient
+        advisory-lock contention with another concurrent claim of the same
+        brand-new audience, not a denial (analytics-web-srv's own
+        `IngestionKeyError::Conflict`) -- this retries the same POST
+        exactly once. `_check_response` (used for every other status,
+        including a second `CLAIM_CONTENDED`) discards the response body's
+        `code` field and only ever raises a bare `RuntimeError`, so it
+        can't tell "retry" apart from a genuine denial (`403 FORBIDDEN`)
+        on its own; this method inspects `resp.status_code`/`resp.json()`
+        itself, before calling `_check_response`, for exactly that reason.
+        """
+        payload = {"name": name}
+        if audience is not None:
+            payload["audience"] = audience
+
+        def post():
+            return self.session.post(
+                self._api_url("ingestion-api-keys"),
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout,
+            )
+
+        resp = post()
+        if resp.status_code == 409:
+            try:
+                code = resp.json().get("code")
+            except Exception:
+                code = None
+            if code == "CLAIM_CONTENDED":
+                resp = post()
+        self._check_response(resp)
+        return resp.json()
+
+    def my_audiences(self):
+        """List the audiences the caller may mint into today (AbAC Stage 6,
+        #1374) via `GET /api/audience-grants/my-audiences`.
+
+        Caller-scoped, so no admin access is required -- this reveals only
+        whether *this* caller's own email/groups match a mint selector,
+        plus facts about the caller's own identity. Returns
+        `{"is_admin", "audiences", "mint_prefix", "email"}`:
+
+        - `is_admin`: whether the caller is an admin (no other route
+          reachable with a Bearer token exposes this).
+        - `audiences`: the audiences whose `mint` selectors match this
+          caller today (meaningless for an admin, whose mint authority
+          never depends on a grant row at all -- see `is_admin` instead).
+        - `mint_prefix`: the caller-derived namespace prefix a fresh,
+          non-admin claim should be minted under, or `None` if the caller
+          has no email (and so cannot claim at all).
+        - `email`: the caller's own email, or `None`.
+        """
+        resp = self.session.get(
+            self._api_url("audience-grants/my-audiences"),
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
     def import_ingestion_api_key(self, name, key, audience=None):
         """Import an existing ingestion API key string (#1458).
 

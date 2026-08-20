@@ -11,15 +11,21 @@
 //! abstraction over a handful of near-identical handlers differing only in which table they
 //! target is a shape this codebase already declines elsewhere
 //! (`data_sources.rs`/`screens.rs`/`folders.rs`).
+//!
+//! Every handler in this file is [`AdminUser`]-gated except one:
+//! `GET .../audience-grants/my-audiences` (AbAC Stage 6, #1374) is caller-scoped
+//! ([`AuthenticatedUser`]-gated instead) -- it answers only "which audiences does *this* caller's
+//! own identity match," which carries none of the confidentiality sensitivity `list_grants`'s
+//! admin gate exists for. See that handler's own doc comment.
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, AuthenticatedUser};
 use axum::extract::{Extension, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use micromegas::auth::policy::{is_valid_audience, valid_selector};
+use micromegas::auth::policy::{is_valid_audience, selector_matches, valid_selector};
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -39,6 +45,12 @@ const MAX_SELECTOR_BYTES: usize = 255;
 #[derive(Clone)]
 pub struct AudienceGrantsState {
     pub pool: Option<PgPool>,
+    /// Off-by-default self-service mint gate (AbAC Stage 6, #1374, Design §5). Resolved once at
+    /// startup from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`, the same knob resolved onto
+    /// `IngestionKeysState`), default `false`. Gates `GET .../audience-grants/my-audiences` for
+    /// non-admin callers the same way `MintGate` gates `mint_key` -- that route is new non-admin
+    /// surface too, and must not widen on upgrade any more than the mint route itself does.
+    pub self_service_mint_enabled: bool,
 }
 
 /// JSON error body returned by every handler in this module. Same `{code, message}` shape as
@@ -60,9 +72,11 @@ impl ErrorResponse {
 
 /// Errors this API returns.
 ///
-/// No `Forbidden` variant here: the admin gate is the [`AdminUser`] extractor
-/// (`auth/handlers.rs`), whose rejection renders as `AdminRequired`'s own 403 body -- before any
-/// handler in this file even starts running -- so a `Forbidden` variant here would be dead code.
+/// `Forbidden` (AbAC Stage 6, #1374) is returned only by `/my-audiences`'s own knob-gate check --
+/// the one handler in this file [`AdminUser`] doesn't cover (see that handler's doc comment).
+/// Every other handler here is still `AdminUser`-gated, whose rejection renders as
+/// `AdminRequired`'s own 403 body before the handler even starts running, so `Forbidden` is never
+/// constructed by any of them.
 #[derive(Debug)]
 pub enum AudienceGrantError {
     /// Request body/query failed validation.
@@ -77,6 +91,9 @@ pub enum AudienceGrantError {
     /// The create statement (see [`insert_or_get`]) returned zero rows twice in a row -- an
     /// internal error, not a caller mistake (see that function's doc comment).
     Internal(String),
+    /// `/my-audiences`'s off-by-default self-service gate denied a non-admin caller
+    /// (`MICROMEGAS_SELF_SERVICE_MINT` is off).
+    Forbidden(String),
 }
 
 impl IntoResponse for AudienceGrantError {
@@ -119,6 +136,11 @@ impl IntoResponse for AudienceGrantError {
                 )
                     .into_response()
             }
+            AudienceGrantError::Forbidden(msg) => (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse::new("FORBIDDEN", msg)),
+            )
+                .into_response(),
         }
     }
 }
@@ -436,12 +458,119 @@ async fn delete_grant(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Derives the caller-scoped namespace prefix `micromegas-setup-telemetry` mints fresh audiences
+/// under (AbAC Stage 6, #1374, Design §5). `pub`, not module-private, and pure/sync -- no DB, no
+/// `AuthContext` needed beyond the plain `Option<String>` email -- so the whole sanitization is
+/// unit-testable directly, the same reason `ingestion_keys::resolve_audience` is `pub`.
+///
+/// Takes the local part of `email` (everything before the first `@`), lowercases it, replaces
+/// every character outside `[a-z0-9_-]` with `-`, collapses any run of `-` to a single `-`, trims
+/// leading/trailing `-`, and appends one more `-` as the separator. `None` when `email` is `None`
+/// (a client-credentials service-account caller -- the same condition the lazy claim path itself
+/// gates on) or when sanitizing leaves an empty string.
+///
+/// Deliberately not injective (`alice.smith@x` and `alice-smith@x` both yield `alice-smith-`,
+/// and two different domains with the same local part collide too) -- harmless, since
+/// authorization is still the exact `user:<email>` selector the lazy claim writes, indifferent to
+/// the prefix; a collision just means the second caller's claim attempt hits the ordinary
+/// "audience already exists" denial.
+pub fn mint_prefix_for(email: &Option<String>) -> Option<String> {
+    let email = email.as_deref()?;
+    let local = email.split('@').next().unwrap_or("");
+    let mut sanitized = String::with_capacity(local.len() + 1);
+    let mut last_was_dash = false;
+    for ch in local.chars() {
+        let lower = ch.to_ascii_lowercase();
+        let mapped = if lower.is_ascii_alphanumeric() || lower == '_' || lower == '-' {
+            lower
+        } else {
+            '-'
+        };
+        if mapped == '-' {
+            if last_was_dash {
+                continue;
+            }
+            last_was_dash = true;
+        } else {
+            last_was_dash = false;
+        }
+        sanitized.push(mapped);
+    }
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(format!("{trimmed}-"))
+    }
+}
+
+/// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
+/// per the DB store's current rows (no cache -- this reads `pool` directly, same as
+/// `list_grants`), plus the caller's own `is_admin` flag, `mint_prefix`, and `email` (AbAC Stage
+/// 6, #1374, Design §5).
+///
+/// Caller-scoped, so [`AuthenticatedUser`] (any authenticated caller), not [`AdminUser`]: unlike
+/// `list_grants`, this can never reveal another principal's selector, only whether *this*
+/// caller's own email/groups match one, plus facts about the caller's own identity. `is_admin`,
+/// `mint_prefix`, and `email` all ride on this response because there is no other route
+/// reachable from a CLI caller (authenticated purely with a Bearer header) that exposes any of
+/// them -- `/auth/me` reads its ID token only from the browser's `id_token` cookie, with no
+/// `Authorization: Bearer` fallback.
+///
+/// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate` enforces for the
+/// mint route itself, for the same reason: this is new non-admin surface too, and must not widen
+/// on upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
+/// `!caller.is_admin` condition.
+#[derive(Serialize)]
+struct MyAudiencesResponse {
+    is_admin: bool,
+    audiences: Vec<String>,
+    mint_prefix: Option<String>,
+    email: Option<String>,
+}
+
+async fn my_audiences(
+    Extension(state): Extension<AudienceGrantsState>,
+    AuthenticatedUser(caller): AuthenticatedUser,
+) -> Result<Json<MyAudiencesResponse>, AudienceGrantError> {
+    if !caller.is_admin && !state.self_service_mint_enabled {
+        return Err(AudienceGrantError::Forbidden(
+            "self-service minting is disabled".to_string(),
+        ));
+    }
+    let pool = require_pool(&state)?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT audience, selector FROM audience_grants WHERE axis = 'mint'")
+            .fetch_all(&pool)
+            .await?;
+    let mut audiences: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, selector)| selector_matches(selector, &caller))
+        .map(|(audience, _)| audience)
+        .collect();
+    audiences.sort();
+    audiences.dedup();
+    let mint_prefix = mint_prefix_for(&caller.email);
+    let email = caller.email.clone();
+    Ok(Json(MyAudiencesResponse {
+        is_admin: caller.is_admin,
+        audiences,
+        mint_prefix,
+        email,
+    }))
+}
+
 /// Routes only -- [`AudienceGrantsState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `analytics_keys_state`/
 /// `ingestion_keys_state` are.
 pub fn audience_grants_router(base_path: &str) -> Router {
-    Router::new().route(
-        &format!("{base_path}/api/audience-grants"),
-        post(create_grant).get(list_grants).delete(delete_grant),
-    )
+    Router::new()
+        .route(
+            &format!("{base_path}/api/audience-grants"),
+            post(create_grant).get(list_grants).delete(delete_grant),
+        )
+        .route(
+            &format!("{base_path}/api/audience-grants/my-audiences"),
+            get(my_audiences),
+        )
 }

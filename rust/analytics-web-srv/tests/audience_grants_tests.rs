@@ -9,13 +9,16 @@
 //! Every non-`#[ignore]`d test here uses a lazily-connected pool (`sqlx::PgPool::connect_lazy`)
 //! and never actually reaches the database: the 403 cases are rejected by the `AdminUser`
 //! extractor before any handler runs, the 400 cases fail validation before touching the pool, and
-//! the `NotConfigured` cases use `AudienceGrantsState { pool: None }`, which never touches
+//! the `NotConfigured` cases use `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`, which never touches
 //! `state.pool` at all. Live-DB round trips are `#[ignore]`d, run manually against a real,
 //! v7-migrated Postgres, per `ingestion_keys_tests.rs`'s precedent.
 
-use analytics_web_srv::audience_grants::{AudienceGrantsState, audience_grants_router};
+use analytics_web_srv::audience_grants::{
+    AudienceGrantsState, audience_grants_router, mint_prefix_for,
+};
 use analytics_web_srv::auth::{AuthToken, ValidatedUser};
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
+use micromegas::auth::types::{AuthContext, AuthType};
 use tower::ServiceExt;
 
 fn lazy_pool() -> sqlx::PgPool {
@@ -41,15 +44,51 @@ fn non_admin_user() -> ValidatedUser {
     }
 }
 
+/// Builds an `AuthContext` mirroring a `ValidatedUser` -- the same shape `cookie_auth_middleware`
+/// inserts alongside `ValidatedUser` in production (`auth/handlers.rs`). Mirrors
+/// `auth/tests/policy_tests.rs::caller`'s field defaults (it isn't exported); duplicated verbatim
+/// per this crate's existing convention of mirroring rather than sharing such helpers across
+/// `tests/*.rs` files, since each file in `tests/` is a separate crate.
+fn auth_context_for(user: &ValidatedUser, groups: Vec<String>) -> AuthContext {
+    AuthContext {
+        subject: user.subject.clone(),
+        email: user.email.clone(),
+        issuer: user.issuer.clone(),
+        audience: None,
+        expires_at: None,
+        auth_type: AuthType::Oidc,
+        is_admin: user.is_admin,
+        allow_delegation: false,
+        bound_audience: None,
+        read_audiences: vec![],
+        groups,
+    }
+}
+
 /// Wires `audience_grants_router` the same way `build_protected_routes` does (state layered as
 /// `Extension<AudienceGrantsState>`), with auth bypassed by pre-inserting a synthetic
 /// `ValidatedUser` -- the same shape `--disable-auth` uses -- instead of standing up an OIDC mock
-/// and running `cookie_auth_middleware` for real.
+/// and running `cookie_auth_middleware` for real. Also layers a matching `AuthContext` (AbAC
+/// Stage 6, #1374): `AuthenticatedUser` (used by `/my-audiences`) reads `AuthContext`, not
+/// `ValidatedUser`, so without this every `/my-audiences` test would otherwise hit the
+/// `Unauthenticated` rejection.
 fn build_handler_router_with_user(state: AudienceGrantsState, user: ValidatedUser) -> Router {
+    build_handler_router_with_user_and_groups(state, user, vec![])
+}
+
+/// Same as [`build_handler_router_with_user`], with an explicit `groups` list on the layered
+/// `AuthContext` -- needed only by `/my-audiences` tests exercising a `group:<g>` mint selector.
+fn build_handler_router_with_user_and_groups(
+    state: AudienceGrantsState,
+    user: ValidatedUser,
+    groups: Vec<String>,
+) -> Router {
+    let auth_context = auth_context_for(&user, groups);
     audience_grants_router("")
         .layer(Extension(state))
         .layer(Extension(AuthToken(String::new())))
         .layer(Extension(user))
+        .layer(Extension(auth_context))
 }
 
 fn post_request(uri: &str, body: &str) -> Request<Body> {
@@ -87,6 +126,7 @@ async fn create_grant_403_for_non_admin() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         non_admin_user(),
     );
@@ -105,6 +145,7 @@ async fn list_grants_403_for_non_admin() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         non_admin_user(),
     );
@@ -120,6 +161,7 @@ async fn delete_grant_403_for_non_admin() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         non_admin_user(),
     );
@@ -141,6 +183,7 @@ async fn create_grant_400_for_invalid_axis() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -159,6 +202,7 @@ async fn create_grant_400_for_invalid_audience() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -180,6 +224,7 @@ async fn create_grant_400_for_overlong_selector() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -199,6 +244,7 @@ async fn list_grants_400_for_zero_limit() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -214,6 +260,7 @@ async fn list_grants_400_for_negative_limit() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -229,6 +276,7 @@ async fn list_grants_400_for_negative_offset() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -240,14 +288,97 @@ async fn list_grants_400_for_negative_offset() {
 }
 
 // ---------------------------------------------------------------------------
-// NotConfigured 503 -- `AudienceGrantsState { pool: None }` never touches the
+// /my-audiences -- AbAC Stage 6, #1374, Design §5. The knob-off-non-admin case is rejected by
+// `my_audiences`'s own gate check before `require_pool`/any DB access, so it needs no live DB,
+// same harness as every 403 case above; a knob-off *admin* is exempt from that gate and does
+// reach the DB query, so that case is a live-DB test alongside the others, below.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn my_audiences_403_for_non_admin_when_knob_disabled() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            self_service_mint_enabled: false,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/my-audiences"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn my_audiences_503_when_pool_unconfigured() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: None,
+            self_service_mint_enabled: true,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/my-audiences"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ---------------------------------------------------------------------------
+// mint_prefix_for -- pure, sync (AbAC Stage 6, #1374, Design §5); no DB or `AuthContext` needed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mint_prefix_for_a_plain_local_part() {
+    assert_eq!(
+        mint_prefix_for(&Some("alice@example.com".to_string())),
+        Some("alice-".to_string())
+    );
+}
+
+#[test]
+fn mint_prefix_for_sanitizes_dots_and_pluses() {
+    assert_eq!(
+        mint_prefix_for(&Some("alice.smith+ci@example.com".to_string())),
+        Some("alice-smith-ci-".to_string())
+    );
+}
+
+#[test]
+fn mint_prefix_for_lowercases_a_mixed_case_address() {
+    assert_eq!(
+        mint_prefix_for(&Some("Alice.Smith@Example.com".to_string())),
+        Some("alice-smith-".to_string())
+    );
+}
+
+#[test]
+fn mint_prefix_for_none_when_local_part_sanitizes_to_empty() {
+    assert_eq!(mint_prefix_for(&Some("+++@example.com".to_string())), None);
+}
+
+#[test]
+fn mint_prefix_for_none_when_email_is_none() {
+    assert_eq!(mint_prefix_for(&None), None);
+}
+
+// ---------------------------------------------------------------------------
+// NotConfigured 503 -- `AudienceGrantsState { pool: None, self_service_mint_enabled: false }` never touches the
 // pool, so this needs no live DB either, same harness as every other test
 // here.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn create_grant_503_when_pool_unconfigured() {
-    let app = build_handler_router_with_user(AudienceGrantsState { pool: None }, admin_user());
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: None,
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
     let response = app
         .oneshot(post_request(
             "/api/audience-grants",
@@ -260,7 +391,13 @@ async fn create_grant_503_when_pool_unconfigured() {
 
 #[tokio::test]
 async fn list_grants_503_when_pool_unconfigured() {
-    let app = build_handler_router_with_user(AudienceGrantsState { pool: None }, admin_user());
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: None,
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
     let response = app
         .oneshot(get_request("/api/audience-grants"))
         .await
@@ -270,7 +407,13 @@ async fn list_grants_503_when_pool_unconfigured() {
 
 #[tokio::test]
 async fn delete_grant_503_when_pool_unconfigured() {
-    let app = build_handler_router_with_user(AudienceGrantsState { pool: None }, admin_user());
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: None,
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
     let response = app
         .oneshot(delete_request(
             "/api/audience-grants?audience=team-alpha&axis=read&selector=%2A",
@@ -306,6 +449,7 @@ async fn live_create_list_delete_round_trip() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
+            self_service_mint_enabled: false,
         },
         admin_user(),
     );
@@ -364,4 +508,92 @@ async fn live_create_list_delete_round_trip() {
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[ignore]
+#[tokio::test]
+async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
+    let pool = live_pool().await;
+    let audience = format!("my-audiences-test-{}", uuid::Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+         VALUES ($1, 'mint', 'user:reader@example.com', now(), 'test')",
+    )
+    .bind(&audience)
+    .execute(&pool)
+    .await
+    .expect("insert grant");
+
+    // The matching caller sees the audience, with `is_admin: false`.
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/my-audiences"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["is_admin"], false);
+    let audiences = body["audiences"].as_array().expect("audiences array");
+    assert!(
+        audiences.iter().any(|a| a == &audience),
+        "expected {audience:?} in {audiences:?}"
+    );
+
+    // A caller with no matching selector doesn't see it.
+    let other = ValidatedUser {
+        subject: "other".to_string(),
+        email: Some("other@example.com".to_string()),
+        issuer: "local".to_string(),
+        is_admin: false,
+    };
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        other,
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/my-audiences"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let audiences = body["audiences"].as_array().expect("audiences array");
+    assert!(
+        !audiences.iter().any(|a| a == &audience),
+        "unexpected {audience:?} in {audiences:?}"
+    );
+
+    sqlx::query("DELETE FROM audience_grants WHERE audience = $1")
+        .bind(&audience)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[ignore]
+#[tokio::test]
+async fn live_my_audiences_admin_gets_a_normal_response_regardless_of_knob() {
+    let pool = live_pool().await;
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/my-audiences"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["is_admin"], true);
 }

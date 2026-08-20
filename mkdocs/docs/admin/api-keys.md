@@ -4,7 +4,7 @@ Micromegas keys can live in two Postgres tables — `ingestion_api_keys` and
 `analytics_api_keys` — instead of `MICROMEGAS_API_KEYS` (a plaintext JSON env
 var, parsed once at startup). The tables hold only a SHA-256 hash of each key
 plus a `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit
-trail. **`analytics-web-srv`** is the sole admin HTTP surface for both
+trail. **`analytics-web-srv`** is the sole HTTP surface for both
 tables — its own `/api/ingestion-api-keys*` and `/api/analytics-api-keys*`
 routes let an operator mint, list, revoke, and import either table without a
 redeploy, writing directly to Postgres. **Ingestion exposes no key-management
@@ -13,6 +13,15 @@ HTTP surface at all** — it only validates incoming API keys against
 key tables have an admin page in the web app (Admin → Ingestion API Keys /
 Analytics API Keys), both calling `analytics-web-srv`'s own routes directly
 (see [Web app admin pages](#web-app-admin-pages)).
+
+**Minting an ingestion key is no longer purely an admin operation** (AbAC
+Stage 6, #1374): a non-admin caller with a matching `mint` grant — or naming
+a brand-new audience explicitly, which lazily claims it — can mint their own
+`ingestion_api_keys` row directly, once an operator turns on
+`MICROMEGAS_SELF_SERVICE_MINT` (off by default). See
+[Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
+for the full picture; every other route (list/revoke/import, and the
+analytics-key table entirely) stays admin-only.
 
 The env keyring still works and is still checked; adopting the key store is an
 operator decision, not an automatic upgrade — see
@@ -86,16 +95,22 @@ key that wasn't actually random.
 
 ## HTTP routes (key management)
 
-All key-management routes for **both** tables live on **`analytics-web-srv`**,
-gated by the same cookie/bearer-auth admin check every other
-`analytics-web-srv` admin route uses (`ValidatedUser.is_admin`, resolved from
-`MICROMEGAS_ADMINS` or `MICROMEGAS_ANALYTICS_ADMINS` on the monolith — see
-[Authentication](authentication.md)). Ingestion itself exposes no
-key-management HTTP surface at all — issuing write credentials from the
-fleet-facing ingestion service would be the wrong direction for the write/read
-asymmetry this design is built on, and consolidating both tables' admin
-surface onto one service means there is exactly one admin list to manage
-(see [Security](#security)).
+All key-management routes for **both** tables live on **`analytics-web-srv`**.
+Every route except ingestion's own mint is gated by the same cookie/bearer-auth
+admin check every other `analytics-web-srv` admin route uses
+(`ValidatedUser.is_admin`, resolved from `MICROMEGAS_ADMINS` or
+`MICROMEGAS_ANALYTICS_ADMINS` on the monolith — see
+[Authentication](authentication.md)). `POST {base_path}/api/ingestion-api-keys`
+(mint) is the one exception (AbAC Stage 6, #1374): it runs through a
+`MintGate`/`AuthenticatedUser` extractor instead of the admin-only `AdminUser`
+one, so a non-admin caller with a matching grant — or a lazy claim of a
+brand-new audience — can reach it once `MICROMEGAS_SELF_SERVICE_MINT` is on;
+see [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374).
+Ingestion itself exposes no key-management HTTP surface at all — issuing
+write credentials from the fleet-facing ingestion service would be the wrong
+direction for the write/read asymmetry this design is built on, and
+consolidating both tables' admin surface onto one service means there is
+exactly one admin list to manage (see [Security](#security)).
 
 | Route | Body / result |
 |---|---|
@@ -112,6 +127,17 @@ Both route groups share the same request/response shapes and validation for
 `name`/`key`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
 see [What audience does a key carry](#what-audience-does-a-key-carry) — that
 `analytics_api_keys`'s routes never accept or return.
+
+**Ingestion's mint route has more error shapes than every other route here**
+(AbAC Stage 6, #1374), since it is the one route in this table a non-admin
+caller can reach at all: alongside the existing `400 BAD_REQUEST` and `503
+NOT_CONFIGURED`, it can now also answer `403 FORBIDDEN` (the self-service
+knob is off, the caller has no matching mint grant and named no claimable
+audience, or a per-caller bound was reached), `503 UNAVAILABLE` (the
+audience-grant point query itself failed — a DB outage, distinct from
+`NOT_CONFIGURED`'s "never configured" case), `401 UNAUTHENTICATED` (no
+`AuthContext` at all — normally unreachable), and `409 CLAIM_CONTENDED` (two
+concurrent lazy claims raced for the same brand-new audience name; retry).
 
 **Mint** (`POST .../{table}-api-keys`) — `{"name"}` (plus, for ingestion,
 an optional `"audience"`) → **201**
@@ -216,13 +242,18 @@ which one it *writes*).
 
 **An audience is an opaque label, not a principal encoding** — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. It carries no meaning by itself;
-who may read or mint into it is separate, editable configuration — the
-`{prefix}_AUDIENCE_GRANTS` env map, unioned with the DB-backed
-`audience_grants` table (`POST`/`GET`/`DELETE {base_path}/api/audience-grants`,
-or the `micromegas-grants` CLI) — see [Audiences and
-Grants](authentication.md#audiences-and-grants) for the full model. `public`
-is the one built-in: every authenticated principal can read it, with no grant
-entry needed in either source.
+who may read or mint into it is separate, editable configuration. For the
+**read** axis, that's the `{prefix}_AUDIENCE_GRANTS` env map, unioned with
+the DB-backed `audience_grants` table
+(`POST`/`GET`/`DELETE {base_path}/api/audience-grants`, or the
+`micromegas-grants` CLI). For the **mint** axis, it's `audience_grants`
+alone: self-service mint (AbAC Stage 6, #1374) reads mint grants with a
+per-request point query, never a cached env-map union, so an env-only
+`"mint"` selector is inert — see
+[Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374).
+See [Audiences and Grants](authentication.md#audiences-and-grants) for the
+full model. `public` is the one built-in: every authenticated principal can
+read it, with no grant entry needed in either source.
 
 **The binding is immutable by design.** Once a key is minted or imported with
 an audience, that audience never changes for that key — not through a later
@@ -242,6 +273,22 @@ through `MICROMEGAS_UNSTAMPED_AUDIENCE`) or, once migration v6's backfill has
 run, already `public` — so `import` falls back to `public` when neither the
 request nor the knob supplies one, matching that continuity rather than
 erroring.
+
+**A non-admin caller naming a brand-new audience explicitly claims it**
+(AbAC Stage 6, #1374), once `MICROMEGAS_SELF_SERVICE_MINT` is on — the same
+400-never-`public` rule above still applies (no audience at all is still a
+400), but a genuinely fresh, never-before-granted name is minted *and*
+granted in the same request rather than rejected for lack of a pre-existing
+grant. `micromegas-setup-telemetry` (the setup script) applies its own
+client-side naming convention on top of this: a non-admin's fresh claim is
+minted under a namespace derived from the caller's own email (e.g.
+`alice-ci-runner` for `alice@example.com` naming `ci-runner`), never the bare
+name the caller typed, so operationally meaningful bare names stay reserved
+for admin use. This is a script convention only — the mint route itself
+accepts any valid, unclaimed name from any authorized non-admin caller,
+prefixed or not. See
+[Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
+for the full mechanism.
 
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) is never
 stamped at all.** That keyring has no audience column to carry one, by
@@ -312,18 +359,27 @@ browser" exposure mint already avoids.
 
 **`created_by`/`revoked_by` always reflect the acting admin's own OIDC
 identity, for both key tables.** Every mint/revoke/import handler resolves
-the caller from `analytics-web-srv`'s own `AdminUser` extractor
-(`user.email` or `user.subject`) and writes that directly — there is no
-service-credential hop for either table, so there is no attribution gap to
-document. (An earlier design proxied ingestion-key calls through a dedicated
-service credential, which meant every proxied row was attributed to that
-credential instead of the acting admin; direct writes remove that gap
-entirely rather than just documenting it.)
+the caller's identity (`user.email` or `user.subject`) and writes that
+directly — there is no service-credential hop for either table, so there is
+no attribution gap to document. Every handler except ingestion's own mint
+resolves that identity from `analytics-web-srv`'s `AdminUser` extractor;
+mint (AbAC Stage 6, #1374) resolves it from `AuthenticatedUser`/`MintGate`
+instead, since it is no longer purely admin-gated — but the attribution is
+the same either way, still the acting caller's own identity, never a shared
+service credential. (An earlier design proxied ingestion-key calls through a
+dedicated service credential, which meant every proxied row was attributed
+to that credential instead of the acting admin; direct writes remove that
+gap entirely rather than just documenting it.)
 
-**Single admin list.** Both route groups gate on the same
-`analytics-web-srv` admin check (`MICROMEGAS_ADMINS` /
+**Single admin list, for administration.** List/revoke/import for both
+tables, plus ingestion's own mint when the caller is an admin, gate on the
+same `analytics-web-srv` admin check (`MICROMEGAS_ADMINS` /
 `MICROMEGAS_ANALYTICS_ADMINS`) — there is exactly one admin list to manage
 for key administration, not two lists that must be kept in sync.
+Ingestion's mint route additionally accepts a non-admin caller once
+`MICROMEGAS_SELF_SERVICE_MINT` is on, authorized by a `mint` grant instead
+of admin-list membership — see
+[Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374).
 
 **Upgrade note: this merge is unconditional, with no opt-out.** On the
 previous, proxy-based design, ingestion-key mint/revoke/import from
@@ -538,8 +594,14 @@ only affects carrying *existing* key strings forward.
 
 - **API keys can never manage keys**: `is_admin` is hardcoded `false` on every
   API-key auth context, and `analytics-web-srv`'s `AdminUser` extractor rejects
-  any caller whose `is_admin` isn't `true` before a mint/list/revoke/import
-  handler ever runs — an API-key caller can never satisfy that gate.
+  any caller whose `is_admin` isn't `true` before a list/revoke/import
+  handler ever runs — an API-key caller can never satisfy that gate. This
+  isn't just policy for the mint route either (AbAC Stage 6, #1374): there is
+  no bearer-key authenticator on `analytics-web-srv`'s `/api/*` routes at
+  all, so an ingestion API key has no code path to reach `mint_key`'s
+  `AuthenticatedUser`/`MintGate` extractors in the first place, admin or not.
+  Self-service mint only ever widens *which browser-authenticated OIDC
+  caller* may mint — never what kind of credential can.
 - **No cleartext at rest.** Only a SHA-256 hash is stored; the cleartext key
   exists only in the one-time `POST` response and in the client's own storage.
 - **No timing side channel** on the DB path — the token is hashed and the hash

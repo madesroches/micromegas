@@ -39,6 +39,7 @@ micromegas-import-keys = "micromegas.cli.import_keys:main"
 micromegas-logout = "micromegas.cli.logout:main"
 micromegas-query = "micromegas.cli.query:main"
 micromegas-screens = "micromegas.cli.screens:main"
+micromegas-setup-telemetry = "micromegas.cli.setup_telemetry:main"
 
 [build-system]
 requires = ["poetry-core"]

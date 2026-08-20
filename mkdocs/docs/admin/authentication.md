@@ -331,9 +331,8 @@ mint authority. Selectors:
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary
   audience with an ordinary grant entry (e.g. `"alice-laptop":
-  ["user:alice@example.com"]`); provisioning one per user is Stage 6 (#1374)
-  territory, since that's the stage that lets a user mint their own key in
-  the first place.
+  ["user:alice@example.com"]`); provisioning one per user by hand this way is
+  what self-service mint (#1374, below) removes the need for.
 
 **Re-sharing already-ingested data is a grants edit, never a restamp.** Since
 the audience *value* stamped on data never changes, widening who can see
@@ -360,9 +359,93 @@ export MICROMEGAS_DEFAULT_KEY_AUDIENCE=team-alpha
 # MICROMEGAS_UNSTAMPED_AUDIENCE left unset: legacy/never-stamped data stays invisible.
 ```
 
-Worked **mint** profiles (granting mint authority for a non-admin caller) are
-deferred to Stage 6 (#1374), the first stage with a real non-admin mint
-consumer.
+Worked **mint** profile, granting a non-admin caller mint authority for their
+own personal audience — see [self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
+below for the full picture (the knob that gates this, the per-caller bounds,
+and `micromegas-setup-telemetry`):
+
+```bash
+# One admin-created grant per personal audience, mint only (read is granted
+# separately, or via a claim -- see below):
+micromegas-grants --url https://analytics.example.com create alice-laptop mint user:alice@example.com
+micromegas-grants --url https://analytics.example.com create alice-laptop read user:alice@example.com
+```
+
+A non-admin caller with this grant can now mint their own `alice-laptop` key
+directly (`POST /api/ingestion-api-keys`), once `MICROMEGAS_SELF_SERVICE_MINT`
+is on (below) — no further admin step needed for that audience. **Self-service
+mint grants must live in the DB `audience_grants` table, never in
+`{prefix}_AUDIENCE_GRANTS`** — unlike the read axis (which still unions both
+sources, above), the mint axis is DB-only once this stage lands: a mint
+audience declared only in the env map is invisible to the lazy claim's
+existence check (below) and so could be claimed out from under it by another
+caller. Keep every mint-relevant audience's grants in the DB once
+`MICROMEGAS_SELF_SERVICE_MINT` is on.
+
+### Self-service ingestion key mint (AbAC Stage 6, #1374)
+
+Given a `mint` grant already exists (the worked profile above), a non-admin
+caller can mint their own ingestion key directly — `POST
+{base_path}/api/ingestion-api-keys` is no longer purely admin-gated.
+`MintPolicy::resolve_audience` (a per-request point query against
+`audience_grants`, never a cached snapshot) is the authorization instead of
+an admin gate; an admin's own mint is unaffected either way. This is gated
+behind one off-by-default deployment knob:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers. |
+| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency. |
+| `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
+
+**Audiences are created lazily, not pre-provisioned.** A non-admin caller who
+names a brand-new, never-before-granted audience *and supplies the name
+explicitly* claims it atomically, as part of the same mint request, once
+`MICROMEGAS_SELF_SERVICE_MINT` is on: the claim writes `user:<email>` grant
+rows on **both** the `mint` and `read` axes (so the caller who just claimed
+the audience can read back what their own new key uploads), inside the same
+transaction that mints the key. Naming an audience that already has *any*
+grant row — admin-created, self-claimed earlier, or someone else's
+in-flight claim — still requires a matching grant exactly as above; only a
+genuinely fresh, unowned name is claimable this way. `public` and the
+deployment's own `MICROMEGAS_DEFAULT_KEY_AUDIENCE` can never be claimed.
+
+**A deployment using an unstamped-audience label
+(`{prefix}_UNSTAMPED_AUDIENCE`) must pre-create a placeholder grant row for
+it** — any selector, on either axis — via the admin grants API, before
+turning on `MICROMEGAS_SELF_SERVICE_MINT`:
+
+```bash
+micromegas-grants --url https://analytics.example.com create unstamped-legacy read '*'
+```
+
+Without that placeholder row, the lazy claim's existence check (which reads
+only `audience_grants` and `ingestion_api_keys`, never a role-prefixed env
+knob it has no reason to know about) would see the unstamped label as
+unowned and let a non-admin claim exclusive rights over it.
+
+The setup script, `micromegas-setup-telemetry`, wraps all of this for an end
+user — OIDC login, mint, and printing the `OTEL_EXPORTER_OTLP_*` env vars
+needed to point their own telemetry at the deployment:
+
+```bash
+# Existing grant, or resolved automatically via GET .../my-audiences if omitted:
+micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
+    --audience alice-laptop
+
+# A fresh claim: a non-admin caller's bare name is minted under a namespace
+# derived from their own email (e.g. "alice-" + "ci-runner"), never the bare
+# name itself -- printed to stderr so the caller sees the resolved name.
+micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
+    --audience ci-runner
+
+eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
+```
+
+See [`python-api.md`](../query-guide/python-api.md#micromegas-setup-telemetry)
+for the full CLI reference, and [`api-keys.md`](api-keys.md) for the mint
+route's error shapes (`FORBIDDEN`, `UNAVAILABLE`, `UNAUTHENTICATED`,
+`CLAIM_CONTENDED`).
 
 ### DB-backed audience grants (#1489, AbAC Stage 6a)
 
@@ -399,24 +482,35 @@ as the right shape, unlike the per-key `moka` cache backing the [DB-backed
 key store](api-keys.md)), unioned with the env map before matching a
 caller's selectors. `analytics-web-srv` is the write surface only (the HTTP
 admin routes below) — it never constructs a `DbAudienceGrantsSource` and
-caches nothing itself. A selector present in
+caches nothing itself. For the **read** axis, a selector present in
 the env map, the store, or both grants exactly the same access — there is no
 "the store wins" or "the env map wins" precedence to reason about, and no
 forced migration off `{prefix}_AUDIENCE_GRANTS`: a deployment that never
-touches the store keeps working exactly as documented above.
+touches the store keeps working exactly as documented above. This is no
+longer true for the **mint** axis once self-service mint (#1374, below)
+lands: mint grants are DB-only, so an env-map-only `"mint"` selector is
+inert — it is never consulted by `mint_key`'s per-request authorization
+check.
 
 **HTTP admin routes**, `AdminUser`-gated (same admin list as the [API-key
 routes](api-keys.md)) and unavailable under `--disable-auth` for the same
-reason those routes are:
+reason those routes are — except `/my-audiences`, which is caller-scoped
+instead (any authenticated caller, not just admins; see
+[self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
+below):
 
 | Route | Body / result |
 |---|---|
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
 | `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` | 200 `[{"audience","axis","selector","created_at","created_by"}]`, newest first |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404 |
+| `GET {base_path}/api/audience-grants/my-audiences` | **Not** `AdminUser`-gated — any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, and the caller's own email. |
 
-`GET` is admin-gated exactly like the write routes — who can read which
-audience is itself a confidentiality-sensitive fact, not a public listing.
+`GET` (the first one, listing arbitrary rows) is admin-gated exactly like
+the write routes — who can read which audience is itself a
+confidentiality-sensitive fact, not a public listing. `/my-audiences`
+carries none of that sensitivity: it reveals only whether the caller's own
+identity matches a selector, never another principal's.
 `DELETE` takes the natural key as query parameters rather than path
 segments: a `group:<id>` selector can contain `/` or other URL-significant
 characters a raw path segment can't safely carry.
