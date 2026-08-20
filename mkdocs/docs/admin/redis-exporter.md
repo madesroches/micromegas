@@ -89,13 +89,13 @@ spec:
                 secretKeyRef: { name: redis, key: password }
             - name: MICROMEGAS_REDIS_EXPORTER_TARGET_NAME
               value: redis-main
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
             - name: MICROMEGAS_REDIS_EXPORTER_PROPERTIES
               value: cluster=prod,namespace=$(POD_NAMESPACE)
             - name: MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR
               value: 0.0.0.0:8081
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef: { fieldPath: metadata.namespace }
           ports:
             - containerPort: 8081
               name: health
