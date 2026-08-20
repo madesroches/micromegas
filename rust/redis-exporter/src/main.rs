@@ -21,7 +21,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -51,6 +51,26 @@ async fn main() -> Result<()> {
     let props = build_base_properties(&config.target_name, &config.properties);
     let mut shutdown = Box::pin(wait_for_shutdown());
 
+    // Constraint: redis-rs's ConnectionManager must never block a tick for
+    // longer than this. Without it, connecting to a blackholed address hangs
+    // for the OS TCP connect timeout (~1-2 min) and a query on a half-open
+    // connection can stall for TCP retransmission timescales — during which
+    // no redis_up=0 would be emitted, breaking the "unreachable -> redis_up=0
+    // every tick" contract. A few seconds is generous for a healthy LAN/DC
+    // link and short enough to keep the per-tick contract; it applies to
+    // both the initial connect and every query made through the manager.
+    //
+    // `number_of_retries` is set to 0 (default is 6, with exponential
+    // backoff) so a failed connect returns after a single bounded attempt
+    // instead of retrying internally for tens of seconds: our own loop
+    // already provides the "retry every tick" behavior, one bounded attempt
+    // per tick at a time.
+    let redis_io_timeout = Duration::from_secs(5);
+    let manager_config = redis::aio::ConnectionManagerConfig::new()
+        .set_connection_timeout(Some(redis_io_timeout))
+        .set_response_timeout(Some(redis_io_timeout))
+        .set_number_of_retries(0);
+
     // Persistent connection: one ConnectionManager for the process
     // lifetime, reconnecting on its own after drops. Creation needs an
     // initial connection, so retry here — the exporter must start (and
@@ -69,7 +89,7 @@ async fn main() -> Result<()> {
         }
         if conn.is_none() {
             tokio::select! {
-                result = redis::aio::ConnectionManager::new(client.clone()) => {
+                result = redis::aio::ConnectionManager::new_with_config(client.clone(), manager_config.clone()) => {
                     match result {
                         Ok(manager) => {
                             info!("connected to redis at {}", config.target_name);
@@ -99,12 +119,6 @@ async fn main() -> Result<()> {
                 match result {
                     Ok(()) => {
                         imetric!("redis_up", "count", props, 1u64);
-                        fmetric!(
-                            "redis_scrape_duration_ms",
-                            "ms",
-                            props,
-                            start.elapsed().as_secs_f64() * 1000.0
-                        );
                     }
                     Err(e) => {
                         // The ConnectionManager reconnects on its own; keep it.
@@ -112,6 +126,12 @@ async fn main() -> Result<()> {
                         imetric!("redis_up", "count", props, 0u64);
                     }
                 }
+                fmetric!(
+                    "redis_scrape_duration_ms",
+                    "ms",
+                    props,
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received, exiting");

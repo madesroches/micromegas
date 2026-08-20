@@ -148,6 +148,9 @@ pub fn emit_info_metrics(info: &ParsedInfo, props: &'static PropertySet, now_uni
         imetric!("redis_rdb_changes_since_last_save", "count", props, v);
     }
     if let Some(t) = info.get_u64("rdb_last_save_time") {
+        // Mixes the server's clock (rdb_last_save_time) with the exporter's
+        // clock (now_unix_secs): clock skew between the two distorts this
+        // age; saturating_sub only guards against underflow, not skew.
         imetric!(
             "redis_rdb_last_save_age_seconds",
             "seconds",
