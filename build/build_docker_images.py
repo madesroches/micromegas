@@ -36,6 +36,7 @@ SERVICES = {
     "object-cache": ("object-cache.Dockerfile", "Shared object range cache service"),
     "http-gateway": ("http-gateway.Dockerfile", "HTTP gateway server"),
     "analytics-web": ("analytics-web.Dockerfile", "Analytics web app"),
+    "redis-exporter": ("redis-exporter.Dockerfile", "Redis metrics exporter"),
     "all": ("all-in-one.Dockerfile", "All services in one image (dev/test)"),
     "monolith": ("monolith.Dockerfile", "Single-process monolith (all roles)"),
 }
