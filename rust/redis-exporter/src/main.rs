@@ -68,15 +68,23 @@ async fn main() -> Result<()> {
             }
         }
         if conn.is_none() {
-            match redis::aio::ConnectionManager::new(client.clone()).await {
-                Ok(manager) => {
-                    info!("connected to redis at {}", config.target_name);
-                    conn = Some(manager);
+            tokio::select! {
+                result = redis::aio::ConnectionManager::new(client.clone()) => {
+                    match result {
+                        Ok(manager) => {
+                            info!("connected to redis at {}", config.target_name);
+                            conn = Some(manager);
+                        }
+                        Err(e) => {
+                            warn!("redis connection failed: {e:#}");
+                            imetric!("redis_up", "count", props, 0u64);
+                            continue;
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!("redis connection failed: {e:#}");
-                    imetric!("redis_up", "count", props, 0u64);
-                    continue;
+                _ = &mut shutdown => {
+                    info!("shutdown signal received, exiting");
+                    return Ok(());
                 }
             }
         }
@@ -86,20 +94,28 @@ async fn main() -> Result<()> {
             .expect("system clock before unix epoch")
             .as_secs();
         let manager = conn.as_mut().expect("connection manager set above");
-        match sample_once(manager, config.preset, props, now_unix_secs).await {
-            Ok(()) => {
-                imetric!("redis_up", "count", props, 1u64);
-                fmetric!(
-                    "redis_scrape_duration_ms",
-                    "ms",
-                    props,
-                    start.elapsed().as_secs_f64() * 1000.0
-                );
+        tokio::select! {
+            result = sample_once(manager, config.preset, props, now_unix_secs) => {
+                match result {
+                    Ok(()) => {
+                        imetric!("redis_up", "count", props, 1u64);
+                        fmetric!(
+                            "redis_scrape_duration_ms",
+                            "ms",
+                            props,
+                            start.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
+                    Err(e) => {
+                        // The ConnectionManager reconnects on its own; keep it.
+                        warn!("redis sample failed: {e:#}");
+                        imetric!("redis_up", "count", props, 0u64);
+                    }
+                }
             }
-            Err(e) => {
-                // The ConnectionManager reconnects on its own; keep it.
-                warn!("redis sample failed: {e:#}");
-                imetric!("redis_up", "count", props, 0u64);
+            _ = &mut shutdown => {
+                info!("shutdown signal received, exiting");
+                return Ok(());
             }
         }
     }
