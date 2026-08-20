@@ -664,17 +664,17 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   a per-file breakdown is needed.
 - **Production validation** — Phase 2's five-hour sample, on the process-level gauges.
 
-## Open Questions
+## Resolved Questions
 
-1. **Resolved: core count of the affected daemon host.** The predicted improvement is linear in
-   `target_partitions`, so the exact factor cannot be stated in advance — and it does not need to be.
-   Phase 2 measures the outcome directly on the host that matters, which is the number the change is
-   judged on.
-2. **Is the residual allocator retention?** If Phase 2 shows `jemalloc_resident_bytes` spiking while
-   `jemalloc_allocated_bytes` stays flat, the remaining footprint is jemalloc retention from streaming
-   churn (consistent with the issue's "back to baseline within ~5 minutes"), and the next step is decay
-   tuning, not further scan work. Worth knowing before opening Phase 3.
-3. **Does anything outside this repo depend on merged-partition row order?** Nothing in-repo does (no
-   `sort_order` is recorded for these views, and it was nondeterministic before), but a downstream
-   consumer relying on the incidental order would see a change. Flagged for the issue reply rather than
-   blocking.
+No open questions remain.
+
+1. **Core count of the affected daemon host — not needed.** The predicted improvement is linear in
+   `target_partitions`, so the exact factor cannot be stated in advance. It does not need to be:
+   Phase 2 measures the outcome directly on the host that matters, and that measurement is what the
+   change is judged on.
+2. **Residual allocator retention — not a question.** Reading `jemalloc_allocated_bytes` against
+   `jemalloc_resident_bytes` is already part of the design (§4) and of Phase 2's sampling (step 9);
+   it is an interpretation of the measurement, not something to decide beforehand.
+3. **Nothing outside this repo depends on merged-partition row order.** Confirmed. Nothing in-repo
+   does either — no `sort_order` is recorded for these views, and the order was nondeterministic
+   before — so the change carries no row-order compatibility risk.
