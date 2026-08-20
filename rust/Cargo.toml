@@ -75,6 +75,7 @@ prost = { version = "0.14" }
 quote = "1.0"
 rand = "0.9"
 raw-cpuid = "11.3.0"
+redis = { version = "1.6", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 reqwest = { version = "0.12.23", default-features = false, features = ["charset", "http2", "json", "macos-system-configuration", "rustls-tls"] }
 rsa = "0.9.10"
 serde = { version = "1.0", features = ["derive", "rc"]}

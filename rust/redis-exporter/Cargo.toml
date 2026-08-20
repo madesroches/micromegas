@@ -1,0 +1,33 @@
+[package]
+name = "redis-exporter"
+description = "Redis metrics exporter sending samples to a Micromegas stack"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "redis_exporter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "micromegas-redis-exporter"
+path = "src/main.rs"
+
+[dependencies]
+micromegas = { workspace = true, features = ["jemalloc-metrics"] }
+
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+redis.workspace = true
+tokio.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemallocator.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["tokio"]  # Required by micromegas_main macro
