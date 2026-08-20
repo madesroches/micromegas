@@ -666,9 +666,10 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
 
 ## Open Questions
 
-1. **Core count of the affected daemon host.** The predicted improvement is linear in
-   `target_partitions`; the actual factor cannot be stated without it. Not blocking — Phase 2 measures
-   the outcome directly.
+1. **Resolved: core count of the affected daemon host.** The predicted improvement is linear in
+   `target_partitions`, so the exact factor cannot be stated in advance — and it does not need to be.
+   Phase 2 measures the outcome directly on the host that matters, which is the number the change is
+   judged on.
 2. **Is the residual allocator retention?** If Phase 2 shows `jemalloc_resident_bytes` spiking while
    `jemalloc_allocated_bytes` stays flat, the remaining footprint is jemalloc retention from streaming
    churn (consistent with the issue's "back to baseline within ~5 minutes"), and the next step is decay
