@@ -4,7 +4,7 @@ This directory contains Dockerfiles for building micromegas services.
 
 ## Images
 
-Seven services are published to Docker Hub under `marcantoinedesroches/`:
+Eight services are published to Docker Hub under `marcantoinedesroches/`:
 
 | Dockerfile | Image | Description |
 |------------|-------|-------------|
@@ -14,6 +14,7 @@ Seven services are published to Docker Hub under `marcantoinedesroches/`:
 | `object-cache.Dockerfile` | `marcantoinedesroches/micromegas-object-cache` | Shared object range cache service |
 | `http-gateway.Dockerfile` | `marcantoinedesroches/micromegas-http-gateway` | HTTP gateway server |
 | `analytics-web.Dockerfile` | `marcantoinedesroches/micromegas-analytics-web` | Analytics web app (frontend + backend) |
+| `redis-exporter.Dockerfile` | `marcantoinedesroches/micromegas-redis-exporter` | Redis metrics exporter |
 | `monolith.Dockerfile` | `marcantoinedesroches/micromegas-monolith` | Single-process monolith (all roles in one binary) |
 | `all-in-one.Dockerfile` | `micromegas-all` | All services in one image (dev/test only, not published) |
 | `github-runner.Dockerfile` | `micromegas-github-runner` | Self-hosted GitHub Actions runner (see `build/dev_worker.py`) |
@@ -225,6 +226,21 @@ docker run -d --name analytics-web \
 
 *Required unless running with `--disable-auth`
 
+### Redis Exporter
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MICROMEGAS_TELEMETRY_URL` | Yes | Ingestion server URL to send metrics to |
+| `MICROMEGAS_INGESTION_API_KEY` | No* | Ingestion API key (or use the `MICROMEGAS_OIDC_*` client-credentials vars) |
+| `MICROMEGAS_REDIS_EXPORTER_REDIS_URL` | No | Redis URL, `redis://` or `rediss://` (default `redis://127.0.0.1:6379`) |
+| `MICROMEGAS_REDIS_EXPORTER_REDIS_PASSWORD` | No | Overrides any password in the URL (secret-friendly) |
+| `MICROMEGAS_REDIS_EXPORTER_METRICS` | No | `core` \| `extended` \| `full` (default `full`) |
+| `MICROMEGAS_REDIS_EXPORTER_SAMPLE_INTERVAL_SECONDS` | No | Seconds between samples (default `1`) |
+| `MICROMEGAS_REDIS_EXPORTER_TARGET_NAME` | No | Instance name in metrics (default `host:port`) |
+| `MICROMEGAS_REDIS_EXPORTER_PROPERTIES` | No | Comma-separated `key=value` pairs added to every metric |
+| `MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR` | No | Enables `/health` + `/ready` probes on this address |
+
+*Required unless the ingestion server runs with `--disable-auth`
+
 ## Ports
 
 | Service | Port | Protocol |
@@ -234,3 +250,4 @@ docker run -d --name analytics-web \
 | Object Cache | 8080 | HTTP |
 | HTTP Gateway | 3000 | HTTP |
 | Analytics Web | 3000 | HTTP |
+| Redis Exporter | 8081 (opt-in via `MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR`) | HTTP |
