@@ -32,7 +32,8 @@ pub use claims::{AuditClaims, UserInfo, ValidatedUser, extract_audit_claims_from
 pub use config::OidcClientConfig;
 pub use cookies::{clear_cookie, create_cookie};
 pub use handlers::{
-    AdminRequired, AdminUser, AuthApiError, AuthToken, auth_callback, auth_login, auth_logout,
-    auth_me, auth_refresh, cookie_auth_middleware, require_admin,
+    AdminRequired, AdminUser, AuthApiError, AuthToken, AuthenticatedUser, Unauthenticated,
+    auth_callback, auth_login, auth_logout, auth_me, auth_refresh, cookie_auth_middleware,
+    require_admin,
 };
 pub use state::AuthState;

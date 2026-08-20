@@ -406,8 +406,14 @@ fn disabled_auth_app() -> Router {
     let ingestion_keys_state = IngestionKeysState {
         pool: None,
         default_audience: None,
+        self_service_mint_enabled: false,
+        max_claims_per_caller: 25,
+        max_keys_per_caller: 100,
     };
-    let audience_grants_state = AudienceGrantsState { pool: None };
+    let audience_grants_state = AudienceGrantsState {
+        pool: None,
+        self_service_mint_enabled: false,
+    };
     build_protected_routes(
         "",
         &None,

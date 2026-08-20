@@ -72,6 +72,19 @@ export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetr
 # see mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
 export MICROMEGAS_DEFAULT_KEY_AUDIENCE="public"
 
+# Self-service ingestion key mint (AbAC Stage 6, #1374) -- off by default, so
+# upgrading keeps today's admin-only mint behavior until explicitly enabled.
+# Lets a non-admin caller with a matching `mint` grant (or lazily claiming a
+# brand-new audience) mint their own key, and gates
+# GET .../audience-grants/my-audiences the same way -- see
+# mkdocs/docs/admin/authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374.
+export MICROMEGAS_SELF_SERVICE_MINT="false"
+
+# Per-caller bounds once MICROMEGAS_SELF_SERVICE_MINT is on -- backstops
+# against a runaway/abusive caller, not routine-use quotas.
+export MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER="25"
+export MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER="100"
+
 # Disable auth (dev only) -- also disables all three key/grant-management
 # route groups above (a fixed 503 answers them instead), not just cookie
 # auth on the rest of the API.

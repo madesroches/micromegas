@@ -73,6 +73,29 @@
 > map is kept as the static/bootstrap layer, unioned additively with the store. Full design in
 > `tasks/1489_db_audience_grant_store_plan.md`.
 
+> **Stage 6 landed (#1374) 2026-08-20.** `POST {base_path}/api/ingestion-api-keys` is no longer
+> purely `AdminUser`-gated: a non-admin caller with a matching `mint` grant can now mint their own
+> key, with `MintPolicy::resolve_audience` (Stage 1, #1369; `AudienceMintPolicy`, Stage 4, #1372)
+> as the authorization — the trait's first production call site. Mint-side grants are resolved by
+> an uncached, per-request point query against `audience_grants`, deliberately asymmetric with the
+> read side's ~60s cached snapshot (Stage 6a): a mint audience declared only in
+> `{prefix}_AUDIENCE_GRANTS` is invisible to this stage's claim logic and so is never honored for
+> mint. A non-admin caller who names a brand-new, never-before-granted audience explicitly claims
+> it atomically as part of the same mint request (writing `user:<email>` on both the `mint` and
+> `read` axes), rather than requiring an admin to pre-create the grant — this is what makes minting
+> actually self-service given Stage 6a's grant store has no non-admin write path otherwise. Both the
+> grant-based mint path and the lazy claim are gated behind one off-by-default knob,
+> `MICROMEGAS_SELF_SERVICE_MINT`, plus two per-caller bounds
+> (`MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`/`MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`),
+> so an existing deployment's authorization surface never silently widens on upgrade. A new
+> `GET {base_path}/api/audience-grants/my-audiences` route (caller-scoped, not admin-gated) lets a
+> non-admin caller discover what they can mint into, and a new `micromegas-setup-telemetry` CLI
+> does an OIDC login, mints a personal key, and prints the OTLP exporter env vars needed to send a
+> user's own telemetry — prefixing a non-admin's fresh claim into a namespace derived from their
+> own email, a client-side convention that shrinks (but does not eliminate) the audience-squatting
+> surface an unauthenticated name choice would otherwise have. Full design in
+> `tasks/1374_self_service_mint_plan.md`.
+
 ## Overview
 
 Isolate telemetry so that data produced under one identity is only **readable** by principals

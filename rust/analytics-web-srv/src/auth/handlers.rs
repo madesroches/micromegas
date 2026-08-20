@@ -18,7 +18,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use micromegas::auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
 use micromegas::auth::oidc::create_http_client;
-use micromegas::auth::types::AuthProvider;
+use micromegas::auth::types::{AuthContext, AuthProvider};
 use micromegas::auth::url_validation::validate_return_url;
 use micromegas::tracing::prelude::*;
 use openidconnect::{
@@ -576,5 +576,42 @@ impl<S: Send + Sync> FromRequestParts<S> for AdminUser {
         } else {
             Err(AdminRequired)
         }
+    }
+}
+
+/// Returned by [`AuthenticatedUser`] when the `AuthContext` extension is missing.
+///
+/// Mirrors `AdminRequired`'s shape (401, `{code: "UNAUTHENTICATED", message}`) rather than
+/// relying on axum's generic `Extension<T>` rejection (a 500), for a correct status code in the
+/// -- normally unreachable once `cookie_auth_middleware` and the `--disable-auth` defensive-parity
+/// layer both insert `AuthContext` -- case where the extension is missing.
+#[derive(Debug)]
+pub struct Unauthenticated;
+
+impl IntoResponse for Unauthenticated {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "code": "UNAUTHENTICATED",
+            "message": "authentication required",
+        });
+        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+    }
+}
+
+/// Extractor that yields the caller's full `AuthContext` for any authenticated request, with no
+/// admin check -- the self-service mint route's authorization is `MintPolicy::resolve_audience`
+/// itself, not a gate in front of it (AbAC Stage 6, #1374).
+pub struct AuthenticatedUser(pub AuthContext);
+
+impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedUser {
+    type Rejection = Unauthenticated;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<AuthContext>()
+            .cloned()
+            .map(AuthenticatedUser)
+            .ok_or(Unauthenticated)
     }
 }

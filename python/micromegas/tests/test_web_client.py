@@ -124,3 +124,170 @@ class TestAudienceGrants:
             "axis": "read",
             "selector": "user:alice@example.com",
         }
+
+
+class TestMintIngestionApiKey:
+    """`mint_ingestion_api_key` (AbAC Stage 6, #1374): payload construction and the
+    409 `CLAIM_CONTENDED` retry-once logic."""
+
+    def test_omits_audience_when_none(self):
+        client = _make_client()
+        client.session.post.return_value.json.return_value = {"key": "mmk_x"}
+        client.mint_ingestion_api_key("laptop")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload == {"name": "laptop"}
+
+    def test_includes_audience_when_set(self):
+        client = _make_client()
+        client.session.post.return_value.json.return_value = {"key": "mmk_x"}
+        client.mint_ingestion_api_key("laptop", audience="team-alpha")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload == {"name": "laptop", "audience": "team-alpha"}
+
+    def test_posts_to_ingestion_api_keys(self):
+        client = _make_client()
+        client.session.post.return_value.json.return_value = {"key": "mmk_x"}
+        client.mint_ingestion_api_key("laptop")
+        call = client.session.post.call_args
+        assert call.args[0] == "http://localhost:9999/api/ingestion-api-keys"
+
+    def test_success_on_first_try_returns_body_with_no_retry(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.status_code = 201
+        resp.ok = True
+        resp.json.return_value = {"key": "mmk_x", "key_id": "abc"}
+        client.session.post.return_value = resp
+
+        result = client.mint_ingestion_api_key("laptop", audience="fresh")
+
+        assert result == {"key": "mmk_x", "key_id": "abc"}
+        assert client.session.post.call_count == 1
+
+    def test_retries_once_on_claim_contended_then_succeeds(self):
+        client = _make_client()
+        contended = MagicMock()
+        contended.status_code = 409
+        contended.ok = False
+        contended.json.return_value = {"code": "CLAIM_CONTENDED", "message": "retry"}
+
+        success = MagicMock()
+        success.status_code = 201
+        success.ok = True
+        success.json.return_value = {"key": "mmk_x", "key_id": "abc"}
+
+        client.session.post.side_effect = [contended, success]
+
+        result = client.mint_ingestion_api_key("laptop", audience="fresh")
+
+        assert result == {"key": "mmk_x", "key_id": "abc"}
+        assert client.session.post.call_count == 2
+
+    def test_retries_at_most_once_a_second_claim_contended_raises(self):
+        client = _make_client()
+        contended = MagicMock()
+        contended.status_code = 409
+        contended.ok = False
+        contended.json.return_value = {"code": "CLAIM_CONTENDED", "message": "retry"}
+        contended.text = "conflict"
+        client.session.post.side_effect = [contended, contended]
+
+        try:
+            client.mint_ingestion_api_key("laptop", audience="fresh")
+            assert False, "expected RuntimeError"
+        except RuntimeError as e:
+            assert "409" in str(e)
+        assert client.session.post.call_count == 2
+
+    def test_non_claim_contended_409_is_not_retried(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.status_code = 409
+        resp.ok = False
+        resp.json.return_value = {"code": "SOME_OTHER_CODE", "message": "nope"}
+        resp.text = "nope"
+        client.session.post.return_value = resp
+
+        try:
+            client.mint_ingestion_api_key("laptop", audience="fresh")
+            assert False, "expected RuntimeError"
+        except RuntimeError:
+            pass
+        assert client.session.post.call_count == 1
+
+    def test_403_forbidden_is_not_retried(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.ok = False
+        resp.json.return_value = {"code": "FORBIDDEN", "message": "denied"}
+        resp.text = "denied"
+        client.session.post.return_value = resp
+
+        try:
+            client.mint_ingestion_api_key("laptop", audience="fresh")
+            assert False, "expected RuntimeError"
+        except RuntimeError:
+            pass
+        assert client.session.post.call_count == 1
+
+
+class TestListIngestionApiKeys:
+    """`list_ingestion_api_keys`: `GET /api/ingestion-api-keys`, omitted/set
+    param convention matching `list_audience_grants`."""
+
+    def test_omits_unset_params(self):
+        client = _make_client()
+        client.list_ingestion_api_keys()
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/ingestion-api-keys"
+        assert call.kwargs["params"] == {}
+
+    def test_includes_set_params(self):
+        client = _make_client()
+        client.list_ingestion_api_keys(limit=500, offset=500, include_revoked=True)
+        call = client.session.get.call_args
+        # `requests` would encode a raw Python bool as the capitalized
+        # literal `True`, which axum/serde_urlencoded's `Query` extractor
+        # rejects -- the client must send the lowercase string instead.
+        assert call.kwargs["params"] == {
+            "limit": 500,
+            "offset": 500,
+            "include_revoked": "true",
+        }
+
+    def test_include_revoked_false_is_lowercase_string(self):
+        client = _make_client()
+        client.list_ingestion_api_keys(include_revoked=False)
+        call = client.session.get.call_args
+        assert call.kwargs["params"] == {"include_revoked": "false"}
+
+    def test_returns_the_response_body(self):
+        client = _make_client()
+        client.session.get.return_value.json.return_value = [
+            {"key_id": "k1", "audience": "ci"}
+        ]
+        result = client.list_ingestion_api_keys()
+        assert result == [{"key_id": "k1", "audience": "ci"}]
+
+
+class TestMyAudiences:
+    """`my_audiences` (AbAC Stage 6, #1374): `GET .../audience-grants/my-audiences`."""
+
+    def test_calls_the_my_audiences_route(self):
+        client = _make_client()
+        client.session.get.return_value.json.return_value = {
+            "is_admin": False,
+            "audiences": ["team-alpha"],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+        }
+        result = client.my_audiences()
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/audience-grants/my-audiences"
+        assert result == {
+            "is_admin": False,
+            "audiences": ["team-alpha"],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+        }
