@@ -163,7 +163,11 @@ class WebClient:
         if offset is not None:
             params["offset"] = offset
         if include_revoked is not None:
-            params["include_revoked"] = include_revoked
+            # `requests` encodes a Python bool via `str()`, producing the
+            # capitalized literal `True`/`False`, but axum's `Query`
+            # extractor (serde_urlencoded) only accepts the lowercase
+            # `true`/`false` -- send the lowercase string explicitly.
+            params["include_revoked"] = "true" if include_revoked else "false"
         resp = self.session.get(
             self._api_url("ingestion-api-keys"),
             headers=self._headers(),

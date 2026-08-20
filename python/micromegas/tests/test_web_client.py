@@ -247,11 +247,20 @@ class TestListIngestionApiKeys:
         client = _make_client()
         client.list_ingestion_api_keys(limit=500, offset=500, include_revoked=True)
         call = client.session.get.call_args
+        # `requests` would encode a raw Python bool as the capitalized
+        # literal `True`, which axum/serde_urlencoded's `Query` extractor
+        # rejects -- the client must send the lowercase string instead.
         assert call.kwargs["params"] == {
             "limit": 500,
             "offset": 500,
-            "include_revoked": True,
+            "include_revoked": "true",
         }
+
+    def test_include_revoked_false_is_lowercase_string(self):
+        client = _make_client()
+        client.list_ingestion_api_keys(include_revoked=False)
+        call = client.session.get.call_args
+        assert call.kwargs["params"] == {"include_revoked": "false"}
 
     def test_returns_the_response_body(self):
         client = _make_client()
