@@ -780,8 +780,13 @@ async fn try_claim_and_mint(
     // the `else` (genuinely-fresh) branch and wrote both new grant rows -- the claim line is
     // unconditional; there is no "mint an existing grant without claiming" path left to
     // distinguish it from.
-    info!(key_id = %key_id, audience = %audience, name = %body.name, created_by = %caller_email, "minted ingestion api key");
-    info!(audience = %audience, selector = %selector, created_by = %caller_email, axes = "mint,read", "claimed audience via lazy self-service mint");
+    info!(
+        "minted ingestion api key key_id={key_id} name={} created_by={caller_email} audience={audience}",
+        body.name
+    );
+    info!(
+        "claimed audience via lazy self-service mint audience={audience} selector={selector} created_by={caller_email} axes=mint,read"
+    );
 
     Ok(MintResponse {
         key_id,
@@ -1494,7 +1499,7 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
 
 ## Testing Strategy
 
-- Rust: `cargo test -p micromegas-analytics-web-srv -p micromegas-auth`; `cargo clippy --workspace
+- Rust: `cargo test -p analytics-web-srv -p micromegas-auth`; `cargo clippy --workspace
   -- -D warnings`; `cargo fmt`.
 - Python: `poetry run pytest tests/test_web_client.py tests/cli/test_setup_telemetry.py` from
   `python/micromegas/`.
