@@ -127,9 +127,18 @@ pub fn derive_target_name(info: &ConnectionInfo) -> String {
     }
 }
 
-/// Parses `key=value` pairs; `instance` is reserved for the target name.
+/// Property keys reserved for tags the exporter attaches itself; `property_get`
+/// is case-insensitive in SQL, so the check below is too.
+const RESERVED_PROPERTY_KEYS: &[&str] = &["instance", "command", "db", "event"];
+
+/// Parses `key=value` pairs; reserved keys (see [`RESERVED_PROPERTY_KEYS`])
+/// are rejected case-insensitively to avoid colliding with tags the exporter
+/// attaches itself. Empty entries are dropped first: clap's `value_delimiter`
+/// turns an empty `MICROMEGAS_REDIS_EXPORTER_PROPERTIES=""` env var into one
+/// empty item, which k8s templates commonly produce for an unset optional var.
 pub fn parse_properties(raw: &[String]) -> Result<Vec<(String, String)>> {
     raw.iter()
+        .filter(|entry| !entry.is_empty())
         .map(|entry| {
             let (key, value) = entry
                 .split_once('=')
@@ -137,8 +146,14 @@ pub fn parse_properties(raw: &[String]) -> Result<Vec<(String, String)>> {
             if key.is_empty() {
                 bail!("invalid --property {entry:?}: empty key");
             }
-            if key == "instance" {
-                bail!("property key 'instance' is reserved (use --target-name)");
+            if RESERVED_PROPERTY_KEYS
+                .iter()
+                .any(|reserved| key.eq_ignore_ascii_case(reserved))
+            {
+                bail!(
+                    "property key {key:?} is reserved (reserved keys: {})",
+                    RESERVED_PROPERTY_KEYS.join(", ")
+                );
             }
             Ok((key.to_string(), value.to_string()))
         })

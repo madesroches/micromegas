@@ -70,6 +70,39 @@ fn instance_property_is_reserved() {
 }
 
 #[test]
+fn reserved_properties_are_rejected_case_insensitively() {
+    for entry in ["Instance=x", "COMMAND=x", "Db=0", "eVeNt=x"] {
+        parse_properties(&[entry.into()]).expect_err(&format!("{entry} must be reserved"));
+    }
+}
+
+#[test]
+fn command_db_event_properties_are_reserved() {
+    for key in ["command", "db", "event"] {
+        let entry = format!("{key}=x");
+        let err = parse_properties(&[entry]).expect_err(&format!("{key} must be reserved"));
+        assert!(err.to_string().contains(key), "got: {err}");
+    }
+}
+
+#[test]
+fn empty_property_entries_are_ignored() {
+    let pairs = parse_properties(&["".into()]).expect("empty entry must be dropped, not an error");
+    assert!(pairs.is_empty());
+}
+
+#[test]
+fn empty_properties_env_value_does_not_fail_cli_parse() {
+    // clap's value_delimiter turns an empty env value into one empty item;
+    // this must not fail startup (k8s templates render unset optional vars
+    // as empty strings).
+    let cli = Cli::try_parse_from(["micromegas-redis-exporter", "--property", ""])
+        .expect("parsing empty --property value");
+    let config = cli.into_config(None).expect("building config");
+    assert!(config.properties.is_empty());
+}
+
+#[test]
 fn password_override_applies() {
     let cli = Cli::try_parse_from(["micromegas-redis-exporter"]).expect("parsing empty args");
     let config = cli
