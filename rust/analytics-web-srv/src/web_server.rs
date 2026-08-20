@@ -125,6 +125,17 @@ fn resolve_u64_env(var: &str, default: u64) -> u64 {
     }
 }
 
+/// Same as `resolve_u64_env`, but for a knob that's stored as `i64` downstream (e.g. compared
+/// against a `COUNT(*)` result) -- warn-and-default the same way on a value that parses as a
+/// valid `u64` but overflows `i64`, rather than silently wrapping negative via `as i64`.
+fn resolve_i64_env(var: &str, default: i64) -> i64 {
+    let value = resolve_u64_env(var, default as u64);
+    i64::try_from(value).unwrap_or_else(|_| {
+        warn!("{var} value {value} exceeds i64::MAX, using default {default}");
+        default
+    })
+}
+
 fn read_base_path() -> Result<String> {
     let raw = std::env::var("MICROMEGAS_BASE_PATH")
         .context("MICROMEGAS_BASE_PATH environment variable not set")?;
@@ -706,9 +717,8 @@ pub async fn run_web_server(
     // take a role prefix, unlike the monolith's per-role vars).
     let self_service_mint_enabled = resolve_bool_env("MICROMEGAS_SELF_SERVICE_MINT", false);
     let max_claims_per_caller =
-        resolve_u64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25) as i64;
-    let max_keys_per_caller =
-        resolve_u64_env("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER", 100) as i64;
+        resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25);
+    let max_keys_per_caller = resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER", 100);
     if self_service_mint_enabled {
         info!(
             "MICROMEGAS_SELF_SERVICE_MINT enabled: max_claims_per_caller={max_claims_per_caller} \

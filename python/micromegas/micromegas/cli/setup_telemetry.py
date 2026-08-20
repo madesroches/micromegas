@@ -23,15 +23,11 @@ from pathlib import Path
 import requests
 
 from micromegas.cli import config
-from micromegas.cli.import_keys import build_auth_provider, make_client
+from micromegas.cli.import_keys import make_client
 from micromegas.cli.version import add_version_argument
 
-# Re-exported so tests can call `setup_telemetry.make_client` directly. Note
-# `make_client` still resolves `build_auth_provider` in `import_keys`'s own
-# module namespace (it's defined there), so tests must monkeypatch
-# `import_keys.build_auth_provider`, not this module's re-exported name --
-# patching `setup_telemetry.build_auth_provider` only rebinds an unused name.
-__all__ = ["build_auth_provider", "make_client", "main"]
+# Re-exported so tests can call `setup_telemetry.make_client` directly.
+__all__ = ["make_client", "main"]
 
 
 def resolve_otlp_endpoint(args, parser):
