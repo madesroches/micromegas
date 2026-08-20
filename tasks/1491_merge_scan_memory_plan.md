@@ -458,16 +458,21 @@ not cached in L1" section already gives for raw telemetry blocks.
 7. Same test file: cover the step-4 collapse by driving `QueryMerger::execute_merge_query` itself over
    the offline lakehouse context with the default `Unordered` ordering and a `SELECT * FROM source`
    query, and assert the drained stream's rows are the inputs concatenated in `begin_insert_time`
-   order. Two fabricated single-row partitions with distinguishable values are enough. This is what
-   fails if a future refactor reverts the undeclared path to `df.execute_stream()` without the
-   wrapper, or drops the wrapper call from `execute_merge_query`.
+   order. Two fabricated single-row partitions with distinguishable values are enough. This pins the
+   collapsed dispatch's concatenation semantics; step 6's plan-shape test is what actually guards the
+   wrapper regression (a fabricated `file_size` large enough to trigger `repartition_file_scans` would
+   also fan the file-scan step out to multiple partitions, so a two-row fixture at this scale cannot
+   detect either a reverted `df.execute_stream()` path or a dropped wrapper call — see step 6).
 
 ### Phase 2 — Measure and answer the issue
 
 8. `merge.rs`: extend `create_merged_partition` to log a completion line next to the existing
-   `sum_size` line — elapsed wall-clock and output `file_size` — so before/after is queryable from
-   `log_entries` without new instrumentation. (Deliberately a log line, not a metric: it pairs with
-   the `sum_size` line the issue already quotes.)
+   `sum_size` line — elapsed wall-clock only, no output `file_size` (`write_partition_from_rows`
+   returns `Result<()>`; the size is consumed internally by `insert_partition` and never returned, and
+   plumbing it out would mean changing that function's return type across its 6 production call sites,
+   which is out of scope here) — so before/after is queryable from `log_entries` without new
+   instrumentation. (Deliberately a log line, not a metric: it pairs with the `sum_size` line the issue
+   already quotes.) Output size for the before/after comparison comes from `list_partitions()` instead.
 9. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
    `jemalloc_allocated_bytes` / `jemalloc_resident_bytes` rather than host `used_memory`, plus the new
    duration line.
@@ -605,9 +610,10 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   sessions pin `target_partitions` to 8 so the control assertion is meaningful on any CI runner.
 - **New `execute_merge_query` concatenation-order test** (step 7) — drives the collapsed dispatch (§2)
   end to end on the default `Unordered` ordering with `SELECT * FROM source`, over two fabricated
-  single-row partitions, asserting the drained rows come out in `begin_insert_time` order. This is the
-  guard the plan-shape test cannot give: a future change that drops the `make_merge_session_context`
-  call, and one that re-splits the undeclared path back onto `df.execute_stream()`.
+  single-row partitions, asserting the drained rows come out in `begin_insert_time` order. At this
+  fixture size the file group is far below `repartition_file_min_size`, so it does not exercise
+  file-scan repartitioning either way; it pins the collapsed dispatch's concatenation semantics, while
+  the plan-shape test (step 6) is the actual regression guard for the wrapper.
 - **Existing merge-path tests must stay green** — `blocks_view_merge_ordering_tests.rs`,
   `sql_batch_view_merge_ordering_tests.rs`, `per_file_scan_ordering_tests.rs`,
   `log_stats_ordering_tests.rs`, `sql_partition_spec_sort_order_tests.rs`. These cover the
