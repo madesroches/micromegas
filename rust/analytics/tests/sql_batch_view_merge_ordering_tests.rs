@@ -544,7 +544,7 @@ async fn build_side_enrichment_join_reports_ordering_not_honored_without_errorin
 #[tokio::test]
 async fn declared_ascending_sort_order_overrides_a_contradictory_author_order_by_desc() {
     // Testing Strategy item 3: the merge query's own (contradictory) `ORDER BY ... DESC` must not
-    // win -- `execute_per_file_merge`'s unconditional `DataFrame::sort` over the declared ascending
+    // win -- `execute_sorted_merge`'s unconditional `DataFrame::sort` over the declared ascending
     // columns (merge.rs:183-188) is applied on top of the author's query, so the declared order
     // always wins. Two out-of-order rows ('b' before 'a', matching the author's DESC clause) make
     // the override observable: an ascending result can only come from the declared sort order, not
