@@ -140,6 +140,14 @@ fn attach_ordering_statistics(
 }
 
 /// How a partition scan's declared output ordering is realized.
+///
+/// Two scan shapes exist: a single sequential file group spanning every input partition
+/// (`Unordered`, `Concatenated`) and one file group per input partition (`PerFile`, scanned by k
+/// readers for a downstream `SortPreservingMergeExec`). `Unordered` and `Concatenated` build and
+/// execute the identical single-file-group scan -- they differ only in whether the resulting order
+/// is declared to DataFusion, not in scan shape or execution strategy (see
+/// `ScanOrdering::declares_concatenated_ordering` and Design §2 of
+/// `tasks/1491_merge_scan_memory_plan.md`).
 #[derive(Clone, Debug)]
 pub enum ScanOrdering {
     /// No declared ordering (today's default).
@@ -159,6 +167,18 @@ pub enum ScanOrdering {
     /// degrades it to `Unordered` for any non-empty partition rather than planning and recording a
     /// vacuous ordering.
     PerFile { columns: Vec<ScanSortColumn> },
+}
+
+impl ScanOrdering {
+    /// True when this ordering declares a concatenating scan's global order (`Concatenated`).
+    /// `PerFile` returns `false` because a per-file ordering only becomes a global one through a
+    /// downstream merge -- it is the other strategy, not an undeclared version of this one. A
+    /// bool, not the columns themselves: nothing on the concatenating path inspects the declared
+    /// columns, only whether an ordering was declared at all (see `execute_concatenated_merge`
+    /// below).
+    pub fn declares_concatenated_ordering(&self) -> bool {
+        matches!(self, ScanOrdering::Concatenated { .. })
+    }
 }
 
 /// Builds the `LexOrdering` declaring the already-satisfied output ordering of the scan, matching
@@ -193,9 +213,10 @@ pub fn make_lex_ordering(
 /// {view}")`); `reason` supplies the full, call-site-specific trailing sentence(s) explaining what
 /// a non-single-partition plan means here -- executing such a plan would coalesce partitions and
 /// silently destroy a declared ordering before it is safe to record or execute. Shared by the
-/// three query-execution paths that must verify this before executing (Design §2/§3 of
-/// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): `QueryMerger::execute_concatenated_merge`,
-/// `QueryMerger::execute_per_file_merge`, and `SqlPartitionSpec::execute_extract_query`.
+/// query-execution paths that must verify this before executing (Design §2/§3 of
+/// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): `QueryMerger::execute_concatenated_merge`
+/// (only when its ordering is declared -- see Design §2 of `tasks/1491_merge_scan_memory_plan.md`),
+/// `QueryMerger::execute_sorted_merge`, and `SqlPartitionSpec::execute_extract_query`.
 pub fn assert_single_partition(
     plan: &Arc<dyn ExecutionPlan>,
     subject: &str,
@@ -220,7 +241,7 @@ pub fn assert_single_partition(
 /// `"per-file merge"` or `"extract-query"`); `subject` names the query for the bail message;
 /// `reason` supplies the full, call-site-specific trailing text of the bail message (what was
 /// declared, and any guidance for diagnosing a mismatch). Shared by the two paths that record a
-/// `sort_order` guarantee (Design §2/§3): `QueryMerger::execute_per_file_merge` and
+/// `sort_order` guarantee (Design §2/§3): `QueryMerger::execute_sorted_merge` and
 /// `SqlPartitionSpec::execute_extract_query`. `QueryMerger::execute_concatenated_merge` does not
 /// call this -- its ordering is a structural property of the sorted, non-overlapping file group
 /// rather than a query-plan sort DataFusion could get wrong.

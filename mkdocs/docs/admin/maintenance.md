@@ -15,7 +15,7 @@ It reads the lake from the environment:
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store holding the partitions |
-| `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` | No | Query engine memory budget in MB; unset means an unbounded pool (the local-development default). This **is** set in real deployments. Unlike `flight-sql-srv`, the daemon's merges and materialization run on the shared, unscoped pool — there is no per-query audit record here, so this budget is a process-wide ceiling rather than something attributable to one query |
+| `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` | No | Query engine memory budget in MB; unset means an unbounded pool (the local-development default). This **is** set in real deployments. Unlike `flight-sql-srv`, the daemon's merges and materialization run on the shared, unscoped pool — there is no per-query audit record here, so this budget is a process-wide ceiling rather than something attributable to one query. Merge scans are single-reader by design (#1491), so merge memory does not scale with host core count |
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent work, in MB; default 100 GB (DataFusion's own default), far larger than a typical Fargate container's local disk. Applies the same way as on `flight-sql-srv`: exceeding the cap fails whichever task's spill write pushes past it, process-wide and shared across all concurrent work, not necessarily the task that consumed most of the budget |
 
 Lakehouse schema migrations run automatically at service startup. The v7

@@ -150,6 +150,15 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// Declares an ordering the view's partition scan *already* emits, letting DataFusion
     /// elide redundant `Sort` nodes for queries that `ORDER BY` these columns.
     ///
+    /// **A large or memory-heavy merge is not, on its own, a reason to declare an ordering here.**
+    /// Every `QueryMerger` merge scans its source partitions with a single sequential reader
+    /// regardless of what this method returns (`make_merge_session_context`,
+    /// `tasks/1491_merge_scan_memory_plan.md`), so a view with no natural sort contract gets a
+    /// bounded-memory merge for free, with no ordering guarantee to maintain. Reach for a declared
+    /// ordering only when a *query-side* need justifies it -- eliding a `Sort` for queries that
+    /// already `ORDER BY` these columns, or (via `PerFile`) a streaming k-way merge that must
+    /// preserve per-file order across an aggregation -- not to bound a merge's memory.
+    ///
     /// Returning a non-`Unordered` value is a correctness contract the view must guarantee, and
     /// its shape depends on which variant is returned:
     /// - `Concatenated { columns, .. }`: rows within each partition file are already sorted by
