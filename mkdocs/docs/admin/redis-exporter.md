@@ -26,6 +26,15 @@ Presets are cumulative; select with `--metrics` / `MICROMEGAS_REDIS_EXPORTER_MET
 | `extended` | core + `SLOWLOG LEN` (`redis_slowlog_length`) |
 | `full` (default) | extended + per-command stats (`redis_command_*` tagged `command=`) + `LATENCY LATEST` (`redis_latency_*` tagged `event=`) |
 
+At the default settings (`full`, 1s interval), a busy server with many
+distinct commands and latency events can emit several hundred measures per
+second per exporter — roughly 50M rows/day. Drop to `extended`/`core` or
+widen `--sample-interval-seconds` to trade detail for volume. On managed
+Redis offerings that restrict `SLOWLOG`/`LATENCY` via ACLs, `extended`
+and/or `full` will report `redis_up=0` on every tick (the exporter fails
+the whole sample if a required command is denied) — drop to `core`, or to
+`extended` if only `LATENCY` is restricted, on such deployments.
+
 Every metric carries an `instance` property (from `--target-name`, default
 `host:port`) plus any user-supplied properties, so several exporters can share
 one stack:
