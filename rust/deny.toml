@@ -92,6 +92,9 @@ skip = [
     "core-foundation",
     "foldhash",
     "itertools",
+    # redis-exporter's `redis` crate pulls a newer num-bigint than
+    # datafusion/arrow-buffer's
+    "num-bigint",
     "ordered-float",
     "redox_syscall",
     "thiserror",

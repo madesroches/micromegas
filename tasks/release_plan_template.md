@@ -211,11 +211,11 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64
 docker login
 ```
 
-Publish all 6 services for both architectures:
+Publish all 8 services for both architectures:
 
 ```bash
 python3 build/build_docker_images.py \
-  ingestion flight-sql admin http-gateway analytics-web monolith \
+  ingestion flight-sql maintenance object-cache http-gateway analytics-web monolith redis-exporter \
   --all-arches --push --version X.Y.0
 ```
 

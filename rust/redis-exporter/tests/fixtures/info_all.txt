@@ -1,0 +1,41 @@
+# Server
+redis_version:7.2.5
+uptime_in_seconds:86452
+
+# Clients
+connected_clients:2
+blocked_clients:0
+
+# Memory
+used_memory:1024000
+used_memory_rss:2048000
+maxmemory:0
+mem_fragmentation_ratio:2.00
+
+# Persistence
+rdb_changes_since_last_save:12
+rdb_last_save_time:1755640000
+aof_enabled:0
+
+# Stats
+total_commands_processed:44921
+instantaneous_ops_per_sec:17
+total_net_input_bytes:123456
+total_net_output_bytes:654321
+expired_keys:3
+evicted_keys:0
+keyspace_hits:4000
+keyspace_misses:250
+
+# Replication
+role:master
+connected_slaves:1
+master_repl_offset:733
+
+# Commandstats
+cmdstat_get:calls=4250,usec=8500,usec_per_call=2.00,rejected_calls=0,failed_calls=0
+cmdstat_set:calls=1200,usec=6000,usec_per_call=5.00,rejected_calls=0,failed_calls=1
+
+# Keyspace
+db0:keys=5,expires=1,avg_ttl=0
+db2:keys=42,expires=0,avg_ttl=0
