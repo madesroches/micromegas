@@ -386,7 +386,7 @@ shrinks the output by orders of magnitude: `processes` and `streams` (`SqlBatchV
 query is a `GROUP BY` aggregate on the default undeclared route — `processes_view.rs:47-68`,
 `streams_view.rs:41-53`) and `log_stats`'s merge whenever it falls back to the plain merger because an
 input hasn't yet certified its `sort_order` (the gate is `SqlBatchView::merge_partitions`'s
-`all_inputs_certify` check, `sql_batch_view.rs:363-371` with `all_inputs_certify` at `:220-232` — true
+`all_inputs_certify` check, `sql_batch_view.rs:363-371` with `all_inputs_certify` at `:221-231` — true
 of every existing partition until re-materialization). There the writer is idle most of the time, so the
 now-serial scan is the bottleneck: expect closer to `target_partitions`× on those merges. In practice
 that's bounded by `processes`/`streams`' small partition volumes, and by `log_stats` shrinking to its
@@ -535,9 +535,9 @@ not cached in L1" section already gives for raw telemetry blocks.
   the two-arm dispatch collapse (`execute_concatenated_merge` taking `declared: bool`,
   `execute_per_file_merge` → `execute_sorted_merge`), rustdoc, the completion log line
 - `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` —
-  `ScanOrdering::declares_concatenated_ordering`, the enum's two-scan-shape rustdoc, and the
-  `execute_per_file_merge` → `execute_sorted_merge` rename plus the corrected "three paths" claim in
-  `assert_single_partition`'s and `assert_ordering_satisfied`'s shared rustdoc
+  `ScanOrdering::declares_concatenated_ordering`, the enum's two-scan-shape rustdoc, and the stale
+  `execute_per_file_merge` mentions in `assert_single_partition`'s (`:198`) and
+  `assert_ordering_satisfied`'s (`:223`) rustdocs, plus the corrected "three paths" claim in the former
 - `rust/analytics/src/lakehouse/view.rs` — `get_scan_output_ordering` rustdoc note
 - `rust/analytics/tests/merge_scan_partitioning_tests.rs` — new plan-shape regression test plus the
   `execute_merge_query` concatenation-order test
@@ -658,16 +658,21 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   `execute_concatenated_merge` starts taking them conditionally.
 - **Full `cargo test` in `rust/`**, plus `cargo clippy --all-targets` and `cargo fmt --check`.
 - **Local end-to-end**: `python3 local_test_env/ai_scripts/start_services.py`, generate enough
-  telemetry for at least two one-minute partitions each of `measures` **and** `log_entries`, then force
-  the hourly merge deterministically instead of waiting on `EveryHourTask`'s cron (which would need up
-  to ~2 hours to land in a fresh local run): call `materialize_partitions('measures'|'log_entries',
-  begin, end, 3600)` via `micromegas-query` or `client.materialize_partitions(...)`
-  (`rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`,
-  `python/micromegas/micromegas/flightsql/client.py:733`) with a `partition_delta_seconds` of 3600 to
-  produce the hourly merged partition on demand. Confirm from `/tmp/daemon.log` that both merges
-  complete and each merged partition's `num_rows` equals the sum of its inputs'
-  (`micromegas-query "SELECT ... FROM list_partitions()"`). Covering both is what exercises the claim
-  that this is a shared-path fix rather than a `measures` one.
+  telemetry for at least two one-minute partitions each of `measures` **and** `log_entries`, then
+  watch two consecutive `EveryMinuteTask` runs in `/tmp/daemon.log` — no forcing needed.
+  `EveryMinuteTask` already merges the 1-second partitions into the 1-minute partition through the
+  same `create_merged_partition` / `QueryMerger` path this change touches
+  (`maintenance.rs:166-180`), so this exercises the code path without the risk of forcing an
+  hour-aligned merge on an in-progress hour: `materialize_partitions` only takes the merge branch
+  when that hour's sub-partitions are complete and their source-object counts sum exactly to the
+  range's (`batch_update.rs:58-67`, `:81-88`) — otherwise it aborts or falls back to
+  `CreateFromSource` with no merge at all — and if it does merge, the resulting hour partition then
+  causes every later per-second/per-minute run for that hour to abort on an overlapping-partition
+  check (`batch_update.rs:58-67`) until the next `HH:10` `EveryHourTask` run. Confirm from
+  `/tmp/daemon.log` that both merges complete and each merged partition's `num_rows` equals the sum
+  of its inputs' (`micromegas-query "SELECT ... FROM list_partitions()"`). Covering both `measures`
+  and `log_entries` is what exercises the claim that this is a shared-path fix rather than a
+  `measures` one.
 - **Row-group pruning, before/after** (§3) — the query-side half of the change. A partition's internal
   row order is fixed at write (merge) time, so this cannot be measured on one partition before and
   after; it is a comparison across two *different* merged hourly partitions of the same view — one
@@ -703,6 +708,7 @@ No open questions remain.
 2. **Residual allocator retention — not a question.** Reading `jemalloc_allocated_bytes` against
    `jemalloc_resident_bytes` is already part of the design (§4) and of Phase 2's sampling (step 9);
    it is an interpretation of the measurement, not something to decide beforehand.
-3. **Nothing outside this repo depends on merged-partition row order.** Confirmed. Nothing in-repo
-   does either — no `sort_order` is recorded for these views, and the order was nondeterministic
-   before — so the change carries no row-order compatibility risk.
+3. **Merged-partition row order.** Nothing in-repo depends on it — no `sort_order` is recorded for
+   these views, and the order was nondeterministic before. The author has confirmed no external
+   consumer depends on it either. The change is documented in the CHANGELOG, and the row-order
+   change is called out in the issue reply.
