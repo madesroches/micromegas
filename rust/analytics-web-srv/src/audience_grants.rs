@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use micromegas::auth::policy::{is_valid_audience, selector_matches, valid_selector};
+use micromegas::auth::policy::{is_valid_audience, valid_selector};
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -539,17 +539,24 @@ async fn my_audiences(
         ));
     }
     let pool = require_pool(&state)?;
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT audience, selector FROM audience_grants WHERE axis = 'mint'")
-            .fetch_all(&pool)
-            .await?;
-    let mut audiences: Vec<String> = rows
-        .into_iter()
-        .filter(|(_, selector)| selector_matches(selector, &caller))
-        .map(|(audience, _)| audience)
-        .collect();
+    // Push the selector test into SQL rather than pulling every `mint` row into Rust and
+    // filtering with `selector_matches`: `*` plus the caller's own `user:`/`group:` selectors
+    // are exactly the selectors `selector_matches` would accept, and binding them as an array
+    // lets Postgres do the filtering instead of materializing the whole (monotonically-growing)
+    // mint axis on every call.
+    let mut selectors: Vec<String> = vec!["*".to_string()];
+    if let Some(email) = &caller.email {
+        selectors.push(format!("user:{email}"));
+    }
+    selectors.extend(caller.groups.iter().map(|g| format!("group:{g}")));
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT audience FROM audience_grants WHERE axis = 'mint' AND selector = ANY($1)",
+    )
+    .bind(&selectors)
+    .fetch_all(&pool)
+    .await?;
+    let mut audiences: Vec<String> = rows.into_iter().map(|(audience,)| audience).collect();
     audiences.sort();
-    audiences.dedup();
     let mint_prefix = mint_prefix_for(&caller.email);
     let email = caller.email.clone();
     Ok(Json(MyAudiencesResponse {
