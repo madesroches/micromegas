@@ -1,7 +1,9 @@
 # Bounded-Memory Merge Scans Plan
 
 [#1491](https://github.com/madesroches/micromegas/issues/1491) — `measures` hourly merge dwarfs
-every other view's and correlates with a ~700-800 MB daemon memory spike.
+every other view's and correlates with a ~700-800 MB daemon memory spike. The fix is not
+`measures`-specific: it is one session setting on the shared `QueryMerger` path, and it applies
+equally to `log_entries` and to every other view that merges through it.
 
 ## Overview
 
@@ -42,14 +44,41 @@ other `PartitionMerger` implementation, currently unused in-repo) keeps its curr
 Design §1 explains why applying the same setting there would trade its unbounded-memory scan for a
 wall-clock regression rather than fixing it.
 
-It also buys a **query** win in mechanism, though a modest one in practice. Today's interleaved
+Two things follow from that, and this plan treats both as part of the fix rather than as side
+effects.
+
+**`log_entries` is not an incidental beneficiary — it is the second-largest view on the same
+path.** Measured with `list_partitions()` on the deployment that reported the issue: `log_entries`
+holds 288 GB across 1468 global partitions with a largest single partition of ~1 GB, against
+`measures`' 1.86 TB across 1324 with a largest of ~5 GB. It is written by the same
+`BlockPartitionSpec`, with the same `buffer_unordered` block ordering and the same insert-time
+partition cuts, so every Current State finding about why `measures` can declare no ordering holds
+for `log_entries` verbatim — same two failed preconditions, same mixed failure mode, same `PerFile`
+no-op. Where the two views differ is in *who queries them*, and that difference reverses the
+reasoning behind §2's and §3's conclusions without changing the verdicts (§3b).
+
+**Once every merge scan is sequential there are only two merge strategies, not three.**
+`Unordered` and `Concatenated` already build the identical scan today —
+`build_unordered_or_concatenated_plan` puts every input partition in one file group for both — and
+after this change they also execute it identically. The only thing separating them is whether the
+resulting order is *declared*. The real taxonomy is **concatenate** (one sequential reader; output
+is the inputs back to back) and **sort-merge** (k readers collapsed by a `SortPreservingMergeExec`,
+on a certified per-file sort order), so `QueryMerger`'s three-arm dispatch collapses to two (§1b).
+The `ScanOrdering` enum itself keeps three variants: on the *query* path "declare nothing" is a
+distinct and necessary state. It is the merge dispatch, not the type, that has one strategy too
+many.
+
+Beyond memory, the sequential scan also buys a **query** win in mechanism, though a modest one in
+practice. Today's interleaved
 merge scatters each source minute across every row group of the merged hourly partition, so `time`
 row-group statistics span the whole hour and a narrow-window query prunes nothing. A sequential scan
 makes the merged file the concatenation of its inputs in insert-time order, which restores
 time-local row groups — ordering by construction, with no declared contract and no sort. How much
-that is worth depends on who queries the global `measures` view; Design §3 answers that from a
-6-hour query-audit sample, and the same evidence is why this plan stops short of a *recorded* sort
-rather than merely deferring one.
+that is worth depends on who queries the merged global partitions; Design §3 answers that for
+`measures` and §3b for `log_entries`, both from 6-hour query-audit samples, and the same evidence
+is why this plan stops short of a *recorded* sort rather than merely deferring one. The short
+version: the mechanism is free, and in this deployment neither view collects on it — for opposite
+reasons.
 
 ## Current State
 
@@ -124,7 +153,7 @@ exists precisely because this fan-out is what happens by default.
   contributes a bounded ~100 MB of in-progress row group plus part buffers — it does **not** scale
   with core count.
 
-### Why `measures` cannot declare an ordering
+### Why `measures` — and `log_entries` — cannot declare an ordering
 
 `View::get_scan_output_ordering`'s contract (`view.rs:150-209`) requires, for
 `Concatenated { columns, bounds }`, that (a) rows within each partition file are already sorted by
@@ -163,6 +192,15 @@ has exactly one consumer: `MaterializedView::scan` (`materialized_view.rs:94`), 
   `make_partitioned_execution_plan` (`partitioned_execution_plan.rs:291`). `BlockPartitionSpec`
   passes `None` for `sort_order` (`block_partition_spec.rs:92`), so no `measures` partition
   certifies anything and the declaration would degrade to `Unordered` — a pure no-op.
+
+**The same four bullets hold for `log_entries`, unchanged.** `LogView` takes the same `View` trait
+defaults (`log_view.rs` overrides neither `merge_partitions` nor `get_scan_output_ordering`),
+constructs the same `BlockPartitionSpec` (`log_view.rs:127`) with the same `buffer_unordered` block
+ordering and the same `sort_order: None`, cuts partitions on insert time while `time` is event
+time, and groups its JIT partitions under the same `BlockOrder::InsertTime` (`log_view.rs:192`).
+Substitute the view name and every argument above reads the same, including the mixed failure
+mode. `async_events` and `images` are the same shape again — `measures` and `log_entries` are
+simply the two large enough to matter.
 
 ## Design
 
@@ -211,7 +249,7 @@ so they're a potential confounder in that comparison, not just an unrelated code
 `QueryMerger` gets the fix via one extracted helper, `make_merge_session_context(...)`, a thin
 wrapper around `make_session_context` (`query.rs:256`) that applies the merge-only setting before
 handing back the session, rather than each ordering-aware path building a session and then
-separately remembering to set it. The plan-shape test in step 4 asserts against this same wrapper,
+separately remembering to set it. The plan-shape test in step 6 asserts against this same wrapper,
 which guards the wrapper's own plan shape; it does not exercise `QueryMerger::execute_merge_query`
 itself, so it would not catch a future regression where that method stops calling the wrapper.
 
@@ -273,6 +311,92 @@ to multiple partitions, and coalescing it is correct. With `repartition_file_sca
 queries keep their aggregation parallelism via round-robin repartition *above* a sequential scan —
 which is the desirable shape, not something to bail on.
 
+### 1b. Two merge strategies, not three
+
+With `repartition_file_scans = false` applied to every `QueryMerger` merge, the three arms of
+`execute_merge_query`'s `match &self.merge_scan_ordering` (`merge.rs:277-296`) produce two distinct
+physical shapes, not three:
+
+| `merge_scan_ordering` | Scan built by `make_partitioned_execution_plan` | Concurrent readers | Strategy |
+|---|---|---|---|
+| `Unordered` | `build_unordered_or_concatenated_plan`, `ordering: None` | 1 | concatenate |
+| `Concatenated { .. }` | `build_unordered_or_concatenated_plan`, `ordering: Some(..)` | 1 | concatenate |
+| `PerFile { columns }` | `build_per_file_plan` | k, one per input partition | sort-merge |
+
+The first two call the same builder (`partitioned_execution_plan.rs:303-324`) and differ only in
+bookkeeping *around* the same single file group: `Concatenated` first runs
+`sort_and_check_non_overlapping`, attaches leading-column statistics per file
+(`attach_ordering_statistics`), and declares a `LexOrdering`. The rows come out in the same order
+either way — file by file, in the `begin_insert_time` order `create_merged_partition` sorted them
+into (`merge.rs:371`). `Unordered` is not a third strategy; it is concatenation with the resulting
+order left undeclared, which is exactly what §2 calls "ordering by construction". Before this plan
+the two arms at least *executed* differently (`Unordered` kept the `target_partitions` fan-out);
+after it, keeping them apart is bookkeeping masquerading as a strategy.
+
+So collapse the dispatch to the two strategies that exist:
+
+```rust
+// merge.rs, QueryMerger::execute_merge_query
+match &self.merge_scan_ordering {
+    // Sort-merge: k ordered readers, collapsed by a SortPreservingMergeExec.
+    ScanOrdering::PerFile { columns } => {
+        self.execute_sorted_merge(&ctx, columns, insert_range).await
+    }
+    // Concatenate: one sequential reader over one file group. `Unordered` and `Concatenated`
+    // are the same strategy -- they differ only in whether the resulting order is declared,
+    // which is what gates the checks inside.
+    ordering => {
+        self.execute_concatenated_merge(&ctx, ordering.concatenated_columns(), insert_range)
+            .await
+    }
+}
+```
+
+backed by a small accessor on the enum:
+
+```rust
+// partitioned_execution_plan.rs
+impl ScanOrdering {
+    /// The global ordering a *concatenating* scan of these partitions declares, if any.
+    /// `PerFile` returns `None` because a per-file ordering only becomes a global one through a
+    /// downstream merge -- it is the other strategy, not an undeclared version of this one.
+    pub fn concatenated_columns(&self) -> Option<&[ScanSortColumn]> {
+        match self {
+            ScanOrdering::Concatenated { columns, .. } => Some(columns),
+            ScanOrdering::Unordered | ScanOrdering::PerFile { .. } => None,
+        }
+    }
+}
+```
+
+`execute_concatenated_merge` becomes the single concatenating path, taking
+`declared: Option<&[ScanSortColumn]>`:
+
+- **Always**: build the physical plan with `create_physical_plan()` and run it with
+  `execute_stream(plan, task_ctx)`, replacing the `Unordered` arm's `df.execute_stream()`. Not a
+  behavior change — `DataFrame::execute_stream` is exactly those two steps — but it puts both
+  concatenating merges on one code path and makes the plan available to inspect and log on either.
+- **Only when `declared.is_some()`**: `assert_single_partition` and the
+  `SortExec`/`SortPreservingMergeExec` `ordering_honored` check, both unchanged. They exist to
+  protect a declared ordering; with nothing declared there is nothing to protect, and §1's
+  "Deliberately not added" reasoning still holds — an aggregating `Unordered` merge query
+  legitimately plans to multiple partitions, and coalescing it is correct.
+- `ordering_honored` stays `true` in the undeclared case, matching today's `Unordered` arm and the
+  field's existing rustdoc ("Always `true` when no ordering was declared").
+
+Rename `execute_per_file_merge` to `execute_sorted_merge` so the two method names are the two
+strategies rather than one strategy and one scan shape. `ScanOrdering::PerFile` keeps its name — it
+describes the scan shape, which is what that enum is for.
+
+**The enum stays at three variants.** `ScanOrdering` has a second consumer,
+`MaterializedView::scan` on the user-query path (`materialized_view.rs:94`), where `Unordered`
+means "declare no ordering to DataFusion" and is neither redundant nor expressible as
+`Concatenated`. The collapse is in the merge dispatch and in the vocabulary the docs use, not in
+the type. `make_partitioned_execution_plan` already encodes the same two-shape split for both
+consumers: its `PerFile`-that-does-not-certify arm degrades to `Unordered`
+(`partitioned_execution_plan.rs:290-300`), which is precisely "fall back from sort-merge to
+concatenate".
+
 ### 2. What this changes about the output — and what it recovers for queries
 
 For a non-aggregating merge query — the default `SELECT * FROM source` shape most views use —
@@ -304,18 +428,24 @@ stream with a long block-fill interval contributes events older than its insert 
 widens some row groups' `time` range. Pruning improves substantially without becoming exact — for
 an exact bound, see §3.
 
-Two limits on how much this is worth, both quantified in §3: pruning can never select less than
-one row group (128 Ki rows, `write_partition.rs:923`), so the benefit scales with row groups per
-partition — large on merged hourly partitions, negligible on fresh one-minute ones — and the global
-`measures` view turns out to receive very little query traffic in the deployment that reported this
-issue. The mechanism is real and free; the payoff is deployment-dependent.
+Three limits on how much this is worth, all quantified in §3 and §3b. Pruning can never select
+less than one row group (128 Ki rows, `write_partition.rs:923`), so the benefit scales with row
+groups per partition — large on merged hourly partitions, negligible on fresh one-minute ones.
+Pruning also only pays when a query's window is materially narrower than the partition it lands in;
+a query asking for the whole hour reads the whole hourly partition however well its row groups are
+clustered. And a view collects on either of those only in proportion to how much of its traffic
+reaches merged global partitions at all. In the deployment that reported this issue the global
+`measures` view fails the third test (§3: ~2 queries in 6 hours) and the global `log_entries` view
+fails the second (§3b: heavily queried, but no sampled query asks for a window narrower than the
+partition it reads). The mechanism is real and free; the payoff is deployment-dependent, and in
+this deployment it is close to zero for both of the views this plan is about.
 
 No guarantee is *recorded*: `get_merged_partition_sort_order` still returns `None` for
 `MetricsView`, so no query plan may assume it, and nothing certifies a `sort_order`. This is
 ordering by construction — free, contract-free, and applying to every view on the default merge
 path.
 
-### 3. What an enforced sort would add, what it would cost, and what the queries actually ask for
+### 3. What an enforced sort would add, what it would cost, and what the queries actually ask for (`measures`)
 
 Ordering by construction (§2) is clustering, not a declared order. A real, recorded sort on
 `measures` would add three things §2 cannot: exact row-group pruning (bounded by the sort key, not
@@ -413,6 +543,77 @@ deployment shows a different mix — and if it is revisited, `(name, time)` is t
 **not** about ordering at all: those queries spend their time in JIT freshness checking over
 over-wide requested ranges, which no sort key or scan change can address.
 
+### 3b. The same question for `log_entries` — opposite traffic, same answer
+
+`log_entries` sits on the identical write and merge path as `measures` (§1's Overview), so §3's
+*mechanics* transfer unchanged: the sort would have to happen in `BlockPartitionSpec::write` on the
+every-minute path, it would scatter the same per-block dictionary runs, and `PerFile` would raise
+merge reader concurrency to k. What does not transfer is the query evidence, which is close to
+inverted — so it is worth checking separately rather than assuming the verdict carries.
+
+**The query evidence.** Same source and same 6-hour window as §3 (`log_entries` where
+`target = 'flightsql_query_audit'`, production deployment), for the 3178 audited queries whose SQL
+references `log_entries`. The window is rolling, so counts drift by a few tens between runs; the
+proportions below are what matter and they are stable.
+
+- **3171 of 3178 go to the global view**; 7 use `view_instance('log_entries', ...)`. That is the
+  exact opposite of `measures`, where 546 of 548 went to per-process JIT instances and the global
+  view saw 2. So for `log_entries` the population this plan's merge touches *is* the population
+  being queried.
+- **Only 28 distinct SQL statements** account for all 3178 — this is dashboard traffic, refreshing.
+- **What they filter:** 3169 filter on `level`; 3153 call
+  `property_get(process_properties, '<key>')`; 3026 `GROUP BY`; 289 `ORDER BY`; 11 mention
+  `process_id`. No high-cardinality scalar column is ever filtered.
+- **All of it is on fresh data**: 3170 of 3178 have `query_time - range_end ≤ 1 hour`.
+- **Window width vs. bytes scanned**, over the 3171 global-view queries, bucketing on the audit
+  record's `range_end - range_begin`:
+
+  | Requested window | Queries | Avg bytes scanned | Max | Total |
+  |---|---|---|---|---|
+  | ≤ 2 min | 2880 | 1.8 MB | 5 MB | 5.0 GB |
+  | ≤ 1 hour | 272 | 175.8 MB | 315 MB | 46.7 GB |
+  | ≤ 1 day | 19 | 856.9 MB | 1.6 GB | 15.9 GB |
+  | > 1 day | 1 | 0 | 0 | 0 |
+
+That evidence changes §3's reasoning and leaves its verdict intact:
+
+**a. The pruning win (§2) still does not land — but for the opposite reason.** For `measures` it
+was that nobody queries the merged global partitions. For `log_entries` everybody does, and it
+still does not pay, because no sampled query asks for a window materially narrower than the
+partition it reads. The ≤ 2-minute queries average 1.8 MB — two orders of magnitude below the wide
+bucket — which is them landing on fresh one-minute partitions, where a partition already *is* the
+window and there is nothing to prune. The queries that do reach merged partitions ask for the whole
+hour or the whole day. Better row-group clustering cannot help a query that wants every row group.
+This is the third limit §2 now lists, and `log_entries` is the view that demonstrates it.
+
+**b. There is no candidate sort key.** For `measures`, §3d found one — `name`, unanimously filtered
+and high-cardinality — and rejected the sort only because the population that would benefit was not
+the population being queried. `log_entries` does not get that far: the only scalar column ever
+filtered is `level`, which has six values (`micromegas_tracing::Level`) and cannot prune, and
+everything else goes through
+`property_get` over the `process_properties` map, which is not a sortable scalar column at all. A
+`(time, ...)` key would prune nothing these dashboards ask for, since they already narrow by time
+through the query range. So the answer here is not "right key, wrong population" — it is that no key
+exists.
+
+**c. The write-side cost is the same, and lands on a second high-volume view.** `BlockPartitionSpec`
+is shared, so a sort would be opt-in per view (§3a); opting `log_entries` in buys the same
+whole-partition write-time buffer on the every-minute path, for the view whose evidence is weaker
+than `measures`'.
+
+**d. Same sampling caveat, and one finding worth flagging.** Twenty-eight statements from one
+dashboard family is a real workload but a narrow one, and it should no more be read as the shape of
+every deployment than §3's sample should. The finding it does support is not about ordering: of the
+67.6 GB scanned by global `log_entries` queries in 6 hours, 62.6 GB comes from the 292 queries
+asking for a window wider than 2 minutes, and nothing in this plan — or in any sort key — addresses
+that. It belongs with the follow-up in step 9.
+
+**Conclusion: no sort for `log_entries` either, and the §2 pruning win does not materialize for it.
+The memory fix in §1 applies to it in full and does not depend on any of the above** — it is 288 GB
+of partitions merging through the same `target_partitions`-wide scan, with a largest partition of
+~1 GB, and the fan-out costs the same multiple of the reader working set there as it does for
+`measures`.
+
 ### 4. Expected improvement, and how to size it
 
 The scan-side component of the spike is linear in `target_partitions`; this change takes it to
@@ -498,11 +699,24 @@ no reuse benefit — so Phase 3 adds a bullet there for merge reads (see Documen
    `execute_per_file_merge`'s optimizer block; update both methods' rustdoc, which currently
    describes setting it as part of their own path (`merge.rs:97-100`, `merge.rs:150-156`), to
    reference the shared setting instead.
-3. `rust/analytics/src/lakehouse/view.rs`: extend the `get_scan_output_ordering` rustdoc with a
+3. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs`: add
+   `ScanOrdering::concatenated_columns(&self) -> Option<&[ScanSortColumn]>` with the rustdoc from
+   Design §1b, and extend the `ScanOrdering` enum's own rustdoc to name the two scan shapes (single
+   sequential file group vs. one group per file) and to say that `Unordered` and `Concatenated` are
+   the same shape differing only in what they declare.
+4. Same file (`merge.rs`): collapse `execute_merge_query`'s three-arm `match` to the two arms in
+   Design §1b. Change `execute_concatenated_merge`'s signature to take
+   `declared: Option<&[ScanSortColumn]>`, gate `assert_single_partition` and the `ordering_honored`
+   plan-string check on `declared.is_some()` (returning `ordering_honored: true` when it is `None`),
+   and delete the `ScanOrdering::Unordered` arm's inline `df.execute_stream()` body — the
+   concatenating path now builds the plan explicitly for both. Rename `execute_per_file_merge` to
+   `execute_sorted_merge`. Update `MergeQueryResult::ordering_honored`'s rustdoc
+   (`merge.rs:38-46`), which describes the field per-variant, to describe it per-strategy.
+5. `rust/analytics/src/lakehouse/view.rs`: extend the `get_scan_output_ordering` rustdoc with a
    short note that a bounded merge scan is *not* a reason to declare an ordering — every merge is
    sequential regardless — so the next view author facing a big merge does not repeat #1491's
    reasoning.
-4. `rust/analytics/tests/merge_scan_partitioning_tests.rs` (new): offline plan-shape test, modelled
+6. `rust/analytics/tests/merge_scan_partitioning_tests.rs` (new): offline plan-shape test, modelled
    on `log_stats_ordering_tests.rs`'s `make_offline_lakehouse_context` helper (in-memory object
    store, no DB, lazily-connected) with fabricated `Partition`s (`file_size` above the 10 MB
    `repartition_file_min_size`) registered as the source table. Build two sessions — one from
@@ -516,47 +730,68 @@ no reuse benefit — so Phase 3 adds a bullet there for merge reads (see Documen
    - with plain `make_session_context` (control, guarding that the test is meaningful):
      `partition_count() > 1`
    Asserting against the wrapper itself, rather than a bare config-mutating helper the test drives
-   by hand, guards the wrapper's own plan shape — it does not exercise
-   `QueryMerger::execute_merge_query`, so it would not catch a future refactor that reverts that
-   method to call `make_session_context` directly instead of the wrapper (Design §1).
+   by hand, guards the wrapper's own plan shape. It does not exercise
+   `QueryMerger::execute_merge_query` — step 7 covers that.
+7. Same test file: cover the step-4 collapse by driving `QueryMerger::execute_merge_query` itself
+   over the offline lakehouse context with the default `Unordered` ordering and a
+   `SELECT * FROM source` query, and assert the drained stream's rows are the inputs concatenated in
+   `begin_insert_time` order. Two fabricated single-row partitions with distinguishable values are
+   enough. This is the coverage the plan-shape test above does not give: it is what fails if a
+   future refactor reverts the undeclared path to `df.execute_stream()` without the wrapper, or
+   drops the wrapper call from `execute_merge_query`.
 
 ### Phase 2 — Measure and answer the issue
 
-5. `rust/analytics/src/lakehouse/merge.rs`: extend `create_merged_partition` to log a completion
+8. `rust/analytics/src/lakehouse/merge.rs`: extend `create_merged_partition` to log a completion
    line next to the existing `sum_size` line — elapsed wall-clock and output `file_size` — so
    before/after is queryable from `log_entries` without new instrumentation. (Deliberately a log
    line, not a metric: it pairs with the `sum_size` line the issue already quotes.)
-6. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
+9. Collect a five-hour sample matching the issue's, using `process_resident_bytes` /
    `jemalloc_allocated_bytes` / `jemalloc_resident_bytes` rather than host `used_memory`, plus the
    new duration line.
-7. Measure row-group pruning before/after: run the same narrow-window `measures` query — projecting
+10. Measure row-group pruning before/after: run the same narrow-window query — projecting
    representative payload columns, not just `time`, so `bytes_scanned` is comparable to partition
    size (see Testing Strategy) — against a pre-change and a post-change merged hourly partition and
-   compare `bytes_scanned` from `log_entries WHERE target = 'flightsql_query_audit'` — the
-   query-side half of the result, and the baseline for step 9.
-8. Post the answer on #1491: `Concatenated` is unsafe for `measures` (both preconditions fail, and
+   compare `bytes_scanned` from `log_entries WHERE target = 'flightsql_query_audit'`. Do this for
+   both `measures` and `log_entries`: it is the mechanism check, and it should show the improvement
+   for a *synthetic* narrow-window query on both views even though §3/§3b predict that no real
+   query in this deployment's sampled traffic collects on it. If the synthetic query shows no
+   improvement, the §2 mechanism claim is wrong and should be struck rather than explained away.
+   This is the query-side half of the result, and the baseline for step 12.
+11. Post the answer on #1491: `Concatenated` is unsafe for `measures` (both preconditions fail, and
    the failure is mixed — a hard `sort_and_check_non_overlapping` error where selected partitions
    overlap, silent mis-ordered rows where they don't — landing on the query path, via
    `get_scan_output_ordering`, not the merge path), `PerFile` would be a no-op, the win was never in
-   the ordering, and here is the measured before/after — memory and pruning.
-9. File the follow-up issue Design §3's evidence actually points at, which is **not** about
-   ordering: `measures` queries through per-process JIT view instances spend their time in JIT
-   freshness checking over requested ranges far wider than the process's data, not in scanning.
-   That is the larger win in the sampled workload and nothing in this plan addresses it.
+   the ordering, and here is the measured before/after — memory and pruning. Note that the same
+   holds for `log_entries` (§3b) and that the fix is shared, so the issue is closed for every view
+   on the default merge path rather than for `measures` alone.
+12. File the follow-up issues Design §3 and §3b's evidence actually point at, neither of which is
+   about ordering:
+   - `measures` queries through per-process JIT view instances spend their time in JIT freshness
+     checking over requested ranges far wider than the process's data, not in scanning (§3).
+   - Global `log_entries` dashboard queries scanned 67.6 GB over 6 hours, 62.6 GB of it from the
+     292 refreshes asking for a window wider than 2 minutes, over a 288 GB view (§3b). Nothing in
+     this plan, and no sort key, touches that.
+   Both are larger wins in the sampled workload than anything here.
 
 ### Phase 3 — Optional, only if Phase 2 leaves the L1 component significant
 
-10. `rust/analytics/src/lakehouse/lakehouse_context.rs`: add an uncached `ReaderFactory` sharing
+13. `rust/analytics/src/lakehouse/lakehouse_context.rs`: add an uncached `ReaderFactory` sharing
     the existing `MetadataCache`.
-11. `rust/analytics/src/lakehouse/merge.rs`: use it for the `source` table.
-12. Re-measure independently.
+14. `rust/analytics/src/lakehouse/merge.rs`: use it for the `source` table.
+15. Re-measure independently.
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/merge.rs` — the setting, the `make_merge_session_context`
-  extraction, rustdoc, the completion log line
+  extraction, the two-arm dispatch collapse (`execute_concatenated_merge` taking
+  `Option<&[ScanSortColumn]>`, `execute_per_file_merge` → `execute_sorted_merge`), rustdoc, the
+  completion log line
+- `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — `ScanOrdering::concatenated_columns`
+  and the enum's two-scan-shape rustdoc
 - `rust/analytics/src/lakehouse/view.rs` — `get_scan_output_ordering` rustdoc note
-- `rust/analytics/tests/merge_scan_partitioning_tests.rs` — new plan-shape regression test
+- `rust/analytics/tests/merge_scan_partitioning_tests.rs` — new plan-shape regression test plus the
+  `execute_merge_query` concatenation-order test
 - `rust/analytics/src/lakehouse/lakehouse_context.rs` — Phase 3 only
 - `CHANGELOG.md` — Unreleased / Analytics entry
 - `mkdocs/docs/admin/maintenance.md` — see Documentation
@@ -581,7 +816,27 @@ Design §4 and measured in Phase 2.
 has the same fan-out; `measures` is merely the one large enough to make it visible. A
 `measures`-only change would leave `log_entries`, `async_events`, `images`, and every unsorted
 `SqlBatchView` with the same behavior — and, per Current State, there is no correct
-`measures`-only change to make.
+`measures`-only change to make. `log_entries` is the concrete case for this: same write path, same
+merger, 288 GB and a ~1 GB largest partition, and — per §3b — an entirely different query workload
+that reaches the same conclusion about ordering. A fix scoped to `measures` would have had to be
+re-derived for it.
+
+**Collapse the merge dispatch to two strategies vs. leave three arms.** Chosen: two (Design §1b).
+Once `repartition_file_scans = false` is unconditional, `Unordered` and `Concatenated` execute the
+same scan; keeping separate arms leaves a distinction that no longer corresponds to anything the
+merge does, and it is the distinction that made this fix look like it needed a declared ordering in
+the first place — which is exactly the reasoning #1491 asked us to repeat. The cost is that the
+undeclared path now builds its physical plan explicitly instead of calling `df.execute_stream()`;
+that is the same two steps, so the cost is a slightly longer method, not a behavior change.
+
+**Rejected: collapse `ScanOrdering` to two variants.** The tempting follow-through — delete
+`Unordered`, or fold it into `Concatenated { columns: vec![] }` — breaks the query path.
+`get_scan_output_ordering` is consumed by `MaterializedView::scan`, where "declare no ordering to
+DataFusion" is a real state that a `Concatenated` with an empty column list does not express: that
+variant would still run `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:83`),
+imposing a non-overlap requirement on every view that today declares nothing. Three variants
+describe the scan; two strategies describe the merge; those are different counts of different
+things, and only the second one is over-counted today.
 
 `BatchPartitionMerger`, the other `PartitionMerger` implementation, is deliberately left out of this
 fix rather than folded in alongside `QueryMerger`. It drains into the same single writer task as
@@ -638,7 +893,9 @@ changes; the key would be `(name, time)`, not `time`.
   order) and restores row-group pruning for time-filtered queries via the resulting time-local row
   groups, that no sort guarantee is claimed, and that an aggregating (`GROUP BY`) merge query's
   output order stays nondeterministic as before. No SQL-surface change: no schema, view name, or
-  UDF signature moves, and no `SCHEMA_VERSION` bump is needed (the file schema is untouched).
+  UDF signature moves, and no `SCHEMA_VERSION` bump is needed (the file schema is untouched). No
+  **Minor breaking change** clause either: the dispatch collapse touches only private methods on
+  `QueryMerger`, and `ScanOrdering::concatenated_columns` is additive.
 - `mkdocs/docs/admin/maintenance.md` — the `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` row already
   explains that daemon merges run on the shared unscoped pool; add a short note that merge scans
   are single-reader by design, so merge memory does not scale with host core count. Relevant to
@@ -649,30 +906,42 @@ changes; the key would be `(name, time)`, not `time`.
 - `mkdocs/docs/architecture/caching.md` (Phase 3 only) — add a bullet to "What is intentionally not
   cached in L1" for merge reads, mirroring the existing raw-telemetry-blocks entry: read exactly
   once during a merge, so caching them in L1 is pure cost.
-- Rustdoc as listed in Implementation Steps 2-3 — the `view.rs` note is the one that prevents this
-  question from being asked again.
+- Rustdoc as listed in Implementation Steps 2-5 — the `view.rs` note is the one that
+  prevents the "should this view declare an ordering to bound its merge?" question from being asked
+  again, and the `ScanOrdering` note (step 3) is the one that keeps the two-strategy/three-variant
+  distinction from being re-litigated the next time someone notices the enum has an arm the merge
+  no longer branches on.
 
 ## Testing Strategy
 
-- **New offline plan-shape test** (step 4) — the regression guard for the wrapper's own plan shape.
+- **New offline plan-shape test** (step 6) — the regression guard for the wrapper's own plan shape.
   Builds one session via `make_merge_session_context` and one via plain `make_session_context`
   (control), asserting one output partition with the former and more than one with the latter, so a
   future DataFusion upgrade that re-introduces the fan-out fails CI rather than production memory.
-  This test does not call `QueryMerger::execute_merge_query`, so it would not catch a future
-  refactor that stops `QueryMerger` from calling the wrapper — that gap is not covered by this plan.
-  Both sessions pin `target_partitions` to 8 so the control assertion is meaningful on any CI runner
-  regardless of
-  core count.
+  This test does not call `QueryMerger::execute_merge_query` — that gap is what the next bullet
+  covers. Both sessions pin `target_partitions` to 8 so the control assertion is meaningful on any
+  CI runner regardless of core count.
+- **New `execute_merge_query` concatenation-order test** (step 7) — drives the collapsed dispatch
+  (Design §1b) end to end on the default `Unordered` ordering with `SELECT * FROM source`, over two
+  fabricated single-row partitions, and asserts the drained rows come out in `begin_insert_time`
+  order. This is the regression guard for both halves of the refactor that the plan-shape test
+  cannot give: a future change that drops the `make_merge_session_context` call from
+  `execute_merge_query`, and one that re-splits the undeclared path back onto
+  `df.execute_stream()`.
 - **Existing merge-path tests must stay green** — `blocks_view_merge_ordering_tests.rs`,
   `sql_batch_view_merge_ordering_tests.rs`, `per_file_scan_ordering_tests.rs`,
   `log_stats_ordering_tests.rs`, `sql_partition_spec_sort_order_tests.rs`. These cover the
-  `Concatenated` and `PerFile` paths whose duplicated setting is being hoisted; they are the proof
-  the refactor is behavior-preserving for them.
+  `Concatenated` and `PerFile` paths whose duplicated setting is being hoisted and whose dispatch
+  arms are being merged; they are the proof the refactor is behavior-preserving for them. In
+  particular `blocks_view_merge_ordering_tests.rs` is what proves the declared-ordering checks still
+  run after `execute_concatenated_merge` starts taking them conditionally.
 - **Full `cargo test` in `rust/`**, plus `cargo clippy --all-targets` and `cargo fmt --check`.
 - **Local end-to-end**: `python3 local_test_env/ai_scripts/start_services.py`, generate enough
-  telemetry for at least two one-minute `measures` partitions, let the hourly task merge them, and
-  confirm from `/tmp/daemon.log` that the merge completes and the merged partition's `num_rows`
-  equals the sum of its inputs' (`micromegas-query "SELECT ... FROM list_partitions()"`).
+  telemetry for at least two one-minute partitions each of `measures` **and** `log_entries`, let the
+  hourly task merge them, and confirm from `/tmp/daemon.log` that both merges complete and each
+  merged partition's `num_rows` equals the sum of its inputs'
+  (`micromegas-query "SELECT ... FROM list_partitions()"`). Covering both is what exercises the
+  claim that this is a shared-path fix rather than a `measures` one.
 - **Overlap claim, verifiable against real data** — the evidence that `Concatenated` was never
   available to `measures`:
   ```sql
@@ -685,6 +954,8 @@ changes; the key would be `(name, time)`, not `time`.
   ) t
   WHERE next_min < max_event_time;
   ```
+  Run it for `view_set_name = 'log_entries'` as well — §3b's claim is that the same two
+  preconditions fail there, and this is the half of it that real data can settle.
   Ordered by `min_event_time` (tiebreak `file_path`) to match the adjacency
   `sort_and_check_non_overlapping` actually checks (`partitioned_execution_plan.rs:83-90` sorts by
   the leading-column `begin` bound, not by `begin_insert_time`). A non-zero count is the count of
@@ -692,9 +963,11 @@ changes; the key would be `(name, time)`, not `time`.
 - **Row-group pruning, before/after** (Design §2) — the query-side half of the change, and the
   baseline any future sort project should be judged against. A partition's internal row order is
   fixed at write (merge) time, so this cannot be measured on one partition before and after the
-  change — it's a comparison across two *different* merged hourly `measures` partitions: one merged
-  before this change (old interleaved clustering) and one merged after (new insert-time-concatenated
-  clustering), matched for comparable volume and window width. Run the same narrow-window query
+  change — it's a comparison across two *different* merged hourly partitions of the same view: one
+  merged before this change (old interleaved clustering) and one merged after (new
+  insert-time-concatenated clustering), matched for comparable volume and window width. Do it for
+  `measures` and for `log_entries`; the latter is the one with real narrow-window traffic, even
+  though §3b finds that traffic never lands on a merged partition. Run the same narrow-window query
   against each and compare bytes actually scanned:
   ```
   micromegas-query "SELECT count(*), min(value), max(name) FROM measures WHERE time BETWEEN ... AND ..." --begin 1h
