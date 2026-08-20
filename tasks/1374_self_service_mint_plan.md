@@ -1107,7 +1107,10 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    (§4); add the lazy-claim path, `try_claim_and_mint` (§4a); add `IngestionKeyError::Forbidden`, `IngestionKeyError::Unavailable`
    (503, distinct from `NotConfigured`, §4), `IngestionKeyError::Unauthenticated` (401, `MintGate`'s
    fallback, §4), and `IngestionKeyError::Conflict` (409 `CLAIM_CONTENDED`, distinct from
-   `Forbidden`, for lock contention in `try_claim_and_mint`, §4a).
+   `Forbidden`, for lock contention in `try_claim_and_mint`, §4a). Update the module doc comment's
+   stale attribution claim (currently: "every mint/revoke/import now records the acting admin's
+   own OIDC identity (via the [`AdminUser`] extractor)" — no longer true for mint, which now runs
+   through `MintGate`/`AuthenticatedUser`; revoke/import stay `AdminUser`-gated).
 6. `audience_grants.rs`: add the `GET {base_path}/api/audience-grants/my-audiences` route and handler,
    gated by `AuthenticatedUser` plus the same off-by-default `self_service_mint_enabled` check
    `MintGate` uses (§3, §5); add `self_service_mint_enabled: bool` to `AudienceGrantsState` and
@@ -1115,7 +1118,12 @@ New module `python/micromegas/micromegas/cli/setup_telemetry.py`, registered as
    `mint_prefix_for` derivation helper, made `pub` (not module-private — mirroring
    `ingestion_keys::resolve_audience`'s own doc-commented rationale, so that the external
    `tests/audience_grants_tests.rs` crate can call it directly in step 8), and the `mint_prefix`
-   field on `MyAudiencesResponse` (§5).
+   field on `MyAudiencesResponse` (§5). Update two more stale doc comments this same change
+   invalidates: the module header's "`AdminUser`-gated handlers" (now true of every handler in this
+   file except `/my-audiences`, which is `AuthenticatedUser`-gated instead) and
+   `AudienceGrantError`'s "a `Forbidden` variant here would be dead code" (directly contradicted by
+   the `Forbidden` variant just added — replace with a note that it is returned only by
+   `/my-audiences`'s own knob-gate check, the one handler in this file `AdminUser` doesn't cover).
 
 ### Phase 2 — Rust tests
 7. `analytics-web-srv/tests/ingestion_keys_tests.rs` **and**
