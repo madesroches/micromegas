@@ -174,8 +174,8 @@ impl ScanOrdering {
     /// `PerFile` returns `false` because a per-file ordering only becomes a global one through a
     /// downstream merge -- it is the other strategy, not an undeclared version of this one. A
     /// bool, not the columns themselves: nothing on the concatenating path inspects the declared
-    /// columns, only whether an ordering was declared at all (see `execute_concatenated_merge`
-    /// below).
+    /// columns, only whether an ordering was declared at all (see
+    /// `QueryMerger::execute_concatenated_merge` in `merge.rs`).
     pub fn declares_concatenated_ordering(&self) -> bool {
         matches!(self, ScanOrdering::Concatenated { .. })
     }

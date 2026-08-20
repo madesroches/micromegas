@@ -173,19 +173,24 @@ impl QueryMerger {
             )?;
         }
 
-        let plan_str = displayable(plan.as_ref()).indent(true).to_string();
-        let ordering_honored = !declared
-            || (!plan_str.contains("SortExec") && !plan_str.contains("SortPreservingMergeExec"));
-        if !ordering_honored {
-            warn!(
-                "merge query {:?} (insert_range=[{}, {}]) did not elide its declared ordering -- \
-                 the merge will still produce a correctly ordered result, but it will buffer in \
-                 memory instead of streaming. Plan:\n{plan_str}",
-                self.query,
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-        }
+        let ordering_honored = if declared {
+            let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+            let honored =
+                !plan_str.contains("SortExec") && !plan_str.contains("SortPreservingMergeExec");
+            if !honored {
+                warn!(
+                    "merge query {:?} (insert_range=[{}, {}]) did not elide its declared \
+                     ordering -- the merge will still produce a correctly ordered result, but \
+                     it will buffer in memory instead of streaming. Plan:\n{plan_str}",
+                    self.query,
+                    insert_range.begin.to_rfc3339(),
+                    insert_range.end.to_rfc3339()
+                );
+            }
+            honored
+        } else {
+            true
+        };
 
         let stream =
             execute_stream(plan, task_ctx).with_context(|| "executing merge query plan")?;

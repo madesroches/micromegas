@@ -6,9 +6,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **Analytics:**
   * Merges (`QueryMerger`, the path every non-ordering-declaring view uses -- `measures`,
-    `log_entries`, `async_events`, `images`, `blocks`' plain-merger fallback, and every
-    `SqlBatchView` with no declared merge sort order) now scan their source partitions
-    sequentially, with one reader, regardless of declared ordering (#1491). Previously only the
+    `log_entries`, `async_events`, `images`, `net_spans`, `otel_spans`, `export_log`, `blocks`'
+    plain-merger fallback, and every `SqlBatchView` with no declared merge sort order;
+    `thread_spans` is affected too, since its declared *scan* ordering doesn't change which
+    merger `View::merge_partitions` uses) now scan their source partitions through one reader per
+    source file group, regardless of declared ordering (#1491) -- one reader total for the
+    concatenating path, or one per input partition for the sort-merge path (detailed below).
+    Previously only the
     two ordering-aware merge paths forced this; the default undeclared path left DataFusion free
     to fan a merge's source scan out to `target_partitions` concurrent readers, multiplying the
     reader working set by the host's core count for no throughput the pipeline's single writer
