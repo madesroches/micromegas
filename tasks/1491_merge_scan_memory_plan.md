@@ -457,12 +457,21 @@ not cached in L1" section already gives for raw telemetry blocks.
    `QueryMerger::execute_merge_query` — step 7 covers that.
 7. Same test file: cover the step-4 collapse by driving `QueryMerger::execute_merge_query` itself over
    the offline lakehouse context with the default `Unordered` ordering and a `SELECT * FROM source`
-   query, and assert the drained stream's rows are the inputs concatenated in `begin_insert_time`
-   order. Two fabricated single-row partitions with distinguishable values are enough. This pins the
-   collapsed dispatch's concatenation semantics; step 6's plan-shape test is what actually guards the
-   wrapper regression (a fabricated `file_size` large enough to trigger `repartition_file_scans` would
-   also fan the file-scan step out to multiple partitions, so a two-row fixture at this scale cannot
-   detect either a reverted `df.execute_stream()` path or a dropped wrapper call — see step 6).
+   query, and assert the drained stream's rows are the two input partitions concatenated in the order
+   they were passed to `execute_merge_query` (this drives the merger directly, below
+   `create_merged_partition`'s `begin_insert_time` sort at `merge.rs:371` — production
+   `begin_insert_time` ordering comes from that caller, not from anything this test asserts). Unlike
+   the plan-shape-only tests in this file and in `blocks_view_merge_ordering_tests.rs`, draining the
+   stream means the fabricated `file_path`s must resolve to real objects: write two real single-row
+   Parquet files into the offline context's `BlobStorage` (the `AsyncArrowWriter` +
+   `object_store::buffered::BufWriter` pattern from `write_partition_tests.rs`'s `make_arrow_writer`,
+   one row each with distinguishable values), and set each fabricated `Partition::file_size` to the
+   written object's actual byte size — an inflated `file_size` makes `ParquetOpener`'s footer read run
+   past the end of the object. This pins the collapsed dispatch's concatenation semantics; step 6's
+   plan-shape test is what actually guards the wrapper regression (a fabricated `file_size` large
+   enough to trigger `repartition_file_scans` would also fan the file-scan step out to multiple
+   partitions, so a two-row fixture at this scale cannot detect either a reverted `df.execute_stream()`
+   path or a dropped wrapper call — see step 6).
 
 ### Phase 2 — Measure and answer the issue
 
@@ -609,11 +618,14 @@ the machinery, so this is not a capability gap. It is rejected on evidence, reco
   DataFusion upgrade that re-introduces the fan-out fails CI rather than production memory. Both
   sessions pin `target_partitions` to 8 so the control assertion is meaningful on any CI runner.
 - **New `execute_merge_query` concatenation-order test** (step 7) — drives the collapsed dispatch (§2)
-  end to end on the default `Unordered` ordering with `SELECT * FROM source`, over two fabricated
-  single-row partitions, asserting the drained rows come out in `begin_insert_time` order. At this
-  fixture size the file group is far below `repartition_file_min_size`, so it does not exercise
-  file-scan repartitioning either way; it pins the collapsed dispatch's concatenation semantics, while
-  the plan-shape test (step 6) is the actual regression guard for the wrapper.
+  end to end on the default `Unordered` ordering with `SELECT * FROM source`, over two real single-row
+  Parquet files written into the offline context's `BlobStorage` (with `Partition::file_size` set to
+  each file's actual byte size, since the stream is actually drained here), asserting the drained rows
+  come out in the order the partitions were passed to `execute_merge_query` — `begin_insert_time`
+  ordering itself is applied by `create_merged_partition`'s caller-side sort, not by anything under
+  test here. At this fixture size the file group is far below `repartition_file_min_size`, so it does
+  not exercise file-scan repartitioning either way; it pins the collapsed dispatch's concatenation
+  semantics, while the plan-shape test (step 6) is the actual regression guard for the wrapper.
 - **Existing merge-path tests must stay green** — `blocks_view_merge_ordering_tests.rs`,
   `sql_batch_view_merge_ordering_tests.rs`, `per_file_scan_ordering_tests.rs`,
   `log_stats_ordering_tests.rs`, `sql_partition_spec_sort_order_tests.rs`. These cover the
