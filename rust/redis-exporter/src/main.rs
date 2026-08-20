@@ -121,9 +121,17 @@ async fn main() -> Result<()> {
                         imetric!("redis_up", "count", props, 1u64);
                     }
                     Err(e) => {
-                        // The ConnectionManager reconnects on its own; keep it.
+                        // Don't rely on the ConnectionManager's own background
+                        // reconnect: with number_of_retries(0) it has been
+                        // observed to wedge permanently after a mid-run
+                        // outage (its internal shared-future swap never
+                        // recovers, and no further errors or connects are
+                        // ever attempted again). Drop it and let the top of
+                        // the loop rebuild a fresh manager next tick through
+                        // our own bounded connect path instead.
                         warn!("redis sample failed: {e:#}");
                         imetric!("redis_up", "count", props, 0u64);
+                        conn = None;
                     }
                 }
                 fmetric!(
