@@ -365,7 +365,10 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
         &unstamped_sql,
     )
     .await
-    .expect_err("an unstamped process must stay denied with the escape hatch unset");
+    .expect_err(
+        "an unstamped process must stay denied for a caller whose scope doesn't include the \
+         default MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')",
+    );
     let unstamped_rows = row_count(
         f.lakehouse.clone(),
         f.view_factory.clone(),
