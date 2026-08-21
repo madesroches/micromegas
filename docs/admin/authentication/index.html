@@ -1,0 +1,5497 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Unified observability platform with high-performance telemetry collection and analytics">
+      
+      
+      
+        <link rel="canonical" href="https://micromegas.info/admin/authentication/">
+      
+      
+        <link rel="prev" href="../../architecture/caching/">
+      
+      
+        <link rel="next" href="../api-keys/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/micromegas-icon-transparent.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Authentication - Micromegas Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  <script data-goatcounter="https://madesroches.goatcounter.com/count"
+      async src="//gc.zgo.at/count.js"></script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#authentication" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Micromegas Documentation" class="md-header__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Micromegas Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Authentication
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../blog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Blog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../query-guide/" class="md-tabs__link">
+          
+  
+  
+  Query Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../web-app/" class="md-tabs__link">
+          
+  
+  
+  Analytics Web App
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../otlp/" class="md-tabs__link">
+          
+  
+  
+  Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Operations
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Micromegas Documentation" class="md-nav__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    Micromegas Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Query Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api-advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Advanced
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/schema-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-audit-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Audit Log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/async-performance-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async Performance Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/advanced-features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analytics Web App
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Notebooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Notebooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/cell-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cell Types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution & Auto-Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/screens-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Screens as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenTelemetry (OTLP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unreal Engine
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Unreal Engine
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/instrumentation-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Instrumentation API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/network-tracing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Plugin
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Grafana Plugin
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_4" id="__nav_6_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP Gateway
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    HTTP Gateway
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blender/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blender Add-on
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../native/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Native SDK (C ABI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1" id="__nav_7_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7_2" id="__nav_7_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-authentication-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Authentication (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disable-authentication-development-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Authentication (Development Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audience-filtering-activation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audience Filtering Activation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#write-side-stamping-abac-stage-5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-Side Stamping (AbAC Stage 5)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audiences-and-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audiences and Grants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Audiences and Grants">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-service-ingestion-key-mint-abac-stage-6-1374" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-service ingestion key mint (AbAC Stage 6, #1374)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#db-backed-audience-grants-1489-abac-stage-6a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DB-backed audience grants (#1489, AbAC Stage 6a)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Client Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with OIDC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python Client with OIDC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interactive-use-jupyter-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Use (Jupyter, Scripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subsequent-use-token-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subsequent Use (Token Reuse)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Tools with OIDC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ingestion-service-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ingestion Service Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ingestion Service Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rust-client-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Client Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rust Client Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-configuration-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Configuration (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api-key-authentication-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Authentication (Simple)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oidc-client-credentials-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Client Credentials (Production)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#setting-up-oidc-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up OIDC Providers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Setting Up OIDC Providers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-oauth-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Google OAuth Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-ad-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure AD Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth0-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth0 Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Storage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Revocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Privileges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#httpstls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPS/TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pkce-proof-key-for-code-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCE (Proof Key for Code Exchange)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-provider-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Provider Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-from-env-api-keys-to-db-backed-keys-and-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from Env API Keys to DB-Backed Keys and OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ingestion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry Ingestion Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flight-sql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FlightSQL Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance Daemon
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monolith/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monolith Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../object-cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Object Cache Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../redis-exporter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis Exporter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../service-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Lifecycle & Shutdown
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry-sink-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry Sink Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin SQL Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cost Effectiveness
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cost Effectiveness
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-effectiveness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Comparison Methodology
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/dynatrace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Dynatrace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/elastic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Elastic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Grafana Cloud
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/newrelic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. New Relic
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cost-comparisons/splunk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. Splunk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-authentication-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Authentication (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#oidc-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disable-authentication-development-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Authentication (Development Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audience-filtering-activation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audience Filtering Activation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#write-side-stamping-abac-stage-5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-Side Stamping (AbAC Stage 5)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audiences-and-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audiences and Grants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Audiences and Grants">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-service-ingestion-key-mint-abac-stage-6-1374" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-service ingestion key mint (AbAC Stage 6, #1374)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#db-backed-audience-grants-1489-abac-stage-6a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DB-backed audience grants (#1489, AbAC Stage 6a)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Client Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with OIDC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python Client with OIDC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interactive-use-jupyter-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Use (Jupyter, Scripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subsequent-use-token-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subsequent Use (Token Reuse)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools-with-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Tools with OIDC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-client-with-api-keys-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Client with API Keys (Legacy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ingestion-service-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ingestion Service Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ingestion Service Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rust-client-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust Client Authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rust Client Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-configuration-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Configuration (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api-key-authentication-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Authentication (Simple)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oidc-client-credentials-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC Client Credentials (Production)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#setting-up-oidc-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up OIDC Providers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Setting Up OIDC Providers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-oauth-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Google OAuth Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-ad-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure AD Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth0-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth0 Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Storage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Revocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-privileges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Privileges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#httpstls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPS/TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pkce-proof-key-for-code-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCE (Proof Key for Code Exchange)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Refresh Failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server-configuration-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Configuration Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-provider-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Provider Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-from-env-api-keys-to-db-backed-keys-and-oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from Env API Keys to DB-Backed Keys and OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../architecture/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Operations
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="./" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Administration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h1>
+<p>Micromegas supports unified authentication across all services using both API keys and OpenID Connect (OIDC).</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Both the analytics server (flight-sql-srv) and ingestion server (telemetry-ingestion-srv) support two authentication methods:</p>
+<ul>
+<li><strong>OIDC (OpenID Connect)</strong> - For human users and service accounts via federated identity providers (Google, Azure AD, Okta, Auth0, etc.)</li>
+<li><strong>API Keys</strong> - Legacy support for simple bearer token authentication</li>
+</ul>
+<p>Both methods can be enabled simultaneously. When multiple providers are configured, they are tried in order until one succeeds (API key first for performance, then OIDC).</p>
+<h2 id="authentication-methods">Authentication Methods<a class="headerlink" href="#authentication-methods" title="Permanent link">&para;</a></h2>
+<h3 id="oidc-authentication-recommended">OIDC Authentication (Recommended)<a class="headerlink" href="#oidc-authentication-recommended" title="Permanent link">&para;</a></h3>
+<p>OIDC provides secure federated authentication with automatic token refresh and support for multiple identity providers.</p>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Standards-based authentication (OAuth 2.0 / OpenID Connect)</li>
+<li>Centralized user management via identity provider</li>
+<li>Automatic token refresh with no manual intervention</li>
+<li>Support for multiple identity providers simultaneously</li>
+<li>Full audit trail with user identity (email, subject)</li>
+<li>Token revocation support via identity provider</li>
+</ul>
+<p><strong>Supported Identity Providers:</strong></p>
+<ul>
+<li>Google OAuth</li>
+<li>Microsoft Azure AD</li>
+<li>Okta</li>
+<li>Auth0</li>
+<li>Any standards-compliant OIDC provider</li>
+</ul>
+<h3 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">&para;</a></h3>
+<p>Bearer token authentication. Two flavors coexist:</p>
+<ul>
+<li><strong>Env keyring (legacy/bootstrap)</strong> — <code>MICROMEGAS_API_KEYS</code>, a JSON array parsed once
+  at startup. Still the only option for <code>object-cache-srv</code> (which has no DB
+  connection and stays env-only permanently); a transitional bootstrap path for
+  ingestion and flight-sql.</li>
+<li><strong>DB-backed keys (steady state)</strong> — <code>ingestion_api_keys</code> / <code>analytics_api_keys</code>
+  rows, validated by hash lookup. Minted, listed, and revoked over HTTP without a
+  redeploy. See <a href="../api-keys/">API Keys</a> for the full reference.</li>
+</ul>
+<p><strong>Benefits (both flavors):</strong></p>
+<ul>
+<li>Simple to configure</li>
+<li>Fast validation (HashMap lookup for the env keyring; cached hash lookup for
+  DB-backed keys)</li>
+<li>No external identity provider dependency</li>
+</ul>
+<p><strong>Limitations:</strong></p>
+<ul>
+<li>No automatic expiration (this design adds <em>revocation</em>, not expiry — a
+  DB-backed key with no <code>revoked_at</code> is valid indefinitely)</li>
+<li>Manual key distribution and rotation for the env keyring; DB-backed keys add
+  <code>created_by</code>/<code>revoked_by</code> audit trail and HTTP mint/list/revoke, but rotation
+  is still a manual operator action, not automatic</li>
+<li>No user identity for audit logging with the env keyring; DB-backed keys record
+  <code>created_by</code>/<code>revoked_by</code> (the OIDC identity that minted/revoked), but not a
+  per-request identity beyond the key's own <code>name</code></li>
+</ul>
+<h2 id="server-configuration">Server Configuration<a class="headerlink" href="#server-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="oidc-configuration">OIDC Configuration<a class="headerlink" href="#oidc-configuration" title="Permanent link">&para;</a></h3>
+<p>Configure OIDC authentication using environment variables:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># OIDC Configuration</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s1">    {</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">      &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="s1">      &quot;audience&quot;: &quot;your-app-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="s1">    },</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="s1">    {</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="s1">      &quot;issuer&quot;: &quot;https://login.microsoftonline.com/{tenant}/v2.0&quot;,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="s1">      &quot;audience&quot;: &quot;api://your-api-id&quot;</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="s1">    }</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="s1">  ],</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="s1">  &quot;jwks_refresh_interval_secs&quot;: 3600,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="s1">  &quot;token_cache_size&quot;: 1000,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="s1">  &quot;token_cache_ttl_secs&quot;: 300</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="s1">}&#39;</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="c1"># Optional: Configure admin users</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_ADMINS</span><span class="o">=</span><span class="s1">&#39;[&quot;alice@example.com&quot;, &quot;bob@example.com&quot;]&#39;</span>
+</span></code></pre></div>
+<p><strong>Configuration Fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issuers</code></td>
+<td>Array of OIDC issuer configurations</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>issuers[].issuer</code></td>
+<td>OIDC issuer URL</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>issuers[].audience</code></td>
+<td>Expected audience claim (client_id)</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>jwks_refresh_interval_secs</code></td>
+<td>JWKS cache TTL in seconds</td>
+<td>3600</td>
+</tr>
+<tr>
+<td><code>token_cache_size</code></td>
+<td>Maximum validated tokens to cache</td>
+<td>1000</td>
+</tr>
+<tr>
+<td><code>token_cache_ttl_secs</code></td>
+<td>Token cache TTL in seconds</td>
+<td>300</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Admin Configuration:</strong></p>
+<p>The <code>MICROMEGAS_ADMINS</code> environment variable is a JSON array of user identifiers (email or subject) that have administrative privileges. Admin users can perform operations like partition management.</p>
+<h3 id="api-key-configuration">API Key Configuration<a class="headerlink" href="#api-key-configuration" title="Permanent link">&para;</a></h3>
+<p><strong>Steady state: DB-backed keys.</strong> Mint an ingestion key with
+<code>POST /api/ingestion-api-keys</code>, or an analytics key with
+<code>POST /api/analytics-api-keys</code> — both on <code>analytics-web-srv</code> (OIDC + admin
+required) — see <a href="../api-keys/">API Keys</a> for the full route reference and the
+<code>mmk_</code>-prefixed key shape.</p>
+<p><strong>Legacy/bootstrap: the env keyring.</strong> Still the only option for
+<code>object-cache-srv</code> (env-only permanently — see <a href="../object-cache/">Object Cache</a>),
+and still usable as a bootstrap path for ingestion/flight-sql before any
+DB-backed key exists:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="s1">  {&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;secret-key-123&quot;},</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s1">  {&quot;name&quot;: &quot;service2&quot;, &quot;key&quot;: &quot;secret-key-456&quot;}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s1">]&#39;</span>
+</span></code></pre></div>
+<p><strong>Format:</strong>
+- JSON array of objects
+- Each object has <code>name</code> (identifier for logging) and <code>key</code> (the actual API key)
+- The <code>key</code> value is sent as the Bearer token by clients
+- Generate keys with: <code>openssl rand -base64 512</code> (or, for a DB-backed key, use
+  the mint route above instead)</p>
+<h3 id="disable-authentication-development-only">Disable Authentication (Development Only)<a class="headerlink" href="#disable-authentication-development-only" title="Permanent link">&para;</a></h3>
+<p>For local development and testing, authentication can be disabled:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Analytics server</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>flight-sql-srv<span class="w"> </span>--disable-auth
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Ingestion server</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>telemetry-ingestion-srv<span class="w"> </span>--disable-auth
+</span></code></pre></div>
+<div class="admonition danger">
+<p class="admonition-title">Security Warning</p>
+<p>Never disable authentication in production environments. This flag is intended only for local development and testing.</p>
+</div>
+<h3 id="audience-filtering-activation">Audience Filtering Activation<a class="headerlink" href="#audience-filtering-activation" title="Permanent link">&para;</a></h3>
+<div class="admonition danger">
+<p class="admonition-title">Enabling auth can silently zero out every query result</p>
+<p>Configuring any authentication method above — OIDC, API keys, or both — does more than gate
+access to the server: it flips every session from the internal <code>ReadScope::All</code> marker to
+<code>ReadScope::Audiences</code>, which activates query-time audience filtering across both enforcement
+prongs. <strong>Prong A</strong> (<code>OwnershipRewrite</code>, AbAC Stage 2) injects an audience predicate into
+every <code>MaterializedView</code>-backed query plan, so a caller only sees processes whose
+(client-asserted) <code>micromegas.audience</code> property resolves to one of their own audiences.
+<strong>Prong B</strong> (<code>AudienceGuard</code>, AbAC Stage 3) covers the four functions Prong A structurally
+can't reach — a restricted caller's call to <code>process_spans</code>, <code>perfetto_trace_chunks</code>,
+<code>parse_block</code>, or <code>get_payload</code> fails with a not-found-shaped error unless the id argument
+names a process in one of their own audiences, and <code>list_partitions()</code> silently omits every
+row (including <code>'global'</code> rows) that isn't theirs to see.</p>
+<p><strong><code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> defaults to <code>public</code></strong> (the monolith's
+<code>MICROMEGAS_ANALYTICS_</code>-prefixed equivalent for a monolith deployment), which keeps
+pre-existing, never-stamped data visible without any operator action — see the matching
+env-var row and upgrade note on the <a href="../flight-sql/#environment-variables">FlightSQL</a> and
+<a href="../monolith/#environment-variables">Monolith</a> admin pages, and the CHANGELOG's AbAC Stage 2
+upgrade note, for the full mechanism. A deployment that wants the fail-closed behavior instead
+(unstamped data invisible to everyone) must set this var to an empty string explicitly. This
+one knob covers both prongs: Prong B's <code>'global'</code>-row rule and its four guarded functions all
+consult the same <code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> value Prong A does.</p>
+<p><strong>API keys and no-<code>email</code>-claim OIDC tokens are covered by <code>public</code> alone, with no second
+knob.</strong> Under the grant-map model (see <a href="#audiences-and-grants">Audiences and Grants</a> below),
+every authenticated caller's readable set always includes <code>public</code>, regardless of identity —
+there is no caller kind whose resolved set is otherwise empty the way an API key's was under
+the identity-derived model this replaced. The <code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> default of
+<code>public</code> restores visibility for every caller kind.</p>
+<p><strong>The two prongs read different copies of <code>micromegas.audience</code>, with different freshness.</strong>
+Prong A reads a daemon-materialized parquet snapshot (unchanged from Stage 2 — a process the
+maintenance role hasn't caught up on is invisible to everyone, including its owner); Prong B
+reads Postgres directly, so it is fresher for a just-ingested process, but denies (rather than
+falls back to the stale snapshot) once retention has deleted a process's Postgres row even if
+a merged/compacted lakehouse partition of its data still exists. See the CHANGELOG's AbAC
+Stage 3 entry for the full mechanism and its accepted trade-offs.</p>
+<p><strong>Eight admin-gated lakehouse UDTFs/UDFs</strong> (<code>retire_partitions</code>, <code>materialize_partitions</code>,
+<code>regenerate_partitions</code>, <code>retire_partition_by_file</code>, <code>retire_partition_by_metadata</code>, and the
+<a href="../functions-reference/#query-deny-list">query deny list</a>'s <code>list_query_denials</code>,
+<code>deny_queries</code>, <code>remove_query_denial</code>) are gated on whether this <em>deployment</em> can ever
+produce an admin principal at all — not on a knob an operator sets. An OIDC provider can
+grant admin whenever it has at least one configured admin user; an API-key provider never
+can. At startup, the server asks every configured auth provider "can you ever produce an
+admin?" and, if none of them can, registers these eight functions for <em>any</em> authenticated
+caller instead of admin-only — otherwise an API-key-only deployment would have no path to
+them at all. <strong>Deployment-wide, not per-audience</strong>: none of the eight functions filters by
+audience, so on a deployment with no admin principal, every authenticated caller gets
+destructive access to every audience's partitions, not just their own, and can also deny
+every query in the deployment via <code>deny_queries</code> — safe only when no admin principal exists
+in the deployment, unsafe the moment it also has personal or per-team audiences.</p>
+</div>
+<h3 id="write-side-stamping-abac-stage-5">Write-Side Stamping (AbAC Stage 5)<a class="headerlink" href="#write-side-stamping-abac-stage-5" title="Permanent link">&para;</a></h3>
+<p>The read-side filter above is only trustworthy because of what happens on the write side
+(ingestion, #1373): <code>micromegas.audience</code> is now <strong>server-written from the authenticated
+ingestion credential</strong>, never trusted from the client payload. Ingestion strips any
+client-supplied <code>micromegas.*</code> property and, when the credential carries a bound audience (a
+DB-backed <code>ingestion_api_keys</code> row), stamps <code>micromegas.audience</code> itself before the process's
+first block is ever materialized. See <a href="../ingestion/#what-gets-stamped">Ingestion → What gets stamped</a>
+for the full mechanism, credential-by-credential.</p>
+<p>Two consequences worth knowing before you flip this stage on:</p>
+<ul>
+<li><strong>OTLP <code>process_id</code> re-derivation.</strong> OTLP-derived identity (<code>process_id</code>, and therefore
+  <code>block_id</code>) is now audience-scoped, so two audiences posting identical resource attributes
+  never collapse onto one process — but a deployment that starts stamping re-derives every OTLP
+  producer's <code>process_id</code> the moment it does. The same logical process appears as a new row;
+  its pre-upgrade data keeps the old id and stays unstamped (visible under the
+  <code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> default of <code>public</code> unless an operator has opted into
+  fail-closed). Rotating an ingestion key to a different audience likewise splits a long-lived
+  producer's history across two process ids — expected, since the data now genuinely belongs to
+  two audiences.</li>
+<li><strong>Client self-stamping stops taking effect.</strong> Before this stage, a native client setting its
+  own <code>micromegas.audience</code> property was the <em>only</em> thing that stamped a process at all. That
+  self-stamp is now stripped and replaced by the credential's authenticated audience — which is
+  <code>None</code> for an env-keyring key or an OIDC token. A producer that relied on self-stamping while
+  authenticating with one of those silently becomes <strong>unstamped</strong> on upgrade (visible under the
+  <code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> default's shared fallback label unless fail-closed is
+  configured, and only ever widened to that shared label, never restored to its own). To keep its
+  own label, move it onto a DB ingestion key bound to that audience.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Residual gap: cross-audience write injection (tracked, not yet closed)</p>
+<p>Process <em>registration</em> (<code>insert_process</code>/<code>register_otel_process</code>) now rejects a
+same-<code>process_id</code>, different-audience re-registration outright (§6), closing the OTLP
+process-squatting confidentiality gap described below. What's still open is appending to an
+<em>existing</em> process a credential didn't create: <code>insert_stream</code>/<code>insert_block</code> accept any
+<code>process_id</code>/<code>stream_id</code> unconditionally, so a credential bound to audience A that discovers a
+<code>process_id</code>/<code>stream_id</code> belonging to audience B can still append events to B's process —
+events that then inherit B's stamped audience. This grants no <em>read</em> power (reading B still
+requires a read grant on B), so it is an integrity-only gap, tracked as a follow-up issue
+rather than closed by #1373 (it depends on the same cache layer AbAC Stage 3's Prong B needs).</p>
+<p>Process registration itself is confidentiality-sensitive, not merely an integrity concern:
+<code>processes</code> is a single table shared by the native and OTLP paths, and the OTLP <code>process_id</code>
+derivation formula is public (see <a href="../../otlp/">OTLP Ingestion</a>). Before this guard, any
+ingestion credential could pre-register (via the native <code>insert_process</code> path) the exact
+<code>process_id</code> a victim audience's OTLP producer would later derive; the genuine producer's
+stream/blocks would then silently land on a row stamped with the squatter's audience, leaking
+that audience's data to the squatter. <code>insert_process</code> and <code>register_otel_process</code> both now
+reject such a conflicting re-registration with a 403.</p>
+<p><strong>A second, distinct residual gap: unstamped pre-registration (confidentiality, not
+integrity).</strong> The conflict guard above only fires on a conflicting <em>re</em>-registration -- an
+existing row whose audience is still <code>NULL</code> is left alone by design, so a mid-migration
+re-registration doesn't lose its process. That <code>NULL</code>-tolerant branch has its own attack: a
+credential with no bound audience (an env-keyring key, OIDC, or <code>--disable-auth</code>) can
+pre-register a victim's future <code>process_id</code> (the OTLP derivation formula is public again)
+via <code>insert_process</code>, creating an unstamped row. The victim's genuine OTLP producer's later
+<code>register_otel_process</code> call for that same <code>process_id</code> then hits the same <code>NULL</code>→no-op
+branch and returns <code>Ok</code> -- but the row stays unstamped forever, permanently suppressing the
+victim's stamp. Since <code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> now <strong>defaults</strong> to <code>public</code>, this makes
+the victim's data world-readable out of the box, not just under an opt-in migration setting.
+There is no in-product enforcement knob left for this specific scenario -- the mitigation is
+operational, not a knob: provision only audience-bound DB-backed ingestion credentials, and
+don't run ingestion with <code>MICROMEGAS_API_KEYS</code>, ingestion OIDC, or <code>--disable-auth</code> alongside
+them. A deployment that does this has no audience-less writer left to squat with in the
+first place. A deployment that wants this gap fully closed instead of mitigated should set
+<code>MICROMEGAS_UNSTAMPED_AUDIENCE</code> to an empty string (fail-closed) in addition to the credential
+hygiene above. Tracked as a follow-up stage of the AbAC epic (#1334) / to #1373 (Stage 5b),
+with no dedicated issue number of its own.</p>
+<p><strong>The two scenarios recover differently.</strong> In the <em>first</em> scenario above (a stamped
+squatter), it is the victim's genuine, later registration that hits the conflict guard and is
+rejected with a 403 -- not the squatter's. Since a stamped process's audience is immutable
+(there is no <code>UPDATE processes</code> path anywhere in the codebase), the victim's producer can
+never successfully register that <code>process_id</code> again until an operator manually deletes the
+squatted row (e.g. <code>DELETE FROM processes WHERE process_id = ...</code>). The maintenance daemon's
+automatic <code>delete_empty_processes</code> sweep (<code>rust/analytics/src/delete.rs</code>) only reclaims it on
+its own once the squatted row has no streams and the retention window has elapsed -- a
+squatter that also writes a stream keeps the row alive indefinitely.</p>
+<p>The <em>second</em> scenario (unstamped pre-registration) is different: there is no 403 and no
+manual recovery step. As described above, the victim's later registration hits the
+<code>NULL</code>→no-op branch and returns <code>Ok</code> -- the row is simply never stamped and stays silently
+unstamped forever, which is exactly what makes it a confidentiality gap rather than an
+outage. <code>DELETE</code>-ing the squatted row doesn't help here either, since nothing rejected the
+write in the first place; preventing the unstamped pre-registration itself requires the
+operational mitigation above -- there is no in-product knob that closes it.</p>
+</div>
+<h2 id="audiences-and-grants">Audiences and Grants<a class="headerlink" href="#audiences-and-grants" title="Permanent link">&para;</a></h2>
+<p>An audience is an <strong>opaque label on data</strong> — <code>public</code>, <code>team-alpha</code>,
+<code>payments-svc</code> — not an encoding of any principal's identity. What determines
+who can read or mint into an audience is separate, editable configuration: a
+grant map, resolved once at startup from <code>{prefix}_AUDIENCE_GRANTS</code> (falling
+back to the unprefixed <code>MICROMEGAS_AUDIENCE_GRANTS</code>). This is the model
+<code>AudienceReadPolicy</code>/<code>AudienceMintPolicy</code> (<code>micromegas_auth::policy</code>) resolve
+against; the <a href="#audience-filtering-activation">Audience Filtering Activation</a>
+section above is what actually consumes the <em>read</em> half of it.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;public&quot;</span><span class="p">:</span><span class="w">       </span><span class="p">[</span><span class="s2">&quot;*&quot;</span><span class="p">],</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;team-alpha&quot;</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="s2">&quot;group:eng&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;user:alice@example.com&quot;</span><span class="p">],</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;alice-laptop&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">&quot;read&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;user:alice@example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;group:leads&quot;</span><span class="p">],</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">&quot;mint&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;user:alice@example.com&quot;</span><span class="p">]</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Keys are audience names (<code>[A-Za-z0-9_-]{1,255}</code>, case-sensitive, no
+normalization). Each value is either a bare array — read-only shorthand, the
+common case — or an object with separate <code>"read"</code>/<code>"mint"</code> lists, needed only
+when the audience should also grant <em>mint</em> authority (minting a new
+<code>ingestion_api_keys</code> row stamped with that audience). An omitted <code>"mint"</code>
+list is always empty, never derived from <code>"read"</code>: a read grant never confers
+mint authority. Selectors:</p>
+<table>
+<thead>
+<tr>
+<th>Selector</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*</code></td>
+<td>any authenticated principal</td>
+</tr>
+<tr>
+<td><code>user:&lt;email&gt;</code></td>
+<td>the caller's <code>email</code> claim</td>
+</tr>
+<tr>
+<td><code>group:&lt;g&gt;</code></td>
+<td>any value in the caller's <code>groups</code> claim</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Two built-in rules, and nothing else:</strong></p>
+<ul>
+<li><strong><code>public</code> is always readable</strong>, by every authenticated principal, whether
+  or not it appears in the map at all — writing <code>{"public": ["*"]}</code> changes
+  nothing, but an operator who omits it doesn't accidentally hide legacy
+  (unstamped, coalesced-to-<code>public</code>) data either.</li>
+<li><strong>There is no self-audience rule.</strong> A caller is never granted an audience
+  merely for being named like one — an API key named <code>team-alpha</code> does not
+  thereby read the <code>team-alpha</code> audience. A personal audience is an ordinary
+  audience with an ordinary grant entry (e.g. <code>"alice-laptop":
+  ["user:alice@example.com"]</code>); provisioning one per user by hand this way is
+  what self-service mint (#1374, below) removes the need for.</li>
+</ul>
+<p><strong>Re-sharing already-ingested data is a grants edit, never a restamp.</strong> Since
+the audience <em>value</em> stamped on data never changes, widening who can see
+<code>team-alpha</code> is a one-line config change — add a selector to its <code>"read"</code>
+list — that takes effect for every already-ingested process immediately
+(bounded by the mint-time key-store cache TTL for callers, not by anything
+about the data itself).</p>
+<p><strong>A malformed grant map fails startup, not silently</strong>: an unknown-shaped
+key, an unrecognized selector prefix, or a duplicate JSON key for the same
+audience are all a startup <code>Err</code>, the same "typo fails fast" convention every
+other knob on this page follows.</p>
+<p><strong>Worked profiles</strong>, open and privacy:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Open deployment: everyone reads everything, no grant map needed at all.</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># MICROMEGAS_UNSTAMPED_AUDIENCE left unset: it defaults to public.</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_DEFAULT_KEY_AUDIENCE</span><span class="o">=</span>public
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Privacy deployment: a team&#39;s data stays inside the team.</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_AUDIENCE_GRANTS</span><span class="o">=</span><span class="s1">&#39;{&quot;team-alpha&quot;: [&quot;group:eng&quot;]}&#39;</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_DEFAULT_KEY_AUDIENCE</span><span class="o">=</span>team-alpha
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># MICROMEGAS_UNSTAMPED_AUDIENCE set to an empty string, not left unset: opts back into</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># fail-closed so legacy/never-stamped data stays invisible instead of defaulting to public.</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_UNSTAMPED_AUDIENCE</span><span class="o">=</span>
+</span></code></pre></div>
+<p>Worked <strong>mint</strong> profile, granting a non-admin caller mint authority for their
+own personal audience — see <a href="#self-service-ingestion-key-mint-abac-stage-6-1374">self-service mint</a>
+below for the full picture (the knob that gates this, the per-caller bounds,
+and <code>micromegas-setup-telemetry</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># One admin-created grant per personal audience, mint only (read is granted</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># separately, or via a claim -- see below):</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>create<span class="w"> </span>alice-laptop<span class="w"> </span>mint<span class="w"> </span>user:alice@example.com
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>create<span class="w"> </span>alice-laptop<span class="w"> </span><span class="nb">read</span><span class="w"> </span>user:alice@example.com
+</span></code></pre></div>
+<p>A non-admin caller with this grant can now mint their own <code>alice-laptop</code> key
+directly (<code>POST /api/ingestion-api-keys</code>), once <code>MICROMEGAS_SELF_SERVICE_MINT</code>
+is on (below) — no further admin step needed for that audience. <strong>Self-service
+mint grants must live in the DB <code>audience_grants</code> table, never in
+<code>{prefix}_AUDIENCE_GRANTS</code></strong> — unlike the read axis (which still unions both
+sources, above), the mint axis is DB-only once this stage lands: a mint
+audience declared only in the env map is invisible to the lazy claim's
+existence check (below) and so could be claimed out from under it by another
+caller. Keep every mint-relevant audience's grants in the DB once
+<code>MICROMEGAS_SELF_SERVICE_MINT</code> is on.</p>
+<p>This isn't only a mint-axis concern: the lazy claim's existence check reads
+only the DB (<code>audience_grants</code> and <code>ingestion_api_keys</code>), never
+<code>{prefix}_AUDIENCE_GRANTS</code> at all, on <em>either</em> axis. An audience named only
+in that env map for <strong>read</strong> — like <code>team-alpha</code> in the privacy-deployment
+example above — is just as invisible to the check as a mint-only one, and so
+just as squattable. Before turning on <code>MICROMEGAS_SELF_SERVICE_MINT</code>,
+pre-create a placeholder DB row (any axis, any selector) for <strong>every</strong>
+audience name that appears anywhere in <code>{prefix}_AUDIENCE_GRANTS</code>, not just
+the ones with a <code>mint</code> entry — see the placeholder-row example below.</p>
+<h3 id="self-service-ingestion-key-mint-abac-stage-6-1374">Self-service ingestion key mint (AbAC Stage 6, #1374)<a class="headerlink" href="#self-service-ingestion-key-mint-abac-stage-6-1374" title="Permanent link">&para;</a></h3>
+<p>Given a <code>mint</code> grant already exists (the worked profile above), a non-admin
+caller can mint their own ingestion key directly — <code>POST
+{base_path}/api/ingestion-api-keys</code> is no longer purely admin-gated.
+<code>MintPolicy::resolve_audience</code> (a per-request point query against
+<code>audience_grants</code>, never a cached snapshot) is the authorization instead of
+an admin gate; an admin's own mint is unaffected either way. This is gated
+behind one off-by-default deployment knob:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_SELF_SERVICE_MINT</code></td>
+<td><code>false</code></td>
+<td>Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates <code>GET {base_path}/api/audience-grants/my-audiences</code> (below) for non-admin callers.</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER</code></td>
+<td><code>25</code></td>
+<td>Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency.</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER</code></td>
+<td><code>100</code></td>
+<td>Caps how many <em>live</em> keys one non-admin caller may hold at once. <code>list_keys</code>/<code>revoke_key</code> stay <code>AdminUser</code>-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Audiences are created lazily, not pre-provisioned.</strong> A non-admin caller who
+names a brand-new, never-before-granted audience <em>and supplies the name
+explicitly</em> claims it atomically, as part of the same mint request, once
+<code>MICROMEGAS_SELF_SERVICE_MINT</code> is on: the claim writes <code>user:&lt;email&gt;</code> grant
+rows on <strong>both</strong> the <code>mint</code> and <code>read</code> axes (so the caller who just claimed
+the audience can read back what their own new key uploads), inside the same
+transaction that mints the key. Naming an audience that already has <em>any</em>
+grant row — admin-created, self-claimed earlier, or someone else's
+in-flight claim — still requires a matching grant exactly as above; only a
+genuinely fresh, unowned name is claimable this way. <code>public</code> and the
+deployment's own <code>MICROMEGAS_DEFAULT_KEY_AUDIENCE</code> can never be claimed.</p>
+<p><strong>Before turning on <code>MICROMEGAS_SELF_SERVICE_MINT</code>, pre-create a placeholder
+grant row — any selector, on either axis — for every audience name that
+exists only outside the DB:</strong> a custom <code>{prefix}_UNSTAMPED_AUDIENCE</code> override
+(irrelevant if left at its <code>public</code> default, since <code>public</code> can never be
+claimed), and <em>every</em> key of <code>{prefix}_AUDIENCE_GRANTS</code> (mint-relevant or
+read-only alike; see the note above). Via the admin grants API:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>create<span class="w"> </span>unstamped-legacy<span class="w"> </span><span class="nb">read</span><span class="w"> </span><span class="s1">&#39;*&#39;</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># ...and one such row per audience named in {prefix}_AUDIENCE_GRANTS, e.g.:</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>create<span class="w"> </span>team-alpha<span class="w"> </span><span class="nb">read</span><span class="w"> </span><span class="s1">&#39;*&#39;</span>
+</span></code></pre></div>
+<p>Without those placeholder rows, the lazy claim's existence check (which reads
+only <code>audience_grants</code> and <code>ingestion_api_keys</code>, never a role-prefixed env
+knob it has no reason to know about) would see any of these names as unowned
+and let a non-admin claim exclusive mint+read rights over a name the operator
+already believes is spoken for.</p>
+<p>The setup script, <code>micromegas-setup-telemetry</code>, wraps all of this for an end
+user — OIDC login, mint, and printing the <code>OTEL_EXPORTER_OTLP_*</code> env vars
+needed to point their own telemetry at the deployment:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Existing grant, or resolved automatically via GET .../my-audiences if omitted:</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>micromegas-setup-telemetry<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>--name<span class="w"> </span>my-laptop<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span>--audience<span class="w"> </span>alice-laptop
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># A fresh claim: a non-admin caller&#39;s bare name is minted under a namespace</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1"># derived from their own email (e.g. &quot;alice-&quot; + &quot;ci-runner&quot;), never the bare</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># name itself -- printed to stderr so the caller sees the resolved name.</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>micromegas-setup-telemetry<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>--name<span class="w"> </span>ci-runner<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span>--audience<span class="w"> </span>ci-runner
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="nb">eval</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>micromegas-setup-telemetry<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>--name<span class="w"> </span>my-laptop<span class="k">)</span><span class="s2">&quot;</span>
+</span></code></pre></div>
+<p>See <a href="../../query-guide/python-api/#micromegas-setup-telemetry"><code>python-api.md</code></a>
+for the full CLI reference, and <a href="../api-keys/"><code>api-keys.md</code></a> for the mint
+route's error shapes (<code>FORBIDDEN</code>, <code>UNAVAILABLE</code>, <code>UNAUTHENTICATED</code>,
+<code>CLAIM_CONTENDED</code>).</p>
+<h3 id="db-backed-audience-grants-1489-abac-stage-6a">DB-backed audience grants (#1489, AbAC Stage 6a)<a class="headerlink" href="#db-backed-audience-grants-1489-abac-stage-6a" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}_AUDIENCE_GRANTS</code> is resolved once at startup, so creating one
+per-user grant means editing an env var and restarting every service that
+reads it — workable for a handful of teams, not for a per-user privacy
+profile where each new user needs one more grant row. The <code>audience_grants</code>
+Postgres table (migration v7) is the same grant model, minted, listed, and
+deleted over HTTP without a redeploy:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">audience_grants</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="n">audience</span><span class="w">   </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="n">axis</span><span class="w">       </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">CHECK</span><span class="w"> </span><span class="p">(</span><span class="n">axis</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;read&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;mint&#39;</span><span class="p">)),</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="n">selector</span><span class="w">   </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="n">created_at</span><span class="w"> </span><span class="n">TIMESTAMPTZ</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="n">created_by</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">audience</span><span class="p">,</span><span class="w"> </span><span class="n">axis</span><span class="p">,</span><span class="w"> </span><span class="n">selector</span><span class="p">),</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="k">CONSTRAINT</span><span class="w"> </span><span class="n">audience_grants_audience_name</span><span class="w"> </span><span class="k">CHECK</span><span class="w"> </span><span class="p">(</span><span class="n">audience</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^[A-Za-z0-9_-]+$&#39;</span><span class="p">),</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="k">CONSTRAINT</span><span class="w"> </span><span class="n">audience_grants_selector_shape</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="k">CHECK</span><span class="w"> </span><span class="p">(</span><span class="n">selector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;*&#39;</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">selector</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^(user|group):.+$&#39;</span><span class="p">)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="p">);</span>
+</span></code></pre></div>
+<p>One table with an <code>axis</code> column, not two — a 1:1 image of the env map's
+single map covering both the read and mint axes, kept splittable later
+(without any change to <code>ReadPolicy</code>/<code>MintPolicy</code>) if the long-term
+group-membership model ever needs it.</p>
+<p><strong>Additive, never a replacement.</strong> Each flight-sql process — standalone
+<code>flight-sql-srv</code>, or the monolith's flight-sql role — holds one whole-table
+snapshot in memory (small enough that the issue treats "cache the whole map"
+as the right shape, unlike the per-key <code>moka</code> cache backing the <a href="../api-keys/">DB-backed
+key store</a>), unioned with the env map before matching a
+caller's selectors. <code>analytics-web-srv</code> is the write surface only (the HTTP
+admin routes below) — it never constructs a <code>DbAudienceGrantsSource</code> and
+caches nothing itself. For the <strong>read</strong> axis, a selector present in
+the env map, the store, or both grants exactly the same access — there is no
+"the store wins" or "the env map wins" precedence to reason about, and no
+forced migration off <code>{prefix}_AUDIENCE_GRANTS</code>: a deployment that never
+touches the store keeps working exactly as documented above. This is no
+longer true for the <strong>mint</strong> axis once self-service mint (#1374, below)
+lands: mint grants are DB-only, so an env-map-only <code>"mint"</code> selector is
+inert — it is never consulted by <code>mint_key</code>'s per-request authorization
+check.</p>
+<p><strong>HTTP admin routes</strong>, <code>AdminUser</code>-gated (same admin list as the <a href="../api-keys/">API-key
+routes</a>) and unavailable under <code>--disable-auth</code> for the same
+reason those routes are — except <code>/my-audiences</code>, which is caller-scoped
+instead (any authenticated caller, not just admins; see
+<a href="#self-service-ingestion-key-mint-abac-stage-6-1374">self-service mint</a>
+below):</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Body / result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST {base_path}/api/audience-grants</code></td>
+<td><code>{"audience","axis","selector"}</code> → 201 (created) or 200 (already existed) <code>{"audience","axis","selector","created_at","created_by"}</code></td>
+</tr>
+<tr>
+<td><code>GET {base_path}/api/audience-grants?audience=&amp;axis=&amp;limit=&amp;offset=</code></td>
+<td>200 <code>[{"audience","axis","selector","created_at","created_by"}]</code>, newest first</td>
+</tr>
+<tr>
+<td><code>DELETE {base_path}/api/audience-grants?audience=&amp;axis=&amp;selector=</code></td>
+<td>204, or 404</td>
+</tr>
+<tr>
+<td><code>GET {base_path}/api/audience-grants/my-audiences</code></td>
+<td><strong>Not</strong> <code>AdminUser</code>-gated — any authenticated caller. 200 <code>{"is_admin","audiences","mint_prefix","email"}</code>: the audiences whose <code>mint</code> selector matches <em>this caller's own</em> identity today, plus the caller's own <code>is_admin</code> flag, the caller-derived namespace prefix a fresh claim mints under, and the caller's own email.</td>
+</tr>
+</tbody>
+</table>
+<p><code>GET</code> (the first one, listing arbitrary rows) is admin-gated exactly like
+the write routes — who can read which audience is itself a
+confidentiality-sensitive fact, not a public listing. <code>/my-audiences</code>
+carries none of that sensitivity: it reveals only whether the caller's own
+identity matches a selector, never another principal's.
+<code>DELETE</code> takes the natural key as query parameters rather than path
+segments: a <code>group:&lt;id&gt;</code> selector can contain <code>/</code> or other URL-significant
+characters a raw path segment can't safely carry.</p>
+<p>The <code>micromegas-grants</code> CLI wraps these three routes, the same
+HTTP-only-via-<code>analytics-web-srv</code> convention every CLI in this codebase
+follows (never direct Postgres access):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>create<span class="w"> </span>team-alpha<span class="w"> </span><span class="nb">read</span><span class="w"> </span>group:eng
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>list<span class="w"> </span>--audience<span class="w"> </span>team-alpha
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>micromegas-grants<span class="w"> </span>--url<span class="w"> </span>https://analytics.example.com<span class="w"> </span>delete<span class="w"> </span>team-alpha<span class="w"> </span><span class="nb">read</span><span class="w"> </span>group:eng
+</span></code></pre></div>
+<p><strong>Cache-TTL knob</strong>, following the same <code>{prefix}_</code> fallback shape as every
+other knob on this page:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS</code></td>
+<td><code>60</code></td>
+<td>How long a process serves its in-memory snapshot before re-querying <code>audience_grants</code>. Accepts a role prefix on the monolith (<code>MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS</code>), falling back to the unprefixed name.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Revocation takes effect within the cache TTL (default 60s), not
+instantly.</strong> This is a stated property, not an oversight: a <code>DELETE</code> above
+removes the row from <code>audience_grants</code> immediately, but every flight-sql
+process keeps serving its cached snapshot — and so keeps granting the removed
+read access — until its next refresh, up to one full TTL window later.</p>
+<p><strong>Outage behavior is deliberately different from the DB-backed key store's.</strong>
+Once a process has loaded the table successfully at least once, a later
+refresh failure keeps serving that last good snapshot — unbounded, for as
+long as the outage lasts, not just for one more TTL window the way the
+per-key cache's TTL eviction bounds a key-lookup outage. The trade favors a
+single, deployment-wide grant view degrading to <em>staleness</em> over degrading to
+<em>everyone loses every grant simultaneously</em> on a transient DB blip. A fresh
+process whose very first query hits a down DB has no "last good" to serve, so
+that case still fails closed like everything else on this seam — <code>resolve()</code>
+denies exactly as documented, at a rate capped by the same cache-TTL knob
+rather than once per request. A sustained outage surfaces on an operator's
+dashboard (<code>audience_grant_refresh_error_count</code>), not on the request path.</p>
+<p><strong>A malformed row still can't reach a policy decision.</strong> The table's own
+<code>CHECK</code> constraints are re-validated independently in Rust on every load, so
+a row that somehow bypassed them (a manual <code>psql</code> fix, a future migration)
+fails the <em>whole</em> snapshot load loudly instead of silently producing an
+unparseable or unreadable grant.</p>
+<p><strong>Deploy-order requirement.</strong> <code>audience_grants</code> is created by migration v7,
+which only <code>telemetry-ingestion-srv</code> and the monolith run (via
+<code>connect_to_remote_data_lake</code>/<code>migrate_db</code>). A standalone <code>flight-sql-srv</code>
+builds its lakehouse context with <code>LakehouseContext::from_env()</code>, which runs
+only <code>migrate_lakehouse</code> and never touches <code>migrate_db</code> — so it never creates
+the table itself. Roll the v7 migration (by upgrading ingestion or the
+monolith) before or in the same deploy as upgrading <code>flight-sql-srv</code> to a
+build that wires <code>DbAudienceGrantsSource</code>. Upgrading <code>flight-sql-srv</code> first
+against a still-v6 database is not a startup failure: the process comes up
+fine and then fails every <code>resolve()</code> call with "relation audience_grants
+does not exist" (throttled to one DB attempt per cache-TTL window), failing
+every authenticated query with <code>unavailable</code> -- <code>public</code>-only queries
+included -- until the migration lands (see the matching CHANGELOG entry for
+this change).</p>
+<h2 id="client-configuration">Client Configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="python-client-with-oidc">Python Client with OIDC<a class="headerlink" href="#python-client-with-oidc" title="Permanent link">&para;</a></h3>
+<p>The Python client supports automatic browser-based login with token persistence and refresh.</p>
+<h4 id="interactive-use-jupyter-scripts">Interactive Use (Jupyter, Scripts)<a class="headerlink" href="#interactive-use-jupyter-scripts" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span> <span class="nn">micromegas.auth</span> <span class="kn">import</span> <span class="n">OidcAuthProvider</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># First use: Opens browser for authentication</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">auth</span> <span class="o">=</span> <span class="n">OidcAuthProvider</span><span class="o">.</span><span class="n">login</span><span class="p">(</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">issuer</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">client_id</span><span class="o">=</span><span class="s2">&quot;your-app-id.apps.googleusercontent.com&quot;</span><span class="p">,</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span><span class="p">,</span>  <span class="c1"># Optional for some providers</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="n">token_file</span><span class="o">=</span><span class="s2">&quot;~/.micromegas/tokens.json&quot;</span>  <span class="c1"># Persists tokens</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="p">)</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="c1"># Create authenticated client</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="p">)</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="c1"># Run queries - tokens auto-refresh before expiration</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM processes LIMIT 10&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issuer</code></td>
+<td>OIDC issuer URL</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>client_id</code></td>
+<td>OAuth client ID</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>client_secret</code></td>
+<td>OAuth client secret</td>
+<td>Optional (for public clients)</td>
+</tr>
+<tr>
+<td><code>token_file</code></td>
+<td>Path to save tokens</td>
+<td><code>~/.micromegas/tokens.json</code></td>
+</tr>
+<tr>
+<td><code>audience</code></td>
+<td>API audience/identifier</td>
+<td>Optional (required by Auth0)</td>
+</tr>
+<tr>
+<td><code>scope</code></td>
+<td>OAuth scopes to request</td>
+<td><code>openid email profile offline_access</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="subsequent-use-token-reuse">Subsequent Use (Token Reuse)<a class="headerlink" href="#subsequent-use-token-reuse" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span> <span class="nn">micromegas.auth</span> <span class="kn">import</span> <span class="n">OidcAuthProvider</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Load existing tokens - no browser interaction needed</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="n">auth</span> <span class="o">=</span> <span class="n">OidcAuthProvider</span><span class="o">.</span><span class="n">from_file</span><span class="p">(</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="s2">&quot;~/.micromegas/tokens.json&quot;</span><span class="p">,</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span>  <span class="c1"># Optional</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="p">)</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="p">)</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="c1"># Tokens automatically refresh when needed</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="kn">import</span> <span class="nn">datetime</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="n">now</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="n">begin</span> <span class="o">=</span> <span class="n">now</span> <span class="o">-</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM log_entries LIMIT 1000&quot;</span><span class="p">,</span> <span class="n">begin</span><span class="p">,</span> <span class="n">now</span><span class="p">)</span>
+</span></code></pre></div>
+<h4 id="token-management">Token Management<a class="headerlink" href="#token-management" title="Permanent link">&para;</a></h4>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Clear saved tokens (logout)</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="n">token_file</span> <span class="o">=</span> <span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span> <span class="o">/</span> <span class="s2">&quot;.micromegas&quot;</span> <span class="o">/</span> <span class="s2">&quot;tokens.json&quot;</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="k">if</span> <span class="n">token_file</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">token_file</span><span class="o">.</span><span class="n">unlink</span><span class="p">()</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Logged out - tokens cleared&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="cli-tools-with-oidc">CLI Tools with OIDC<a class="headerlink" href="#cli-tools-with-oidc" title="Permanent link">&para;</a></h3>
+<p>CLI tools automatically support OIDC when environment variables are set:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Configure OIDC</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;your-app-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span><span class="w">  </span><span class="c1"># Optional</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_ANALYTICS_URI</span><span class="o">=</span><span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># First use: Opens browser for authentication</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>micromegas-query<span class="w"> </span><span class="s2">&quot;SELECT process_id, exe, start_time FROM processes&quot;</span><span class="w"> </span>--begin<span class="w"> </span>1h
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="c1"># Subsequent uses: No browser interaction, uses cached tokens</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>micromegas-query<span class="w"> </span><span class="s2">&quot;SELECT time, level, msg FROM log_entries WHERE process_id = &#39;&lt;process_id&gt;&#39;&quot;</span><span class="w"> </span>--begin<span class="w"> </span>1h
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="c1"># Logout (clear saved tokens)</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>micromegas-logout
+</span></code></pre></div>
+<p><strong>Environment Variables:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_OIDC_ISSUER</code></td>
+<td>OIDC issuer URL</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_ID</code></td>
+<td>OAuth client ID</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_SECRET</code></td>
+<td>OAuth client secret</td>
+<td>No*</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_AUDIENCE</code></td>
+<td>API audience/identifier</td>
+<td>No (for Auth0, Azure API)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_SCOPE</code></td>
+<td>OAuth scopes to request</td>
+<td>No (default: openid email profile offline_access)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_PROFILE</code></td>
+<td>Named connection profile to select from <code>~/.micromegas/config.json</code>'s <code>profiles</code> map</td>
+<td>No (see <a href="../../query-guide/python-api/">Named profiles</a>)</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_ANALYTICS_URI</code></td>
+<td>Analytics server URI</td>
+<td>No (default: grpc://localhost:50051)</td>
+</tr>
+</tbody>
+</table>
+<p>*Required for some providers (e.g., Google) even with PKCE</p>
+<h3 id="python-client-with-api-keys-legacy">Python Client with API Keys (Legacy)<a class="headerlink" href="#python-client-with-api-keys-legacy" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span> <span class="nn">micromegas.flightsql.client</span> <span class="kn">import</span> <span class="n">FlightSQLClient</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="s2">&quot;grpc://localhost:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer your-api-key&quot;</span><span class="p">}</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="p">)</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="n">df</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM processes LIMIT 10&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Deprecated API</p>
+<p>The <code>headers</code> parameter is deprecated. Use <code>auth_provider</code> with <code>OidcAuthProvider</code> instead.</p>
+</div>
+<h2 id="ingestion-service-authentication">Ingestion Service Authentication<a class="headerlink" href="#ingestion-service-authentication" title="Permanent link">&para;</a></h2>
+<p>The telemetry ingestion service (telemetry-ingestion-srv) uses the same authentication infrastructure as the analytics service.</p>
+<h3 id="server-configuration_1">Server Configuration<a class="headerlink" href="#server-configuration_1" title="Permanent link">&para;</a></h3>
+<p>The ingestion server uses the same environment variables as the analytics server:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Start ingestion server with authentication</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[{&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;secret-key-123&quot;}]&#39;</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{&quot;issuers&quot;: [...]}&#39;</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>telemetry-ingestion-srv
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="c1"># Or disable auth for development</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>telemetry-ingestion-srv<span class="w"> </span>--disable-auth
+</span></code></pre></div>
+<p>The OTLP/HTTP routes (<code>/ingestion/otlp/v1/{logs,metrics,traces}</code>) share this authentication chain. OTel SDKs attach the bearer token via <code>OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer &lt;key&gt;"</code>. See <a href="../../otlp/#authentication">OTLP Ingestion</a> for SDK-side configuration.</p>
+<h3 id="rust-client-authentication">Rust Client Authentication<a class="headerlink" href="#rust-client-authentication" title="Permanent link">&para;</a></h3>
+<p>Rust applications sending telemetry can use either API keys or OIDC client credentials.</p>
+<h4 id="automatic-configuration-recommended">Automatic Configuration (Recommended)<a class="headerlink" href="#automatic-configuration-recommended" title="Permanent link">&para;</a></h4>
+<p>Applications using <code>#[micromegas_main]</code> automatically configure authentication from environment variables:</p>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas</span>::<span class="n">micromegas_main</span><span class="p">;</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas</span>::<span class="n">tracing</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="cp">#[micromegas_main(interop_max_level = </span><span class="s">&quot;info&quot;</span><span class="cp">)]</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span>::<span class="n">error</span>::<span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="n">info</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Application starting&quot;</span><span class="p">);</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">    </span><span class="c1">// Telemetry automatically authenticated based on environment variables</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><strong>Environment Variables:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Authentication Method</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROMEGAS_INGESTION_API_KEY</code></td>
+<td>API key (simple)</td>
+<td>For API key auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_TOKEN_ENDPOINT</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_ID</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_OIDC_CLIENT_SECRET</code></td>
+<td>OIDC client credentials</td>
+<td>For OIDC auth</td>
+</tr>
+<tr>
+<td><code>MICROMEGAS_TELEMETRY_URL</code></td>
+<td>Ingestion server URL</td>
+<td>Yes (e.g., http://localhost:9000)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example (API Key):</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_INGESTION_API_KEY</span><span class="o">=</span>secret-key-123
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_TELEMETRY_URL</span><span class="o">=</span>http://localhost:9000
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>cargo<span class="w"> </span>run
+</span></code></pre></div></p>
+<p><strong>Example (OIDC Client Credentials):</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_TOKEN_ENDPOINT</span><span class="o">=</span>https://accounts.google.com/o/oauth2/token
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span>my-service@project.iam.gserviceaccount.com
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span>secret-from-secret-manager
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_TELEMETRY_URL</span><span class="o">=</span>http://localhost:9000
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>cargo<span class="w"> </span>run
+</span></code></pre></div></p>
+<h4 id="manual-configuration">Manual Configuration<a class="headerlink" href="#manual-configuration" title="Permanent link">&para;</a></h4>
+<p>For applications not using <code>#[micromegas_main]</code>, configure authentication manually:</p>
+<h5 id="api-key-authentication-simple">API Key Authentication (Simple)<a class="headerlink" href="#api-key-authentication-simple" title="Permanent link">&para;</a></h5>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">http_event_sink</span>::<span class="p">{</span><span class="n">HttpEventSink</span><span class="p">,</span><span class="w"> </span><span class="n">HttpSinkConfig</span><span class="p">};</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">api_key_decorator</span>::<span class="n">ApiKeyRequestDecorator</span><span class="p">;</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">// From environment variable</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_INGESTION_API_KEY&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;secret-key-123&quot;</span><span class="p">);</span>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="kd">let</span><span class="w"> </span><span class="n">decorator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ApiKeyRequestDecorator</span>::<span class="n">from_env</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="c1">// Configure HttpEventSink with authentication</span>
+</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="kd">let</span><span class="w"> </span><span class="n">sink</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HttpEventSink</span>::<span class="n">new</span><span class="p">(</span>
+</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a><span class="w">    </span><span class="s">&quot;http://localhost:9000&quot;</span><span class="p">,</span>
+</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a><span class="w">    </span><span class="n">HttpSinkConfig</span>::<span class="n">default</span><span class="p">(),</span>
+</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a><span class="w">    </span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">decorator</span><span class="p">.</span><span class="n">clone</span><span class="p">())),</span>
+</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a><span class="p">);</span>
+</span></code></pre></div>
+<h5 id="oidc-client-credentials-production">OIDC Client Credentials (Production)<a class="headerlink" href="#oidc-client-credentials-production" title="Permanent link">&para;</a></h5>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">http_event_sink</span>::<span class="p">{</span><span class="n">HttpEventSink</span><span class="p">,</span><span class="w"> </span><span class="n">HttpSinkConfig</span><span class="p">};</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="k">use</span><span class="w"> </span><span class="n">micromegas_telemetry_sink</span>::<span class="n">oidc_client_credentials_decorator</span>::<span class="n">OidcClientCredentialsDecorator</span><span class="p">;</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">// Configure OIDC client credentials</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_TOKEN_ENDPOINT&quot;</span><span class="p">,</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">    </span><span class="s">&quot;https://accounts.google.com/o/oauth2/token&quot;</span><span class="p">);</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_CLIENT_ID&quot;</span><span class="p">,</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">    </span><span class="s">&quot;my-service@project.iam.gserviceaccount.com&quot;</span><span class="p">);</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_var</span><span class="p">(</span><span class="s">&quot;MICROMEGAS_OIDC_CLIENT_SECRET&quot;</span><span class="p">,</span>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="w">    </span><span class="s">&quot;secret-from-secret-manager&quot;</span><span class="p">);</span>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="kd">let</span><span class="w"> </span><span class="n">decorator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OidcClientCredentialsDecorator</span>::<span class="n">from_env</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a><span class="kd">let</span><span class="w"> </span><span class="n">sink</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">HttpEventSink</span>::<span class="n">new</span><span class="p">(</span>
+</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a><span class="w">    </span><span class="s">&quot;http://localhost:9000&quot;</span><span class="p">,</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a><span class="w">    </span><span class="n">HttpSinkConfig</span>::<span class="n">default</span><span class="p">(),</span>
+</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a><span class="w">    </span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="k">move</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">decorator</span><span class="p">.</span><span class="n">clone</span><span class="p">())),</span>
+</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a><span class="p">);</span>
+</span></code></pre></div>
+<p><strong>Authentication Methods Comparison:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Use Case</th>
+<th>Token Lifetime</th>
+<th>Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API Key</td>
+<td>Development, testing</td>
+<td>No expiration</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>Client Credentials</td>
+<td>Production services</td>
+<td>~1 hour (auto-refresh)</td>
+<td>Medium</td>
+</tr>
+</tbody>
+</table>
+<h3 id="health-endpoint">Health Endpoint<a class="headerlink" href="#health-endpoint" title="Permanent link">&para;</a></h3>
+<p>The <code>/health</code> endpoint remains public for monitoring and liveness checks, even when authentication is enabled.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Health check always works without authentication</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>curl<span class="w"> </span>http://localhost:9000/health
+</span></code></pre></div>
+<h2 id="setting-up-oidc-providers">Setting Up OIDC Providers<a class="headerlink" href="#setting-up-oidc-providers" title="Permanent link">&para;</a></h2>
+<h3 id="google-oauth-setup">Google OAuth Setup<a class="headerlink" href="#google-oauth-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://console.cloud.google.com/">Google Cloud Console</a></li>
+<li>Create a new project or select existing</li>
+<li>Navigate to <strong>APIs &amp; Services → OAuth consent screen</strong></li>
+<li>Select "External" user type</li>
+<li>Fill in app name and contact emails</li>
+<li>Add test users (yourself and team members)</li>
+<li>Navigate to <strong>APIs &amp; Services → Credentials</strong></li>
+<li>Click "+ CREATE CREDENTIALS" → "OAuth client ID"</li>
+<li>Application type: <strong>"Desktop app"</strong> (for CLI/local use)</li>
+<li>Click "Create"</li>
+<li>Copy both credentials:</li>
+<li><strong>Client ID</strong> (ends with <code>.apps.googleusercontent.com</code>)</li>
+<li><strong>Client Secret</strong></li>
+<li>Add authorized redirect URIs:</li>
+<li><code>http://localhost:48080/callback</code></li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="s1">    {</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="s1">      &quot;audience&quot;: &quot;123-abc.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="s1">    }</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="s1">  ]</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://accounts.google.com&quot;</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;123-abc.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_SECRET</span><span class="o">=</span><span class="s2">&quot;GOCSPX-...&quot;</span>
+</span></code></pre></div>
+<h3 id="azure-ad-setup">Azure AD Setup<a class="headerlink" href="#azure-ad-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://portal.azure.com/">Azure Portal</a></li>
+<li>Navigate to <strong>Azure Active Directory → App registrations</strong></li>
+<li>Click <strong>"New registration"</strong></li>
+<li>Name: "Micromegas Analytics"</li>
+<li>Supported account types: Choose based on your needs</li>
+<li>Redirect URI: "Public client/native" - <code>http://localhost:48080/callback</code></li>
+<li>Note the <strong>Application (client) ID</strong></li>
+<li>Navigate to <strong>Authentication</strong></li>
+<li>Under "Advanced settings", set "Allow public client flows" to <strong>Yes</strong></li>
+<li>This enables PKCE without requiring a client secret</li>
+<li>Navigate to <strong>API permissions</strong> (optional)</li>
+<li>Add permissions if needed for your organization</li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="s1">    {</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://login.microsoftonline.com/{tenant-id}/v2.0&quot;,</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="s1">      &quot;audience&quot;: &quot;{application-id}&quot;</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="s1">    }</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="s1">  ]</span>
+</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://login.microsoftonline.com/{tenant-id}/v2.0&quot;</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;{application-id}&quot;</span>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="c1"># No MICROMEGAS_OIDC_CLIENT_SECRET needed - Azure AD supports public clients with PKCE</span>
+</span></code></pre></div>
+<h3 id="auth0-setup">Auth0 Setup<a class="headerlink" href="#auth0-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to <a href="https://manage.auth0.com/">Auth0 Dashboard</a></li>
+<li>Create application:</li>
+<li>Applications → Create Application</li>
+<li>Name: "Micromegas Analytics"</li>
+<li>Application type: <strong>"Native"</strong> (for CLI/desktop)</li>
+<li>Configure application:</li>
+<li>Allowed Callback URLs: <code>http://localhost:48080/callback</code></li>
+<li>Allowed Web Origins: <code>http://localhost:48080</code></li>
+<li>Note the <strong>Domain</strong> and <strong>Client ID</strong></li>
+<li>For Native apps, client secret is optional (true public client)</li>
+</ol>
+<p><strong>Server Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="s1">  &quot;issuers&quot;: [</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="s1">    {</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="s1">      &quot;issuer&quot;: &quot;https://your-tenant.auth0.com/&quot;,</span>
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="s1">      &quot;audience&quot;: &quot;your-client-id&quot;</span>
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="s1">    }</span>
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="s1">  ]</span>
+</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<p><strong>Client Configuration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_ISSUER</span><span class="o">=</span><span class="s2">&quot;https://your-tenant.auth0.com/&quot;</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;your-client-id&quot;</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="c1"># No client_secret needed for Native apps</span>
+</span></code></pre></div>
+<h2 id="security-considerations">Security Considerations<a class="headerlink" href="#security-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="token-storage">Token Storage<a class="headerlink" href="#token-storage" title="Permanent link">&para;</a></h3>
+<p>Tokens are stored at <code>~/.micromegas/tokens.json</code> with secure file permissions (0600 - owner read/write only). If <code>~/.micromegas/config.json</code> has a <code>profiles</code> map, the cache moves to a per-profile <code>~/.micromegas/tokens-&lt;profile&gt;.json</code> instead — see <a href="../../query-guide/python-api/">Named profiles</a>.</p>
+<p><strong>Token File Contents:</strong></p>
+<ul>
+<li>Access token (JWT)</li>
+<li>Refresh token</li>
+<li>ID token</li>
+<li>Expiration time</li>
+<li>Issuer and client ID</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Token File Security</p>
+<p>Never commit token files to version control or share them. Tokens provide full access to your analytics data.</p>
+</div>
+<h3 id="token-refresh">Token Refresh<a class="headerlink" href="#token-refresh" title="Permanent link">&para;</a></h3>
+<p>The Python client automatically refreshes tokens when they approach expiration (5-minute buffer). This ensures:
+- No mid-query authentication failures
+- Transparent token management
+- Thread-safe concurrent query support</p>
+<h3 id="token-revocation">Token Revocation<a class="headerlink" href="#token-revocation" title="Permanent link">&para;</a></h3>
+<p>To revoke access:</p>
+<ol>
+<li><strong>User accounts:</strong> Disable the user in your identity provider (Google, Azure AD, etc.)</li>
+<li><strong>Service accounts:</strong> Disable or delete the service account in your identity provider</li>
+<li><strong>Immediate revocation:</strong> Restart the analytics server to clear the token validation cache</li>
+</ol>
+<p><strong>Revocation Timing:</strong></p>
+<ul>
+<li>New tokens will be rejected immediately after disabling the account</li>
+<li>Existing cached tokens remain valid for up to 5 minutes (configurable via <code>token_cache_ttl_secs</code>)</li>
+<li>Total revocation time: Cache TTL (5 min) + Token lifetime (typically 60 min) = ~65 minutes worst case</li>
+</ul>
+<p>For faster revocation, use shorter token cache TTL or restart the analytics server.</p>
+<h3 id="admin-privileges">Admin Privileges<a class="headerlink" href="#admin-privileges" title="Permanent link">&para;</a></h3>
+<p>Admin users (configured via <code>MICROMEGAS_ADMINS</code>) have elevated privileges for administrative operations. Only grant admin access to trusted users.</p>
+<p><strong>Admin Capabilities:</strong></p>
+<ul>
+<li>Partition management functions</li>
+<li>Schema migration operations</li>
+<li>Administrative SQL functions</li>
+</ul>
+<p>Admin status is reachable only through an OIDC identity matched against
+<code>MICROMEGAS_ADMINS</code> (or the role-scoped <code>MICROMEGAS_ANALYTICS_ADMINS</code> in the
+monolith) — never through <code>MICROMEGAS_API_KEYS</code>. API keys always resolve to
+<code>is_admin: false</code>, so an API-key-only deployment has no admin principal and cannot
+call the eight gated admin SQL functions (see
+<a href="../functions-reference/">Admin SQL Functions</a>).</p>
+<h3 id="httpstls">HTTPS/TLS<a class="headerlink" href="#httpstls" title="Permanent link">&para;</a></h3>
+<p>Always use TLS for production deployments:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Production: Use grpc+tls</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>    <span class="s2">&quot;grpc+tls://analytics.example.com:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="p">)</span>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="c1"># Development only: Plain grpc</span>
+</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a><span class="n">client</span> <span class="o">=</span> <span class="n">FlightSQLClient</span><span class="p">(</span>
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a>    <span class="s2">&quot;grpc://localhost:50051&quot;</span><span class="p">,</span>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>    <span class="n">auth_provider</span><span class="o">=</span><span class="n">auth</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>Configure your load balancer or reverse proxy to handle TLS termination.</p>
+<h3 id="pkce-proof-key-for-code-exchange">PKCE (Proof Key for Code Exchange)<a class="headerlink" href="#pkce-proof-key-for-code-exchange" title="Permanent link">&para;</a></h3>
+<p>The Python client uses PKCE for all OIDC flows, providing security for public clients (desktop apps, CLIs) that cannot securely store client secrets.</p>
+<p><strong>How PKCE Works:</strong></p>
+<ol>
+<li>Client generates random <code>code_verifier</code></li>
+<li>Client creates <code>code_challenge</code> (SHA256 hash of verifier)</li>
+<li>Authorization request includes <code>code_challenge</code></li>
+<li>Token exchange includes original <code>code_verifier</code></li>
+<li>Identity provider validates the verifier matches the challenge</li>
+</ol>
+<p>This prevents authorization code interception attacks even if the client secret is compromised or unavailable.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="authentication-failures">Authentication Failures<a class="headerlink" href="#authentication-failures" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> "Invalid token" or "Authentication failed" errors</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Check server logs: <code>tail -f /tmp/analytics.log | grep -i auth</code></li>
+<li>Verify OIDC configuration matches between server and client</li>
+<li>Ensure Client ID and Issuer URL are correct</li>
+<li>Check token expiration: <code>cat ~/.micromegas/tokens.json | jq .token.expires_at</code> (or <code>tokens-&lt;profile&gt;.json</code> if a <code>profiles</code> map is in use)</li>
+<li>Clear tokens and re-authenticate: <code>micromegas-logout</code> (clears every cached token file; use <code>--profile &lt;name&gt;</code> to narrow to one)</li>
+</ol>
+<h3 id="token-refresh-failures">Token Refresh Failures<a class="headerlink" href="#token-refresh-failures" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Browser opens on every CLI invocation</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Check if refresh token is present: <code>cat ~/.micromegas/tokens.json | jq .token.refresh_token</code> (or <code>tokens-&lt;profile&gt;.json</code> if a <code>profiles</code> map is in use)</li>
+<li>Verify client secret matches (if required by provider)</li>
+<li>Check token file permissions: <code>ls -la ~/.micromegas/tokens.json</code> (should be 600; or <code>tokens-&lt;profile&gt;.json</code> if a <code>profiles</code> map is in use)</li>
+<li>Re-authenticate: <code>micromegas-logout</code> then retry (clears every cached token file; use <code>--profile &lt;name&gt;</code> to narrow to one)</li>
+</ol>
+<h3 id="server-configuration-issues">Server Configuration Issues<a class="headerlink" href="#server-configuration-issues" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Server fails to start or rejects all authentication</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Validate OIDC config JSON syntax: <code>echo $MICROMEGAS_OIDC_CONFIG | jq .</code></li>
+<li>Check server can reach identity provider: <code>curl https://accounts.google.com/.well-known/openid-configuration</code></li>
+<li>Verify audience matches client ID exactly</li>
+<li>Check server logs for OIDC discovery errors</li>
+</ol>
+<h3 id="multi-provider-issues">Multi-Provider Issues<a class="headerlink" href="#multi-provider-issues" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Only one identity provider works</p>
+<p><strong>Solutions:</strong></p>
+<ol>
+<li>Verify all issuers are in the configuration array</li>
+<li>Check each issuer URL is correct and accessible</li>
+<li>Ensure audience (client_id) matches for each provider</li>
+<li>Review server logs for OIDC discovery failures per issuer</li>
+</ol>
+<h2 id="migration-from-env-api-keys-to-db-backed-keys-and-oidc">Migration from Env API Keys to DB-Backed Keys and OIDC<a class="headerlink" href="#migration-from-env-api-keys-to-db-backed-keys-and-oidc" title="Permanent link">&para;</a></h2>
+<p>OIDC is the destination for human/service-account identities. It is <strong>not</strong> the
+destination for machine credentials — service keys and Firehose access keys
+migrate to DB-backed <code>ingestion_api_keys</code> instead, not OIDC. See
+<a href="../api-keys/">API Keys</a> for the full picture (schema, HTTP routes, the
+<code>micromegas-import-keys</code>-driven
+<a href="../api-keys/#migrating-from-the-env-keyring">legacy-key import procedure</a>, and
+the <code>object-cache-srv</code> exception, which never migrates).</p>
+<ol>
+<li><strong>Deploy the new binaries.</strong> The migration creates <code>ingestion_api_keys</code> /
+   <code>analytics_api_keys</code> (schema v5). Nothing changes yet: the env keyring still
+   authenticates every existing key, and the DB tables are empty.</li>
+<li><strong>Populate the tables</strong> from the existing env keyring using the
+   <code>micromegas-import-keys</code> CLI tool (see
+   <a href="../api-keys/#migrating-from-the-env-keyring">Migrating from the env keyring</a>
+   for the exact commands), or mint fresh keys via <code>POST /api/ingestion-api-keys</code>
+   on <code>analytics-web-srv</code> for callers you can update. A key valid on both
+   ingestion and flight-sql today must become two distinct keys — "never both"
+   is enforced at the code level once the tables are in use.</li>
+<li><strong>Set up an OIDC provider</strong> (Google, Azure AD, etc.) for human/service-account
+   identities, if you haven't already.</li>
+<li><strong>Update clients</strong>: machine credentials point at their new DB-backed key;
+   human/service-account clients switch to OIDC.</li>
+<li><strong>Remove <code>MICROMEGAS_API_KEYS</code></strong> (and prefixed variants) only after the tables
+   are populated — a non-empty key store counts as "auth configured" on its own,
+   so unsetting the env var is safe once step 2 is done, but unsetting it
+   <em>before</em> the tables are populated leaves machine clients unauthenticated.
+   <code>object-cache-srv</code> keeps its <code>MICROMEGAS_API_KEYS</code> permanently; do not remove
+   it there.</li>
+</ol>
+<p><strong>Example Migration:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Step 1/2: Add OIDC configuration and populate ingestion_api_keys (env keys</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="c1"># still work during this window)</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_API_KEYS</span><span class="o">=</span><span class="s1">&#39;[{&quot;name&quot;: &quot;service1&quot;, &quot;key&quot;: &quot;old-key&quot;}]&#39;</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MICROMEGAS_OIDC_CONFIG</span><span class="o">=</span><span class="s1">&#39;{</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="s1">  &quot;issuers&quot;: [{</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="s1">    &quot;issuer&quot;: &quot;https://accounts.google.com&quot;,</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="s1">    &quot;audience&quot;: &quot;new-client-id.apps.googleusercontent.com&quot;</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a><span class="s1">  }]</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="s1">}&#39;</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="c1"># See api-keys.md#migrating-from-the-env-keyring for the exact commands</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a>micromegas-import-keys<span class="w"> </span>--table<span class="w"> </span>ingestion<span class="w"> </span>--source<span class="w"> </span>env<span class="w"> </span>--var<span class="w"> </span>MICROMEGAS_API_KEYS<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="w">  </span>--url<span class="w"> </span>https://analytics.example.com
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a><span class="c1"># Step 3/4: Update clients to use OIDC (human/service-account) or their new</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a><span class="c1"># DB-backed key (machine credentials). Test both authentication methods work.</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a><span class="c1"># Step 5: Remove the env keyring once the tables are confirmed populated</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a><span class="nb">unset</span><span class="w"> </span>MICROMEGAS_API_KEYS
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a><span class="c1"># DB-backed keys and OIDC remain</span>
+</span></code></pre></div>
+<h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Use OIDC for all new deployments</strong> - Better security and user management</li>
+<li><strong>Enable admin privileges sparingly</strong> - Only for users who need administrative access</li>
+<li><strong>Use short token cache TTL</strong> in high-security environments (60-300 seconds)</li>
+<li><strong>Monitor authentication logs</strong> - Track failed auth attempts and unusual patterns</li>
+<li><strong>Rotate client secrets regularly</strong> - Update in identity provider and redistribute</li>
+<li><strong>Use separate OAuth clients</strong> for different environments (dev, staging, prod)</li>
+<li><strong>Document your identity provider setup</strong> - Makes onboarding new team members easier</li>
+</ol>
+<h2 id="reference">Reference<a class="headerlink" href="#reference" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://openid.net/specs/openid-connect-core-1_0.html">OpenID Connect Core Specification</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc6749">OAuth 2.0 RFC 6749</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc7636">PKCE RFC 7636</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-security-topics">OAuth 2.0 Security Best Practices</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "search.highlight", "search.suggest", "toc.follow", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

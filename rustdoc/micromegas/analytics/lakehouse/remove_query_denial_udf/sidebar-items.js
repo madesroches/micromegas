@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_remove_query_denial_udf"],"struct":["RemoveQueryDenial"]};

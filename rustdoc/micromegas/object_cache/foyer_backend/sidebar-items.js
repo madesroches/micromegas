@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DISK_FORMAT_MARKER","DISK_FORMAT_VERSION"],"struct":["FoyerBackend","WriteTuning"]};

@@ -1,0 +1,584 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `analytics-web-srv/src/audience_grants.rs`."><title>audience_grants.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="analytics_web_srv" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">analytics_web_srv/</div>audience_grants.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Audience grant admin API for `analytics-web-srv` (#1489, AbAC Stage 6a).
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! Directly mirrors `ingestion_keys.rs`'s shape (`AudienceGrantsState { pool: Option&lt;PgPool&gt; }`,
+<a href=#4 id=4 data-nosnippet>4</a>//! an `IntoResponse` error enum, `AdminUser`-gated handlers) over the new `audience_grants` table
+<a href=#5 id=5 data-nosnippet>5</a>//! (migration v7, `rust/ingestion/src/sql_migration.rs`). This is the admin write surface for the
+<a href=#6 id=6 data-nosnippet>6</a>//! grant store `micromegas-auth::db_audience_grants::DbAudienceGrantsSource` reads from -- the
+<a href=#7 id=7 data-nosnippet>7</a>//! store's own snapshot cache picks up rows written here within its cache TTL.
+<a href=#8 id=8 data-nosnippet>8</a>//!
+<a href=#9 id=9 data-nosnippet>9</a>//! **Duplication, accepted.** This duplicates most of `ingestion_keys.rs`/`analytics_keys.rs`'s
+<a href=#10 id=10 data-nosnippet>10</a>//! validation/SQL/error shape -- deliberately, per those modules' own doc comments: a generic
+<a href=#11 id=11 data-nosnippet>11</a>//! abstraction over a handful of near-identical handlers differing only in which table they
+<a href=#12 id=12 data-nosnippet>12</a>//! target is a shape this codebase already declines elsewhere
+<a href=#13 id=13 data-nosnippet>13</a>//! (`data_sources.rs`/`screens.rs`/`folders.rs`).
+<a href=#14 id=14 data-nosnippet>14</a>//!
+<a href=#15 id=15 data-nosnippet>15</a>//! Every handler in this file is [`AdminUser`]-gated except one:
+<a href=#16 id=16 data-nosnippet>16</a>//! `GET .../audience-grants/my-audiences` (AbAC Stage 6, #1374) is caller-scoped
+<a href=#17 id=17 data-nosnippet>17</a>//! ([`AuthenticatedUser`]-gated instead) -- it answers only "which audiences does *this* caller's
+<a href=#18 id=18 data-nosnippet>18</a>//! own identity match," which carries none of the confidentiality sensitivity `list_grants`'s
+<a href=#19 id=19 data-nosnippet>19</a>//! admin gate exists for. See that handler's own doc comment.
+<a href=#20 id=20 data-nosnippet>20</a>
+<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">use </span><span class="kw">crate</span>::auth::{AdminUser, AuthenticatedUser};
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>axum::extract::{Extension, Query};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>axum::http::StatusCode;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>axum::response::{IntoResponse, Response};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>axum::routing::{get, post};
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>axum::{Json, Router};
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>chrono::{DateTime, Utc};
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>micromegas::auth::policy::{is_valid_audience, valid_selector};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>micromegas::tracing::prelude::<span class="kw-2">*</span>;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>sqlx::PgPool;
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">const </span>DEFAULT_LIMIT: i64 = <span class="number">100</span>;
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">const </span>MAX_LIMIT: i64 = <span class="number">500</span>;
+<a href=#35 id=35 data-nosnippet>35</a><span class="doccomment">/// `valid_selector` places no charset/length bound on a `group:&lt;id&gt;` selector (a hierarchical
+<a href=#36 id=36 data-nosnippet>36</a>/// IdP group name can be arbitrarily long), but the `selector` column is `VARCHAR(255)` -- this
+<a href=#37 id=37 data-nosnippet>37</a>/// check is what turns an over-long selector into a `400 BadRequest` instead of a `500` at the
+<a href=#38 id=38 data-nosnippet>38</a>/// `INSERT`.
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">const </span>MAX_SELECTOR_BYTES: usize = <span class="number">255</span>;
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a><span class="doccomment">/// Holds the (possibly absent) telemetry-DB pool for the audience-grant routes. `None` only when
+<a href=#42 id=42 data-nosnippet>42</a>/// `MICROMEGAS_SQL_CONNECTION_STRING` is unset -- the routes stay registered either way and
+<a href=#43 id=43 data-nosnippet>43</a>/// return 503 per-request in that case, the same always-register-503-when-unconfigured shape
+<a href=#44 id=44 data-nosnippet>44</a>/// `IngestionKeysState`/`AnalyticsKeysState` use.
+<a href=#45 id=45 data-nosnippet>45</a></span><span class="attr">#[derive(Clone)]
+<a href=#46 id=46 data-nosnippet>46</a></span><span class="kw">pub struct </span>AudienceGrantsState {
+<a href=#47 id=47 data-nosnippet>47</a>    <span class="kw">pub </span>pool: <span class="prelude-ty">Option</span>&lt;PgPool&gt;,
+<a href=#48 id=48 data-nosnippet>48</a>    <span class="doccomment">/// Off-by-default self-service mint gate (AbAC Stage 6, #1374, Design §5). Resolved once at
+<a href=#49 id=49 data-nosnippet>49</a>    /// startup from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`, the same knob resolved onto
+<a href=#50 id=50 data-nosnippet>50</a>    /// `IngestionKeysState`), default `false`. Gates `GET .../audience-grants/my-audiences` for
+<a href=#51 id=51 data-nosnippet>51</a>    /// non-admin callers the same way `MintGate` gates `mint_key` -- that route is new non-admin
+<a href=#52 id=52 data-nosnippet>52</a>    /// surface too, and must not widen on upgrade any more than the mint route itself does.
+<a href=#53 id=53 data-nosnippet>53</a>    </span><span class="kw">pub </span>self_service_mint_enabled: bool,
+<a href=#54 id=54 data-nosnippet>54</a>}
+<a href=#55 id=55 data-nosnippet>55</a>
+<a href=#56 id=56 data-nosnippet>56</a><span class="doccomment">/// JSON error body returned by every handler in this module. Same `{code, message}` shape as
+<a href=#57 id=57 data-nosnippet>57</a>/// `ingestion_keys.rs::ErrorResponse`, redefined here since that struct is private to its module.
+<a href=#58 id=58 data-nosnippet>58</a></span><span class="attr">#[derive(Debug, Serialize)]
+<a href=#59 id=59 data-nosnippet>59</a></span><span class="kw">struct </span>ErrorResponse {
+<a href=#60 id=60 data-nosnippet>60</a>    code: String,
+<a href=#61 id=61 data-nosnippet>61</a>    message: String,
+<a href=#62 id=62 data-nosnippet>62</a>}
+<a href=#63 id=63 data-nosnippet>63</a>
+<a href=#64 id=64 data-nosnippet>64</a><span class="kw">impl </span>ErrorResponse {
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">fn </span>new(code: <span class="kw-2">&amp;</span>str, message: <span class="kw">impl </span>Into&lt;String&gt;) -&gt; <span class="self">Self </span>{
+<a href=#66 id=66 data-nosnippet>66</a>        <span class="self">Self </span>{
+<a href=#67 id=67 data-nosnippet>67</a>            code: code.to_string(),
+<a href=#68 id=68 data-nosnippet>68</a>            message: message.into(),
+<a href=#69 id=69 data-nosnippet>69</a>        }
+<a href=#70 id=70 data-nosnippet>70</a>    }
+<a href=#71 id=71 data-nosnippet>71</a>}
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a><span class="doccomment">/// Errors this API returns.
+<a href=#74 id=74 data-nosnippet>74</a>///
+<a href=#75 id=75 data-nosnippet>75</a>/// `Forbidden` (AbAC Stage 6, #1374) is returned only by `/my-audiences`'s own knob-gate check --
+<a href=#76 id=76 data-nosnippet>76</a>/// the one handler in this file [`AdminUser`] doesn't cover (see that handler's doc comment).
+<a href=#77 id=77 data-nosnippet>77</a>/// Every other handler here is still `AdminUser`-gated, whose rejection renders as
+<a href=#78 id=78 data-nosnippet>78</a>/// `AdminRequired`'s own 403 body before the handler even starts running, so `Forbidden` is never
+<a href=#79 id=79 data-nosnippet>79</a>/// constructed by any of them.
+<a href=#80 id=80 data-nosnippet>80</a></span><span class="attr">#[derive(Debug)]
+<a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">pub enum </span>AudienceGrantError {
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Request body/query failed validation.
+<a href=#83 id=83 data-nosnippet>83</a>    </span>BadRequest(String),
+<a href=#84 id=84 data-nosnippet>84</a>    <span class="doccomment">/// Unknown `(audience, axis, selector)` on `DELETE`.
+<a href=#85 id=85 data-nosnippet>85</a>    </span>NotFound,
+<a href=#86 id=86 data-nosnippet>86</a>    <span class="doccomment">/// A DB error.
+<a href=#87 id=87 data-nosnippet>87</a>    </span>Database(sqlx::Error),
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// `state.pool == None` -- the telemetry-DB pool was never configured
+<a href=#89 id=89 data-nosnippet>89</a>    /// (`MICROMEGAS_SQL_CONNECTION_STRING` unset).
+<a href=#90 id=90 data-nosnippet>90</a>    </span>NotConfigured,
+<a href=#91 id=91 data-nosnippet>91</a>    <span class="doccomment">/// The create statement (see [`insert_or_get`]) returned zero rows twice in a row -- an
+<a href=#92 id=92 data-nosnippet>92</a>    /// internal error, not a caller mistake (see that function's doc comment).
+<a href=#93 id=93 data-nosnippet>93</a>    </span>Internal(String),
+<a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// `/my-audiences`'s off-by-default self-service gate denied a non-admin caller
+<a href=#95 id=95 data-nosnippet>95</a>    /// (`MICROMEGAS_SELF_SERVICE_MINT` is off).
+<a href=#96 id=96 data-nosnippet>96</a>    </span>Forbidden(String),
+<a href=#97 id=97 data-nosnippet>97</a>}
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a><span class="kw">impl </span>IntoResponse <span class="kw">for </span>AudienceGrantError {
+<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">fn </span>into_response(<span class="self">self</span>) -&gt; Response {
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#102 id=102 data-nosnippet>102</a>            AudienceGrantError::BadRequest(msg) =&gt; (
+<a href=#103 id=103 data-nosnippet>103</a>                StatusCode::BAD_REQUEST,
+<a href=#104 id=104 data-nosnippet>104</a>                Json(ErrorResponse::new(<span class="string">"BAD_REQUEST"</span>, msg)),
+<a href=#105 id=105 data-nosnippet>105</a>            )
+<a href=#106 id=106 data-nosnippet>106</a>                .into_response(),
+<a href=#107 id=107 data-nosnippet>107</a>            AudienceGrantError::NotFound =&gt; (
+<a href=#108 id=108 data-nosnippet>108</a>                StatusCode::NOT_FOUND,
+<a href=#109 id=109 data-nosnippet>109</a>                Json(ErrorResponse::new(<span class="string">"NOT_FOUND"</span>, <span class="string">"grant not found"</span>)),
+<a href=#110 id=110 data-nosnippet>110</a>            )
+<a href=#111 id=111 data-nosnippet>111</a>                .into_response(),
+<a href=#112 id=112 data-nosnippet>112</a>            AudienceGrantError::Database(err) =&gt; {
+<a href=#113 id=113 data-nosnippet>113</a>                <span class="macro">error!</span>(<span class="string">"audience_grants: database error: {err}"</span>);
+<a href=#114 id=114 data-nosnippet>114</a>                (
+<a href=#115 id=115 data-nosnippet>115</a>                    StatusCode::INTERNAL_SERVER_ERROR,
+<a href=#116 id=116 data-nosnippet>116</a>                    Json(ErrorResponse::new(
+<a href=#117 id=117 data-nosnippet>117</a>                        <span class="string">"DATABASE_ERROR"</span>,
+<a href=#118 id=118 data-nosnippet>118</a>                        <span class="string">"internal database error"</span>,
+<a href=#119 id=119 data-nosnippet>119</a>                    )),
+<a href=#120 id=120 data-nosnippet>120</a>                )
+<a href=#121 id=121 data-nosnippet>121</a>                    .into_response()
+<a href=#122 id=122 data-nosnippet>122</a>            }
+<a href=#123 id=123 data-nosnippet>123</a>            AudienceGrantError::NotConfigured =&gt; (
+<a href=#124 id=124 data-nosnippet>124</a>                StatusCode::SERVICE_UNAVAILABLE,
+<a href=#125 id=125 data-nosnippet>125</a>                Json(ErrorResponse::new(
+<a href=#126 id=126 data-nosnippet>126</a>                    <span class="string">"NOT_CONFIGURED"</span>,
+<a href=#127 id=127 data-nosnippet>127</a>                    <span class="string">"audience grant store not configured: set MICROMEGAS_SQL_CONNECTION_STRING"</span>,
+<a href=#128 id=128 data-nosnippet>128</a>                )),
+<a href=#129 id=129 data-nosnippet>129</a>            )
+<a href=#130 id=130 data-nosnippet>130</a>                .into_response(),
+<a href=#131 id=131 data-nosnippet>131</a>            AudienceGrantError::Internal(msg) =&gt; {
+<a href=#132 id=132 data-nosnippet>132</a>                <span class="macro">error!</span>(<span class="string">"audience_grants: internal error: {msg}"</span>);
+<a href=#133 id=133 data-nosnippet>133</a>                (
+<a href=#134 id=134 data-nosnippet>134</a>                    StatusCode::INTERNAL_SERVER_ERROR,
+<a href=#135 id=135 data-nosnippet>135</a>                    Json(ErrorResponse::new(<span class="string">"INTERNAL_ERROR"</span>, <span class="string">"internal error"</span>)),
+<a href=#136 id=136 data-nosnippet>136</a>                )
+<a href=#137 id=137 data-nosnippet>137</a>                    .into_response()
+<a href=#138 id=138 data-nosnippet>138</a>            }
+<a href=#139 id=139 data-nosnippet>139</a>            AudienceGrantError::Forbidden(msg) =&gt; (
+<a href=#140 id=140 data-nosnippet>140</a>                StatusCode::FORBIDDEN,
+<a href=#141 id=141 data-nosnippet>141</a>                Json(ErrorResponse::new(<span class="string">"FORBIDDEN"</span>, msg)),
+<a href=#142 id=142 data-nosnippet>142</a>            )
+<a href=#143 id=143 data-nosnippet>143</a>                .into_response(),
+<a href=#144 id=144 data-nosnippet>144</a>        }
+<a href=#145 id=145 data-nosnippet>145</a>    }
+<a href=#146 id=146 data-nosnippet>146</a>}
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a><span class="kw">impl </span>From&lt;sqlx::Error&gt; <span class="kw">for </span>AudienceGrantError {
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>from(err: sqlx::Error) -&gt; <span class="self">Self </span>{
+<a href=#150 id=150 data-nosnippet>150</a>        AudienceGrantError::Database(err)
+<a href=#151 id=151 data-nosnippet>151</a>    }
+<a href=#152 id=152 data-nosnippet>152</a>}
+<a href=#153 id=153 data-nosnippet>153</a>
+<a href=#154 id=154 data-nosnippet>154</a><span class="kw">fn </span>require_pool(state: <span class="kw-2">&amp;</span>AudienceGrantsState) -&gt; <span class="prelude-ty">Result</span>&lt;PgPool, AudienceGrantError&gt; {
+<a href=#155 id=155 data-nosnippet>155</a>    state.pool.clone().ok_or(AudienceGrantError::NotConfigured)
+<a href=#156 id=156 data-nosnippet>156</a>}
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a><span class="kw">fn </span>validate_audience(audience: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), AudienceGrantError&gt; {
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">if </span>!is_valid_audience(audience) {
+<a href=#160 id=160 data-nosnippet>160</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(<span class="macro">format!</span>(
+<a href=#161 id=161 data-nosnippet>161</a>            <span class="string">"invalid audience {audience:?}: must match [A-Za-z0-9_-]{{1,255}}"
+<a href=#162 id=162 data-nosnippet>162</a>        </span>)));
+<a href=#163 id=163 data-nosnippet>163</a>    }
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="prelude-val">Ok</span>(())
+<a href=#165 id=165 data-nosnippet>165</a>}
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a><span class="kw">fn </span>validate_axis(axis: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), AudienceGrantError&gt; {
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">if </span>axis != <span class="string">"read" </span>&amp;&amp; axis != <span class="string">"mint" </span>{
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(<span class="macro">format!</span>(
+<a href=#170 id=170 data-nosnippet>170</a>            <span class="string">"invalid axis {axis:?}: must be 'read' or 'mint'"
+<a href=#171 id=171 data-nosnippet>171</a>        </span>)));
+<a href=#172 id=172 data-nosnippet>172</a>    }
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="prelude-val">Ok</span>(())
+<a href=#174 id=174 data-nosnippet>174</a>}
+<a href=#175 id=175 data-nosnippet>175</a>
+<a href=#176 id=176 data-nosnippet>176</a><span class="kw">fn </span>validate_selector(selector: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), AudienceGrantError&gt; {
+<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">if </span>!valid_selector(selector) {
+<a href=#178 id=178 data-nosnippet>178</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(<span class="macro">format!</span>(
+<a href=#179 id=179 data-nosnippet>179</a>            <span class="string">"invalid selector {selector:?}: must be '*', 'user:&lt;id&gt;', or 'group:&lt;id&gt;'"
+<a href=#180 id=180 data-nosnippet>180</a>        </span>)));
+<a href=#181 id=181 data-nosnippet>181</a>    }
+<a href=#182 id=182 data-nosnippet>182</a>    <span class="kw">if </span>selector.len() &gt; MAX_SELECTOR_BYTES {
+<a href=#183 id=183 data-nosnippet>183</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(<span class="macro">format!</span>(
+<a href=#184 id=184 data-nosnippet>184</a>            <span class="string">"selector must be at most {MAX_SELECTOR_BYTES} bytes"
+<a href=#185 id=185 data-nosnippet>185</a>        </span>)));
+<a href=#186 id=186 data-nosnippet>186</a>    }
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="prelude-val">Ok</span>(())
+<a href=#188 id=188 data-nosnippet>188</a>}
+<a href=#189 id=189 data-nosnippet>189</a>
+<a href=#190 id=190 data-nosnippet>190</a><span class="attr">#[derive(Deserialize)]
+<a href=#191 id=191 data-nosnippet>191</a>#[serde(deny_unknown_fields)]
+<a href=#192 id=192 data-nosnippet>192</a></span><span class="kw">struct </span>CreateGrantRequest {
+<a href=#193 id=193 data-nosnippet>193</a>    audience: String,
+<a href=#194 id=194 data-nosnippet>194</a>    axis: String,
+<a href=#195 id=195 data-nosnippet>195</a>    selector: String,
+<a href=#196 id=196 data-nosnippet>196</a>}
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a><span class="attr">#[derive(Serialize)]
+<a href=#199 id=199 data-nosnippet>199</a></span><span class="kw">struct </span>GrantResponse {
+<a href=#200 id=200 data-nosnippet>200</a>    audience: String,
+<a href=#201 id=201 data-nosnippet>201</a>    axis: String,
+<a href=#202 id=202 data-nosnippet>202</a>    selector: String,
+<a href=#203 id=203 data-nosnippet>203</a>    created_at: DateTime&lt;Utc&gt;,
+<a href=#204 id=204 data-nosnippet>204</a>    created_by: String,
+<a href=#205 id=205 data-nosnippet>205</a>}
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a><span class="doccomment">/// Row shape shared by both branches of `insert_or_get`'s CTE (see its doc comment).
+<a href=#208 id=208 data-nosnippet>208</a></span><span class="attr">#[derive(sqlx::FromRow)]
+<a href=#209 id=209 data-nosnippet>209</a></span><span class="kw">struct </span>UpsertedRow {
+<a href=#210 id=210 data-nosnippet>210</a>    audience: String,
+<a href=#211 id=211 data-nosnippet>211</a>    axis: String,
+<a href=#212 id=212 data-nosnippet>212</a>    selector: String,
+<a href=#213 id=213 data-nosnippet>213</a>    created_at: DateTime&lt;Utc&gt;,
+<a href=#214 id=214 data-nosnippet>214</a>    created_by: String,
+<a href=#215 id=215 data-nosnippet>215</a>    created: bool,
+<a href=#216 id=216 data-nosnippet>216</a>}
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a><span class="doccomment">/// One round trip: a CTE that unions the just-inserted row with the pre-existing one, so there is
+<a href=#219 id=219 data-nosnippet>219</a>/// no window between a failed insert and a re-`SELECT` for a concurrent `DELETE` to invalidate --
+<a href=#220 id=220 data-nosnippet>220</a>/// unlike `ingestion_keys.rs::import_key`'s insert-then-re-`SELECT`, safe there only because that
+<a href=#221 id=221 data-nosnippet>221</a>/// table never physically deletes rows.
+<a href=#222 id=222 data-nosnippet>222</a>///
+<a href=#223 id=223 data-nosnippet>223</a>/// This single statement can still return **zero rows**: Postgres data-modifying CTEs share one
+<a href=#224 id=224 data-nosnippet>224</a>/// statement-level snapshot with the query around them, so when two callers race to create the
+<a href=#225 id=225 data-nosnippet>225</a>/// same new `(audience, axis, selector)`, the loser's `ins` branch resolves to "do nothing" (its
+<a href=#226 id=226 data-nosnippet>226</a>/// `INSERT ... ON CONFLICT` finds the winner's row already committed) while its plain-`SELECT`
+<a href=#227 id=227 data-nosnippet>227</a>/// branch still runs against the snapshot taken before the winner committed -- neither branch
+<a href=#228 id=228 data-nosnippet>228</a>/// sees the row. The caller retries the exact same statement once more (now that the winner's
+<a href=#229 id=229 data-nosnippet>229</a>/// insert has definitely committed, the loser's re-`SELECT` branch will see it); a second
+<a href=#230 id=230 data-nosnippet>230</a>/// zero-row result is treated as an internal error rather than looping further.
+<a href=#231 id=231 data-nosnippet>231</a></span><span class="kw">const </span>UPSERT_GRANT_SQL: <span class="kw-2">&amp;</span>str = <span class="string">"
+<a href=#232 id=232 data-nosnippet>232</a>    WITH ins AS (
+<a href=#233 id=233 data-nosnippet>233</a>        INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+<a href=#234 id=234 data-nosnippet>234</a>        VALUES ($1, $2, $3, now(), $4)
+<a href=#235 id=235 data-nosnippet>235</a>        ON CONFLICT (audience, axis, selector) DO NOTHING
+<a href=#236 id=236 data-nosnippet>236</a>        RETURNING audience, axis, selector, created_at, created_by
+<a href=#237 id=237 data-nosnippet>237</a>    )
+<a href=#238 id=238 data-nosnippet>238</a>    SELECT audience, axis, selector, created_at, created_by, true AS created FROM ins
+<a href=#239 id=239 data-nosnippet>239</a>    UNION ALL
+<a href=#240 id=240 data-nosnippet>240</a>    SELECT audience, axis, selector, created_at, created_by, false AS created
+<a href=#241 id=241 data-nosnippet>241</a>    FROM audience_grants
+<a href=#242 id=242 data-nosnippet>242</a>    WHERE audience = $1 AND axis = $2 AND selector = $3
+<a href=#243 id=243 data-nosnippet>243</a>      AND NOT EXISTS (SELECT 1 FROM ins)"</span>;
+<a href=#244 id=244 data-nosnippet>244</a>
+<a href=#245 id=245 data-nosnippet>245</a><span class="kw">async fn </span>insert_or_get(
+<a href=#246 id=246 data-nosnippet>246</a>    pool: <span class="kw-2">&amp;</span>PgPool,
+<a href=#247 id=247 data-nosnippet>247</a>    audience: <span class="kw-2">&amp;</span>str,
+<a href=#248 id=248 data-nosnippet>248</a>    axis: <span class="kw-2">&amp;</span>str,
+<a href=#249 id=249 data-nosnippet>249</a>    selector: <span class="kw-2">&amp;</span>str,
+<a href=#250 id=250 data-nosnippet>250</a>    created_by: <span class="kw-2">&amp;</span>str,
+<a href=#251 id=251 data-nosnippet>251</a>) -&gt; <span class="prelude-ty">Result</span>&lt;UpsertedRow, AudienceGrantError&gt; {
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">2 </span>{
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span>row = sqlx::query_as::&lt;<span class="kw">_</span>, UpsertedRow&gt;(UPSERT_GRANT_SQL)
+<a href=#254 id=254 data-nosnippet>254</a>            .bind(audience)
+<a href=#255 id=255 data-nosnippet>255</a>            .bind(axis)
+<a href=#256 id=256 data-nosnippet>256</a>            .bind(selector)
+<a href=#257 id=257 data-nosnippet>257</a>            .bind(created_by)
+<a href=#258 id=258 data-nosnippet>258</a>            .fetch_optional(pool)
+<a href=#259 id=259 data-nosnippet>259</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(row) = row {
+<a href=#261 id=261 data-nosnippet>261</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(row);
+<a href=#262 id=262 data-nosnippet>262</a>        }
+<a href=#263 id=263 data-nosnippet>263</a>    }
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="prelude-val">Err</span>(AudienceGrantError::Internal(<span class="macro">format!</span>(
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="string">"audience_grants upsert for ({audience:?}, {axis:?}, {selector:?}) returned no row \
+<a href=#266 id=266 data-nosnippet>266</a>         after a retry"
+<a href=#267 id=267 data-nosnippet>267</a>    </span>)))
+<a href=#268 id=268 data-nosnippet>268</a>}
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a><span class="doccomment">/// `POST {base_path}/api/audience-grants` -- creates (or reports the pre-existing) grant row.
+<a href=#271 id=271 data-nosnippet>271</a>/// `201` when this call created it, `200` when it already existed.
+<a href=#272 id=272 data-nosnippet>272</a></span><span class="kw">async fn </span>create_grant(
+<a href=#273 id=273 data-nosnippet>273</a>    Extension(state): Extension&lt;AudienceGrantsState&gt;,
+<a href=#274 id=274 data-nosnippet>274</a>    AdminUser(user): AdminUser,
+<a href=#275 id=275 data-nosnippet>275</a>    Json(body): Json&lt;CreateGrantRequest&gt;,
+<a href=#276 id=276 data-nosnippet>276</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(StatusCode, Json&lt;GrantResponse&gt;), AudienceGrantError&gt; {
+<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">let </span>pool = require_pool(<span class="kw-2">&amp;</span>state)<span class="question-mark">?</span>;
+<a href=#278 id=278 data-nosnippet>278</a>    validate_audience(<span class="kw-2">&amp;</span>body.audience)<span class="question-mark">?</span>;
+<a href=#279 id=279 data-nosnippet>279</a>    validate_axis(<span class="kw-2">&amp;</span>body.axis)<span class="question-mark">?</span>;
+<a href=#280 id=280 data-nosnippet>280</a>    validate_selector(<span class="kw-2">&amp;</span>body.selector)<span class="question-mark">?</span>;
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">let </span>created_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">let </span>row = insert_or_get(
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw-2">&amp;</span>pool,
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw-2">&amp;</span>body.audience,
+<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw-2">&amp;</span>body.axis,
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw-2">&amp;</span>body.selector,
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="kw-2">&amp;</span>created_by,
+<a href=#289 id=289 data-nosnippet>289</a>    )
+<a href=#290 id=290 data-nosnippet>290</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#291 id=291 data-nosnippet>291</a>
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">let </span>status = <span class="kw">if </span>row.created {
+<a href=#293 id=293 data-nosnippet>293</a>        StatusCode::CREATED
+<a href=#294 id=294 data-nosnippet>294</a>    } <span class="kw">else </span>{
+<a href=#295 id=295 data-nosnippet>295</a>        StatusCode::OK
+<a href=#296 id=296 data-nosnippet>296</a>    };
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="macro">info!</span>(
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="string">"audience grant audience={} axis={} selector={} created={} created_by={}"</span>,
+<a href=#299 id=299 data-nosnippet>299</a>        row.audience, row.axis, row.selector, row.created, row.created_by
+<a href=#300 id=300 data-nosnippet>300</a>    );
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="prelude-val">Ok</span>((
+<a href=#302 id=302 data-nosnippet>302</a>        status,
+<a href=#303 id=303 data-nosnippet>303</a>        Json(GrantResponse {
+<a href=#304 id=304 data-nosnippet>304</a>            audience: row.audience,
+<a href=#305 id=305 data-nosnippet>305</a>            axis: row.axis,
+<a href=#306 id=306 data-nosnippet>306</a>            selector: row.selector,
+<a href=#307 id=307 data-nosnippet>307</a>            created_at: row.created_at,
+<a href=#308 id=308 data-nosnippet>308</a>            created_by: row.created_by,
+<a href=#309 id=309 data-nosnippet>309</a>        }),
+<a href=#310 id=310 data-nosnippet>310</a>    ))
+<a href=#311 id=311 data-nosnippet>311</a>}
+<a href=#312 id=312 data-nosnippet>312</a>
+<a href=#313 id=313 data-nosnippet>313</a><span class="attr">#[derive(Deserialize)]
+<a href=#314 id=314 data-nosnippet>314</a></span><span class="kw">struct </span>ListQuery {
+<a href=#315 id=315 data-nosnippet>315</a>    audience: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#316 id=316 data-nosnippet>316</a>    axis: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#317 id=317 data-nosnippet>317</a>    limit: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#318 id=318 data-nosnippet>318</a>    offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#319 id=319 data-nosnippet>319</a>}
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a><span class="attr">#[derive(Serialize, sqlx::FromRow)]
+<a href=#322 id=322 data-nosnippet>322</a></span><span class="kw">struct </span>GrantListEntry {
+<a href=#323 id=323 data-nosnippet>323</a>    audience: String,
+<a href=#324 id=324 data-nosnippet>324</a>    axis: String,
+<a href=#325 id=325 data-nosnippet>325</a>    selector: String,
+<a href=#326 id=326 data-nosnippet>326</a>    created_at: DateTime&lt;Utc&gt;,
+<a href=#327 id=327 data-nosnippet>327</a>    created_by: String,
+<a href=#328 id=328 data-nosnippet>328</a>}
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a><span class="doccomment">/// `GET {base_path}/api/audience-grants?audience=&amp;axis=&amp;limit=&amp;offset=` -- lists rows, optionally
+<a href=#331 id=331 data-nosnippet>331</a>/// filtered, newest first. Admin-gated like the write side: revealing who can read which audience
+<a href=#332 id=332 data-nosnippet>332</a>/// is itself confidentiality-sensitive.
+<a href=#333 id=333 data-nosnippet>333</a></span><span class="kw">async fn </span>list_grants(
+<a href=#334 id=334 data-nosnippet>334</a>    Extension(state): Extension&lt;AudienceGrantsState&gt;,
+<a href=#335 id=335 data-nosnippet>335</a>    AdminUser(_user): AdminUser,
+<a href=#336 id=336 data-nosnippet>336</a>    Query(query): Query&lt;ListQuery&gt;,
+<a href=#337 id=337 data-nosnippet>337</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Json&lt;Vec&lt;GrantListEntry&gt;&gt;, AudienceGrantError&gt; {
+<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span>pool = require_pool(<span class="kw-2">&amp;</span>state)<span class="question-mark">?</span>;
+<a href=#339 id=339 data-nosnippet>339</a>
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">let </span>limit = query.limit.unwrap_or(DEFAULT_LIMIT);
+<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">if </span>limit &lt;= <span class="number">0 </span>{
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(
+<a href=#343 id=343 data-nosnippet>343</a>            <span class="string">"limit must be &gt; 0"</span>.to_string(),
+<a href=#344 id=344 data-nosnippet>344</a>        ));
+<a href=#345 id=345 data-nosnippet>345</a>    }
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="comment">// A read endpoint, so capping is safer than erroring: silently clamp rather than reject
+<a href=#347 id=347 data-nosnippet>347</a>    // values above MAX_LIMIT.
+<a href=#348 id=348 data-nosnippet>348</a>    </span><span class="kw">let </span>limit = limit.min(MAX_LIMIT);
+<a href=#349 id=349 data-nosnippet>349</a>    <span class="kw">let </span>offset = query.offset.unwrap_or(<span class="number">0</span>);
+<a href=#350 id=350 data-nosnippet>350</a>    <span class="kw">if </span>offset &lt; <span class="number">0 </span>{
+<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::BadRequest(
+<a href=#352 id=352 data-nosnippet>352</a>            <span class="string">"offset must be &gt;= 0"</span>.to_string(),
+<a href=#353 id=353 data-nosnippet>353</a>        ));
+<a href=#354 id=354 data-nosnippet>354</a>    }
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(axis) = <span class="kw-2">&amp;</span>query.axis {
+<a href=#356 id=356 data-nosnippet>356</a>        validate_axis(axis)<span class="question-mark">?</span>;
+<a href=#357 id=357 data-nosnippet>357</a>    }
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">let </span>rows = <span class="kw">match </span>(<span class="kw-2">&amp;</span>query.audience, <span class="kw-2">&amp;</span>query.axis) {
+<a href=#360 id=360 data-nosnippet>360</a>        (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; {
+<a href=#361 id=361 data-nosnippet>361</a>            sqlx::query_as::&lt;<span class="kw">_</span>, GrantListEntry&gt;(
+<a href=#362 id=362 data-nosnippet>362</a>                <span class="string">"SELECT audience, axis, selector, created_at, created_by
+<a href=#363 id=363 data-nosnippet>363</a>                 FROM audience_grants
+<a href=#364 id=364 data-nosnippet>364</a>                 ORDER BY created_at DESC
+<a href=#365 id=365 data-nosnippet>365</a>                 LIMIT $1 OFFSET $2"</span>,
+<a href=#366 id=366 data-nosnippet>366</a>            )
+<a href=#367 id=367 data-nosnippet>367</a>            .bind(limit)
+<a href=#368 id=368 data-nosnippet>368</a>            .bind(offset)
+<a href=#369 id=369 data-nosnippet>369</a>            .fetch_all(<span class="kw-2">&amp;</span>pool)
+<a href=#370 id=370 data-nosnippet>370</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#371 id=371 data-nosnippet>371</a>        </span>}
+<a href=#372 id=372 data-nosnippet>372</a>        (<span class="prelude-val">Some</span>(audience), <span class="prelude-val">None</span>) =&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>            sqlx::query_as::&lt;<span class="kw">_</span>, GrantListEntry&gt;(
+<a href=#374 id=374 data-nosnippet>374</a>                <span class="string">"SELECT audience, axis, selector, created_at, created_by
+<a href=#375 id=375 data-nosnippet>375</a>                 FROM audience_grants
+<a href=#376 id=376 data-nosnippet>376</a>                 WHERE audience = $1
+<a href=#377 id=377 data-nosnippet>377</a>                 ORDER BY created_at DESC
+<a href=#378 id=378 data-nosnippet>378</a>                 LIMIT $2 OFFSET $3"</span>,
+<a href=#379 id=379 data-nosnippet>379</a>            )
+<a href=#380 id=380 data-nosnippet>380</a>            .bind(audience)
+<a href=#381 id=381 data-nosnippet>381</a>            .bind(limit)
+<a href=#382 id=382 data-nosnippet>382</a>            .bind(offset)
+<a href=#383 id=383 data-nosnippet>383</a>            .fetch_all(<span class="kw-2">&amp;</span>pool)
+<a href=#384 id=384 data-nosnippet>384</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#385 id=385 data-nosnippet>385</a>        </span>}
+<a href=#386 id=386 data-nosnippet>386</a>        (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(axis)) =&gt; {
+<a href=#387 id=387 data-nosnippet>387</a>            sqlx::query_as::&lt;<span class="kw">_</span>, GrantListEntry&gt;(
+<a href=#388 id=388 data-nosnippet>388</a>                <span class="string">"SELECT audience, axis, selector, created_at, created_by
+<a href=#389 id=389 data-nosnippet>389</a>                 FROM audience_grants
+<a href=#390 id=390 data-nosnippet>390</a>                 WHERE axis = $1
+<a href=#391 id=391 data-nosnippet>391</a>                 ORDER BY created_at DESC
+<a href=#392 id=392 data-nosnippet>392</a>                 LIMIT $2 OFFSET $3"</span>,
+<a href=#393 id=393 data-nosnippet>393</a>            )
+<a href=#394 id=394 data-nosnippet>394</a>            .bind(axis)
+<a href=#395 id=395 data-nosnippet>395</a>            .bind(limit)
+<a href=#396 id=396 data-nosnippet>396</a>            .bind(offset)
+<a href=#397 id=397 data-nosnippet>397</a>            .fetch_all(<span class="kw-2">&amp;</span>pool)
+<a href=#398 id=398 data-nosnippet>398</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#399 id=399 data-nosnippet>399</a>        </span>}
+<a href=#400 id=400 data-nosnippet>400</a>        (<span class="prelude-val">Some</span>(audience), <span class="prelude-val">Some</span>(axis)) =&gt; {
+<a href=#401 id=401 data-nosnippet>401</a>            sqlx::query_as::&lt;<span class="kw">_</span>, GrantListEntry&gt;(
+<a href=#402 id=402 data-nosnippet>402</a>                <span class="string">"SELECT audience, axis, selector, created_at, created_by
+<a href=#403 id=403 data-nosnippet>403</a>                 FROM audience_grants
+<a href=#404 id=404 data-nosnippet>404</a>                 WHERE audience = $1 AND axis = $2
+<a href=#405 id=405 data-nosnippet>405</a>                 ORDER BY created_at DESC
+<a href=#406 id=406 data-nosnippet>406</a>                 LIMIT $3 OFFSET $4"</span>,
+<a href=#407 id=407 data-nosnippet>407</a>            )
+<a href=#408 id=408 data-nosnippet>408</a>            .bind(audience)
+<a href=#409 id=409 data-nosnippet>409</a>            .bind(axis)
+<a href=#410 id=410 data-nosnippet>410</a>            .bind(limit)
+<a href=#411 id=411 data-nosnippet>411</a>            .bind(offset)
+<a href=#412 id=412 data-nosnippet>412</a>            .fetch_all(<span class="kw-2">&amp;</span>pool)
+<a href=#413 id=413 data-nosnippet>413</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#414 id=414 data-nosnippet>414</a>        </span>}
+<a href=#415 id=415 data-nosnippet>415</a>    };
+<a href=#416 id=416 data-nosnippet>416</a>
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="prelude-val">Ok</span>(Json(rows))
+<a href=#418 id=418 data-nosnippet>418</a>}
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a><span class="attr">#[derive(Deserialize)]
+<a href=#421 id=421 data-nosnippet>421</a></span><span class="kw">struct </span>DeleteGrantQuery {
+<a href=#422 id=422 data-nosnippet>422</a>    audience: String,
+<a href=#423 id=423 data-nosnippet>423</a>    axis: String,
+<a href=#424 id=424 data-nosnippet>424</a>    selector: String,
+<a href=#425 id=425 data-nosnippet>425</a>}
+<a href=#426 id=426 data-nosnippet>426</a>
+<a href=#427 id=427 data-nosnippet>427</a><span class="doccomment">/// `DELETE {base_path}/api/audience-grants?audience=&amp;axis=&amp;selector=` -- natural key passed as
+<a href=#428 id=428 data-nosnippet>428</a>/// query parameters, not path segments: `valid_selector` places no charset restriction on a
+<a href=#429 id=429 data-nosnippet>429</a>/// `group:&lt;id&gt;` selector (a hierarchical IdP group name can contain `/`, `?`, or other
+<a href=#430 id=430 data-nosnippet>430</a>/// URL-significant characters), so encoding it as a raw path segment the way every other route's
+<a href=#431 id=431 data-nosnippet>431</a>/// `Uuid` id does would be unsafe here. `404` if no such row.
+<a href=#432 id=432 data-nosnippet>432</a></span><span class="kw">async fn </span>delete_grant(
+<a href=#433 id=433 data-nosnippet>433</a>    Extension(state): Extension&lt;AudienceGrantsState&gt;,
+<a href=#434 id=434 data-nosnippet>434</a>    AdminUser(user): AdminUser,
+<a href=#435 id=435 data-nosnippet>435</a>    Query(query): Query&lt;DeleteGrantQuery&gt;,
+<a href=#436 id=436 data-nosnippet>436</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StatusCode, AudienceGrantError&gt; {
+<a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">let </span>pool = require_pool(<span class="kw-2">&amp;</span>state)<span class="question-mark">?</span>;
+<a href=#438 id=438 data-nosnippet>438</a>    validate_axis(<span class="kw-2">&amp;</span>query.axis)<span class="question-mark">?</span>;
+<a href=#439 id=439 data-nosnippet>439</a>
+<a href=#440 id=440 data-nosnippet>440</a>    <span class="kw">let </span>result = sqlx::query(
+<a href=#441 id=441 data-nosnippet>441</a>        <span class="string">"DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3"</span>,
+<a href=#442 id=442 data-nosnippet>442</a>    )
+<a href=#443 id=443 data-nosnippet>443</a>    .bind(<span class="kw-2">&amp;</span>query.audience)
+<a href=#444 id=444 data-nosnippet>444</a>    .bind(<span class="kw-2">&amp;</span>query.axis)
+<a href=#445 id=445 data-nosnippet>445</a>    .bind(<span class="kw-2">&amp;</span>query.selector)
+<a href=#446 id=446 data-nosnippet>446</a>    .execute(<span class="kw-2">&amp;</span>pool)
+<a href=#447 id=447 data-nosnippet>447</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#448 id=448 data-nosnippet>448</a>
+<a href=#449 id=449 data-nosnippet>449</a>    <span class="kw">if </span>result.rows_affected() == <span class="number">0 </span>{
+<a href=#450 id=450 data-nosnippet>450</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::NotFound);
+<a href=#451 id=451 data-nosnippet>451</a>    }
+<a href=#452 id=452 data-nosnippet>452</a>
+<a href=#453 id=453 data-nosnippet>453</a>    <span class="kw">let </span>deleted_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
+<a href=#454 id=454 data-nosnippet>454</a>    <span class="macro">info!</span>(
+<a href=#455 id=455 data-nosnippet>455</a>        <span class="string">"deleted audience grant audience={} axis={} selector={} deleted_by={deleted_by}"</span>,
+<a href=#456 id=456 data-nosnippet>456</a>        query.audience, query.axis, query.selector
+<a href=#457 id=457 data-nosnippet>457</a>    );
+<a href=#458 id=458 data-nosnippet>458</a>    <span class="prelude-val">Ok</span>(StatusCode::NO_CONTENT)
+<a href=#459 id=459 data-nosnippet>459</a>}
+<a href=#460 id=460 data-nosnippet>460</a>
+<a href=#461 id=461 data-nosnippet>461</a><span class="doccomment">/// Derives the caller-scoped namespace prefix `micromegas-setup-telemetry` mints fresh audiences
+<a href=#462 id=462 data-nosnippet>462</a>/// under (AbAC Stage 6, #1374, Design §5). `pub`, not module-private, and pure/sync -- no DB, no
+<a href=#463 id=463 data-nosnippet>463</a>/// `AuthContext` needed beyond the plain `Option&lt;String&gt;` email -- so the whole sanitization is
+<a href=#464 id=464 data-nosnippet>464</a>/// unit-testable directly, the same reason `ingestion_keys::resolve_audience` is `pub`.
+<a href=#465 id=465 data-nosnippet>465</a>///
+<a href=#466 id=466 data-nosnippet>466</a>/// Takes the local part of `email` (everything before the first `@`), lowercases it, replaces
+<a href=#467 id=467 data-nosnippet>467</a>/// every character outside `[a-z0-9_-]` with `-`, collapses any run of `-` to a single `-`, trims
+<a href=#468 id=468 data-nosnippet>468</a>/// leading/trailing `-`, and appends one more `-` as the separator. `None` when `email` is `None`
+<a href=#469 id=469 data-nosnippet>469</a>/// (a client-credentials service-account caller -- the same condition the lazy claim path itself
+<a href=#470 id=470 data-nosnippet>470</a>/// gates on) or when sanitizing leaves an empty string.
+<a href=#471 id=471 data-nosnippet>471</a>///
+<a href=#472 id=472 data-nosnippet>472</a>/// Deliberately not injective (`alice.smith@x` and `alice-smith@x` both yield `alice-smith-`,
+<a href=#473 id=473 data-nosnippet>473</a>/// and two different domains with the same local part collide too) -- harmless, since
+<a href=#474 id=474 data-nosnippet>474</a>/// authorization is still the exact `user:&lt;email&gt;` selector the lazy claim writes, indifferent to
+<a href=#475 id=475 data-nosnippet>475</a>/// the prefix; a collision just means the second caller's claim attempt hits the ordinary
+<a href=#476 id=476 data-nosnippet>476</a>/// "audience already exists" denial.
+<a href=#477 id=477 data-nosnippet>477</a></span><span class="kw">pub fn </span>mint_prefix_for(email: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#478 id=478 data-nosnippet>478</a>    <span class="kw">let </span>email = email.as_deref()<span class="question-mark">?</span>;
+<a href=#479 id=479 data-nosnippet>479</a>    <span class="kw">let </span>local = email.split(<span class="string">'@'</span>).next().unwrap_or(<span class="string">""</span>);
+<a href=#480 id=480 data-nosnippet>480</a>    <span class="kw">let </span><span class="kw-2">mut </span>sanitized = String::with_capacity(local.len() + <span class="number">1</span>);
+<a href=#481 id=481 data-nosnippet>481</a>    <span class="kw">let </span><span class="kw-2">mut </span>last_was_dash = <span class="bool-val">false</span>;
+<a href=#482 id=482 data-nosnippet>482</a>    <span class="kw">for </span>ch <span class="kw">in </span>local.chars() {
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="kw">let </span>lower = ch.to_ascii_lowercase();
+<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span>mapped = <span class="kw">if </span>lower.is_ascii_alphanumeric() || lower == <span class="string">'_' </span>|| lower == <span class="string">'-' </span>{
+<a href=#485 id=485 data-nosnippet>485</a>            lower
+<a href=#486 id=486 data-nosnippet>486</a>        } <span class="kw">else </span>{
+<a href=#487 id=487 data-nosnippet>487</a>            <span class="string">'-'
+<a href=#488 id=488 data-nosnippet>488</a>        </span>};
+<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">if </span>mapped == <span class="string">'-' </span>{
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="kw">if </span>last_was_dash {
+<a href=#491 id=491 data-nosnippet>491</a>                <span class="kw">continue</span>;
+<a href=#492 id=492 data-nosnippet>492</a>            }
+<a href=#493 id=493 data-nosnippet>493</a>            last_was_dash = <span class="bool-val">true</span>;
+<a href=#494 id=494 data-nosnippet>494</a>        } <span class="kw">else </span>{
+<a href=#495 id=495 data-nosnippet>495</a>            last_was_dash = <span class="bool-val">false</span>;
+<a href=#496 id=496 data-nosnippet>496</a>        }
+<a href=#497 id=497 data-nosnippet>497</a>        sanitized.push(mapped);
+<a href=#498 id=498 data-nosnippet>498</a>    }
+<a href=#499 id=499 data-nosnippet>499</a>    <span class="kw">let </span>trimmed = sanitized.trim_matches(<span class="string">'-'</span>);
+<a href=#500 id=500 data-nosnippet>500</a>    <span class="kw">if </span>trimmed.is_empty() {
+<a href=#501 id=501 data-nosnippet>501</a>        <span class="prelude-val">None
+<a href=#502 id=502 data-nosnippet>502</a>    </span>} <span class="kw">else </span>{
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"{trimmed}-"</span>))
+<a href=#504 id=504 data-nosnippet>504</a>    }
+<a href=#505 id=505 data-nosnippet>505</a>}
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a><span class="attr">#[derive(Serialize)]
+<a href=#508 id=508 data-nosnippet>508</a></span><span class="kw">struct </span>MyAudiencesResponse {
+<a href=#509 id=509 data-nosnippet>509</a>    is_admin: bool,
+<a href=#510 id=510 data-nosnippet>510</a>    audiences: Vec&lt;String&gt;,
+<a href=#511 id=511 data-nosnippet>511</a>    mint_prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#512 id=512 data-nosnippet>512</a>    email: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#513 id=513 data-nosnippet>513</a>}
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a><span class="doccomment">/// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
+<a href=#516 id=516 data-nosnippet>516</a>/// per the DB store's current rows (no cache -- this reads `pool` directly, same as
+<a href=#517 id=517 data-nosnippet>517</a>/// `list_grants`), plus the caller's own `is_admin` flag, `mint_prefix`, and `email` (AbAC Stage
+<a href=#518 id=518 data-nosnippet>518</a>/// 6, #1374, Design §5).
+<a href=#519 id=519 data-nosnippet>519</a>///
+<a href=#520 id=520 data-nosnippet>520</a>/// Caller-scoped, so [`AuthenticatedUser`] (any authenticated caller), not [`AdminUser`]: unlike
+<a href=#521 id=521 data-nosnippet>521</a>/// `list_grants`, this can never reveal another principal's selector, only whether *this*
+<a href=#522 id=522 data-nosnippet>522</a>/// caller's own email/groups match one, plus facts about the caller's own identity. `is_admin`,
+<a href=#523 id=523 data-nosnippet>523</a>/// `mint_prefix`, and `email` all ride on this response because there is no other route
+<a href=#524 id=524 data-nosnippet>524</a>/// reachable from a CLI caller (authenticated purely with a Bearer header) that exposes any of
+<a href=#525 id=525 data-nosnippet>525</a>/// them -- `/auth/me` reads its ID token only from the browser's `id_token` cookie, with no
+<a href=#526 id=526 data-nosnippet>526</a>/// `Authorization: Bearer` fallback.
+<a href=#527 id=527 data-nosnippet>527</a>///
+<a href=#528 id=528 data-nosnippet>528</a>/// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate` enforces for the
+<a href=#529 id=529 data-nosnippet>529</a>/// mint route itself, for the same reason: this is new non-admin surface too, and must not widen
+<a href=#530 id=530 data-nosnippet>530</a>/// on upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
+<a href=#531 id=531 data-nosnippet>531</a>/// `!caller.is_admin` condition.
+<a href=#532 id=532 data-nosnippet>532</a></span><span class="kw">async fn </span>my_audiences(
+<a href=#533 id=533 data-nosnippet>533</a>    Extension(state): Extension&lt;AudienceGrantsState&gt;,
+<a href=#534 id=534 data-nosnippet>534</a>    AuthenticatedUser(caller): AuthenticatedUser,
+<a href=#535 id=535 data-nosnippet>535</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Json&lt;MyAudiencesResponse&gt;, AudienceGrantError&gt; {
+<a href=#536 id=536 data-nosnippet>536</a>    <span class="kw">if </span>!caller.is_admin &amp;&amp; !state.self_service_mint_enabled {
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(AudienceGrantError::Forbidden(
+<a href=#538 id=538 data-nosnippet>538</a>            <span class="string">"self-service minting is disabled"</span>.to_string(),
+<a href=#539 id=539 data-nosnippet>539</a>        ));
+<a href=#540 id=540 data-nosnippet>540</a>    }
+<a href=#541 id=541 data-nosnippet>541</a>    <span class="kw">let </span>pool = require_pool(<span class="kw-2">&amp;</span>state)<span class="question-mark">?</span>;
+<a href=#542 id=542 data-nosnippet>542</a>    <span class="comment">// Push the selector test into SQL rather than pulling every `mint` row into Rust and
+<a href=#543 id=543 data-nosnippet>543</a>    // filtering with `selector_matches`: `*` plus the caller's own `user:`/`group:` selectors
+<a href=#544 id=544 data-nosnippet>544</a>    // are exactly the selectors `selector_matches` would accept, and binding them as an array
+<a href=#545 id=545 data-nosnippet>545</a>    // lets Postgres do the filtering instead of materializing the whole (monotonically-growing)
+<a href=#546 id=546 data-nosnippet>546</a>    // mint axis on every call.
+<a href=#547 id=547 data-nosnippet>547</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>selectors: Vec&lt;String&gt; = <span class="macro">vec!</span>[<span class="string">"*"</span>.to_string()];
+<a href=#548 id=548 data-nosnippet>548</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(email) = <span class="kw-2">&amp;</span>caller.email {
+<a href=#549 id=549 data-nosnippet>549</a>        selectors.push(<span class="macro">format!</span>(<span class="string">"user:{email}"</span>));
+<a href=#550 id=550 data-nosnippet>550</a>    }
+<a href=#551 id=551 data-nosnippet>551</a>    selectors.extend(caller.groups.iter().map(|g| <span class="macro">format!</span>(<span class="string">"group:{g}"</span>)));
+<a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">let </span>rows: Vec&lt;(String,)&gt; = sqlx::query_as(
+<a href=#553 id=553 data-nosnippet>553</a>        <span class="string">"SELECT DISTINCT audience FROM audience_grants WHERE axis = 'mint' AND selector = ANY($1)"</span>,
+<a href=#554 id=554 data-nosnippet>554</a>    )
+<a href=#555 id=555 data-nosnippet>555</a>    .bind(<span class="kw-2">&amp;</span>selectors)
+<a href=#556 id=556 data-nosnippet>556</a>    .fetch_all(<span class="kw-2">&amp;</span>pool)
+<a href=#557 id=557 data-nosnippet>557</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">let </span><span class="kw-2">mut </span>audiences: Vec&lt;String&gt; = rows.into_iter().map(|(audience,)| audience).collect();
+<a href=#559 id=559 data-nosnippet>559</a>    audiences.sort();
+<a href=#560 id=560 data-nosnippet>560</a>    <span class="kw">let </span>mint_prefix = mint_prefix_for(<span class="kw-2">&amp;</span>caller.email);
+<a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">let </span>email = caller.email.clone();
+<a href=#562 id=562 data-nosnippet>562</a>    <span class="prelude-val">Ok</span>(Json(MyAudiencesResponse {
+<a href=#563 id=563 data-nosnippet>563</a>        is_admin: caller.is_admin,
+<a href=#564 id=564 data-nosnippet>564</a>        audiences,
+<a href=#565 id=565 data-nosnippet>565</a>        mint_prefix,
+<a href=#566 id=566 data-nosnippet>566</a>        email,
+<a href=#567 id=567 data-nosnippet>567</a>    }))
+<a href=#568 id=568 data-nosnippet>568</a>}
+<a href=#569 id=569 data-nosnippet>569</a>
+<a href=#570 id=570 data-nosnippet>570</a><span class="doccomment">/// Routes only -- [`AudienceGrantsState`] is layered separately in
+<a href=#571 id=571 data-nosnippet>571</a>/// `web_server.rs::build_protected_routes`, the same way `analytics_keys_state`/
+<a href=#572 id=572 data-nosnippet>572</a>/// `ingestion_keys_state` are.
+<a href=#573 id=573 data-nosnippet>573</a></span><span class="kw">pub fn </span>audience_grants_router(base_path: <span class="kw-2">&amp;</span>str) -&gt; Router {
+<a href=#574 id=574 data-nosnippet>574</a>    Router::new()
+<a href=#575 id=575 data-nosnippet>575</a>        .route(
+<a href=#576 id=576 data-nosnippet>576</a>            <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{base_path}/api/audience-grants"</span>),
+<a href=#577 id=577 data-nosnippet>577</a>            post(create_grant).get(list_grants).delete(delete_grant),
+<a href=#578 id=578 data-nosnippet>578</a>        )
+<a href=#579 id=579 data-nosnippet>579</a>        .route(
+<a href=#580 id=580 data-nosnippet>580</a>            <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{base_path}/api/audience-grants/my-audiences"</span>),
+<a href=#581 id=581 data-nosnippet>581</a>            get(my_audiences),
+<a href=#582 id=582 data-nosnippet>582</a>        )
+<a href=#583 id=583 data-nosnippet>583</a>}
+</code></pre></div></section></main></body></html>

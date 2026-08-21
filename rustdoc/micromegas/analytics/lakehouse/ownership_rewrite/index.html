@@ -1,0 +1,79 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Query Enforcement Prong A (#1370, AbAC Stage 2): injects an audience predicate into every `MaterializedView` scan based on the caller’s `ReadScope`. `OwnershipRewrite` – Query Enforcement Prong A (#1370, AbAC Stage 2)."><title>micromegas::analytics::lakehouse::ownership_rewrite - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="micromegas" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module ownership_rewrite</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../../micromegas/index.html">micromegas</a><span class="version">0.30.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module ownership_<wbr>rewrite</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#readscopeall-is-a-true-no-op" title="`ReadScope::All` is a true no-op"><code>ReadScope::All</code> is a true no-op</a></li><li><a href="#one-audience-per-process-not-per-row" title="One audience per process, not per row">One audience per process, not per row</a></li><li><a href="#branch-table" title="Branch table">Branch table</a></li><li><a href="#no-io-in-analyze" title="No I/O in `analyze()`">No I/O in <code>analyze()</code></a></li><li><a href="#micromegasaudience-is-now-server-written-and-authenticated-abac-stage-5-1373-landed" title="`micromegas.audience` is now server-written and authenticated (AbAC Stage 5, #1373, landed)"><code>micromegas.audience</code> is now server-written and authenticated (AbAC Stage 5, #1373, landed)</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In micromegas::<wbr>analytics::<wbr>lakehouse</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../../index.html">micromegas</a>::<wbr><a href="../../index.html">analytics</a>::<wbr><a href="../index.html">lakehouse</a></div><h1>Module <span>ownership_<wbr>rewrite</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../../src/micromegas_analytics/lakehouse/mod.rs.html#75">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Query Enforcement Prong A (#1370, AbAC Stage 2): injects an audience predicate into every
+<code>MaterializedView</code> scan based on the caller’s <code>ReadScope</code>.
+<code>OwnershipRewrite</code> – Query Enforcement Prong A (#1370, AbAC Stage 2).</p>
+<p>An <code>AnalyzerRule</code> that injects an audience-filtering predicate into every
+<code>MaterializedView</code>-backed <code>TableScan</code> a query plan touches, based on the caller’s <code>ReadScope</code>
+(#1369, AbAC Stage 1, <code>read_scope.rs</code>) and the two deployment knobs bundled in
+[<code>super::read_scope::IsolationConfig</code>] (<code>MICROMEGAS_UNSTAMPED_AUDIENCE</code>,
+<code>MICROMEGAS_PUBLIC_VIEW_SETS</code>). See <code>tasks/1370_ownership_rewrite_plan.md</code> for the full design
+rationale; this comment records only what a future reader of this file needs close at hand.</p>
+<h3 id="readscopeall-is-a-true-no-op"><a class="doc-anchor" href="#readscopeall-is-a-true-no-op">§</a><code>ReadScope::All</code> is a true no-op</h3>
+<p><code>ReadScope::All</code> is the internal/maintenance marker – never the output of a real <code>ReadPolicy</code>
+(see <code>read_scope.rs</code>). <code>analyze()</code> returns the plan unchanged when constructed with it, and
+<code>query.rs::make_session_context</code> does not even construct this rule for <code>ReadScope::All</code>
+callers, so their <code>ViewFactory</code> need not carry <code>processes</code>/<code>streams</code> either.</p>
+<h3 id="one-audience-per-process-not-per-row"><a class="doc-anchor" href="#one-audience-per-process-not-per-row">§</a>One audience per process, not per row</h3>
+<p><code>__processes__partitions</code> (the raw, un-merged <code>SqlBatchView</code> partitions <code>self.processes_source</code>
+scans) can carry more than one historical row per <code>process_id</code> – the partition-level
+<code>GROUP BY</code> in <code>processes_view.rs</code>’s transform query only collapses rows <em>within</em> a partition,
+not across a long-lived process’s entire history. Filtering those raw rows directly (a bare
+<code>WHERE &lt;audience predicate&gt;</code>) would let a process admitted once, by any one of its historical
+(possibly pre-stamping, unstamped) rows, stay visible forever to whatever audience that row
+happened to carry – even after the process is later stamped with a real, narrower audience.
+Every branch below therefore resolves one audience per process first
+(<code>Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)</code>, <code>MAX</code> over a nullable
+column ignoring <code>NULL</code>s so a stamped row always outranks an unstamped one), then filters
+<em>that</em> – uniformly, including <code>processes</code>’s own scan, which gets no separate per-row branch.
+This assumes a process is stamped with at most one distinct audience over its lifetime (true
+under Stage 5’s design). Stage 3 (#1371, <code>audience_guard.rs</code>) landed without revisiting this –
+Prong B resolves straight from Postgres’s current row, so the assumption doesn’t even arise
+there the way it does for this rule’s own historical, multi-row aggregate.</p>
+<h3 id="branch-table"><a class="doc-anchor" href="#branch-table">§</a>Branch table</h3>
+<p>Keyed on <code>MaterializedView::get_view().get_view_set_name()</code> and whether
+<code>get_file_schema()</code> has a <code>process_id</code> field – not on a hardcoded view-set list, so a future
+view set with a <code>process_id</code> column falls into §4 automatically:</p>
+<div><table><thead><tr><th>View set</th><th><code>process_id</code> column?</th><th>Branch</th></tr></thead><tbody>
+<tr><td><code>processes</code></td><td>yes (and <em>is</em> the audience source)</td><td>§3: <code>process_id IN (subquery)</code> against its own resolved-per-process aggregate</td></tr>
+<tr><td><code>streams</code>, <code>blocks</code>, <code>log_entries</code>, <code>measures</code>, <code>net_spans</code>, <code>otel_spans</code>, <code>images</code>, <code>log_stats</code></td><td>yes</td><td>§4: semi-join, <code>process_id IN (subquery)</code> (outer <code>process_id</code> cast to <code>Utf8</code>: it is <code>Dictionary(Int32, Utf8)</code> in most of these, and nothing coerces an uncorrelated <code>IN</code> subquery’s join keys once <code>DecorrelatePredicateSubquery</code> turns it into a <code>LeftSemi</code> join – the analyzer’s own <code>TypeCoercion</code> has already run by the time this rule executes)</td></tr>
+<tr><td><code>async_events</code></td><td>no – process-scoped, but no column to join on</td><td>§5: literal-valued <code>EXISTS</code>, keyed on <code>get_view_instance_id()</code> (the process_id string, canonicalized – see <code>canonical_view_instance_id</code>)</td></tr>
+<tr><td><code>thread_spans</code></td><td>no – stream-scoped, no <code>process_id</code> <strong>or</strong> <code>stream_id</code> column</td><td>§6: two-hop literal <code>EXISTS</code>, through <code>streams</code> (<code>get_view_instance_id()</code> is the stream_id string, canonicalized the same way)</td></tr>
+<tr><td>anything in <code>public_view_sets</code></td><td>(any)</td><td>§7: no predicate at all – checked before any of the above</td></tr>
+<tr><td>anything else</td><td>(any)</td><td><code>analyze()</code> returns <code>Err</code> (<code>DataFusionError::Plan</code>) rather than silently leaving the scan unfiltered – a future view set must add itself to this table, not fall through</td></tr>
+</tbody></table>
+</div>
+<p>Adding a new view set to a <code>ViewFactory</code> means adding it to this table too, and to the match
+arms in [<code>OwnershipRewrite::predicate_for</code>] below.</p>
+<h3 id="no-io-in-analyze"><a class="doc-anchor" href="#no-io-in-analyze">§</a>No I/O in <code>analyze()</code></h3>
+<p><code>in_subquery</code>/<code>exists</code> build uncorrelated subquery <code>Expr</code>s; <code>DecorrelatePredicateSubquery</code> (an
+optimizer, not analyzer, rule) turns them into joins later. <code>processes_source</code>/<code>streams_source</code>
+come from <code>MaterializedView::new(..., query_range: None)</code>, which is synchronous and does no I/O
+– the actual <code>processes</code>/<code>streams</code> scans happen during normal execution, exactly like
+<code>TableScanRewrite</code>’s injected time filter.</p>
+<h3 id="micromegasaudience-is-now-server-written-and-authenticated-abac-stage-5-1373-landed"><a class="doc-anchor" href="#micromegasaudience-is-now-server-written-and-authenticated-abac-stage-5-1373-landed">§</a><code>micromegas.audience</code> is now server-written and authenticated (AbAC Stage 5, #1373, landed)</h3>
+<p>[<code>Self::audience_col</code>] reads <code>micromegas.audience</code> via <code>property_get</code> off the <code>processes</code>
+view’s <code>properties</code> column. Before Stage 5 this was a verbatim snapshot of whatever
+<code>ProcessInfo.properties</code> the instrumented client sent at ingestion, with no reserved-key
+filtering and no server-side validation. Stage 5 closed that gap: ingestion now strips any
+client-supplied <code>micromegas.*</code> property and writes <code>micromegas.audience</code> itself from the
+authenticated credential’s <code>AuthContext.bound_audience</code> (each ingestion key is assigned
+exactly one write audience, Stage 4, #1372) – a client can no longer assert or suppress the
+stamp. Registration itself (<code>insert_process</code>/<code>register_otel_process</code>) now also rejects a
+same-<code>process_id</code>, different-audience re-registration outright – needed because the OTLP
+<code>process_id</code> derivation formula is public, so without this guard a credential could
+pre-register (via the native path) the exact <code>process_id</code> a victim audience’s OTLP producer
+would later derive, silently exposing that audience’s data to the squatter; this is a
+confidentiality gap, not merely an integrity one. What remains open, tracked separately: a
+credential bound to one audience that knows another audience’s already-registered
+<code>process_id</code>/<code>stream_id</code> can still append events to it over <code>insert_stream</code>/<code>insert_block</code>
+(Stage 5b, an integrity-only gap – see <code>rust/ingestion/src/web_ingestion_service.rs</code>’s doc
+comments on those two methods). A second, distinct residual gap sits in the conflict guard
+itself: its existing-<code>NULL</code>-audience branch is deliberately a no-op (so a mid-migration
+re-registration doesn’t lose its process), which lets an audience-less credential
+pre-register a victim’s future <code>process_id</code> unstamped – the victim’s later, genuine
+registration then hits that same <code>NULL</code>→no-op branch and never gets stamped, permanently
+suppressing its audience (a confidentiality gap, not an integrity one). There is no
+in-product enforcement knob left for this gap; the mitigation is operational – provision
+only audience-bound DB-backed ingestion credentials, and don’t run ingestion with an
+env-keyring key, OIDC, or <code>--disable-auth</code> alongside them – see the “Residual gap”
+admonition in <code>mkdocs/docs/admin/authentication.md</code> and this stage’s <code>CHANGELOG.md</code> entry).</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.OwnershipRewrite.html" title="struct micromegas::analytics::lakehouse::ownership_rewrite::OwnershipRewrite">Ownership<wbr>Rewrite</a></dt><dd>Injects an audience predicate into every <code>MaterializedView</code> scan (see the module doc comment).</dd></dl></section></div></main></body></html>

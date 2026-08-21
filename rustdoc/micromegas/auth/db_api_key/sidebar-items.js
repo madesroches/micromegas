@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ApiKeyTable"],"fn":["dedicated_key_store_pool","generate_key","hash_key","key_store_has_live_rows"],"struct":["DbApiKeyAuthProvider","DbApiKeyConfig"]};

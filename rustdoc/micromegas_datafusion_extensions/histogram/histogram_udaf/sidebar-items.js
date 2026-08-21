@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_histo_udaf","make_histogram_arrow_type"],"struct":["HistogramArray"]};

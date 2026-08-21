@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_color_scale_udf"],"struct":["ColorScaleUdf"]};

@@ -1,0 +1,59 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .matrix-bg { fill: #000; }
+    .matrix-text {
+      font-family: monospace;
+      font-size: 8px;
+      fill: #00ff00;
+      opacity: 0.8;
+    }
+    .matrix-text.bright {
+      fill: #88ff88;
+      opacity: 1;
+    }
+
+    @keyframes fall1 {
+      0% { transform: translateY(-10px); opacity: 0; }
+      50% { opacity: 1; }
+      100% { transform: translateY(32px); opacity: 0; }
+    }
+    @keyframes fall2 {
+      0% { transform: translateY(-15px); opacity: 0; }
+      50% { opacity: 1; }
+      100% { transform: translateY(32px); opacity: 0; }
+    }
+    @keyframes fall3 {
+      0% { transform: translateY(-20px); opacity: 0; }
+      50% { opacity: 1; }
+      100% { transform: translateY(32px); opacity: 0; }
+    }
+
+    .col1 { animation: fall1 2s linear infinite; }
+    .col2 { animation: fall2 2.5s linear infinite; }
+    .col3 { animation: fall3 3s linear infinite; }
+  </style>
+
+  <rect class="matrix-bg" width="32" height="32" rx="2"/>
+
+  <!-- Column 1 -->
+  <g class="col1">
+    <text class="matrix-text bright" x="2" y="8">1</text>
+    <text class="matrix-text" x="2" y="16">0</text>
+    <text class="matrix-text" x="2" y="24">1</text>
+  </g>
+
+  <!-- Column 2 -->
+  <g class="col2">
+    <text class="matrix-text bright" x="12" y="4">0</text>
+    <text class="matrix-text" x="12" y="12">1</text>
+    <text class="matrix-text" x="12" y="20">1</text>
+    <text class="matrix-text" x="12" y="28">0</text>
+  </g>
+
+  <!-- Column 3 -->
+  <g class="col3">
+    <text class="matrix-text bright" x="22" y="6">1</text>
+    <text class="matrix-text" x="22" y="14">1</text>
+    <text class="matrix-text" x="22" y="22">0</text>
+  </g>
+</svg>

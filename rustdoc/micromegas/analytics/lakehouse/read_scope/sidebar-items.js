@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_UNSTAMPED_AUDIENCE"],"enum":["ReadScope"],"struct":["CallerContext","IsolationConfig"]};

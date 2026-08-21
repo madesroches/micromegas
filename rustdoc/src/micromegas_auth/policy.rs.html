@@ -1,0 +1,598 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `auth/src/policy.rs`."><title>policy.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="micromegas_auth" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">micromegas_auth/</div>policy.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Authorization seam (#1369, AbAC Stage 1; grant map rewrite #1372, Stage 4): `MintPolicy`,
+<a href=#2 id=2 data-nosnippet>2</a>//! `ReadPolicy`, and the audience-based implementations that resolve them from a caller's
+<a href=#3 id=3 data-nosnippet>3</a>//! `AuthContext` and a JSON grant map keyed by audience name.
+<a href=#4 id=4 data-nosnippet>4</a>//!
+<a href=#5 id=5 data-nosnippet>5</a>//! **No enforcement lands with this module itself.** This module fixes the *shape* of
+<a href=#6 id=6 data-nosnippet>6</a>//! authorization -- every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
+<a href=#7 id=7 data-nosnippet>7</a>//! express "grant everything" at all -- while the resolved `ReadableAudiences`/`ReadScope` is
+<a href=#8 id=8 data-nosnippet>8</a>//! consumed downstream by `OwnershipRewrite` (#1370, AbAC Stage 2; Prong A) and, still pending
+<a href=#9 id=9 data-nosnippet>9</a>//! (#1371, Stage 3), Prong B's UDTF/UDF guards. See `rust/analytics/src/lakehouse/read_scope.rs`
+<a href=#10 id=10 data-nosnippet>10</a>//! and `tasks/1372_audience_on_keys_plan.md`.
+<a href=#11 id=11 data-nosnippet>11</a>//!
+<a href=#12 id=12 data-nosnippet>12</a>//! **An audience is an opaque label, not a principal encoding.** `is_valid_audience` and
+<a href=#13 id=13 data-nosnippet>13</a>//! `PUBLIC_AUDIENCE` define what a name is; `AudienceGrants` defines who may read or mint into
+<a href=#14 id=14 data-nosnippet>14</a>//! it. No code here derives an audience from a caller's identity -- see `AudienceGrants` and
+<a href=#15 id=15 data-nosnippet>15</a>//! `tasks/1372_audience_on_keys_plan.md` §1-§2 for the reasoning.
+<a href=#16 id=16 data-nosnippet>16</a>
+<a href=#17 id=17 data-nosnippet>17</a></span><span class="kw">use </span><span class="kw">crate</span>::db_audience_grants::DbAudienceGrantsSource;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::env::resolve_prefixed_var;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::types::AuthContext;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>anyhow::{<span class="prelude-ty">Result</span>, anyhow};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>async_trait::async_trait;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>micromegas_tracing::info;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>serde::Deserialize;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>serde::de::{<span class="self">self</span>, MapAccess, Visitor};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>std::collections::BTreeMap;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>std::collections::BTreeSet;
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>std::fmt;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>std::fmt::Debug;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>std::sync::Arc;
+<a href=#30 id=30 data-nosnippet>30</a>
+<a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// The reserved audience every authenticated principal may read.
+<a href=#32 id=32 data-nosnippet>32</a></span><span class="kw">pub const </span>PUBLIC_AUDIENCE: <span class="kw-2">&amp;</span>str = <span class="string">"public"</span>;
+<a href=#33 id=33 data-nosnippet>33</a>
+<a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the
+<a href=#35 id=35 data-nosnippet>35</a>/// ASCII-only charset makes byte length and char length agree for every value that can pass, so
+<a href=#36 id=36 data-nosnippet>36</a>/// this doubles as the length check the `ingestion_api_keys.audience` `VARCHAR(255)` column
+<a href=#37 id=37 data-nosnippet>37</a>/// enforces on the SQL side.
+<a href=#38 id=38 data-nosnippet>38</a>///
+<a href=#39 id=39 data-nosnippet>39</a>/// An audience is an opaque label on data, not a principal encoding: this charset makes an email
+<a href=#40 id=40 data-nosnippet>40</a>/// (`@`, `.`) or a `user:`/`group:`-prefixed value (`:`) unrepresentable, on purpose -- see
+<a href=#41 id=41 data-nosnippet>41</a>/// `AudienceGrants` for why there is no derivation from a caller's identity to replace it with.
+<a href=#42 id=42 data-nosnippet>42</a>///
+<a href=#43 id=43 data-nosnippet>43</a>/// Deliberately **not** normalizing: no case folding, no trimming. The value is stored and
+<a href=#44 id=44 data-nosnippet>44</a>/// compared verbatim, which is what makes uniqueness meaningful -- `team-alpha` and `Team-Alpha`
+<a href=#45 id=45 data-nosnippet>45</a>/// are two audiences, and neither is a typo the system silently repairs into the other.
+<a href=#46 id=46 data-nosnippet>46</a></span><span class="kw">pub fn </span>is_valid_audience(aud: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#47 id=47 data-nosnippet>47</a>    !aud.is_empty()
+<a href=#48 id=48 data-nosnippet>48</a>        &amp;&amp; aud.len() &lt;= <span class="number">255
+<a href=#49 id=49 data-nosnippet>49</a>        </span>&amp;&amp; aud
+<a href=#50 id=50 data-nosnippet>50</a>            .bytes()
+<a href=#51 id=51 data-nosnippet>51</a>            .all(|b| b.is_ascii_alphanumeric() || b == <span class="string">b'_' </span>|| b == <span class="string">b'-'</span>)
+<a href=#52 id=52 data-nosnippet>52</a>}
+<a href=#53 id=53 data-nosnippet>53</a>
+<a href=#54 id=54 data-nosnippet>54</a><span class="doccomment">/// Resolves `{prefix}_DEFAULT_KEY_AUDIENCE` (falling back to `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) --
+<a href=#55 id=55 data-nosnippet>55</a>/// resolved **once at startup** (`web_server.rs`) so a typo fails fast rather than surfacing as a
+<a href=#56 id=56 data-nosnippet>56</a>/// per-request 400. `None` when neither is set or the value is empty. Invalid ⇒ `Err`.
+<a href=#57 id=57 data-nosnippet>57</a>///
+<a href=#58 id=58 data-nosnippet>58</a>/// Consumed by `ingestion_keys.rs::resolve_audience`'s `import` fallback (`Some(PUBLIC_AUDIENCE)`)
+<a href=#59 id=59 data-nosnippet>59</a>/// and `mint`'s (`None` -- an unresolved mint is a 400, never a silent `public`). See
+<a href=#60 id=60 data-nosnippet>60</a>/// `tasks/1372_audience_on_keys_plan.md` §5 for why the two routes differ only when this knob is
+<a href=#61 id=61 data-nosnippet>61</a>/// unset.
+<a href=#62 id=62 data-nosnippet>62</a></span><span class="kw">pub fn </span>default_key_audience_from_env(prefix: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt; {
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">let </span>var = resolve_prefixed_var(prefix, <span class="string">"DEFAULT_KEY_AUDIENCE"</span>);
+<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">let </span>resolved = <span class="kw">match </span>std::env::var(<span class="kw-2">&amp;</span>var) {
+<a href=#65 id=65 data-nosnippet>65</a>        <span class="prelude-val">Ok</span>(raw) =&gt; {
+<a href=#66 id=66 data-nosnippet>66</a>            <span class="kw">let </span>raw = raw.trim().to_string();
+<a href=#67 id=67 data-nosnippet>67</a>            <span class="kw">if </span>raw.is_empty() {
+<a href=#68 id=68 data-nosnippet>68</a>                <span class="prelude-val">None
+<a href=#69 id=69 data-nosnippet>69</a>            </span>} <span class="kw">else if </span>is_valid_audience(<span class="kw-2">&amp;</span>raw) {
+<a href=#70 id=70 data-nosnippet>70</a>                <span class="prelude-val">Some</span>(raw)
+<a href=#71 id=71 data-nosnippet>71</a>            } <span class="kw">else </span>{
+<a href=#72 id=72 data-nosnippet>72</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#73 id=73 data-nosnippet>73</a>                    <span class="string">"{var}: {raw:?} is not a valid audience name -- must match [A-Za-z0-9_-]{{1,255}}"
+<a href=#74 id=74 data-nosnippet>74</a>                </span>));
+<a href=#75 id=75 data-nosnippet>75</a>            }
+<a href=#76 id=76 data-nosnippet>76</a>        }
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#78 id=78 data-nosnippet>78</a>    };
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">match </span><span class="kw-2">&amp;</span>resolved {
+<a href=#80 id=80 data-nosnippet>80</a>        <span class="prelude-val">Some</span>(aud) =&gt; <span class="macro">info!</span>(<span class="string">"{var}: default key audience = {aud}"</span>),
+<a href=#81 id=81 data-nosnippet>81</a>        <span class="prelude-val">None </span>=&gt; <span class="macro">info!</span>(<span class="string">"{var}: no default key audience configured"</span>),
+<a href=#82 id=82 data-nosnippet>82</a>    }
+<a href=#83 id=83 data-nosnippet>83</a>    <span class="prelude-val">Ok</span>(resolved)
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="doccomment">/// A principal selector on either axis of an [`AudienceGrants`] entry: `*` (any authenticated
+<a href=#87 id=87 data-nosnippet>87</a>/// principal), `user:&lt;email&gt;` (matches `AuthContext.email`), or `group:&lt;g&gt;` (matches any raw
+<a href=#88 id=88 data-nosnippet>88</a>/// value in `AuthContext.groups`). Validated at parse time; `resolve`/`resolve_audience` never
+<a href=#89 id=89 data-nosnippet>89</a>/// see an unrecognized shape.
+<a href=#90 id=90 data-nosnippet>90</a>///
+<a href=#91 id=91 data-nosnippet>91</a>/// `pub` (#1489, AbAC Stage 6a) -- `analytics-web-srv`'s admin grant-write route (a separate
+<a href=#92 id=92 data-nosnippet>92</a>/// crate) needs to run this exact same selector-shape check `parse`/`from_rows` run, not a
+<a href=#93 id=93 data-nosnippet>93</a>/// re-implementation of it.
+<a href=#94 id=94 data-nosnippet>94</a></span><span class="kw">pub fn </span>valid_selector(selector: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#95 id=95 data-nosnippet>95</a>    selector == <span class="string">"*"
+<a href=#96 id=96 data-nosnippet>96</a>        </span>|| selector
+<a href=#97 id=97 data-nosnippet>97</a>            .strip_prefix(<span class="string">"user:"</span>)
+<a href=#98 id=98 data-nosnippet>98</a>            .is_some_and(|rest| !rest.is_empty())
+<a href=#99 id=99 data-nosnippet>99</a>        || selector
+<a href=#100 id=100 data-nosnippet>100</a>            .strip_prefix(<span class="string">"group:"</span>)
+<a href=#101 id=101 data-nosnippet>101</a>            .is_some_and(|rest| !rest.is_empty())
+<a href=#102 id=102 data-nosnippet>102</a>}
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="kw">fn </span>selector_matches(selector: <span class="kw-2">&amp;</span>str, caller: <span class="kw-2">&amp;</span>AuthContext) -&gt; bool {
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">if </span>selector == <span class="string">"*" </span>{
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#107 id=107 data-nosnippet>107</a>    }
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(email) = selector.strip_prefix(<span class="string">"user:"</span>) {
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">return </span>caller.email.as_deref() == <span class="prelude-val">Some</span>(email);
+<a href=#110 id=110 data-nosnippet>110</a>    }
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(group) = selector.strip_prefix(<span class="string">"group:"</span>) {
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">return </span>caller.groups.iter().any(|g| g == group);
+<a href=#113 id=113 data-nosnippet>113</a>    }
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// Unreachable given `valid_selector` gates every selector at parse time; false rather than
+<a href=#115 id=115 data-nosnippet>115</a>    // panicking keeps this fail-closed if that invariant is ever violated.
+<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="bool-val">false
+<a href=#117 id=117 data-nosnippet>117</a></span>}
+<a href=#118 id=118 data-nosnippet>118</a>
+<a href=#119 id=119 data-nosnippet>119</a><span class="doccomment">/// One audience's read/mint selector lists, both already validated by [`AudienceGrants::parse`].
+<a href=#120 id=120 data-nosnippet>120</a></span><span class="attr">#[derive(Debug, Clone, Default)]
+<a href=#121 id=121 data-nosnippet>121</a></span><span class="kw">struct </span>GrantEntry {
+<a href=#122 id=122 data-nosnippet>122</a>    read: Vec&lt;String&gt;,
+<a href=#123 id=123 data-nosnippet>123</a>    mint: Vec&lt;String&gt;,
+<a href=#124 id=124 data-nosnippet>124</a>}
+<a href=#125 id=125 data-nosnippet>125</a>
+<a href=#126 id=126 data-nosnippet>126</a><span class="doccomment">/// The Rust side of `audience_grants.axis` (#1489, AbAC Stage 6a) -- which selector list a DB row
+<a href=#127 id=127 data-nosnippet>127</a>/// contributes to, mirroring the JSON grant map's `"read"`/`"mint"` keys.
+<a href=#128 id=128 data-nosnippet>128</a></span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+<a href=#129 id=129 data-nosnippet>129</a></span><span class="kw">pub enum </span>GrantAxis {
+<a href=#130 id=130 data-nosnippet>130</a>    Read,
+<a href=#131 id=131 data-nosnippet>131</a>    Mint,
+<a href=#132 id=132 data-nosnippet>132</a>}
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a><span class="doccomment">/// The bare-array-or-object shape a single grant-map value may take on the wire, before content
+<a href=#135 id=135 data-nosnippet>135</a>/// validation. An untagged enum rather than a hand-rolled visitor: JSON arrays and objects are
+<a href=#136 id=136 data-nosnippet>136</a>/// syntactically distinct, so serde can dispatch on shape alone, and any value that is neither
+<a href=#137 id=137 data-nosnippet>137</a>/// (a number, a string, `null`, ...) fails here with serde's own type-mismatch error.
+<a href=#138 id=138 data-nosnippet>138</a></span><span class="attr">#[derive(Debug, Deserialize)]
+<a href=#139 id=139 data-nosnippet>139</a>#[serde(untagged)]
+<a href=#140 id=140 data-nosnippet>140</a></span><span class="kw">enum </span>RawGrantValue {
+<a href=#141 id=141 data-nosnippet>141</a>    <span class="doccomment">/// Read-only shorthand: a bare array is the audience's `read` list, with an implicitly empty
+<a href=#142 id=142 data-nosnippet>142</a>    /// `mint` list -- never derived from `read`.
+<a href=#143 id=143 data-nosnippet>143</a>    </span>Bare(Vec&lt;String&gt;),
+<a href=#144 id=144 data-nosnippet>144</a>    <span class="doccomment">/// The explicit form, needed only when an audience also grants mint authority.
+<a href=#145 id=145 data-nosnippet>145</a>    </span>Object(RawGrantObject),
+<a href=#146 id=146 data-nosnippet>146</a>}
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a><span class="doccomment">/// The object form of a single grant-map value, broken out of [`RawGrantValue::Object`] so
+<a href=#149 id=149 data-nosnippet>149</a>/// `#[serde(deny_unknown_fields)]` -- which serde cannot apply directly to an enum variant --
+<a href=#150 id=150 data-nosnippet>150</a>/// has somewhere to attach: without it, a misspelled key (`"raed"` for `"read"`) would silently
+<a href=#151 id=151 data-nosnippet>151</a>/// parse into an empty grant instead of failing startup.
+<a href=#152 id=152 data-nosnippet>152</a></span><span class="attr">#[derive(Debug, Deserialize)]
+<a href=#153 id=153 data-nosnippet>153</a>#[serde(deny_unknown_fields)]
+<a href=#154 id=154 data-nosnippet>154</a></span><span class="kw">struct </span>RawGrantObject {
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="attr">#[serde(default)]
+<a href=#156 id=156 data-nosnippet>156</a>    </span>read: Vec&lt;String&gt;,
+<a href=#157 id=157 data-nosnippet>157</a>    <span class="attr">#[serde(default)]
+<a href=#158 id=158 data-nosnippet>158</a>    </span>mint: Vec&lt;String&gt;,
+<a href=#159 id=159 data-nosnippet>159</a>}
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a><span class="doccomment">/// Deserializes the top-level `{prefix}_AUDIENCE_GRANTS` object while rejecting a repeated key --
+<a href=#162 id=162 data-nosnippet>162</a>/// `serde_json`'s own `Map` deserialization silently keeps the *last* value for a duplicate key,
+<a href=#163 id=163 data-nosnippet>163</a>/// which would discard an earlier grant list without a word (see `AudienceGrants`'s doc comment).
+<a href=#164 id=164 data-nosnippet>164</a>/// Pulling keys one at a time through `MapAccess`, rather than deserializing straight into a
+<a href=#165 id=165 data-nosnippet>165</a>/// `BTreeMap`, is what makes that duplicate visible before it is lost.
+<a href=#166 id=166 data-nosnippet>166</a></span><span class="kw">struct </span>RawAudienceGrants(BTreeMap&lt;String, RawGrantValue&gt;);
+<a href=#167 id=167 data-nosnippet>167</a>
+<a href=#168 id=168 data-nosnippet>168</a><span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; Deserialize&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>RawAudienceGrants {
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">fn </span>deserialize&lt;D&gt;(deserializer: D) -&gt; std::result::Result&lt;<span class="self">Self</span>, D::Error&gt;
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">where
+<a href=#171 id=171 data-nosnippet>171</a>        </span>D: serde::Deserializer&lt;<span class="lifetime">'de</span>&gt;,
+<a href=#172 id=172 data-nosnippet>172</a>    {
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="kw">struct </span>GrantsVisitor;
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; Visitor&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>GrantsVisitor {
+<a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">type </span>Value = RawAudienceGrants;
+<a href=#177 id=177 data-nosnippet>177</a>
+<a href=#178 id=178 data-nosnippet>178</a>            <span class="kw">fn </span>expecting(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter) -&gt; fmt::Result {
+<a href=#179 id=179 data-nosnippet>179</a>                <span class="macro">write!</span>(f, <span class="string">"a JSON object keyed by audience name"</span>)
+<a href=#180 id=180 data-nosnippet>180</a>            }
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>            <span class="kw">fn </span>visit_map&lt;A&gt;(<span class="self">self</span>, <span class="kw-2">mut </span>map: A) -&gt; std::result::Result&lt;<span class="self">Self</span>::Value, A::Error&gt;
+<a href=#183 id=183 data-nosnippet>183</a>            <span class="kw">where
+<a href=#184 id=184 data-nosnippet>184</a>                </span>A: MapAccess&lt;<span class="lifetime">'de</span>&gt;,
+<a href=#185 id=185 data-nosnippet>185</a>            {
+<a href=#186 id=186 data-nosnippet>186</a>                <span class="kw">let </span><span class="kw-2">mut </span>result = BTreeMap::new();
+<a href=#187 id=187 data-nosnippet>187</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(key) = map.next_key::&lt;String&gt;()<span class="question-mark">? </span>{
+<a href=#188 id=188 data-nosnippet>188</a>                    <span class="kw">let </span>value: RawGrantValue = map.next_value()<span class="question-mark">?</span>;
+<a href=#189 id=189 data-nosnippet>189</a>                    <span class="kw">if </span>result.contains_key(<span class="kw-2">&amp;</span>key) {
+<a href=#190 id=190 data-nosnippet>190</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(de::Error::custom(<span class="macro">format!</span>(
+<a href=#191 id=191 data-nosnippet>191</a>                            <span class="string">"duplicate audience key {key:?} in grant map"
+<a href=#192 id=192 data-nosnippet>192</a>                        </span>)));
+<a href=#193 id=193 data-nosnippet>193</a>                    }
+<a href=#194 id=194 data-nosnippet>194</a>                    result.insert(key, value);
+<a href=#195 id=195 data-nosnippet>195</a>                }
+<a href=#196 id=196 data-nosnippet>196</a>                <span class="prelude-val">Ok</span>(RawAudienceGrants(result))
+<a href=#197 id=197 data-nosnippet>197</a>            }
+<a href=#198 id=198 data-nosnippet>198</a>        }
+<a href=#199 id=199 data-nosnippet>199</a>
+<a href=#200 id=200 data-nosnippet>200</a>        deserializer.deserialize_map(GrantsVisitor)
+<a href=#201 id=201 data-nosnippet>201</a>    }
+<a href=#202 id=202 data-nosnippet>202</a>}
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a><span class="doccomment">/// The parsed, validated `{prefix}_AUDIENCE_GRANTS` map: "who can access this audience", keyed by
+<a href=#205 id=205 data-nosnippet>205</a>/// audience name, one relation per axis (read/mint -- AbAC plan's `group_read_grants` /
+<a href=#206 id=206 data-nosnippet>206</a>/// `group_mint_grants`, kept as one env map only because there is no store yet to split them
+<a href=#207 id=207 data-nosnippet>207</a>/// across).
+<a href=#208 id=208 data-nosnippet>208</a>///
+<a href=#209 id=209 data-nosnippet>209</a>/// A bare-array value is read-only shorthand: an omitted `"mint"` list is therefore always empty,
+<a href=#210 id=210 data-nosnippet>210</a>/// never defaulted from `"read"` -- a read grant confers no mint authority, by construction.
+<a href=#211 id=211 data-nosnippet>211</a>///
+<a href=#212 id=212 data-nosnippet>212</a>/// `public` is not stored here: it is the sole built-in read grant, applied by
+<a href=#213 id=213 data-nosnippet>213</a>/// `AudienceReadPolicy::resolve` directly rather than needing a `{"public": ["*"]}` entry (though
+<a href=#214 id=214 data-nosnippet>214</a>/// writing one changes nothing).
+<a href=#215 id=215 data-nosnippet>215</a></span><span class="attr">#[derive(Debug, Clone, Default)]
+<a href=#216 id=216 data-nosnippet>216</a></span><span class="kw">pub struct </span>AudienceGrants {
+<a href=#217 id=217 data-nosnippet>217</a>    entries: BTreeMap&lt;String, GrantEntry&gt;,
+<a href=#218 id=218 data-nosnippet>218</a>}
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a><span class="kw">impl </span>AudienceGrants {
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// No grants at all -- every audience but `public` is unreadable and unmintable by anyone
+<a href=#222 id=222 data-nosnippet>222</a>    /// non-admin. Used as the disabled-auth / no-explicit-policy default.
+<a href=#223 id=223 data-nosnippet>223</a>    </span><span class="kw">pub fn </span>empty() -&gt; <span class="self">Self </span>{
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="self">Self</span>::default()
+<a href=#225 id=225 data-nosnippet>225</a>    }
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="doccomment">/// Parses a `{prefix}_AUDIENCE_GRANTS` JSON string directly. Split out from
+<a href=#228 id=228 data-nosnippet>228</a>    /// [`Self::from_env`] so tests can exercise parsing without mutating the environment.
+<a href=#229 id=229 data-nosnippet>229</a>    ///
+<a href=#230 id=230 data-nosnippet>230</a>    /// Validates both axes of the map, not just its JSON shape -- same reason every other knob in
+<a href=#231 id=231 data-nosnippet>231</a>    /// this crate fails startup on a typo rather than shipping inert: every key must satisfy
+<a href=#232 id=232 data-nosnippet>232</a>    /// [`is_valid_audience`] (`{"group:everyone": [...]}`, the value operators are migrating
+<a href=#233 id=233 data-nosnippet>233</a>    /// *from*, can never match a stamped audience once the charset excludes `:`), and every
+<a href=#234 id=234 data-nosnippet>234</a>    /// selector on either axis must be `*`, `user:&lt;non-empty&gt;`, or `group:&lt;non-empty&gt;` (an
+<a href=#235 id=235 data-nosnippet>235</a>    /// unprefixed or mis-prefixed selector matches no identity axis and would otherwise be a
+<a href=#236 id=236 data-nosnippet>236</a>    /// silently-inert entry).
+<a href=#237 id=237 data-nosnippet>237</a>    </span><span class="kw">pub fn </span>parse(raw: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="kw">let </span>raw: RawAudienceGrants =
+<a href=#239 id=239 data-nosnippet>239</a>            serde_json::from_str(raw).map_err(|e| <span class="macro">anyhow!</span>(<span class="string">"invalid audience grant map: {e}"</span>))<span class="question-mark">?</span>;
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">let </span><span class="kw-2">mut </span>entries = BTreeMap::new();
+<a href=#241 id=241 data-nosnippet>241</a>        <span class="kw">for </span>(audience, value) <span class="kw">in </span>raw.<span class="number">0 </span>{
+<a href=#242 id=242 data-nosnippet>242</a>            <span class="kw">if </span>!is_valid_audience(<span class="kw-2">&amp;</span>audience) {
+<a href=#243 id=243 data-nosnippet>243</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#244 id=244 data-nosnippet>244</a>                    <span class="string">"invalid audience grant map: {audience:?} is not a valid audience name -- \
+<a href=#245 id=245 data-nosnippet>245</a>                     must match [A-Za-z0-9_-]{{1,255}}"
+<a href=#246 id=246 data-nosnippet>246</a>                </span>));
+<a href=#247 id=247 data-nosnippet>247</a>            }
+<a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">let </span>(read, mint) = <span class="kw">match </span>value {
+<a href=#249 id=249 data-nosnippet>249</a>                RawGrantValue::Bare(read) =&gt; (read, <span class="macro">vec!</span>[]),
+<a href=#250 id=250 data-nosnippet>250</a>                RawGrantValue::Object(RawGrantObject { read, mint }) =&gt; (read, mint),
+<a href=#251 id=251 data-nosnippet>251</a>            };
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="kw">for </span>selector <span class="kw">in </span>read.iter().chain(mint.iter()) {
+<a href=#253 id=253 data-nosnippet>253</a>                <span class="kw">if </span>!valid_selector(selector) {
+<a href=#254 id=254 data-nosnippet>254</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#255 id=255 data-nosnippet>255</a>                        <span class="string">"invalid audience grant map: selector {selector:?} for audience \
+<a href=#256 id=256 data-nosnippet>256</a>                         {audience:?} must be '*', 'user:&lt;id&gt;', or 'group:&lt;id&gt;'"
+<a href=#257 id=257 data-nosnippet>257</a>                    </span>));
+<a href=#258 id=258 data-nosnippet>258</a>                }
+<a href=#259 id=259 data-nosnippet>259</a>            }
+<a href=#260 id=260 data-nosnippet>260</a>            entries.insert(audience, GrantEntry { read, mint });
+<a href=#261 id=261 data-nosnippet>261</a>        }
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ entries })
+<a href=#263 id=263 data-nosnippet>263</a>    }
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="doccomment">/// Resolves [`audience_grants_var`] and parses it. Unset ⇒ [`Self::empty`].
+<a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">pub fn </span>from_env(prefix: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>var = resolve_prefixed_var(prefix, <span class="string">"AUDIENCE_GRANTS"</span>);
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>grants = <span class="kw">match </span>std::env::var(<span class="kw-2">&amp;</span>var) {
+<a href=#269 id=269 data-nosnippet>269</a>            <span class="prelude-val">Ok</span>(raw) <span class="kw">if </span>raw.trim().is_empty() =&gt; <span class="self">Self</span>::empty(),
+<a href=#270 id=270 data-nosnippet>270</a>            <span class="prelude-val">Ok</span>(raw) =&gt; <span class="self">Self</span>::parse(<span class="kw-2">&amp;</span>raw).map_err(|e| <span class="macro">anyhow!</span>(<span class="string">"{var}: {e}"</span>))<span class="question-mark">?</span>,
+<a href=#271 id=271 data-nosnippet>271</a>            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="self">Self</span>::empty(),
+<a href=#272 id=272 data-nosnippet>272</a>        };
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">if </span>grants.entries.is_empty() {
+<a href=#274 id=274 data-nosnippet>274</a>            <span class="macro">info!</span>(<span class="string">"{var}: no audience grants configured"</span>);
+<a href=#275 id=275 data-nosnippet>275</a>        } <span class="kw">else </span>{
+<a href=#276 id=276 data-nosnippet>276</a>            <span class="kw">let </span>names = grants.entries.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().join(<span class="string">","</span>);
+<a href=#277 id=277 data-nosnippet>277</a>            <span class="macro">info!</span>(<span class="string">"{var}: {} audience grants ({names})"</span>, grants.entries.len());
+<a href=#278 id=278 data-nosnippet>278</a>        }
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="prelude-val">Ok</span>(grants)
+<a href=#280 id=280 data-nosnippet>280</a>    }
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="doccomment">/// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
+<a href=#283 id=283 data-nosnippet>283</a>    /// analogue of [`Self::parse`] (#1489, AbAC Stage 6a). Runs the *same* [`is_valid_audience`]/
+<a href=#284 id=284 data-nosnippet>284</a>    /// [`valid_selector`] checks `parse` runs, so a row that slipped past `audience_grants`'s own
+<a href=#285 id=285 data-nosnippet>285</a>    /// `CHECK` constraints (e.g. via a direct `psql` session) still can't reach a policy decision:
+<a href=#286 id=286 data-nosnippet>286</a>    /// this is the one place both the JSON path and the DB path fail closed on a malformed row.
+<a href=#287 id=287 data-nosnippet>287</a>    </span><span class="kw">pub fn </span>from_rows(rows: <span class="kw">impl </span>IntoIterator&lt;Item = (String, GrantAxis, String)&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="kw">let </span><span class="kw-2">mut </span>entries: BTreeMap&lt;String, GrantEntry&gt; = BTreeMap::new();
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">for </span>(audience, axis, selector) <span class="kw">in </span>rows {
+<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">if </span>!is_valid_audience(<span class="kw-2">&amp;</span>audience) {
+<a href=#291 id=291 data-nosnippet>291</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#292 id=292 data-nosnippet>292</a>                    <span class="string">"invalid audience grant row: {audience:?} is not a valid audience name -- \
+<a href=#293 id=293 data-nosnippet>293</a>                     must match [A-Za-z0-9_-]{{1,255}}"
+<a href=#294 id=294 data-nosnippet>294</a>                </span>));
+<a href=#295 id=295 data-nosnippet>295</a>            }
+<a href=#296 id=296 data-nosnippet>296</a>            <span class="kw">if </span>!valid_selector(<span class="kw-2">&amp;</span>selector) {
+<a href=#297 id=297 data-nosnippet>297</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#298 id=298 data-nosnippet>298</a>                    <span class="string">"invalid audience grant row: selector {selector:?} for audience \
+<a href=#299 id=299 data-nosnippet>299</a>                     {audience:?} must be '*', 'user:&lt;id&gt;', or 'group:&lt;id&gt;'"
+<a href=#300 id=300 data-nosnippet>300</a>                </span>));
+<a href=#301 id=301 data-nosnippet>301</a>            }
+<a href=#302 id=302 data-nosnippet>302</a>            <span class="kw">let </span>entry = entries.entry(audience).or_default();
+<a href=#303 id=303 data-nosnippet>303</a>            <span class="kw">match </span>axis {
+<a href=#304 id=304 data-nosnippet>304</a>                GrantAxis::Read =&gt; entry.read.push(selector),
+<a href=#305 id=305 data-nosnippet>305</a>                GrantAxis::Mint =&gt; entry.mint.push(selector),
+<a href=#306 id=306 data-nosnippet>306</a>            }
+<a href=#307 id=307 data-nosnippet>307</a>        }
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ entries })
+<a href=#309 id=309 data-nosnippet>309</a>    }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="doccomment">/// Unions each audience's `read`/`mint` selector lists across `self` and `other` (#1489, AbAC
+<a href=#312 id=312 data-nosnippet>312</a>    /// Stage 6a): a selector present in either map grants exactly the same access as being
+<a href=#313 id=313 data-nosnippet>313</a>    /// present in both. No dedup -- `selector_matches` is called with `.any()`, so a selector
+<a href=#314 id=314 data-nosnippet>314</a>    /// present in both sources costs one redundant comparison, never a wrong answer.
+<a href=#315 id=315 data-nosnippet>315</a>    ///
+<a href=#316 id=316 data-nosnippet>316</a>    /// A public utility for combining two `AudienceGrants` maps, exercised by this crate's own
+<a href=#317 id=317 data-nosnippet>317</a>    /// integration tests (`rust/auth/tests/policy_tests.rs`); `resolve`/`resolve_audience` do
+<a href=#318 id=318 data-nosnippet>318</a>    /// **not** call it -- they check the env map and the DB store snapshot as two separate
+<a href=#319 id=319 data-nosnippet>319</a>    /// sources instead, specifically to avoid a per-request deep clone (see the comment in
+<a href=#320 id=320 data-nosnippet>320</a>    /// [`AudienceReadPolicy::resolve`]).
+<a href=#321 id=321 data-nosnippet>321</a>    </span><span class="kw">pub fn </span>merge(<span class="kw-2">&amp;</span><span class="self">self</span>, other: <span class="kw-2">&amp;</span><span class="self">Self</span>) -&gt; <span class="self">Self </span>{
+<a href=#322 id=322 data-nosnippet>322</a>        <span class="kw">let </span><span class="kw-2">mut </span>entries = <span class="self">self</span>.entries.clone();
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">for </span>(audience, other_entry) <span class="kw">in </span><span class="kw-2">&amp;</span>other.entries {
+<a href=#324 id=324 data-nosnippet>324</a>            <span class="kw">let </span>entry = entries.entry(audience.clone()).or_default();
+<a href=#325 id=325 data-nosnippet>325</a>            entry.read.extend(other_entry.read.iter().cloned());
+<a href=#326 id=326 data-nosnippet>326</a>            entry.mint.extend(other_entry.mint.iter().cloned());
+<a href=#327 id=327 data-nosnippet>327</a>        }
+<a href=#328 id=328 data-nosnippet>328</a>        <span class="self">Self </span>{ entries }
+<a href=#329 id=329 data-nosnippet>329</a>    }
+<a href=#330 id=330 data-nosnippet>330</a>
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">fn </span>readers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = (<span class="kw-2">&amp;</span>String, <span class="kw-2">&amp;</span>[String])&gt; {
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="self">self</span>.entries.iter().map(|(a, e)| (a, e.read.as_slice()))
+<a href=#333 id=333 data-nosnippet>333</a>    }
+<a href=#334 id=334 data-nosnippet>334</a>
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">fn </span>mint_selectors(<span class="kw-2">&amp;</span><span class="self">self</span>, audience: <span class="kw-2">&amp;</span>str) -&gt; <span class="kw-2">&amp;</span>[String] {
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="self">self</span>.entries
+<a href=#337 id=337 data-nosnippet>337</a>            .get(audience)
+<a href=#338 id=338 data-nosnippet>338</a>            .map(|e| e.mint.as_slice())
+<a href=#339 id=339 data-nosnippet>339</a>            .unwrap_or(<span class="kw-2">&amp;</span>[])
+<a href=#340 id=340 data-nosnippet>340</a>    }
+<a href=#341 id=341 data-nosnippet>341</a>}
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a><span class="doccomment">/// A policy's resolved set of audiences a caller may read.
+<a href=#344 id=344 data-nosnippet>344</a>///
+<a href=#345 id=345 data-nosnippet>345</a>/// Newtype over `Arc&lt;[String]&gt;`, not a bare `Vec&lt;String&gt;`/`Arc&lt;[String]&gt;` -- so a policy's
+<a href=#346 id=346 data-nosnippet>346</a>/// result can never be confused with any other string list on a security path.
+<a href=#347 id=347 data-nosnippet>347</a></span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq)]
+<a href=#348 id=348 data-nosnippet>348</a></span><span class="kw">pub struct </span>ReadableAudiences(Arc&lt;[String]&gt;);
+<a href=#349 id=349 data-nosnippet>349</a>
+<a href=#350 id=350 data-nosnippet>350</a><span class="kw">impl </span>ReadableAudiences {
+<a href=#351 id=351 data-nosnippet>351</a>    <span class="doccomment">/// Wraps an already-computed audience set.
+<a href=#352 id=352 data-nosnippet>352</a>    </span><span class="kw">pub fn </span>new(audiences: Arc&lt;[String]&gt;) -&gt; <span class="self">Self </span>{
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="self">Self</span>(audiences)
+<a href=#354 id=354 data-nosnippet>354</a>    }
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="doccomment">/// Unwraps the audience set. This is the one cross-crate conversion point: the
+<a href=#357 id=357 data-nosnippet>357</a>    /// `rust/public` bridge (see `tasks/1369_policy_seam_plan.md` §1) calls this to build
+<a href=#358 id=358 data-nosnippet>358</a>    /// `micromegas_analytics::lakehouse::read_scope::ReadScope::Audiences`.
+<a href=#359 id=359 data-nosnippet>359</a>    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; Arc&lt;[String]&gt; {
+<a href=#360 id=360 data-nosnippet>360</a>        <span class="self">self</span>.<span class="number">0
+<a href=#361 id=361 data-nosnippet>361</a>    </span>}
+<a href=#362 id=362 data-nosnippet>362</a>}
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a><span class="doccomment">/// Resolves the set of audiences an authenticated caller may read.
+<a href=#365 id=365 data-nosnippet>365</a>///
+<a href=#366 id=366 data-nosnippet>366</a>/// `resolve` can **never** return "all" -- `ReadScope::All` is deliberately not a policy output.
+<a href=#367 id=367 data-nosnippet>367</a>/// It is the marker only internal (non-request) callers pass, which is what keeps "who granted
+<a href=#368 id=368 data-nosnippet>368</a>/// themselves `All`?" a greppable question with a small, auditable answer set. A policy that
+<a href=#369 id=369 data-nosnippet>369</a>/// wants to be maximally permissive still has to enumerate the audiences that make it so.
+<a href=#370 id=370 data-nosnippet>370</a>///
+<a href=#371 id=371 data-nosnippet>371</a>/// `async` and fallible because the AbAC plan's recorded *Long-term model* resolves grants from a
+<a href=#372 id=372 data-nosnippet>372</a>/// store -- nested groups, plus group→audience grants -- which cannot live behind a sync,
+<a href=#373 id=373 data-nosnippet>373</a>/// infallible signature. This is no longer just future-proofing: `AudienceReadPolicy` is fallible
+<a href=#374 id=374 data-nosnippet>374</a>/// today whenever a [`DbAudienceGrantsSource`] is attached via `with_store` -- a cold-start store
+<a href=#375 id=375 data-nosnippet>375</a>/// outage with no prior successful load returns `Err`, which `caller_context`
+<a href=#376 id=376 data-nosnippet>376</a>/// (`flight_sql_service_impl.rs`) maps to `Status::unavailable`. Without a store attached it still
+<a href=#377 id=377 data-nosnippet>377</a>/// cannot fail.
+<a href=#378 id=378 data-nosnippet>378</a>///
+<a href=#379 id=379 data-nosnippet>379</a>/// **Every caller must deny on `Err`.** An `Err` here means "the policy could not be evaluated" --
+<a href=#380 id=380 data-nosnippet>380</a>/// never soften it into `ReadableAudiences::new(Arc::from([]))` (that would read as a legitimate,
+<a href=#381 id=381 data-nosnippet>381</a>/// audited fail-closed decision) and never into `ReadScope::All` (a silent fail-open bypass).
+<a href=#382 id=382 data-nosnippet>382</a></span><span class="attr">#[async_trait]
+<a href=#383 id=383 data-nosnippet>383</a></span><span class="kw">pub trait </span>ReadPolicy: Send + Sync + Debug {
+<a href=#384 id=384 data-nosnippet>384</a>    <span class="doccomment">/// Resolves `caller`'s readable-audience set, or `Err` if the policy could not be evaluated
+<a href=#385 id=385 data-nosnippet>385</a>    /// (e.g. a backing store outage once a store-backed policy lands).
+<a href=#386 id=386 data-nosnippet>386</a>    </span><span class="kw">async fn </span>resolve(<span class="kw-2">&amp;</span><span class="self">self</span>, caller: <span class="kw-2">&amp;</span>AuthContext) -&gt; <span class="prelude-ty">Result</span>&lt;ReadableAudiences&gt;;
+<a href=#387 id=387 data-nosnippet>387</a>}
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a><span class="doccomment">/// Resolves the audience a newly minted key may be stamped with.
+<a href=#390 id=390 data-nosnippet>390</a>///
+<a href=#391 id=391 data-nosnippet>391</a>/// `requested` is the caller-supplied audience (e.g. `"team-alpha"`); `None` means "no audience
+<a href=#392 id=392 data-nosnippet>392</a>/// requested and none can be defaulted" -- under the opaque-label model there is no "myself"
+<a href=#393 id=393 data-nosnippet>393</a>/// audience for a caller's identity to default to, so every implementation must return `Err` for
+<a href=#394 id=394 data-nosnippet>394</a>/// `requested: None`, admin or not. Async and fallible for the same forward-looking reason as
+<a href=#395 id=395 data-nosnippet>395</a>/// `ReadPolicy` -- wired by `mint_key` (`analytics-web-srv/src/ingestion_keys.rs`, AbAC Stage 6,
+<a href=#396 id=396 data-nosnippet>396</a>/// #1374), its first production caller, gated by `MintGate`/`AuthenticatedUser` rather than
+<a href=#397 id=397 data-nosnippet>397</a>/// `AdminUser`.
+<a href=#398 id=398 data-nosnippet>398</a></span><span class="attr">#[async_trait]
+<a href=#399 id=399 data-nosnippet>399</a></span><span class="kw">pub trait </span>MintPolicy: Send + Sync + Debug {
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="doccomment">/// Resolves the audience to stamp on a newly minted key, or `Err` if `requested` is outside
+<a href=#401 id=401 data-nosnippet>401</a>    /// what `caller` may mint (including `requested: None` -- see the trait doc comment).
+<a href=#402 id=402 data-nosnippet>402</a>    </span><span class="kw">async fn </span>resolve_audience(
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#404 id=404 data-nosnippet>404</a>        caller: <span class="kw-2">&amp;</span>AuthContext,
+<a href=#405 id=405 data-nosnippet>405</a>        requested: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;,
+<a href=#406 id=406 data-nosnippet>406</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt;;
+<a href=#407 id=407 data-nosnippet>407</a>}
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a><span class="doccomment">/// The shipped `ReadPolicy`: a lookup over an [`AudienceGrants`] map -- and, when a
+<a href=#410 id=410 data-nosnippet>410</a>/// [`DbAudienceGrantsSource`] is attached via `with_store`, a second lookup over that store's
+<a href=#411 id=411 data-nosnippet>411</a>/// snapshot -- with no identity derivation anywhere. Resolves the readable set:
+<a href=#412 id=412 data-nosnippet>412</a>///
+<a href=#413 id=413 data-nosnippet>413</a>/// ```text
+<a href=#414 id=414 data-nosnippet>414</a>/// { PUBLIC_AUDIENCE }
+<a href=#415 id=415 data-nosnippet>415</a>///   ∪ { a : "*"            ∈ grants[a].read }
+<a href=#416 id=416 data-nosnippet>416</a>///   ∪ { a : "user:&lt;email&gt;" ∈ grants[a].read }                  if email present
+<a href=#417 id=417 data-nosnippet>417</a>///   ∪ { a : "group:&lt;g&gt;"    ∈ grants[a].read for some g ∈ caller.groups }
+<a href=#418 id=418 data-nosnippet>418</a>///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
+<a href=#419 id=419 data-nosnippet>419</a>///   ∪ caller.read_audiences                                    // Stage 4b per-key direct grant
+<a href=#420 id=420 data-nosnippet>420</a>/// ```
+<a href=#421 id=421 data-nosnippet>421</a>///
+<a href=#422 id=422 data-nosnippet>422</a>/// There is **no self-audience rule** -- a caller is granted no audience merely for being named
+<a href=#423 id=423 data-nosnippet>423</a>/// like one. See `tasks/1372_audience_on_keys_plan.md` §2 for why: the charset makes an email
+<a href=#424 id=424 data-nosnippet>424</a>/// unrepresentable as an audience name, and keying on `subject` instead would let an admin mint
+<a href=#425 id=425 data-nosnippet>425</a>/// themselves read access by naming a key after an audience.
+<a href=#426 id=426 data-nosnippet>426</a>///
+<a href=#427 id=427 data-nosnippet>427</a>/// `read_audiences` is folded in here but deliberately **excluded** from
+<a href=#428 id=428 data-nosnippet>428</a>/// `AudienceMintPolicy`'s mintable set -- a service-account key's ability to *see* an audience
+<a href=#429 id=429 data-nosnippet>429</a>/// must not imply it can *stamp new keys* with that audience (mint is integrity, read is
+<a href=#430 id=430 data-nosnippet>430</a>/// confidentiality).
+<a href=#431 id=431 data-nosnippet>431</a></span><span class="attr">#[derive(Debug, Clone, Default)]
+<a href=#432 id=432 data-nosnippet>432</a></span><span class="kw">pub struct </span>AudienceReadPolicy {
+<a href=#433 id=433 data-nosnippet>433</a>    grants: AudienceGrants,
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="doccomment">/// The DB-backed grant store (#1489, AbAC Stage 6a), when this process has one configured --
+<a href=#435 id=435 data-nosnippet>435</a>    /// checked alongside `grants` on every `resolve` call, as a separate source rather than
+<a href=#436 id=436 data-nosnippet>436</a>    /// merged into it (see `resolve`). `None` for every disabled-auth/test caller that has no DB
+<a href=#437 id=437 data-nosnippet>437</a>    /// pool to back one.
+<a href=#438 id=438 data-nosnippet>438</a>    </span>store: <span class="prelude-ty">Option</span>&lt;Arc&lt;DbAudienceGrantsSource&gt;&gt;,
+<a href=#439 id=439 data-nosnippet>439</a>}
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a><span class="kw">impl </span>AudienceReadPolicy {
+<a href=#442 id=442 data-nosnippet>442</a>    <span class="doccomment">/// Builds a policy with an explicit grant map (bypassing env resolution).
+<a href=#443 id=443 data-nosnippet>443</a>    </span><span class="kw">pub fn </span>new(grants: AudienceGrants) -&gt; <span class="self">Self </span>{
+<a href=#444 id=444 data-nosnippet>444</a>        <span class="self">Self </span>{
+<a href=#445 id=445 data-nosnippet>445</a>            grants,
+<a href=#446 id=446 data-nosnippet>446</a>            store: <span class="prelude-val">None</span>,
+<a href=#447 id=447 data-nosnippet>447</a>        }
+<a href=#448 id=448 data-nosnippet>448</a>    }
+<a href=#449 id=449 data-nosnippet>449</a>
+<a href=#450 id=450 data-nosnippet>450</a>    <span class="doccomment">/// Resolves the grant map from `{prefix}_AUDIENCE_GRANTS` (falling back to
+<a href=#451 id=451 data-nosnippet>451</a>    /// `MICROMEGAS_AUDIENCE_GRANTS`) via [`AudienceGrants::from_env`]. Unset ⇒ an empty grant map
+<a href=#452 id=452 data-nosnippet>452</a>    /// ⇒ the readable set degenerates to `{public}` plus `read_audiences`, which
+<a href=#453 id=453 data-nosnippet>453</a>    /// `OwnershipRewrite` (#1370, AbAC Stage 2) enforces. A malformed grant map is `Err`, not a
+<a href=#454 id=454 data-nosnippet>454</a>    /// silently-emptied one, so a startup `?` turns a typo into a fail-fast instead of a
+<a href=#455 id=455 data-nosnippet>455</a>    /// silently-inactive knob.
+<a href=#456 id=456 data-nosnippet>456</a>    </span><span class="kw">pub fn </span>from_env(prefix: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>grants = AudienceGrants::from_env(prefix)<span class="question-mark">?</span>;
+<a href=#458 id=458 data-nosnippet>458</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#459 id=459 data-nosnippet>459</a>            grants,
+<a href=#460 id=460 data-nosnippet>460</a>            store: <span class="prelude-val">None</span>,
+<a href=#461 id=461 data-nosnippet>461</a>        })
+<a href=#462 id=462 data-nosnippet>462</a>    }
+<a href=#463 id=463 data-nosnippet>463</a>
+<a href=#464 id=464 data-nosnippet>464</a>    <span class="doccomment">/// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). A
+<a href=#465 id=465 data-nosnippet>465</a>    /// builder method, not a constructor argument, so `new`/`from_env` keep working unchanged for
+<a href=#466 id=466 data-nosnippet>466</a>    /// every caller with no DB pool to back one (disabled-auth, tests).
+<a href=#467 id=467 data-nosnippet>467</a>    </span><span class="kw">pub fn </span>with_store(<span class="kw-2">mut </span><span class="self">self</span>, store: <span class="prelude-ty">Option</span>&lt;Arc&lt;DbAudienceGrantsSource&gt;&gt;) -&gt; <span class="self">Self </span>{
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="self">self</span>.store = store;
+<a href=#469 id=469 data-nosnippet>469</a>        <span class="self">self
+<a href=#470 id=470 data-nosnippet>470</a>    </span>}
+<a href=#471 id=471 data-nosnippet>471</a>}
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a><span class="attr">#[async_trait]
+<a href=#474 id=474 data-nosnippet>474</a></span><span class="kw">impl </span>ReadPolicy <span class="kw">for </span>AudienceReadPolicy {
+<a href=#475 id=475 data-nosnippet>475</a>    <span class="kw">async fn </span>resolve(<span class="kw-2">&amp;</span><span class="self">self</span>, caller: <span class="kw-2">&amp;</span>AuthContext) -&gt; <span class="prelude-ty">Result</span>&lt;ReadableAudiences&gt; {
+<a href=#476 id=476 data-nosnippet>476</a>        <span class="comment">// `Err` only on a cold-start outage (no snapshot has ever loaded successfully) --
+<a href=#477 id=477 data-nosnippet>477</a>        // propagated as-is, so `resolve` denies exactly as documented on its own trait.
+<a href=#478 id=478 data-nosnippet>478</a>        </span><span class="kw">let </span>store_grants = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.store {
+<a href=#479 id=479 data-nosnippet>479</a>            <span class="prelude-val">Some</span>(store) =&gt; <span class="prelude-val">Some</span>(store.current().<span class="kw">await</span><span class="question-mark">?</span>),
+<a href=#480 id=480 data-nosnippet>480</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#481 id=481 data-nosnippet>481</a>        };
+<a href=#482 id=482 data-nosnippet>482</a>        <span class="kw">let </span><span class="kw-2">mut </span>set = BTreeSet::new();
+<a href=#483 id=483 data-nosnippet>483</a>        set.insert(PUBLIC_AUDIENCE.to_string());
+<a href=#484 id=484 data-nosnippet>484</a>        <span class="comment">// The env map and the store snapshot are checked as two separate sources -- a selector
+<a href=#485 id=485 data-nosnippet>485</a>        // present in either grants access -- rather than merged into one map, so neither side is
+<a href=#486 id=486 data-nosnippet>486</a>        // deep-cloned on every request (#1489, AbAC Stage 6a).
+<a href=#487 id=487 data-nosnippet>487</a>        </span><span class="kw">for </span>(audience, read) <span class="kw">in </span><span class="self">self</span>.grants.readers() {
+<a href=#488 id=488 data-nosnippet>488</a>            <span class="kw">if </span>read.iter().any(|s| selector_matches(s, caller)) {
+<a href=#489 id=489 data-nosnippet>489</a>                set.insert(audience.clone());
+<a href=#490 id=490 data-nosnippet>490</a>            }
+<a href=#491 id=491 data-nosnippet>491</a>        }
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(grants) = <span class="kw-2">&amp;</span>store_grants {
+<a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">for </span>(audience, read) <span class="kw">in </span>grants.readers() {
+<a href=#494 id=494 data-nosnippet>494</a>                <span class="kw">if </span>read.iter().any(|s| selector_matches(s, caller)) {
+<a href=#495 id=495 data-nosnippet>495</a>                    set.insert(audience.clone());
+<a href=#496 id=496 data-nosnippet>496</a>                }
+<a href=#497 id=497 data-nosnippet>497</a>            }
+<a href=#498 id=498 data-nosnippet>498</a>        }
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">for </span>audience <span class="kw">in </span><span class="kw-2">&amp;</span>caller.read_audiences {
+<a href=#500 id=500 data-nosnippet>500</a>            set.insert(audience.clone());
+<a href=#501 id=501 data-nosnippet>501</a>        }
+<a href=#502 id=502 data-nosnippet>502</a>        <span class="kw">let </span>audiences: Arc&lt;[String]&gt; = set.into_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().into();
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="prelude-val">Ok</span>(ReadableAudiences::new(audiences))
+<a href=#504 id=504 data-nosnippet>504</a>    }
+<a href=#505 id=505 data-nosnippet>505</a>}
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a><span class="doccomment">/// The shipped `MintPolicy`. Non-admin callers may mint only an audience in their **mint** set --
+<a href=#508 id=508 data-nosnippet>508</a>/// `grants[a].mint`, never `grants[a].read` (a read grant confers no mint authority, unchanged
+<a href=#509 id=509 data-nosnippet>509</a>/// from `AudienceReadPolicy`'s split); being able to *read* `public`, which every authenticated
+<a href=#510 id=510 data-nosnippet>510</a>/// principal is, does not imply being able to *mint into* it, unless some grant names `public` in
+<a href=#511 id=511 data-nosnippet>511</a>/// a `"mint"` list.
+<a href=#512 id=512 data-nosnippet>512</a>///
+<a href=#513 id=513 data-nosnippet>513</a>/// `is_admin` callers may mint **any** valid audience, `public` included -- `mint_key`
+<a href=#514 id=514 data-nosnippet>514</a>/// (`analytics-web-srv/src/ingestion_keys.rs`) delegates authorization to this policy for every
+<a href=#515 id=515 data-nosnippet>515</a>/// caller, admin included, rather than gating admin callers separately of its own accord (its own
+<a href=#516 id=516 data-nosnippet>516</a>/// gate, `MintGate`, only enforces the self-service knob against non-admins); without this arm the
+<a href=#517 id=517 data-nosnippet>517</a>/// only shipped `MintPolicy` could not express the admin mint flow that route depends on; the arm
+<a href=#518 id=518 data-nosnippet>518</a>/// grants no power the route's gate does not already grant. This is deliberately **asymmetric** to
+<a href=#519 id=519 data-nosnippet>519</a>/// the read path, where `is_admin` is never a bypass (AbAC plan §5): mint is an integrity decision
+<a href=#520 id=520 data-nosnippet>520</a>/// (who may stamp a credential), reads are a confidentiality decision (who may see data), and the
+<a href=#521 id=521 data-nosnippet>521</a>/// two axes are allowed to disagree.
+<a href=#522 id=522 data-nosnippet>522</a></span><span class="attr">#[derive(Debug, Clone, Default)]
+<a href=#523 id=523 data-nosnippet>523</a></span><span class="kw">pub struct </span>AudienceMintPolicy {
+<a href=#524 id=524 data-nosnippet>524</a>    grants: AudienceGrants,
+<a href=#525 id=525 data-nosnippet>525</a>    <span class="doccomment">/// The DB-backed grant store (#1489, AbAC Stage 6a). Built for symmetry with
+<a href=#526 id=526 data-nosnippet>526</a>    /// [`AudienceReadPolicy::with_store`] and unit-tested, but this stage wires nothing to it: no
+<a href=#527 id=527 data-nosnippet>527</a>    /// production code constructs a `dyn MintPolicy` today -- see [`with_store`](Self::with_store).
+<a href=#528 id=528 data-nosnippet>528</a>    </span>store: <span class="prelude-ty">Option</span>&lt;Arc&lt;DbAudienceGrantsSource&gt;&gt;,
+<a href=#529 id=529 data-nosnippet>529</a>}
+<a href=#530 id=530 data-nosnippet>530</a>
+<a href=#531 id=531 data-nosnippet>531</a><span class="kw">impl </span>AudienceMintPolicy {
+<a href=#532 id=532 data-nosnippet>532</a>    <span class="doccomment">/// Builds a policy with an explicit grant map.
+<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">pub fn </span>new(grants: AudienceGrants) -&gt; <span class="self">Self </span>{
+<a href=#534 id=534 data-nosnippet>534</a>        <span class="self">Self </span>{
+<a href=#535 id=535 data-nosnippet>535</a>            grants,
+<a href=#536 id=536 data-nosnippet>536</a>            store: <span class="prelude-val">None</span>,
+<a href=#537 id=537 data-nosnippet>537</a>        }
+<a href=#538 id=538 data-nosnippet>538</a>    }
+<a href=#539 id=539 data-nosnippet>539</a>
+<a href=#540 id=540 data-nosnippet>540</a>    <span class="doccomment">/// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). Built
+<a href=#541 id=541 data-nosnippet>541</a>    /// alongside [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, no
+<a href=#542 id=542 data-nosnippet>542</a>    /// production call site attaches a store through this method: `mint_key` (AbAC Stage 6,
+<a href=#543 id=543 data-nosnippet>543</a>    /// #1374) constructs its `AudienceMintPolicy` via `new`, so mint grants stay resolved by a
+<a href=#544 id=544 data-nosnippet>544</a>    /// fresh, uncached point query against `audience_grants`, never a `DbAudienceGrantsSource`
+<a href=#545 id=545 data-nosnippet>545</a>    /// snapshot, in this stage.
+<a href=#546 id=546 data-nosnippet>546</a>    </span><span class="kw">pub fn </span>with_store(<span class="kw-2">mut </span><span class="self">self</span>, store: <span class="prelude-ty">Option</span>&lt;Arc&lt;DbAudienceGrantsSource&gt;&gt;) -&gt; <span class="self">Self </span>{
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="self">self</span>.store = store;
+<a href=#548 id=548 data-nosnippet>548</a>        <span class="self">self
+<a href=#549 id=549 data-nosnippet>549</a>    </span>}
+<a href=#550 id=550 data-nosnippet>550</a>}
+<a href=#551 id=551 data-nosnippet>551</a>
+<a href=#552 id=552 data-nosnippet>552</a><span class="attr">#[async_trait]
+<a href=#553 id=553 data-nosnippet>553</a></span><span class="kw">impl </span>MintPolicy <span class="kw">for </span>AudienceMintPolicy {
+<a href=#554 id=554 data-nosnippet>554</a>    <span class="kw">async fn </span>resolve_audience(
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#556 id=556 data-nosnippet>556</a>        caller: <span class="kw-2">&amp;</span>AuthContext,
+<a href=#557 id=557 data-nosnippet>557</a>        requested: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;,
+<a href=#558 id=558 data-nosnippet>558</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(aud) = requested <span class="kw">else </span>{
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(<span class="string">"no audience requested and none can be defaulted"</span>));
+<a href=#561 id=561 data-nosnippet>561</a>        };
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">if </span>caller.is_admin {
+<a href=#563 id=563 data-nosnippet>563</a>            <span class="kw">return if </span>is_valid_audience(aud) {
+<a href=#564 id=564 data-nosnippet>564</a>                <span class="prelude-val">Ok</span>(aud.to_string())
+<a href=#565 id=565 data-nosnippet>565</a>            } <span class="kw">else </span>{
+<a href=#566 id=566 data-nosnippet>566</a>                <span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#567 id=567 data-nosnippet>567</a>                    <span class="string">"malformed audience {aud:?}: must match [A-Za-z0-9_-]{{1,255}}"
+<a href=#568 id=568 data-nosnippet>568</a>                </span>))
+<a href=#569 id=569 data-nosnippet>569</a>            };
+<a href=#570 id=570 data-nosnippet>570</a>        }
+<a href=#571 id=571 data-nosnippet>571</a>        <span class="comment">// The env map and the store snapshot are checked as two separate sources -- a selector
+<a href=#572 id=572 data-nosnippet>572</a>        // present in either grants access -- rather than merged into one map, so neither side is
+<a href=#573 id=573 data-nosnippet>573</a>        // deep-cloned on every request (#1489, AbAC Stage 6a).
+<a href=#574 id=574 data-nosnippet>574</a>        </span><span class="kw">let </span>store_grants = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.store {
+<a href=#575 id=575 data-nosnippet>575</a>            <span class="prelude-val">Some</span>(store) =&gt; <span class="prelude-val">Some</span>(store.current().<span class="kw">await</span><span class="question-mark">?</span>),
+<a href=#576 id=576 data-nosnippet>576</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#577 id=577 data-nosnippet>577</a>        };
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>granted = <span class="self">self
+<a href=#579 id=579 data-nosnippet>579</a>            </span>.grants
+<a href=#580 id=580 data-nosnippet>580</a>            .mint_selectors(aud)
+<a href=#581 id=581 data-nosnippet>581</a>            .iter()
+<a href=#582 id=582 data-nosnippet>582</a>            .any(|s| selector_matches(s, caller))
+<a href=#583 id=583 data-nosnippet>583</a>            || store_grants.as_ref().is_some_and(|grants| {
+<a href=#584 id=584 data-nosnippet>584</a>                grants
+<a href=#585 id=585 data-nosnippet>585</a>                    .mint_selectors(aud)
+<a href=#586 id=586 data-nosnippet>586</a>                    .iter()
+<a href=#587 id=587 data-nosnippet>587</a>                    .any(|s| selector_matches(s, caller))
+<a href=#588 id=588 data-nosnippet>588</a>            });
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">if </span>granted {
+<a href=#590 id=590 data-nosnippet>590</a>            <span class="prelude-val">Ok</span>(aud.to_string())
+<a href=#591 id=591 data-nosnippet>591</a>        } <span class="kw">else </span>{
+<a href=#592 id=592 data-nosnippet>592</a>            <span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(
+<a href=#593 id=593 data-nosnippet>593</a>                <span class="string">"audience {aud:?} is not in the caller's mintable set"
+<a href=#594 id=594 data-nosnippet>594</a>            </span>))
+<a href=#595 id=595 data-nosnippet>595</a>        }
+<a href=#596 id=596 data-nosnippet>596</a>    }
+<a href=#597 id=597 data-nosnippet>597</a>}
+</code></pre></div></section></main></body></html>
