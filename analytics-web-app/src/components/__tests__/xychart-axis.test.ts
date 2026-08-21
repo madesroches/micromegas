@@ -240,10 +240,10 @@ describe('yAxisSize', () => {
 })
 
 describe('buildYAxisConfig', () => {
-  it('defaults show and showGrid to true and side to undefined (uPlot default 3)', () => {
+  it('defaults show and showGrid to true and side to 3 (left)', () => {
     const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: '', currencyCode: null })
     expect(axis.show).toBe(true)
-    expect(axis.side).toBeUndefined()
+    expect(axis.side).toBe(3)
     expect(axis.grid).toEqual({ stroke: '#2a2a35', width: 1 })
   })
 

@@ -191,7 +191,7 @@ export function yAxisSize(chartWidth: number, values: string[] | null): number {
 export interface YAxisOptions {
   /** uPlot scale key; omit for the single-line default 'y'. */
   scale?: string
-  /** uPlot side: 3 = left, 1 = right. Default 3 (uPlot's own default). */
+  /** uPlot side: 3 = left, 1 = right. Omit for the single-line default 3. */
   side?: 1 | 3
   /** Hidden when every series on this scale is hidden. Default true. */
   show?: boolean
@@ -212,7 +212,7 @@ export interface YAxisOptions {
  * one place.
  */
 export function buildYAxisConfig(opts: YAxisOptions): uPlot.Axis {
-  const { scale, side, show = true, showGrid = true, conversionFactor, displayUnit, currencyCode } = opts
+  const { scale = 'y', side = 3, show = true, showGrid = true, conversionFactor, displayUnit, currencyCode } = opts
   return {
     scale,
     side,
