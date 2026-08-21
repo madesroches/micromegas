@@ -151,15 +151,16 @@ export function isKnownUnit(canonicalUnit: string): boolean {
 
 `isKnownUnit` is checked against the *normalized* unit, so it works whether
 or not adaptive scaling actually applied (mirrors how `yAxisUnit` itself is
-derived at `XYChart.tsx:915`). Currency is handled separately, since it
-already has its own `isCurrencyScale` flag at the call site.
+derived at `XYChart.tsx:915`). Currency needs no OR-ing in here at all:
+`formatYAxisTick` already short-circuits on `currencyCode` before it ever
+reads the `displayUnit` argument, so whatever `isKnownAxisUnit` evaluates to
+is irrelevant whenever `isCurrencyScale` is true.
 
 In `XYChart.tsx`'s single-line branch, at the axis `values` closure
-(`XYChart.tsx:1007-1011`), suppress the suffix when the unit isn't known and
-isn't currency:
+(`XYChart.tsx:1007-1011`), suppress the suffix when the unit isn't known:
 
 ```ts
-const isKnownAxisUnit = isCurrencyScale || isKnownUnit(normalizeUnit(primaryUnit))
+const isKnownAxisUnit = isKnownUnit(normalizeUnit(primaryUnit))
 ...
 values: (_u: uPlot, vals: number[]) => {
   return vals.map((v) =>
@@ -189,10 +190,13 @@ today's behavior.
    already-compact forms like `/s`, `°F`, `%CPU` count as known while a long
    opaque unit that merely starts with one of those symbols does not.
 2. `analytics-web-app/src/components/XYChart.tsx`: in the single-line branch,
-   compute `isKnownAxisUnit` (currency OR `isKnownUnit(normalizeUnit(primaryUnit))`)
-   next to the existing `yAxisUnit`/`isCurrencyScale` computation
+   compute `isKnownAxisUnit` as `isKnownUnit(normalizeUnit(primaryUnit))` next
+   to the existing `yAxisUnit`/`isCurrencyScale` computation
    (`XYChart.tsx:915-916`), and use it to pass `''` instead of `yAxisUnit` into
    `formatYAxisTick` at the axis `values` callback (`XYChart.tsx:1007-1011`).
+   No OR with `isCurrencyScale` is needed: `formatYAxisTick` already
+   short-circuits on `currencyCode` before reading `displayUnit`, so the
+   currency branch renders correctly regardless of `isKnownAxisUnit`.
 3. Add unit tests (see Testing Strategy).
 4. Manually verify against a chart with an opaque unit (e.g. `redis_ops_per_sec
    | ops_per_sec`, the measure named in #1503) and a couple of "known unit"
