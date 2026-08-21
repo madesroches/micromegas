@@ -155,21 +155,29 @@ away, not the warning itself.
    truth table and `from_env` parsing (the whole point of the file). What survives, trimmed to the
    new infallible signature: the "bound audience always stamps" cases and the "no bound audience →
    unstamped" case, since those still exercise real behavior (`resolve_write_audience`'s only
-   remaining branch), plus the existing HTTP-level pass-through tests for OTLP and native with a
-   bound audience (e.g. `native_knob_on_bound_audience_credential_reaches_the_parse_boundary`,
-   trimmed of its now-gone `StampingConfig` argument). Webhook has no such pass-through case today —
+   remaining branch), plus one surviving HTTP-level pass-through test each for OTLP and native.
+   Each knob_off/knob_on pair here reduces to the same behavior once the gate is gone —
+   `otlp_knob_off_empty_resource_logs_passes_the_gate_and_returns_ok` and
+   `otlp_knob_on_bound_audience_credential_passes_the_gate` both become "empty `resourceLogs` →
+   200"; `native_knob_off_malformed_body_reaches_the_parse_boundary_as_400` and
+   `native_knob_on_bound_audience_credential_reaches_the_parse_boundary` both become "malformed CBOR
+   → 400" — so delete the `knob_off` test in each pair and keep only the `knob_on` one (renamed to
+   drop the "knob"/"gate" framing and trimmed of its now-gone `StampingConfig` argument), since the
+   remaining ctx-present/ctx-absent difference is already covered by the surviving unit tests.
+   Webhook has no such pass-through case today —
    its only test in this file, `webhook_knob_on_no_extension_is_denied_with_plain_text_403`, is a
    gate test and gets deleted along with the rest of the truth table, and there is no other webhook
    HTTP test anywhere in the repo (`rust/otel-ingestion/tests/webhook_tests.rs` asserts
-   payload/identity shape, not the HTTP route). Write one new webhook HTTP case here, but target the
-   boundary this DB-less harness can actually reach: any non-empty body reaching `webhook_handler`
-   resolves the audience and then always calls `handler::ingest_webhook` → `write_blocks`, which
-   hits the harness's lazily-connected `postgres://localhost/unused` pool and fails with a 503
-   (`OtelError::Database`) — 200 is unreachable here. Assert a bound- or audience-less-credential
-   request reaches that same post-resolution 503 boundary through `webhook_router()` (the same
-   differential-pass-through trick the existing native cases use with malformed CBOR: get past
-   audience resolution, fail only on the DB call), so webhook route coverage doesn't drop to zero;
-   if that's not written, say so plainly rather than describing webhook coverage as surviving. Keep the surviving tests under `rust/public/tests/` — matching
+   payload/identity shape, not the HTTP route). Write one new webhook HTTP case here, but keep it
+   zero-DB per this file's own invariant (`ingestion_stamping_tests.rs:4-7`, "every case here must
+   be a request that either stops at the gate or does zero database work"): assert that an
+   empty-body request through `webhook_router()` gets the 400 it already returns before any DB work
+   (`webhook.rs:123-125`). Do not resolve the audience and reach for the harness's
+   lazily-connected `postgres://localhost/unused` pool instead — that 503 boundary is only reachable
+   within a useful test runtime by overriding sqlx's default 30s `acquire_timeout` (see the
+   `acquire_timeout(50ms)` pattern in `rust/ingestion/tests/process_audience_cache_test.rs` and
+   `rust/auth/tests/db_api_key_tests.rs`), and even then a bound-audience and an audience-less
+   credential would hit the identical 503, so it wouldn't be differential anyway. Keep the surviving tests under `rust/public/tests/` — matching
    every other test file in that directory and `rust/CLAUDE.md`'s rule that unit tests live under a
    crate's `tests/` folder, not alongside the lib implementation — with the new filename replacing
    the "stamping" framing, since "gate" tests no longer exist to justify it. Also rename the
@@ -199,15 +207,17 @@ away, not the warning itself.
    `AuthContext` extension the middleware inserts, so the DB-less harness can assert the propagated
    `bound_audience` reaches that extension without going through ingestion at all. Reshape the test
    to build that router, send the bound-audience request, and assert on the probe route's extension
-   instead of on a 403. If no such seam is taken,
-   state plainly instead that this coverage moves to the existing `#[ignore]`d live-stack test
-   (`full_multi_record_ingest_succeeds_against_a_live_stack`) and that CI no longer guards #1373's
-   context-propagation fix by default.
+   instead of on a 403.
 6. **Fix now-stale doc comments referencing the removed knob** (not user docs, code comments):
    `rust/analytics/src/lakehouse/ownership_rewrite.rs:85` and `rust/auth/src/env.rs:4,15` (drop
    `REQUIRE_WRITE_AUDIENCE` from the list of example prefixed vars — check
    `read_scope.rs`'s parallel `resolved_var` copy for the same stale mention), and
-   `rust/auth/tests/policy_tests.rs:713`. Also `rust/otel-ingestion/src/error.rs`: the module doc
+   `rust/auth/tests/policy_tests.rs:713`. Also `rust/ingestion/src/write_audience.rs`'s
+   `WriteAudience::new` doc comment (`:20-28`) — the same comment the Design section above quotes —
+   which currently frames the malformed-label case as being "rejected" as "defence in depth ...
+   rather than stamping it": narrow it to say the ingestion edge now warns and degrades to
+   `WriteAudience::none()` instead of rejecting, since that defence-in-depth no longer exists for
+   the HTTP-edge caller the comment names. Also `rust/otel-ingestion/src/error.rs`: the module doc
    (`:7-9`), the `Denied` variant doc (`:56-58`), the `public_message` field doc (`:62-67`), and the
    comment at `:126` all describe `Denied` as having two causes — "gate rejection vs. audience
    conflict" — but once `otlp.rs`'s gate-rejection producer (`:152-156`) is gone, `AudienceConflict`
@@ -255,12 +265,13 @@ away, not the warning itself.
 - `rust/auth/src/env.rs` — drop `REQUIRE_WRITE_AUDIENCE` from example list
 - `rust/analytics/src/lakehouse/read_scope.rs` — check/fix its parallel `resolved_var` doc copy
 - `rust/auth/tests/policy_tests.rs` — fix stale comment (line 713)
+- `rust/ingestion/src/write_audience.rs` — narrow `WriteAudience::new`'s doc comment to describe warn-and-degrade instead of rejection
 - `rust/otel-ingestion/src/error.rs` — remove the `public_message` field from `Denied`, narrow the four `Denied`-has-two-causes doc comments to conflict-only
 - `mkdocs/docs/admin/authentication.md` — rewrite §"Write-Side Stamping" knob mention + residual-gap admonition
 - `mkdocs/docs/admin/ingestion.md` — remove knob row + "What gets stamped" mention
 - `mkdocs/docs/admin/monolith.md` — remove knob row, rewrite the prefix-asymmetry admonition
 - `mkdocs/docs/otlp/index.md` — narrow the two 403-cause descriptions to conflict-only
-- `CHANGELOG.md` — in-place edits to the still-unreleased Stage 5 (#1373) entry (lines 37, 38, 42)
+- `CHANGELOG.md` — in-place edits to the still-unreleased Stage 5 (#1373) entry (lines 37, 38, 40, 42)
 - `tasks/data_isolation/audience_based_access_control_plan.md` — in-place status note that the
   `REQUIRE_WRITE_AUDIENCE` knob described as Stage 5's deliverable (line 1324) was removed before
   release
@@ -322,6 +333,9 @@ away, not the warning itself.
     current mitigation" statement citing the same tracking issue number as the `authentication.md`
     edit above (or, if Step 7 was skipped, the same plain "nothing tracks it yet" wording) — this
     gap stays open either way.
+  - Line 40 (the Firehose/CloudWatch Logs sentence): drop the trailing "and gated" so it reads
+    "Firehose and CloudWatch Logs deliveries are stamped the same as every other entry point" —
+    the write-audience gate being deleted is exactly what made them "gated" too.
   - Line 42 (the breaking-change clause): delete the `serve_ingestion`/`StampingConfig` and
     `firehose_router`/`Arc<StampingConfig>` clauses outright (they never shipped). Rewrite the
     `resolve_write_audience` clause to describe its *final* shape instead of the intermediate one:
