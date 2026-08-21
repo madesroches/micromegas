@@ -119,18 +119,33 @@ or `''` into `formatYAxisTick` at the single-line call site.
 
 ```ts
 // units.ts, near unitDisplayAbbrev
+
+/**
+ * Longest symbol-prefixed unit this codebase actually cites as
+ * short-and-safe: `%CPU` (4 chars). Bounds the `isKnownUnit` carve-out below
+ * so a long opaque string that merely starts with `/`, `°`, or `%` (e.g. a
+ * hypothetical `%utilization_ratio`) isn't misclassified as safe to repeat.
+ */
+const MAX_SYMBOL_PREFIX_UNIT_LENGTH = 4
+
 /**
  * True when `canonicalUnit` is safe to repeat on every y-axis tick without
  * risking overflow: either it has a known short abbreviation (time/size/bit/
  * percent/degrees/celsius/centimeters/dimensionless, i.e. `unitDisplayAbbrev`
- * would not just echo the input back unchanged), or it's already a short,
- * symbol-prefixed form — leading `/`, `°`, or `%` — of the kind `unitSuffix`
- * already renders compactly (e.g. the bare rate unit `/s`, or an
- * out-of-vocabulary `°F`/`%CPU`). Mirrors `unitSuffix`'s own symbol-prefix
- * test so the two stay in sync.
+ * would not just echo the input back unchanged), or it's already short *and*
+ * symbol-prefixed — leading `/`, `°`, or `%`, and no longer than
+ * `MAX_SYMBOL_PREFIX_UNIT_LENGTH` — of the kind `unitSuffix` renders
+ * compactly (e.g. the bare rate unit `/s`, or an out-of-vocabulary `°F`/
+ * `%CPU`). The prefix test mirrors `unitSuffix`'s own regex, but adds a
+ * length bound: `unitSuffix`'s test only decides spacing and says nothing
+ * about length, so used alone it would also match a long opaque unit that
+ * happens to start with one of these symbols (e.g. `%utilization_ratio`).
  */
 export function isKnownUnit(canonicalUnit: string): boolean {
-  return canonicalUnit in CANONICAL_DISPLAY_ABBREV || /^[/°%]/.test(canonicalUnit)
+  if (canonicalUnit in CANONICAL_DISPLAY_ABBREV) return true
+  return (
+    /^[/°%]/.test(canonicalUnit) && canonicalUnit.length <= MAX_SYMBOL_PREFIX_UNIT_LENGTH
+  )
 }
 ```
 
@@ -168,8 +183,11 @@ today's behavior.
 
 1. `analytics-web-app/src/lib/units.ts`: add `isKnownUnit(canonicalUnit: string): boolean`
    next to `unitDisplayAbbrev`, checking membership in `CANONICAL_DISPLAY_ABBREV`
-   *or* a leading `/`, `°`, or `%` (mirroring `unitSuffix`'s symbol-prefix test),
-   so already-compact forms like `/s`, `°F`, `%CPU` count as known too.
+   *or* a leading `/`, `°`, or `%` combined with a `MAX_SYMBOL_PREFIX_UNIT_LENGTH`
+   (4, the length of the longest cited case, `%CPU`) length bound — mirroring
+   `unitSuffix`'s symbol-prefix test but adding the length check it lacks — so
+   already-compact forms like `/s`, `°F`, `%CPU` count as known while a long
+   opaque unit that merely starts with one of those symbols does not.
 2. `analytics-web-app/src/components/XYChart.tsx`: in the single-line branch,
    compute `isKnownAxisUnit` (currency OR `isKnownUnit(normalizeUnit(primaryUnit))`)
    next to the existing `yAxisUnit`/`isCurrencyScale` computation
@@ -200,14 +218,22 @@ today's behavior.
   truncation risk today. Fixing that would need a different mechanism (e.g.
   an actual uPlot axis title) since there's no other place multi-line units
   are shown — left out of scope to keep this change minimal and low-risk.
-- **`isKnownUnit` as table membership (+ `unitSuffix`'s symbol-prefix test)
-  vs. a length heuristic.** Checking `CANONICAL_DISPLAY_ABBREV` membership
-  reuses the existing single source of truth for "units we know how to
-  abbreviate," and reusing `unitSuffix`'s own `/^[/°%]/` test catches the
-  short, symbol-form units (`/s`, `°F`, `%CPU`) that table membership alone
-  would miss — both are precise, unlike guessing from string length (which
-  could misfire on a short-but-unrecognized unit, or a long-but-legitimate
-  one).
+- **`isKnownUnit` as table membership (+ a length-bounded symbol-prefix test)
+  vs. a length heuristic alone.** Checking `CANONICAL_DISPLAY_ABBREV`
+  membership reuses the existing single source of truth for "units we know
+  how to abbreviate," which is exact. The symbol-prefix carve-out on top of
+  it is *not* exact on its own — `unitSuffix`'s `/^[/°%]/` regex only decides
+  leading-space formatting and says nothing about length, so reused bare it
+  would also match a long opaque unit that happens to start with `/`, `°`, or
+  `%` (e.g. a hypothetical `%utilization_ratio`). Pairing that regex with a
+  `MAX_SYMBOL_PREFIX_UNIT_LENGTH` bound (4, sized to the longest cited case,
+  `%CPU`) closes that gap: it still catches the short, symbol-form units
+  (`/s`, `°F`, `%CPU`) table membership alone would miss, while excluding
+  long opaque strings. This is a length heuristic for that one carve-out, not
+  a rejection of length heuristics in general — the difference from "guessing
+  from string length" as a global test is that it's scoped narrowly (only
+  applies to strings that already pass the symbol-prefix test) and bounded by
+  a value tied to a real cited case rather than an arbitrary threshold.
 - **Suffix suppressed entirely vs. truncated/ellipsized.** Dropping it is
   simpler than adding text-truncation/rotation logic to the axis, and loses
   no information since the unit remains visible in the header/stats/tooltip
@@ -219,7 +245,10 @@ today's behavior.
   `'bytes'`, `'percent'`, `'degrees'`, `'celsius'`, `'centimeters'`, `''`
   (dimensionless), and for the symbol-prefixed cases `'/s'`, `'°F'`, `'%CPU'`;
   false for an arbitrary unrecognized unit like `'ops_per_sec'` or
-  `'requests'`.
+  `'requests'`, and false for a long unit that merely starts with a
+  symbol-prefix character, e.g. `'%utilization_ratio'` or
+  `'/requests_dropped'` — this is the case the length bound on the
+  symbol-prefix carve-out exists to exclude.
 - Manual: build a `redis_ops_per_sec | ops_per_sec`-style chart and confirm
   y-axis ticks now render as plain numbers (`100`, `200`, `300`), while the
   header title/stats/tooltip still show `ops_per_sec`. Spot-check a
