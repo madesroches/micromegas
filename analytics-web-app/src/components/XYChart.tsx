@@ -12,7 +12,7 @@ import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
-import { buildXAxisConfig, buildXScale, formatYAxisTick, RIGHT_AXIS_SIZE_PX } from './xychart-axis'
+import { buildXAxisConfig, buildXScale, buildYAxisConfig } from './xychart-axis'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -721,7 +721,9 @@ export function XYChart({
         }
       }
 
-      // Build per-unit axes
+      // Build per-unit axes. `yAxisSize`'s fraction cap is a combined budget across every
+      // visible vertical y-axis, so tell it how many there are (hidden axes take 0 width).
+      const visibleAxisCount = Math.max(1, unitScaleInfo.filter((s) => s.hasVisible).length)
       for (const scaleInfo of unitScaleInfo) {
         const scaleName = scaleInfo.scaleName
         const scaleP99 = scaleInfo.p99
@@ -740,21 +742,18 @@ export function XYChart({
         const yAxisUnit = adaptiveInfo?.abbrev ?? unitDisplayAbbrev(scaleInfo.unitName)
         const axisCf = adaptiveInfo?.conversionFactor ?? 1
         const isCurrencyScale = isCurrencyUnit(normalizeUnit(scaleInfo.unitName))
-        axes.push({
-          show: scaleInfo.hasVisible,
-          scale: scaleName,
-          side: scaleInfo.side as 1 | 3,
-          stroke: '#6a6a7a',
-          grid: scaleInfo.side === 1 ? { stroke: '#2a2a35', width: 1 } : { show: false },
-          ticks: { stroke: '#2a2a35', width: 1 },
-          font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: RIGHT_AXIS_SIZE_PX,
-          values: (_u: uPlot, vals: number[]) => {
-            return vals.map((v) =>
-              formatYAxisTick(v, axisCf, yAxisUnit, isCurrencyScale ? scaleInfo.unitName : null)
-            )
-          },
-        })
+        axes.push(
+          buildYAxisConfig({
+            scale: scaleName,
+            side: scaleInfo.side as 1 | 3,
+            show: scaleInfo.hasVisible,
+            showGrid: scaleInfo.side === 1,
+            conversionFactor: axisCf,
+            displayUnit: yAxisUnit,
+            currencyCode: isCurrencyScale ? scaleInfo.unitName : null,
+            visibleAxisCount,
+          })
+        )
       }
 
       // Build uPlot series configs
@@ -1000,18 +999,11 @@ export function XYChart({
         },
         axes: [
           xAxisConfig,
-          {
-            stroke: '#6a6a7a',
-            grid: { stroke: '#2a2a35', width: 1 },
-            ticks: { stroke: '#2a2a35', width: 1 },
-            font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-            size: RIGHT_AXIS_SIZE_PX,
-            values: (_u: uPlot, vals: number[]) => {
-              return vals.map((v) =>
-                formatYAxisTick(v, 1, isKnownAxisUnit ? yAxisUnit : '', isCurrencyScale ? primaryUnit : null)
-              )
-            },
-          },
+          buildYAxisConfig({
+            conversionFactor: 1,
+            displayUnit: isKnownAxisUnit ? yAxisUnit : '',
+            currencyCode: isCurrencyScale ? primaryUnit : null,
+          }),
         ],
         series: [
           {},
