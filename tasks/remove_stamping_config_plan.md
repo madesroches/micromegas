@@ -103,8 +103,13 @@ line in `otlp/index.md:235,720` (see Documentation below).
 `mkdocs/docs/admin/authentication.md:256-286` documents a confidentiality gap ("unstamped
 pre-registration") whose *only* stated closure is `{prefix}_REQUIRE_WRITE_AUDIENCE=true`
 (also referenced from `ownership_rewrite.rs:85` and the design doc). Once the knob is gone, this
-gap has no mitigation at all — the doc must say so plainly (open, unmitigated, tracked as a
-follow-up) rather than quietly drop the sentence and leave a stale promise of protection. This gap
+gap has no mitigation at all — the doc must say so plainly rather than quietly drop the sentence
+and leave a stale promise of protection. Every other deferred gap in these docs cites a concrete
+tracker (Stage 5b, referenced from `ownership_rewrite.rs:75-78` and `web_ingestion_service.rs:266,396`);
+a bare "tracked as a follow-up" with no issue number would just replace one stale promise with
+another, so Implementation Step 7 below has the implementer file a tracking issue for this gap and
+cite its number in both docs — if that step is skipped, the doc must instead say plainly that no
+mitigation exists and nothing tracks it yet, rather than claiming a follow-up that doesn't exist. This gap
 is not merely theoretical: migration v6 already makes every DB-backed ingestion key audience-bound,
 so any deployment mixing DB-backed keys with an env-keyring/OIDC credential (which stay
 audience-less) has this gap live today — the latter can still pre-register a victim's future
@@ -150,20 +155,38 @@ away, not the warning itself.
    truth table and `from_env` parsing (the whole point of the file). What survives, trimmed to the
    new infallible signature: the "bound audience always stamps" cases and the "no bound audience →
    unstamped" case, since those still exercise real behavior (`resolve_write_audience`'s only
-   remaining branch, plus the HTTP-level pass-through tests for OTLP/native/webhook with a bound
-   audience). Keep the surviving tests under `rust/public/tests/` — matching every other test file
-   in that directory and `rust/CLAUDE.md`'s rule that unit tests live under a crate's `tests/`
-   folder, not alongside the lib implementation — with the new filename replacing the "stamping"
-   framing, since "gate" tests no longer exist to justify it.
+   remaining branch), plus the existing HTTP-level pass-through tests for OTLP and native with a
+   bound audience (e.g. `native_knob_on_bound_audience_credential_reaches_the_parse_boundary`,
+   trimmed of its now-gone `StampingConfig` argument). Webhook has no such pass-through case today —
+   its only test in this file, `webhook_knob_on_no_extension_is_denied_with_plain_text_403`, is a
+   gate test and gets deleted along with the rest of the truth table, and there is no other webhook
+   HTTP test anywhere in the repo (`rust/otel-ingestion/tests/webhook_tests.rs` asserts
+   payload/identity shape, not the HTTP route). Write one new webhook HTTP case here — a bound- or
+   audience-less-credential request reaching 200 through `webhook_router()` — so webhook route
+   coverage doesn't drop to zero; if that's not written, say so plainly rather than describing
+   webhook coverage as surviving. Keep the surviving tests under `rust/public/tests/` — matching
+   every other test file in that directory and `rust/CLAUDE.md`'s rule that unit tests live under a
+   crate's `tests/` folder, not alongside the lib implementation — with the new filename replacing
+   the "stamping" framing, since "gate" tests no longer exist to justify it.
 5. **Update `firehose_tests.rs` / `firehose_cloudwatch_logs_tests.rs`**: `stamping_off()` helpers and
    their call sites go away along with the `stamping` parameter on `firehose_router`. The on-branch
    403 test (`firehose_tests.rs:199-243`) loses its reason for existing as a 403 test, but it is the
    only test in either file that exercises a bound-audience provider through `firehose_auth_middleware`
    — the regression guard for #1373's context-propagation fix ("`firehose_auth_middleware` no longer
-   discards the validated context"). Don't delete that coverage outright: reshape the test to drop
-   the 403 assertion and instead assert the resolved audience reaches ingestion end-to-end (e.g. the
-   stamped `micromegas.audience` on the resulting process), so a future regression that silently
-   drops the context again still fails a test.
+   discards the validated context"). Don't delete that coverage outright — but this harness's pool
+   (`postgres://localhost/unused`, lazily connected) is never actually touched, and per the file's own
+   header comment "every case must stop before touching it," so asserting a stamped `micromegas.audience`
+   on a resulting process needs real DB writes that this harness cannot do. `firehose_auth_middleware`
+   is also `pub(crate)` (`firehose_common.rs:71`), so a test under `tests/` can't call it directly
+   either. Resolve this with a small `pub` seam instead of a DB write: add a `pub(crate)`-to-`pub`
+   (or a dedicated `#[cfg(test)]`) hook in `firehose_common.rs` — e.g. expose the `AuthContext`
+   extension the middleware inserts, or add a thin `pub fn` wrapper the test can call directly — so
+   the DB-less harness can assert the propagated `AuthContext`'s `bound_audience` reaches the request
+   extensions without going through ingestion at all. Reshape the test to build the router, send the
+   bound-audience request, and assert on that extension instead of on a 403. If no such seam is taken,
+   state plainly instead that this coverage moves to the existing `#[ignore]`d live-stack test
+   (`full_multi_record_ingest_succeeds_against_a_live_stack`) and that CI no longer guards #1373's
+   context-propagation fix by default.
 6. **Fix now-stale doc comments referencing the removed knob** (not user docs, code comments):
    `rust/analytics/src/lakehouse/ownership_rewrite.rs:85` and `rust/auth/src/env.rs:4,15` (drop
    `REQUIRE_WRITE_AUDIENCE` from the list of example prefixed vars — check
@@ -172,12 +195,25 @@ away, not the warning itself.
    (`:7-9`), the `Denied` variant doc (`:56-58`), the `public_message` field doc (`:62-67`), and the
    comment at `:126` all describe `Denied` as having two causes — "gate rejection vs. audience
    conflict" — but once `otlp.rs`'s gate-rejection producer (`:152-156`) is gone, `AudienceConflict`
-   (`:150`) is the only remaining producer. Narrow all four to the conflict-only cause, and decide
-   whether `public_message` (whose doc exists solely to keep the two causes distinguishable) is
-   still earning its place as a separate field now that `Denied` has only one cause.
-7. **Documentation** (see below) — update in the same change, not a follow-up, since a stale doc
+   (`:150`) is the only remaining producer, and `error.rs:146-158`'s `AudienceConflict` arm is then
+   `Denied`'s only construction site, always passing the same hard-coded string. `webhook.rs:130-135`
+   never builds `Denied` (it renders its own `text/plain` 403), and
+   `rust/otel-ingestion/tests/error_tests.rs:20` only pattern-matches the variant, so nothing depends
+   on `public_message` varying. Remove the `public_message` field from `Denied` outright: change
+   `public_message()` to return the single constant string directly instead of reading the field,
+   drop the now-single-copy `public_message` from the `AudienceConflict` arm's constructor and from
+   `with_context`'s match arms (`:179-187`), and narrow all four doc comments (module doc, `Denied`
+   variant doc, and the `:126` comment; the field doc disappears with the field) to the conflict-only
+   cause.
+7. **File a tracking issue for the now-unmitigated residual gap**, before writing the doc text
+   below: open a GitHub issue on this gap (unstamped pre-registration squatting, live today for any
+   deployment mixing DB-backed keys with an env-keyring/OIDC credential per the Design section
+   above) and note its number for use in the doc edits. If no issue is filed, the doc edits below
+   must say plainly that no mitigation exists and nothing tracks it yet — never write "tracked as a
+   follow-up" without a real issue number to cite.
+8. **Documentation** (see below) — update in the same change, not a follow-up, since a stale doc
    describing a removed enforcement knob as available is actively misleading.
-8. **Changelog**: no new entry — `StampingConfig`/`WriteAudienceError`/`resolve_write_audience`/
+9. **Changelog**: no new entry — `StampingConfig`/`WriteAudienceError`/`resolve_write_audience`/
    `serve_ingestion`/`firehose_router` were all introduced under AbAC Stage 5 (#1373) in the
    still-open `## Unreleased` section, so nothing about them has ever shipped and there is no public
    API break to record. Edit the existing Stage 5 entry in `CHANGELOG.md` in place instead (see
@@ -202,7 +238,7 @@ away, not the warning itself.
 - `rust/auth/src/env.rs` — drop `REQUIRE_WRITE_AUDIENCE` from example list
 - `rust/analytics/src/lakehouse/read_scope.rs` — check/fix its parallel `resolved_var` doc copy
 - `rust/auth/tests/policy_tests.rs` — fix stale comment (line 713)
-- `rust/otel-ingestion/src/error.rs` — narrow the four `Denied`-has-two-causes doc comments to conflict-only
+- `rust/otel-ingestion/src/error.rs` — remove the `public_message` field from `Denied`, narrow the four `Denied`-has-two-causes doc comments to conflict-only
 - `mkdocs/docs/admin/authentication.md` — rewrite §"Write-Side Stamping" knob mention + residual-gap admonition
 - `mkdocs/docs/admin/ingestion.md` — remove knob row + "What gets stamped" mention
 - `mkdocs/docs/admin/monolith.md` — remove knob row, rewrite the prefix-asymmetry admonition
@@ -234,19 +270,28 @@ away, not the warning itself.
   - Lines 206-215: drop the `{prefix}_REQUIRE_WRITE_AUDIENCE` sentence from the "Write-Side
     Stamping" intro paragraph.
   - Lines 236-286 (the "Residual gap" admonition): remove every `REQUIRE_WRITE_AUDIENCE`-as-fix
-    reference (lines 267, 286) and replace with an explicit "no current mitigation; tracked as a
-    follow-up" statement for the "unstamped pre-registration" scenario specifically. The first
-    scenario (stamped squatter → 403 + manual `DELETE`) is unaffected and stays as-is.
+    reference (lines 267, 286) and replace with an explicit "no current mitigation" statement for
+    the "unstamped pre-registration" scenario specifically, citing the tracking issue filed in
+    Implementation Step 7 by number (e.g. "tracked in #NNNN") — never the bare phrase "tracked as a
+    follow-up" with no issue to point to. If Step 7 was skipped, state plainly that no mitigation
+    exists and nothing tracks it yet. The first scenario (stamped squatter → 403 + manual `DELETE`)
+    is unaffected and stays as-is.
 - `mkdocs/docs/admin/ingestion.md`: delete the `MICROMEGAS_REQUIRE_WRITE_AUDIENCE` env var row
-  (line 32) and the sentence at line 93 that introduces it under "What gets stamped."
+  (line 32) and, under "What gets stamped," the whole `MICROMEGAS_REQUIRE_WRITE_AUDIENCE` paragraph
+  (lines 93-97) — it's one five-line paragraph, not a single sentence, and deleting only line 93
+  would strand "with it set, a credential carrying no write audience gets a 403 (native/OTLP/webhook)
+  or a Firehose retry-then-spill... Leave it off for a mixed fleet still migrating onto DB-backed
+  keys; set it once every producer authenticates with an audience-bound credential" with no
+  antecedent.
 - `mkdocs/docs/admin/monolith.md`: delete the `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` row
   (line 50), then rewrite the whole `!!! note "One prefix asymmetry, pre-existing"` admonition
-  (lines 61-75) in place rather than deleting only lines 62-71 — lines 69-75 also depend on the
+  (lines 61-73) in place rather than deleting only lines 62-71 — lines 69-73 also depend on the
   removed knob as their contrast case ("follow `MICROMEGAS_DEFAULT_KEY_AUDIENCE`'s convention, not
   `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE`'s") and would otherwise strand a still-true
   statement with no antecedent. Re-anchor the prefix-asymmetry contrast on
-  `MICROMEGAS_INGESTION_API_KEYS` (documented at line 101), the remaining `MICROMEGAS_INGESTION_*`
-  row in this table.
+  `MICROMEGAS_INGESTION_API_KEYS`, as documented in the "Authentication" section below (line 101)
+  — not a table row itself, since after this deletion the env-var table has no
+  `MICROMEGAS_INGESTION_*` row left.
 - `mkdocs/docs/otlp/index.md`: narrow both 403 descriptions (lines 235, 720) to just the
   audience-conflict cause; drop the `{prefix}_REQUIRE_WRITE_AUDIENCE` clause from each.
 - `CHANGELOG.md`: no new entry — edit the still-`## Unreleased` Stage 5 (#1373) entry in place,
@@ -257,8 +302,9 @@ away, not the warning itself.
     `mkdocs/docs/admin/ingestion.md`.").
   - Line 38 (the "Known gap, documentation-only for now" paragraph): drop the closing sentence
     naming `{prefix}_REQUIRE_WRITE_AUDIENCE=true` as the fix, and replace it with a plain "no
-    current mitigation" statement — this gap stays open, matching the `authentication.md` edit
-    above.
+    current mitigation" statement citing the same tracking issue number as the `authentication.md`
+    edit above (or, if Step 7 was skipped, the same plain "nothing tracks it yet" wording) — this
+    gap stays open either way.
   - Line 42 (the breaking-change clause): delete the `serve_ingestion`/`StampingConfig` and
     `firehose_router`/`Arc<StampingConfig>` clauses outright (they never shipped). Rewrite the
     `resolve_write_audience` clause to describe its *final* shape instead of the intermediate one:
@@ -276,8 +322,9 @@ away, not the warning itself.
   stamping-pass-through cases (bound audience → stamped; audience-less → unstamped) still pass with
   the new infallible signature.
 - `cargo test -p micromegas --test firehose_tests --test firehose_cloudwatch_logs_tests` after
-  removing `stamping_off()` and reshaping the former 403 test into an audience-propagation assertion
-  — confirm it and the remaining ingest-and-stamp assertions pass.
+  removing `stamping_off()` and reshaping the former 403 test into an assertion on the propagated
+  `AuthContext` extension via the new `firehose_common.rs` test seam (§5) — confirm it and the
+  remaining ingest-and-stamp assertions pass.
 - `cargo clippy --workspace -- -D warnings` and `cargo fmt` per `rust/CLAUDE.md`.
 - Manual smoke: start services (`local_test_env/ai_scripts/start_services.py`), post a native
   `insert_process` with no `Authorization` header (dev-mode / `--disable-auth`) and confirm it still
