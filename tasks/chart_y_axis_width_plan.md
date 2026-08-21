@@ -131,6 +131,9 @@ export interface YAxisOptions {
   displayUnit: string
   /** Raw currency unit for a currency scale, else null. */
   currencyCode: string | null
+  /** Number of visible vertical y-axes on this chart, for budgeting `yAxisSize`'s
+   * fraction cap across all of them. Default 1 (the single-line case). */
+  visibleAxisCount?: number
 }
 
 export function buildYAxisConfig(opts: YAxisOptions): uPlot.Axis
@@ -141,7 +144,7 @@ Body: today's shared literal (`stroke: '#6a6a7a'`, `ticks`, `font`), plus
 ```ts
 grid: showGrid ? { stroke: '#2a2a35', width: 1 } : { show: false },
 values: (_u, vals) => vals.map(v => formatYAxisTick(v, conversionFactor, displayUnit, currencyCode)),
-size: (self, values) => yAxisSize(self.width, values),
+size: (self, values) => yAxisSize(self.width, values, visibleAxisCount),
 ```
 
 `formatYAxisTick` is unchanged, and so is every caller's `displayUnit` — the
@@ -158,13 +161,20 @@ export const Y_AXIS_SIZE_FRACTION = 0.33
  * Tick-band width in CSS px for a y axis, sized from its formatted labels.
  * Grow-only: never returns less than Y_AXIS_BASE_SIZE_PX, so a chart whose
  * labels already fit renders exactly as it does today.
+ *
+ * `visibleAxisCount` is the number of visible vertical y-axes uPlot will draw
+ * on this chart (default 1, the single-line case). `Y_AXIS_SIZE_FRACTION` is
+ * a *combined* budget across all of them, so each axis's share of it is
+ * divided by that count — otherwise every axis independently claims up to
+ * the full fraction and they add together in uPlot's plot-width math.
+ * `Y_AXIS_MAX_SIZE_PX` stays an absolute per-axis ceiling regardless of count.
  */
-export function yAxisSize(chartWidth: number, values: string[] | null): number {
+export function yAxisSize(chartWidth: number, values: string[] | null, visibleAxisCount = 1): number {
   // uPlot's init call passes values === null (uPlot.esm.js:3782).
   if (values == null) return Y_AXIS_BASE_SIZE_PX
   const maxWidth = Math.max(0, ...values.map(v => estimateLabelWidth(String(v ?? ''))))
   const needed = Math.ceil(maxWidth) + AXIS_CHROME_PX + TICK_LABEL_PADDING_PX
-  const cap = Math.min(Y_AXIS_MAX_SIZE_PX, Math.round(chartWidth * Y_AXIS_SIZE_FRACTION))
+  const cap = Math.min(Y_AXIS_MAX_SIZE_PX, Math.round((chartWidth * Y_AXIS_SIZE_FRACTION) / visibleAxisCount))
   return Math.max(Y_AXIS_BASE_SIZE_PX, Math.min(cap, needed))
 }
 ```
@@ -179,13 +189,20 @@ export function yAxisSize(chartWidth: number, values: string[] | null): number {
   what keeps stacked charts aligned and keeps the blast radius at "charts that
   were already broken".
 - **Cap** keeps a pathological unit (or a `max`-scale chart with huge numbers)
-  from eating the plot: at most 200 px, and at most a third of the chart width.
-  When the cap binds, the label still clips — same as today, no regression, and
-  the floor guarantees the cap can never push the band *below* 90 px on a narrow
+  from eating the plot: at most 200 px, and at most a third of the chart width
+  divided by `visibleAxisCount` — a *combined* budget across every visible
+  vertical y-axis, not a per-axis allowance, so two axes don't each independently
+  claim up to the full third and add together in uPlot's plot-width math. When
+  the cap binds, the label still clips — same as today, no regression, and the
+  floor guarantees the cap can never push the band *below* 90 px on a narrow
   chart.
 - **The reported case**: `100 ops_per_sec` → `needed = 90 + 20 + 8 = 118 px`; on
-  a 660 px-wide chart the cap is 200, so the band lands at 118 px and the plot
-  loses ~28 px of width. Nothing is clipped.
+  a 660 px-wide chart with a single visible y-axis the cap is 200, so the band
+  lands at 118 px and the plot loses ~28 px of width. Nothing is clipped. With
+  two visible y-axes sharing that same 660 px chart, the cap halves to 100 px,
+  so the band lands at the cap (100 px) instead and the label still clips —
+  the same pathological-cap trade-off as a single very wide label, now also
+  reachable by fanning the same total budget across more axes.
 - **Convergence**: the returned size depends only on the formatted labels and
   `self.width`. Label text depends on the scale range (fixed by our own `range`
   callbacks, not on plot width) and on tick count (a function of plot *height*).
@@ -231,15 +248,20 @@ Self-contained; open directly in a browser.
    `Y_AXIS_BASE_SIZE_PX` (update its docstring: it is now the y-axis *floor*,
    used by the x-axis padding as a lower bound). Add `Y_AXIS_MAX_SIZE_PX` and
    `Y_AXIS_SIZE_FRACTION`.
-2. **`xychart-axis.ts` — `yAxisSize(chartWidth, values)`**, exported for direct
-   unit testing.
+2. **`xychart-axis.ts` — `yAxisSize(chartWidth, values, visibleAxisCount = 1)`**,
+   exported for direct unit testing.
 3. **`xychart-axis.ts` — `buildYAxisConfig(opts)`**, returning the full
    `uPlot.Axis` including `values` and `size`.
 4. **`XYChart.tsx` — multi-line path** (`743-757`): replace the literal with
    `buildYAxisConfig({ scale: scaleName, side: scaleInfo.side as 1 | 3, show:
    scaleInfo.hasVisible, showGrid: scaleInfo.side === 1, conversionFactor:
    axisCf, displayUnit: yAxisUnit, currencyCode: isCurrencyScale ?
-   scaleInfo.unitName : null })`. Tick text unchanged.
+   scaleInfo.unitName : null, visibleAxisCount })`, where `visibleAxisCount =
+   Math.max(1, unitScaleInfo.filter(s => s.hasVisible).length)` is computed once
+   before the per-scale loop and passed to every call in it, so `yAxisSize`'s
+   fraction cap is budgeted across all the visible y-axes on this chart rather
+   than let each one independently claim up to the full fraction. Tick text
+   unchanged.
 5. **`XYChart.tsx` — single-line path** (`1001-1013`): replace the literal with
    `buildYAxisConfig({ conversionFactor: 1, displayUnit: isKnownAxisUnit ?
    yAxisUnit : '', currencyCode: isCurrencyScale ? primaryUnit : null })`.
@@ -314,10 +336,23 @@ Unit tests in `src/components/__tests__/xychart-axis.test.ts`:
     `round(chartWidth * Y_AXIS_SIZE_FRACTION)`; with a *tiny* `chartWidth` →
     still the floor (the cap can never undercut it).
   - `Y_AXIS_MAX_SIZE_PX` binds for a huge label on a very wide chart.
+  - `visibleAxisCount` omitted defaults to the same result as `visibleAxisCount
+    = 1`.
+  - `visibleAxisCount = 2` halves the fraction-cap budget relative to
+    `visibleAxisCount = 1` (`round((chartWidth * Y_AXIS_SIZE_FRACTION) / 2)`),
+    confirming the cap is a combined budget across all visible y-axes rather
+    than a per-axis allowance.
+  - a large `visibleAxisCount` on a narrow chart still floors at
+    `Y_AXIS_BASE_SIZE_PX` (dividing the fraction cap further can never undercut
+    the floor).
 - `buildYAxisConfig`: `scale`/`side`/`show` pass-through and their defaults;
   `showGrid: false` yields `{ show: false }`; `values` formatting matches
   `formatYAxisTick` for the plain, suppressed-suffix (`''`), and currency cases;
-  `size` is a function returning the floor for `null` values.
+  `size` is a function returning the floor for `null` values, defaults
+  `visibleAxisCount` to 1 when omitted, and delegates to `yAxisSize` with the
+  plot width, formatted values, and `visibleAxisCount` — including the
+  multi-axis case, where passing `visibleAxisCount: 2` yields a smaller size
+  than `1` for the same wide values.
 
 Manual verification (services per `CLAUDE.md`, monolith mode):
 
