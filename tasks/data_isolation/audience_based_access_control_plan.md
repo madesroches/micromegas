@@ -1330,7 +1330,12 @@ corrected to what actually shipped rather than left as the pre-implementation pl
     (migration v6), so the knob narrowed a small, non-default category rather than exercising
     real enforcement. `resolve_write_audience` is infallible now: a bound audience always
     stamps, an audience-less credential stays unstamped, matching the `require_write_audience:
-    false` behavior this section describes. See `tasks/remove_stamping_config_plan.md`.
+    false` behavior this section describes. **One case does not match knob-off exactly**: a
+    malformed `bound_audience` (an `Err` from `WriteAudience::new`) previously drew a 403
+    regardless of the knob's value, since the knob only ever gated the no-bound-audience-at-all
+    case; it now warns and resolves to `WriteAudience::none()` instead of being rejected — a
+    deliberate fail-open narrowing, not a behavior-preserving refactor (see `CHANGELOG.md`).
+    See `tasks/remove_stamping_config_plan.md`.
 11a. **Landed alongside stamping, not deferred**: OTLP-derived `process_id`/`block_id` are now
     audience-scoped (`IdentityContext { audience, extra_hash_input }` folded into both formulas).
     Stamping without this would let two audiences sending identical resource attributes collapse

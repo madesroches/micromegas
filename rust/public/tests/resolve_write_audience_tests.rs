@@ -1,10 +1,13 @@
-//! Unit tests for `resolve_write_audience`, plus HTTP-level pass-through cases for the native,
-//! OTLP, and webhook ingestion routes (AbAC Stage 5, #1373, §5).
+//! Unit tests for `resolve_write_audience`, plus HTTP-level pass-through cases for the native and
+//! OTLP ingestion routes, and a pre-resolve rejection case for the webhook route (AbAC Stage 5,
+//! #1373, §5).
 //!
 //! HTTP cases use `tower::ServiceExt::oneshot` against a lazily-connected Postgres pool +
 //! in-memory object store (never actually touched), matching
 //! `rust/public/tests/firehose_tests.rs:1-7`'s own constraint: every case here must be a
-//! request that does zero database work.
+//! request that does zero database work. The webhook case is not a pass-through case like the
+//! other two: it asserts an empty-body 400 that fires before `resolve_write_audience` is ever
+//! called (`webhook.rs`, around lines 121-123).
 
 use axum::Extension;
 use axum::body::Body;
@@ -67,7 +70,8 @@ fn ctx_without_bound_audience() -> AuthContext {
 }
 
 // ---------------------------------------------------------------------------
-// resolve_write_audience: its one remaining branch.
+// resolve_write_audience: its remaining branches (the `Ok` bound-audience-stamps path and the
+// `Err`-degrades-to-none warn path).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -87,6 +91,16 @@ fn audience_less_credential_is_unstamped() {
 #[test]
 fn no_extension_is_unstamped() {
     let audience = resolve_write_audience(None);
+    assert_eq!(audience, WriteAudience::none());
+}
+
+#[test]
+fn malformed_bound_audience_warns_and_degrades_to_none() {
+    // "bad label with spaces" fails `WriteAudience::new`'s `[A-Za-z0-9_-]{1,255}` charset check
+    // (the space bytes), so this exercises the `Err` arm: it warns and resolves to
+    // `WriteAudience::none()` instead of being rejected.
+    let ctx = Extension(ctx_with_bound_audience("bad label with spaces"));
+    let audience = resolve_write_audience(Some(&ctx));
     assert_eq!(audience, WriteAudience::none());
 }
 
