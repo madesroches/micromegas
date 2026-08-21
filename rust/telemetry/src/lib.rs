@@ -8,6 +8,7 @@ pub mod block_wire_format;
 pub mod compression;
 #[cfg(feature = "server")]
 pub mod property;
+pub mod property_names;
 pub mod serde_byte_buf;
 pub mod stream_info;
 pub mod types;

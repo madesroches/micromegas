@@ -12,7 +12,7 @@ docker run -d --name redis-exporter \
   -e MICROMEGAS_TELEMETRY_URL=http://ingestion:9000 \
   -e MICROMEGAS_INGESTION_API_KEY=... \
   -e MICROMEGAS_REDIS_EXPORTER_REDIS_URL=redis://my-redis:6379 \
-  -e MICROMEGAS_REDIS_EXPORTER_PROPERTIES=cluster=eu-west,role=cache \
+  -e MICROMEGAS_PROCESS_PROPERTIES=cluster=eu-west,role=cache \
   marcantoinedesroches/micromegas-redis-exporter:latest
 ```
 
@@ -45,6 +45,32 @@ WHERE name = 'redis_used_memory_bytes'
   AND property_get(properties, 'instance') = 'my-redis:6379';
 ```
 
+### Process properties vs metric properties
+
+There are two places to hang a tag, and the right one depends on whether the
+tag varies:
+
+- `MICROMEGAS_PROCESS_PROPERTIES` (comma-separated `key=value`) tags the
+  **exporter process**. Stored once on its `processes` row and readable from
+  the `process_properties` column of `measures` and `log_entries`, so it also
+  covers the exporter's own log output. Use it for everything constant —
+  `cluster`, `region`, `role`, `namespace`, `pod`. This is the standard
+  variable every micromegas process honors; see
+  [Telemetry Sink Configuration](telemetry-sink-tuning.md#process-properties)
+  for the full format and precedence rules.
+- `--property` / `MICROMEGAS_REDIS_EXPORTER_PROPERTIES` tags **every metric**,
+  alongside the `instance`/`command`/`db`/`event` tags the exporter attaches
+  itself. Costs storage on every measure the exporter emits, so reach for it
+  only when a query needs the tag on the measure row itself rather than
+  through a join on the process.
+
+```sql
+-- constant tag: read it off the process
+SELECT time, value FROM measures
+WHERE name = 'redis_used_memory_bytes'
+  AND property_get(process_properties, 'cluster') = 'prod';
+```
+
 ## Configuration
 
 | Flag | Env | Default |
@@ -56,11 +82,16 @@ WHERE name = 'redis_used_memory_bytes'
 | `--target-name` | `MICROMEGAS_REDIS_EXPORTER_TARGET_NAME` | `host:port` from the URL |
 | `--property k=v` (repeatable) | `MICROMEGAS_REDIS_EXPORTER_PROPERTIES` (comma-separated) | none |
 | `--health-listen-addr` | `MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR` | off |
+| — | `MICROMEGAS_PROCESS_PROPERTIES` (comma-separated) | none |
 
-Telemetry destination and authentication use the standard client contract:
-`MICROMEGAS_TELEMETRY_URL` plus either `MICROMEGAS_INGESTION_API_KEY` or the
-OIDC client-credentials variables (`MICROMEGAS_OIDC_TOKEN_ENDPOINT`,
-`MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET`).
+Telemetry destination, authentication, and process properties use the standard
+client contract: `MICROMEGAS_TELEMETRY_URL` plus either
+`MICROMEGAS_INGESTION_API_KEY` or the OIDC client-credentials variables
+(`MICROMEGAS_OIDC_TOKEN_ENDPOINT`, `MICROMEGAS_OIDC_CLIENT_ID`,
+`MICROMEGAS_OIDC_CLIENT_SECRET`), and `MICROMEGAS_PROCESS_PROPERTIES` for
+process-level tags. `MICROMEGAS_PROCESS_PROPERTIES` has no flag equivalent: the
+telemetry guard is built before command-line parsing, and a process's
+properties are sent once at startup.
 
 ## Kubernetes
 
@@ -101,8 +132,11 @@ spec:
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef: { fieldPath: metadata.namespace }
-            - name: MICROMEGAS_REDIS_EXPORTER_PROPERTIES
-              value: cluster=prod,namespace=$(POD_NAMESPACE)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: MICROMEGAS_PROCESS_PROPERTIES
+              value: cluster=prod,namespace=$(POD_NAMESPACE),pod=$(POD_NAME)
             - name: MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR
               value: 0.0.0.0:8081
           ports:

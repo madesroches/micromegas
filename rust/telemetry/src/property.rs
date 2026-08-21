@@ -1,13 +1,9 @@
 use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
 use std::{collections::HashMap, sync::Arc};
 
-/// Reserved, server-written property namespace. A client-supplied property whose key starts
-/// with this prefix is dropped at ingestion (AbAC Stage 5, #1373).
-pub const RESERVED_PROPERTY_PREFIX: &str = "micromegas.";
-
-/// The audience a process's data belongs to -- written server-side from the authenticated
-/// ingestion credential, read by `OwnershipRewrite`.
-pub const PROPERTY_AUDIENCE: &str = "micromegas.audience";
+/// Re-exported so server code keeps reaching these names through `property`; they are defined in
+/// [`crate::property_names`] so client crates can reach them without the `server` feature.
+pub use crate::property_names::{PROPERTY_AUDIENCE, RESERVED_PROPERTY_PREFIX};
 
 /// Represents a key-value property.
 ///

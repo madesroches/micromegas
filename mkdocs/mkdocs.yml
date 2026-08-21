@@ -141,7 +141,7 @@ nav:
         - Object Cache Deployment: admin/object-cache.md
         - Redis Exporter: admin/redis-exporter.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md
-        - Telemetry Sink Transport Tuning: admin/telemetry-sink-tuning.md
+        - Telemetry Sink Configuration: admin/telemetry-sink-tuning.md
         - Admin SQL Functions: admin/functions-reference.md
     - Development:
         - Contributing: contributing.md
