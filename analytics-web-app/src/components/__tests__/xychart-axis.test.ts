@@ -2,7 +2,9 @@ import type uPlot from 'uplot'
 import {
   buildXAxisConfig,
   buildXScale,
+  buildYAxisConfig,
   formatYAxisTick,
+  yAxisSize,
   estimateLabelWidth,
   AVG_CHAR_WIDTH_PX,
   ROTATE_DEG,
@@ -12,7 +14,11 @@ import {
   MAX_ROTATED_SIZE,
   ROTATED_SIZE_FRACTION,
   DEFAULT_RIGHT_CUSHION_PX,
-  RIGHT_AXIS_SIZE_PX,
+  Y_AXIS_BASE_SIZE_PX,
+  Y_AXIS_MAX_SIZE_PX,
+  Y_AXIS_SIZE_FRACTION,
+  AXIS_CHROME_PX,
+  TICK_LABEL_PADDING_PX,
 } from '../xychart-axis'
 
 // The `values` formatter ignores its uPlot argument; pass a stub.
@@ -132,7 +138,7 @@ describe('buildXAxisConfig', () => {
       expect(noRightAxis).toBeGreaterThan(DEFAULT_RIGHT_CUSHION_PX)
       expect(noRightAxis).toBeLessThanOrEqual(cap)
       const withRightAxis = fn(stubSelf, 1, [false, true, true, true], 0)
-      expect(withRightAxis).toBe(Math.max(0, noRightAxis - RIGHT_AXIS_SIZE_PX))
+      expect(withRightAxis).toBe(Math.max(0, noRightAxis - Y_AXIS_BASE_SIZE_PX))
     })
   })
 })
@@ -187,5 +193,109 @@ describe('formatYAxisTick', () => {
     expect(formatYAxisTick(180, 1, '°', null)).toBe('180°')
     expect(formatYAxisTick(210, 1, '°C', null)).toBe('210°C')
     expect(formatYAxisTick(500, 1, '%', null)).toBe('500%')
+  })
+})
+
+describe('yAxisSize', () => {
+  it('returns the floor for the uPlot init call shape (values === null)', () => {
+    expect(yAxisSize(660, null)).toBe(Y_AXIS_BASE_SIZE_PX)
+  })
+
+  it('returns exactly the floor for short labels that already fit (grow-only regression guard)', () => {
+    expect(yAxisSize(660, ['0', '100', '200'])).toBe(Y_AXIS_BASE_SIZE_PX)
+  })
+
+  it('grows past the floor for a long label, matching estimateLabelWidth + chrome + padding', () => {
+    const label = '100 ops_per_sec'
+    const result = yAxisSize(660, [label])
+    expect(result).toBeGreaterThan(Y_AXIS_BASE_SIZE_PX)
+    expect(result).toBe(estimateLabelWidth(label) + AXIS_CHROME_PX + TICK_LABEL_PADDING_PX)
+  })
+
+  it('tracks the widest label regardless of its position in the array', () => {
+    const wide = '100 ops_per_sec'
+    const expected = estimateLabelWidth(wide) + AXIS_CHROME_PX + TICK_LABEL_PADDING_PX
+    expect(yAxisSize(660, ['1', wide, '2'])).toBe(expected)
+    expect(yAxisSize(660, [wide, '1', '2'])).toBe(expected)
+    expect(yAxisSize(660, ['1', '2', wide])).toBe(expected)
+  })
+
+  it('caps at a fraction of chart width when that fraction is still >= the floor', () => {
+    const hugeLabel = 'a'.repeat(50)
+    const chartWidth = 300
+    const cap = Math.round(chartWidth * Y_AXIS_SIZE_FRACTION)
+    expect(cap).toBeGreaterThan(Y_AXIS_BASE_SIZE_PX)
+    expect(yAxisSize(chartWidth, [hugeLabel])).toBe(cap)
+  })
+
+  it('the fraction cap can never undercut the floor on a very narrow chart', () => {
+    const hugeLabel = 'a'.repeat(50)
+    expect(yAxisSize(10, [hugeLabel])).toBe(Y_AXIS_BASE_SIZE_PX)
+  })
+
+  it('caps at Y_AXIS_MAX_SIZE_PX for a huge label on a very wide chart', () => {
+    const hugeLabel = 'a'.repeat(50)
+    expect(yAxisSize(3000, [hugeLabel])).toBe(Y_AXIS_MAX_SIZE_PX)
+  })
+})
+
+describe('buildYAxisConfig', () => {
+  it('defaults show and showGrid to true and side to undefined (uPlot default 3)', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: '', currencyCode: null })
+    expect(axis.show).toBe(true)
+    expect(axis.side).toBeUndefined()
+    expect(axis.grid).toEqual({ stroke: '#2a2a35', width: 1 })
+  })
+
+  it('passes scale/side/show through', () => {
+    const axis = buildYAxisConfig({
+      scale: 'redis_ops_per_sec',
+      side: 1,
+      show: false,
+      conversionFactor: 1,
+      displayUnit: '',
+      currencyCode: null,
+    })
+    expect(axis.scale).toBe('redis_ops_per_sec')
+    expect(axis.side).toBe(1)
+    expect(axis.show).toBe(false)
+  })
+
+  it('showGrid: false yields a hidden grid', () => {
+    const axis = buildYAxisConfig({ showGrid: false, conversionFactor: 1, displayUnit: '', currencyCode: null })
+    expect(axis.grid).toEqual({ show: false })
+  })
+
+  it('values formatting matches formatYAxisTick for the plain case', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'ms', currencyCode: null })
+    const fn = axis.values as (u: uPlot, vals: number[]) => string[]
+    expect(fn(u, [123.456])).toEqual([formatYAxisTick(123.456, 1, 'ms', null)])
+  })
+
+  it('values formatting matches formatYAxisTick when the unit suffix is suppressed', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: '', currencyCode: null })
+    const fn = axis.values as (u: uPlot, vals: number[]) => string[]
+    expect(fn(u, [100])).toEqual([formatYAxisTick(100, 1, '', null)])
+  })
+
+  it('values formatting matches formatYAxisTick for a currency scale', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'USD', currencyCode: 'USD' })
+    const fn = axis.values as (u: uPlot, vals: number[]) => string[]
+    expect(fn(u, [1234.5])).toEqual([formatYAxisTick(1234.5, 1, 'USD', 'USD')])
+  })
+
+  it('size is a function returning the floor for null values (uPlot init call)', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'ms', currencyCode: null })
+    const size = axis.size as (self: uPlot, values: string[] | null) => number
+    const stubSelf = { width: 660 } as uPlot
+    expect(size(stubSelf, null)).toBe(Y_AXIS_BASE_SIZE_PX)
+  })
+
+  it('size delegates to yAxisSize with the plot width and formatted values', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'ms', currencyCode: null })
+    const size = axis.size as (self: uPlot, values: string[] | null) => number
+    const stubSelf = { width: 660 } as uPlot
+    const values = ['100 ops_per_sec']
+    expect(size(stubSelf, values)).toBe(yAxisSize(660, values))
   })
 })

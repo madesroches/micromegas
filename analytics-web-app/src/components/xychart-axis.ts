@@ -38,9 +38,15 @@ export const ROTATED_SIZE_FRACTION = 0.4
 // a `padding` function can't fall back to `null` for once installed.
 export const DEFAULT_RIGHT_CUSHION_PX = 25
 
-// Mirrors XYChart.tsx's right-side y-axis `size: 90`, the clearance a rotated label can
-// safely cross into when a right y-axis is present.
-export const RIGHT_AXIS_SIZE_PX = 90
+// Floor for the y-axis tick-label band (see `yAxisSize` below): a right-side y-axis is at
+// least this wide, so this is also the clearance a rotated x-axis label can safely cross into
+// when a right y-axis is present. Grow-only, so this stays a valid lower bound even when the
+// y-axis widens past it.
+export const Y_AXIS_BASE_SIZE_PX = 90
+
+// Widest band the y axis may claim, and the fraction of chart width it may not exceed.
+export const Y_AXIS_MAX_SIZE_PX = 200
+export const Y_AXIS_SIZE_FRACTION = 0.33
 
 // Once labels are rotated they no longer need to fit horizontally within a tick slot;
 // adjacent rotated baselines only need to clear LABEL_LINE_HEIGHT_PX / sin(45deg) apart.
@@ -112,7 +118,7 @@ export function buildXAxisConfig(
       const capped = Math.min(cap, Math.ceil(horizontalExtent))
       // A right y-axis already reserves clearance rotated labels can safely cross into, so
       // subtract that band instead of reserving the full projection on top of it.
-      return Math.max(0, capped - (sidesWithAxes[1] ? RIGHT_AXIS_SIZE_PX : 0))
+      return Math.max(0, capped - (sidesWithAxes[1] ? Y_AXIS_BASE_SIZE_PX : 0))
     }
   } else if (xAxisMode === 'numeric') {
     xAxisConfig.space = BASE_MIN_SPACE_PX
@@ -166,4 +172,56 @@ export function formatYAxisTick(
   if (absV >= 10) return dv.toFixed(1) + suffix
   if (absV >= 1) return dv.toFixed(2) + suffix
   return dv.toPrecision(2) + suffix
+}
+
+/**
+ * Tick-band width in CSS px for a y axis, sized from its formatted labels.
+ * Grow-only: never returns less than `Y_AXIS_BASE_SIZE_PX`, so a chart whose
+ * labels already fit renders exactly as it does today.
+ */
+export function yAxisSize(chartWidth: number, values: string[] | null): number {
+  // uPlot's init call passes values === null (uPlot.esm.js:3782).
+  if (values == null) return Y_AXIS_BASE_SIZE_PX
+  const maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v ?? ''))))
+  const needed = Math.ceil(maxWidth) + AXIS_CHROME_PX + TICK_LABEL_PADDING_PX
+  const cap = Math.min(Y_AXIS_MAX_SIZE_PX, Math.round(chartWidth * Y_AXIS_SIZE_FRACTION))
+  return Math.max(Y_AXIS_BASE_SIZE_PX, Math.min(cap, needed))
+}
+
+export interface YAxisOptions {
+  /** uPlot scale key; omit for the single-line default 'y'. */
+  scale?: string
+  /** uPlot side: 3 = left, 1 = right. Default 3 (uPlot's own default). */
+  side?: 1 | 3
+  /** Hidden when every series on this scale is hidden. Default true. */
+  show?: boolean
+  /** Only one axis draws the grid. Default true. */
+  showGrid?: boolean
+  /** Applied on top of the raw tick value; 1 when the caller pre-scaled. */
+  conversionFactor: number
+  /** Display unit for the tick suffix; '' suppresses it. */
+  displayUnit: string
+  /** Raw currency unit for a currency scale, else null. */
+  currencyCode: string | null
+}
+
+/**
+ * Pure Y-axis uPlot.Axis builder shared by XYChart's multi-series (per-unit-scale)
+ * and single-series paths, mirroring `buildXAxisConfig`'s shape. De-duplicates the
+ * two near-identical axis literals and gives both the `yAxisSize` sizing fix from
+ * one place.
+ */
+export function buildYAxisConfig(opts: YAxisOptions): uPlot.Axis {
+  const { scale, side, show = true, showGrid = true, conversionFactor, displayUnit, currencyCode } = opts
+  return {
+    scale,
+    side,
+    show,
+    stroke: '#6a6a7a',
+    grid: showGrid ? { stroke: '#2a2a35', width: 1 } : { show: false },
+    ticks: { stroke: '#2a2a35', width: 1 },
+    font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+    values: (_u: uPlot, vals: number[]) => vals.map((v) => formatYAxisTick(v, conversionFactor, displayUnit, currencyCode)),
+    size: (self, values) => yAxisSize(self.width, values),
+  }
 }
