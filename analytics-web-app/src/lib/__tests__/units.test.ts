@@ -13,6 +13,7 @@ import {
   unitScaleKey,
   unitDisplayAbbrev,
   unitSuffix,
+  isCompactAxisUnit,
 } from '../units'
 
 describe('normalizeUnit', () => {
@@ -662,5 +663,33 @@ describe('unitSuffix', () => {
 
   it('returns an empty string for an empty (dimensionless) display unit', () => {
     expect(unitSuffix('')).toBe('')
+  })
+})
+
+describe('isCompactAxisUnit', () => {
+  it('recognizes canonical units with a known short abbreviation', () => {
+    expect(isCompactAxisUnit('milliseconds')).toBe(true)
+    expect(isCompactAxisUnit('bytes')).toBe(true)
+    expect(isCompactAxisUnit('percent')).toBe(true)
+    expect(isCompactAxisUnit('degrees')).toBe(true)
+    expect(isCompactAxisUnit('celsius')).toBe(true)
+    expect(isCompactAxisUnit('centimeters')).toBe(true)
+    expect(isCompactAxisUnit('')).toBe(true) // dimensionless
+  })
+
+  it('recognizes short, symbol-prefixed units even when out of vocabulary', () => {
+    expect(isCompactAxisUnit('/s')).toBe(true)
+    expect(isCompactAxisUnit('°F')).toBe(true)
+    expect(isCompactAxisUnit('%CPU')).toBe(true)
+  })
+
+  it('rejects arbitrary unrecognized units', () => {
+    expect(isCompactAxisUnit('ops_per_sec')).toBe(false)
+    expect(isCompactAxisUnit('requests')).toBe(false)
+  })
+
+  it('rejects a long unit that merely starts with a symbol-prefix character', () => {
+    expect(isCompactAxisUnit('%utilization_ratio')).toBe(false)
+    expect(isCompactAxisUnit('/requests_dropped')).toBe(false)
   })
 })
