@@ -29,7 +29,6 @@ binary as its entrypoint.
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
-| `MICROMEGAS_REQUIRE_WRITE_AUDIENCE` | No | Reject ingestion from a credential carrying no write audience (`{prefix}_REQUIRE_WRITE_AUDIENCE`, falling back to this unprefixed form). Off by default — see [What gets stamped](#what-gets-stamped) below and [Authentication](authentication.md) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags
@@ -89,12 +88,6 @@ property a client sends is dropped at ingestion and logged (`warn!`), naming the
 particular, a native client that used to self-stamp `micromegas.audience` directly no longer has
 any effect — its data becomes unstamped instead, unless its credential is switched to a DB
 ingestion key bound to the audience it wants to keep.
-
-`MICROMEGAS_REQUIRE_WRITE_AUDIENCE` (off by default) turns "unstamped" into a hard rejection:
-with it set, a credential carrying no write audience gets a 403 (native/OTLP/webhook) or a
-Firehose retry-then-spill (Firehose does not distinguish 4xx from 5xx). Leave it off for a mixed
-fleet still migrating onto DB-backed keys; set it once every producer authenticates with an
-audience-bound credential.
 
 ## Health and readiness
 

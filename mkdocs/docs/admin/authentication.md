@@ -211,8 +211,7 @@ ingestion credential**, never trusted from the client payload. Ingestion strips 
 client-supplied `micromegas.*` property and, when the credential carries a bound audience (a
 DB-backed `ingestion_api_keys` row), stamps `micromegas.audience` itself before the process's
 first block is ever materialized. See [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)
-for the full mechanism, credential-by-credential, and `{prefix}_REQUIRE_WRITE_AUDIENCE` for the
-knob that turns "unstamped" into a hard rejection.
+for the full mechanism, credential-by-credential.
 
 Two consequences worth knowing before you flip this stage on:
 
@@ -263,9 +262,13 @@ Two consequences worth knowing before you flip this stage on:
     `register_otel_process` call for that same `process_id` then hits the same `NULL`→no-op
     branch and returns `Ok` -- but the row stays unstamped forever, permanently suppressing the
     victim's stamp. Under the commonly recommended migration setting
-    `MICROMEGAS_UNSTAMPED_AUDIENCE=public`, this makes the victim's data world-readable.
-    `{prefix}_REQUIRE_WRITE_AUDIENCE=true` closes this gap by rejecting the audience-less write
-    that would create the squatted row in the first place.
+    `MICROMEGAS_UNSTAMPED_AUDIENCE=public`, this makes the victim's data world-readable. There is
+    no in-product enforcement knob left for this specific scenario -- the mitigation is
+    operational, not a knob: provision only audience-bound DB-backed ingestion credentials, and
+    don't run ingestion with `MICROMEGAS_API_KEYS`, ingestion OIDC, or `--disable-auth` alongside
+    them. A deployment that does this has no audience-less writer left to squat with in the
+    first place. Tracked as a follow-up stage of the AbAC epic (#1334) / to #1373 (Stage 5b),
+    with no dedicated issue number of its own.
 
     **The two scenarios recover differently.** In the *first* scenario above (a stamped
     squatter), it is the victim's genuine, later registration that hits the conflict guard and is
@@ -282,8 +285,8 @@ Two consequences worth knowing before you flip this stage on:
     `NULL`→no-op branch and returns `Ok` -- the row is simply never stamped and stays silently
     unstamped forever, which is exactly what makes it a confidentiality gap rather than an
     outage. `DELETE`-ing the squatted row doesn't help here either, since nothing rejected the
-    write in the first place; the fix is preventing the unstamped pre-registration itself via
-    `{prefix}_REQUIRE_WRITE_AUDIENCE=true`.
+    write in the first place; preventing the unstamped pre-registration itself requires the
+    operational mitigation above -- there is no in-product knob that closes it.
 
 ## Audiences and Grants
 

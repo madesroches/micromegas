@@ -81,10 +81,11 @@
 //! re-registration doesn't lose its process), which lets an audience-less credential
 //! pre-register a victim's future `process_id` unstamped -- the victim's later, genuine
 //! registration then hits that same `NULL`→no-op branch and never gets stamped, permanently
-//! suppressing its audience (a confidentiality gap, not an integrity one, and closed only by
-//! `{prefix}_REQUIRE_WRITE_AUDIENCE=true` rejecting the audience-less write up front -- see the
-//! "Residual gap" admonition in `mkdocs/docs/admin/authentication.md` and this stage's
-//! `CHANGELOG.md` entry).
+//! suppressing its audience (a confidentiality gap, not an integrity one). There is no
+//! in-product enforcement knob left for this gap; the mitigation is operational -- provision
+//! only audience-bound DB-backed ingestion credentials, and don't run ingestion with an
+//! env-keyring key, OIDC, or `--disable-auth` alongside them -- see the "Residual gap"
+//! admonition in `mkdocs/docs/admin/authentication.md` and this stage's `CHANGELOG.md` entry).
 
 use super::{
     audience_guard::AUDIENCE_PROPERTY, materialized_view::MaterializedView, read_scope::ReadScope,

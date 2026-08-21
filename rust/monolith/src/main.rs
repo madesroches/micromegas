@@ -35,7 +35,6 @@ use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
 use micromegas::servers::shutdown::{ShutdownFanout, wait_for_sigterm};
-use micromegas::servers::write_audience::StampingConfig;
 use micromegas::tracing::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
@@ -223,12 +222,6 @@ async fn main() -> Result<()> {
         None
     };
 
-    // AbAC Stage 5 (#1373): resolved under the ingestion role's own prefix, matching how
-    // `ingestion_auth` above is already scoped -- an operator sets
-    // `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` here, not the unprefixed form (unless
-    // unset, per the usual fallback).
-    let ingestion_stamping = StampingConfig::from_env("MICROMEGAS_INGESTION")?;
-
     let analytics_auth = if roles.flightsql && !args.disable_auth {
         let pool = lake_pool
             .clone()
@@ -317,10 +310,9 @@ async fn main() -> Result<()> {
         let listen_addr = args.listen_endpoint_http;
         let grace_c = grace;
         let auth = ingestion_auth;
-        let stamping = ingestion_stamping;
-        join_set.spawn(async move {
-            serve_ingestion(listen_addr, lake, auth, stamping, shutdown, grace_c).await
-        });
+        join_set.spawn(
+            async move { serve_ingestion(listen_addr, lake, auth, shutdown, grace_c).await },
+        );
     }
 
     // ── FlightSQL ──────────────────────────────────────────────────────────

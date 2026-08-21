@@ -19,12 +19,15 @@ pub struct WriteAudience(Option<Arc<str>>);
 impl WriteAudience {
     /// Builds a `WriteAudience` from an optional audience label.
     ///
-    /// Rejects a malformed label rather than stamping it: `ingestion_api_keys.audience` is
-    /// already `CHECK`-constrained to `[A-Za-z0-9_-]{1,255}`, so this is defence in depth
-    /// against a future producer of `bound_audience` that doesn't go through that column. The
-    /// charset check duplicates `micromegas_auth::policy::is_valid_audience` (`policy.rs`)
-    /// rather than depending on `micromegas-auth` from `micromegas-ingestion` -- the same
-    /// crate-boundary trade-off `read_scope.rs`'s `is_well_formed_audience` already makes for
+    /// Rejects a malformed label: `ingestion_api_keys.audience` is already `CHECK`-constrained
+    /// to `[A-Za-z0-9_-]{1,255}`, so this is defence in depth against a future producer of
+    /// `bound_audience` that doesn't go through that column. The HTTP-edge caller
+    /// (`micromegas::servers::write_audience::resolve_write_audience`) no longer treats this
+    /// `Err` as a rejection -- it warns and degrades to [`WriteAudience::none`] instead, since
+    /// that caller has no `Result` to propagate the failure through. The charset check
+    /// duplicates `micromegas_auth::policy::is_valid_audience` (`policy.rs`) rather than
+    /// depending on `micromegas-auth` from `micromegas-ingestion` -- the same crate-boundary
+    /// trade-off `read_scope.rs`'s `is_well_formed_audience` already makes for
     /// `micromegas-analytics`. Keep the three copies in step if the charset ever changes.
     pub fn new(audience: Option<&str>) -> anyhow::Result<Self> {
         match audience {

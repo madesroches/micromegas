@@ -26,7 +26,6 @@ use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::ingestion::serve_ingestion;
-use micromegas::servers::write_audience::StampingConfig;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
 
@@ -72,13 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let stamping = StampingConfig::from_env("")?;
     let grace = args.common.grace();
     serve_ingestion(
         args.listen_endpoint_http,
         data_lake,
         auth_provider,
-        stamping,
         micromegas::servers::shutdown::wait_for_sigterm(),
         grace,
     )

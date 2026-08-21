@@ -710,8 +710,7 @@ fn default_key_audience_from_env_prefixed_var_wins_over_unprefixed_fallback() {
 
 // ---------------------------------------------------------------------------
 // resolve_prefixed_var (`rust/auth/src/env.rs`) -- shared by every `{prefix}_*`-with-fallback
-// knob in this crate, including the new `{prefix}_REQUIRE_WRITE_AUDIENCE` (AbAC Stage 5, #1373).
-// Env-mutating, so `#[serial]` like its neighbours above.
+// knob in this crate. Env-mutating, so `#[serial]` like its neighbours above.
 // ---------------------------------------------------------------------------
 
 const RPV_SUFFIX: &str = "1373_POLICY_TESTS_KNOB";

@@ -1322,7 +1322,15 @@ corrected to what actually shipped rather than left as the pre-implementation pl
     `req.extensions_mut().insert(ctx)` on that middleware's success arm, not missing auth
     entirely). So this stage's actual work was resolution + a fail-closed knob
     (`{prefix}_REQUIRE_WRITE_AUDIENCE`, off by default), not adding auth wiring that already
-    existed.
+    existed. **Status update**: that knob (`StampingConfig`, `WriteAudienceError`, and the
+    403-on-missing-audience branch of `resolve_write_audience`) was removed before release —
+    it was never enabled in any deployment, and even enabled, it only gated the credential
+    categories that carry no bound audience in the first place (env-keyring keys, OIDC,
+    `--disable-auth`); every DB-backed `ingestion_api_keys` row already carries a bound audience
+    (migration v6), so the knob narrowed a small, non-default category rather than exercising
+    real enforcement. `resolve_write_audience` is infallible now: a bound audience always
+    stamps, an audience-less credential stays unstamped, matching the `require_write_audience:
+    false` behavior this section describes. See `tasks/remove_stamping_config_plan.md`.
 11a. **Landed alongside stamping, not deferred**: OTLP-derived `process_id`/`block_id` are now
     audience-scoped (`IdentityContext { audience, extra_hash_input }` folded into both formulas).
     Stamping without this would let two audiences sending identical resource attributes collapse

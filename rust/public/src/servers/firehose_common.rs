@@ -68,7 +68,7 @@ pub(crate) fn request_id_from(headers: &HeaderMap) -> String {
 /// of the ingestion service uses (reuses the constant-time keyring check verbatim). On
 /// failure, return the Firehose error shape (non-200 JSON) so Firehose retries/spills
 /// rather than dropping data.
-pub(crate) async fn firehose_auth_middleware(
+pub async fn firehose_auth_middleware(
     provider: Arc<dyn AuthProvider>,
     mut req: Request,
     next: Next,
