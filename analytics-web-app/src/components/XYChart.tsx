@@ -6,7 +6,7 @@ import {
   getAdaptiveTimeUnit,
   formatTimeValue,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev, isKnownUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev, isCompactAxisUnit } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
 import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
@@ -912,9 +912,10 @@ export function XYChart({
       const displayP99 = stats.p99 * conversionFactor
       const displayMax = stats.max * conversionFactor
 
-      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
-      const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))
-      const isKnownAxisUnit = isKnownUnit(normalizeUnit(primaryUnit))
+      const canonicalUnit = normalizeUnit(primaryUnit)
+      const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(canonicalUnit)
+      const isCurrencyScale = isCurrencyUnit(canonicalUnit)
+      const isKnownAxisUnit = isCompactAxisUnit(canonicalUnit)
 
       // Per-row color support for single-series
       const hasPerRowColors = singleData.some(p => p.color != null)

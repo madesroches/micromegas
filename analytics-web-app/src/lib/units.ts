@@ -438,31 +438,33 @@ export function unitDisplayAbbrev(canonicalUnit: string): string {
   return CANONICAL_DISPLAY_ABBREV[canonicalUnit] ?? canonicalUnit
 }
 
+/** Leading symbol that `unitSuffix` attaches directly to the value with no space. */
+const SYMBOL_PREFIX_RE = /^[/°%]/
+
 /**
  * Longest symbol-prefixed unit this codebase actually cites as
- * short-and-safe: `%CPU` (4 chars). Bounds the `isKnownUnit` carve-out below
- * so a long opaque string that merely starts with `/`, `°`, or `%` (e.g. a
- * hypothetical `%utilization_ratio`) isn't misclassified as safe to repeat.
+ * short-and-safe: `%CPU` (4 chars). Bounds the `isCompactAxisUnit` carve-out
+ * below so a long opaque string that merely starts with `/`, `°`, or `%`
+ * (e.g. a hypothetical `%utilization_ratio`) isn't misclassified as safe to
+ * repeat.
  */
 const MAX_SYMBOL_PREFIX_UNIT_LENGTH = 4
 
 /**
  * True when `canonicalUnit` is safe to repeat on every y-axis tick without
- * risking overflow: either it has a known short abbreviation (time/size/bit/
- * percent/degrees/celsius/centimeters/dimensionless, i.e. `unitDisplayAbbrev`
- * would not just echo the input back unchanged), or it's already short *and*
- * symbol-prefixed — leading `/`, `°`, or `%`, and no longer than
- * `MAX_SYMBOL_PREFIX_UNIT_LENGTH` — of the kind `unitSuffix` renders
- * compactly (e.g. the bare rate unit `/s`, or an out-of-vocabulary `°F`/
- * `%CPU`). The prefix test mirrors `unitSuffix`'s own regex, but adds a
- * length bound: `unitSuffix`'s test only decides spacing and says nothing
- * about length, so used alone it would also match a long opaque unit that
- * happens to start with one of these symbols (e.g. `%utilization_ratio`).
+ * risking overflow: either it's a table member (has a known short
+ * abbreviation, or is the dimensionless unit), or it's already short *and*
+ * symbol-prefixed — leading `/`, `°`, or `%`, no longer than
+ * `MAX_SYMBOL_PREFIX_UNIT_LENGTH`. The length bound matters because the
+ * symbol-prefix test alone only decides spacing (see `unitSuffix`) and says
+ * nothing about length, so used alone it would also match a long opaque unit
+ * that happens to start with one of these symbols (e.g.
+ * `%utilization_ratio`).
  */
-export function isKnownUnit(canonicalUnit: string): boolean {
+export function isCompactAxisUnit(canonicalUnit: string): boolean {
   if (canonicalUnit in CANONICAL_DISPLAY_ABBREV) return true
   return (
-    /^[/°%]/.test(canonicalUnit) && canonicalUnit.length <= MAX_SYMBOL_PREFIX_UNIT_LENGTH
+    SYMBOL_PREFIX_RE.test(canonicalUnit) && canonicalUnit.length <= MAX_SYMBOL_PREFIX_UNIT_LENGTH
   )
 }
 
@@ -477,5 +479,5 @@ export function isKnownUnit(canonicalUnit: string): boolean {
  */
 export function unitSuffix(displayUnit: string): string {
   if (!displayUnit) return ''
-  return /^[/°%]/.test(displayUnit) ? displayUnit : ' ' + displayUnit
+  return SYMBOL_PREFIX_RE.test(displayUnit) ? displayUnit : ' ' + displayUnit
 }

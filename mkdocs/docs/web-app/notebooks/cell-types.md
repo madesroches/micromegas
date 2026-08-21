@@ -27,7 +27,7 @@ Multi-query time-series charts supporting line and bar chart types.
 |-------|------|-------------|
 | `sql` | string | SQL query returning X + Y columns (plus optional `color`) |
 | `name` | string | Query name (used for WASM table registration) |
-| `unit` | string | Y-axis unit label |
+| `unit` | string | Value unit (shown on the y axis when it has a short abbreviation; always shown in the header, stats, and tooltip) |
 | `label` | string | Series label override |
 | `color` | string | Series color `#rrggbb` (default: rotating palette) |
 | `dataSource` | string | Per-query data source |

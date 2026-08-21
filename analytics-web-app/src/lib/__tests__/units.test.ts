@@ -13,7 +13,7 @@ import {
   unitScaleKey,
   unitDisplayAbbrev,
   unitSuffix,
-  isKnownUnit,
+  isCompactAxisUnit,
 } from '../units'
 
 describe('normalizeUnit', () => {
@@ -666,30 +666,30 @@ describe('unitSuffix', () => {
   })
 })
 
-describe('isKnownUnit', () => {
+describe('isCompactAxisUnit', () => {
   it('recognizes canonical units with a known short abbreviation', () => {
-    expect(isKnownUnit('milliseconds')).toBe(true)
-    expect(isKnownUnit('bytes')).toBe(true)
-    expect(isKnownUnit('percent')).toBe(true)
-    expect(isKnownUnit('degrees')).toBe(true)
-    expect(isKnownUnit('celsius')).toBe(true)
-    expect(isKnownUnit('centimeters')).toBe(true)
-    expect(isKnownUnit('')).toBe(true) // dimensionless
+    expect(isCompactAxisUnit('milliseconds')).toBe(true)
+    expect(isCompactAxisUnit('bytes')).toBe(true)
+    expect(isCompactAxisUnit('percent')).toBe(true)
+    expect(isCompactAxisUnit('degrees')).toBe(true)
+    expect(isCompactAxisUnit('celsius')).toBe(true)
+    expect(isCompactAxisUnit('centimeters')).toBe(true)
+    expect(isCompactAxisUnit('')).toBe(true) // dimensionless
   })
 
   it('recognizes short, symbol-prefixed units even when out of vocabulary', () => {
-    expect(isKnownUnit('/s')).toBe(true)
-    expect(isKnownUnit('°F')).toBe(true)
-    expect(isKnownUnit('%CPU')).toBe(true)
+    expect(isCompactAxisUnit('/s')).toBe(true)
+    expect(isCompactAxisUnit('°F')).toBe(true)
+    expect(isCompactAxisUnit('%CPU')).toBe(true)
   })
 
   it('rejects arbitrary unrecognized units', () => {
-    expect(isKnownUnit('ops_per_sec')).toBe(false)
-    expect(isKnownUnit('requests')).toBe(false)
+    expect(isCompactAxisUnit('ops_per_sec')).toBe(false)
+    expect(isCompactAxisUnit('requests')).toBe(false)
   })
 
   it('rejects a long unit that merely starts with a symbol-prefix character', () => {
-    expect(isKnownUnit('%utilization_ratio')).toBe(false)
-    expect(isKnownUnit('/requests_dropped')).toBe(false)
+    expect(isCompactAxisUnit('%utilization_ratio')).toBe(false)
+    expect(isCompactAxisUnit('/requests_dropped')).toBe(false)
   })
 })
