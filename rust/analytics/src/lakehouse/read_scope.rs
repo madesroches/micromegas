@@ -109,22 +109,44 @@ impl CallerContext {
     }
 }
 
+/// The audience [`IsolationConfig::from_env`] falls back to for `unstamped_audience` when
+/// `{prefix}_UNSTAMPED_AUDIENCE`/`MICROMEGAS_UNSTAMPED_AUDIENCE` is unset -- an operator who wants
+/// the old fail-closed behavior (unstamped processes invisible to every `ReadScope::Audiences`
+/// caller) sets the var to an empty string explicitly rather than leaving it unset.
+pub const DEFAULT_UNSTAMPED_AUDIENCE: &str = "public";
+
 /// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
 /// (#1370, AbAC Stage 2, Prong A). Per-service, resolved once at server startup from environment
 /// variables -- see [`IsolationConfig::from_env`].
-#[derive(Debug, Clone, Default)]
+///
+/// `Default` matches [`Self::from_env`]'s own default: `unstamped_audience:
+/// Some(`[`DEFAULT_UNSTAMPED_AUDIENCE`]`)`. Internal/maintenance callers plan under
+/// `ReadScope::All`, which `OwnershipRewrite`/`AudienceGuard` treat as a true no-op regardless of
+/// this value, so `Default` deliberately doesn't carve out a different, `None`-based value just
+/// for them -- one struct, one meaning of "unconfigured."
+#[derive(Debug, Clone)]
 pub struct IsolationConfig {
     /// The audience to fall back to (via `coalesce`) for a process whose resolved audience is
-    /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"public"`. `None`
-    /// (the default) means unstamped processes stay invisible to every `ReadScope::Audiences`
-    /// caller. Parsed from `{prefix}_UNSTAMPED_AUDIENCE`, falling back to
-    /// `MICROMEGAS_UNSTAMPED_AUDIENCE`.
+    /// `NULL` (never stamped with `micromegas.audience`) -- e.g. `"public"`. `None` means
+    /// unstamped processes stay invisible to every `ReadScope::Audiences` caller; both `Default`
+    /// and [`IsolationConfig::from_env`] resolve to `Some(`[`DEFAULT_UNSTAMPED_AUDIENCE`]`)`
+    /// instead -- an operator (or a direct struct literal) opts into `None` explicitly. Parsed
+    /// from `{prefix}_UNSTAMPED_AUDIENCE`, falling back to `MICROMEGAS_UNSTAMPED_AUDIENCE`.
     pub unstamped_audience: Option<String>,
     /// View-set names `OwnershipRewrite` skips entirely -- no predicate injected at all,
     /// regardless of scope. Off (empty) by default, matching the AbAC plan's "off by default,
     /// fail-closed" framing for this operator-responsibility allowlist. Parsed from
     /// `{prefix}_PUBLIC_VIEW_SETS`, falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub public_view_sets: Vec<String>,
+}
+
+impl Default for IsolationConfig {
+    fn default() -> Self {
+        Self {
+            unstamped_audience: Some(DEFAULT_UNSTAMPED_AUDIENCE.to_string()),
+            public_view_sets: Vec::new(),
+        }
+    }
 }
 
 /// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the same
@@ -190,9 +212,12 @@ fn resolved_var(prefix: &str, suffix: &str) -> String {
 }
 
 impl IsolationConfig {
-    /// Resolves both knobs from the environment. Unset ⇒ `IsolationConfig::default()`
-    /// (unstamped processes stay invisible, no public view sets). A malformed
-    /// `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
+    /// Resolves both knobs from the environment. `{prefix}_PUBLIC_VIEW_SETS` unset ⇒ no public
+    /// view sets. `{prefix}_UNSTAMPED_AUDIENCE` unset ⇒ [`DEFAULT_UNSTAMPED_AUDIENCE`] --
+    /// unstamped processes are visible to that audience unless an operator opts back into the
+    /// fail-closed behavior by setting the var to an empty string explicitly (the
+    /// all-whitespace/empty branch below, kept distinct from "unset" for exactly this reason). A
+    /// malformed `{prefix}_UNSTAMPED_AUDIENCE` (outside `[A-Za-z0-9_-]{1,255}`) or a malformed
     /// `{prefix}_PUBLIC_VIEW_SETS` entry is `Err`, not silently ignored -- a startup `?` turns a
     /// typo into a fail-fast instead of a silently-inert knob.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
@@ -209,7 +234,7 @@ impl IsolationConfig {
                 }
                 Some(raw)
             }
-            Err(_) => None,
+            Err(_) => Some(DEFAULT_UNSTAMPED_AUDIENCE.to_string()),
         };
         let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");
         let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;

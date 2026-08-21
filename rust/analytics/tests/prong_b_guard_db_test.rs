@@ -615,7 +615,8 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     );
     assert!(
         !team_a_instance_ids.iter().any(|id| id == "global"),
-        "'global' rows must be hidden with MICROMEGAS_UNSTAMPED_AUDIENCE unset"
+        "'global' rows must stay hidden from a caller whose scope doesn't include the default \
+         MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')"
     );
 
     let team_a_with_public_batches = query(

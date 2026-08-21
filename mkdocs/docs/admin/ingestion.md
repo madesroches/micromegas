@@ -78,9 +78,10 @@ security boundary instead of a client-asserted label.
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process a key registers is stamped with that audience.
 - **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no audience at
-  all. Data ingested under them stays **unstamped** — invisible to every audience-scoped reader
-  unless the analytics side's `{prefix}_UNSTAMPED_AUDIENCE` widens it to a fallback label (see
-  [Authentication](authentication.md)).
+  all. Data ingested under them stays **unstamped** — readable under the analytics side's
+  `{prefix}_UNSTAMPED_AUDIENCE` fallback label, which defaults to `public` unless an operator
+  opts back into fail-closed (invisible to every audience-scoped reader) by setting it to an
+  empty string (see [Authentication](authentication.md)).
 - **No auth provider configured** (`--disable-auth`): also unstamped, same as above.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`

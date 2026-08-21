@@ -249,9 +249,9 @@ async fn main() -> Result<()> {
     // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12; grant map rewrite
     // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
     // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
-    // `OwnershipRewrite` (#1370, AbAC Stage 2) -- see the CHANGELOG upgrade note for the
-    // `MICROMEGAS_UNSTAMPED_AUDIENCE=public` setting required to keep legacy, never-stamped
-    // data visible once this ships.
+    // `OwnershipRewrite` (#1370, AbAC Stage 2) -- `MICROMEGAS_UNSTAMPED_AUDIENCE` defaults to
+    // `public` (`IsolationConfig::from_env`), so legacy, never-stamped data stays visible unless
+    // an operator opts back into fail-closed by setting it to an empty string.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
         // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`
