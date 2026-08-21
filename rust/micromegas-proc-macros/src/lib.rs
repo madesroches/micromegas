@@ -22,6 +22,13 @@ use syn::{Expr, ExprLit, ItemFn, Lit, Meta};
 /// - **OIDC Client Credentials:** Set `MICROMEGAS_OIDC_TOKEN_ENDPOINT`, `MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET`
 /// - **No auth:** If no env vars are set, telemetry is sent unauthenticated (requires `--disable-auth` on ingestion server)
 ///
+/// # Failure to initialize
+///
+/// The generated `main` builds the telemetry guard before the function body runs and panics if
+/// that fails -- e.g. a malformed `MICROMEGAS_PROCESS_PROPERTIES` -- printing anyhow's full
+/// context chain and exiting non-zero rather than continuing with telemetry silently off. A
+/// missing telemetry URL or unset auth env is not a failure: the sink is simply omitted.
+///
 /// # Parameters
 ///
 /// - `ctrlc_handling`: bool (default: `true`) — enable Ctrl-C graceful shutdown
@@ -320,10 +327,12 @@ fn expand_micromegas_main(
     }
 
     // `expect`, not a bare binding: `build()` returns a `Result`, and binding it
-    // unwrapped would silently swallow a failed telemetry init -- a malformed
-    // `MICROMEGAS_PROCESS_PROPERTIES`, a bad sink configuration -- leaving the
-    // process running with no telemetry, no local sink, and nothing on stderr to
-    // say why. anyhow's `Debug` prints the whole context chain in the panic.
+    // unwrapped would swallow any guard-build failure -- today a malformed
+    // `MICROMEGAS_PROCESS_PROPERTIES`, tomorrow whatever else `build()` learns to
+    // reject -- leaving the process running with no telemetry, no local sink, and
+    // nothing on stderr to say why. (A missing telemetry URL or unset auth env is
+    // not such a failure: the builder falls back to no HTTP sink and a no-op
+    // decorator.) anyhow's `Debug` prints the whole context chain in the panic.
     let telemetry_guard_builder = quote! {
         micromegas::telemetry_sink::TelemetryGuardBuilder::default()
             #(#builder_calls)*
@@ -377,9 +386,10 @@ mod tests {
         assert!(out.contains("with_local_sink_max_level"));
     }
 
-    /// `build()` returns a `Result`; binding it without unwrapping would silently
-    /// swallow a failed telemetry init (a malformed `MICROMEGAS_PROCESS_PROPERTIES`,
-    /// a bad sink config) and run the process on with no telemetry and no message.
+    /// `build()` returns a `Result`; binding it without unwrapping would swallow a
+    /// failed telemetry init (a malformed `MICROMEGAS_PROCESS_PROPERTIES`, or any
+    /// future `build()` rejection) and run the process on with no telemetry and no
+    /// message.
     #[test]
     fn guard_build_failure_is_not_swallowed() {
         let out = expand(quote! {});

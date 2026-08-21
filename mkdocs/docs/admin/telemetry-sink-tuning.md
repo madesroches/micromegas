@@ -70,8 +70,9 @@ Notes:
   startup rather than being silently ignored.
 - Keys the process sets itself win over this variable: `version` and the
   host-derived `exe`, `username`, `realname`, `computer`, `distro`,
-  `cpu_brand`, `cpu_count`, and `total_memory` cannot be overridden here.
-  Within the list itself, the first occurrence of a key wins.
+  `cpu_brand`, `physical_core_count`, `logical_cpu_count`, and `total_memory`
+  cannot be overridden here. Within the list itself, the first occurrence of a
+  key wins.
 
 To interpolate values Kubernetes only knows at pod creation, bind them to
 their own variables first and reference those:

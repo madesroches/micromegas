@@ -479,8 +479,11 @@ mod native {
         pub fn build(mut self) -> anyhow::Result<TelemetryGuard> {
             // Merged before the defaults below, which use `or_insert_with`: that
             // orders precedence as explicit builder calls > env > derived defaults.
-            if let Ok(raw) = std::env::var(PROCESS_PROPERTIES_ENV_VAR) {
-                merge_process_properties(&mut self.process_properties, &raw)?;
+            // `var_os` rather than `var`: a set-but-non-UTF-8 value would otherwise be
+            // indistinguishable from an unset one and silently ignored, which is the
+            // one shape of bad input the parsing below is here to make loud.
+            if let Some(raw) = std::env::var_os(PROCESS_PROPERTIES_ENV_VAR) {
+                merge_process_properties(&mut self.process_properties, &raw.to_string_lossy())?;
             }
             if self.default_system_properties_enabled {
                 self.populate_default_system_properties();
