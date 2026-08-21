@@ -237,6 +237,27 @@ describe('yAxisSize', () => {
     const hugeLabel = 'a'.repeat(50)
     expect(yAxisSize(3000, [hugeLabel])).toBe(Y_AXIS_MAX_SIZE_PX)
   })
+
+  it('defaults to a single axis (visibleAxisCount omitted) matching visibleAxisCount = 1', () => {
+    const hugeLabel = 'a'.repeat(50)
+    const chartWidth = 300
+    expect(yAxisSize(chartWidth, [hugeLabel])).toBe(yAxisSize(chartWidth, [hugeLabel], 1))
+  })
+
+  it('divides the fraction cap across multiple visible axes so their combined budget stays fixed', () => {
+    const hugeLabel = 'a'.repeat(50)
+    const chartWidth = 580
+    const capOneAxis = Math.round(chartWidth * Y_AXIS_SIZE_FRACTION)
+    const capTwoAxes = Math.round((chartWidth * Y_AXIS_SIZE_FRACTION) / 2)
+    expect(yAxisSize(chartWidth, [hugeLabel], 1)).toBe(capOneAxis)
+    expect(yAxisSize(chartWidth, [hugeLabel], 2)).toBe(capTwoAxes)
+    expect(capTwoAxes * 2).toBeLessThanOrEqual(capOneAxis + 1) // combined budget preserved (rounding-safe)
+  })
+
+  it('the per-axis fraction cap can still never undercut the floor, even with multiple axes', () => {
+    const hugeLabel = 'a'.repeat(50)
+    expect(yAxisSize(300, [hugeLabel], 4)).toBe(Y_AXIS_BASE_SIZE_PX)
+  })
 })
 
 describe('buildYAxisConfig', () => {
@@ -297,5 +318,22 @@ describe('buildYAxisConfig', () => {
     const stubSelf = { width: 660 } as uPlot
     const values = ['100 ops_per_sec']
     expect(size(stubSelf, values)).toBe(yAxisSize(660, values))
+  })
+
+  it('size defaults visibleAxisCount to 1 when omitted', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'ms', currencyCode: null })
+    const size = axis.size as (self: uPlot, values: string[] | null) => number
+    const stubSelf = { width: 400 } as uPlot
+    const values = ['a'.repeat(50)]
+    expect(size(stubSelf, values)).toBe(yAxisSize(400, values, 1))
+  })
+
+  it('size passes visibleAxisCount through to yAxisSize so multi-axis charts share the fraction budget', () => {
+    const axis = buildYAxisConfig({ conversionFactor: 1, displayUnit: 'ms', currencyCode: null, visibleAxisCount: 2 })
+    const size = axis.size as (self: uPlot, values: string[] | null) => number
+    const stubSelf = { width: 400 } as uPlot
+    const values = ['a'.repeat(50)]
+    expect(size(stubSelf, values)).toBe(yAxisSize(400, values, 2))
+    expect(size(stubSelf, values)).toBeLessThan(yAxisSize(400, values, 1))
   })
 })

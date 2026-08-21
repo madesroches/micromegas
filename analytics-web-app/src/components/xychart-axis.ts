@@ -178,13 +178,19 @@ export function formatYAxisTick(
  * Tick-band width in CSS px for a y axis, sized from its formatted labels.
  * Grow-only: never returns less than `Y_AXIS_BASE_SIZE_PX`, so a chart whose
  * labels already fit renders exactly as it does today.
+ *
+ * `visibleAxisCount` is the number of visible vertical y-axes uPlot will draw
+ * on this chart (default 1, the single-line case). `Y_AXIS_SIZE_FRACTION` is
+ * a *combined* budget across all of them, so each axis's share of it is
+ * divided by that count — otherwise every axis independently claims up to
+ * the full fraction and they add together in uPlot's plot-width math.
  */
-export function yAxisSize(chartWidth: number, values: string[] | null): number {
+export function yAxisSize(chartWidth: number, values: string[] | null, visibleAxisCount = 1): number {
   // uPlot's init call passes values === null (uPlot.esm.js:3782).
   if (values == null) return Y_AXIS_BASE_SIZE_PX
   const maxWidth = Math.max(0, ...values.map((v) => estimateLabelWidth(String(v ?? ''))))
   const needed = Math.ceil(maxWidth) + AXIS_CHROME_PX + TICK_LABEL_PADDING_PX
-  const cap = Math.min(Y_AXIS_MAX_SIZE_PX, Math.round(chartWidth * Y_AXIS_SIZE_FRACTION))
+  const cap = Math.min(Y_AXIS_MAX_SIZE_PX, Math.round((chartWidth * Y_AXIS_SIZE_FRACTION) / visibleAxisCount))
   return Math.max(Y_AXIS_BASE_SIZE_PX, Math.min(cap, needed))
 }
 
@@ -203,6 +209,9 @@ export interface YAxisOptions {
   displayUnit: string
   /** Raw currency unit for a currency scale, else null. */
   currencyCode: string | null
+  /** Number of visible vertical y-axes on this chart, for budgeting `yAxisSize`'s
+   * fraction cap across all of them. Default 1 (the single-line case). */
+  visibleAxisCount?: number
 }
 
 /**
@@ -212,7 +221,7 @@ export interface YAxisOptions {
  * one place.
  */
 export function buildYAxisConfig(opts: YAxisOptions): uPlot.Axis {
-  const { scale = 'y', side = 3, show = true, showGrid = true, conversionFactor, displayUnit, currencyCode } = opts
+  const { scale = 'y', side = 3, show = true, showGrid = true, conversionFactor, displayUnit, currencyCode, visibleAxisCount = 1 } = opts
   return {
     scale,
     side,
@@ -222,6 +231,6 @@ export function buildYAxisConfig(opts: YAxisOptions): uPlot.Axis {
     ticks: { stroke: '#2a2a35', width: 1 },
     font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
     values: (_u: uPlot, vals: number[]) => vals.map((v) => formatYAxisTick(v, conversionFactor, displayUnit, currencyCode)),
-    size: (self, values) => yAxisSize(self.width, values),
+    size: (self, values) => yAxisSize(self.width, values, visibleAxisCount),
   }
 }

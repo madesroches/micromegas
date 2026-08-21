@@ -721,7 +721,9 @@ export function XYChart({
         }
       }
 
-      // Build per-unit axes
+      // Build per-unit axes. `yAxisSize`'s fraction cap is a combined budget across every
+      // visible vertical y-axis, so tell it how many there are (hidden axes take 0 width).
+      const visibleAxisCount = Math.max(1, unitScaleInfo.filter((s) => s.hasVisible).length)
       for (const scaleInfo of unitScaleInfo) {
         const scaleName = scaleInfo.scaleName
         const scaleP99 = scaleInfo.p99
@@ -749,6 +751,7 @@ export function XYChart({
             conversionFactor: axisCf,
             displayUnit: yAxisUnit,
             currencyCode: isCurrencyScale ? scaleInfo.unitName : null,
+            visibleAxisCount,
           })
         )
       }
