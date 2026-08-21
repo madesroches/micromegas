@@ -161,13 +161,23 @@ away, not the warning itself.
    its only test in this file, `webhook_knob_on_no_extension_is_denied_with_plain_text_403`, is a
    gate test and gets deleted along with the rest of the truth table, and there is no other webhook
    HTTP test anywhere in the repo (`rust/otel-ingestion/tests/webhook_tests.rs` asserts
-   payload/identity shape, not the HTTP route). Write one new webhook HTTP case here — a bound- or
-   audience-less-credential request reaching 200 through `webhook_router()` — so webhook route
-   coverage doesn't drop to zero; if that's not written, say so plainly rather than describing
-   webhook coverage as surviving. Keep the surviving tests under `rust/public/tests/` — matching
+   payload/identity shape, not the HTTP route). Write one new webhook HTTP case here, but target the
+   boundary this DB-less harness can actually reach: any non-empty body reaching `webhook_handler`
+   resolves the audience and then always calls `handler::ingest_webhook` → `write_blocks`, which
+   hits the harness's lazily-connected `postgres://localhost/unused` pool and fails with a 503
+   (`OtelError::Database`) — 200 is unreachable here. Assert a bound- or audience-less-credential
+   request reaches that same post-resolution 503 boundary through `webhook_router()` (the same
+   differential-pass-through trick the existing native cases use with malformed CBOR: get past
+   audience resolution, fail only on the DB call), so webhook route coverage doesn't drop to zero;
+   if that's not written, say so plainly rather than describing webhook coverage as surviving. Keep the surviving tests under `rust/public/tests/` — matching
    every other test file in that directory and `rust/CLAUDE.md`'s rule that unit tests live under a
    crate's `tests/` folder, not alongside the lib implementation — with the new filename replacing
-   the "stamping" framing, since "gate" tests no longer exist to justify it.
+   the "stamping" framing, since "gate" tests no longer exist to justify it. Also rename the
+   matching `[[test]]` block in `rust/public/Cargo.toml` (its `name` and `path` from
+   `ingestion_stamping_tests`/`tests/ingestion_stamping_tests.rs` to
+   `write_audience_tests`/`tests/write_audience_tests.rs`, keeping
+   `required-features = ["server"]` unchanged) — cargo resolves that path explicitly, so renaming
+   the file alone breaks the build.
 5. **Update `firehose_tests.rs` / `firehose_cloudwatch_logs_tests.rs`**: `stamping_off()` helpers and
    their call sites go away along with the `stamping` parameter on `firehose_router`. The on-branch
    403 test (`firehose_tests.rs:199-243`) loses its reason for existing as a 403 test, but it is the
@@ -178,12 +188,18 @@ away, not the warning itself.
    header comment "every case must stop before touching it," so asserting a stamped `micromegas.audience`
    on a resulting process needs real DB writes that this harness cannot do. `firehose_auth_middleware`
    is also `pub(crate)` (`firehose_common.rs:71`), so a test under `tests/` can't call it directly
-   either. Resolve this with a small `pub` seam instead of a DB write: add a `pub(crate)`-to-`pub`
-   (or a dedicated `#[cfg(test)]`) hook in `firehose_common.rs` — e.g. expose the `AuthContext`
-   extension the middleware inserts, or add a thin `pub fn` wrapper the test can call directly — so
-   the DB-less harness can assert the propagated `AuthContext`'s `bound_audience` reaches the request
-   extensions without going through ingestion at all. Reshape the test to build the router, send the
-   bound-audience request, and assert on that extension instead of on a 403. If no such seam is taken,
+   either. Resolve this with a small `pub` seam instead of a DB write: change
+   `firehose_auth_middleware` from `pub(crate)` to `pub`. This is the only viable option of the
+   three considered — a `#[cfg(test)]` hook is invisible to integration tests under
+   `rust/public/tests/`, which link the lib compiled without `cfg(test)`, and a thin `pub fn`
+   wrapper the test calls directly can't work either, since `firehose_auth_middleware` takes an
+   `axum::middleware::Next`, and in axum 0.8 `Next` has a single private field and no public
+   constructor, so no external crate can build one to pass in. With `firehose_auth_middleware`
+   made `pub`, layer it via `middleware::from_fn` over a test-local probe route that reads the
+   `AuthContext` extension the middleware inserts, so the DB-less harness can assert the propagated
+   `bound_audience` reaches that extension without going through ingestion at all. Reshape the test
+   to build that router, send the bound-audience request, and assert on the probe route's extension
+   instead of on a 403. If no such seam is taken,
    state plainly instead that this coverage moves to the existing `#[ignore]`d live-stack test
    (`full_multi_record_ingest_succeeds_against_a_live_stack`) and that CI no longer guards #1373's
    context-propagation fix by default.
@@ -232,6 +248,7 @@ away, not the warning itself.
 - `rust/monolith/src/main.rs` — delete `ingestion_stamping` construction
 - `rust/telemetry-ingestion-srv/src/main.rs` — delete `stamping` construction
 - `rust/public/tests/ingestion_stamping_tests.rs` — rename to `write_audience_tests.rs`, delete gate tests, keep/trim stamping-pass-through tests
+- `rust/public/Cargo.toml` — rename the `[[test]]` block's `name`/`path` from `ingestion_stamping_tests` to `write_audience_tests` to match the renamed file, keeping `required-features = ["server"]`
 - `rust/public/tests/firehose_tests.rs` — reshape 403 test into an audience-propagation assertion, drop `stamping` param plumbing
 - `rust/public/tests/firehose_cloudwatch_logs_tests.rs` — drop `stamping` param plumbing
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` — fix stale doc comment
@@ -317,14 +334,18 @@ away, not the warning itself.
 
 ## Testing Strategy
 
-- `cargo test -p micromegas` (or workspace-wide) after trimming and renaming
-  `ingestion_stamping_tests.rs` to `write_audience_tests.rs` — confirm the surviving
-  stamping-pass-through cases (bound audience → stamped; audience-less → unstamped) still pass with
-  the new infallible signature.
-- `cargo test -p micromegas --test firehose_tests --test firehose_cloudwatch_logs_tests` after
-  removing `stamping_off()` and reshaping the former 403 test into an assertion on the propagated
-  `AuthContext` extension via the new `firehose_common.rs` test seam (§5) — confirm it and the
-  remaining ingest-and-stamp assertions pass.
+- `cargo test -p micromegas --features server` (or workspace-wide `cargo test` /
+  `python3 ../build/rust_ci.py`) after trimming and renaming `ingestion_stamping_tests.rs` to
+  `write_audience_tests.rs` — confirm the surviving stamping-pass-through cases (bound audience →
+  stamped; audience-less → unstamped) still pass with the new infallible signature. `--features
+  server` is required: every test target in `rust/public/Cargo.toml` is
+  `required-features = ["server"]` and the crate's `default = []`, so without it (or without
+  running the workspace-wide command, where another member pulls the feature in) the tests are
+  silently skipped rather than run.
+- `cargo test -p micromegas --features server --test firehose_tests --test
+  firehose_cloudwatch_logs_tests` after removing `stamping_off()` and reshaping the former 403 test
+  into an assertion on the propagated `AuthContext` extension via the new `firehose_common.rs` test
+  seam (§5) — confirm it and the remaining ingest-and-stamp assertions pass.
 - `cargo clippy --workspace -- -D warnings` and `cargo fmt` per `rust/CLAUDE.md`.
 - Manual smoke: start services (`local_test_env/ai_scripts/start_services.py`), post a native
   `insert_process` with no `Authorization` header (dev-mode / `--disable-auth`) and confirm it still
