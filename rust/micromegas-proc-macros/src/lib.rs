@@ -319,10 +319,16 @@ fn expand_micromegas_main(
         builder_calls.push(quote! { .with_interop_max_level_override(#level_filter) });
     }
 
+    // `expect`, not a bare binding: `build()` returns a `Result`, and binding it
+    // unwrapped would silently swallow a failed telemetry init -- a malformed
+    // `MICROMEGAS_PROCESS_PROPERTIES`, a bad sink configuration -- leaving the
+    // process running with no telemetry, no local sink, and nothing on stderr to
+    // say why. anyhow's `Debug` prints the whole context chain in the panic.
     let telemetry_guard_builder = quote! {
         micromegas::telemetry_sink::TelemetryGuardBuilder::default()
             #(#builder_calls)*
             .build()
+            .expect("failed to initialize micromegas telemetry")
     };
 
     Ok(quote! {
@@ -369,6 +375,18 @@ mod tests {
         assert!(out.contains("with_auth_from_env"));
         assert!(out.contains("with_ctrlc_handling"));
         assert!(out.contains("with_local_sink_max_level"));
+    }
+
+    /// `build()` returns a `Result`; binding it without unwrapping would silently
+    /// swallow a failed telemetry init (a malformed `MICROMEGAS_PROCESS_PROPERTIES`,
+    /// a bad sink config) and run the process on with no telemetry and no message.
+    #[test]
+    fn guard_build_failure_is_not_swallowed() {
+        let out = expand(quote! {});
+        assert!(
+            out.contains("failed to initialize micromegas telemetry"),
+            "the generated main must unwrap build()'s Result: {out}"
+        );
     }
 
     #[test]

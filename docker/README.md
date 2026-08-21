@@ -237,6 +237,7 @@ docker run -d --name analytics-web \
 | `MICROMEGAS_REDIS_EXPORTER_SAMPLE_INTERVAL_SECONDS` | No | Seconds between samples (default `1`) |
 | `MICROMEGAS_REDIS_EXPORTER_TARGET_NAME` | No | Instance name in metrics (default `host:port`) |
 | `MICROMEGAS_REDIS_EXPORTER_PROPERTIES` | No | Comma-separated `key=value` pairs added to every metric |
+| `MICROMEGAS_PROCESS_PROPERTIES` | No | Comma-separated `key=value` pairs tagging the exporter process; prefer it for tags that never change |
 | `MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR` | No | Enables `/health` + `/ready` probes on this address |
 
 *Required unless the ingestion server runs with `--disable-auth`

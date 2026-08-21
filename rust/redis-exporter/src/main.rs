@@ -12,6 +12,8 @@
 //!  - `MICROMEGAS_REDIS_EXPORTER_SAMPLE_INTERVAL_SECONDS` : default 1
 //!  - `MICROMEGAS_REDIS_EXPORTER_TARGET_NAME` : instance name (default host:port)
 //!  - `MICROMEGAS_REDIS_EXPORTER_PROPERTIES` : comma-separated key=value pairs added to every metric
+//!  - `MICROMEGAS_PROCESS_PROPERTIES` : comma-separated key=value pairs tagging the exporter
+//!    process itself (queryable as `process_properties`); prefer it for tags that never change
 //!  - `MICROMEGAS_REDIS_EXPORTER_HEALTH_LISTEN_ADDR` : optional /health + /ready listen address
 
 #[cfg(not(target_os = "windows"))]

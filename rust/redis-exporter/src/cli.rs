@@ -57,7 +57,9 @@ pub struct Cli {
     pub target_name: Option<String>,
 
     /// Extra key=value property attached to every metric (repeatable;
-    /// comma-separated pairs in the env var)
+    /// comma-separated pairs in the env var). For a tag that never changes,
+    /// prefer `MICROMEGAS_PROCESS_PROPERTIES`: it is stored once on the
+    /// exporter's `processes` row instead of on every measure.
     #[clap(
         long = "property",
         env = "MICROMEGAS_REDIS_EXPORTER_PROPERTIES",

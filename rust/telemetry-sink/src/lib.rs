@@ -51,6 +51,7 @@ mod native {
     use crate::log_interop::install_log_interop;
     use crate::request_decorator::RequestDecorator;
     use crate::tracing_interop::install_tracing_interop;
+    use micromegas_telemetry::property_names::RESERVED_PROPERTY_PREFIX;
     use micromegas_tracing::event::BoxedEventSink;
     use micromegas_tracing::info;
     use micromegas_tracing::{
@@ -70,6 +71,60 @@ mod native {
 
     pub mod reqwest {
         pub use reqwest::*;
+    }
+
+    /// Environment variable carrying deployment-supplied process properties as a
+    /// comma-separated `key=value` list, e.g. `cluster=prod,role=cache`. Read by
+    /// [`TelemetryGuardBuilder::build`], so every micromegas process honors it.
+    pub const PROCESS_PROPERTIES_ENV_VAR: &str = "MICROMEGAS_PROCESS_PROPERTIES";
+
+    /// Merges a [`PROCESS_PROPERTIES_ENV_VAR`]-formatted list into `properties`,
+    /// leaving keys already present untouched. Precedence is therefore
+    /// *explicit [`TelemetryGuardBuilder::with_process_property`] calls > environment >
+    /// `populate_default_system_properties` defaults*: an operator
+    /// can add deployment tags but cannot spoof the `version` that `micromegas_main`
+    /// stamps nor the identity properties derived from the host, both of which
+    /// dashboards filter on. Within one list the first occurrence of a key wins,
+    /// consistent with that rule.
+    ///
+    /// The whole list is parsed before anything is merged, so a malformed entry
+    /// fails the call with `properties` untouched rather than applying half a
+    /// config. Blank entries are dropped and each entry is trimmed: a k8s manifest
+    /// rendering an unset optional var produces `""`, hand-written lists routinely
+    /// carry a trailing comma, and a space after a comma would otherwise create a
+    /// key no query could match.
+    ///
+    /// Keys in the server-reserved [`RESERVED_PROPERTY_PREFIX`] namespace are
+    /// rejected here, turning the ingestion service's silent strip into a startup
+    /// failure the operator can see.
+    pub fn merge_process_properties(
+        properties: &mut HashMap<String, String>,
+        raw: &str,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let mut parsed = Vec::new();
+        for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let (key, value) = entry.split_once('=').with_context(|| {
+                format!("invalid {PROCESS_PROPERTIES_ENV_VAR} entry {entry:?}: expected key=value")
+            })?;
+            let (key, value) = (key.trim(), value.trim());
+            if key.is_empty() {
+                anyhow::bail!("invalid {PROCESS_PROPERTIES_ENV_VAR} entry {entry:?}: empty key");
+            }
+            if key.starts_with(RESERVED_PROPERTY_PREFIX) {
+                anyhow::bail!(
+                    "invalid {PROCESS_PROPERTIES_ENV_VAR} entry {entry:?}: the \
+                     {RESERVED_PROPERTY_PREFIX} namespace is server-written only and \
+                     would be stripped on ingestion"
+                );
+            }
+            parsed.push((key.to_string(), value.to_string()));
+        }
+        for (key, value) in parsed {
+            properties.entry(key).or_insert(value);
+        }
+        Ok(())
     }
 
     pub struct TelemetryGuardBuilder {
@@ -422,6 +477,11 @@ mod native {
         }
 
         pub fn build(mut self) -> anyhow::Result<TelemetryGuard> {
+            // Merged before the defaults below, which use `or_insert_with`: that
+            // orders precedence as explicit builder calls > env > derived defaults.
+            if let Ok(raw) = std::env::var(PROCESS_PROPERTIES_ENV_VAR) {
+                merge_process_properties(&mut self.process_properties, &raw)?;
+            }
             if self.default_system_properties_enabled {
                 self.populate_default_system_properties();
             }

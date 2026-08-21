@@ -138,4 +138,4 @@ depending on the store.
 Producers point at the ingestion endpoint with `MICROMEGAS_TELEMETRY_URL`. If the
 ingestion service falls behind or becomes briefly unreachable, the Rust telemetry
 sink buffers and retries; queue sizes, concurrency, and timeouts are tunable — see
-[Telemetry Sink Transport Tuning](telemetry-sink-tuning.md).
+[Telemetry Sink Configuration](telemetry-sink-tuning.md).

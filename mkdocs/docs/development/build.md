@@ -196,7 +196,7 @@ export MICROMEGAS_OBJECT_STORE_URI=file:///path/to/local/storage
 !!! note "Advanced: transport tuning"
     The Rust telemetry sink exposes environment variables for queue size limits,
     concurrency, and timeouts if the ingestion service falls behind or becomes
-    unreachable. See [Telemetry Sink Transport Tuning](../admin/telemetry-sink-tuning.md).
+    unreachable. See [Telemetry Sink Configuration](../admin/telemetry-sink-tuning.md).
 
 ### Option A: Monolith (recommended)
 
