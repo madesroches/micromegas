@@ -13,7 +13,7 @@
 
 #![cfg(test)]
 
-use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
+use micromegas_analytics::lakehouse::read_scope::{DEFAULT_UNSTAMPED_AUDIENCE, IsolationConfig};
 use serial_test::serial;
 
 const PREFIX: &str = "MICROMEGAS_1370_CONFIG_TESTS";
@@ -51,9 +51,10 @@ fn unset_vars_resolve_to_default() {
     }
     let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
-        config.unstamped_audience, None,
-        "an unset unstamped-audience var must resolve to None, not a default that would \
-         silently open visibility"
+        config.unstamped_audience,
+        Some(DEFAULT_UNSTAMPED_AUDIENCE.to_string()),
+        "a genuinely unset unstamped-audience var must resolve to the built-in default, not None \
+         -- an operator opts back into fail-closed by setting the var to an empty string"
     );
     assert!(
         config.public_view_sets.is_empty(),
@@ -63,7 +64,7 @@ fn unset_vars_resolve_to_default() {
 
 #[test]
 #[serial]
-fn all_whitespace_unstamped_audience_resolves_to_none() {
+fn all_whitespace_unstamped_audience_is_the_explicit_opt_out() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
@@ -75,7 +76,9 @@ fn all_whitespace_unstamped_audience_resolves_to_none() {
     let config = IsolationConfig::from_env(PREFIX).expect("from_env");
     assert_eq!(
         config.unstamped_audience, None,
-        "an all-whitespace value must be treated as unset, not as a malformed audience"
+        "an explicitly blank value must resolve to None (fail-closed), distinct from a var left \
+         genuinely unset (which resolves to the built-in default) -- this is how an operator \
+         opts back out of the default"
     );
 }
 

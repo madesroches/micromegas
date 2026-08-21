@@ -232,7 +232,7 @@ WHERE process_id = '...';
 | Success | `200 OK`, response `Content-Type` mirrors the request encoding; body is an empty `Export*ServiceResponse` |
 | Parse error | `400 Bad Request`, body is a `google.rpc.Status` proto with `code = INVALID_ARGUMENT (3)` |
 | Auth failure | `401 Unauthorized`, body is `google.rpc.Status` |
-| Write denied | `403 Forbidden`, body is a `google.rpc.Status` proto with `code = PERMISSION_DENIED (7)` -- either `{prefix}_REQUIRE_WRITE_AUDIENCE` rejecting an audience-less credential, or a `process_id` re-registration under a conflicting audience (AbAC Stage 5, #1373) |
+| Write denied | `403 Forbidden`, body is a `google.rpc.Status` proto with `code = PERMISSION_DENIED (7)` -- a `process_id` re-registration under a conflicting audience (AbAC Stage 5, #1373) |
 | Body too large | `413 Payload Too Large`, body is `google.rpc.Status` |
 | Unsupported media type | `415 Unsupported Media Type`, body is `google.rpc.Status` |
 | Backend transient failure | `503 Service Unavailable` with `Retry-After: 30` header, body is `google.rpc.Status` (retryable per spec) |
@@ -717,7 +717,7 @@ distinct log lines never collide.
 
 **`413 Payload Too Large`** — the compressed body exceeds 20 MiB. Lower the SDK's batch size (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`) or split into more frequent exports.
 
-**`403 Forbidden` / `google.rpc.Status` code 7 (`PERMISSION_DENIED`)** — two possible causes: (1) `{prefix}_REQUIRE_WRITE_AUDIENCE` is set and the authenticated credential carries no write audience -- either bind an audience to the credential or turn the knob off; (2) this request's `process_id` was already registered under a different write audience (an audience conflict) -- check for two credentials/producers deriving the same `process_id` (see the degenerate-resource note above) under different audiences.
+**`403 Forbidden` / `google.rpc.Status` code 7 (`PERMISSION_DENIED`)** — this request's `process_id` was already registered under a different write audience (an audience conflict) -- check for two credentials/producers deriving the same `process_id` (see the degenerate-resource note above) under different audiences.
 
 **Process collapses across runs** — the formula expects `service.instance.id` to vary per OS process. If your SDK omits it (some FaaS configurations), every invocation hashes to the same `process_id`. Set it explicitly via `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(uuidgen)` or have the SDK generate one.
 

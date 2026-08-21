@@ -15,7 +15,7 @@
 //! decoding).
 
 use super::ingestion_limits::{RETRY_AFTER_SECONDS, apply_ingestion_body_limits};
-use super::write_audience::{StampingConfig, resolve_write_audience};
+use super::write_audience::resolve_write_audience;
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
@@ -115,7 +115,6 @@ fn build_error_response(status: StatusCode, message: &str, retryable: bool) -> R
 
 async fn webhook_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
-    Extension(stamping): Extension<Arc<StampingConfig>>,
     ctx: Option<Extension<AuthContext>>,
     headers: HeaderMap,
     body: bytes::Bytes,
@@ -124,15 +123,7 @@ async fn webhook_handler(
         return build_error_response(StatusCode::BAD_REQUEST, "empty body", false);
     }
 
-    // AbAC Stage 5 (#1373, §5): reuses `OtelError::Denied`'s meaning but renders it through
-    // this route's own `build_error_response` (text/plain, non-retryable) rather than the OTLP
-    // `google.rpc.Status` shape -- a denied write is not a transient condition worth retrying.
-    let audience = match resolve_write_audience(ctx.as_ref(), &stamping) {
-        Ok(a) => a,
-        Err(_) => {
-            return build_error_response(StatusCode::FORBIDDEN, "write audience required", false);
-        }
-    };
+    let audience = resolve_write_audience(ctx.as_ref());
 
     let mut resource_attrs = Vec::new();
     push_attr_from_header(

@@ -11,7 +11,6 @@ use axum::http::{Request, StatusCode, header};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use micromegas::servers::firehose_cloudwatch_logs::firehose_router;
-use micromegas::servers::write_audience::StampingConfig;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -41,13 +40,6 @@ fn make_auth_provider() -> Arc<dyn AuthProvider> {
     let json = format!(r#"[{{"name": "cw-logs-firehose-test", "key": "{ACCESS_KEY}"}}]"#);
     let keyring = parse_key_ring(&json).expect("parse keyring");
     Arc::new(ApiKeyAuthProvider::new(keyring))
-}
-
-/// `StampingConfig` with `require_write_audience` off -- the default, and what every case in
-/// this file exercises. The knob-on differential case (a bound-audience credential vs. an
-/// audience-less one) is asserted once, in `firehose_tests.rs`, rather than duplicated here.
-fn stamping_off() -> Arc<StampingConfig> {
-    Arc::new(StampingConfig::new(false))
 }
 
 fn empty_records_body(request_id: &str) -> String {
@@ -93,7 +85,7 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
 async fn missing_access_key_is_rejected_with_firehose_error_shape() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let request = Request::builder()
         .method("POST")
@@ -115,7 +107,7 @@ async fn missing_access_key_is_rejected_with_firehose_error_shape() {
 async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let request = Request::builder()
         .method("POST")
@@ -137,7 +129,7 @@ async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
 async fn valid_key_control_message_returns_ack_with_no_db_write() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let body = envelope_with_records("req-control", &[control_message_record()]);
     let request = Request::builder()
@@ -163,7 +155,7 @@ async fn valid_key_control_message_returns_ack_with_no_db_write() {
 async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let body = gzip(empty_records_body("req-gzip-ok").as_bytes());
     let request = Request::builder()
@@ -189,7 +181,7 @@ async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
 #[tokio::test]
 async fn dev_mode_no_provider_accepts_request_without_access_key() {
     let service = make_test_service();
-    let app = firehose_router(service, None, stamping_off());
+    let app = firehose_router(service, None);
 
     let request = Request::builder()
         .method("POST")
@@ -214,7 +206,7 @@ async fn full_data_message_ingest_succeeds_against_a_live_stack() {
         .await
         .expect("creating service from env");
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let json = r#"{"messageType":"DATA_MESSAGE","owner":"123456789012","logGroup":"/ecs/live-e2e","logStream":"live-e2e-stream","subscriptionFilters":["f"],"logEvents":[{"id":"evt-1","timestamp":1700000000000,"message":"live e2e line one"},{"id":"evt-2","timestamp":1700000000100,"message":"live e2e line two"}]}"#;
     let record = gzip(json.as_bytes());

@@ -47,9 +47,8 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_MONOLITH_ROLES` | No | Comma-separated roles or `all` (default: `all`) |
 | `MICROMEGAS_PORT` | No | Web server port (default: `3000`) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
-| `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` | No | Reject ingestion from a credential carrying no write audience (falls back to unprefixed `MICROMEGAS_REQUIRE_WRITE_AUDIENCE`); off by default. Resolved under the **ingestion** role's own prefix — note this is `MICROMEGAS_INGESTION_*`, not `MICROMEGAS_ANALYTICS_*` like the read-side knobs below, since stamping is a write-side (ingestion) concern. See [Ingestion → What gets stamped](ingestion.md#what-gets-stamped) |
 | `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` | No | JSON object keyed by audience name, granting read/mint access to selectors (`*`/`user:<email>`/`group:<g>`) for FlightSQL callers (falls back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`) — see [Audiences and Grants](authentication.md#audiences-and-grants) |
-| `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` | No | Audience name (opaque label, e.g. `public`) a process with no `micromegas.audience` property falls back to for `OwnershipRewrite`'s query-time audience filtering (falls back to unprefixed `MICROMEGAS_UNSTAMPED_AUDIENCE`); unset means such processes stay invisible to every restricted caller. With write-side stamping now live (#1373), "no `micromegas.audience` property" means either never-stamped legacy data or a process ingested under a credential with no bound audience — see [Ingestion → What gets stamped](ingestion.md#what-gets-stamped). **Required to keep legacy data visible when enabling auth on a deployment with unstamped data** (e.g. `public`) — not sufficient by itself, a maintenance-role pass must have materialized the process first; see the CHANGELOG's AbAC Stage 2 upgrade note for the full explanation. **Upgrade note**: a previously-recommended `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup — `:` is outside the `[A-Za-z0-9_-]` audience charset (#1372) — set an opaque name like `public` instead |
+| `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` | No | Audience name (opaque label, e.g. `public`) a process with no `micromegas.audience` property falls back to for `OwnershipRewrite`'s query-time audience filtering (falls back to unprefixed `MICROMEGAS_UNSTAMPED_AUDIENCE`); **defaults to `public`** when genuinely unset — set it to an empty string to opt back into the fail-closed behavior (such processes invisible to every restricted caller). With write-side stamping now live (#1373), "no `micromegas.audience` property" means either never-stamped legacy data or a process ingested under a credential with no bound audience — see [Ingestion → What gets stamped](ingestion.md#what-gets-stamped). Making legacy/unstamped data visible is not sufficient by itself — a maintenance-role pass must have materialized the process first; see the CHANGELOG's AbAC Stage 2 upgrade note for the full explanation. **Upgrade note**: a previously-recommended `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE=group:everyone` now fails startup — `:` is outside the `[A-Za-z0-9_-]` audience charset (#1372) — set an opaque name like `public` instead |
 | `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering; falls back to unprefixed `MICROMEGAS_PUBLIC_VIEW_SETS`) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_KEY_AUDIENCE` | No | Audience the `web` role's ingestion-key mint/import routes fall back to when a request supplies none (falling back further to `public` for `import` only; `mint` is a **400** if neither this knob nor the request resolves one) — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers — see [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374) |
@@ -59,18 +58,18 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent queries, in MB; default 100 GB (DataFusion's own default), far larger than a typical container's local disk. Exceeding the cap fails whichever query's spill write pushes past it — not necessarily the query that consumed most of the budget |
 
 !!! note "One prefix asymmetry, pre-existing"
-    Inside the monolith, `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` resolves under the
-    ingestion role's own prefix, while `MICROMEGAS_DEFAULT_KEY_AUDIENCE` (the mint-side default
-    above) is always resolved **unprefixed**, even in-process. So one monolith reads
-    `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE` for stamping enforcement but only
+    Inside the monolith, `MICROMEGAS_INGESTION_API_KEYS` (see [Authentication](#authentication)
+    below) resolves under the ingestion role's own prefix, while `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
+    (the mint-side default above) is always resolved **unprefixed**, even in-process. So one
+    monolith reads `MICROMEGAS_INGESTION_API_KEYS` for ingestion auth but only
     `MICROMEGAS_DEFAULT_KEY_AUDIENCE` for mint defaults — not
     `MICROMEGAS_INGESTION_DEFAULT_KEY_AUDIENCE`. Pre-existing and out of scope for #1373; noted
     here so it doesn't surprise an operator reaching for a `MICROMEGAS_INGESTION_` prefix on both.
     The three self-service knobs above (`MICROMEGAS_SELF_SERVICE_MINT` and its two per-caller
     bounds) follow `MICROMEGAS_DEFAULT_KEY_AUDIENCE`'s convention, not
-    `MICROMEGAS_INGESTION_REQUIRE_WRITE_AUDIENCE`'s: they stay unprefixed under monolith too,
-    since they belong to `analytics-web-srv`'s own standalone-service, empty-prefix convention,
-    the same as every other knob this section owns.
+    `MICROMEGAS_INGESTION_API_KEYS`'s: they stay unprefixed under monolith too, since they belong
+    to `analytics-web-srv`'s own standalone-service, empty-prefix convention, the same as every
+    other knob this section owns.
 
 ## CLI flags
 

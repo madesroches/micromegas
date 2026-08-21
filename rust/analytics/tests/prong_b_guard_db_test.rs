@@ -365,7 +365,10 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
         &unstamped_sql,
     )
     .await
-    .expect_err("an unstamped process must stay denied with the escape hatch unset");
+    .expect_err(
+        "an unstamped process must stay denied for a caller whose scope doesn't include the \
+         default MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')",
+    );
     let unstamped_rows = row_count(
         f.lakehouse.clone(),
         f.view_factory.clone(),
@@ -615,7 +618,8 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     );
     assert!(
         !team_a_instance_ids.iter().any(|id| id == "global"),
-        "'global' rows must be hidden with MICROMEGAS_UNSTAMPED_AUDIENCE unset"
+        "'global' rows must stay hidden from a caller whose scope doesn't include the default \
+         MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')"
     );
 
     let team_a_with_public_batches = query(

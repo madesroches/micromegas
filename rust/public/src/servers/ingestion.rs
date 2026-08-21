@@ -1,4 +1,4 @@
-use super::write_audience::{StampingConfig, resolve_write_audience};
+use super::write_audience::resolve_write_audience;
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
@@ -8,7 +8,6 @@ use axum::routing::post;
 use micromegas_auth::types::{AuthContext, AuthProvider};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
-use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -24,9 +23,8 @@ pub enum IngestionError {
     #[error("Internal server error: {0}")]
     Internal(String),
 
-    /// The write audience gate rejected this request (AbAC Stage 5, #1373, §5/§6): either
-    /// `REQUIRE_WRITE_AUDIENCE` is set and the credential carries no audience, or this is a
-    /// conflicting `insert_process` re-registration under a different audience. Maps to 403.
+    /// A conflicting `insert_process` re-registration under a different audience (AbAC Stage 5,
+    /// #1373, §6). Maps to 403.
     #[error("Forbidden: {0}")]
     Forbidden(String),
 }
@@ -60,27 +58,16 @@ impl From<IngestionServiceError> for IngestionError {
     }
 }
 
-/// Resolves the write audience for a native-route request, mapping a gate rejection onto
-/// [`IngestionError::Forbidden`] with a sanitized body (no internal detail).
-fn resolve_native_write_audience(
-    ctx: &Option<Extension<AuthContext>>,
-    stamping: &StampingConfig,
-) -> Result<WriteAudience, IngestionError> {
-    resolve_write_audience(ctx.as_ref(), stamping)
-        .map_err(|_| IngestionError::Forbidden("write audience required".to_string()))
-}
-
 /// Handles requests to insert process information.
 ///
-/// Returns 403 when the write audience gate rejects the request (§5/§6), 400 for malformed
-/// CBOR, 500 for database errors.
+/// Returns 403 for a conflicting re-registration under a different audience (§6), 400 for
+/// malformed CBOR, 500 for database errors.
 pub async fn insert_process_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
-    Extension(stamping): Extension<Arc<StampingConfig>>,
     ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    let audience = resolve_native_write_audience(&ctx, &stamping)?;
+    let audience = resolve_write_audience(ctx.as_ref());
     service
         .insert_process(body, &audience)
         .await
@@ -89,29 +76,21 @@ pub async fn insert_process_request(
 
 /// Handles requests to insert stream information.
 ///
-/// Returns 403 when the write audience gate rejects the request (§5), 400 for malformed CBOR,
-/// 500 for database errors.
+/// Returns 400 for malformed CBOR, 500 for database errors.
 pub async fn insert_stream_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
-    Extension(stamping): Extension<Arc<StampingConfig>>,
-    ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    resolve_native_write_audience(&ctx, &stamping)?;
     service.insert_stream(body).await.map_err(Into::into)
 }
 
 /// Handles requests to insert block information.
 ///
-/// Returns 403 when the write audience gate rejects the request (§5), 400 for empty body or
-/// malformed CBOR, 500 for database/storage errors.
+/// Returns 400 for empty body or malformed CBOR, 500 for database/storage errors.
 pub async fn insert_block_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
-    Extension(stamping): Extension<Arc<StampingConfig>>,
-    ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    resolve_native_write_audience(&ctx, &stamping)?;
     if body.is_empty() {
         return Err(IngestionError::BadRequest("empty body".to_string()));
     }
@@ -153,7 +132,6 @@ pub async fn serve_ingestion(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,
     auth_provider: Option<Arc<dyn AuthProvider>>,
-    stamping: StampingConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
     grace: Duration,
 ) -> anyhow::Result<()> {
@@ -167,7 +145,6 @@ pub async fn serve_ingestion(
     use super::shutdown::serve_axum_with_graceful_shutdown;
 
     let service = Arc::new(WebIngestionService::new(lake));
-    let stamping = Arc::new(stamping);
 
     let health_router = Router::new()
         .route("/health", get(|| async { axum::http::StatusCode::OK }))
@@ -182,8 +159,7 @@ pub async fn serve_ingestion(
         .merge(super::webhook::webhook_router())
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
-        .layer(Extension(service.clone()))
-        .layer(Extension(stamping.clone()));
+        .layer(Extension(service.clone()));
 
     let auth_enabled = auth_provider.is_some();
     if let Some(provider) = auth_provider {
@@ -197,16 +173,10 @@ pub async fn serve_ingestion(
 
     // The Firehose routes carry their own auth (Firehose can only send its credential via
     // X-Amz-Firehose-Access-Key, not Authorization: Bearer), so they are merged outside
-    // protected_app and never hit the global Bearer auth_middleware. They also take
-    // `stamping` as an explicit parameter rather than an ambient extension, since they're
-    // built directly (with no parent extension) here and by every test call site.
-    let firehose_app =
-        super::firehose::firehose_router(service.clone(), firehose_auth, stamping.clone());
-    let cw_logs_firehose_app = super::firehose_cloudwatch_logs::firehose_router(
-        service.clone(),
-        cw_logs_firehose_auth,
-        stamping.clone(),
-    );
+    // protected_app and never hit the global Bearer auth_middleware.
+    let firehose_app = super::firehose::firehose_router(service.clone(), firehose_auth);
+    let cw_logs_firehose_app =
+        super::firehose_cloudwatch_logs::firehose_router(service.clone(), cw_logs_firehose_auth);
 
     let app = health_router
         .merge(protected_app)

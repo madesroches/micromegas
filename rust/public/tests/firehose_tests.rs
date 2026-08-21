@@ -8,12 +8,16 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use axum::Extension;
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use axum::middleware;
+use axum::routing::get;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use micromegas::servers::firehose::firehose_router;
-use micromegas::servers::write_audience::StampingConfig;
+use micromegas::servers::firehose_common::firehose_auth_middleware;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::types::{AuthContext, AuthProvider, AuthType, RequestParts};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -43,12 +47,6 @@ fn make_auth_provider() -> Arc<dyn AuthProvider> {
     let json = format!(r#"[{{"name": "firehose-test", "key": "{ACCESS_KEY}"}}]"#);
     let keyring = parse_key_ring(&json).expect("parse keyring");
     Arc::new(ApiKeyAuthProvider::new(keyring))
-}
-
-/// `StampingConfig` with `require_write_audience` off -- the default, and what every case here
-/// but the new differential one below exercises.
-fn stamping_off() -> Arc<StampingConfig> {
-    Arc::new(StampingConfig::new(false))
 }
 
 /// A stub `AuthProvider` returning a fixed `AuthContext` carrying `bound_audience: Some(..)`
@@ -102,7 +100,7 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
 async fn missing_access_key_is_rejected_with_firehose_error_shape() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let request = Request::builder()
         .method("POST")
@@ -124,7 +122,7 @@ async fn missing_access_key_is_rejected_with_firehose_error_shape() {
 async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let request = Request::builder()
         .method("POST")
@@ -146,7 +144,7 @@ async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
 async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
     let service = make_test_service();
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let body = gzip(empty_records_body("req-gzip-ok").as_bytes());
     let request = Request::builder()
@@ -173,7 +171,7 @@ async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
 #[tokio::test]
 async fn dev_mode_no_provider_accepts_request_without_access_key() {
     let service = make_test_service();
-    let app = firehose_router(service, None, stamping_off());
+    let app = firehose_router(service, None);
 
     let request = Request::builder()
         .method("POST")
@@ -189,62 +187,44 @@ async fn dev_mode_no_provider_accepts_request_without_access_key() {
     assert_eq!(json["requestId"], "req-dev-mode");
 }
 
-#[tokio::test]
-async fn require_write_audience_differentiates_bound_from_audience_less_credential() {
-    // AbAC Stage 5 (#1373, §5): with the knob on, only a credential whose `AuthContext` carries
-    // a `bound_audience` gets a clean ack -- proving `firehose_auth_middleware` no longer
-    // discards the validated context (its old `Ok(_ctx) => { ... }` arm dropped it entirely).
-    // Zero records both times: this harness's lazy pool points at an unreachable database, so
-    // every case must stop before touching it.
-    let stamping = Arc::new(StampingConfig::new(true));
+/// Reads back the `AuthContext` extension `firehose_auth_middleware` inserts, so a DB-less
+/// harness can assert on the propagated `bound_audience` without going through ingestion.
+async fn auth_context_probe(ctx: Option<Extension<AuthContext>>) -> String {
+    ctx.and_then(|Extension(c)| c.bound_audience.clone())
+        .unwrap_or_default()
+}
 
-    let bound_provider: Arc<dyn AuthProvider> =
-        Arc::new(BoundAudienceProvider { audience: "team-a" });
-    let bound_app = firehose_router(make_test_service(), Some(bound_provider), stamping.clone());
-    let bound_request = Request::builder()
-        .method("POST")
-        .uri(ENDPOINT)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header("X-Amz-Firehose-Request-Id", "req-bound")
+#[tokio::test]
+async fn firehose_auth_middleware_propagates_bound_audience_to_the_extension() {
+    // Regression guard for #1373's context-propagation fix: `firehose_auth_middleware`'s
+    // success arm used to discard the validated `AuthContext` entirely (`Ok(_ctx) => { ... }`).
+    // This harness's lazy pool is never reachable, so asserting a stamped `micromegas.audience`
+    // on a resulting process would need real DB writes it cannot do; instead, this lays
+    // `firehose_auth_middleware` (made `pub` for exactly this) directly over a test-local probe
+    // route via `middleware::from_fn`, bypassing ingestion entirely, and asserts on the
+    // `AuthContext` extension the probe route reads back.
+    let provider: Arc<dyn AuthProvider> = Arc::new(BoundAudienceProvider { audience: "team-a" });
+    let app = Router::new()
+        .route("/probe", get(auth_context_probe))
+        .layer(middleware::from_fn(move |req, next| {
+            firehose_auth_middleware(provider.clone(), req, next)
+        }));
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/probe")
         .header(
             "X-Amz-Firehose-Access-Key",
             "irrelevant-for-this-stub-provider",
         )
-        .body(Body::from(empty_records_body("req-bound")))
+        .body(Body::empty())
         .expect("build request");
-    let bound_response = bound_app
-        .oneshot(bound_request)
+    let response = app.oneshot(request).await.expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
-        .expect("call service");
-    assert_eq!(bound_response.status(), StatusCode::OK);
-    let bound_json = response_json(bound_response).await;
-    assert!(
-        bound_json.get("errorMessage").is_none(),
-        "a credential with a bound audience must get a clean ack: {bound_json:?}"
-    );
-
-    let audience_less_provider = make_auth_provider();
-    let audience_less_app =
-        firehose_router(make_test_service(), Some(audience_less_provider), stamping);
-    let audience_less_request = Request::builder()
-        .method("POST")
-        .uri(ENDPOINT)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header("X-Amz-Firehose-Request-Id", "req-unstamped")
-        .header("X-Amz-Firehose-Access-Key", ACCESS_KEY)
-        .body(Body::from(empty_records_body("req-unstamped")))
-        .expect("build request");
-    let audience_less_response = audience_less_app
-        .oneshot(audience_less_request)
-        .await
-        .expect("call service");
-    assert!(
-        audience_less_response.status().is_client_error(),
-        "an audience-less credential must be rejected when REQUIRE_WRITE_AUDIENCE is set: {:?}",
-        audience_less_response.status()
-    );
-    let audience_less_json = response_json(audience_less_response).await;
-    assert!(audience_less_json["errorMessage"].is_string());
+        .expect("reading response body");
+    assert_eq!(&body[..], b"team-a");
 }
 
 // Requires MICROMEGAS_SQL_CONNECTION_STRING (and object store env vars) to point at a
@@ -264,7 +244,7 @@ async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
         .await
         .expect("creating service from env");
     let provider = make_auth_provider();
-    let app = firehose_router(service, Some(provider), stamping_off());
+    let app = firehose_router(service, Some(provider));
 
     let make_request = |name: &str, value: i64| -> ExportMetricsServiceRequest {
         ExportMetricsServiceRequest {

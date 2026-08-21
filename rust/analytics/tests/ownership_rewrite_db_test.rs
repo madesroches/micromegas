@@ -525,8 +525,9 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         )
         .await?,
         0,
-        "without the escape hatch configured, an unstamped process must stay invisible to every \
-         ReadScope::Audiences caller, however unrelated to A/B its own scope is"
+        "an unstamped process must stay invisible to a ReadScope::Audiences caller whose own \
+         scope doesn't include the default MICROMEGAS_UNSTAMPED_AUDIENCE value ('public'), \
+         however unrelated to A/B its own scope is"
     );
     assert_eq!(
         row_count(
