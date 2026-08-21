@@ -439,6 +439,34 @@ export function unitDisplayAbbrev(canonicalUnit: string): string {
 }
 
 /**
+ * Longest symbol-prefixed unit this codebase actually cites as
+ * short-and-safe: `%CPU` (4 chars). Bounds the `isKnownUnit` carve-out below
+ * so a long opaque string that merely starts with `/`, `°`, or `%` (e.g. a
+ * hypothetical `%utilization_ratio`) isn't misclassified as safe to repeat.
+ */
+const MAX_SYMBOL_PREFIX_UNIT_LENGTH = 4
+
+/**
+ * True when `canonicalUnit` is safe to repeat on every y-axis tick without
+ * risking overflow: either it has a known short abbreviation (time/size/bit/
+ * percent/degrees/celsius/centimeters/dimensionless, i.e. `unitDisplayAbbrev`
+ * would not just echo the input back unchanged), or it's already short *and*
+ * symbol-prefixed — leading `/`, `°`, or `%`, and no longer than
+ * `MAX_SYMBOL_PREFIX_UNIT_LENGTH` — of the kind `unitSuffix` renders
+ * compactly (e.g. the bare rate unit `/s`, or an out-of-vocabulary `°F`/
+ * `%CPU`). The prefix test mirrors `unitSuffix`'s own regex, but adds a
+ * length bound: `unitSuffix`'s test only decides spacing and says nothing
+ * about length, so used alone it would also match a long opaque unit that
+ * happens to start with one of these symbols (e.g. `%utilization_ratio`).
+ */
+export function isKnownUnit(canonicalUnit: string): boolean {
+  if (canonicalUnit in CANONICAL_DISPLAY_ABBREV) return true
+  return (
+    /^[/°%]/.test(canonicalUnit) && canonicalUnit.length <= MAX_SYMBOL_PREFIX_UNIT_LENGTH
+  )
+}
+
+/**
  * Symbol-like display units (`/s`, `°`, `°C`, `%`) attach directly to the
  * value with no space; anything else gets a leading space. An empty display
  * unit (dimensionless) contributes no suffix at all.

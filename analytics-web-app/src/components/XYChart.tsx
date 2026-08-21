@@ -6,7 +6,7 @@ import {
   getAdaptiveTimeUnit,
   formatTimeValue,
 } from '@/lib/time-units'
-import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit, isBitUnit, getAdaptiveBitUnit, isCurrencyUnit, unitScaleKey, unitDisplayAbbrev, isKnownUnit } from '@/lib/units'
 import { formatValueWithUnit } from '@/lib/format-value'
 import { useLatestRef } from '@/hooks/useLatestRef'
 import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
@@ -914,6 +914,7 @@ export function XYChart({
 
       const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? adaptiveBitUnit?.abbrev ?? unitDisplayAbbrev(normalizeUnit(primaryUnit))
       const isCurrencyScale = isCurrencyUnit(normalizeUnit(primaryUnit))
+      const isKnownAxisUnit = isKnownUnit(normalizeUnit(primaryUnit))
 
       // Per-row color support for single-series
       const hasPerRowColors = singleData.some(p => p.color != null)
@@ -1006,7 +1007,7 @@ export function XYChart({
             size: RIGHT_AXIS_SIZE_PX,
             values: (_u: uPlot, vals: number[]) => {
               return vals.map((v) =>
-                formatYAxisTick(v, 1, yAxisUnit, isCurrencyScale ? primaryUnit : null)
+                formatYAxisTick(v, 1, isKnownAxisUnit ? yAxisUnit : '', isCurrencyScale ? primaryUnit : null)
               )
             },
           },
