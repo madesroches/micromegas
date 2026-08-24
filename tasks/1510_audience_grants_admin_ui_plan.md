@@ -245,9 +245,11 @@ export type ErrorCode = string
  *  This is `streamQuery`'s existing frame loop, with one change: a stream that runs out of
  *  input (`readLine()` returns `null`) without having seen an explicit `done` frame yields an
  *  `error` result (`code: 'INCOMPLETE_STREAM'`) instead of a `done` result, so a caller can
- *  always tell truncation apart from a clean end. */
+ *  always tell truncation apart from a clean end. No `signal` parameter: the frame loop never
+ *  consulted one even in `streamQuery` today — aborting is the fetch-level signal's job, already
+ *  handled by whoever issued `response`. */
 export async function* readArrowStream(
-  response: Response, signal?: AbortSignal
+  response: Response
 ): AsyncGenerator<StreamResult>
 
 /** GET a JSON-framed Arrow endpoint and accumulate it into one Table.
@@ -386,7 +388,14 @@ Audiences sorted by `localeCompare`; within an axis, `*` first, then selectors a
 `*` is the most consequential value on the page. `findText` matches case-insensitively against
 the audience name **or** any selector, and an audience survives if either its name matches or at
 least one of its selectors does (a name match keeps all of its selectors visible, so a card is
-never a partial view of an audience it claims to show).
+never a partial view of an audience it claims to show). This grouping decides which *audiences*
+appear; it never decides which grants within a surviving audience's rows are counted or rendered
+— the per-card grant count (item 6) and the "N grants across M audiences" summary line (item 2)
+are always computed from the audience's/page's complete `grants`, unfiltered by `findText`, and
+the chip rows themselves are never narrowed by `findText` either (only by the **Axis** filter,
+which hides whole rows and is the sole filter safe to apply chip-by-chip). Otherwise a read
+selector match on `findText` would keep an audience's card visible while its non-matching `mint`
+selectors silently disappeared from the row, turning "No mint grants" into a false claim.
 
 Layout (see the Option B mockup):
 
@@ -396,7 +405,9 @@ Layout (see the Option B mockup):
    / mint only), both filtered client-side over the already-loaded `grants` — `axis` is a
    two-valued equality filter over a set the page already holds in full, so there is nothing to
    gain by re-fetching and no partial-set risk in filtering it locally, unlike Focus below. A
-   summary line: *"N grants across M audiences."*
+   summary line: *"N grants across M audiences"* — always the total counts for the loaded
+   (optionally Focus-scoped) `grants`, not narrowed by `findText` or **Axis**, so the line never
+   implies fewer grants exist than are actually loaded.
 3. When `focusAudience` is set, a dismissible pill — *Showing only `team-alpha`* — above the cards.
    It is set by the per-card **Focus** button, and sends the exact-match `?audience=` param the
    API already offers (a cheap way to shrink the stream on a large store; the free-text Find box
@@ -416,17 +427,22 @@ Layout (see the Option B mockup):
 5. `ErrorBanner` (`onRetry={loadGrants}`) for load and delete failures.
 6. One card per audience: header = audience name (monospace) + grant count + **Focus**; then a
    `read` row and a `mint` row, each an axis badge plus selector chips and a *"+ Add read grant"* /
-   *"+ Add mint grant"* button that opens the dialog pre-filled with that audience and axis.
+   *"+ Add mint grant"* button that opens the dialog pre-filled with that audience and axis. The
+   header's grant count and every row's chip list are always drawn from that audience's complete,
+   `findText`-unfiltered grants — `findText` decides only whether the card appears at all (see
+   §5's grouping description), never which of a surviving card's chips are shown, so a read-only
+   `findText` match can never make a `mint` chip vanish from the row underneath it.
    - Each chip is two lines: the selector in monospace, then `created_by · created_at` beneath —
      auditability on the face of the card rather than behind a tooltip.
    - A `*` selector gets a red-tinted border and the words *any authenticated principal*.
    - Delete is an `×` on the chip, `aria-label={`Delete ${axis} grant on ${audience} for
      ${selector}`}`.
-   - An axis with no grants shows *"No mint grants — nobody can issue ingestion keys stamped with
-     this audience."* Because the axis filter is client-side over the complete loaded set (see
-     item 2), this is always an honest statement — the mint row (or its "No mint grants" line) is
-     simply hidden by the **Axis** filter like any other row, with no special case needed for
-     what an active filter does or doesn't know.
+   - An axis with no grants (unfiltered by `findText`) shows *"No mint grants — nobody can issue
+     ingestion keys stamped with this audience."* Because that emptiness is evaluated over the
+     audience's complete grant set and the **Axis** filter is the only client-side filter allowed
+     to hide a whole row (see item 2), this is always an honest statement — the mint row (or its
+     "No mint grants" line) is simply hidden by the **Axis** filter like any other row, never by
+     `findText`, with no special case needed for what an active filter does or doesn't know.
    - React key is the natural key, `` `${audience} ${axis} ${selector}` `` — there is no
      surrogate id, and no component can contain a NUL.
 7. Loading: a spinner with *"Streaming grants… N rows"* driven by `onProgress`. Cards are not
@@ -634,6 +650,9 @@ Created:
 
 Modified:
 
+- `analytics-web-app/src/lib/__tests__/arrow-ipc-fixtures.ts` — export (or generalize)
+  `frameMessages`/`splitIpcMessages` so the grants tests can build framed-Arrow fixtures for the
+  five-column grants schema instead of reimplementing the framing.
 - `rust/analytics-web-srv/src/audience_grants.rs`
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs` — `rows_to_batch`/`stream_grant_frames`
   unit cases, and `live_create_list_delete_round_trip`'s list assertion updated to decode the
@@ -648,6 +667,7 @@ Modified:
 - `python/micromegas/tests/cli/test_grants.py`
 - `python/micromegas/tests/test_web_client.py`
 - `mkdocs/docs/admin/web-app.md`, `authentication.md`, `api-keys.md`
+- `mkdocs/docs/query-guide/python-api.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -715,6 +735,12 @@ Modified:
 - `mkdocs/docs/admin/api-keys.md` — at ≈247-254 and ≈405-410, add the UI as a third client of the
   grants API and document that `GET /api/audience-grants` responds with a streamed Arrow IPC
   result set (`application/x-micromegas-arrow-stream`), while `POST`/`DELETE` stay JSON.
+- `mkdocs/docs/query-guide/python-api.md` — under `### micromegas-grants` (≈859-880), update
+  `list [--audience] [--axis] [--limit N] [--offset N] [--format …]` for the new `--limit`/
+  `--offset` semantics: an absent `--limit` now returns all rows instead of the old 100-row
+  default, and an explicit `--limit` is no longer clamped to 500. Under `WebClient` (≈624-641),
+  note that `list_audience_grants` now reads a streamed Arrow response rather than a plain JSON
+  array, transparently to callers.
 - `CHANGELOG.md` under `## Unreleased` — a `**Web App:**` bullet for the page, and an entry for
   the list-route representation change carrying the **Minor breaking change** clause: response is
   now Arrow, an absent `limit` returns all rows instead of 100, an explicit `limit` is no
@@ -742,9 +768,11 @@ an enum.
 
 **Frontend** (vitest + Testing Library), following `IngestionApiKeysPage.test.tsx`'s style: mock
 `@/lib/auth` to an admin user, `@/lib/config` to a pinned `basePath`, `@/hooks/usePageTitle` and
-`@/components/layout`; drive `global.fetch`. Arrow responses are built in-test with
-`apache-arrow`'s `RecordBatchStreamWriter` and wrapped in the JSON framing, so the tests exercise
-the real decoder rather than a stub.
+`@/components/layout`; drive `global.fetch`. Arrow responses are built from
+`src/lib/__tests__/arrow-ipc-fixtures.ts`'s existing `frameMessages`/`splitIpcMessages` (exported,
+or generalized if they need it, rather than reimplemented) over a `tableToIPC` blob for the
+five-column grants schema, so the tests exercise the real decoder rather than a stub and reuse
+the framing code two existing test files already build on instead of writing a new one.
 
 `audience-grants-api.test.ts`:
 
@@ -784,16 +812,18 @@ the real decoder rather than a stub.
 - A `503` list response renders the server message in the error banner (this also covers the
   `--disable-auth` fixed 503).
 
-**Python**: `test_grants.py` updated so its `FakeClient`/fixtures return `list_audience_grants`'
-real output — `created_at` as the ISO-8601 string produced from the decoded `datetime` — instead
-of a hand-typed string, so `test_cmd_list_json_format_is_valid_json` actually exercises the
-`datetime`-to-string conversion; assert `cmd_list` renders both formats. Fixtures cover both a
-whole-second timestamp and a whole-millisecond one (e.g. a `.123` ms value), so the AutoSi-
-equivalent formatter's zero-digit and three-digit branches are both exercised, not just the
-zero-digit case the old hand-typed fixtures used exclusively. A separate test serves a
-gzip-compressed framed Arrow body (so it actually exercises the reader's gzip-decoded byte
-source, not a raw one) through `web_client.list_audience_grants` directly and asserts the
-returned `created_at` is the expected ISO-8601 string for both cases.
+**Python**: `test_grants.py`'s `FakeClient` fully replaces `WebClient` (monkeypatched over
+`grants.make_client`), and `cmd_list` only ever calls `client.list_audience_grants` — no fixture
+value it returns can reach the AutoSi formatter, which lives inside the real
+`WebClient.list_audience_grants`. So `test_grants.py`'s fixtures stay hand-typed strings; they
+only need to remain string-shaped so `json.dumps` in `cmd_list` keeps working, with no claim that
+they exercise the `datetime`-to-string conversion. Fixtures cover both a whole-second timestamp
+and a whole-millisecond one (e.g. a `.123` ms value) purely to keep `cmd_list`'s formatting
+assertions representative. The AutoSi-equivalent formatter's zero-digit and three-digit branches
+are exercised solely by a separate `web_client` test: it serves a gzip-compressed framed Arrow
+body (so it actually exercises the reader's gzip-decoded byte source, not a raw one) through
+`WebClient.list_audience_grants` directly and asserts the returned `created_at` is the expected
+ISO-8601 string for both the whole-second and whole-millisecond cases.
 
 **Manual**: run the monolith with `--disable-auth` to confirm the 503 banner; then against a real
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
@@ -824,10 +854,13 @@ the grouping hold up.
    `rust/analytics/src/lakehouse/query.rs:181` (`if caller.is_admin || !caller.admin_principal_possible`)
    simply does not register the function for non-admins — eight functions already ship behind it,
    and denial surfaces as DataFusion's ordinary "table function not found". **"The analytics
-   service should not read the auth store"** is weaker than it sounds: that service already reads
-   and writes non-telemetry admin tables in the same Postgres instance (`query_deny_list`,
-   `lakehouse_partitions`), though it is worth noting it does not today touch the auth tables
-   proper.
+   service should not read the auth store"** is already false today, not just weaker than it
+   sounds: both `flight-sql-srv`
+   (`rust/public/src/servers/flight_sql_server.rs:286-313`) and the monolith
+   (`rust/monolith/src/main.rs:264-273`) build a `DbApiKeyAuthProvider` over `analytics_api_keys`
+   and a `DbAudienceGrantsSource` over the `audience_grants` table itself, wiring the latter into
+   `AudienceReadPolicy::with_store` on every authenticated request — the analytics service is
+   already a reader of the exact table this question is about.
 
    What genuinely argues against it:
 
