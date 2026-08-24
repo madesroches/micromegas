@@ -89,7 +89,14 @@ router, so every `/api/audience-grants` request is answered by a fixed **503**.
   `resp.json()`.
 - `python/micromegas/micromegas/cli/grants.py` — `cmd_list`, `--format table|json`,
   `--limit`/`--offset`.
+- `python/micromegas/micromegas/cli/setup_telemetry.py:135` — calls
+  `client.list_audience_grants(audience=args.audience)` only to check the list for emptiness; no
+  code change needed, but it should be exercised/verified once the method's transport changes.
 - `python/micromegas/tests/cli/test_grants.py`.
+- `python/micromegas/tests/test_web_client.py` — `TestAudienceGrants`'s
+  `test_list_audience_grants_omits_unset_filters` / `..._includes_set_filters` mock
+  `client.session.get` directly and assert on a plain JSON response; they need updating for the
+  `stream=True` request and the framed-Arrow response body.
 - `pyarrow ^23.0.0` is already a dependency (`python/micromegas/pyproject.toml:19`).
 
 No `curl` example for this route exists in the docs (only for the two key-mint routes,
@@ -133,18 +140,20 @@ impl ArrowStreamEncoder {
 }
 ```
 
-`stream_query.rs` drops its copies and uses these; its `ErrorCode` enum becomes a set of
-`&'static str` constants, or keeps the enum and passes `.as_str()`. Its wire output does not
-change. (Rust API churn is fine here per `CLAUDE.md`; the wire format is what must stay put — and
-does.)
+`stream_query.rs` drops its copies and uses these; its `ErrorCode` enum stays an enum, with an
+`.as_str()` method used wherever a `&'static str` is now needed — this keeps
+`tests/stream_query_tests.rs`'s `test_error_code_serialization` (which asserts on `ErrorCode`'s
+`SCREAMING_SNAKE_CASE` `Serialize`) unchanged. Its wire output does not change. (Rust API churn is
+fine here per `CLAUDE.md`; the wire format is what must stay put — and does.)
 
 `tests/stream_query_tests.rs` imports `encode_batch`/`encode_schema` as free functions with the
 old `(&schema, &mut tracker, &options)` signature; that signature is gone once encoding becomes
-`ArrowStreamEncoder` methods. Its encoder-behavior cases (schema/batch framing, compression) move
-to a unit-test module in `arrow_stream.rs` against `ArrowStreamEncoder` directly; the cases
-specific to `stream_query.rs` (`contains_blocked_function`, `sanitize_origin_label`,
-`substitute_macros`) stay in `tests/stream_query_tests.rs` with the encoder-related imports
-dropped.
+`ArrowStreamEncoder` methods. Per the crate's convention (`rust/CLAUDE.md`: unit tests live under
+the crate's `tests/` folder, not beside the lib code), its encoder-behavior cases (schema/batch
+framing, compression) move to a new integration-test file `tests/arrow_stream_tests.rs` against
+`ArrowStreamEncoder` directly (made `pub`); the cases specific to `stream_query.rs`
+(`contains_blocked_function`, `sanitize_origin_label`, `substitute_macros`) stay in
+`tests/stream_query_tests.rs` with the encoder-related imports dropped.
 
 ### 2. Server: `list_grants` returns an Arrow stream
 
@@ -170,15 +179,21 @@ and dropping accepted params is a gratuitous break), but:
 - **`limit` absent now means "all rows", not 100.** This is the bug fix: the current
   `DEFAULT_LIMIT` silently truncates any deployment with more than 100 grants. A streaming
   response has no reason to truncate.
-- When `limit` *is* supplied it is still validated (`> 0`) and still clamped to `MAX_LIMIT`.
+- **`MAX_LIMIT` is also deleted, not just `DEFAULT_LIMIT`.** The 500-row clamp on an explicit
+  `limit` was justified by the old JSON route's "capping is safer than erroring" comment, which
+  no longer applies once the response streams: keeping it would mean an omitted `limit` returns
+  every row while `--limit 1000` silently returns 500 — the same silent truncation this change
+  sets out to remove, now reachable only by asking for more. `limit` is still validated `> 0`;
   `offset` is unchanged.
-- `DEFAULT_LIMIT` is deleted.
 
-**Streaming, not buffering.** The handler uses `sqlx::query_as(...).fetch(&pool)` (a `Stream`),
-accumulating rows into `RecordBatch`es of `GRANT_BATCH_ROWS = 4096` and yielding each as it fills,
-so peak memory is one batch rather than the whole table. This holds a pool connection for the
-duration of the response — acceptable on an admin route, and the reason the batch size is small
-enough to keep the stream moving.
+**Streaming, not buffering.** The handler builds an `async_stream::stream!` block that takes
+ownership of a cloned `PgPool` (so the stream is `'static`, satisfying `Body::from_stream`'s `S:
+TryStream + Send + 'static` bound) and, inside it, drives `sqlx::query_as(...).fetch(&pool)` (a
+`Stream` borrowing that owned pool) through `stream_grant_frames`, accumulating rows into
+`RecordBatch`es of `GRANT_BATCH_ROWS = 4096` and yielding each as `Ok::<Bytes, std::io::Error>(..)`
+as it fills, so peak memory is one batch rather than the whole table. This holds a pool connection
+for the duration of the response — acceptable on an admin route, and the reason the batch size is
+small enough to keep the stream moving.
 
 **Errors.** A failure *before* the first byte (pool absent → `NOT_CONFIGURED`, bad `limit`/`axis`
 → `BAD_REQUEST`) is returned as today: an HTTP status plus the `{code, message}` JSON body, so
@@ -192,12 +207,13 @@ The four `(audience, axis)` filter branches keep their current shape; only the `
 becomes conditional.
 
 **Testability.** The row-fetching query (needs a live Postgres) is kept separate from the framing
-logic (doesn't): a pure `rows_to_batch(rows: &[GrantRow]) -> Result<RecordBatch>` builds one batch,
-and a generic `stream_grant_frames<S>(rows: S) -> impl Stream<Item = Bytes>` (where `S: Stream<Item
-= sqlx::Result<GrantRow>>`) does the batching-at-4096 and mid-stream-error-to-`error`-frame work
-over any row stream, including an in-test `futures::stream::iter` that never touches a database.
-`list_grants` itself is just `sqlx::query_as(...).fetch(&pool)` piped into
-`stream_grant_frames`.
+logic (doesn't): a pure `pub fn rows_to_batch(rows: &[GrantRow]) -> Result<RecordBatch>` builds one
+batch, and a generic `pub fn stream_grant_frames<S>(rows: S) -> impl Stream<Item = Bytes>` (where
+`S: Stream<Item = sqlx::Result<GrantRow>>`) does the batching-at-4096 and mid-stream-error-to-
+`error`-frame work over any row stream, including an in-test `futures::stream::iter` that never
+touches a database. Both are `pub` so `tests/audience_grants_tests.rs` can exercise them from
+outside the lib, per the crate's tests-under-`tests/` convention. `list_grants` itself is just
+`sqlx::query_as(...).fetch(&pool)` piped into `stream_grant_frames`.
 
 ### 3. Frontend: generalize `arrow-stream.ts`
 
@@ -407,9 +423,14 @@ framing is the same JSON-framed protocol, so this needs a small reader:
 `stream=True`, read a line, read `size` bytes, feed the concatenated IPC messages to
 `pyarrow.ipc.open_stream`, and raise on an `error` frame or a stream with no `done` frame. Returns
 the same list of dicts as before, except `created_at` decodes to a `datetime` from the Arrow
-column; `list_audience_grants` converts it back to an ISO-8601 string (`.isoformat()`) before
-returning, so the dict shape handed to `grants.py` is unchanged and `json.dumps` in `cmd_list`
-keeps working without a `default=` handler.
+column; `list_audience_grants` converts it back to a string with
+`.isoformat().replace('+00:00', 'Z')` before returning — matching, not just resembling, the `Z`-
+suffixed RFC 3339 string the current JSON route's `chrono::DateTime<Utc>` serialization produces
+(the exact form the fixtures in `tests/cli/test_grants.py` use, e.g.
+`"2026-08-19T00:00:00Z"`), so the dict shape handed to `grants.py` is genuinely unchanged and
+`json.dumps` in `cmd_list` keeps working without a `default=` handler. A plain `.isoformat()`
+would instead emit `2026-08-19T00:00:00+00:00`, a real format change for every existing caller —
+avoided here rather than documented, since preserving the `Z` form costs nothing.
 
 No framed-Arrow reader exists anywhere in `python/micromegas/micromegas/` today — the only
 `pyarrow.ipc` use is `flightsql/client.py`'s `open_stream(dataset_schema)` over a bare schema blob,
@@ -453,26 +474,38 @@ which is a plausible follow-up as a view toggle — not built here.
 1. `rust/analytics-web-srv/src/arrow_stream.rs` (new) — `ARROW_STREAM_CONTENT_TYPE`, `json_line`,
    `DataHeader`/`DoneFrame`/`ErrorFrame`, `ArrowStreamEncoder`. Register in `lib.rs`.
 2. `rust/analytics-web-srv/src/stream_query.rs` — delete the moved copies, use `arrow_stream`.
-   Wire output must be byte-identical. `tests/stream_query_tests.rs` loses its
-   `encode_batch`/`encode_schema` imports and the cases exercising them, which move to a new unit
-   test module in `arrow_stream.rs`; its remaining cases (macro/blocked-function/origin-label
-   handling) pass untouched.
+   Wire output must be byte-identical. Keep `ErrorCode` as an enum with an `.as_str()` method
+   (rather than replacing it with bare constants), so `tests/stream_query_tests.rs`'s
+   `test_error_code_serialization` (asserting its `SCREAMING_SNAKE_CASE` `Serialize`) needs no
+   change. `tests/stream_query_tests.rs` loses its `encode_batch`/`encode_schema` imports and the
+   cases exercising them, which move to a new `tests/arrow_stream_tests.rs`; its remaining cases —
+   macro/blocked-function/origin-label handling, and `test_error_code_serialization` — pass
+   untouched.
 
 **Phase 2 — server list route**
 
-3. `rust/analytics-web-srv/src/audience_grants.rs` — split out `rows_to_batch` and
-   `stream_grant_frames` (generic over the row stream) per Design §2's Testability note;
-   `list_grants` returns `Body::from_stream` over `sqlx …fetch(&pool)` piped through
-   `stream_grant_frames`, batching at `GRANT_BATCH_ROWS = 4096`; drop `DEFAULT_LIMIT` so an absent
-   `limit` means all rows; keep the `> 0` check and `MAX_LIMIT` clamp for an explicit `limit`;
-   pre-stream failures keep their current status+JSON responses, mid-stream failures become a
-   terminal `error` frame.
-4. Rust unit tests against `rows_to_batch`/`stream_grant_frames` with an in-memory row
-   stream (`futures::stream::iter`), no database needed: schema/column order, an empty result
-   still emitting schema + `done`, batching across the 4096 boundary, and a mid-stream error
-   (an `Err` item from the input stream) producing an `error` frame after a partial batch. `limit`
-   absent → all rows and explicit `limit` still clamped are query-construction behavior and stay
-   as `#[ignore]`d live-DB round trips per the crate's convention.
+3. `rust/analytics-web-srv/src/audience_grants.rs` — split out `pub fn rows_to_batch` and
+   `pub fn stream_grant_frames` (generic over the row stream) per Design §2's Testability note;
+   `list_grants` returns `Body::from_stream` over an `async_stream::stream!` block that takes
+   ownership of the (cloned) `PgPool`, drives `sqlx::query_as(...).fetch(&pool)` piped through
+   `stream_grant_frames`, batching at `GRANT_BATCH_ROWS = 4096`, and yields
+   `Ok::<Bytes, std::io::Error>(..)` — satisfying `Body::from_stream`'s `TryStream + Send +
+   'static` bound, which a bare borrowing `fetch(&pool)` stream of plain `Bytes` does not; drop
+   `DEFAULT_LIMIT` and `MAX_LIMIT` so `limit` is unclamped in both directions (only the `> 0`
+   check remains) — an absent `limit` means all rows, and an explicit `limit` is honored exactly,
+   not silently capped; pre-stream failures keep their current status+JSON responses, mid-stream
+   failures become a terminal `error` frame.
+4. Rust integration tests in `tests/audience_grants_tests.rs` against `rows_to_batch`/
+   `stream_grant_frames` with an in-memory row stream (`futures::stream::iter`), no database
+   needed: schema/column order, an empty result still emitting schema + `done`, batching across
+   the 4096 boundary, and a mid-stream error (an `Err` item from the input stream) producing an
+   `error` frame after a partial batch. `limit` absent → all rows and explicit `limit` no longer
+   clamped are query-construction behavior and stay as `#[ignore]`d live-DB round trips per the
+   crate's convention. Update `live_create_list_delete_round_trip` (line ~449), whose list
+   assertion currently does `json_body(response).await; rows.as_array()` against the JSON list
+   body, to instead decode the Arrow stream (via `arrow_stream_tests.rs`'s or a shared helper)
+   before asserting on the rows; its `list_grants_400_for_*_limit/offset` and
+   `list_grants_503_when_pool_unconfigured` cases are pre-stream failures and are unaffected.
 
 **Phase 3 — frontend transport + client**
 
@@ -490,19 +523,24 @@ which is a plausible follow-up as a view toggle — not built here.
 **Phase 5 — Python + docs**
 
 11. `python/micromegas/micromegas/web_client.py` — framed-Arrow reader for
-    `list_audience_grants`; `python/micromegas/tests/cli/test_grants.py` updated.
+    `list_audience_grants`; `python/micromegas/tests/cli/test_grants.py` and
+    `python/micromegas/tests/test_web_client.py` updated for the new request/response shape;
+    `setup_telemetry.py` needs no code change (it only tests the list for emptiness) but its use
+    of `list_audience_grants` is verified against the new transport.
 12. Docs and `CHANGELOG.md` per the Documentation section.
 
 **Phase 6 — verification**
 
-13. `cargo build && cargo test && cargo clippy` in `rust/`; `npm run lint`, typecheck and `npm test`
-    in `analytics-web-app/`; `pytest` for the CLI tests.
+13. `cargo build && cargo test && cargo clippy` in `rust/`; `yarn lint`, `yarn type-check` and
+    `yarn test` in `analytics-web-app/` (this project uses `yarn`, not `npm`); `pytest` for the
+    CLI tests.
 
 ## Files to Modify
 
 Created:
 
 - `rust/analytics-web-srv/src/arrow_stream.rs`
+- `rust/analytics-web-srv/tests/arrow_stream_tests.rs`
 - `analytics-web-app/src/lib/audience-grants-api.ts`
 - `analytics-web-app/src/lib/__tests__/audience-grants-api.test.ts`
 - `analytics-web-app/src/routes/AudienceGrantsPage.tsx`
@@ -511,6 +549,9 @@ Created:
 Modified:
 
 - `rust/analytics-web-srv/src/audience_grants.rs`
+- `rust/analytics-web-srv/tests/audience_grants_tests.rs` — `rows_to_batch`/`stream_grant_frames`
+  unit cases, and `live_create_list_delete_round_trip`'s list assertion updated to decode the
+  Arrow stream instead of `json_body(response).await`
 - `rust/analytics-web-srv/src/stream_query.rs`
 - `rust/analytics-web-srv/tests/stream_query_tests.rs`
 - `rust/analytics-web-srv/src/lib.rs`
@@ -519,6 +560,7 @@ Modified:
 - `analytics-web-app/src/routes/AdminPage.tsx`
 - `python/micromegas/micromegas/web_client.py`
 - `python/micromegas/tests/cli/test_grants.py`
+- `python/micromegas/tests/test_web_client.py`
 - `mkdocs/docs/admin/web-app.md`, `authentication.md`, `api-keys.md`
 - `CHANGELOG.md`
 
@@ -530,12 +572,14 @@ Modified:
 - **Converting the existing route rather than adding `GET .../stream`.** A parallel Arrow route
   would avoid the break, at the cost of two list paths to keep in sync forever and a JSON path
   that keeps its silent-truncation default. One representation is the cleaner end state; the blast
-  radius is small and fully enumerated (the Python client, its CLI, and its test — no documented
-  `curl` example exists for this route).
-- **`limit` absent now means "all rows".** A behavior change for `micromegas-grants list` with no
-  `--limit`, which previously returned at most 100 rows. Strictly more correct — the old default
-  truncated with no signal — but worth an explicit CHANGELOG line, since a script that relied on
-  the implicit cap will now see everything.
+  radius is small and fully enumerated (the Python client, its CLI, `setup_telemetry.py`, and their
+  tests — no documented `curl` example exists for this route).
+- **`limit` absent now means "all rows", and an explicit `limit` is no longer clamped to 500.** A
+  behavior change for `micromegas-grants list`: with no `--limit` it previously returned at most
+  100 rows, and `--limit` above 500 was silently capped. Strictly more correct — the old defaults
+  truncated with no signal, and keeping the clamp after removing the default would have inverted
+  it (asking for more returning fewer) — but worth an explicit CHANGELOG line, since a script that
+  relied on either implicit limit will now see everything it asks for.
 - **Grouped cards over the flat table.** See Mockups. The cost is that date-ordered auditing gets
   harder; the underlying rows are still `created_at DESC` on the wire, so a future view toggle is
   cheap.
@@ -569,21 +613,28 @@ Modified:
   Grants**. Also update the route reference table at lines 528-531: the
   `GET {base_path}/api/audience-grants?...` row's response changes from the JSON array shape to
   the streamed Arrow content type (`application/x-micromegas-arrow-stream`), and the row gains a
-  note that an absent `limit` now means all rows rather than the old 100-row default.
+  note that an absent `limit` now means all rows rather than the old 100-row default, and an
+  explicit `limit` is no longer clamped to 500.
 - `mkdocs/docs/admin/api-keys.md` — at ≈247-254 and ≈405-410, add the UI as a third client of the
   grants API and document that `GET /api/audience-grants` responds with a streamed Arrow IPC
   result set (`application/x-micromegas-arrow-stream`), while `POST`/`DELETE` stay JSON.
 - `CHANGELOG.md` under `## Unreleased` — a `**Web App:**` bullet for the page, and an entry for
   the list-route representation change carrying the **Minor breaking change** clause: response is
-  now Arrow, and an absent `limit` returns all rows instead of 100. No SQL surface is touched.
+  now Arrow, an absent `limit` returns all rows instead of 100, and an explicit `limit` is no
+  longer clamped to 500. No SQL surface is touched.
 
 ## Testing Strategy
 
-**Rust** (`rust/analytics-web-srv`) — per Implementation Step 4: unit tests on `rows_to_batch` /
-`stream_grant_frames` over an in-memory row stream cover schema/column order, empty-result
-framing, 4096-row batching, and mid-stream-error framing without a database; `limit`
-absent-vs-clamped behavior stays `#[ignore]`d live-DB round trips. Plus a `stream_query.rs`
-regression check that the refactor left its frames byte-identical.
+**Rust** (`rust/analytics-web-srv`) — per Implementation Step 4: in `tests/audience_grants_tests.rs`
+(per the crate's convention of keeping unit tests under `tests/`, not beside the lib code), tests
+on `rows_to_batch` / `stream_grant_frames` over an in-memory row stream cover schema/column order,
+empty-result framing, 4096-row batching, and mid-stream-error framing without a database; `limit`
+absent-vs-explicit behavior stays `#[ignore]`d live-DB round trips, and the existing
+`live_create_list_delete_round_trip` is updated to decode the Arrow stream instead of
+`json_body(...).as_array()`. Plus a `tests/arrow_stream_tests.rs` regression check (moved out of
+`stream_query_tests.rs`) that the refactor left `stream_query.rs`'s frames byte-identical, and
+`stream_query_tests.rs`'s `test_error_code_serialization` passes untouched since `ErrorCode` stays
+an enum.
 
 **Frontend** (vitest + Testing Library), following `IngestionApiKeysPage.test.tsx`'s style: mock
 `@/lib/auth` to an admin user, `@/lib/config` to a pinned `basePath`, `@/hooks/usePageTitle` and
