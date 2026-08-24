@@ -225,7 +225,10 @@ Extract the transport half of `streamQuery` so a second endpoint can use it:
 export type ErrorCode = string
 
 /** Parses the JSON-framed Arrow protocol out of an already-issued Response.
- *  This is `streamQuery`'s existing body, verbatim, minus the fetch. */
+ *  This is `streamQuery`'s existing frame loop, with one change: a stream that runs out of
+ *  input (`readLine()` returns `null`) without having seen an explicit `done` frame yields an
+ *  `error` result (`code: 'INCOMPLETE_STREAM'`) instead of a `done` result, so a caller can
+ *  always tell truncation apart from a clean end. */
 export async function* readArrowStream(
   response: Response, signal?: AbortSignal
 ): AsyncGenerator<StreamResult>
@@ -237,19 +240,27 @@ export async function fetchArrowTable(
 ): Promise<Table>
 
 /** Thrown by `fetchArrowTable` for a pre-stream non-2xx response (status + parsed `{code,
- *  message}` body, or a synthesized code/message when the body isn't JSON). A transport-level
- *  type, not a caller's domain error — callers map it to their own error class. A `401` is
- *  rethrown as `AuthenticationError` instead, matching `streamQuery`'s existing handling. */
+ *  message}` body, or a synthesized code/message when the body isn't JSON), **and** for a
+ *  mid-stream failure — an `error` frame, or a stream that ends without a `done` frame (the
+ *  synthesized `INCOMPLETE_STREAM` code from `readArrowStream`) — in which case `status` is the
+ *  response's actual (2xx) status, since the frame carrying the failure arrived inside an
+ *  already-successful response. A transport-level type, not a caller's domain error — callers
+ *  map it to their own error class. A `401` is rethrown as `AuthenticationError` instead,
+ *  matching `streamQuery`'s existing handling. */
 export class ArrowFetchError extends Error {
   constructor(public code: string, message: string, public status: number) { ... }
 }
 ```
 
 `streamQuery` becomes `authenticatedFetch(POST /query-stream)` + `readArrowStream`, with its
-existing pre-stream 401/403 handling intact. No behavior change for any current caller.
+existing pre-stream 401/403 handling intact. One behavior change for existing callers: a stream
+that previously ended silently with an implicit `done` (no frame ever seen) now surfaces as an
+`error` result instead — the truncation bug `fetchQueryIPC` already guarded against separately.
 `fetchArrowTable` issues the `GET` itself via `authenticatedFetch`; on a non-2xx response it
 rethrows a `401` as `AuthenticationError` (same as `streamQuery`) and otherwise throws
-`ArrowFetchError`.
+`ArrowFetchError`; on a 2xx response, a mid-stream `error` frame or an incomplete stream from
+`readArrowStream` is likewise thrown as `ArrowFetchError`, carrying that frame's `code`/`message`
+and the response's (2xx) `status`.
 
 ### 4. Frontend: `src/lib/audience-grants-api.ts` (new)
 
@@ -268,10 +279,13 @@ export class AudienceGrantError extends Error {
   constructor(public code: string, message: string, public status: number) { ... }
 }
 
-/** GET /api/audience-grants as Arrow. No limit/offset — the stream carries the whole
- *  (optionally filtered) set, which is what makes grouping by audience honest. */
+/** GET /api/audience-grants as Arrow. No limit/offset, and no `axis` — the stream carries the
+ *  whole (optionally `audience`-filtered) set, which is what makes grouping by audience honest
+ *  and lets the page's Axis control filter client-side over the complete result instead of
+ *  re-fetching a partial one (Design §5). The route's `?axis=` query parameter still exists
+ *  server-side; this client just never sends it. */
 export function listAudienceGrants(
-  params: { audience?: string; axis?: GrantAxis },
+  params: { audience?: string },
   opts?: { signal?: AbortSignal; onProgress?: (rows: number) => void }
 ): Promise<AudienceGrant[]>
 
@@ -288,13 +302,15 @@ export function deleteAudienceGrant(
 
 Details:
 
-- `listAudienceGrants` builds its query with `URLSearchParams`, appending `audience`/`axis` only
+- `listAudienceGrants` builds its query with `URLSearchParams`, appending `audience` only
   when non-empty (an empty `audience=` is an exact match against `""`, which matches nothing —
   not "no filter"), calls `fetchArrowTable`, and decodes with `decodeAudienceGrants(table)` using
   `timestampToDate` from `arrow-utils.ts`, exactly as `decodeQueryDenyRules` does. `fetchArrowTable`
   throwing `ArrowFetchError` is caught and rethrown as `AudienceGrantError(code, message, status)`;
-  `AuthenticationError` (the 401 case) passes through unchanged, as `streamQuery` callers already
-  expect.
+  this single catch covers both a pre-stream non-2xx response and a mid-stream `error` frame (or a
+  stream missing its `done` frame), the latter carrying the frame's `code`/`message` and the 2xx
+  `status` the response arrived with. `AuthenticationError` (the 401 case) passes through
+  unchanged, as `streamQuery` callers already expect.
 - Create/delete stay plain JSON on `authenticatedFetch`, in `data-sources-api.ts`'s shape.
   `createAudienceGrant` reads `response.status === 201` **before** awaiting the body.
   `deleteAudienceGrant` must not call `.json()` on the `204` — a sibling `handleEmptyResponse`
@@ -317,17 +333,17 @@ One route file with a local `AddGrantDialog`, wrapped in `Suspense` on the defau
 grants: AudienceGrant[]          // the complete (optionally server-filtered) set
 isLoading, loadedRows, error     // loadedRows drives the progressive "N rows" counter
 focusAudience: string | null     // server-side ?audience= exact filter
-axisFilter: GrantAxis | null     // server-side ?axis=
+axisFilter: GrantAxis | null     // client-side filter over `grants`, no re-fetch
 findText: string                 // client-side substring, over the whole set
 showAddDialog, addPrefill, addError, isAdding, alreadyExistedNote
 deleteTarget, isDeleting, deleteError
 ```
 
-`loadGrants` is a `useCallback` over `[focusAudience, axisFilter]`, invoked by the
-load-on-dep-change effect (with the IIFE-inside-effect form the repo's
-`react-hooks/set-state-in-effect` lint requires) and passed to `PageLayout`'s `onRefresh`. It
-holds an `AbortController` in a ref so a filter change mid-stream cancels the in-flight request
-rather than racing it.
+`loadGrants` is a `useCallback` over `[focusAudience]` — axis is deliberately not a dependency;
+see Design §5 item 2 — invoked by the load-on-dep-change effect (with the IIFE-inside-effect form
+the repo's `react-hooks/set-state-in-effect` lint requires) and passed to `PageLayout`'s
+`onRefresh`. It holds an `AbortController` in a ref so a filter change mid-stream cancels the
+in-flight request rather than racing it.
 
 **Grouping** (`useMemo` over `grants` + `findText`): bucket by `audience`, then by `axis`.
 Audiences sorted by `localeCompare`; within an axis, `*` first, then selectors alphabetically —
@@ -341,7 +357,10 @@ Layout (see the Option B mockup):
 1. Breadcrumb `Admin / Audience Grants`; header with `<h1>` + subtitle *"Who can read from, and
    mint into, each audience."* and the primary **Add Grant** button.
 2. Filter bar: **Find** (client-side substring across the whole set) and **Axis** (Both / read only
-   / mint only → server-side `?axis=`). A summary line: *"N grants across M audiences."*
+   / mint only), both filtered client-side over the already-loaded `grants` — `axis` is a
+   two-valued equality filter over a set the page already holds in full, so there is nothing to
+   gain by re-fetching and no partial-set risk in filtering it locally, unlike Focus below. A
+   summary line: *"N grants across M audiences."*
 3. When `focusAudience` is set, a dismissible pill — *Showing only `team-alpha`* — above the cards.
    It is set by the per-card **Focus** button, and sends the exact-match `?audience=` param the
    API already offers (a cheap way to shrink the stream on a large store; the free-text Find box
@@ -368,9 +387,10 @@ Layout (see the Option B mockup):
    - Delete is an `×` on the chip, `aria-label={`Delete ${axis} grant on ${audience} for
      ${selector}`}`.
    - An axis with no grants shows *"No mint grants — nobody can issue ingestion keys stamped with
-     this audience."* This line is **only** rendered when no axis filter is active. Under
-     `axis=read` the mint rows were never fetched, and claiming "no mint grants" would be a lie;
-     the other axis row is hidden entirely instead.
+     this audience."* Because the axis filter is client-side over the complete loaded set (see
+     item 2), this is always an honest statement — the mint row (or its "No mint grants" line) is
+     simply hidden by the **Axis** filter like any other row, with no special case needed for
+     what an active filter does or doesn't know.
    - React key is the natural key, `` `${audience} ${axis} ${selector}` `` — there is no
      surrogate id, and no component can contain a NUL.
 7. Loading: a spinner with *"Streaming grants… N rows"* driven by `onProgress`. Cards are not
@@ -584,8 +604,9 @@ Modified:
   harder; the underlying rows are still `created_at DESC` on the wire, so a future view toggle is
   cheap.
 - **No pagination in the UI at all.** With the whole set streamed, a pathological store (millions
-  of grants) would be slow to render — the client-side `Find` box and the server-side Focus/axis
-  filters are the escape hatch, not a row cap. A row cap is what this design deliberately removed.
+  of grants) would be slow to render — the client-side `Find`/**Axis** filters and the
+  server-side Focus filter are the escape hatch, not a row cap. A row cap is what this design
+  deliberately removed.
 - **Cards render only after the stream completes.** Costs progressive paint on a large store; buys
   a grouping that is never transiently wrong. The row counter keeps the wait legible.
 - **Composed selector control instead of a raw text field.** Diverges from the CLI's raw-string
@@ -644,11 +665,12 @@ the real decoder rather than a stub.
 
 `audience-grants-api.test.ts`:
 
-- List URL omits `audience`/`axis` when unset and includes them when set; never sends
-  `limit`/`offset`.
+- List URL omits `audience` when unset and includes it when set; never sends `axis`,
+  `limit`, or `offset`.
 - A framed Arrow stream decodes to `AudienceGrant[]` with `createdAt` as a `Date`.
-- A stream ending without a `done` frame rejects; an `error` frame rejects with its `code` and
-  `message`.
+- A stream ending without a `done` frame rejects with `AudienceGrantError`; an `error` frame
+  rejects likewise, with its `code` and `message` and `status` 200 (the frame arrived inside an
+  already-successful response).
 - A pre-stream `503 NOT_CONFIGURED` JSON body becomes an `AudienceGrantError` carrying code and
   status; a pre-stream `401` becomes `AuthenticationError`, not `AudienceGrantError`.
 - Delete URL percent-encodes every key component; a `group:` selector containing `/` and `?`
@@ -663,12 +685,12 @@ the real decoder rather than a stub.
 
 - Grants from one stream group into per-audience cards with the right counts, sorted by audience,
   `*` first within an axis.
-- An audience with read grants but no mint grants shows the "No mint grants" line — and does
-  **not** show it when an axis filter is active.
+- An audience with read grants but no mint grants shows the "No mint grants" line
+  unconditionally, including when an axis filter hides the mint row itself.
 - Chips render selector, `created_by` and a formatted `created_at`.
-- `Find` narrows across the whole set without issuing a fetch; a name match keeps all of that
-  audience's selectors visible.
-- Axis filter and Focus each re-fetch with the right query param; clearing Focus re-fetches.
+- `Find` and **Axis** each narrow across the whole set without issuing a fetch; a name match under
+  Find keeps all of that audience's selectors visible.
+- Focus re-fetches with the right query param; clearing Focus re-fetches.
 - Add flow from a card's "+ Add mint grant" pre-fills audience and axis; picking Group and typing
   an id makes the preview read `group:<id>`; submit posts the right body and reloads.
 - A `400 BAD_REQUEST` on create keeps the dialog open with the server message; a `200` shows the
