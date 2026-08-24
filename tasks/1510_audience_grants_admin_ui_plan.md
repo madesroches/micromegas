@@ -343,7 +343,9 @@ deleteTarget, isDeleting, deleteError
 see Design §5 item 2 — invoked by the load-on-dep-change effect (with the IIFE-inside-effect form
 the repo's `react-hooks/set-state-in-effect` lint requires) and passed to `PageLayout`'s
 `onRefresh`. It holds an `AbortController` in a ref so a filter change mid-stream cancels the
-in-flight request rather than racing it.
+in-flight request rather than racing it; `loadGrants` ignores a rejection whose `name ===
+'AbortError'` (does not set `error`, does not clear `isLoading` for the superseded request),
+matching the existing guard in `useStreamQuery.ts:93`.
 
 **Grouping** (`useMemo` over `grants` + `findText`): bucket by `audience`, then by `axis`.
 Audiences sorted by `localeCompare`; within an axis, `*` first, then selectors alphabetically —
@@ -530,7 +532,8 @@ which is a plausible follow-up as a view toggle — not built here.
 **Phase 3 — frontend transport + client**
 
 5. `analytics-web-app/src/lib/arrow-stream.ts` — extract `readArrowStream`, add `fetchArrowTable`,
-   widen `ErrorCode`; `streamQuery`/`fetchQueryIPC` unchanged in behavior.
+   widen `ErrorCode`; `fetchQueryIPC` unchanged, `streamQuery` gains the single behavior change
+   described in Design §3 (incomplete stream → `error` result).
 6. `analytics-web-app/src/lib/audience-grants-api.ts` (new) — per Design §4.
 7. `analytics-web-app/src/lib/__tests__/audience-grants-api.test.ts`.
 
@@ -622,6 +625,13 @@ Modified:
 - **No bulk create.** Provisioning many grants at once (one per user, one per audience) is a loop,
   and `micromegas-grants` already scripts a loop better than a browser form can. The page is for
   inspecting and fixing individual grants, which is the job that currently has no tool at all.
+- **The key-list routes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`) stay JSON in this
+  change.** They have the same 500-row cap and silent-truncation default as the grants route did,
+  but unlike it they have live JSON clients (`analytics-web-app/src/lib/ingestion-api-keys-api.ts`,
+  `analytics-api-keys-api.ts`, and the Python `WebClient.list_ingestion_api_keys` /
+  `micromegas-import-keys`) and documented `curl` examples (`mkdocs/docs/admin/api-keys.md:308,
+  324`), so converting them is a larger, separate change. `arrow_stream.rs` makes that conversion
+  cheap whenever it's taken on.
 
 ## Documentation
 
@@ -642,7 +652,10 @@ Modified:
 - `CHANGELOG.md` under `## Unreleased` — a `**Web App:**` bullet for the page, and an entry for
   the list-route representation change carrying the **Minor breaking change** clause: response is
   now Arrow, an absent `limit` returns all rows instead of 100, and an explicit `limit` is no
-  longer clamped to 500. No SQL surface is touched.
+  longer clamped to 500. A second **Minor breaking change** note for the Rust API move in Design
+  §1: `analytics_web_srv::stream_query::{encode_schema, encode_batch}` are removed in favor of
+  `analytics_web_srv::arrow_stream::ArrowStreamEncoder`, and `ErrorCode` gains `as_str()`. No SQL
+  surface is touched.
 
 ## Testing Strategy
 
@@ -685,8 +698,9 @@ the real decoder rather than a stub.
 
 - Grants from one stream group into per-audience cards with the right counts, sorted by audience,
   `*` first within an axis.
-- An audience with read grants but no mint grants shows the "No mint grants" line
-  unconditionally, including when an axis filter hides the mint row itself.
+- An audience with read grants but no mint grants shows the "No mint grants" line when the Axis
+  filter is Both or mint-only; switching the Axis filter to read-only hides that line along with
+  the mint row itself, same as any other row.
 - Chips render selector, `created_by` and a formatted `created_at`.
 - `Find` and **Axis** each narrow across the whole set without issuing a fetch; a name match under
   Find keeps all of that audience's selectors visible.
@@ -711,10 +725,3 @@ framed Arrow body through `web_client.list_audience_grants` directly and asserts
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
 `micromegas-grants list`. Seed a few thousand grants to confirm the stream, the row counter, and
 the grouping hold up.
-
-## Open Questions
-
-1. **Should the key-list routes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`) move to
-   Arrow too?** They have the same 500-row cap and the same silent-truncation default. Out of scope
-   here, but `arrow_stream.rs` makes it cheap, and leaving them JSON keeps two conventions in one
-   admin API.
