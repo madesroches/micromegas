@@ -102,9 +102,9 @@ export function createApiKeysApi<
     const response = await authenticatedFetch(`${getApiBase()}${config.basePath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // `audience` is sent only when set: `JSON.stringify` drops an `undefined` value
-      // entirely, so an unset audience omits the field rather than sending `null` --
-      // the server then applies its own default (`MICROMEGAS_DEFAULT_KEY_AUDIENCE`).
+      // `audience` is only ever unset for callers that don't ask for one (analytics
+      // keys never carry an audience). `JSON.stringify` drops an `undefined` value
+      // entirely, so that case omits the field rather than sending `null`.
       body: JSON.stringify({ name, audience }),
     })
     return handleResponse<MintApiKeyResponse>(response)

@@ -4,6 +4,8 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Web App:**
+  * Require and pre-fill the audience field in the ingestion API key mint dialog: it now defaults to `public` instead of hinting that a blank value falls back to a server-side `MICROMEGAS_DEFAULT_KEY_AUDIENCE` default, and the Mint button is gated on a non-blank value.
 * **Analytics:**
   * Merges (`QueryMerger`, the path every non-ordering-declaring view uses -- `measures`,
     `log_entries`, `async_events`, `images`, `net_spans`, `otel_spans`, `export_log`, `blocks`'

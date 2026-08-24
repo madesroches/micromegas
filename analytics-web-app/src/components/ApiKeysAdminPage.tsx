@@ -102,7 +102,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
 
   const openMintForm = () => {
     setMintName('')
-    setMintAudience('')
+    setMintAudience(config.showAudience ? 'public' : '')
     setMintError(null)
     setShowMintForm(true)
   }
@@ -253,7 +253,8 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                         onChange={(e) => setMintAudience(e.target.value)}
                       />
                       <p className="mt-1 text-xs text-theme-text-muted">
-                        Leave blank to use MICROMEGAS_DEFAULT_KEY_AUDIENCE.
+                        The write audience this key is scoped to. "public" is readable by every
+                        authenticated principal; use a named audience to restrict it.
                       </p>
                     </div>
                   )}
@@ -262,7 +263,14 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                   <Button variant="outline" onClick={() => setShowMintForm(false)} disabled={isMinting}>
                     Cancel
                   </Button>
-                  <Button onClick={handleMint} disabled={isMinting || !mintName.trim()}>
+                  <Button
+                    onClick={handleMint}
+                    disabled={
+                      isMinting ||
+                      !mintName.trim() ||
+                      (config.showAudience && !mintAudience.trim())
+                    }
+                  >
                     {isMinting ? (
                       <span className="flex items-center gap-2">
                         <span className="w-4 h-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
