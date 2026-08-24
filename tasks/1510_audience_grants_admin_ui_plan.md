@@ -138,6 +138,14 @@ impl ArrowStreamEncoder {
 change. (Rust API churn is fine here per `CLAUDE.md`; the wire format is what must stay put — and
 does.)
 
+`tests/stream_query_tests.rs` imports `encode_batch`/`encode_schema` as free functions with the
+old `(&schema, &mut tracker, &options)` signature; that signature is gone once encoding becomes
+`ArrowStreamEncoder` methods. Its encoder-behavior cases (schema/batch framing, compression) move
+to a unit-test module in `arrow_stream.rs` against `ArrowStreamEncoder` directly; the cases
+specific to `stream_query.rs` (`contains_blocked_function`, `sanitize_origin_label`,
+`substitute_macros`) stay in `tests/stream_query_tests.rs` with the encoder-related imports
+dropped.
+
 ### 2. Server: `list_grants` returns an Arrow stream
 
 Same route, same query params, new representation.
@@ -183,6 +191,14 @@ stream that ends without a `done` frame as a failure, never as an empty result.
 The four `(audience, axis)` filter branches keep their current shape; only the `limit` clause
 becomes conditional.
 
+**Testability.** The row-fetching query (needs a live Postgres) is kept separate from the framing
+logic (doesn't): a pure `rows_to_batch(rows: &[GrantRow]) -> Result<RecordBatch>` builds one batch,
+and a generic `stream_grant_frames<S>(rows: S) -> impl Stream<Item = Bytes>` (where `S: Stream<Item
+= sqlx::Result<GrantRow>>`) does the batching-at-4096 and mid-stream-error-to-`error`-frame work
+over any row stream, including an in-test `futures::stream::iter` that never touches a database.
+`list_grants` itself is just `sqlx::query_as(...).fetch(&pool)` piped into
+`stream_grant_frames`.
+
 ### 3. Frontend: generalize `arrow-stream.ts`
 
 Extract the transport half of `streamQuery` so a second endpoint can use it:
@@ -203,10 +219,21 @@ export async function* readArrowStream(
 export async function fetchArrowTable(
   url: string, opts?: { signal?: AbortSignal; onProgress?: (rows: number) => void }
 ): Promise<Table>
+
+/** Thrown by `fetchArrowTable` for a pre-stream non-2xx response (status + parsed `{code,
+ *  message}` body, or a synthesized code/message when the body isn't JSON). A transport-level
+ *  type, not a caller's domain error — callers map it to their own error class. A `401` is
+ *  rethrown as `AuthenticationError` instead, matching `streamQuery`'s existing handling. */
+export class ArrowFetchError extends Error {
+  constructor(public code: string, message: string, public status: number) { ... }
+}
 ```
 
 `streamQuery` becomes `authenticatedFetch(POST /query-stream)` + `readArrowStream`, with its
 existing pre-stream 401/403 handling intact. No behavior change for any current caller.
+`fetchArrowTable` issues the `GET` itself via `authenticatedFetch`; on a non-2xx response it
+rethrows a `401` as `AuthenticationError` (same as `streamQuery`) and otherwise throws
+`ArrowFetchError`.
 
 ### 4. Frontend: `src/lib/audience-grants-api.ts` (new)
 
@@ -248,7 +275,10 @@ Details:
 - `listAudienceGrants` builds its query with `URLSearchParams`, appending `audience`/`axis` only
   when non-empty (an empty `audience=` is an exact match against `""`, which matches nothing —
   not "no filter"), calls `fetchArrowTable`, and decodes with `decodeAudienceGrants(table)` using
-  `timestampToDate` from `arrow-utils.ts`, exactly as `decodeQueryDenyRules` does.
+  `timestampToDate` from `arrow-utils.ts`, exactly as `decodeQueryDenyRules` does. `fetchArrowTable`
+  throwing `ArrowFetchError` is caught and rethrown as `AudienceGrantError(code, message, status)`;
+  `AuthenticationError` (the 401 case) passes through unchanged, as `streamQuery` callers already
+  expect.
 - Create/delete stay plain JSON on `authenticatedFetch`, in `data-sources-api.ts`'s shape.
   `createAudienceGrant` reads `response.status === 201` **before** awaiting the body.
   `deleteAudienceGrant` must not call `.json()` on the `204` — a sibling `handleEmptyResponse`
@@ -300,7 +330,7 @@ Layout (see the Option B mockup):
    It is set by the per-card **Focus** button, and sends the exact-match `?audience=` param the
    API already offers (a cheap way to shrink the stream on a large store; the free-text Find box
    is the substring search operators actually reach for, which the API has no param for).
-4. Two standing notes:
+4. Three standing notes:
    - **Propagation**: read grants take effect within the grant-cache TTL
      (`MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, default 60 s) because
      `DbAudienceGrantsSource` serves a whole-table snapshot; mint grants are a per-request point
@@ -308,6 +338,10 @@ Layout (see the Option B mockup):
      user's dashboard, sees nothing, and concludes the page is broken.
    - **Scope**: `public` is always readable by every authenticated principal — it needs no grant
      row here, and adding one would change nothing.
+   - **Env-map grants**: for the read axis, a deployment may also grant access via the
+     `MICROMEGAS_AUDIENCE_GRANTS` startup env map (unioned with this table, see `api-keys.md`);
+     this page shows only the DB-backed grants, so a principal can have read access this page
+     doesn't show.
 5. `ErrorBanner` (`onRetry={loadGrants}`) for load and delete failures.
 6. One card per audience: header = audience name (monospace) + grant count + **Focus**; then a
    `read` row and a `mint` row, each an axis badge plus selector chips and a *"+ Add read grant"* /
@@ -372,12 +406,15 @@ so the chip disappears instead of lingering.
 framing is the same JSON-framed protocol, so this needs a small reader:
 `stream=True`, read a line, read `size` bytes, feed the concatenated IPC messages to
 `pyarrow.ipc.open_stream`, and raise on an `error` frame or a stream with no `done` frame. Returns
-the same list of dicts as before, so `grants.py`'s `cmd_list` (both `--format` branches) is
-unchanged apart from `created_at` now arriving as a `datetime` rather than a string.
+the same list of dicts as before, except `created_at` decodes to a `datetime` from the Arrow
+column; `list_audience_grants` converts it back to an ISO-8601 string (`.isoformat()`) before
+returning, so the dict shape handed to `grants.py` is unchanged and `json.dumps` in `cmd_list`
+keeps working without a `default=` handler.
 
-If a reusable framed-Arrow reader already exists on the Python side it should be used; otherwise
-the new helper belongs next to `WebClient`, not inside `grants.py`, since the key-list routes are
-plausible future converts.
+No framed-Arrow reader exists anywhere in `python/micromegas/micromegas/` today — the only
+`pyarrow.ipc` use is `flightsql/client.py`'s `open_stream(dataset_schema)` over a bare schema blob,
+not this JSON-framed protocol — so this is new code, not a reuse. The helper belongs next to
+`WebClient`, not inside `grants.py`, since the key-list routes are plausible future converts.
 
 ### 9. Admin card + route wiring
 
@@ -416,18 +453,26 @@ which is a plausible follow-up as a view toggle — not built here.
 1. `rust/analytics-web-srv/src/arrow_stream.rs` (new) — `ARROW_STREAM_CONTENT_TYPE`, `json_line`,
    `DataHeader`/`DoneFrame`/`ErrorFrame`, `ArrowStreamEncoder`. Register in `lib.rs`.
 2. `rust/analytics-web-srv/src/stream_query.rs` — delete the moved copies, use `arrow_stream`.
-   Wire output must be byte-identical; existing tests must pass untouched.
+   Wire output must be byte-identical. `tests/stream_query_tests.rs` loses its
+   `encode_batch`/`encode_schema` imports and the cases exercising them, which move to a new unit
+   test module in `arrow_stream.rs`; its remaining cases (macro/blocked-function/origin-label
+   handling) pass untouched.
 
 **Phase 2 — server list route**
 
-3. `rust/analytics-web-srv/src/audience_grants.rs` — `list_grants` returns
-   `Body::from_stream` over `sqlx …fetch(&pool)`, batching at `GRANT_BATCH_ROWS = 4096`; drop
-   `DEFAULT_LIMIT` so an absent `limit` means all rows; keep the `> 0` check and `MAX_LIMIT` clamp
-   for an explicit `limit`; pre-stream failures keep their current status+JSON responses,
-   mid-stream failures become a terminal `error` frame.
-4. Rust tests: schema/column order, an empty result still emitting schema + `done`, batching across
-   the 4096 boundary, `limit` absent → all rows, explicit `limit` still clamped, and a mid-stream
-   error producing an `error` frame after a partial batch.
+3. `rust/analytics-web-srv/src/audience_grants.rs` — split out `rows_to_batch` and
+   `stream_grant_frames` (generic over the row stream) per Design §2's Testability note;
+   `list_grants` returns `Body::from_stream` over `sqlx …fetch(&pool)` piped through
+   `stream_grant_frames`, batching at `GRANT_BATCH_ROWS = 4096`; drop `DEFAULT_LIMIT` so an absent
+   `limit` means all rows; keep the `> 0` check and `MAX_LIMIT` clamp for an explicit `limit`;
+   pre-stream failures keep their current status+JSON responses, mid-stream failures become a
+   terminal `error` frame.
+4. Rust unit tests against `rows_to_batch`/`stream_grant_frames` with an in-memory row
+   stream (`futures::stream::iter`), no database needed: schema/column order, an empty result
+   still emitting schema + `done`, batching across the 4096 boundary, and a mid-stream error
+   (an `Err` item from the input stream) producing an `error` frame after a partial batch. `limit`
+   absent → all rows and explicit `limit` still clamped are query-construction behavior and stay
+   as `#[ignore]`d live-DB round trips per the crate's convention.
 
 **Phase 3 — frontend transport + client**
 
@@ -467,6 +512,7 @@ Modified:
 
 - `rust/analytics-web-srv/src/audience_grants.rs`
 - `rust/analytics-web-srv/src/stream_query.rs`
+- `rust/analytics-web-srv/tests/stream_query_tests.rs`
 - `rust/analytics-web-srv/src/lib.rs`
 - `analytics-web-app/src/lib/arrow-stream.ts`
 - `analytics-web-app/src/router.tsx`
@@ -501,10 +547,13 @@ Modified:
 - **Composed selector control instead of a raw text field.** Diverges from the CLI's raw-string
   input; the preview line keeps the wire value visible, and the failure it prevents (a typo'd
   prefix that validates and then matches nobody) is exactly what this page exists to catch.
-- **The DB store is treated as the whole picture.** The `MICROMEGAS_AUDIENCE_GRANTS` startup env
-  map is on its way out, so the page deliberately says nothing about it rather than teaching an
-  operator about a source that is being removed. The one rule the store doesn't contain is the
-  built-in "`public` is always readable", which the page states directly.
+- **The DB store is treated as the whole picture.** For the read axis, effective access is the DB
+  table unioned with the `MICROMEGAS_AUDIENCE_GRANTS` startup env map (`api-keys.md:246-249`),
+  which stays a live, undeprecated knob. The page adds a third standing note next to Propagation
+  and Scope: env-map grants, if configured, are not shown here and must be checked separately —
+  rather than teach the full union semantics on a page whose whole point is a quick answer to "who
+  can see this". The one rule the store doesn't contain at all is the built-in "`public` is always
+  readable", which the page states directly.
 - **No bulk create.** Provisioning many grants at once (one per user, one per audience) is a loop,
   and `micromegas-grants` already scripts a loop better than a browser form can. The page is for
   inspecting and fixing individual grants, which is the job that currently has no tool at all.
@@ -517,7 +566,10 @@ Modified:
   immediate).
 - `mkdocs/docs/admin/authentication.md` — in §*Audiences and Grants* and §*Self-service ingestion
   key mint*, note that each `micromegas-grants create` has an equivalent in **Admin → Audience
-  Grants**.
+  Grants**. Also update the route reference table at lines 528-531: the
+  `GET {base_path}/api/audience-grants?...` row's response changes from the JSON array shape to
+  the streamed Arrow content type (`application/x-micromegas-arrow-stream`), and the row gains a
+  note that an absent `limit` now means all rows rather than the old 100-row default.
 - `mkdocs/docs/admin/api-keys.md` — at ≈247-254 and ≈405-410, add the UI as a third client of the
   grants API and document that `GET /api/audience-grants` responds with a streamed Arrow IPC
   result set (`application/x-micromegas-arrow-stream`), while `POST`/`DELETE` stay JSON.
@@ -527,7 +579,10 @@ Modified:
 
 ## Testing Strategy
 
-**Rust** (`rust/analytics-web-srv`) — per Implementation Step 4, plus a `stream_query.rs`
+**Rust** (`rust/analytics-web-srv`) — per Implementation Step 4: unit tests on `rows_to_batch` /
+`stream_grant_frames` over an in-memory row stream cover schema/column order, empty-result
+framing, 4096-row batching, and mid-stream-error framing without a database; `limit`
+absent-vs-clamped behavior stays `#[ignore]`d live-DB round trips. Plus a `stream_query.rs`
 regression check that the refactor left its frames byte-identical.
 
 **Frontend** (vitest + Testing Library), following `IngestionApiKeysPage.test.tsx`'s style: mock
@@ -544,7 +599,7 @@ the real decoder rather than a stub.
 - A stream ending without a `done` frame rejects; an `error` frame rejects with its `code` and
   `message`.
 - A pre-stream `503 NOT_CONFIGURED` JSON body becomes an `AudienceGrantError` carrying code and
-  status.
+  status; a pre-stream `401` becomes `AuthenticationError`, not `AudienceGrantError`.
 - Delete URL percent-encodes every key component; a `group:` selector containing `/` and `?`
   round-trips. `204` resolves without a JSON parse.
 - `201` → `created: true`; `200` → `created: false`. A non-JSON error body falls back to
@@ -572,8 +627,12 @@ the real decoder rather than a stub.
 - A `503` list response renders the server message in the error banner (this also covers the
   `--disable-auth` fixed 503).
 
-**Python**: `test_grants.py` updated to serve a framed Arrow body and assert `cmd_list` renders
-both formats.
+**Python**: `test_grants.py` updated so its `FakeClient`/fixtures return `list_audience_grants`'
+real output — `created_at` as the ISO-8601 string produced from the decoded `datetime` — instead
+of a hand-typed string, so `test_cmd_list_json_format_is_valid_json` actually exercises the
+`datetime`-to-string conversion; assert `cmd_list` renders both formats. A separate test serves a
+framed Arrow body through `web_client.list_audience_grants` directly and asserts the returned
+`created_at` is the expected ISO-8601 string.
 
 **Manual**: run the monolith with `--disable-auth` to confirm the 503 banner; then against a real
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
@@ -582,9 +641,7 @@ the grouping hold up.
 
 ## Open Questions
 
-1. **Does the Python side already have a framed-Arrow reader?** If not, Design §8 adds one next to
-   `WebClient`. Worth confirming before writing a second implementation of the frame loop.
-2. **Should the key-list routes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`) move to
+1. **Should the key-list routes (`/api/ingestion-api-keys`, `/api/analytics-api-keys`) move to
    Arrow too?** They have the same 500-row cap and the same silent-truncation default. Out of scope
    here, but `arrow_stream.rs` makes it cheap, and leaving them JSON keeps two conventions in one
    admin API.
