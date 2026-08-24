@@ -125,8 +125,9 @@ pub fn json_line<T: Serialize>(value: &T) -> Bytes;
 #[derive(Serialize)] pub struct DoneFrame  { .. }
 /// `code` is a plain `&'static str`, not an enum: it is wire-identical to what
 /// `stream_query::ErrorCode`'s SCREAMING_SNAKE_CASE serialization already emits, and each
-/// producer has its own code vocabulary (`INVALID_SQL` here, `NOT_CONFIGURED` there).
-#[derive(Serialize)] pub struct ErrorFrame { pub code: &'static str, pub message: String }
+/// producer has its own code vocabulary (`INVALID_SQL` here, `NOT_CONFIGURED` there). Carries the
+/// same `#[serde(rename = "type")] frame_type: &'static str` field as its siblings, elided here too.
+#[derive(Serialize)] pub struct ErrorFrame { .. }
 
 /// Owns the `DictionaryTracker` + `IpcWriteOptions` pair that must stay consistent between the
 /// schema message and every batch — the invariant `stream_query.rs`'s comment calls out and
@@ -223,8 +224,13 @@ batch, and a generic `pub fn stream_grant_frames<S>(rows: S) -> impl Stream<Item
 `S: Stream<Item = sqlx::Result<GrantRow>>`) does the batching-at-4096 and mid-stream-error-to-
 `error`-frame work over any row stream, including an in-test `futures::stream::iter` that never
 touches a database. Both are `pub` so `tests/audience_grants_tests.rs` can exercise them from
-outside the lib, per the crate's tests-under-`tests/` convention. `list_grants` itself is just
-`sqlx::query_as(...).fetch(&pool)` piped into `stream_grant_frames`.
+outside the lib, per the crate's tests-under-`tests/` convention — which requires `GrantRow` itself
+to be `pub` with `pub` fields: today's private `GrantListEntry` (`audience_grants.rs:321-328`) is
+renamed to `GrantRow` and made `pub` (a `pub fn` naming a private type otherwise trips Rust's
+`private_interfaces` lint, and the external test crate could not construct rows for
+`futures::stream::iter` anyway). Its `#[derive(Serialize)]` is dropped along with the rename, since
+the route stops returning JSON. `list_grants` itself is just `sqlx::query_as(...).fetch(&pool)`
+piped into `stream_grant_frames`.
 
 ### 3. Frontend: generalize `arrow-stream.ts`
 
@@ -282,13 +288,30 @@ export interface AudienceGrant {
   audience: string
   axis: GrantAxis
   selector: string
-  createdAt: Date | null
+  createdAt: Date | null   // `created_at` is non-null on the wire (§2); `| null` is defensive
+                            // against `timestampToDate` returning `null`, matching
+                            // `QueryDenyRule.createdAt` in `decodeQueryDenyRules`
   createdBy: string
 }
 
 export class AudienceGrantError extends Error {
   constructor(public code: string, message: string, public status: number) { ... }
 }
+
+/** The server's raw JSON shape for a single grant, as `POST` returns it (snake_case fields,
+ *  `created_at` a string) — distinct from `AudienceGrant`, which is the Arrow-decoded, camelCase
+ *  shape the list path produces. */
+export interface AudienceGrantResponse {
+  audience: string
+  axis: GrantAxis
+  selector: string
+  created_at: string
+  created_by: string
+}
+
+/** Decodes a `fetchArrowTable` result into `AudienceGrant[]`, using `timestampToDate` for
+ *  `created_at`, exactly as `decodeQueryDenyRules` does for its table. */
+export function decodeAudienceGrants(table: Table): AudienceGrant[]
 
 /** GET /api/audience-grants as Arrow. No limit/offset, and no `axis` — the stream carries the
  *  whole (optionally `audience`-filtered) set, which is what makes grouping by audience honest
@@ -452,9 +475,17 @@ so the chip disappears instead of lingering.
 ### 8. Python client + CLI
 
 `web_client.list_audience_grants` now decodes an Arrow stream instead of `resp.json()`. The
-framing is the same JSON-framed protocol, so this needs a small reader:
-`stream=True`, read a line, read `size` bytes, feed the concatenated IPC messages to
-`pyarrow.ipc.open_stream`, and raise on an `error` frame or a stream with no `done` frame. Returns
+framing is the same JSON-framed protocol, so this needs a small reader — but every route,
+including this one, sits behind `web_server.rs:787`'s app-wide `CompressionLayer::new().gzip(true)`
+(no content-type exclusion covers `application/x-micromegas-arrow-stream`, and a streamed body has
+no `Content-Length` for `SizeAbove` to skip), and `requests` sends `Accept-Encoding: gzip` by
+default. `requests.adapters.HTTPAdapter.send` builds its urllib3 response with
+`decode_content=False`, so `resp.raw.read(n)` / `resp.raw.readline()` would return the *compressed*
+bytes, not frames. The reader must instead consume a gzip-decoded byte source — a small buffered
+reader over `resp.iter_content()` (or `resp.raw.stream(..., decode_content=True)`), never raw
+`resp.raw.read`/`readline` — from which it does: `stream=True`, read a line, read `size` bytes,
+feed the concatenated IPC messages to `pyarrow.ipc.open_stream`, and raise on an `error` frame or a
+stream with no `done` frame. Returns
 the same list of dicts as before, except `created_at` decodes to a `datetime` from the Arrow
 column; `list_audience_grants` converts it back to a string with a small formatter that replicates
 chrono's `SecondsFormat::AutoSi` — the mode the current JSON route's `chrono::DateTime<Utc>`
@@ -466,10 +497,11 @@ exactly six, so it would diverge from today's output whenever a timestamp lands 
 millisecond that is not a whole second — e.g. a value at `.123` ms serializes today as
 `...T00:00:00.123Z` but as `...T00:00:00.123000Z` under `.isoformat()`-based logic. The
 AutoSi-equivalent formatter keeps the output byte-identical to the `Z`-suffixed RFC 3339 string the
-JSON route produces today — the exact forms the fixtures in `tests/cli/test_grants.py` use,
-covering both the whole-second case (e.g. `"2026-08-19T00:00:00Z"`) and a whole-millisecond case
-(e.g. `"2026-08-19T00:00:00.123Z"`) — so the dict shape handed to `grants.py` is genuinely
-unchanged and `json.dumps` in `cmd_list` keeps working without a `default=` handler.
+JSON route produces today — the form the existing fixtures in `tests/cli/test_grants.py` already use
+for the whole-second case (e.g. `"2026-08-19T00:00:00Z"`, at lines 21, 78, 100); this change adds a
+whole-millisecond fixture (e.g. `"2026-08-19T00:00:00.123Z"`) to cover the branch those fixtures
+never exercised — so the dict shape handed to `grants.py` is genuinely unchanged and `json.dumps` in
+`cmd_list` keeps working without a `default=` handler.
 
 No framed-Arrow reader exists anywhere in `python/micromegas/micromegas/` today — the only
 `pyarrow.ipc` use is `flightsql/client.py`'s `open_stream(dataset_schema)` over a bare schema blob,
@@ -523,8 +555,10 @@ which is a plausible follow-up as a view toggle — not built here.
 
 **Phase 2 — server list route**
 
-3. `rust/analytics-web-srv/src/audience_grants.rs` — split out `pub fn rows_to_batch` and
-   `pub fn stream_grant_frames` (generic over the row stream) per Design §2's Testability note;
+3. `rust/analytics-web-srv/src/audience_grants.rs` — rename the private `GrantListEntry` to
+   `pub struct GrantRow` with `pub` fields, dropping its now-unused `Serialize` derive; split out
+   `pub fn rows_to_batch` and `pub fn stream_grant_frames` (generic over the row stream) per
+   Design §2's Testability note;
    `list_grants` returns `Body::from_stream` over an `async_stream::stream!` block that takes
    ownership of the (cloned) `PgPool`, drives `sqlx::query_as(...).fetch(&pool)` piped through
    `stream_grant_frames`, batching at `GRANT_BATCH_ROWS = 4096`, and yields
@@ -545,8 +579,11 @@ which is a plausible follow-up as a view toggle — not built here.
    clamped are query-construction behavior and stay as `#[ignore]`d live-DB round trips per the
    crate's convention. Update `live_create_list_delete_round_trip` (line ~449), whose list
    assertion currently does `json_body(response).await; rows.as_array()` against the JSON list
-   body, to instead decode the Arrow stream (via `arrow_stream_tests.rs`'s or a shared helper)
-   before asserting on the rows; its `list_grants_400_for_*_limit/offset` and
+   body, to instead decode the Arrow stream before asserting on the rows. Each file under
+   `tests/` compiles as its own crate, so this decode helper cannot simply be imported from
+   `arrow_stream_tests.rs`; add it as a `tests/common/mod.rs` shared module (the
+   `rust/analytics/tests/common` precedent) or as a `pub` decode helper on the lib side. Its
+   `list_grants_400_for_*_limit/offset` and
    `list_grants_503_when_pool_unconfigured` cases are pre-stream failures and are unaffected.
 
 **Phase 3 — frontend transport + client**
@@ -566,7 +603,10 @@ which is a plausible follow-up as a view toggle — not built here.
 **Phase 5 — Python + docs**
 
 11. `python/micromegas/micromegas/web_client.py` — framed-Arrow reader for
-    `list_audience_grants`; `python/micromegas/tests/cli/test_grants.py` and
+    `list_audience_grants`, fed from a gzip-decoded byte source (`resp.iter_content()` or
+    `resp.raw.stream(..., decode_content=True)`), never raw `resp.raw.read`/`readline`, since the
+    response passes through `web_server.rs`'s app-wide gzip `CompressionLayer`;
+    `python/micromegas/tests/cli/test_grants.py` and
     `python/micromegas/tests/test_web_client.py` updated for the new request/response shape;
     `setup_telemetry.py` needs no code change (it only tests the list for emptiness) but its use
     of `list_audience_grants` is verified against the new transport.
@@ -584,6 +624,9 @@ Created:
 
 - `rust/analytics-web-srv/src/arrow_stream.rs`
 - `rust/analytics-web-srv/tests/arrow_stream_tests.rs`
+- `rust/analytics-web-srv/tests/common/mod.rs` — shared Arrow-stream decode helper for
+  `live_create_list_delete_round_trip`, following the `rust/analytics/tests/common` precedent
+  (only needed if the decode helper isn't instead added as `pub` on the lib side)
 - `analytics-web-app/src/lib/audience-grants-api.ts`
 - `analytics-web-app/src/lib/__tests__/audience-grants-api.test.ts`
 - `analytics-web-app/src/routes/AudienceGrantsPage.tsx`
@@ -691,8 +734,9 @@ on `rows_to_batch` / `stream_grant_frames` over an in-memory row stream cover sc
 empty-result framing, 4096-row batching, and mid-stream-error framing without a database; `limit`
 absent-vs-explicit behavior stays `#[ignore]`d live-DB round trips, and the existing
 `live_create_list_delete_round_trip` is updated to decode the Arrow stream instead of
-`json_body(...).as_array()`. Plus a `tests/arrow_stream_tests.rs` regression check (moved out of
-`stream_query_tests.rs`) that the refactor left `stream_query.rs`'s frames byte-identical, and
+`json_body(...).as_array()`. Plus `tests/arrow_stream_tests.rs`, holding the existing encoder-behavior cases (schema/batch
+framing, compression) moved out of `stream_query_tests.rs` to run against `ArrowStreamEncoder`
+directly — not a byte-identity check, since neither file constructs a frame or drives the handler.
 `stream_query_tests.rs`'s `test_error_code_serialization` passes untouched since `ErrorCode` stays
 an enum.
 
@@ -746,9 +790,10 @@ of a hand-typed string, so `test_cmd_list_json_format_is_valid_json` actually ex
 `datetime`-to-string conversion; assert `cmd_list` renders both formats. Fixtures cover both a
 whole-second timestamp and a whole-millisecond one (e.g. a `.123` ms value), so the AutoSi-
 equivalent formatter's zero-digit and three-digit branches are both exercised, not just the
-zero-digit case the old hand-typed fixtures used exclusively. A separate test serves a framed
-Arrow body through `web_client.list_audience_grants` directly and asserts the returned
-`created_at` is the expected ISO-8601 string for both cases.
+zero-digit case the old hand-typed fixtures used exclusively. A separate test serves a
+gzip-compressed framed Arrow body (so it actually exercises the reader's gzip-decoded byte
+source, not a raw one) through `web_client.list_audience_grants` directly and asserts the
+returned `created_at` is the expected ISO-8601 string for both cases.
 
 **Manual**: run the monolith with `--disable-auth` to confirm the 503 banner; then against a real
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
