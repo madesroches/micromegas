@@ -192,6 +192,7 @@ describe('IngestionApiKeysPage', () => {
             name: 'new-key',
             created_at: '2026-01-01T00:00:00Z',
             key: 'mmk_test_cleartext',
+            audience: 'public',
           }),
       } as unknown as Response)
       .mockResolvedValueOnce({
@@ -206,6 +207,7 @@ describe('IngestionApiKeysPage', () => {
               last_used_at: null,
               revoked_at: null,
               revoked_by: null,
+              audience: 'public',
             },
           ]),
       } as unknown as Response)
@@ -230,7 +232,7 @@ describe('IngestionApiKeysPage', () => {
       const postCall = fetchMock.mock.calls.find((c) => c[1]?.method === 'POST')
       expect(postCall).toBeDefined()
       expect(postCall![0]).toBe('/mmlocal/api/ingestion-api-keys')
-      expect(JSON.parse(postCall![1].body)).toEqual({ name: 'new-key' })
+      expect(JSON.parse(postCall![1].body)).toEqual({ name: 'new-key', audience: 'public' })
     })
 
     await waitFor(() => expect(screen.getByText('mmk_test_cleartext')).toBeInTheDocument())
