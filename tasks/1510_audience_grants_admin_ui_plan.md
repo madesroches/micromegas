@@ -195,13 +195,24 @@ as it fills, so peak memory is one batch rather than the whole table. This holds
 for the duration of the response — acceptable on an admin route, and the reason the batch size is
 small enough to keep the stream moving.
 
-**Errors.** A failure *before* the first byte (pool absent → `NOT_CONFIGURED`, bad `limit`/`axis`
-→ `BAD_REQUEST`) is returned as today: an HTTP status plus the `{code, message}` JSON body, so
+**Errors.** A failure *before* the first byte — pool absent → `NOT_CONFIGURED`, bad `limit`/`axis`
+→ `BAD_REQUEST` — is returned as today: an HTTP status plus the `{code, message}` JSON body, so
 `AudienceGrantError::into_response` keeps working unchanged and existing 4xx/5xx handling is
-untouched. A failure *mid-stream* (a `sqlx` error on row N, an encode error) can no longer change
-the status code, so it is emitted as a terminal `{"type":"error","code":"DATABASE_ERROR",...}`
-frame — the same shape `stream_query.rs` uses for the identical situation. The client must treat a
-stream that ends without a `done` frame as a failure, never as an empty result.
+untouched. Note what this enumeration excludes: connection acquisition happens *inside* the
+`async_stream::stream!` block, after `Body::from_stream` has already committed to a 200, so a
+DB-unreachable failure (pool exhausted, Postgres down) — a clean `500 DATABASE_ERROR` today — is a
+*mid-stream* failure under this design, not a pre-stream one. A mid-stream failure (that
+connection failure, a `sqlx` error on row N, an encode error) can no longer change the status
+code, so it is emitted as a terminal `{"type":"error","code":"DATABASE_ERROR","message":"internal
+database error"}` frame — the same framing `stream_query.rs` uses for the identical situation, but
+not the same message: the frame logs the real `sqlx` error server-side via `error!` and carries the
+fixed `"internal database error"` text `AudienceGrantError::Database` already emits, rather than
+following `stream_query.rs`'s precedent of putting `e.to_string()` into the frame body — the
+driver text must stay server-side here exactly as it does today. The client must treat a stream
+that ends without a `done` frame as a failure, never as an empty result, and the Python client must
+raise on a mid-stream `error` frame rather than returning the rows collected so far —
+`WebClient._check_response` only inspects `resp.ok`, which has already passed by the time the
+error frame arrives.
 
 The four `(audience, axis)` filter branches keep their current shape; only the `limit` clause
 becomes conditional.
@@ -445,14 +456,20 @@ framing is the same JSON-framed protocol, so this needs a small reader:
 `stream=True`, read a line, read `size` bytes, feed the concatenated IPC messages to
 `pyarrow.ipc.open_stream`, and raise on an `error` frame or a stream with no `done` frame. Returns
 the same list of dicts as before, except `created_at` decodes to a `datetime` from the Arrow
-column; `list_audience_grants` converts it back to a string with
-`.isoformat().replace('+00:00', 'Z')` before returning — matching, not just resembling, the `Z`-
-suffixed RFC 3339 string the current JSON route's `chrono::DateTime<Utc>` serialization produces
-(the exact form the fixtures in `tests/cli/test_grants.py` use, e.g.
-`"2026-08-19T00:00:00Z"`), so the dict shape handed to `grants.py` is genuinely unchanged and
-`json.dumps` in `cmd_list` keeps working without a `default=` handler. A plain `.isoformat()`
-would instead emit `2026-08-19T00:00:00+00:00`, a real format change for every existing caller —
-avoided here rather than documented, since preserving the `Z` form costs nothing.
+column; `list_audience_grants` converts it back to a string with a small formatter that replicates
+chrono's `SecondsFormat::AutoSi` — the mode the current JSON route's `chrono::DateTime<Utc>`
+serialization actually uses — rather than `.isoformat().replace('+00:00', 'Z')`. AutoSi emits zero
+fractional digits when the value falls on a whole second, three when it falls on a whole
+millisecond, six otherwise (nine for genuine sub-microsecond precision, which Postgres's
+microsecond-resolution `timestamptz` column never produces); `.isoformat()` only ever emits zero or
+exactly six, so it would diverge from today's output whenever a timestamp lands on a whole
+millisecond that is not a whole second — e.g. a value at `.123` ms serializes today as
+`...T00:00:00.123Z` but as `...T00:00:00.123000Z` under `.isoformat()`-based logic. The
+AutoSi-equivalent formatter keeps the output byte-identical to the `Z`-suffixed RFC 3339 string the
+JSON route produces today — the exact forms the fixtures in `tests/cli/test_grants.py` use,
+covering both the whole-second case (e.g. `"2026-08-19T00:00:00Z"`) and a whole-millisecond case
+(e.g. `"2026-08-19T00:00:00.123Z"`) — so the dict shape handed to `grants.py` is genuinely
+unchanged and `json.dumps` in `cmd_list` keeps working without a `default=` handler.
 
 No framed-Arrow reader exists anywhere in `python/micromegas/micromegas/` today — the only
 `pyarrow.ipc` use is `flightsql/client.py`'s `open_stream(dataset_schema)` over a bare schema blob,
@@ -515,8 +532,11 @@ which is a plausible follow-up as a view toggle — not built here.
    'static` bound, which a bare borrowing `fetch(&pool)` stream of plain `Bytes` does not; drop
    `DEFAULT_LIMIT` and `MAX_LIMIT` so `limit` is unclamped in both directions (only the `> 0`
    check remains) — an absent `limit` means all rows, and an explicit `limit` is honored exactly,
-   not silently capped; pre-stream failures keep their current status+JSON responses, mid-stream
-   failures become a terminal `error` frame.
+   not silently capped; pre-stream failures keep their current status+JSON responses. Mid-stream
+   failures — including a connection-acquisition failure, since the pool is only touched inside the
+   stream — become a terminal `error` frame that logs the `sqlx` error server-side and carries the
+   same generic `"internal database error"` message `AudienceGrantError::Database` already emits,
+   never the driver text.
 4. Rust integration tests in `tests/audience_grants_tests.rs` against `rows_to_batch`/
    `stream_grant_frames` with an in-memory row stream (`futures::stream::iter`), no database
    needed: schema/column order, an empty result still emitting schema + `done`, batching across
@@ -645,14 +665,20 @@ Modified:
   `GET {base_path}/api/audience-grants?...` row's response changes from the JSON array shape to
   the streamed Arrow content type (`application/x-micromegas-arrow-stream`), and the row gains a
   note that an absent `limit` now means all rows rather than the old 100-row default, and an
-  explicit `limit` is no longer clamped to 500.
+  explicit `limit` is no longer clamped to 500. Also note that a DB failure occurring after the
+  response has started (pool exhausted, Postgres down) now surfaces as a `200` whose body ends in
+  a terminal `error` frame, rather than the `500 DATABASE_ERROR` it is today — a caller that only
+  checks the HTTP status must read to the `done`/`error` frame to know the request succeeded.
 - `mkdocs/docs/admin/api-keys.md` — at ≈247-254 and ≈405-410, add the UI as a third client of the
   grants API and document that `GET /api/audience-grants` responds with a streamed Arrow IPC
   result set (`application/x-micromegas-arrow-stream`), while `POST`/`DELETE` stay JSON.
 - `CHANGELOG.md` under `## Unreleased` — a `**Web App:**` bullet for the page, and an entry for
   the list-route representation change carrying the **Minor breaking change** clause: response is
-  now Arrow, an absent `limit` returns all rows instead of 100, and an explicit `limit` is no
-  longer clamped to 500. A second **Minor breaking change** note for the Rust API move in Design
+  now Arrow, an absent `limit` returns all rows instead of 100, an explicit `limit` is no
+  longer clamped to 500, and a DB failure after the response has started (pool exhausted, Postgres
+  down) now surfaces as a `200` ending in a terminal `error` frame instead of a `500
+  DATABASE_ERROR` — a caller that only checks the status code will no longer see it fail. A second
+  **Minor breaking change** note for the Rust API move in Design
   §1: `analytics_web_srv::stream_query::{encode_schema, encode_batch}` are removed in favor of
   `analytics_web_srv::arrow_stream::ArrowStreamEncoder`, and `ErrorCode` gains `as_str()`. No SQL
   surface is touched.
@@ -717,9 +743,12 @@ the real decoder rather than a stub.
 **Python**: `test_grants.py` updated so its `FakeClient`/fixtures return `list_audience_grants`'
 real output — `created_at` as the ISO-8601 string produced from the decoded `datetime` — instead
 of a hand-typed string, so `test_cmd_list_json_format_is_valid_json` actually exercises the
-`datetime`-to-string conversion; assert `cmd_list` renders both formats. A separate test serves a
-framed Arrow body through `web_client.list_audience_grants` directly and asserts the returned
-`created_at` is the expected ISO-8601 string.
+`datetime`-to-string conversion; assert `cmd_list` renders both formats. Fixtures cover both a
+whole-second timestamp and a whole-millisecond one (e.g. a `.123` ms value), so the AutoSi-
+equivalent formatter's zero-digit and three-digit branches are both exercised, not just the
+zero-digit case the old hand-typed fixtures used exclusively. A separate test serves a framed
+Arrow body through `web_client.list_audience_grants` directly and asserts the returned
+`created_at` is the expected ISO-8601 string for both cases.
 
 **Manual**: run the monolith with `--disable-auth` to confirm the 503 banner; then against a real
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
@@ -728,21 +757,47 @@ the grouping hold up.
 
 ## Open Questions
 
-1. **Should the grant list be a SQL table function instead of a dedicated route?** This is a
-   fork, not an addition. A UDTF in the analytics service — alongside the existing
-   `list_partitions()`-style functions — would make grants queryable from FlightSQL, Grafana, and
-   the query UI, and the admin page would then read them by issuing a `SELECT` over the web app's
-   **existing** `stream_query` path. That deletes most of this plan's server and client work:
-   §1's Arrow-transport extraction loses its motivation here, §2's conversion of `list_grants` to
-   an Arrow stream is unnecessary because the route stops being the read path, and §4's new
-   `audience-grants-api.ts` shrinks to the create/delete calls. Writes stay on the HTTP admin
-   routes either way — a table function is read-only — so the page would end up split across two
-   backends rather than one.
+1. **Should the grants be admin-gated SQL functions instead of a dedicated route?** This is a
+   fork, not an addition, and **Admin → Query Deny List has already taken it**. That screen is a
+   front end for three SQL functions — `list_query_denials()`, `deny_queries(match_expr, reason)`,
+   `remove_query_denial(rule_id)` — issued through the same `useStreamQuery` → `/api/query-stream`
+   path every other SQL-driven page uses, with **no REST routes of its own**
+   (`analytics-web-app/src/lib/query-deny-list-api.ts`, `src/routes/QueryDenyListPage.tsx`). This
+   plan already cites that module as its Arrow-decoding precedent while taking the other fork for
+   the same kind of data.
 
-   Against that: the analytics service would have to read the auth store, which is not telemetry
-   data and is not what that service is for; the page would depend on the query path being
-   reachable, not just the web server, so the "why can't this user see their data" question could
-   not be answered on a deployment where the analytics service is the thing that's broken; and
-   the function needs its own access control, since the grant list is itself sensitive. The
-   env-map caveat this page already carries would carry over unchanged — a SQL view of the table
-   is partial in exactly the same way.
+   Taking it here would delete most of this plan's server and client work: §1's Arrow-transport
+   extraction loses its motivation, §2's conversion of `list_grants` is unnecessary because the
+   route stops being the read path, and §4's `audience-grants-api.ts` becomes SQL builders plus
+   decoders rather than a REST client. It is not read-only either — `deny_queries` and
+   `remove_query_denial` show that mutating admin functions are conventional (mutating UDTFs
+   return the `(time, msg)` log-stream shape), so create and delete could follow, leaving the page
+   on one backend rather than split across two.
+
+   The two objections that look obvious do not survive contact with the code. **Access control**
+   is an established pattern, not new work: a registration-time gate in
+   `rust/analytics/src/lakehouse/query.rs:181` (`if caller.is_admin || !caller.admin_principal_possible`)
+   simply does not register the function for non-admins — eight functions already ship behind it,
+   and denial surfaces as DataFusion's ordinary "table function not found". **"The analytics
+   service should not read the auth store"** is weaker than it sounds: that service already reads
+   and writes non-telemetry admin tables in the same Postgres instance (`query_deny_list`,
+   `lakehouse_partitions`), though it is worth noting it does not today touch the auth tables
+   proper.
+
+   What genuinely argues against it:
+
+   - **The gate's fallback widens exposure.** `is_admin || !admin_principal_possible` means that in
+     a deployment which can never mint an admin — API-key-only, or an empty `admin_users` list —
+     *every authenticated caller* gets these functions (`rust/auth/src/types.rs:175`,
+     `rust/auth/src/oidc.rs:583`). That is tolerable for partition retirement; for a table that
+     reveals who can read which audience it is a real widening versus the HTTP route's
+     `AdminUser` gate, and it would need a deliberate decision rather than inheriting the default.
+   - **A second gate to keep in sync.** `stream_query.rs`'s `BLOCKED_FUNCTIONS` list is
+     defense-in-depth over the web query path; the deny-list trio is deliberately absent from it,
+     so a grants trio would need the same call made explicitly.
+   - **Availability coupling.** The page would depend on the query path being reachable, not just
+     the web server — so "why can't this user see their data" could not be answered on a
+     deployment where the analytics service is itself the broken thing.
+
+   The env-map caveat carries over unchanged either way: a SQL view of the table is partial in
+   exactly the same way the page is.
