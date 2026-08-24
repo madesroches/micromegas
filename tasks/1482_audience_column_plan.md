@@ -110,8 +110,9 @@ admits a global partition row when the view set is on `public_view_sets` **or** 
 is in the caller's scope — under the default knob, that second disjunct is what makes global rows
 visible to every authenticated caller today. Note that `list_partitions` itself is registered for
 every principal (`query.rs:132-138`, pinned by `lakehouse_admin_gate_test.rs:156-166`), unlike the
-eight mutating/admin UDTFs registered behind `caller.is_admin || !caller.admin_principal_possible`
-(`query.rs:181-221`); `AudienceGuard` is built from `read_scope`, `unstamped_audience`,
+eight admin registrations (five mutating UDTFs and three UDFs) behind
+`caller.is_admin || !caller.admin_principal_possible`
+(`query.rs:181-224`); `AudienceGuard` is built from `read_scope`, `unstamped_audience`,
 `public_view_sets` and the index only (`audience_guard.rs:334-346`, `query.rs:126-131`), so it
 currently sees nothing admin-related.
 
@@ -192,7 +193,7 @@ Mechanics that constrain the design:
   at `:728`) — `pub` precisely so `tests/write_partition_tests.rs` can drive it against an
   `InMemory` store. `write_partition_from_rows` is the only production `AsyncArrowWriter`
   construction and the only production caller of that loop (`:941`); every partition write —
-  `metadata_partition_spec.rs:138`, `block_partition_spec.rs:86, :163` (JIT included via
+  `metadata_partition_spec.rs:138`, `block_partition_spec.rs:86` (JIT included via
   `jit_partitions.rs:1411`), `sql_partition_spec.rs:150`, `merge.rs:442`, `thread_spans_view.rs:174`,
   `net_spans_view.rs:140` — funnels through it.
 - **`processes`/`streams`/`log_stats`** are `SqlBatchView`s. Their schema is *inferred* from the
@@ -322,10 +323,13 @@ Four mechanisms establish and keep it, each closing one way a `NULL` could appea
    runs on the **ingestion-role startup path only**, right after the lake connection and before
    the listener binds: `rust/telemetry-ingestion-srv/src/main.rs:52` (pool at
    `DataLakeConnection.db_pool`, `data_lake_connection.rs:14`, `pub`), and in the monolith inside
-   the `if roles.ingestion` block at `rust/monolith/src/main.rs:302-316` (its own lake connection
-   at `:303-308`, `serve_ingestion` spawned at `:313-315`) — **not** next to the
-   `needs_lakehouse()` connection at `:181-184`, which also runs for `--roles flightsql` /
-   `maintenance`. It is **not** a versioned migration
+   the `if roles.ingestion` block at `rust/monolith/src/main.rs:302-316`, which does not connect
+   on its own but clones the shared lakehouse's lake
+   (`lakehouse.as_ref().expect(..).lake().as_ref().clone()`, `:303-308`) before spawning
+   `serve_ingestion` (`:313-315`) — the backfill takes that clone's `db_pool`. The connection
+   itself is made once at `:184-186` inside the `needs_lakehouse()` block, which also runs for
+   `--roles flightsql` / `maintenance`, so the backfill goes in the ingestion block and **not**
+   next to the connection. It is **not** a versioned migration
    (`LATEST_DATA_LAKE_SCHEMA_VERSION` stays 7, `migrate_db`/`execute_migration` are untouched),
    for two reasons:
    - *Rolling upgrades.* Ingestion is stateless and documented as horizontally scaled
@@ -334,7 +338,11 @@ Four mechanisms establish and keep it, each closing one way a `NULL` could appea
      unstamped and never repaired — and then trips the conflict guard, the `NOT NULL` extraction,
      and §1's poison-pill partition write. An idempotent statement re-run at every start repairs
      stragglers at the next replica start. A zero-row run is one sequential scan of a
-     retention-bounded table with no row locks, cheap enough to not think about.
+     retention-bounded table with no row locks, cheap enough to not think about. The *first* run
+     on an existing deployment is not free: it rewrites every legacy row in one statement and one
+     transaction, and the listener does not bind until it returns. That is retention-bounded,
+     happens once, and is the right order — the invariant must hold before the first request is
+     served — so it is accepted rather than batched.
    - *Who runs `migrate_db`.* Its real callers are `connect_to_remote_data_lake`
      (`remote_data_lake.rs:60`) — reached from the monolith for **any** lake-backed role
      (`needs_lakehouse()`, `main.rs:96-98`, i.e. `--roles maintenance` or `flightsql` too) — and
@@ -495,8 +503,9 @@ Append one aggregate to each transform **and** merge query:
   Left out of the `GROUP BY` on purpose: audience is functionally determined by `process_id`, so
   grouping on it cannot change row counts, and leaving the key list alone keeps the declared
   `(time_bin, process_id, level, target)` merge sort order (`log_stats_view.rs:84-89`) exactly as
-  it is (`SqlBatchView` only requires declared sort columns to be merge `GROUP BY` keys,
-  `sql_batch_view.rs:155-162`). Transform and merge must produce the same column **count, order
+  it is (`SqlBatchView`'s contract is that declared sort columns be merge `GROUP BY` keys — a
+  doc-comment rule at `sql_batch_view.rs:155-162`; the only runtime check, `:186`, is that the
+  column exists). Transform and merge must produce the same column **count, order
   and types** — the file schema is fixed by the transform (`sql_batch_view.rs:126-131`), the
   merge stream is written under `view.get_file_schema()` (`merge.rs:445`) positionally, and
   **nothing checks the two against each other** (no name/type validation anywhere between
@@ -571,12 +580,12 @@ property of `SqlBatchView` schema inference, not of the data; document it as suc
   i.e. `--disable-auth`); with any provider configured even an `is_admin` principal resolves to
   `ReadScope::Audiences` (`:596-606`; `policy.rs:366` guarantees a policy never yields `All`). On
   every auth-enabled deployment, allowlist-only would make `list_incompatible_partitions`
-  (`python/micromegas/micromegas/admin.py:77`) return zero global rows while
+  (`python/micromegas/micromegas/admin.py:14`) return zero global rows while
   `retire_incompatible_partitions` stays callable — the documented workflow
   (`admin.py:102-104`) would silently break. The decision, then: for `ReadScope::Audiences`,
   a global partition row is visible when its view set is on `public_view_sets` **or** the caller
   passes the lakehouse admin gate — the *same* boolean that already governs registration of the
-  eight admin UDTFs, `caller.is_admin || !caller.admin_principal_possible` (`query.rs:181`; a
+  eight admin UDTFs/UDFs, `caller.is_admin || !caller.admin_principal_possible` (`query.rs:181`; a
   caller who can `retire_partitions` a global file can see it — no new authority, no new knob).
   `ReadScope::All` is unchanged. Plumbing: `AudienceGuard` gains `lakehouse_admin: bool` in the
   slot the removed `unstamped_audience` field/parameter occupied (`audience_guard.rs:328, :336`),
@@ -593,7 +602,7 @@ property of `SqlBatchView` schema inference, not of the data; document it as suc
   disjunct — `global_rows_visible_via_unstamped_audience_in_scope`
   (`audience_guard_tests.rs:208-228`) and the global-row assertions inside the `#[ignore]`d
   `list_partitions_row_filter_enforces_audience` (`prong_b_guard_db_test.rs:619-641`, whose
-  `caller(...)` fixture at `:158` must learn to set `is_admin`) — and become an admin-vs-non-admin
+  `caller(...)` fixture at `:154-162` must learn to set `is_admin`) — and become an admin-vs-non-admin
   pair; `global_rows_visible_via_public_view_sets` (`:196-206`) and
   `global_rows_hidden_by_default_under_restricted_scope` (`:230-234`) already pass under the new
   rule.
@@ -643,7 +652,10 @@ fn audience_column_predicate(&self, table_name: &TableReference, field: &Field) 
 ```
 
 `table_name` here is the resolved scan — `__processes__partitions`, `__streams__partitions`, and
-so on for the `SqlBatchView`s — the same qualifier the existing `process_id` predicate uses
+so on for the `SqlBatchView`s; the bare view-set name for `blocks` and the global
+`log_entries`/`measures` (default `View::register_table`, `view.rs:88-97`); the function name
+`view_instance` for a JIT `view_instance(...)` scan — in every case the same qualifier the
+existing `process_id` predicate already resolves against
 (`:334`). `self.audiences()` already exists (`:189`, `&[String]`), so the `lit(ScalarValue::Utf8(..))`
 mapping is the one `resolved_predicate` uses at `:219-225`; `get_file_schema()` returns
 `Arc<Schema>` (`view.rs:71`), so `field_with_name` yields `Result<&Field, ArrowError>`; the only
@@ -800,14 +812,17 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 5. `rust/otel-ingestion/src/identity.rs`: `IdentityContext.audience: &str`; drop the `Default`
    derive (`:51`) and its doc paragraph (`:46-50`); `block.rs:306`'s doc reference.
 6. `rust/telemetry-ingestion-srv/src/main.rs` (after `connect_to_remote_data_lake`, `:52`) and
-   `rust/monolith/src/main.rs` (inside the `if roles.ingestion` block, `:302-316`, after its lake
-   connection at `:303-308`): resolve the default via `WriteAudience::default_from_env()`, call
-   `backfill_default_audience`, pass the default to `serve_ingestion`.
+   `rust/monolith/src/main.rs` (inside the `if roles.ingestion` block, `:302-316`, after the
+   shared lake is cloned at `:303-308` — the block opens no connection of its own): resolve the
+   default via `WriteAudience::default_from_env()`, call `backfill_default_audience` on the
+   lake's `db_pool`, pass the default to `serve_ingestion`.
 7. Compile fallout: `rust/ingestion/tests/{write_audience_tests,audience_stamping_db_test,process_audience_cache_test,insert_block_dedup_db_test,readiness}.rs`,
    `rust/public/tests/{resolve_write_audience_tests,firehose_tests,firehose_cloudwatch_logs_tests}.rs`,
    `rust/otel-ingestion/tests/{identity_tests,split_tests,block_tests,cloudwatch_logs_tests,cloudwatch_metrics_tests,firehose_tests,json_tests,webhook_tests}.rs`
    (~94 `IdentityContext` literals in all), and the `analytics` DB tests that build a
-   `WebIngestionService` (listed under Tests). Add the backfill test; convert
+   `WebIngestionService` or call `WriteAudience::none()` (listed under Tests —
+   `thread_spans_ordering_db_test.rs` has ten `none()` calls, `jit_process_batch_db_test.rs:189`
+   one). Add the backfill test; convert
    `malformed_bound_audience_warns_and_degrades_to_none` (`resolve_write_audience_tests.rs:97-105`)
    to "rejects".
 
@@ -817,8 +832,9 @@ bucket yields whatever sources remain; it is gone within a day regardless.
    add `audience_subselect()`. Update `lib.rs`; `audience_guard.rs` imports from here, and so does
    `ownership_rewrite.rs` — only until step 20 deletes its `audience_col()` and the import with
    it (the end state has three consumers: `audience_guard.rs`, `blocks_view.rs`, `metadata.rs`).
-9. `lakehouse/blocks_view.rs`: `format!` the subselect into `data_sql` (the `blocks` query binds
-   only `$1`/`$2`, `metadata_partition_spec.rs:187-189`, so the fragment is inlined, not bound),
+9. `lakehouse/blocks_view.rs`: `format!` the subselect into `data_sql` (today a plain `r#"…"#`
+   literal; the `blocks` query binds only `$1`/`$2`, `metadata_partition_spec.rs:155-156`, so the
+   fragment is inlined, not bound),
    append `Field::new("audience", Utf8, false)` to `blocks_view_schema()`, re-declare
    `processes.parent_process_id` nullable (`:298`), `blocks_file_schema_hash()` → `vec![4]`
    (`:309`). `lakehouse/write_partition.rs`: `write_rows_and_track_times` gains a `&Schema`
@@ -869,7 +885,7 @@ semi-join, so the change is observable only as a new column in `SELECT *`.
     `ownership_rewrite_config_tests.rs` (removal semantics), `ownership_rewrite_db_test.rs`,
     `prong_b_guard_db_test.rs` and `audience_guard_tests.rs` (including the two
     `global_rows_visible` tests that encode the old disjunct), `tests/common/db_fixtures.rs`
-    (delete `caller_with_unstamped_audience`, `:105-115`).
+    (delete `caller_with_unstamped_audience`, `:105-121`).
 
 ### Phase 4 — docs and changelog
 
@@ -928,7 +944,8 @@ semi-join, so the change is observable only as a new column in `SELECT *`.
   `jit_partition_grouping_tests.rs`, `jit_freshness_tests.rs`, `jit_partition_bounds_tests.rs`
 - `rust/analytics/tests/write_partition_tests.rs` (nullability guard)
 - `rust/analytics/tests/thread_spans_ordering_db_test.rs`, `jit_process_batch_db_test.rs`
-  (`WebIngestionService` constructor fallout only)
+  (`WebIngestionService` constructor fallout plus their `WriteAudience::none()` calls — ten in
+  the former, one at `:189` in the latter — which become the default audience)
 - `rust/ingestion/tests/write_audience_tests.rs`, `audience_stamping_db_test.rs`,
   `process_audience_cache_test.rs`, `insert_block_dedup_db_test.rs`, `readiness.rs`, plus the new
   backfill test; `rust/public/tests/resolve_write_audience_tests.rs`, `firehose_tests.rs`,
@@ -1084,7 +1101,9 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
 - `CHANGELOG.md` — **every AbAC entry this plan touches is still under `## Unreleased`**
   (`:34-35` Prong A/B under Analytics, `:37` under Auth, `:39-44` under Ingestion): the unstamped
   knob, `WriteAudience::none()`, `OwnerAudience::Unstamped`, `IsolationConfig.unstamped_audience`
-  and `IdentityContext.audience: Option<&str>` have never shipped (v0.29.0 starts at `:73`). So
+  and `IdentityContext.audience: Option<&str>` have never shipped (v0.29.0 starts at `:73`;
+  `Unstamped` is not named in the file — it arrived with the unreleased Prong B entry at `:35` —
+  but the conclusion is the same). So
   there is no "removed env var" breaking-change clause to write (the `:106` precedent retired a
   *released*, deprecated var) — instead:
   - **Amend the Unreleased entries in place** so they describe what ships: `:34` (Prong A) now
@@ -1134,7 +1153,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   (`:390-464`) builds one query per `get_global_views()` entry (6) plus one `view_instance(...)`
   per `get_view_sets()` key (7 — `images`, `log_entries`, `measures`, `async_events`, `net_spans`,
   `thread_spans`, `otel_spans`) and asserts each of the 13 plans contains `LeftSemi Join`
-  (`:452-458`; the §5/§6 `EXISTS` shapes decorrelate to `LeftSemi` too, `:333-358`, `:360-388`).
+  (`:457-462`; the §5/§6 `EXISTS` shapes decorrelate to `LeftSemi` too, `:333-358`, `:360-388`).
   **Eight** now produce a bare `Filter`: the six globals plus `view_instance('log_entries', …)` and
   `view_instance('measures', …)`, whose per-process schemas carry the column (§5); five stay
   `LeftSemi` (`images`, `net_spans`, `otel_spans`, `async_events`, `thread_spans`). Restructure it
