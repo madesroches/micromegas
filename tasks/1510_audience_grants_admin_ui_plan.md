@@ -725,3 +725,17 @@ framed Arrow body through `web_client.list_audience_grants` directly and asserts
 OIDC config and a v7 telemetry DB, exercise create/list/delete end to end and cross-check with
 `micromegas-grants list`. Seed a few thousand grants to confirm the stream, the row counter, and
 the grouping hold up.
+
+## Open Questions
+
+1. **Should the grants also be exposed as a SQL table function?** This plan reaches the
+   `audience_grants` table over a dedicated HTTP route, which is what the admin page needs and
+   what `micromegas-grants` already uses. A UDTF in the analytics service — alongside the
+   existing `list_partitions()`-style functions — would instead make grants queryable from
+   FlightSQL, Grafana, and the query UI, so an operator could join them against other admin data
+   and answer "who can read this audience" in SQL rather than in a page. The two surfaces are not
+   mutually exclusive; the question is whether the table function is worth building here, later,
+   or not at all. Weighing it needs a call on: whether the analytics service should read the
+   grants table at all (it is the auth store, not telemetry data), how the function's own access
+   control works given that the grant list is itself sensitive, and whether the read axis' env-map
+   grants — which this page already declines to show — would make a SQL view similarly partial.
