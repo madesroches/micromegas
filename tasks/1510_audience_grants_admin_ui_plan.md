@@ -728,14 +728,21 @@ the grouping hold up.
 
 ## Open Questions
 
-1. **Should the grants also be exposed as a SQL table function?** This plan reaches the
-   `audience_grants` table over a dedicated HTTP route, which is what the admin page needs and
-   what `micromegas-grants` already uses. A UDTF in the analytics service — alongside the
-   existing `list_partitions()`-style functions — would instead make grants queryable from
-   FlightSQL, Grafana, and the query UI, so an operator could join them against other admin data
-   and answer "who can read this audience" in SQL rather than in a page. The two surfaces are not
-   mutually exclusive; the question is whether the table function is worth building here, later,
-   or not at all. Weighing it needs a call on: whether the analytics service should read the
-   grants table at all (it is the auth store, not telemetry data), how the function's own access
-   control works given that the grant list is itself sensitive, and whether the read axis' env-map
-   grants — which this page already declines to show — would make a SQL view similarly partial.
+1. **Should the grant list be a SQL table function instead of a dedicated route?** This is a
+   fork, not an addition. A UDTF in the analytics service — alongside the existing
+   `list_partitions()`-style functions — would make grants queryable from FlightSQL, Grafana, and
+   the query UI, and the admin page would then read them by issuing a `SELECT` over the web app's
+   **existing** `stream_query` path. That deletes most of this plan's server and client work:
+   §1's Arrow-transport extraction loses its motivation here, §2's conversion of `list_grants` to
+   an Arrow stream is unnecessary because the route stops being the read path, and §4's new
+   `audience-grants-api.ts` shrinks to the create/delete calls. Writes stay on the HTTP admin
+   routes either way — a table function is read-only — so the page would end up split across two
+   backends rather than one.
+
+   Against that: the analytics service would have to read the auth store, which is not telemetry
+   data and is not what that service is for; the page would depend on the query path being
+   reachable, not just the web server, so the "why can't this user see their data" question could
+   not be answered on a deployment where the analytics service is the thing that's broken; and
+   the function needs its own access control, since the grant list is itself sensitive. The
+   env-map caveat this page already carries would carry over unchanged — a SQL view of the table
+   is partial in exactly the same way.
