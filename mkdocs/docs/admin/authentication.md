@@ -419,10 +419,10 @@ behind one off-by-default deployment knob:
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers. |
+| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing (see below). |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
-| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into), excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
 
 **Audiences are created lazily, not pre-provisioned.** A non-admin caller who
 names a brand-new, never-before-granted audience *and supplies the name
@@ -613,8 +613,9 @@ surface, not a REST route. No arguments; filter with `WHERE`. Columns: `audience
 pair they hold a matching grant on — deliberately wider than "rows whose selector matches me":
 if you may read `team-alpha`, you may see who else may, which is exactly the "who can see this
 audience" question the function (and the Audience Access page) exists to answer, and it is the
-same set a non-admin may modify via the write routes above. A caller with no email and no groups
-(an internal/maintenance caller, or a request with no `AuthContext` at all) sees zero rows.
+same set a non-admin may modify via the write routes above. Only a non-admin caller with an empty
+selector set (e.g. `CallerContext::internal()`) sees zero rows; a maintenance caller and a
+`--disable-auth` request are both treated as admin and see every row instead.
 
 **Unlike `GET .../visible`, this function always applies the held-pair rule for a non-admin,
 knob or no knob** — it runs in `flight-sql-srv`/`micromegas-analytics`, which has no visibility

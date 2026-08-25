@@ -243,7 +243,9 @@ if you may read `team-alpha`, you may see who else may — which is exactly the 
 audience" question the page exists to answer, and it is the same set you are allowed to modify
 (§3), so the page never shows a share/revoke control over a row you cannot see the siblings of.
 An empty selector list (internal, maintenance callers) yields zero rows. An API-key caller
-has no email or groups, so it sees only pairs that carry a `*` grant.
+has no email or groups, and once the leading `*` is stripped before binding (see §3's write
+hold-check note) its selector list is empty too, so it now sees zero rows rather than pairs
+carrying a `*` grant.
 
 This function is unconditional: it cannot read `analytics-web-srv`'s `self_service_mint_enabled`
 knob (a different crate/service, Current State's stated boundary), so it always applies the
@@ -355,12 +357,14 @@ see or re-share it; the confirm dialog says so (§8).
 `my_audiences` already is: no pagination, reading `AudienceGrantsState.pool` directly. Admin:
 `SELECT audience, axis, selector, created_at, created_by FROM audience_grants ORDER BY audience,
 axis, selector`. Non-admin, **self-service knob on**: the same `EXISTS`-joined held-pair
-visibility query §2 gives `list_audience_grants()`, bound to `caller_selectors(&caller)` (the
-unfiltered list — `*` is fine here, unlike the write hold-check) — every grant row on a pair the
-caller holds, including other principals' `selector` and `created_by`. Non-admin, **self-service
-knob off**: the query narrows to `SELECT audience, axis, selector, created_at, created_by FROM
-audience_grants WHERE selector = ANY($1) ORDER BY audience, axis, selector` with `$1 =
-caller_selectors(&caller)` — the caller's own rows only, never a sibling's.
+visibility query §2 gives `list_audience_grants()`, bound to `caller_selectors(&caller)` with the
+leading `*` stripped first (the same identity-selector list the write hold-check binds — an
+API-key caller with no email/groups now gets an empty list here too) — every grant row on a pair
+the caller holds, including other principals' `selector` and `created_by`. Non-admin,
+**self-service knob off**: the query narrows to `SELECT audience, axis, selector, created_at,
+created_by FROM audience_grants WHERE selector = ANY($1) ORDER BY audience, axis, selector` with
+`$1` = that same `*`-stripped identity-selector list — the caller's own rows only, never a
+sibling's.
 
 This narrowing mirrors why `my_audiences` already gates on the same knob (:536-540, "must not
 widen on upgrade regardless of the knob"): unlike `my_audiences`, which only ever reveals whether

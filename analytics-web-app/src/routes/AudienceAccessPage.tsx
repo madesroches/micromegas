@@ -913,7 +913,7 @@ function AudienceAccessPageContent() {
             onMinted={handleMinted}
           />
 
-          {listQuery.isStreaming && !listQuery.isComplete ? (
+          {listQuery.isStreaming && grants.length === 0 ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />

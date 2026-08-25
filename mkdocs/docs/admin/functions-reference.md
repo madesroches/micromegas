@@ -447,10 +447,11 @@ Rows are ordered `audience, axis, selector`. No arguments; filter and order with
 deliberately wider than "rows whose selector matches me": if a caller may read `team-alpha`,
 they may see who else may, which is exactly the "who can see this audience" question this
 function (and the web app's Audience Access page) exists to answer — and it is the same set that
-caller may modify via the `POST`/`DELETE /api/audience-grants` routes. A caller with an empty
-selector set (no email, no groups — an internal/maintenance caller, or `--disable-auth`'s
-absent-`AuthContext` convention treats every caller as admin instead, so this only bites a real
-API-key-shaped caller with neither) sees zero rows.
+caller may modify via the `POST`/`DELETE /api/audience-grants` routes. Only a non-admin caller
+with an empty selector set (no email, no groups — e.g. a real API-key-shaped caller with
+neither, or `CallerContext::internal()`) sees zero rows; a maintenance caller and a
+`--disable-auth` request's absent-`AuthContext` convention both treat the caller as admin
+instead, so neither one bites.
 
 **Reads the table directly on every call**, not a cached snapshot — a write via the REST routes
 above is visible on the very next call, with no TTL to wait out.

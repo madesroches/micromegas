@@ -64,8 +64,9 @@ pub struct AudienceGrantsState {
     pub self_service_mint_enabled: bool,
     /// `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER`, default 50 -- caps how many rows one
     /// non-admin caller may have created in `audience_grants` (`created_by = <caller>`,
-    /// counted across every audience/axis/selector, not just the pair being shared into),
-    /// checked in `create_grant` before the insert. Mirrors `IngestionKeysState`'s
+    /// counted across every audience/axis/selector, not just the pair being shared into, but
+    /// excluding the caller's own `user:<email>` rows -- those are claim/self-access rows, not
+    /// shares), checked in `create_grant` before the insert. Mirrors `IngestionKeysState`'s
     /// `max_claims_per_caller`/`max_keys_per_caller` bounds on the mint side of the same
     /// `MICROMEGAS_SELF_SERVICE_MINT` knob: without it, a non-admin holding one grant on a pair
     /// could plant unlimited `group:<arbitrary-id>` rows on it. Best-effort under concurrency,

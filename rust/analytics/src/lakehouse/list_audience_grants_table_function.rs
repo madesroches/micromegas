@@ -10,8 +10,10 @@
 //! caller holds a matching grant on -- deliberately wider than "rows whose selector matches me":
 //! if a caller may read an audience, they may see who else may, which is exactly the "who can
 //! see this audience" question the Audience Access page (and this function) exists to answer.
-//! An empty selector list (internal/maintenance callers, or an identity-less caller once the
-//! always-present `"*"` is stripped -- see `scan`) yields zero rows.
+//! An empty selector list (`CallerContext::internal()`, or an identity-less caller once the
+//! always-present `"*"` is stripped -- see `scan`) yields zero rows. A maintenance caller and a
+//! request with no `AuthContext` at all (`--disable-auth`) are both `is_admin: true` and take
+//! the `All` branch below instead, never `Held`.
 //!
 //! **What this is not.** This function reads the DB table directly on every call, never
 //! `DbAudienceGrantsSource`'s TTL snapshot, so a write is visible immediately. It also does not
@@ -43,8 +45,9 @@ pub enum GrantVisibility {
     /// Every row -- an admin caller.
     All,
     /// Every grant on each `(audience, axis)` pair covered by one of these selectors -- a
-    /// non-admin caller's `grant_selectors`, `"*"` included. Empty for internal/maintenance
-    /// callers and for a request with no `AuthContext` at all. `scan` strips the leading `"*"`
+    /// non-admin caller's `grant_selectors`, `"*"` included. Empty for `CallerContext::internal()`;
+    /// a maintenance caller and a request with no `AuthContext` at all are `is_admin: true` and
+    /// take [`Self::All`] instead, never reaching this variant. `scan` strips the leading `"*"`
     /// before binding it into the held-pair query -- see the note there for why.
     Held(Arc<[String]>),
 }
