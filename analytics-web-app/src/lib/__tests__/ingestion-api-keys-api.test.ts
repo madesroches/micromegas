@@ -1,9 +1,10 @@
 /**
- * `listIngestionApiKeys` must explicitly request the server's max limit
- * (500) rather than omitting `limit` (which falls back to the server's
- * lower `DEFAULT_LIMIT` of 100) — omitting it silently truncates the list on
- * any deployment with more than 100 lifetime keys, with no indication
- * anything is missing. It must also thread `offset` through so the page can
+ * `listIngestionApiKeys` must send the caller's `limit` explicitly rather than
+ * omitting it (which falls back to the server's lower `DEFAULT_LIMIT` of
+ * 100) — omitting it silently truncates the list on any deployment with more
+ * than 100 lifetime keys, with no indication anything is missing. The page
+ * passes `MAX_INGESTION_API_KEYS_LIST_LIMIT` (the server's max), so that's what
+ * goes on the wire. `offset` must be threaded through too, so the page can
  * page past the first 500 lifetime keys.
  */
 import { listIngestionApiKeys, MAX_INGESTION_API_KEYS_LIST_LIMIT } from '../ingestion-api-keys-api'
@@ -13,19 +14,20 @@ describe('ingestion-api-keys-api', () => {
     vi.restoreAllMocks()
   })
 
-  it('listIngestionApiKeys requests the server max limit and offset 0 by default', async () => {
+  it('listIngestionApiKeys sends the given limit and offset 0 on the first page', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve([]),
     } as unknown as Response)
     global.fetch = fetchMock as unknown as typeof fetch
 
-    await listIngestionApiKeys()
+    await listIngestionApiKeys(true, 0, MAX_INGESTION_API_KEYS_LIST_LIMIT)
 
     const [url] = fetchMock.mock.calls[0]
     expect(url).toBe(
       `/api/ingestion-api-keys?limit=${MAX_INGESTION_API_KEYS_LIST_LIMIT}&offset=0&include_revoked=true`
     )
+    // The page's default page size is the server's own `MAX_LIMIT`.
     expect(MAX_INGESTION_API_KEYS_LIST_LIMIT).toBe(500)
   })
 
@@ -36,7 +38,7 @@ describe('ingestion-api-keys-api', () => {
     } as unknown as Response)
     global.fetch = fetchMock as unknown as typeof fetch
 
-    await listIngestionApiKeys(true, MAX_INGESTION_API_KEYS_LIST_LIMIT)
+    await listIngestionApiKeys(true, MAX_INGESTION_API_KEYS_LIST_LIMIT, MAX_INGESTION_API_KEYS_LIST_LIMIT)
 
     const [url] = fetchMock.mock.calls[0]
     expect(url).toBe(

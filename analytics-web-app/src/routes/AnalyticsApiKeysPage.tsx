@@ -22,14 +22,24 @@ const analyticsApiKeysPageConfig: ApiKeysAdminPageConfig = {
   loadErrorMessage: 'Failed to load analytics API keys',
   revokeConfirmMessage: (name) =>
     `Are you sure you want to revoke "${name}"? Any client using this key will lose access.`,
-  maxListLimit: MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
   ErrorClass: AnalyticsApiKeyError,
   listKeys: listAnalyticsApiKeys,
   mintKey: mintAnalyticsApiKey,
   revokeKey: revokeAnalyticsApiKey,
 }
 
-export default function AnalyticsApiKeysPage() {
+export interface AnalyticsApiKeysPageProps {
+  /**
+   * Rows per page. Defaults to the server's max list limit; the route renders
+   * this component with no props, so only tests ever pass a smaller size (to
+   * exercise paging without rendering a full page of rows).
+   */
+  pageSize?: number
+}
+
+export default function AnalyticsApiKeysPage({
+  pageSize = MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
+}: AnalyticsApiKeysPageProps = {}) {
   return (
     <Suspense
       fallback={
@@ -44,7 +54,7 @@ export default function AnalyticsApiKeysPage() {
         </AuthGuard>
       }
     >
-      <ApiKeysAdminPage config={analyticsApiKeysPageConfig} />
+      <ApiKeysAdminPage config={analyticsApiKeysPageConfig} pageSize={pageSize} />
     </Suspense>
   )
 }

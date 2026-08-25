@@ -61,13 +61,11 @@ export interface ApiKeysApiConfig {
   basePath: string
   /** `.name` of the per-module error class, e.g. 'AnalyticsApiKeyError'. */
   errorName: string
-  /** The server's hard cap on `limit`, used as the page size for offset-based paging. */
-  maxListLimit: number
 }
 
 export interface ApiKeysApi<TRevokeResponse> {
   ErrorClass: ApiKeyErrorConstructor
-  list: (includeRevoked?: boolean, offset?: number) => Promise<ApiKeyListEntry[]>
+  list: (includeRevoked: boolean, offset: number, limit: number) => Promise<ApiKeyListEntry[]>
   mint: (name: string, audience?: string) => Promise<MintApiKeyResponse>
   revoke: (keyId: string) => Promise<TRevokeResponse>
 }
@@ -95,9 +93,19 @@ export function createApiKeysApi<
     return response.json()
   }
 
-  async function list(includeRevoked = true, offset = 0): Promise<ApiKeyListEntry[]> {
+  // `limit` is the caller's page size rather than a module constant: the admin
+  // page owns the value (it also drives the offset arithmetic and the
+  // "is there a next page?" row-count comparison), so a single number has to
+  // reach both the query string and the paging UI. All three args are
+  // required — a defaulted `limit` here could silently disagree with the page
+  // size the UI is comparing against.
+  async function list(
+    includeRevoked: boolean,
+    offset: number,
+    limit: number
+  ): Promise<ApiKeyListEntry[]> {
     const response = await authenticatedFetch(
-      `${getApiBase()}${config.basePath}?limit=${config.maxListLimit}&offset=${offset}&include_revoked=${includeRevoked}`
+      `${getApiBase()}${config.basePath}?limit=${limit}&offset=${offset}&include_revoked=${includeRevoked}`
     )
     return handleResponse<ApiKeyListEntry[]>(response)
   }

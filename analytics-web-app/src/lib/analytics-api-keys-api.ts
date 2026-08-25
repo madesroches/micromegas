@@ -15,14 +15,14 @@ import {
   MintApiKeyResponse,
 } from './api-keys-shared'
 
-// The server's own hard cap (`MAX_LIMIT` in `rust/analytics-web-srv/src/analytics_keys.rs`),
-// used here as the page size for offset-based paging. Requested explicitly on
-// every list call — omitting `limit` falls back to the server's lower
-// `DEFAULT_LIMIT` (100), which silently truncates the list on any deployment
-// with more than 100 *lifetime* keys (revoked keys are never deleted, and
-// `include_revoked` defaults to true) with zero indication anything is
-// missing. Exported so the page can detect "there may be another page" by
-// comparing the returned row count against this same value.
+// The server's own hard cap (`MAX_LIMIT` in
+// `rust/analytics-web-srv/src/analytics_keys.rs`), used as the default page size for
+// offset-based paging. The page passes it to every list call — omitting `limit`
+// falls back to the server's lower `DEFAULT_LIMIT` (100), which silently
+// truncates the list on any deployment with more than 100 *lifetime* keys
+// (revoked keys are never deleted, and `include_revoked` defaults to true) with
+// zero indication anything is missing. The page also compares the returned row
+// count against its page size to detect "there may be another page".
 export const MAX_ANALYTICS_API_KEYS_LIST_LIMIT = 500
 
 export type AnalyticsApiKeyListEntry = ApiKeyListEntry
@@ -41,7 +41,6 @@ export interface AnalyticsApiKeyErrorResponse {
 const api = createApiKeysApi<AnalyticsApiKeyErrorResponse, RevokeAnalyticsApiKeyResponse>({
   basePath: '/analytics-api-keys',
   errorName: 'AnalyticsApiKeyError',
-  maxListLimit: MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
 })
 
 export const AnalyticsApiKeyError = api.ErrorClass
