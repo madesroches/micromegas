@@ -263,8 +263,10 @@ selector to the audience's entry in `{prefix}_AUDIENCE_GRANTS`), never a
 restamping of the key or its already-ingested history.
 
 **A request that names no audience gets the deployment default**
-(`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value the
-ingestion role stamps onto data written by a credential with no bound audience.
+(`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value data
+written by a credential with no bound audience is *read* as, applied where the
+audience is resolved rather than stamped onto the data itself (see
+[Audience stamping and the default](authentication.md#audience-stamping-and-the-default)).
 One knob answers one question, on every route: what does something that arrives
 without an audience get. A new credential's *entire future* ingestion history
 follows that choice, so **name the audience explicitly when minting a key for

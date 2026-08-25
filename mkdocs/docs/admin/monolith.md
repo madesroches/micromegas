@@ -62,17 +62,18 @@ cargo run --bin micromegas-monolith -- \
     below) resolves under the ingestion role's own prefix, while `MICROMEGAS_DEFAULT_AUDIENCE`
     (the default audience above) is always resolved **unprefixed**, even in-process. So one
     monolith reads `MICROMEGAS_INGESTION_API_KEYS` for ingestion auth but only
-    `MICROMEGAS_DEFAULT_AUDIENCE` for audience defaults — not
-    `MICROMEGAS_INGESTION_DEFAULT_AUDIENCE`. Pre-existing and out of scope for #1373; noted
-    here so it doesn't surprise an operator reaching for a `MICROMEGAS_INGESTION_` prefix on both.
+    `MICROMEGAS_DEFAULT_AUDIENCE` for audience defaults. Pre-existing and out of scope for
+    #1373; noted here so it doesn't surprise an operator reaching for a `MICROMEGAS_INGESTION_`
+    prefix on both.
     The three self-service knobs above (`MICROMEGAS_SELF_SERVICE_MINT` and its two per-caller
     bounds) follow `MICROMEGAS_DEFAULT_AUDIENCE`'s convention, not
     `MICROMEGAS_INGESTION_API_KEYS`'s: they stay unprefixed under monolith too, since they belong
     to `analytics-web-srv`'s own standalone-service, empty-prefix convention, the same as every
     other knob this section owns. The `web` role does resolve a `{prefix}_DEFAULT_AUDIENCE` form
-    (`micromegas_auth::policy::default_audience_from_env`, prefix `""` under monolith); the
-    ingestion role reads the unprefixed name directly and has no prefixed variant at all, so a
-    prefixed spelling would split the two roles onto different defaults — set the unprefixed name.
+    (`micromegas_auth::policy::default_audience_from_env`, prefix `""` under monolith); every
+    role that builds a lakehouse (FlightSQL, maintenance) reads the unprefixed name directly and
+    has no prefixed variant at all, so a prefixed spelling would split those roles onto a
+    different default than the web role — set the unprefixed name.
 
 ## CLI flags
 
