@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
+    audience::audience_subselect,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
@@ -49,6 +50,9 @@ pub struct ProcessMetadata {
     pub start_ticks: i64,
     pub parent_process_id: Option<uuid::Uuid>,
     pub properties: SharedJsonbSerialized,
+    /// The owning process's audience (#1482 §3) -- always present, never empty. Appended last:
+    /// a required field with no default, so the compiler enumerates every construction site.
+    pub audience: Arc<str>,
 }
 
 /// Analytics-optimized stream metadata.
@@ -229,6 +233,10 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
     let properties_map = micromegas_telemetry::property::into_hashmap(properties);
     let serialized_properties = serialize_properties_to_jsonb(&properties_map)
         .with_context(|| "serializing process properties to JSONB")?;
+    // A NULL here (`try_get` on a String column) is a `try_get` error -- correct, per #1482 §0:
+    // every process carries an audience, always, after the write-side default and the startup
+    // backfill.
+    let audience: String = row.try_get("audience")?;
 
     Ok(ProcessMetadata {
         process_id: row.try_get("process_id")?,
@@ -243,6 +251,7 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
         start_ticks: row.try_get("start_ticks")?,
         parent_process_id: row.try_get("parent_process_id")?,
         properties: Arc::new(serialized_properties),
+        audience: Arc::from(audience),
     })
 }
 
@@ -252,9 +261,8 @@ pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: &sqlx::types::Uuid,
 ) -> Result<ProcessMetadata> {
-    let row = instrument_named!(
-        sqlx::query(
-            "SELECT process_id,
+    let sql = format!(
+        "SELECT process_id,
                 exe,
                 username,
                 realname,
@@ -265,12 +273,14 @@ pub async fn find_process(
                 start_time,
                 start_ticks,
                 parent_process_id,
-                properties as process_properties
+                properties as process_properties,
+                {audience_subselect} AS audience
          FROM processes
          WHERE process_id = $1;",
-        )
-        .bind(process_id)
-        .fetch_one(pool),
+        audience_subselect = audience_subselect("properties"),
+    );
+    let row = instrument_named!(
+        sqlx::query(&sql).bind(process_id).fetch_one(pool),
         "sql_select_process"
     )
     .await
@@ -307,7 +317,7 @@ pub async fn find_process_with_latest_timing(
     let sql = format!(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand,
                 tsc_frequency, start_time, start_ticks, parent_process_id, properties,
-                last_block_end_ticks, last_block_end_time
+                last_block_end_ticks, last_block_end_time, audience
          FROM processes
          WHERE process_id = '{}'",
         process_id
@@ -345,6 +355,7 @@ pub async fn find_process_with_latest_timing(
     let last_block_end_time_column: &TimestampNanosecondArray =
         typed_column_by_name(batch, "last_block_end_time")?;
     let parent_process_id_column = string_column_by_name(batch, "parent_process_id")?;
+    let audience_column = string_column_by_name(batch, "audience")?;
 
     let parent_process_id = if parent_process_id_column.is_null(0) {
         None
@@ -377,6 +388,7 @@ pub async fn find_process_with_latest_timing(
         start_ticks: start_ticks_column.value(0),
         parent_process_id,
         properties: properties_jsonb,
+        audience: Arc::from(audience_column.value(0)?),
     };
 
     let last_block_end_ticks = last_block_end_ticks_column.value(0);

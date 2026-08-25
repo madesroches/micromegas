@@ -144,11 +144,13 @@ pub async fn upgrade_data_lake_schema_v5(
 /// Adds the `audience` column to `ingestion_api_keys` (#1372, AbAC Stage 4): the write
 /// audience a key is immutably bound to. Backfilled to `'public'` before `SET NOT NULL` --
 /// every pre-existing row is a pre-AbAC key, and `public` is the accurate description of
-/// its current, unstamped-and-visible-to-everyone state, not a new grant. No `DEFAULT` on
-/// the column: that would let a not-yet-upgraded `analytics-web-srv` keep inserting rows
-/// that silently take `public`, defeating the fail-closed property this stage relies on.
-/// `analytics_api_keys` is untouched -- its read-side mirror is `read_audiences` (Stage
-/// 4b), a set-valued grant in the opposite direction.
+/// its current, unstamped-and-visible-to-everyone state (a *key*-level notion, predating and
+/// distinct from the per-process `micromegas.audience` property -- see #1482, which makes every
+/// *process* carry one unconditionally and removes that state on the process side), not a new
+/// grant. No `DEFAULT` on the column: that would let a not-yet-upgraded `analytics-web-srv` keep
+/// inserting rows that silently take `public`, defeating the fail-closed property this stage
+/// relies on. `analytics_api_keys` is untouched -- its read-side mirror is `read_audiences`
+/// (Stage 4b), a set-valued grant in the opposite direction.
 pub async fn upgrade_data_lake_schema_v6(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<()> {

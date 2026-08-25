@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
 use micromegas_ingestion::write_audience::WriteAudience;
-use micromegas_telemetry::property::{PROPERTY_AUDIENCE, Property};
+use micromegas_telemetry::property::{PROPERTY_AUDIENCE, Property, make_properties};
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::dispatch::make_process_info;
 use std::collections::HashMap;
@@ -31,6 +31,34 @@ async fn connect() -> Result<micromegas_ingestion::data_lake_connection::DataLak
 fn process_body(process_id: Uuid) -> Result<bytes::Bytes> {
     let process_info = make_process_info(process_id, None, HashMap::new());
     Ok(bytes::Bytes::from(encode_cbor(&process_info)?))
+}
+
+/// Inserts a `processes` row with no `micromegas.audience` property at all -- bypassing
+/// `insert_process`'s stamping entirely, the same way a pre-#1482 legacy row (or an old replica
+/// straggling mid-rollout) would look. Used to exercise the conflict guard's invariant-violation
+/// arm, which after #1482 is the only way such a row can be re-registered against.
+async fn insert_unstamped_process_row(pool: &sqlx::PgPool, process_id: Uuid) -> Result<()> {
+    let now = sqlx::types::chrono::Utc::now();
+    sqlx::query(
+        "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+    )
+    .bind(process_id)
+    .bind("exe")
+    .bind("username")
+    .bind("username")
+    .bind("computer")
+    .bind("distro")
+    .bind("cpu_brand")
+    .bind(1_000_000_000_i64)
+    .bind(now)
+    .bind(0_i64)
+    .bind(now)
+    .bind(Option::<Uuid>::None)
+    .bind(make_properties(&std::collections::HashMap::new()))
+    .execute(pool)
+    .await
+    .with_context(|| "inserting unstamped processes row")?;
+    Ok(())
 }
 
 async fn read_audience_property(pool: &sqlx::PgPool, process_id: Uuid) -> Result<Option<String>> {
@@ -52,9 +80,9 @@ async fn read_audience_property(pool: &sqlx::PgPool, process_id: Uuid) -> Result
 #[tokio::test]
 async fn same_audience_reregistration_is_ok() -> Result<()> {
     let lake = connect().await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let process_id = Uuid::new_v4();
-    let audience = WriteAudience::new(Some("team-a"))?;
+    let audience = WriteAudience::new("team-a")?;
 
     ingestion
         .insert_process(process_body(process_id)?, &audience)
@@ -79,10 +107,10 @@ async fn same_audience_reregistration_is_ok() -> Result<()> {
 #[tokio::test]
 async fn different_audience_reregistration_is_a_conflict() -> Result<()> {
     let lake = connect().await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let process_id = Uuid::new_v4();
-    let audience_a = WriteAudience::new(Some("team-a"))?;
-    let audience_b = WriteAudience::new(Some("team-b"))?;
+    let audience_a = WriteAudience::new("team-a")?;
+    let audience_b = WriteAudience::new("team-b")?;
 
     ingestion
         .insert_process(process_body(process_id)?, &audience_a)
@@ -106,30 +134,37 @@ async fn different_audience_reregistration_is_a_conflict() -> Result<()> {
     Ok(())
 }
 
-/// An existing `NULL` (never-stamped) row, re-registered with `Some` audience, is a no-op --
-/// the process must not be lost, but it must also not be retro-stamped.
+/// A row that carries no `micromegas.audience` property at all -- an invariant violation once
+/// every process is stamped at write time and the startup backfill has run (#1482 §0), e.g. a
+/// straggler old replica during a rolling upgrade -- rejects a re-registration as a database
+/// error rather than silently leaving it alone (the pre-#1482 "no retro-stamp" behavior).
 #[ignore]
 #[tokio::test]
-async fn existing_null_audience_reregistration_is_ok_and_stays_unstamped() -> Result<()> {
+async fn existing_row_with_no_audience_property_rejects_reregistration() -> Result<()> {
     let lake = connect().await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let process_id = Uuid::new_v4();
 
-    ingestion
-        .insert_process(process_body(process_id)?, &WriteAudience::none())
-        .await
-        .with_context(|| "first insert_process, unstamped")?;
+    insert_unstamped_process_row(&lake.db_pool, process_id).await?;
+    assert_eq!(
+        read_audience_property(&lake.db_pool, process_id).await?,
+        None,
+        "test setup: the row must start with no audience property"
+    );
 
-    let audience = WriteAudience::new(Some("team-a"))?;
-    ingestion
+    let audience = WriteAudience::new("team-a")?;
+    let result = ingestion
         .insert_process(process_body(process_id)?, &audience)
-        .await
-        .with_context(|| "re-registration of an unstamped process must not fail")?;
+        .await;
+    assert!(
+        matches!(result, Err(IngestionServiceError::DatabaseError(_))),
+        "expected DatabaseError (invariant violation), got {result:?}"
+    );
 
     assert_eq!(
         read_audience_property(&lake.db_pool, process_id).await?,
         None,
-        "an existing NULL audience must never be retro-stamped by a later re-registration"
+        "a rejected re-registration must never retro-stamp"
     );
     Ok(())
 }
@@ -145,10 +180,10 @@ async fn existing_null_audience_reregistration_is_ok_and_stays_unstamped() -> Re
 #[tokio::test]
 async fn otel_reregistration_conflicts_with_native_registration() -> Result<()> {
     let lake = connect().await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let process_id = Uuid::new_v4();
-    let audience_a = WriteAudience::new(Some("team-a"))?;
-    let audience_b = WriteAudience::new(Some("team-b"))?;
+    let audience_a = WriteAudience::new("team-a")?;
+    let audience_b = WriteAudience::new("team-b")?;
 
     ingestion
         .insert_process(process_body(process_id)?, &audience_a)

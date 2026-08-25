@@ -31,10 +31,14 @@ fn make_test_service() -> Arc<WebIngestionService> {
     let blob_storage = Arc::new(BlobStorage::new(blob_store, Path::default()));
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
-    Arc::new(WebIngestionService::new(DataLakeConnection::new(
+    Arc::new(WebIngestionService::new_for_test(DataLakeConnection::new(
         pool,
         blob_storage,
     )))
+}
+
+fn default_audience() -> WriteAudience {
+    WriteAudience::new("public").expect("\"public\" is a valid audience")
 }
 
 fn ctx_with_bound_audience(audience: &str) -> AuthContext {
@@ -70,38 +74,39 @@ fn ctx_without_bound_audience() -> AuthContext {
 }
 
 // ---------------------------------------------------------------------------
-// resolve_write_audience: its remaining branches (the `Ok` bound-audience-stamps path and the
-// `Err`-degrades-to-none warn path).
+// resolve_write_audience: every process gets an audience, always (#1482 §0) -- a bound
+// credential's audience wins, an audience-less one gets `default`, and a malformed
+// `bound_audience` is rejected outright rather than degraded to `default`.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn bound_audience_stamps() {
     let ctx = Extension(ctx_with_bound_audience("team-a"));
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::new(Some("team-a")).unwrap());
+    let audience = resolve_write_audience(Some(&ctx), &default_audience()).unwrap();
+    assert_eq!(audience, WriteAudience::new("team-a").unwrap());
 }
 
 #[test]
-fn audience_less_credential_is_unstamped() {
+fn audience_less_credential_gets_the_default() {
     let ctx = Extension(ctx_without_bound_audience());
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::none());
+    let audience = resolve_write_audience(Some(&ctx), &default_audience()).unwrap();
+    assert_eq!(audience, default_audience());
 }
 
 #[test]
-fn no_extension_is_unstamped() {
-    let audience = resolve_write_audience(None);
-    assert_eq!(audience, WriteAudience::none());
+fn no_extension_gets_the_default() {
+    let audience = resolve_write_audience(None, &default_audience()).unwrap();
+    assert_eq!(audience, default_audience());
 }
 
 #[test]
-fn malformed_bound_audience_warns_and_degrades_to_none() {
+fn malformed_bound_audience_rejects() {
     // "bad label with spaces" fails `WriteAudience::new`'s `[A-Za-z0-9_-]{1,255}` charset check
-    // (the space bytes), so this exercises the `Err` arm: it warns and resolves to
-    // `WriteAudience::none()` instead of being rejected.
+    // (the space bytes). With no unstamped state left, the only degrade available would move a
+    // restricted key's writes into the default audience -- fail-open on the boundary this design
+    // exists to hold -- so this is rejected outright instead.
     let ctx = Extension(ctx_with_bound_audience("bad label with spaces"));
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::none());
+    assert!(resolve_write_audience(Some(&ctx), &default_audience()).is_err());
 }
 
 // ---------------------------------------------------------------------------

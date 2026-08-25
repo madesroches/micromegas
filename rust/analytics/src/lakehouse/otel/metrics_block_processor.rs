@@ -165,6 +165,7 @@ struct MeasuresRowBuilder {
     values: PrimitiveBuilder<Float64Type>,
     properties: BinaryDictionaryBuilder<Int32Type>,
     process_properties: BinaryDictionaryBuilder<Int32Type>,
+    audiences: StringDictionaryBuilder<Int32Type>,
     min_time: i64,
     max_time: i64,
     nb_appended: usize,
@@ -198,6 +199,7 @@ impl MeasuresRowBuilder {
             values: PrimitiveBuilder::new(),
             properties: BinaryDictionaryBuilder::new(),
             process_properties: BinaryDictionaryBuilder::new(),
+            audiences: StringDictionaryBuilder::new(),
             min_time: i64::MAX,
             max_time: i64::MIN,
             nb_appended: 0,
@@ -240,6 +242,7 @@ impl MeasuresRowBuilder {
         self.values.append_value(value);
         self.properties.append(props_jsonb)?;
         self.process_properties.append(&**self.process.properties)?;
+        self.audiences.append(&*self.process.audience)?;
 
         self.nb_appended += 1;
         Ok(())
@@ -392,6 +395,7 @@ impl MeasuresRowBuilder {
                 Arc::new(self.values.finish()),
                 Arc::new(self.properties.finish()),
                 Arc::new(self.process_properties.finish()),
+                Arc::new(self.audiences.finish()),
             ],
         )
         .with_context(|| "building OTel measures batch")?;

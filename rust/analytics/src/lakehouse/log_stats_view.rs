@@ -35,7 +35,8 @@ pub async fn make_log_stats_view(
                process_id,
                level,
                target,
-               count(*) as count
+               count(*) as count,
+               arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
         FROM log_entries
         WHERE insert_time >= '{begin}'
         AND insert_time < '{end}'
@@ -53,7 +54,8 @@ pub async fn make_log_stats_view(
                process_id,
                level,
                target,
-               sum(count) as count
+               sum(count) as count,
+               arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
         FROM {source}
         GROUP BY process_id, level, target, time_bin
         ;"#,

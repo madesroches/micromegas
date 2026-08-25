@@ -62,6 +62,7 @@ fn block(begin_ticks: i64, end_ticks: i64, object_offset: i64) -> Arc<PartitionS
             start_ticks: 0,
             parent_process_id: None,
             properties: Arc::new(vec![]),
+            audience: Arc::from("public"),
         }),
         format: "test".to_owned(),
     })

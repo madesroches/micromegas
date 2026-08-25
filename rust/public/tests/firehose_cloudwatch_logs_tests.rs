@@ -30,7 +30,7 @@ fn make_test_service() -> Arc<WebIngestionService> {
     let blob_storage = Arc::new(BlobStorage::new(blob_store, Path::default()));
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
-    Arc::new(WebIngestionService::new(DataLakeConnection::new(
+    Arc::new(WebIngestionService::new_for_test(DataLakeConnection::new(
         pool,
         blob_storage,
     )))

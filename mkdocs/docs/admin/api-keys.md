@@ -268,9 +268,10 @@ no built-in default.** A new credential's *entire future* ingestion history
 follows this one choice, so an unresolvable mint is a **400**, never a silent
 `public`: defaulting a fresh write credential to a universally-readable
 audience would publish everything it ever ingests. `import` is different — a
-legacy key's already-ingested history is either unstamped (visible only
-through `MICROMEGAS_UNSTAMPED_AUDIENCE`) or, once migration v6's backfill has
-run, already `public` — so `import` falls back to `public` when neither the
+legacy key's already-ingested history is either stamped with the deployment's
+`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`, applied by the
+ingestion-side backfill, #1482) or, once migration v6's backfill has run,
+already `public` — so `import` falls back to `public` when neither the
 request nor the knob supplies one, matching that continuity rather than
 erroring.
 
@@ -301,11 +302,12 @@ grants API); the script no longer needs to, and the web dialog and any direct `c
 get the same behavior. An admin with no email is unaffected — no `user:` row can be formed for
 them either way, same pre-existing gap as before.
 
-**Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) is never
-stamped at all.** That keyring has no audience column to carry one, by
-design (per the umbrella data-isolation plan) — its data stays visible only
-through `MICROMEGAS_UNSTAMPED_AUDIENCE`, the same escape hatch that covers
-any process minted before this stage existed.
+**Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
+audience of its own.** That keyring has no audience column, by design (per
+the umbrella data-isolation plan) — its data is stamped with the
+deployment's `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`)
+instead, the same default that covers any process ingested before #1482
+existed (via the ingestion-side backfill).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly** —
 the audience is cached alongside the rest of the row

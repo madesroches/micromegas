@@ -11,6 +11,7 @@ use super::{
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
+use crate::audience::audience_subselect;
 use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -57,10 +58,11 @@ pub struct BlocksView {
 
 impl BlocksView {
     pub fn new() -> Result<Self> {
-        let data_sql = Arc::new(String::from(
+        let data_sql = Arc::new(format!(
             r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time, streams.format,
-           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
+           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties,
+           {audience_subselect} AS audience
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
          AND blocks.process_id = processes.process_id
@@ -68,6 +70,7 @@ impl BlocksView {
          AND blocks.insert_time < $2
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
+            audience_subselect = audience_subselect("processes.properties"),
         ));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let schema = Arc::new(blocks_view_schema());
@@ -295,16 +298,25 @@ pub fn blocks_view_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             false,
         ),
-        Field::new("processes.parent_process_id", DataType::Utf8, false),
+        // Nullable, not because the Postgres column is (no `processes`/`streams`/`blocks` column
+        // is `NOT NULL`) but because it is `NULL` in practice for every OTLP process and every
+        // root native process (`parent_process_id: Option<Uuid>`). The write path's nullability
+        // guard (`write_partition.rs`) checks declared-non-nullable columns against the batch, so
+        // a wrongly-`false` declaration here would reject essentially every fresh partition.
+        Field::new("processes.parent_process_id", DataType::Utf8, true),
         Field::new(
             "processes.properties",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
+        // Appended last (#1482): the audience of the owning process, extracted once here from
+        // Postgres and propagated structurally into every downstream view. Never `NULL` in
+        // practice -- every process carries one, always (see `audience.rs`, `audience_backfill.rs`).
+        Field::new("audience", DataType::Utf8, false),
     ])
 }
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![3] // Bumped from vec![2] for streams.format column (OTLP support)
+    vec![4] // Bumped from vec![3] for the first-class `audience` column (#1482)
 }

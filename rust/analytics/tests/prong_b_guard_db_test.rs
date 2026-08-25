@@ -16,9 +16,7 @@ mod common;
 
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
-use common::db_fixtures::{
-    caller_with_unstamped_audience, ensure_telemetry_guard, reset_global_view,
-};
+use common::db_fixtures::{ensure_telemetry_guard, reset_global_view};
 use micromegas_analytics::dfext::string_column_accessor::string_column_by_name;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -66,15 +64,15 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left unstamped if `None` -- plus
-/// its cpu stream and one block, through the real ingestion pipeline. See
-/// `ownership_rewrite_db_test.rs`'s identical-in-spirit helper for why stamping happens before
-/// any block is materialized (irrelevant to Prong B, which reads Postgres directly, but kept for
-/// consistency and because this file shares its seeding style).
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) -- plus its cpu stream and one block,
+/// through the real ingestion pipeline. See `ownership_rewrite_db_test.rs`'s identical-in-spirit
+/// helper for why stamping happens before any block is materialized (irrelevant to Prong B,
+/// which reads Postgres directly, but kept for consistency and because this file shares its
+/// seeding style).
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
-    audience: Option<&str>,
+    audience: &str,
 ) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
@@ -162,6 +160,16 @@ fn caller(read_scope: ReadScope) -> CallerContext {
     }
 }
 
+/// A caller that passes the lakehouse admin gate (`caller.is_admin ||
+/// !caller.admin_principal_possible`) -- the boolean `AudienceGuard::global_rows_visible` now
+/// consults instead of the removed `unstamped_audience` knob (#1482 §4).
+fn admin_caller(read_scope: ReadScope) -> CallerContext {
+    CallerContext {
+        is_admin: true,
+        ..caller(read_scope)
+    }
+}
+
 fn scope(audiences: &[&str]) -> ReadScope {
     ReadScope::Audiences(
         audiences
@@ -207,8 +215,9 @@ async fn row_count(
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
 
-/// Shared fixture setup: three processes (A/B stamped with different audiences, C unstamped),
-/// with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
+/// Shared fixture setup: three processes (A/B stamped with different audiences, C stamped with
+/// the deployment's default ingestion audience, `public` -- #1482 §0, there is no unstamped
+/// state any more), with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
 /// `get_process_thread_list` and `perfetto_trace_chunks`' `get_process_exe`, which read those
 /// views under the witness's internal caller regardless of the outer caller's scope -- see
 /// `tasks/1371_udtf_udf_guards_plan.md` §6).
@@ -228,12 +237,12 @@ async fn setup() -> Result<Fixtures> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
-    let process_a = seed_process(&ingestion, &lake.db_pool, Some("team-a")).await?;
-    let process_b = seed_process(&ingestion, &lake.db_pool, Some("team-b")).await?;
-    let process_c = seed_process(&ingestion, &lake.db_pool, None).await?;
+    let process_a = seed_process(&ingestion, &lake.db_pool, "team-a").await?;
+    let process_b = seed_process(&ingestion, &lake.db_pool, "team-b").await?;
+    let process_c = seed_process(&ingestion, &lake.db_pool, "public").await?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);
@@ -354,7 +363,7 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
          so a caller can't tell them apart (no existence oracle)"
     );
 
-    let unstamped_sql = format!(
+    let default_audience_sql = format!(
         "SELECT * FROM process_spans('{}', 'thread')",
         f.process_c.process_id
     );
@@ -363,25 +372,24 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
         f.view_factory.clone(),
         caller(scope(&["team-a"])),
         Some(f.insert_range),
-        &unstamped_sql,
+        &default_audience_sql,
     )
     .await
     .expect_err(
-        "an unstamped process must stay denied for a caller whose scope doesn't include the \
-         default MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')",
+        "a default-audience process must stay denied for a caller whose scope doesn't include \
+         'public'",
     );
-    let unstamped_rows = row_count(
+    let default_audience_rows = row_count(
         f.lakehouse.clone(),
         f.view_factory.clone(),
-        caller_with_unstamped_audience(scope(&["team-a"]), "team-a"),
+        caller(scope(&["public"])),
         Some(f.insert_range),
-        &unstamped_sql,
+        &default_audience_sql,
     )
     .await?;
     assert!(
-        unstamped_rows > 0,
-        "an unstamped process must become readable once MICROMEGAS_UNSTAMPED_AUDIENCE names an \
-         audience in the caller's own scope"
+        default_audience_rows > 0,
+        "a caller holding the default audience ('public') must see the default-audience process"
     );
 
     Ok(())
@@ -619,26 +627,26 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     );
     assert!(
         !team_a_instance_ids.iter().any(|id| id == "global"),
-        "'global' rows must stay hidden from a caller whose scope doesn't include the default \
-         MICROMEGAS_UNSTAMPED_AUDIENCE value ('public')"
+        "'global' rows must stay hidden from a non-admin caller whose view sets aren't in \
+         MICROMEGAS_PUBLIC_VIEW_SETS (#1482 §4)"
     );
 
-    let team_a_with_public_batches = query(
+    let team_a_admin_batches = query(
         f.lakehouse.clone(),
         f.view_factory.clone(),
-        caller_with_unstamped_audience(scope(&["team-a"]), "team-a"),
+        admin_caller(scope(&["team-a"])),
         None,
         "SELECT view_set_name, view_instance_id FROM list_partitions()",
     )
     .await?;
-    let has_global = team_a_with_public_batches.iter().any(|b| {
+    let has_global = team_a_admin_batches.iter().any(|b| {
         let ids = string_column_by_name(b, "view_instance_id").expect("view_instance_id");
         (0..b.num_rows()).any(|i| ids.value(i).expect("valid utf8") == "global")
     });
     assert!(
         has_global,
-        "'global' rows must become visible once MICROMEGAS_UNSTAMPED_AUDIENCE names an \
-         audience in the caller's own scope"
+        "'global' rows must become visible once the caller passes the lakehouse admin gate \
+         (#1482 §4) -- no query-time knob involved any more"
     );
 
     // `LIMIT n` over a filtered set must never return fewer than `min(n, matching)` rows because

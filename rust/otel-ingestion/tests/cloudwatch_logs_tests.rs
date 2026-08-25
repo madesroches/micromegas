@@ -14,6 +14,15 @@ use micromegas_otel_ingestion::error::OtelError;
 use micromegas_otel_ingestion::identity::{IdentityContext, process_id_from_resource};
 use std::io::Write;
 
+/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no
+/// `Default` any more, so tests that don't care what the audience is use this fixed one.
+fn default_ctx() -> IdentityContext<'static> {
+    IdentityContext {
+        audience: "public",
+        extra_hash_input: &[],
+    }
+}
+
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes).expect("writing to gzip encoder");
@@ -171,7 +180,7 @@ fn full_pipeline_decode_build_split_produces_one_block_with_matching_record_coun
         .expect("decode ok")
         .expect("Some");
     let req = build_export_logs_request(&msg);
-    let blocks = split_logs(req, IdentityContext::default()).expect("split_logs");
+    let blocks = split_logs(req, default_ctx()).expect("split_logs");
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].nb_records, 3);
 }
@@ -190,10 +199,8 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
         .expect("decode ok")
         .expect("Some");
 
-    let blocks1 = split_logs(build_export_logs_request(&msg1), IdentityContext::default())
-        .expect("split_logs");
-    let blocks2 = split_logs(build_export_logs_request(&msg2), IdentityContext::default())
-        .expect("split_logs");
+    let blocks1 = split_logs(build_export_logs_request(&msg1), default_ctx()).expect("split_logs");
+    let blocks2 = split_logs(build_export_logs_request(&msg2), default_ctx()).expect("split_logs");
     assert_eq!(blocks1.len(), 1);
     assert_eq!(blocks2.len(), 1);
     assert_ne!(blocks1[0].process_id, blocks2[0].process_id);
@@ -205,7 +212,7 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
             dropped_attributes_count: 0,
             entity_refs: vec![],
         }),
-        IdentityContext::default(),
+        default_ctx(),
     );
     let pid2 = process_id_from_resource(
         Some(&micromegas_otel_ingestion::proto::Resource {
@@ -213,7 +220,7 @@ fn multi_record_batch_with_distinct_log_streams_yields_distinct_process_ids() {
             dropped_attributes_count: 0,
             entity_refs: vec![],
         }),
-        IdentityContext::default(),
+        default_ctx(),
     );
     assert_eq!(blocks1[0].process_id, pid1);
     assert_eq!(blocks2[0].process_id, pid2);

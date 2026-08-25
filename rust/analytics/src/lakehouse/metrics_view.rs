@@ -36,7 +36,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
-const SCHEMA_VERSION: u8 = 7;
+const SCHEMA_VERSION: u8 = 8;
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
 }

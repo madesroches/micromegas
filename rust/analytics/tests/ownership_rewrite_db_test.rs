@@ -1,11 +1,14 @@
 //! DB-backed tests for `OwnershipRewrite` (#1370, AbAC Stage 2) -- the issue's own acceptance
 //! criteria: seed processes stamped with different `micromegas.audience` properties (plus one
-//! never stamped at all) through the real ingestion pipeline, materialize the `blocks`/
+//! stamped with the deployment's *default* ingestion audience, per #1482 §0 -- there is no
+//! unstamped state any more) through the real ingestion pipeline, materialize the `blocks`/
 //! `processes`/`streams` batch views `OwnershipRewrite` reads its audience mapping from, then
 //! assert a session's visible rows differ by `CallerContext.read_scope` -- cross-audience denial,
-//! same-audience visibility, `ReadScope::All` sees everything, the
-//! `MICROMEGAS_UNSTAMPED_AUDIENCE` escape hatch, and (the coverage a naive "process_id column or
-//! bust" implementation would miss) the two schema-less view sets `async_events`/`thread_spans`.
+//! same-audience visibility, `ReadScope::All` sees everything, and (the coverage a naive
+//! "process_id column or bust" implementation would miss) the two schema-less view sets
+//! `async_events`/`thread_spans`. Also asserts the physical `audience` column itself (#1482) is
+//! present, non-`NULL`, and carries the expected value on `processes`/`streams`/`blocks`/
+//! `log_entries`.
 //!
 //! Requires a live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (mirrors
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
@@ -28,9 +31,7 @@ mod common;
 
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
-use common::db_fixtures::{
-    caller_with_unstamped_audience, ensure_telemetry_guard, reset_global_view,
-};
+use common::db_fixtures::{ensure_telemetry_guard, reset_global_view};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
@@ -76,13 +77,10 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left unstamped if `None` -- plus
-/// its cpu/log streams and one block each, through the real ingestion pipeline
-/// (`WebIngestionService`, the same entry point a real client hits).
-async fn seed_process(
-    ingestion: &WebIngestionService,
-    audience: Option<&str>,
-) -> Result<ProcessFixture> {
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) -- plus its cpu/log streams and one block
+/// each, through the real ingestion pipeline (`WebIngestionService`, the same entry point a real
+/// client hits).
+async fn seed_process(ingestion: &WebIngestionService, audience: &str) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
@@ -243,15 +241,16 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new_for_test(lake.clone());
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     // Seed three processes *before* any block/view materialization: A and B are stamped with
-    // different audiences, C is left unstamped (no `micromegas.audience` property at all) --
-    // exercising the `MICROMEGAS_UNSTAMPED_AUDIENCE` escape hatch below.
-    let process_a = seed_process(&ingestion, Some("team-a")).await?;
-    let process_b = seed_process(&ingestion, Some("team-b")).await?;
-    let process_c = seed_process(&ingestion, None).await?;
+    // different audiences, C is stamped with the deployment's default ingestion audience
+    // (`public`) -- exercising the write-side default rather than a query-time escape hatch
+    // (#1482 §0: there is no unstamped state any more).
+    let process_a = seed_process(&ingestion, "team-a").await?;
+    let process_b = seed_process(&ingestion, "team-b").await?;
+    let process_c = seed_process(&ingestion, "public").await?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);
@@ -511,7 +510,9 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         "ReadScope::All must see the same thread_spans rows as the owning audience"
     );
 
-    // --- Unstamped process C: visible only via the MICROMEGAS_UNSTAMPED_AUDIENCE escape hatch
+    // --- Default-audience process C: visible to a caller holding the default audience,
+    // invisible to one that does not (#1482 §0 -- there is no query-time escape hatch any more,
+    // the default is a write-time stamp like any other audience).
     let processes_c_sql = format!(
         "SELECT * FROM processes WHERE process_id = '{}'",
         process_c.process_id
@@ -526,36 +527,69 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         )
         .await?,
         0,
-        "an unstamped process must stay invisible to a ReadScope::Audiences caller whose own \
-         scope doesn't include the default MICROMEGAS_UNSTAMPED_AUDIENCE value ('public'), \
-         however unrelated to A/B its own scope is"
+        "a default-audience process must stay invisible to a caller whose scope doesn't \
+         include 'public', however unrelated to A/B its own scope is"
     );
     assert_eq!(
         row_count(
             lakehouse.clone(),
             view_factory.clone(),
-            caller_with_unstamped_audience(audiences_scope(&["everyone"]), "everyone",),
+            caller_with_scope(audiences_scope(&["public"])),
             None,
             &processes_c_sql,
         )
         .await?,
         1,
-        "a caller whose scope includes the configured MICROMEGAS_UNSTAMPED_AUDIENCE value must \
-         see the unstamped process"
+        "a caller holding the default audience ('public') must see the default-audience process"
     );
-    assert_eq!(
-        row_count(
-            lakehouse.clone(),
-            view_factory.clone(),
-            caller_with_unstamped_audience(audiences_scope(&["team-a"]), "everyone"),
-            None,
-            &processes_c_sql,
-        )
-        .await?,
-        0,
-        "configuring the escape hatch must not leak the unstamped process to a caller whose own \
-         scope does not include the configured unstamped audience"
-    );
+
+    // --- The `audience` column itself (#1482): present, non-NULL, and carrying the expected
+    // value on every view that now materializes it. `measures`/`log_stats` aren't exercised by
+    // this fixture (no metrics are ingested here) -- see `log_stats_view.rs`/`metrics_table.rs`
+    // for their own coverage of the column.
+    for (view_sql, expected_count) in [
+        (
+            format!(
+                "SELECT audience FROM processes WHERE process_id = '{}' AND audience = 'team-a'",
+                process_a.process_id
+            ),
+            1,
+        ),
+        (
+            format!(
+                "SELECT audience FROM streams WHERE process_id = '{}' AND audience = 'team-a'",
+                process_a.process_id
+            ),
+            2, // cpu + log streams
+        ),
+        (
+            format!(
+                "SELECT audience FROM blocks WHERE process_id = '{}' AND audience = 'team-a'",
+                process_a.process_id
+            ),
+            2, // cpu + log blocks
+        ),
+        (
+            format!(
+                "SELECT audience FROM view_instance('log_entries', '{}') WHERE audience = 'team-a'",
+                process_a.process_id
+            ),
+            1,
+        ),
+    ] {
+        assert_eq!(
+            row_count(
+                lakehouse.clone(),
+                view_factory.clone(),
+                caller_with_scope(ReadScope::All),
+                None,
+                &view_sql,
+            )
+            .await?,
+            expected_count,
+            "audience column mismatch for query {view_sql:?}"
+        );
+    }
 
     Ok(())
 }

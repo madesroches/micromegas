@@ -1,11 +1,12 @@
 //! Unit tests (no DB) for `WriteAudience` and the two `pub` property-stamping helpers
-//! (AbAC Stage 5, #1373). Every case here is a pure function of its arguments.
+//! (AbAC Stage 5, #1373; #1482). Every case here is a pure function of its arguments.
 
 use micromegas_ingestion::web_ingestion_service::{
     finalize_process_properties, strip_reserved_properties,
 };
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::property::{PROPERTY_AUDIENCE, Property};
+use serial_test::serial;
 use std::sync::Arc;
 
 fn prop(key: &str, value: &str) -> Property {
@@ -21,29 +22,17 @@ fn find<'a>(properties: &'a [Property], key: &str) -> Option<&'a Property> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn write_audience_none_carries_no_audience() {
-    let audience = WriteAudience::none();
-    assert_eq!(audience.as_str(), None);
-}
-
-#[test]
-fn write_audience_new_none_is_equivalent_to_none() {
-    let audience = WriteAudience::new(None).expect("None is always valid");
-    assert_eq!(audience, WriteAudience::none());
-}
-
-#[test]
 fn write_audience_accepts_the_full_charset() {
     for valid in ["team-alpha", "team_alpha", "TeamAlpha123", "a", "-", "_"] {
-        let audience = WriteAudience::new(Some(valid))
+        let audience = WriteAudience::new(valid)
             .unwrap_or_else(|e| panic!("{valid:?} should be a valid audience: {e:#}"));
-        assert_eq!(audience.as_str(), Some(valid));
+        assert_eq!(audience.as_str(), valid);
     }
 }
 
 #[test]
 fn write_audience_rejects_empty_string() {
-    assert!(WriteAudience::new(Some("")).is_err());
+    assert!(WriteAudience::new("").is_err());
 }
 
 #[test]
@@ -56,7 +45,7 @@ fn write_audience_rejects_disallowed_characters() {
         "team@alpha",
     ] {
         assert!(
-            WriteAudience::new(Some(invalid)).is_err(),
+            WriteAudience::new(invalid).is_err(),
             "{invalid:?} must be rejected"
         );
     }
@@ -65,14 +54,69 @@ fn write_audience_rejects_disallowed_characters() {
 #[test]
 fn write_audience_rejects_256_bytes() {
     let too_long = "a".repeat(256);
-    assert!(WriteAudience::new(Some(&too_long)).is_err());
+    assert!(WriteAudience::new(&too_long).is_err());
     let exactly_255 = "a".repeat(255);
-    assert!(WriteAudience::new(Some(&exactly_255)).is_ok());
+    assert!(WriteAudience::new(&exactly_255).is_ok());
 }
 
 #[test]
 fn write_audience_rejects_non_ascii() {
-    assert!(WriteAudience::new(Some("team-\u{e9}")).is_err()); // "team-é"
+    assert!(WriteAudience::new("team-\u{e9}").is_err()); // "team-é"
+}
+
+// ---------------------------------------------------------------------------
+// WriteAudience::default_from_env
+// ---------------------------------------------------------------------------
+
+const DEFAULT_AUDIENCE_VAR: &str = "MICROMEGAS_DEFAULT_INGESTION_AUDIENCE";
+
+/// Clears the env var on drop so a failing assertion in one test can't leak state into the
+/// next (tests are serialized via `#[serial]` since they all mutate this process-wide var).
+struct EnvGuard;
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: tests are serialized with `#[serial]`, so no other thread is
+        // reading/writing this var concurrently.
+        unsafe {
+            std::env::remove_var(DEFAULT_AUDIENCE_VAR);
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn default_from_env_unset_is_public() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(DEFAULT_AUDIENCE_VAR);
+    }
+    let audience = WriteAudience::default_from_env().expect("unset must default, not error");
+    assert_eq!(audience.as_str(), "public");
+}
+
+#[test]
+#[serial]
+fn default_from_env_set_to_a_valid_label() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(DEFAULT_AUDIENCE_VAR, "team-a");
+    }
+    let audience = WriteAudience::default_from_env().expect("valid label");
+    assert_eq!(audience.as_str(), "team-a");
+}
+
+#[test]
+#[serial]
+fn default_from_env_rejects_a_malformed_label() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(DEFAULT_AUDIENCE_VAR, "bad label with spaces");
+    }
+    assert!(WriteAudience::default_from_env().is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +166,7 @@ fn strip_reserved_properties_keeps_a_key_that_merely_contains_the_prefix_mid_str
 #[test]
 fn finalize_process_properties_drops_client_stamp_and_writes_the_authenticated_one() {
     let client = vec![prop("micromegas.audience", "attacker-asserted")];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     assert_eq!(out.len(), 1);
     assert_eq!(
@@ -140,7 +184,7 @@ fn finalize_process_properties_drops_other_reserved_keys_and_keeps_the_rest() {
         prop("otel.resource.service.name", "kept"),
         prop("arbitrary-client-key", "kept"),
     ];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     // otel.resource.service.name + arbitrary-client-key + the one stamped micromegas.audience
     assert_eq!(out.len(), 3);
@@ -160,28 +204,14 @@ fn finalize_process_properties_drops_other_reserved_keys_and_keeps_the_rest() {
 }
 
 #[test]
-fn finalize_process_properties_with_none_audience_writes_no_property_at_all() {
-    let client = vec![prop("arbitrary-client-key", "kept")];
-    let out = finalize_process_properties(client, &WriteAudience::none());
-    assert_eq!(out.len(), 1, "only the untouched client key remains");
-    assert!(
-        find(&out, PROPERTY_AUDIENCE).is_none(),
-        "an unstamped write must leave the audience property absent, not present-and-empty"
-    );
-}
-
-#[test]
-fn finalize_process_properties_with_none_audience_still_strips_client_micromegas_star() {
-    let client = vec![
-        prop("micromegas.audience", "self-stamped-pre-stage-5"),
-        prop("arbitrary-client-key", "kept"),
-    ];
-    let out = finalize_process_properties(client, &WriteAudience::none());
+fn finalize_process_properties_always_stamps_even_with_no_client_properties() {
+    // Every process gets an audience, always (#1482 §0) -- there is no unstamped write any
+    // more, so even an empty client property list still ends up with exactly one property.
+    let out = finalize_process_properties(vec![], &WriteAudience::new("team-a").unwrap());
     assert_eq!(out.len(), 1);
-    assert!(
-        find(&out, PROPERTY_AUDIENCE).is_none(),
-        "a pre-Stage-5 self-stamp must not survive once ingesting under an audience-less \
-         credential -- it becomes unstamped, not a retained self-assertion"
+    assert_eq!(
+        find(&out, PROPERTY_AUDIENCE).map(|p| p.value_str()),
+        Some("team-a")
     );
 }
 
@@ -192,7 +222,7 @@ fn finalize_process_properties_leaves_otel_resource_and_arbitrary_keys_untouched
         prop("otel.resource.process.pid", "1234"),
         prop("some-native-client-key", "value"),
     ];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     assert_eq!(out.len(), 4); // 3 untouched + the stamp
     assert_eq!(

@@ -8,6 +8,7 @@ use axum::routing::post;
 use micromegas_auth::types::{AuthContext, AuthProvider};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -67,7 +68,8 @@ pub async fn insert_process_request(
     ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience())
+        .map_err(|e| IngestionError::Forbidden(e.to_string()))?;
     service
         .insert_process(body, &audience)
         .await
@@ -134,6 +136,7 @@ pub async fn serve_ingestion(
     auth_provider: Option<Arc<dyn AuthProvider>>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     grace: Duration,
+    default_audience: WriteAudience,
 ) -> anyhow::Result<()> {
     use axum::extract::DefaultBodyLimit;
     use axum::middleware;
@@ -144,7 +147,7 @@ pub async fn serve_ingestion(
     use super::axum_utils::observability_middleware;
     use super::shutdown::serve_axum_with_graceful_shutdown;
 
-    let service = Arc::new(WebIngestionService::new(lake));
+    let service = Arc::new(WebIngestionService::new(lake, default_audience));
 
     let health_router = Router::new()
         .route("/health", get(|| async { axum::http::StatusCode::OK }))

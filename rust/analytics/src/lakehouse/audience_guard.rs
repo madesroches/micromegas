@@ -17,13 +17,15 @@
 //! ## Fail-closed
 //!
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
-//! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally,
-//! passes [`OwnerAudience::Unstamped`] only when `unstamped_audience` is both configured and in
-//! scope, and matches [`OwnerAudience::Audience`] byte-exactly. An id ambiguous between a
-//! `process_id` and a `stream_id` interpretation ([`OwnerAudience::Ambiguous`]) is readable only
-//! when every interpretation is -- never by picking one arm over the other. A resolution *error*
-//! (Postgres unreachable) is a denial too -- [`AudienceGuard::authorize`]/
-//! [`AudienceGuard::readable_ids`] map it to a query failure, never to a readable verdict.
+//! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
+//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more
+//! (#1482 §0): every process carries an audience, always, so `Unknown` now covers both "no such
+//! row" and (post-backfill) "a row that violates the invariant" -- both deny, on the same
+//! fail-closed reasoning. An id ambiguous between a `process_id` and a `stream_id`
+//! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
+//! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
+//! denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`] map it to a query
+//! failure, never to a readable verdict.
 //!
 //! ## No existence oracle
 //!
@@ -33,6 +35,7 @@
 //! reason so an operator can tell the two apart; the client cannot.
 
 use super::read_scope::{CallerContext, ReadScope};
+use crate::audience::AUDIENCE_PROPERTY;
 use anyhow::Context;
 use datafusion::common::plan_err;
 use datafusion::error::DataFusionError;
@@ -43,19 +46,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-/// The process property carrying the data-isolation audience. Single definition, shared with
-/// [`super::ownership_rewrite::OwnershipRewrite`] (which reads it via [`Self::audience_col`] --
-/// formerly its own inlined literal, before Prong B introduced this shared constant).
-pub const AUDIENCE_PROPERTY: &str = "micromegas.audience";
-
-/// What a resolution attempt found. `Unknown` is *not* `Unstamped`: an id with no row at all is
-/// always denied, while an unstamped process is subject to the `unstamped_audience` knob.
-/// "No row" covers both "not yet ingested" and "retention already deleted it" (plan §11) -- both
-/// deny, on the same fail-closed reasoning.
+/// What a resolution attempt found. Every process carries an audience, always (#1482 §0), so
+/// `Unknown` is the only "not a real, readable audience" state left: it covers "no such row"
+/// (not yet ingested, or retention already deleted it, plan §11) *and* -- after the startup
+/// backfill -- a row that somehow violates the invariant. Both deny, on the same fail-closed
+/// reasoning.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerAudience {
     Unknown,
-    Unstamped,
     Audience(Arc<str>),
     /// The id resolved to more than one distinct owner under `IdKind::ProcessOrStream`'s two
     /// arms -- a `process_id`/`stream_id` collision (see the variant's doc comment on
@@ -104,12 +102,18 @@ pub const DEFAULT_AUDIENCE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// the id maps to [`OwnerAudience::Ambiguous`], which [`is_readable`] only passes when every
 /// resolved audience is independently readable. `Process`/`Block` queries never produce more than
 /// one row per id, so this never triggers for them.
+///
+/// A `None` audience (the property missing from the row) maps to [`OwnerAudience::Unknown`], not
+/// a distinct state: after #1482 §0's write-side default and startup backfill, every process
+/// carries the property, so its absence here means an invariant violation (a straggler old
+/// replica, or something writing to `processes` bypassing ingestion) -- fail-closed, exactly like
+/// "no such row".
 fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAudience> {
     let mut by_id: HashMap<Uuid, Vec<OwnerAudience>> = HashMap::new();
     for (id, audience) in rows {
         let owner = match audience {
             Some(a) => OwnerAudience::Audience(Arc::from(a)),
-            None => OwnerAudience::Unstamped,
+            None => OwnerAudience::Unknown,
         };
         let distinct_owners = by_id.entry(id).or_default();
         if !distinct_owners.contains(&owner) {
@@ -135,9 +139,13 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 }
 
 /// The SQL shape for each [`IdKind`]. `LEFT JOIN LATERAL` (not an inner `unnest` in the `FROM`
-/// list) is what keeps *unstamped* rows in the result -- an inner unnest would silently drop
-/// them, collapsing `Unstamped` into `Unknown`. `$2` is [`AUDIENCE_PROPERTY`]; `$1` is the batch
-/// of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one query.
+/// list) keeps a row in the result even when its `properties` carry no `AUDIENCE_PROPERTY` --
+/// which, after #1482 §0, is only possible for an invariant-violating row (a straggler old
+/// replica, or something bypassing ingestion); an inner unnest would instead silently drop such
+/// a row from the result, and [`merge_owner_rows`] would then treat it as "no such id" rather
+/// than "id exists, `Unknown` owner" -- distinct code paths that happen to agree on the verdict
+/// (deny) but not on the reasoning. `$2` is [`AUDIENCE_PROPERTY`]; `$1` is the batch of ids to
+/// resolve, bound as a `uuid[]` array so `resolve_many` is always one query.
 fn owner_query_sql(kind: IdKind) -> &'static str {
     match kind {
         IdKind::Process => {
@@ -269,24 +277,14 @@ impl std::fmt::Debug for AudienceIndex {
 
 /// Pure, offline-testable: the whole authorization rule, with no I/O in it. `ReadScope::All` is
 /// the only branch that passes `Unknown` -- every other combination denies it unconditionally.
-pub fn is_readable(
-    scope: &ReadScope,
-    unstamped_audience: Option<&str>,
-    owner: &OwnerAudience,
-) -> bool {
+pub fn is_readable(scope: &ReadScope, owner: &OwnerAudience) -> bool {
     match scope {
         ReadScope::All => true,
         ReadScope::Audiences(auds) => match owner {
             OwnerAudience::Unknown => false,
-            OwnerAudience::Unstamped => {
-                unstamped_audience.is_some_and(|u| auds.iter().any(|a| a == u))
-            }
             OwnerAudience::Audience(a) => auds.iter().any(|x| x.as_str() == &**a),
             OwnerAudience::Ambiguous(owners) => {
-                !owners.is_empty()
-                    && owners
-                        .iter()
-                        .all(|owner| is_readable(scope, unstamped_audience, owner))
+                !owners.is_empty() && owners.iter().all(|owner| is_readable(scope, owner))
             }
         },
     }
@@ -325,7 +323,12 @@ impl Authorized {
 #[derive(Debug)]
 pub struct AudienceGuard {
     read_scope: ReadScope,
-    unstamped_audience: Option<String>,
+    /// Whether this deployment's caller passes the lakehouse admin gate --
+    /// `caller.is_admin || !caller.admin_principal_possible` (`query.rs`), the same boolean that
+    /// already governs registration of the mutating lakehouse UDTFs/UDFs. Occupies the slot the
+    /// removed `unstamped_audience` field used to (#1482 §4): it is what
+    /// [`Self::global_rows_visible`] now consults instead.
+    lakehouse_admin: bool,
     public_view_sets: Vec<String>,
     index: Arc<AudienceIndex>,
 }
@@ -333,13 +336,13 @@ pub struct AudienceGuard {
 impl AudienceGuard {
     pub fn new(
         read_scope: ReadScope,
-        unstamped_audience: Option<String>,
+        lakehouse_admin: bool,
         public_view_sets: Vec<String>,
         index: Arc<AudienceIndex>,
     ) -> Self {
         Self {
             read_scope,
-            unstamped_audience,
+            lakehouse_admin,
             public_view_sets,
             index,
         }
@@ -373,7 +376,7 @@ impl AudienceGuard {
                 return Err(DataFusionError::External(e.into()));
             }
         };
-        if is_readable(&self.read_scope, self.unstamped_audience.as_deref(), &owner) {
+        if is_readable(&self.read_scope, &owner) {
             Ok(Authorized { id })
         } else {
             debug!(
@@ -405,24 +408,23 @@ impl AudienceGuard {
             .copied()
             .filter(|id| {
                 let owner = owners.get(id).unwrap_or(&OwnerAudience::Unknown);
-                is_readable(&self.read_scope, self.unstamped_audience.as_deref(), owner)
+                is_readable(&self.read_scope, owner)
             })
             .collect())
     }
 
-    /// `list_partitions`' `'global'`-row rule (plan §8): a global aggregate has no single
-    /// audience, so it is treated like unstamped data -- visible under `ReadScope::All`, when
-    /// `view_set_name` is on the public allowlist, or when the configured `unstamped_audience` is
-    /// itself in the caller's scope.
+    /// `list_partitions`' `'global'`-row rule (#1482 §4): a global partition is a multi-audience
+    /// file -- it has no single owning audience to check against the caller's scope. Visible
+    /// under `ReadScope::All`, when `view_set_name` is on the public allowlist, or when the
+    /// caller passes the lakehouse admin gate (the same boolean that already governs the
+    /// mutating UDTFs/UDFs: a caller who can `retire_partitions`/`regenerate_partitions` a global
+    /// file can see it -- no new authority, no new knob). Previously: visible whenever the
+    /// removed `unstamped_audience` knob was itself in the caller's scope.
     pub fn global_rows_visible(&self, view_set_name: &str) -> bool {
         match &self.read_scope {
             ReadScope::All => true,
-            ReadScope::Audiences(auds) => {
-                self.public_view_sets.iter().any(|s| s == view_set_name)
-                    || self
-                        .unstamped_audience
-                        .as_deref()
-                        .is_some_and(|u| auds.iter().any(|a| a == u))
+            ReadScope::Audiences(_) => {
+                self.public_view_sets.iter().any(|s| s == view_set_name) || self.lakehouse_admin
             }
         }
     }

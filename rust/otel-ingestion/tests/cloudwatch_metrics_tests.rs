@@ -26,6 +26,15 @@ use opentelemetry_proto::tonic::metrics::v1::{
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
+/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no
+/// `Default` any more, so tests that don't care what the audience is use this fixed one.
+fn default_ctx() -> IdentityContext<'static> {
+    IdentityContext {
+        audience: "public",
+        extra_hash_input: &[],
+    }
+}
+
 fn s_kv(k: &str, v: &str) -> KeyValue {
     KeyValue {
         key: k.into(),
@@ -534,7 +543,7 @@ fn rewrite_merges_same_namespace_across_two_scope_metrics_into_one_resource_metr
         ]
     );
 
-    let blocks = split_metrics(rewritten, IdentityContext::default()).expect("split_metrics");
+    let blocks = split_metrics(rewritten, default_ctx()).expect("split_metrics");
     assert_eq!(
         blocks.len(),
         1,
@@ -585,7 +594,7 @@ fn rewrite_merges_case_variant_namespaces_into_one_resource_metrics_with_one_exe
         "both metrics land under the merged bucket"
     );
 
-    let blocks = split_metrics(rewritten, IdentityContext::default()).expect("split_metrics");
+    let blocks = split_metrics(rewritten, default_ctx()).expect("split_metrics");
     assert_eq!(
         blocks.len(),
         1,
@@ -604,7 +613,7 @@ fn full_pipeline_yields_one_block_per_namespace_with_distinct_process_ids_and_ex
         ]),
     );
     let rewritten = rewrite_cloudwatch_metric_streams(req);
-    let blocks = split_metrics(rewritten, IdentityContext::default()).expect("split_metrics");
+    let blocks = split_metrics(rewritten, default_ctx()).expect("split_metrics");
     assert_eq!(blocks.len(), 2);
     assert_ne!(blocks[0].process_id, blocks[1].process_id);
 
@@ -632,16 +641,10 @@ fn same_arn_and_namespace_yields_identical_process_id_across_requests_with_diffe
         )]),
     );
 
-    let blocks1 = split_metrics(
-        rewrite_cloudwatch_metric_streams(req1),
-        IdentityContext::default(),
-    )
-    .expect("split_metrics");
-    let blocks2 = split_metrics(
-        rewrite_cloudwatch_metric_streams(req2),
-        IdentityContext::default(),
-    )
-    .expect("split_metrics");
+    let blocks1 = split_metrics(rewrite_cloudwatch_metric_streams(req1), default_ctx())
+        .expect("split_metrics");
+    let blocks2 = split_metrics(rewrite_cloudwatch_metric_streams(req2), default_ctx())
+        .expect("split_metrics");
     assert_eq!(blocks1.len(), 1);
     assert_eq!(blocks2.len(), 1);
     assert_eq!(
@@ -655,7 +658,7 @@ fn same_arn_and_namespace_yields_identical_process_id_across_requests_with_diffe
             dropped_attributes_count: 0,
             entity_refs: vec![],
         }),
-        IdentityContext::default(),
+        default_ctx(),
     );
     assert_eq!(blocks1[0].process_id, pid);
 }
@@ -671,16 +674,10 @@ fn different_arn_same_namespace_yields_distinct_process_ids() {
         one_scope(vec![cw_summary_metric("AWS/RDS", "CPUUtilization", 1_000)]),
     );
 
-    let blocks1 = split_metrics(
-        rewrite_cloudwatch_metric_streams(req1),
-        IdentityContext::default(),
-    )
-    .expect("split_metrics");
-    let blocks2 = split_metrics(
-        rewrite_cloudwatch_metric_streams(req2),
-        IdentityContext::default(),
-    )
-    .expect("split_metrics");
+    let blocks1 = split_metrics(rewrite_cloudwatch_metric_streams(req1), default_ctx())
+        .expect("split_metrics");
+    let blocks2 = split_metrics(rewrite_cloudwatch_metric_streams(req2), default_ctx())
+        .expect("split_metrics");
     assert_ne!(
         blocks1[0].process_id, blocks2[0].process_id,
         "distinct accounts/regions (distinct ARNs) must not collapse onto one process_id"

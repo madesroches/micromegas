@@ -59,6 +59,7 @@ fn make_block(
         start_ticks: 0,
         parent_process_id: None,
         properties: Arc::new(vec![]),
+        audience: Arc::from("public"),
     });
     Arc::new(PartitionSourceBlock {
         block,

@@ -22,8 +22,10 @@ use anyhow::Result;
 use clap::Parser;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::default_provider::ProviderBuilder;
+use micromegas::ingestion::audience_backfill::backfill_default_audience;
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
+use micromegas::ingestion::write_audience::WriteAudience;
 use micromegas::micromegas_main;
 use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::tracing::prelude::*;
@@ -50,6 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = DataLakeConfig::from_env()?;
     let data_lake =
         connect_to_remote_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?;
+
+    // Every process gets an audience, always (#1482 §0): resolve the deployment's default
+    // ingestion audience once at startup and idempotently backfill it onto any legacy
+    // `processes` row that was never stamped, before the listener binds.
+    let default_audience = WriteAudience::default_from_env()?;
+    backfill_default_audience(&data_lake.db_pool, &default_audience).await?;
 
     let auth_provider = if args.disable_auth {
         info!("Authentication disabled (--disable-auth)");
@@ -78,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_provider,
         micromegas::servers::shutdown::wait_for_sigterm(),
         grace,
+        default_audience,
     )
     .await?;
     Ok(())

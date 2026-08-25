@@ -1401,8 +1401,14 @@ status update near the top of this document):
   ([Long-term model](#long-term-model--groups-nested-membership-and-grants)).
 
 ### Later — (optional) physical boundary
-15. Promote `micromegas.audience` to a first-class `audience` column; propagate through views;
-    enable partition pruning and per-audience object-storage prefixing.
+15. ~~Promote `micromegas.audience` to a first-class `audience` column; propagate through
+    views~~ **Landed** — see `tasks/1482_audience_column_plan.md` (#1482): `audience` is now a
+    physical, non-nullable column on `blocks`/`processes`/`streams`/`log_entries`/`measures`/
+    `log_stats`, and `OwnershipRewrite` filters those six directly on it instead of a
+    `property_get` semi-join. Partition pruning and per-audience object-storage prefixing remain
+    future work (that plan's own "Future work" section) — the column alone buys row-group
+    pruning only for partitions that happen to be single-audience; the real win needs
+    audience-homogeneous partitions.
 
 ## Files to Modify
 

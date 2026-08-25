@@ -43,7 +43,16 @@ async fn firehose_handler(
 
     // Resolved from the `AuthContext` `firehose_auth_middleware` inserts (AbAC Stage 5, #1373,
     // §5: it used to discard it).
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = match resolve_write_audience(ctx.as_ref(), service.default_audience()) {
+        Ok(a) => a,
+        Err(e) => {
+            return firehose_response(
+                StatusCode::FORBIDDEN,
+                &request_id_header,
+                Some(&e.to_string()),
+            );
+        }
+    };
 
     let mut request_id = request_id_header;
     let envelope = match handler::decode_firehose_envelope(&body, Signal::Metrics) {

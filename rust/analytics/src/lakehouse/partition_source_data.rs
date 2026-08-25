@@ -158,6 +158,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let process_cpu_column = string_column_by_name(&b, "processes.cpu_brand")?;
                 let process_parent_column = string_column_by_name(&b, "processes.parent_process_id")?;
                 let process_properties_accessor = properties_column_by_name(&b, "processes.properties")?;
+                let audience_column = string_column_by_name(&b, "audience")?;
                 for ir in 0..b.num_rows() {
                     let block_insert_time = block_insert_time_column.value(ir);
                     let stream_id = Uuid::parse_str(stream_id_column.value(ir)?)?;
@@ -218,6 +219,10 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         start_ticks: process_start_ticks_column.value(ir),
                         parent_process_id,
                         properties: Arc::new(process_properties_jsonb),
+                        // The source column is non-nullable, so no null check is needed here --
+                        // see this file's `PartitionSourceBlock` doc / #1482 §3 for why that
+                        // matters for the dictionary accessor in particular.
+                        audience: Arc::from(audience_column.value(ir)?),
                     };
                     let format = stream_format_column.value(ir)?.to_string();
                     yield Arc::new(PartitionSourceBlock {
@@ -256,7 +261,7 @@ pub async fn fetch_partition_source_data(
               "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties", "streams.format",
               "processes.start_time", "processes.start_ticks", "processes.tsc_frequency", "processes.exe",
               "processes.username", "processes.realname", "processes.computer", "processes.distro", "processes.cpu_brand",
-              "processes.parent_process_id", "processes.properties"
+              "processes.parent_process_id", "processes.properties", audience
           FROM source
           WHERE array_has( "streams.tags", '{source_stream_tag}' )
           AND insert_time >= '{begin_rfc}'

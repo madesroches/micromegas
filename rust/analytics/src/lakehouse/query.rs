@@ -133,7 +133,7 @@ pub fn register_lakehouse_functions(
     // auth-unset deployment.
     let audience_guard = Arc::new(AudienceGuard::new(
         caller.read_scope.clone(),
-        caller.isolation_config.unstamped_audience.clone(),
+        caller.is_admin || !caller.admin_principal_possible,
         caller.isolation_config.public_view_sets.clone(),
         lakehouse.audience_index().clone(),
     ));
@@ -357,7 +357,6 @@ pub async fn make_session_context(
             ))));
         ctx.add_analyzer_rule(Arc::new(OwnershipRewrite::new(
             caller.read_scope.clone(),
-            caller.isolation_config.unstamped_audience.clone(),
             caller.isolation_config.public_view_sets.clone(),
             processes_source,
             streams_source,

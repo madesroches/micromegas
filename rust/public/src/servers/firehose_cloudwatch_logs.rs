@@ -36,7 +36,16 @@ async fn cloudwatch_logs_firehose_handler(
     let request_id_header = request_id_from(&headers);
 
     // See `firehose.rs::firehose_handler`'s identical comment.
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = match resolve_write_audience(ctx.as_ref(), service.default_audience()) {
+        Ok(a) => a,
+        Err(e) => {
+            return firehose_response(
+                StatusCode::FORBIDDEN,
+                &request_id_header,
+                Some(&e.to_string()),
+            );
+        }
+    };
 
     let mut request_id = request_id_header;
     let envelope = match handler::decode_firehose_envelope(&body, Signal::Logs) {
