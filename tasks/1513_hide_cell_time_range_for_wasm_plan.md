@@ -79,23 +79,45 @@ always a real (remote) data source — `notebook` is only ever selectable per-ce
   Swimlane/PropertyTimeline axis and bounds Map playback, and feeds render-time `$from`/`$to`
   substitution in Table/TransposedTable link templates and Chart/PieChart unit/label text.
 - `PerfettoExportCell.tsx:382` — the Perfetto cell's own resolution.
+- `useCellExecution.ts:156-171` — a fourth, independent consumer that reads the override *before*
+  `resolveQueryTimeRange` is even called: it pulls `cellTimeRange` straight off the cell config and
+  feeds `cellTimeRange.from`/`.to` into `findUnresolvedSelectionMacro`, alongside the cell's SQL. If
+  either bound references a `$cell.selected.column` macro whose row isn't selected yet, the cell is
+  set to `status: 'blocked'` and execution halts for every downstream cell. This is deliberate, tested
+  behaviour (`__tests__/useCellExecution.test.ts:858`, "blocks when the timeRange override references
+  an unresolved row selection") and documented at `mkdocs/docs/web-app/notebooks/variables.md:119`.
 
 None of these paths reach a server for a `notebook`-source cell — there is no server query to bound —
-but all three are live today regardless: the first still moves `$from`/`$to` inside the cell's own
+but all four are live today regardless: the first still moves `$from`/`$to` inside the cell's own
 locally-run SQL, the second still redraws a display-axis cell's axis/playback window and render-time
-templates, and the third resolves independently of whatever the editor shows. That is the bug this
-plan fixes, not a capability worth preserving: the override's shadowing in `resolveQueryTimeRange`
-doesn't add a filter on top of the global range, it *replaces* what `$from`/`$to` mean inside that
-cell's SQL — so a saved override on a `notebook`-source cell makes the screen's own global range
-unreachable from that cell's macros, with (once the field is hidden) no UI left to see or clear it.
-The Design section below closes all three paths at their common root (`resolveQueryTimeRange`) rather
-than leaving them live and merely un-editable.
+templates, the third resolves independently of whatever the editor shows, and the fourth can halt the
+whole notebook run over a field the editor no longer shows. That is the bug this plan fixes, not a
+capability worth preserving: the override's shadowing in `resolveQueryTimeRange` doesn't add a filter
+on top of the global range, it *replaces* what `$from`/`$to` mean inside that cell's SQL — so a saved
+override on a `notebook`-source cell makes the screen's own global range unreachable from that cell's
+macros, with (once the field is hidden) no UI left to see or clear it. The Design section below closes
+all four paths at their common root (gating on the resolved data source before `resolveQueryTimeRange`
+and before the unresolved-selection check) rather than leaving them live and merely un-editable.
 
 ### Horizontal-group children
 
 HG children are edited by `ChildEditorView` (`HorizontalGroupCell.tsx:278-393`), which renders name +
 `DataSourceField` + the type editor — it has **no** `CellTimeRangeField` today (`CellEditor.tsx` is
-`CellTimeRangeField`'s only render site). Nothing to hide there; out of scope.
+`CellTimeRangeField`'s only render site). There is still no field to hide for children, so the
+visibility half of this plan has nothing to do there.
+
+The enforcement half, however, does reach them. `NotebookRenderer.tsx:333` flattens HG children into
+`cells` via `flattenCellsForExecution` before handing them to the single `useCellExecution` run, so a
+child's saved `timeRange` override is resolved by the same `resolveQueryTimeRange` call
+(`useCellExecution.ts:197`) and the same unresolved-selection check (`useCellExecution.ts:156-171`) as
+any top-level cell — gated on the child's own resolved data source exactly like a top-level cell's. At
+render, `HorizontalGroupCell.tsx:192` builds each child's renderer props via `buildCellRendererProps`,
+passing `dataSource: resolveCellDataSource(child, variables, defaultDataSource)` — already the child's
+*resolved* source, the same shape `notebook-cell-view.ts:216` gates on. So a JSON-set override on a
+`notebook`-source HG child is honoured today, at both execution and render, and will be ignored after
+this change too — consistent with the plan's invariant, not an exception to it. Both paths already
+pass a resolved data source, so this needs no extra implementation step; it's a behaviour note, not new
+scope. Open Question 1 (whether children should gain the field at all) is unaffected and left as-is.
 
 ## Design
 
@@ -167,6 +189,16 @@ Table/Chart/PieChart render-time macros all resolve against the override instead
 global range — invisibly, since the field that would show or clear it is now hidden. That is a bug
 (the screen's own global range becomes unreachable from that cell), not a capability worth preserving.
 
+A fourth consumer sits outside `resolveQueryTimeRange` entirely and has to be gated separately:
+`useCellExecution.ts:156-171` reads `cellTimeRange.from`/`.to` off the cell config directly — before
+`resolveQueryTimeRange` is even called — and feeds them into `findUnresolvedSelectionMacro`. For a
+`notebook`-source cell whose (now-ignored, now-hidden) override references an unresolved row selection
+(e.g. `{ from: '$Processes.selected.start_time' }`), this still sets the cell to `status: 'blocked'`
+and halts every downstream cell, even though the override's value no longer affects anything once
+resolved. This check has to move below `resolveCellDataSource(...)` and skip its two
+`cellTimeRange`-derived clauses when the resolved source is `notebook` — the `cellSql` clause stays
+unconditional, since a notebook cell's own SQL can legitimately reference a selection macro.
+
 There are exactly three production call sites of `resolveQueryTimeRange`: `useCellExecution.ts:197`,
 `notebook-cell-view.ts:216`, and `PerfettoExportCell.tsx:382`. Rather than repeat a data-source check
 at each one (and risk them drifting), the gate lives once inside `resolveQueryTimeRange` itself, via a
@@ -203,9 +235,14 @@ same reason — see `PerfettoExportCell.tsx` below.
 What each call site supplies:
 
 - **`useCellExecution.ts:197`** — already computes `resolveCellDataSource(...)` for `isNotebookSource`,
-  but at line 205, *after* the `resolveQueryTimeRange` call at line 197. Move that computation above
-  it, and pass `cellDataSource` into both the `MacroCtx` literal and the `CellExecutionContext` literal
-  built a few lines below (which downstream `execute` functions, including Perfetto's, receive).
+  but at line 205, *after* both the unresolved-selection check at lines 156-171 and the
+  `resolveQueryTimeRange` call at line 197. Move that computation above the unresolved-selection
+  check (not merely above line 197), and:
+  - skip the `cellTimeRange?.from`/`cellTimeRange?.to` clauses of that check when
+    `cellDataSource === 'notebook'` (keep the `cellSql` clause unconditional — a notebook cell's SQL
+    can still legitimately reference a selection macro);
+  - pass `cellDataSource` into both the `MacroCtx` literal and the `CellExecutionContext` literal
+    built a few lines below (which downstream `execute` functions, including Perfetto's, receive).
 - **`notebook-cell-view.ts:216`** — no new lookup needed. `buildCellRendererProps`'s `context.dataSource`
   is *already* the cell's resolved data source, not the notebook-level default: `NotebookRenderer.tsx`
   computes `resolveCellDataSource(cell, availableVariables, dataSource)` once at line 633 and passes
@@ -249,8 +286,11 @@ which is right for that single-query shape. Inspecting per-query sources would m
    `cellDataSource: string | undefined` field to `CellExecutionContext` (lines 67-75).
 3. **`analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`** — move the existing
    `resolveCellDataSource(...)`/`isNotebookSource` computation (currently at line 205) above the
-   `resolveQueryTimeRange` call (line 197), and pass `cellDataSource` into both that call's `MacroCtx`
-   literal and the `CellExecutionContext` literal built below it.
+   unresolved-selection check (lines 156-171), not merely above the `resolveQueryTimeRange` call
+   (line 197). Skip that check's `cellTimeRange?.from`/`cellTimeRange?.to` clauses when
+   `cellDataSource === 'notebook'` (leave the `cellSql` clause unconditional), and pass
+   `cellDataSource` into both the `resolveQueryTimeRange` call's `MacroCtx` literal and the
+   `CellExecutionContext` literal built below it.
 4. **`analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts:216`** — pass `context.dataSource`
    (already the cell's resolved data source) as `cellDataSource` in the `resolveQueryTimeRange` call's
    `MacroCtx` literal.
@@ -263,14 +303,25 @@ which is right for that single-query shape. Inspecting per-query sources would m
    `resolveQueryTimeRange` describe block (line ~1234: add `cellDataSource` to `baseCtx`, plus cases
    proving a `notebook` data source returns the global range even with an override set, and a remote
    data source still honours the override).
-8. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
+8. **`analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`** — add a case
+   next to the existing "blocks when the timeRange override references an unresolved row selection"
+   test (line 858): the same unresolved-selection-in-`timeRange` setup, but on a `notebook`-source
+   cell, asserting the cell runs (does not go `blocked`) because the `cellTimeRange` clauses are
+   skipped for that data source.
+9. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`** — add a case
+   to the existing `describe('per-cell timeRange override')` block (line ~396): using the `makeContext`
+   helper's `dataSource` override, prove `buildCellRendererProps` with `dataSource: 'notebook'` and a
+   cell carrying a `timeRange` override returns the global range for `result.timeRange` (the override
+   is ignored), while the existing remote-source case alongside it keeps proving the override is
+   honoured.
+10. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
    that for cells whose data source resolves to `notebook`, the field is hidden *and* any existing
    override is ignored entirely — `$from`/`$to` and the display axis follow the screen's global range —
    and why. Also update `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every
    query-backed cell at the shared `timeRange` field, with the same `notebook`-source qualifier.
-9. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing both the hidden
+11. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing both the hidden
    field and the behaviour change for cells already carrying a saved override.
-10. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
+12. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
     `analytics-web-app/`.
 
 ## Files to Modify
@@ -282,6 +333,8 @@ which is right for that single-query shape. Inspecting per-query sources would m
 - `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx`
 - `analytics-web-app/src/components/CellEditor.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`
+- `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`
+- `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`
 - `mkdocs/docs/web-app/notebooks/variables.md`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `CHANGELOG.md`
@@ -340,8 +393,10 @@ which is right for that single-query shape. Inspecting per-query sources would m
 
 ## Testing Strategy
 
-Unit tests in `notebook-utils.test.ts`, across both affected describe blocks — keep them proportional
-to the change; no new CellEditor or renderer render test is warranted for a visibility/gating flag:
+Unit tests in `notebook-utils.test.ts`, across both affected describe blocks, plus one case each in
+`useCellExecution.test.ts` and `notebook-cell-view.test.ts` for the two call sites whose correctness
+isn't covered by the `notebook-utils.ts` unit tests alone — keep them proportional to the change; no
+new CellEditor or renderer render test is warranted for a visibility/gating flag:
 
 **`shouldShowTimeRange`:**
 
@@ -362,6 +417,22 @@ to the change; no new CellEditor or renderer render test is warranted for a visi
   (the global range) unchanged, proving the override is ignored, not just narrowed.
 - `cellDataSource` set to a remote source with the same override → still resolves the override, exactly
   as today — proving the new gate is additive for remote-sourced cells.
+
+**`useCellExecution` (`useCellExecution.test.ts`):**
+
+- Next to the existing "blocks when the timeRange override references an unresolved row selection"
+  test (line 858): the same setup (a `timeRange` override referencing `$Processes.selected.*` with no
+  row selected), but with the downstream cell's data source resolving to `notebook` → the cell is *not*
+  blocked and runs normally, proving the unresolved-selection check skips the `cellTimeRange` clauses
+  for a notebook-source cell while still leaving the `cellSql` clause (and the remote-source case) live.
+
+**`buildCellRendererProps` (`notebook-cell-view.test.ts`):**
+
+- In the existing `describe('per-cell timeRange override')` block: `makeContext({ dataSource:
+  'notebook' })` plus a cell carrying a `timeRange` override → `result.timeRange` equals the global
+  range (`context.timeRange`), not the override — proving the render call site's `context.dataSource`
+  wiring (`NotebookRenderer.tsx:646`, `HorizontalGroupCell.tsx:192`) actually reaches the gate. The
+  existing remote-source case in the same block continues to prove the override is honoured there.
 
 Manual check: open a notebook, add a table cell with a **Query Time Range** override set, confirm it
 narrows the result; switch the cell's data source to **Notebook**, confirm the field disappears *and*
