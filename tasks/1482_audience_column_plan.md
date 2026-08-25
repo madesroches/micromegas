@@ -22,6 +22,13 @@ stamps the same value onto the legacy rows that were never stamped. With "unstam
 default audience assigned at write time is the concept that survives, a query-time reinterpretation
 of missing data is not.
 
+> **The paragraph above is superseded by the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).**
+> `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` and the startup backfill are implemented but reverted by
+> the follow-up pass. What survives: the column is still non-nullable, because a *read-side*
+> default — `MICROMEGAS_DEFAULT_AUDIENCE`, applied as `COALESCE(<extraction>, $n)` at each of the
+> three places the audience is read out of Postgres — makes a `NULL` unrepresentable downstream.
+> `MICROMEGAS_UNSTAMPED_AUDIENCE` and `OwnerAudience::Unstamped` are still removed.
+
 This is not a correctness fix — all six views are already access-controlled. It buys: (1) the
 semi-join and the per-row JSONB extraction disappear from every query plan touching those views;
 (2) the audience travels with the rows it governs, removing today's cross-view
@@ -53,7 +60,9 @@ process has no audience, use the default.* It keeps §1–§5 (the physical colu
 — default-at-write, startup backfill, conflict-guard rejection, replication rejection — with a
 `COALESCE(<extraction>, <default>)` at each of the three places the audience is read out of
 Postgres. A follow-up implementation pass has to *revert* the landed Phase 1, then build the
-addendum's smaller design; Phase 3 stays as built. Nothing of that pass has started.
+addendum's smaller design; Phase 3 stays as built and Phase 2 is extended. Nothing of that pass has
+started — its ordered checklist is **[Phase 5](#phase-5--the-addendums-follow-up-pass-not-started)**
+(steps 25–34), and the addendum below is its rationale.
 
 Read the body below as the design **as built today**; where the addendum contradicts it, the
 addendum wins and the affected sections are flagged inline. `## Open Questions` records the
@@ -742,6 +751,17 @@ not one with two labels. Per-row filtering hands each row to the audience that p
 6 → 7; `metrics_view.rs` 7 → 8; `processes`/`streams`/`log_stats` bump automatically with their
 inferred schema. On deploy every pre-existing partition of the six views goes invisible.
 
+> **The next paragraph is superseded by the
+> [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read),** which deletes
+> the backfill and the write-side knob entirely. What replaces it: there is no ingestion-side step
+> at all. Set `MICROMEGAS_DEFAULT_AUDIENCE` on **every role that builds a `LakehouseContext`**
+> (FlightSQL, maintenance, and the monolith) before deploying, to the label legacy, never-stamped
+> data should carry — the maintenance role is what bakes it into partitions, so a role
+> materializing under the wrong default produces partitions that must be regenerated to fix.
+> Changing the default later is not routine: it requires the same regeneration pass this section
+> already specifies. The rest of §7 — hashes, regeneration order, alignment, `log_stats` — is
+> unaffected.
+
 **Order of operations on the ingestion side**: the backfill runs at ingestion-service startup,
 after `migrate_db` and before the listener binds (both binaries `await` the lake connection
 sequentially before serving — `telemetry-ingestion-srv/src/main.rs:51-75`, and the monolith's
@@ -861,6 +881,11 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 
 ### Phase 2 — the column, materialized
 
+> **Landed, and revised by the addendum.** Nothing here is reverted, but steps 8, 9 and 11 are
+> *extended* by it: `audience.rs` gains `coalesced_audience_subselect`, `blocks_view.rs` gains the
+> `COALESCE` / `$3` bind / `BlocksView::new` parameter, and `metadata.rs`'s `find_process` gains
+> the `COALESCE` and a `default_audience` parameter. See Phase 5.
+
 8. New `rust/analytics/src/audience.rs`: re-export `PROPERTY_AUDIENCE` as `AUDIENCE_PROPERTY`,
    add `audience_subselect()`. Update `lib.rs`; `audience_guard.rs` imports from here, and so does
    `ownership_rewrite.rs` — only until step 20 deletes its `audience_col()` and the import with
@@ -925,10 +950,60 @@ semi-join, so the change is observable only as a new column in `SELECT *`.
 
 ### Phase 4 — docs and changelog
 
+> **Landed, and largely rewritten by the addendum.** The docs and CHANGELOG entries below describe
+> the write-side knob; the addendum's "Docs and CHANGELOG — the concrete list" replaces them. See
+> Phase 5.
+
 23. Documentation updates listed below, plus the CHANGELOG entry with its **Operational note**,
     **Minor breaking change** clause, and the removed-env-var notice.
 24. Mark step 15 of `tasks/data_isolation/audience_based_access_control_plan.md` as landed and
     point it at this plan.
+
+### Phase 5 — the addendum's follow-up pass (not started)
+
+The only outstanding work. Full rationale in the
+[Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read); this is its ordered
+checklist. Steps 25–27 revert, 28–32 build, 33–34 finish — and 25–27 must land before 28, since the
+`COALESCE` sites take `&str` defaults that the reverted `WriteAudience` no longer supplies.
+
+25. **Revert the ingestion write path.** `rust/ingestion/src/write_audience.rs` back to
+    `Option<Arc<str>>` with `none()` and no `default_from_env`;
+    `rust/public/src/servers/write_audience.rs` and its seven call sites in five HTTP-edge callers
+    back to their pre-#1482 shape; `web_ingestion_service.rs` loses `default_audience`,
+    `new_for_test`, and the conflict guard's error arm.
+26. **Delete `rust/ingestion/src/audience_backfill.rs`**, its `lib.rs` module declaration, its two
+    call sites (`telemetry-ingestion-srv/src/main.rs`, the `roles.ingestion` block of
+    `monolith/src/main.rs`), and `rust/ingestion/tests/audience_backfill_db_test.rs`. Revert
+    `rust/analytics/src/replication.rs`'s reject-unstamped check and `sql_migration.rs`'s doc
+    comment.
+27. **Revert the OTLP identity pair together**: `rust/otel-ingestion/src/identity.rs`
+    (`Option<&str>` + `Default` derive) and `rust/otel-ingestion/src/block.rs`
+    (`block_id_with_context`'s short-circuit) — `identity.rs` alone does not compile. The ~94-site
+    `IdentityContext` test churn reverts with them.
+28. **`rust/analytics/src/audience.rs`**: add
+    `coalesced_audience_subselect(properties_expr, param) -> String` next to `audience_subselect`,
+    emitting `COALESCE(<subselect>, $n)`; rewrite the module doc (`:1-4`), which asserts §0.
+29. **Resolve the knob once, in `LakehouseContext`** (`lakehouse_context.rs`): read
+    `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`, `[A-Za-z0-9_-]{1,255}`, malformed ⇒ startup
+    error) next to `MICROMEGAS_METADATA_CACHE_MB` at `:75-83`, store it, add an accessor, and pass
+    it to `AudienceIndex::new` at **both** `:91` and `:117`.
+30. **Read site 1 — `blocks`.** `blocks_view.rs`: `BlocksView::new(default_audience: Arc<str>)`,
+    `COALESCE(..., $3)` in `data_sql`; `metadata_partition_spec.rs`: new spec field + 9th
+    `fetch_metadata_partition_spec` parameter + the third `.bind`, leaving `source_count_query`
+    alone. Update the 8 production `BlocksView::new` sites (7 pass `lakehouse.default_audience()`
+    from `jit_update`'s own argument; `view_factory.rs:302` takes `default_view_factory`'s new
+    parameter) and the 16 test sites.
+31. **Read site 2 — JIT.** `metadata.rs`: `find_process` gains `default_audience: &str` and the
+    `COALESCE` bound as `$2`; update its four production callers (`log_view.rs:159`,
+    `metrics_view.rs:159`, `otel/spans_view.rs:125`, `images_view.rs:122` — all have `lakehouse`
+    in scope) and `jit_process_batch_db_test.rs:265`.
+32. **Read site 3 — Prong B.** `audience_guard.rs`: `COALESCE(a.value, $3)` in all three
+    `owner_query_sql` variants, `fetch_owner_rows` binds the default, `AudienceIndex` carries it.
+33. **Signature fallout and comment debt.** `default_view_factory`'s new parameter across 3
+    production + 18 test call sites (and the `ViewFactoryFn` seam); `read_scope.rs`'s removed-knob
+    message renamed; every comment listed under the addendum's **Comment debt**.
+34. **Docs, CHANGELOG, and tests** per the addendum's "Docs and CHANGELOG — the concrete list" and
+    "Testing Strategy changes" — including `maintenance.md`, which the original plan never touched.
 
 ## Files to Modify
 
@@ -1021,6 +1096,14 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   for it — permanent history loss on a bump — turned out to be false: lakehouse partitions already
   expire with their sources (`retire_expired_partitions`), so a bump costs regeneration time, not
   data. A non-nullable column with a full regeneration is the simpler system by a wide margin.
+
+> **The next three bullets are superseded by the
+> [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).** They record why
+> the write-side default and its backfill beat the read-side knob; the addendum reverses that, on
+> the grounds that the column needs only the *value it materializes* to be non-null, not the
+> Postgres row it came from. The read-side default it settles on is not the old
+> `MICROMEGAS_UNSTAMPED_AUDIENCE` — see the addendum's "Fail-closed is a label, not a `None`".
+
 - **Default audience vs. keeping `MICROMEGAS_UNSTAMPED_AUDIENCE`.** The knob could have stayed as
   the value coalesced in at materialization time. Rejected: it would bake a read-time policy value
   into data columns (changing the knob later would reinterpret nothing already written), it keeps
@@ -1067,6 +1150,13 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   should weigh the column against the cache, not assume it.)
 
 ## Documentation
+
+> **Superseded by the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).**
+> This section is implemented as written and describes the write-side knob. The addendum's
+> "Docs and CHANGELOG — the concrete list" is the authority for the follow-up pass: every
+> `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` below becomes `MICROMEGAS_DEFAULT_AUDIENCE` with a
+> read-side explanation, the backfill / rolling-upgrade / conflict-guard prose is deleted,
+> `maintenance.md` joins the list, and the CHANGELOG's write-side-stamping claims revert.
 
 - `mkdocs/docs/query-guide/schema-reference.md` — add the `audience` row to the `processes`
   (`:25`), `streams` (`:62`), `blocks` (`:91`), `log_entries` (`:151`), `log_stats` (`:201`), and
@@ -1402,6 +1492,13 @@ All four of §0's mechanisms, and the Phase 1 steps that implement them, go away
 - `rust/otel-ingestion/src/identity.rs`: `IdentityContext.audience` reverts to `Option<&str>` with
   its `Default` derive restored; the OTLP id-derivation "always domain-separate" change reverts to
   "domain-separate only when `Some`". The ~94-site test churn under old step 7 does not happen.
+- `rust/otel-ingestion/src/block.rs`: reverts with `identity.rs`, and is a **behavioral** revert,
+  not just the `:306` doc reference the original Files-to-Modify list named.
+  `block_id_with_context` (`:193-206`) currently prefixes `"aud{SEP}{audience}{SEP}"`
+  unconditionally; it goes back to the `ctx.audience.is_none() && ctx.extra_hash_input.is_empty()`
+  short-circuit that reproduces pre-Stage-5 `block_id`s, with the `Option` mapping around the
+  prefix. Its two doc comments (`:193-199`, `:296-300`) revert with it. Reverting `identity.rs`
+  without this leaves the crate uncompilable (`ctx.audience` is an `Option` again).
 - All of Phase 1's compile-fallout (steps 1–7, and their listed test files) is void — the tests
   stay exactly as they are on `main` today, modulo whatever Phase 2/3 below still touches them.
 
@@ -1448,11 +1545,11 @@ rests **entirely** on that `COALESCE`, since `StringColumnAccessor::value` does 
 the dictionary accessor returns a wrong non-null string on a null slot.
 
 **Binding `$3` is not a local edit.** `data_sql`'s `$1`/`$2` are bound in
-`metadata_partition_spec.rs:151-154` (`sqlx::query(&self.data_sql).bind(begin).bind(end)`) from the
+`metadata_partition_spec.rs:154-156` (`sqlx::query(&self.data_sql).bind(begin).bind(end)`) from the
 `insert_range` field, not in `blocks_view.rs`. `BlocksView` is the only user of that module, so the
 change is contained, but it is two edits in a different file: a new field on `MetadataPartitionSpec`
-(`:28-37`) and a 9th parameter on `fetch_metadata_partition_spec` (`:41-50`, which already carries
-`#[expect(clippy::too_many_arguments)]`). The separate `source_count_query`
+(`:28-37`) and a 9th parameter on `fetch_metadata_partition_spec` (`:41-50`, 8 parameters today,
+already carrying `#[expect(clippy::too_many_arguments)]` at `:40`). The separate `source_count_query`
 (`metadata_partition_spec.rs:53`) must **not** get the bind — it references only `$1`/`$2`.
 
 **New plumbing this requires.** `BlocksView::new()` currently takes no parameters; it needs a
@@ -1461,12 +1558,23 @@ sites and **16** test call sites. Exactly one of the production sites is the sha
 (`view_factory.rs:302`, inside `default_view_factory`); the other **seven** are inside
 `async fn jit_update(&self, ...)` bodies of other views (`log_view.rs:171`, `metrics_view.rs:173`,
 `otel/spans_view.rs:132`, `net_spans_view.rs:350`, `images_view.rs:128`, `async_events_view.rs:156`,
-`thread_spans_view.rs:382`). `jit_update`'s signature is fixed by the `View` trait, so the value
-cannot be passed in as an argument: each of those seven view structs must **carry** the default as
-a field, set once when its `*ViewMaker::make_view` constructs it — the same shape
-`default_view_factory` already uses to construct each maker once at startup. Those same seven views
-are also the ones that call `find_process`, so one field serves both. This is the largest single
-piece of work the addendum adds, and a follow-up pass should treat it as its own step.
+`thread_spans_view.rs:382`). **No view struct gains a field, and no `*ViewMaker::make_view`
+changes.** `jit_update`'s signature is fixed by the `View` trait — but that signature already hands
+it the context: `async fn jit_update(&self, lakehouse: Arc<LakehouseContext>, query_range: Option<TimeRange>)`
+(`view.rs:74-78`), and `LakehouseContext` is exactly where the default is resolved (below). All
+seven impls already bind it as `lakehouse` and dereference it in the same body (e.g.
+`images_view.rs:122` `find_process(&lakehouse.lake().db_pool, ...)`,
+`otel/spans_view.rs:133-135`), so each site becomes
+`BlocksView::new(lakehouse.default_audience())?` and nothing else moves. The only constraint is
+ordering, which already holds: the context carries the default before any `jit_update` runs.
+
+The same context serves `find_process`'s new `default_audience: &str` parameter — but that is
+**four** of the seven views, not seven: `log_view.rs:159`, `metrics_view.rs:159`,
+`otel/spans_view.rs:125`, `images_view.rs:122` (plus one test caller,
+`jit_process_batch_db_test.rs:265`). The other three — `thread_spans_view.rs:367`,
+`async_events_view.rs:130`, `net_spans_view.rs:330` — call `find_process_with_latest_timing`
+instead, which reads the materialized `processes` view and is already downstream of the `COALESCE`
+(see above). Every one of those four call sites also has `lakehouse` in hand.
 
 **Where the value is resolved: `LakehouseContext`, and nowhere else.** The default is needed by the
 materialization side (the maintenance daemon), the JIT side (`find_process`), and Prong B
@@ -1474,13 +1582,31 @@ materialization side (the maintenance daemon), the JIT side (`find_process`), an
 struct that the maintenance daemon never builds (`telemetry-maintenance-srv/src/main.rs` does not
 call `IsolationConfig::from_env` at all; `flight_sql_server.rs` builds its view factory at `:244`,
 *before* resolving the config at `:315`; and the monolith resolves it only when
-`roles.flightsql && !args.disable_auth`, `:286-291`, while its maintenance role builds its own
-factory at `:367-369`). Every one of those paths *does* build a `LakehouseContext`, which already
+`roles.flightsql && !args.disable_auth`, `:286-290`, while its maintenance role builds its own
+factory at `:367-368`). Every one of those paths *does* build a `LakehouseContext`, which already
 resolves env vars directly (`MICROMEGAS_METADATA_CACHE_MB`, `lakehouse_context.rs:75-83`) and
-already owns the `AudienceIndex` (`:91`, `:117`). Resolve `MICROMEGAS_DEFAULT_AUDIENCE` in
-`LakehouseContext::new` next to that, store it, expose it with an accessor, and hand it to
-`AudienceIndex::new`. `default_view_factory` then gains a `default_audience: Arc<str>` parameter
-its three callers source from `lakehouse.default_audience()`. **No binary gains new env plumbing.**
+already owns the `AudienceIndex`. Resolve `MICROMEGAS_DEFAULT_AUDIENCE` there, store it, expose it
+with an accessor, and hand it to `AudienceIndex::new` (whose signature, `audience_guard.rs:216`,
+gains a 4th parameter). **Two constructors, not one:** `AudienceIndex` is built at
+`lakehouse_context.rs:91` (`LakehouseContext::new`) *and* `:117` (`with_caches`) — both need the
+field, and `with_caches` must take the default rather than re-reading the env.
+`default_view_factory` then gains a `default_audience: Arc<str>` parameter its three production
+callers source from `lakehouse.default_audience()` (`monolith/src/main.rs:368`,
+`telemetry-maintenance-srv/src/main.rs:37`, `flight_sql_server.rs:244`).
+**No binary gains new env plumbing.**
+
+**Compile fallout the two signature changes cost.** `BlocksView::new` has 16 test call sites (listed
+above); `default_view_factory` has **18** more that the follow-up pass must also update —
+`thread_spans_ordering_db_test.rs:241, :492, :738, :953, :1168, :1425, :1694, :1962, :2165` (9),
+`sql_view_test.rs:360, :505, :515` (3), `histo_view_test.rs:165, :238` (2),
+`ownership_rewrite_public_view_set_tests.rs:514`, `prong_b_guard_db_test.rs:281`,
+`ownership_rewrite_db_test.rs:295`, and `rust/public/tests/materialize_fail_isolation_tests.rs:85`.
+Most overlap the same test files as the `BlocksView::new` churn, so it is one mechanical pass.
+Note also `flight_sql_server.rs`'s injection seam (`ViewFactoryFn`, `:33-39`, selected at `:241`
+via `with_view_factory_fn`, `:116-121`): its closure type receives only `Arc<RuntimeEnv>` and
+`Arc<DataLakeConnection>`, so an injected factory that wraps `default_view_factory` has no
+`LakehouseContext` to source the default from — the seam either gains the default as a third
+closure argument or the wrapper resolves it itself.
 
 ### What reverts in Phase 3 — almost nothing
 
@@ -1527,6 +1653,21 @@ default changed between the two materializations — and that is precisely the c
 requires an operator to close by regenerating (see "The trade this accepts" above), not a case
 per-row filtering has to tolerate silently.
 
+**A third surface, on the same terms.** `log_entries` and `measures` are the one view set whose
+`audience` column has **two** producers, because `ProcessMetadata` has two producers: the global
+instances fill it from a `blocks` partition (`partition_source_data.rs:208-220`, so the
+*materialization-time* default, baked once), while the per-process JIT instances fill it from
+`find_process` (`metadata.rs:260-289`, so the default *live at JIT-materialization time*). Both
+feed the same `LogEntriesRecordBuilder` / `MetricsRecordBuilder` column, and both take §5's
+`audience IN (...)` branch, since the per-process and global instances share
+`log_table_schema()` / `metrics_table_schema()`. So for a never-stamped process the two instances
+of one view set can carry different labels if the configured default changed between their
+materializations — a third instance of the same accepted drift, not a new failure mode. It closes
+the same way: changing the default requires regenerating (§7), and JIT partitions additionally
+rebuild on first query after a hash bump (`jit_partitions.rs:1177-1182`). Worth stating in the docs
+alongside the operational rule, because it is the one case where two queries a user thinks are
+equivalent (`FROM log_entries` vs `view_instance('log_entries', <pid>)`) can disagree.
+
 ### Testing Strategy changes
 
 - Delete: the backfill DB test, the replication-reject test, the conflict-guard-errors-on-null
@@ -1562,7 +1703,7 @@ Relative to the plan's original "Files to Modify" list:
 
 **Reverted in full** — every file under **"Ingestion — default audience and backfill"**
 (`write_audience.rs` in both crates and its five HTTP-edge callers, `web_ingestion_service.rs`,
-`audience_backfill.rs` — deleted — and its two call sites, `identity.rs`, `ingestion.rs`,
+`audience_backfill.rs` — deleted — and its two call sites, `identity.rs`, `block.rs`, `ingestion.rs`,
 `monolith/src/main.rs`, `telemetry-ingestion-srv/src/main.rs`, `sql_migration.rs`'s doc comment),
 plus `rust/analytics/src/replication.rs`, which drops back out of scope entirely.
 
@@ -1596,9 +1737,15 @@ comment, and `ownership_rewrite.rs`'s module doc and `resolved_predicate` /
   prose reverts to "a credential with no audience stamps nothing"; the backfill, rolling-upgrade and
   conflict-guard-closes-the-gap paragraphs are deleted; the fail-closed worked profile becomes
   `export MICROMEGAS_DEFAULT_AUDIENCE=unassigned` instead of the old empty-string form.
-- `mkdocs/docs/admin/flight-sql.md`, `monolith.md` — a `MICROMEGAS_DEFAULT_AUDIENCE` row on every
-  role that builds a `LakehouseContext` (not just the ingestion role), stating the contrast with
-  `MICROMEGAS_DEFAULT_KEY_AUDIENCE` and the "changing it requires regeneration" rule.
+- `mkdocs/docs/admin/flight-sql.md`, `monolith.md`, **`maintenance.md`** — a
+  `MICROMEGAS_DEFAULT_AUDIENCE` row on every role that builds a `LakehouseContext` (not just the
+  ingestion role), stating the contrast with `MICROMEGAS_DEFAULT_KEY_AUDIENCE` and the "changing it
+  requires regeneration" rule. `maintenance.md` is the one the original plan never touched and the
+  one that matters most: `telemetry-maintenance-srv/src/main.rs:35` builds its `LakehouseContext`
+  from env, so the maintenance role is what actually *bakes* the default into the six views'
+  partitions — a deployment that sets the knob only on the FlightSQL role materializes under the
+  wrong default. Its env table already documents `MICROMEGAS_RETENTION_DAYS` /
+  `MICROMEGAS_METADATA_CACHE_MB`, so the row has a home.
 - `mkdocs/docs/admin/functions-reference.md` — the `list_partitions` `'global'`-row note keeps the
   landed "public allowlist or lakehouse admin" rule; only the surrounding unstamped phrasing goes.
 - `CHANGELOG.md` — the removed-env-var notice stays but renames its replacement; the Unreleased
