@@ -85,7 +85,7 @@ always a real (remote) data source — `notebook` is only ever selectable per-ce
   either bound references a `$cell.selected.column` macro whose row isn't selected yet, the cell is
   set to `status: 'blocked'` and execution halts for every downstream cell. This is deliberate, tested
   behaviour (`__tests__/useCellExecution.test.ts:858`, "blocks when the timeRange override references
-  an unresolved row selection") and documented at `mkdocs/docs/web-app/notebooks/variables.md:119`.
+  an unresolved row selection") and documented at `mkdocs/docs/web-app/notebooks/variables.md:120`.
 
 None of these paths reach a server for a `notebook`-source cell — there is no server query to bound —
 but all four are live today regardless: the first still moves `$from`/`$to` inside the cell's own
@@ -306,8 +306,12 @@ which is right for that single-query shape. Inspecting per-query sources would m
 8. **`analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`** — add a case
    next to the existing "blocks when the timeRange override references an unresolved row selection"
    test (line 858): the same unresolved-selection-in-`timeRange` setup, but on a `notebook`-source
-   cell, asserting the cell runs (does not go `blocked`) because the `cellTimeRange` clauses are
-   skipped for that data source.
+   cell, asserting the cell's status is not `'blocked'` because the `cellTimeRange` clauses are
+   skipped for that data source. (Without an `engine` option — which this test, like the one it sits
+   next to, doesn't pass — the cell still ends up `'error'` on the "WASM engine not loaded" check
+   inside `runQuery`, per the existing "should error when notebook data source is used without engine"
+   test at line 1498; the point of this new case is only that it's not `'blocked'`, i.e. the
+   unresolved-selection check no longer halts execution.)
 9. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`** — add a case
    to the existing `describe('per-cell timeRange override')` block (line ~396): using the `makeContext`
    helper's `dataSource` override, prove `buildCellRendererProps` with `dataSource: 'notebook'` and a
@@ -317,8 +321,13 @@ which is right for that single-query shape. Inspecting per-query sources would m
 10. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
    that for cells whose data source resolves to `notebook`, the field is hidden *and* any existing
    override is ignored entirely — `$from`/`$to` and the display axis follow the screen's global range —
-   and why. Also update `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every
-   query-backed cell at the shared `timeRange` field, with the same `notebook`-source qualifier.
+   and why. Also qualify the two bullets this change invalidates: **Errors** (`variables.md:119`),
+   which no longer applies since a `notebook`-source override never reaches `parseRelativeTime`, and
+   **Waiting for selection** (`variables.md:120`), which no longer applies since the unresolved-selection
+   check skips the `cellTimeRange` clauses for a `notebook`-source cell — both need a "does not apply
+   when the cell's data source resolves to `notebook`" qualifier. Also update
+   `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every query-backed cell at
+   the shared `timeRange` field, with the same `notebook`-source qualifier.
 11. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing both the hidden
    field and the behaviour change for cells already carrying a saved override.
 12. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
@@ -381,7 +390,12 @@ which is right for that single-query shape. Inspecting per-query sources would m
   ignored entirely — `$from`/`$to` macros, the display axis, and playback all follow the screen's
   global range instead, because a WASM-registered table has no designated time column to bound. Use
   SQL (`WHERE`) or narrow the upstream cell's range instead. Amend the existing bullet that says the
-  field is shown "for every cell type that supports it".
+  field is shown "for every cell type that supports it". Also qualify the **Errors** bullet
+  (`variables.md:119`) and the **Waiting for selection** bullet (`variables.md:120`) as not applying
+  to a cell whose data source resolves to `notebook`: the former because the early return in
+  `resolveQueryTimeRange` never reaches `parseRelativeTime`, so an unparseable override on such a cell
+  no longer surfaces as an error; the latter because the unresolved-selection check now skips the
+  `cellTimeRange` clauses for that data source, so the cell is no longer blocked on it.
 - `mkdocs/docs/web-app/notebooks/cell-types.md:7` — the sentence pointing every query-backed cell at
   the shared `timeRange` field gets the same "ignored for `notebook`-source cells" qualifier.
   (`execution.md` is left as-is: its "Local WASM Query Engine" section already doesn't mention the
@@ -422,9 +436,11 @@ new CellEditor or renderer render test is warranted for a visibility/gating flag
 
 - Next to the existing "blocks when the timeRange override references an unresolved row selection"
   test (line 858): the same setup (a `timeRange` override referencing `$Processes.selected.*` with no
-  row selected), but with the downstream cell's data source resolving to `notebook` → the cell is *not*
-  blocked and runs normally, proving the unresolved-selection check skips the `cellTimeRange` clauses
-  for a notebook-source cell while still leaving the `cellSql` clause (and the remote-source case) live.
+  row selected), but with the downstream cell's data source resolving to `notebook` → assert
+  `status !== 'blocked'` (not, e.g., a `'success'`/normal-run assertion — with no `engine` passed, the
+  cell still ends up `'error'` via the "WASM engine not loaded" path, matching the existing test at
+  line 1498), proving the unresolved-selection check skips the `cellTimeRange` clauses for a
+  notebook-source cell while still leaving the `cellSql` clause (and the remote-source case) live.
 
 **`buildCellRendererProps` (`notebook-cell-view.test.ts`):**
 
