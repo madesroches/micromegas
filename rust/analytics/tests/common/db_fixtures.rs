@@ -117,5 +117,6 @@ pub fn caller_with_unstamped_audience(
         }),
         admin_principal_possible: true,
         identity: None,
+        grant_selectors: Arc::from([]),
     }
 }

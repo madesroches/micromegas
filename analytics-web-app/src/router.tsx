@@ -19,6 +19,7 @@ const MapsPage = lazy(() => import('@/routes/MapsPage'))
 const IngestionApiKeysPage = lazy(() => import('@/routes/IngestionApiKeysPage'))
 const AnalyticsApiKeysPage = lazy(() => import('@/routes/AnalyticsApiKeysPage'))
 const QueryDenyListPage = lazy(() => import('@/routes/QueryDenyListPage'))
+const AudienceAccessPage = lazy(() => import('@/routes/AudienceAccessPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
 export function PageLoader() {
@@ -47,6 +48,7 @@ export function AppRouter() {
           <Route path="/screens" element={<ScreensPage />} />
           <Route path="/screen/new" element={<ScreenPage />} />
           <Route path="/screen/:name" element={<ScreenPage />} />
+          <Route path="/audiences" element={<AudienceAccessPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/admin/data-sources" element={<DataSourcesPage />} />
           <Route path="/admin/export-screens" element={<ExportScreensPage />} />

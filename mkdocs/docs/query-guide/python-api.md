@@ -858,23 +858,31 @@ Pass `--version` to print the installed package and interpreter version and exit
 
 ### micromegas-grants
 
-Manages DB-backed audience grants (`audience_grants` table) via `analytics-web-srv`'s
-`/api/audience-grants` routes — never direct Postgres access. Requires OIDC admin access on the
-target service.
+Creates and deletes DB-backed audience grants (`audience_grants` table) via
+`analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. Since #1510,
+these two write routes are no longer admin-only: a non-admin caller with a matching hold on the
+pair can share it too, once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
+[Authentication → DB-backed audience grants](../admin/authentication.md#db-backed-audience-grants-1489-abac-stage-6a)).
 
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
-micromegas-grants --url https://analytics.example.com list --audience team-alpha
 micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
 ```
 
-`--url` always points at `analytics-web-srv`'s base URL. Three subcommands:
+`--url` always points at `analytics-web-srv`'s base URL. Two subcommands:
 
 - `create <audience> <axis> <selector>` — creates (or reports the pre-existing) grant row.
   `<axis>` is `read` or `mint`; `<selector>` is `*`, `user:<id>`, or `group:<id>`.
-- `list [--audience NAME] [--axis {read,mint}] [--limit N] [--offset N] [--format {table,json}]` —
-  lists grant rows, optionally filtered. `--format` defaults to `table`.
 - `delete <audience> <axis> <selector>` — deletes one grant row, keyed by its natural triple.
+
+**There is no `list` subcommand.** Listing goes through the caller-scoped
+`list_audience_grants()` SQL function instead — a non-admin gets their own scoped view (every
+grant on a pair they hold), an admin gets every row, filterable and orderable like any other
+table:
+
+```bash
+micromegas-query --all "SELECT * FROM list_audience_grants()" --profile analytics
+```
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`
 (`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
@@ -912,10 +920,11 @@ micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner 
   prefixing; it is what keeps operationally meaningful bare names (`prod`, `ci`, `staging`) out of
   self-service reach for the caller using this script.
 - A name from an **admin** caller is never prefixed — deliberate operational naming. If the named
-  audience is brand-new (no pre-existing `audience_grants` row and no pre-existing
-  `ingestion_api_keys` row), the script also grants that admin their own `read`/`mint` access to
-  it via the existing admin grants API, since the mint route itself writes no grant for an admin
-  caller.
+  audience is brand-new, the mint route itself now claims it server-side (#1510) — writing that
+  admin's own `read`/`mint` grant in the same request — and the printed mint line adds `claimed
+  audience <name>` when it did. The script no longer pages through
+  `list_ingestion_api_keys`/`list_audience_grants` or calls the grants API itself to make this
+  decision.
 - Omitted entirely: resolved via `GET .../audience-grants/my-audiences` — exactly one match is used
   silently; more than one prints the choices and asks for `--audience`; none prints a hint to claim
   a fresh name or ask an admin. An admin caller must always pass `--audience` explicitly (an empty

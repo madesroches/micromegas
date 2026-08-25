@@ -10,7 +10,7 @@
 use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE,
-    ReadPolicy, default_key_audience_from_env, is_valid_audience, valid_selector,
+    ReadPolicy, caller_selectors, default_key_audience_from_env, is_valid_audience, valid_selector,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
@@ -393,6 +393,62 @@ fn valid_selector_rejects_empty_or_unrecognized_prefixes() {
             "expected {selector:?} to be rejected"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// caller_selectors (#1489/#1510, AbAC Stage 6a/6b) -- the shared builder for
+// `CallerContext::grant_selectors`, `my_audiences`, and the write policy's hold check.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn caller_selectors_with_no_email_and_no_groups_is_just_star() {
+    let c = caller(None, vec![], vec![], false);
+    assert_eq!(caller_selectors(&c), vec!["*".to_string()]);
+}
+
+#[test]
+fn caller_selectors_with_email_only() {
+    let c = caller(Some("alice@example.com"), vec![], vec![], false);
+    assert_eq!(
+        caller_selectors(&c),
+        vec!["*".to_string(), "user:alice@example.com".to_string()]
+    );
+}
+
+#[test]
+fn caller_selectors_with_groups_only() {
+    let c = caller(
+        None,
+        vec!["eng".to_string(), "leads".to_string()],
+        vec![],
+        false,
+    );
+    assert_eq!(
+        caller_selectors(&c),
+        vec![
+            "*".to_string(),
+            "group:eng".to_string(),
+            "group:leads".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn caller_selectors_with_both_email_and_groups() {
+    let c = caller(
+        Some("alice@example.com"),
+        vec!["eng".to_string()],
+        vec![],
+        false,
+    );
+    assert_eq!(
+        caller_selectors(&c),
+        vec![
+            "*".to_string(),
+            "user:alice@example.com".to_string(),
+            "group:eng".to_string(),
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -101,6 +101,22 @@ pub fn valid_selector(selector: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty())
 }
 
+/// The grant selectors `caller` matches: a leading `"*"` (every caller matches it), then
+/// `"user:<email>"` when `caller.email` is `Some`, then one `"group:<g>"` per entry in
+/// `caller.groups`. `pub` (#1489, AbAC Stage 6a/6b) -- shared by three consumers:
+/// `flight_sql_service_impl.rs`'s `CallerContext::grant_selectors`, `analytics-web-srv`'s
+/// `my_audiences` handler (which used to build this list by hand), and the audience-grant
+/// write policy's per-pair hold check (which must strip the leading `"*"` before binding the
+/// result -- a `*` grant is not something a caller individually holds).
+pub fn caller_selectors(caller: &AuthContext) -> Vec<String> {
+    let mut selectors = vec!["*".to_string()];
+    if let Some(email) = &caller.email {
+        selectors.push(format!("user:{email}"));
+    }
+    selectors.extend(caller.groups.iter().map(|g| format!("group:{g}")));
+    selectors
+}
+
 fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
     if selector == "*" {
         return true;

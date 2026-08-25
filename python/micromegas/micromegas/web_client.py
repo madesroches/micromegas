@@ -253,31 +253,6 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
-    def list_audience_grants(self, audience=None, axis=None, limit=None, offset=None):
-        """List audience grant rows via `GET /api/audience-grants`, optionally
-        filtered by `audience`/`axis` and paginated with `limit`/`offset`.
-
-        Returns a list of `{"audience", "axis", "selector", "created_at",
-        "created_by"}` dicts, newest first.
-        """
-        params = {}
-        if audience is not None:
-            params["audience"] = audience
-        if axis is not None:
-            params["axis"] = axis
-        if limit is not None:
-            params["limit"] = limit
-        if offset is not None:
-            params["offset"] = offset
-        resp = self.session.get(
-            self._api_url("audience-grants"),
-            headers=self._headers(),
-            params=params,
-            timeout=self.timeout,
-        )
-        self._check_response(resp)
-        return resp.json()
-
     def delete_audience_grant(self, audience, axis, selector):
         """Delete one audience grant row via `DELETE /api/audience-grants`,
         keyed by its natural `(audience, axis, selector)` triple passed as

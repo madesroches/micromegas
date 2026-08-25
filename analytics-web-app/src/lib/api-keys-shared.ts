@@ -28,6 +28,10 @@ export interface MintApiKeyResponse {
   key: string
   /** The audience the minted key was stamped with (#1372). Analytics keys never carry one. */
   audience?: string
+  /** `true` only when this mint call also claimed a brand-new audience for the caller --
+   *  writing their own `read`+`mint` grant rows in the same request (#1510, AbAC Stage 6c).
+   *  `false`/absent otherwise; ingestion-only, analytics keys never carry it. */
+  claimed?: boolean
 }
 
 interface ErrorResponseShape {

@@ -50,6 +50,7 @@ async fn make_gated_session_context(
         // gated `deny_queries` call fails (or succeeds) on the *registration gate* under test,
         // never on this unrelated check.
         identity: Some("test-caller".to_string()),
+        grant_selectors: Arc::from([]),
     };
     make_session_context(
         lakehouse,
@@ -80,6 +81,7 @@ const MUTATING_UDF_CALLS: &[&str] = &[
 const NON_MUTATING_CALLS: &[&str] = &[
     "SELECT * FROM list_partitions()",
     "SELECT * FROM list_view_sets()",
+    "SELECT * FROM list_audience_grants()",
 ];
 
 #[tokio::test]

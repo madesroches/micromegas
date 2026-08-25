@@ -38,6 +38,8 @@ pub mod images_view;
 pub mod jit_partitions;
 /// Bundles runtime resources for lakehouse query execution
 pub mod lakehouse_context;
+/// Caller-scoped UDTF listing rows of the `audience_grants` table (#1489, AbAC Stage 6b)
+pub mod list_audience_grants_table_function;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
 /// Admin UDTF listing every query-deny-list rule currently in force

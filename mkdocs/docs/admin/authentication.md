@@ -294,6 +294,12 @@ Two consequences worth knowing before you flip this stage on:
 
 ## Audiences and Grants
 
+**A user sees their own grants, and can share/mint self-service, from the Audience Access page**
+(`/audiences` in the web app, open to every authenticated user — see
+[`web-app.md`](web-app.md#audience-access)) or from SQL via `list_audience_grants()`
+(`micromegas-query --all "SELECT * FROM list_audience_grants()"`). The rest of this section
+covers the underlying model the page and the CLI below both drive.
+
 An audience is an **opaque label on data** — `public`, `team-alpha`,
 `payments-svc` — not an encoding of any principal's identity. What determines
 who can read or mint into an audience is separate, editable configuration: a
@@ -413,9 +419,10 @@ behind one off-by-default deployment knob:
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers. |
+| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing (see below). |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into), excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
 
 **Audiences are created lazily, not pre-provisioned.** A non-admin caller who
 names a brand-new, never-before-granted audience *and supplies the name
@@ -471,6 +478,22 @@ for the full CLI reference, and [`api-keys.md`](api-keys.md) for the mint
 route's error shapes (`FORBIDDEN`, `UNAVAILABLE`, `UNAUTHENTICATED`,
 `CLAIM_CONTENDED`).
 
+**The same knob now also governs sharing and removal on the Audience Access page** (`/audiences`,
+open to every authenticated user — see [`web-app.md`](web-app.md#audience-access)): a non-admin
+may create/delete a grant row (per the write policy below) only when
+`MICROMEGAS_SELF_SERVICE_MINT` is on, exactly as for minting. Sharing an audience you already
+hold is the second half of the self-service feature this knob introduced — claim an audience,
+then let your team in — so it rides the same switch rather than a second knob.
+
+**An admin caller minting into a brand-new audience is now also claimed server-side**, the same
+way a non-admin's lazy claim already is: `mint_key` runs the same ownership check
+(`try_claim_and_mint` uses internally) as a pre-check for an admin caller, and if the audience
+looks unclaimed, writes the admin's own `user:<email>` `mint`+`read` rows in the same transaction
+as the key insert. This is exactly what `setup_telemetry.py`'s admin branch used to do
+client-side (writing the grant via the admin API after minting); it is now the server's job, and
+the mint response's new `claimed` field says whether it happened. An admin with no email is
+unaffected either way — that caller was never eligible for the client-side grant either.
+
 ### DB-backed audience grants (#1489, AbAC Stage 6a)
 
 `{prefix}_AUDIENCE_GRANTS` is resolved once at startup, so creating one
@@ -516,37 +539,93 @@ lands: mint grants are DB-only, so an env-map-only `"mint"` selector is
 inert — it is never consulted by `mint_key`'s per-request authorization
 check.
 
-**HTTP admin routes**, `AdminUser`-gated (same admin list as the [API-key
-routes](api-keys.md)) and unavailable under `--disable-auth` for the same
-reason those routes are — except `/my-audiences`, which is caller-scoped
-instead (any authenticated caller, not just admins; see
-[self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
-below):
+**HTTP routes** (#1510, AbAC Stage 6c widens these from admin-only to a
+self-service policy — see [self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
+below for the knob, and [`web-app.md`](web-app.md#audience-access) for the page that drives
+them):
 
 | Route | Body / result |
 |---|---|
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
-| `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` | 200 `[{"audience","axis","selector","created_at","created_by"}]`, newest first |
-| `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404 |
-| `GET {base_path}/api/audience-grants/my-audiences` | **Not** `AdminUser`-gated — any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, and the caller's own email. |
+| `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403 |
+| `GET {base_path}/api/audience-grants/visible` | 200 `[{"audience","axis","selector","created_at","created_by"}]` — the caller-scoped read backing the Audience Access page's own list (below) |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
 
-`GET` (the first one, listing arbitrary rows) is admin-gated exactly like
-the write routes — who can read which audience is itself a
-confidentiality-sensitive fact, not a public listing. `/my-audiences`
-carries none of that sensitivity: it reveals only whether the caller's own
-identity matches a selector, never another principal's.
-`DELETE` takes the natural key as query parameters rather than path
+There is no more paginated `GET` over the whole collection — that route is
+deleted outright. Listing arbitrary rows from SQL now goes through the
+caller-scoped `list_audience_grants()` table function (below) instead, and
+the page's own list reads `GET .../visible`.
+
+**`POST`/`DELETE` gate**, `GrantGate` (a `FromRequestParts` extractor
+modeled on the mint route's own `MintGate`): an admin acts unconditionally,
+exactly as before. A non-admin is admitted only when
+`MICROMEGAS_SELF_SERVICE_MINT` is on, and then further constrained per call:
+
+- **Create**: `selector` must be `user:…`/`group:…` (never `*` — a caller
+  who can read an audience must not be able to open it to every
+  authenticated principal), and the caller must **hold** `(audience, axis)`
+  via an identity selector (`user:`/`group:`, not a `*` row — a `*` grant is
+  publicly readable/mintable but must not let every authenticated caller
+  plant durable rows that would outlive it). Delegation is per axis: a
+  `read` grant lets you share `read`, a `mint` grant lets you share `mint`,
+  and neither confers the other.
+- **Delete**: the row must be the caller's own direct `user:<email>` row
+  ("remove my access" — never offered for `group:`/`*` rows, since those
+  would affect other principals and there are no negative grants), or a row
+  the caller themselves created (the revoke-a-share counterpart of
+  sharing) — except their own `mint`/`user:<email>` row, which "remove my
+  access" does not cover: that row is the self-service claim marker
+  `max_claims_per_caller` counts from, so a non-admin can't delete it
+  themselves (an admin still can). A row that doesn't exist at all is 404;
+  one that exists but matches no condition is 403.
+
+`DELETE` still takes the natural key as query parameters rather than path
 segments: a `group:<id>` selector can contain `/` or other URL-significant
 characters a raw path segment can't safely carry.
 
-The `micromegas-grants` CLI wraps these three routes, the same
+**`GET .../visible`'s own visibility rule, by caller**: admin sees every
+row; a non-admin with the knob on sees every grant on each pair they hold a
+matching grant on (the same held-pair rule `list_audience_grants()` uses,
+below); a non-admin with the knob off sees only their own rows — never a
+sibling's `selector`/`created_by`, since this route (unlike the table
+function) *can* check the knob and a default knob-off deployment must not
+hand a browsing non-admin that disclosure for free.
+
+The `micromegas-grants` CLI wraps the two write routes, the same
 HTTP-only-via-`analytics-web-srv` convention every CLI in this codebase
-follows (never direct Postgres access):
+follows (never direct Postgres access); listing goes through
+`micromegas-query` instead:
 
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
-micromegas-grants --url https://analytics.example.com list --audience team-alpha
+micromegas-query --all "SELECT * FROM list_audience_grants()" --profile analytics
 micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
+```
+
+### `list_audience_grants()` (#1510, AbAC Stage 6b)
+
+A caller-scoped SQL table function over the `audience_grants` table, registered for **every**
+authenticated caller (never admin-gated) — like `list_query_denials()`, it is a SQL auditing
+surface, not a REST route. No arguments; filter with `WHERE`. Columns: `audience`, `axis`,
+`selector`, `created_at`, `created_by`.
+
+**Visibility**: an admin sees every row. A non-admin sees every grant on each `(audience, axis)`
+pair they hold a matching grant on — deliberately wider than "rows whose selector matches me":
+if you may read `team-alpha`, you may see who else may, which is exactly the "who can see this
+audience" question the function (and the Audience Access page) exists to answer, and it is the
+same set a non-admin may modify via the write routes above. Only a non-admin caller with an empty
+selector set (e.g. `CallerContext::internal()`) sees zero rows; a maintenance caller and a
+`--disable-auth` request are both treated as admin and see every row instead.
+
+**Unlike `GET .../visible`, this function always applies the held-pair rule for a non-admin,
+knob or no knob** — it runs in `flight-sql-srv`/`micromegas-analytics`, which has no visibility
+into `analytics-web-srv`'s `MICROMEGAS_SELF_SERVICE_MINT` config, so it structurally cannot apply
+the same knob-off narrowing `/visible` does. This is a deliberate, accepted asymmetry between the
+two read paths, not a bug. See [Admin Functions Reference](functions-reference.md#list_audience_grants)
+for the full schema and query shape.
+
+```bash
+micromegas-query --all "SELECT * FROM list_audience_grants() WHERE audience = 'team-alpha'"
 ```
 
 **Cache-TTL knob**, following the same `{prefix}_` fallback shape as every

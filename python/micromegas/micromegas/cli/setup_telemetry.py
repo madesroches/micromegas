@@ -52,29 +52,6 @@ def resolve_otlp_endpoint(args, parser):
     return f"{base.rstrip('/')}/ingestion/otlp"
 
 
-_KEY_PAGE_SIZE = 500  # matches analytics-web-srv's own MAX_LIMIT for this route
-
-
-def _audience_has_existing_keys(client, audience):
-    """Mirrors the other half of the server's own ownership predicate in
-    `try_claim_and_mint` (rust/analytics-web-srv/src/ingestion_keys.rs):
-    an audience counts as already-owned if it has any `ingestion_api_keys`
-    row at all -- revoked or not -- not just a grant row. Pages through
-    `list_ingestion_api_keys` (admin-only) rather than trusting a single
-    page, since a deployment can hold more keys than one page returns.
-    """
-    offset = 0
-    while True:
-        page = client.list_ingestion_api_keys(
-            limit=_KEY_PAGE_SIZE, offset=offset, include_revoked=True
-        )
-        if any(entry.get("audience") == audience for entry in page):
-            return True
-        if len(page) < _KEY_PAGE_SIZE:
-            return False
-        offset += _KEY_PAGE_SIZE
-
-
 def resolve_audience(client, args, parser, my_audiences):
     """Applies the three-way `--audience` prefixing rule (§6):
 
@@ -94,16 +71,12 @@ def resolve_audience(client, args, parser, my_audiences):
       `audiences` is not a reliable "nothing mintable yet" signal for an
       admin.
 
-    Returns `(resolved_audience, is_brand_new_admin_claim)`. The second
-    element is `True` only when an admin explicitly named an audience with
-    no pre-existing `audience_grants` row *and* no pre-existing
-    `ingestion_api_keys` row -- mirroring the server's own broader
-    ownership predicate in `try_claim_and_mint` (see
-    `_audience_has_existing_keys`), since an audience an admin minted into
-    before any grant row existed must not be treated as brand-new either.
-    This is the signal `main()` uses to also write the admin's own
-    `read`/`mint` grant afterwards (§4a Trigger: the mint route itself
-    never writes one for an admin).
+    Returns the resolved audience name. The admin branch no longer decides
+    or reports whether the name is brand-new (#1510): the mint route itself
+    now runs that same ownership check server-side and claims a brand-new
+    audience for an admin caller in the same request (`MintResponse`'s new
+    `claimed` field says so), so this helper no longer needs to page through
+    `list_ingestion_api_keys`/`list_audience_grants` to decide it client-side.
     """
     is_admin = my_audiences["is_admin"]
     audiences = my_audiences["audiences"]
@@ -116,7 +89,7 @@ def resolve_audience(client, args, parser, my_audiences):
                 "explicitly; an empty mintable-audience list means nothing for an admin)"
             )
         if len(audiences) == 1:
-            return audiences[0], False
+            return audiences[0]
         if len(audiences) > 1:
             parser.error(
                 "multiple mintable audiences found ("
@@ -129,14 +102,12 @@ def resolve_audience(client, args, parser, my_audiences):
         )
 
     if args.audience in audiences:
-        return args.audience, False
+        return args.audience
 
     if is_admin:
-        existing_grants = client.list_audience_grants(audience=args.audience)
-        is_brand_new = not existing_grants and not _audience_has_existing_keys(
-            client, args.audience
-        )
-        return args.audience, is_brand_new
+        # No list calls: the server now decides (and claims) a brand-new audience for an
+        # admin caller as part of the mint request itself (§4).
+        return args.audience
 
     if mint_prefix is None:
         parser.error(
@@ -146,7 +117,7 @@ def resolve_audience(client, args, parser, my_audiences):
         )
     resolved = f"{mint_prefix}{args.audience}"
     print(f"claiming fresh audience: {resolved}", file=sys.stderr)
-    return resolved, False
+    return resolved
 
 
 def write_env_file(path, content):
@@ -245,11 +216,8 @@ def run(args, parser):
     # list from this one response. A useful side effect: a knob-off caller gets a clear
     # 403 up front, instead of a confusing denial only once the mint itself is attempted.
     my_audiences = client.my_audiences()
-    email = my_audiences.get("email")
 
-    audience, is_brand_new_admin_claim = resolve_audience(
-        client, args, parser, my_audiences
-    )
+    audience = resolve_audience(client, args, parser, my_audiences)
 
     # Resolved before the mint so a purely local validation error (e.g. missing
     # --otlp-endpoint/MICROMEGAS_TELEMETRY_URL) can never strand an already-minted,
@@ -263,9 +231,13 @@ def run(args, parser):
         f"audience={result.get('audience')}, name={result.get('name')})",
         file=sys.stderr,
     )
+    # The server now claims a brand-new audience for the caller (admin or non-admin
+    # alike) as part of the mint request itself (#1510, §4) -- `claimed` says so, rather
+    # than this script inferring it or writing the grant rows itself.
+    if result.get("claimed"):
+        print(f"claimed audience {result.get('audience')}", file=sys.stderr)
 
     content = format_env_exports(result["key"], otlp_endpoint)
-    env_file_error = None
     if args.env_file:
         try:
             write_env_file(args.env_file, content)
@@ -273,35 +245,18 @@ def run(args, parser):
             # The key was already minted above and is never retrievable again -- a
             # write failure here (permission denied, read-only/full filesystem, bad
             # path) must never discard it. Fall back to emitting it on stdout, with a
-            # clear warning on stderr. The error is re-raised below, but only after
-            # the admin self-grant block has had a chance to run, so a write failure
-            # never silently skips the grants too.
+            # clear warning on stderr, then re-raise.
             print(
                 f"warning: failed to write --env-file {args.env_file!r} ({e}); "
                 "printing the exports below instead so the key is not lost",
                 file=sys.stderr,
             )
             sys.stdout.write(content)
-            env_file_error = e
+            raise
         else:
             print(args.env_file)
     else:
         sys.stdout.write(content)
-
-    # Admin callers get their own read grant, since the mint route never writes one for
-    # them (§4a Trigger: the admin `is_admin` arm is a pure authorization bypass, not a
-    # place that stage adds DB writes to). Without this, an admin minting a brand-new
-    # audience could never read what their own new key uploads. Done last, after the key
-    # material above has already been emitted, so a failure emitting/writing the key
-    # never discards it -- but still before re-raising an --env-file write failure, so a
-    # retry (which will find the audience no longer brand-new) doesn't silently skip
-    # these grants forever.
-    if is_brand_new_admin_claim and email:
-        for axis in ("mint", "read"):
-            client.create_audience_grant(result["audience"], axis, f"user:{email}")
-
-    if env_file_error is not None:
-        raise env_file_error
 
 
 def main():

@@ -53,9 +53,11 @@ export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 
 # Key management (Admin -> Analytics API Keys / Ingestion API Keys);
-# audience grants are managed via /api/audience-grants or the
-# micromegas-grants CLI, not yet a web UI page. 503 if unset. Backs ALL
-# THREE route groups -- analytics-web-srv is the sole admin HTTP surface for
+# audience grants are managed from the Audience Access page (/audiences,
+# open to every authenticated user -- see "Audience Access" below), the
+# micromegas-grants CLI, or list_audience_grants() from any SQL client.
+# 503 if unset. Backs ALL THREE route groups -- analytics-web-srv is the
+# sole admin HTTP surface for
 # ingestion_api_keys, analytics_api_keys, and audience_grants, writing
 # directly to Postgres for each (see mkdocs/docs/admin/api-keys.md). Must
 # point at a telemetry DB where the v7 migration has already run (via
@@ -152,6 +154,61 @@ expression's own string literal, e.g. `deny_queries('sql LIKE ''%retire_partitio
 That guard is deliberately left as-is (narrowing it to call position would open a comment-based
 bypass), so a deny rule that needs to mention one of those names has to be created from
 `micromegas-query` or a notebook instead of this screen.
+
+## Audience Access
+
+**Audience Access** (`/audiences`) is open to **every authenticated user**, not just admins —
+`AuthGuard` on this route carries no `requireAdmin`. It answers "what can I read, and why?",
+lets a user share what they can already see with other users and groups, remove their own
+access, revoke a share they created, and mint an ingestion key into an audience they may mint
+into. Admins see the whole store and keep every power they have today (any selector including
+`*`; delete any row); a non-admin sees a scoped, fewer-controls version of the same page.
+
+Reachable from a new **Audience access** item in the header user menu (everyone) and from an
+**Audience Access** card on the Admin page (admins).
+
+**Reads go through SQL for auditing, REST for the page itself.** The page's own list calls the
+small, unpaginated `GET {base_path}/api/audience-grants/visible` route (below) against this
+deployment's own store — not `list_audience_grants()` and a data source, since this page's
+writes are fixed to one store and its read has to be too. The caller-scoped
+`list_audience_grants()` SQL table function (see
+[Admin Functions Reference](functions-reference.md#list_audience_grants)) is how
+`micromegas-query` and other SQL clients audit the store ad hoc; it is registered for every
+authenticated caller, never admin-gated, and applies the same held-pair visibility rule
+`/visible` does for a non-admin — except that it cannot see (and so cannot apply)
+`analytics-web-srv`'s self-service knob the way `/visible` does, and so is always as wide open
+for a non-admin as the knob-on case. See
+[Self-service ingestion key mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
+for the knob and [DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a)
+for the write policy the page's Share/Remove/Revoke controls drive.
+
+**Unavailable under `--disable-auth`.** The page's `/visible` and `/my-audiences` reads (and
+every write) 503 with `AUTH_DISABLED` in that mode, same as the admin key-management pages (see
+[`api-keys.md`](api-keys.md#web-app-admin-pages)); the page detects this and renders a single
+explanatory panel instead of the normal list, with no Add grant / Share / Mint / delete controls.
+
+**What a non-admin sees and may do**, once `MICROMEGAS_SELF_SERVICE_MINT` is on:
+
+- **See** every grant on each `(audience, axis)` pair they hold a matching grant on — including
+  other principals' rows on that same pair, which is what lets them answer "who else can see
+  this."
+- **Share** a pair they hold, with a `user:<id>` or `group:<id>` selector only — never `*`, and
+  never a pair held only through a `*` row (the page never offers a control that would always
+  fail server-side).
+- **Remove their own** direct `user:<their email>` row, or **revoke** any row they themselves
+  created.
+- **Mint** an ingestion key into an existing mintable audience, or claim a brand-new one — the
+  same self-service mint the CLI (`micromegas-setup-telemetry`) already exposes, now with a
+  browser dialog.
+
+With the knob off, the page still renders — it shows only the caller's own rows and disables
+Share/Remove/Revoke/Mint, with a note explaining why.
+
+**`AuthGuard` is UX only, here as everywhere else.** The route itself carries no server-side
+gate beyond ordinary authentication; every actual authorization decision (the held-pair
+visibility rule, the per-pair hold check on create, the own-row/created-by check on delete, the
+self-service knob) is enforced server-side, in SQL or in the REST handlers, regardless of what
+the client renders.
 
 ## Production Notes
 

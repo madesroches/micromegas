@@ -412,6 +412,65 @@ deployment with no admin principal at all, any authenticated caller — the same
 otherwise match every query they send — the check is skipped for a statement naming one of these
 three functions, from a caller who could reach them anyway.
 
+### `list_audience_grants()`
+
+!!! note "Caller-scoped, not admin-gated"
+    Registered for **every** authenticated caller (#1510, AbAC Stage 6b) — unlike every other
+    function on this page, it is not admin-only. What each caller sees differs by visibility
+    rule, below.
+
+**Description**: Lists rows of the `audience_grants` table (the DB-backed audience grant store —
+see [Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a)),
+scoped to what the calling principal may see.
+
+**Usage**:
+```sql
+SELECT * FROM list_audience_grants();
+SELECT * FROM list_audience_grants() WHERE audience = 'team-alpha' ORDER BY axis, selector;
+```
+
+**Returns**: Table with columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `audience` | String | The audience name the row grants against |
+| `axis` | String | `read` or `mint` |
+| `selector` | String | `*`, `user:<id>`, or `group:<id>` |
+| `created_at` | Timestamp | When the grant row was created |
+| `created_by` | String | The identity of the caller who created it |
+
+Rows are ordered `audience, axis, selector`. No arguments; filter and order with ordinary SQL
+`WHERE`/`ORDER BY` clauses, same as any other table-valued function.
+
+**Visibility rule**: an admin sees **every row**. A non-admin sees **every grant on each
+`(audience, axis)` pair they hold a matching grant on** — not just their own rows. This is
+deliberately wider than "rows whose selector matches me": if a caller may read `team-alpha`,
+they may see who else may, which is exactly the "who can see this audience" question this
+function (and the web app's Audience Access page) exists to answer — and it is the same set that
+caller may modify via the `POST`/`DELETE /api/audience-grants` routes. Only a non-admin caller
+with an empty selector set (no email, no groups — e.g. a real API-key-shaped caller with
+neither, or `CallerContext::internal()`) sees zero rows; a maintenance caller and a
+`--disable-auth` request's absent-`AuthContext` convention both treat the caller as admin
+instead, so neither one bites.
+
+**Reads the table directly on every call**, not a cached snapshot — a write via the REST routes
+above is visible on the very next call, with no TTL to wait out.
+
+**Does not apply `analytics-web-srv`'s self-service knob.** `GET /api/audience-grants/visible`
+(the REST route backing the Audience Access page's own list) narrows a non-admin's view to their
+own rows when `MICROMEGAS_SELF_SERVICE_MINT` is off; this function cannot make that check at all
+— it runs in `flight-sql-srv`/`micromegas-analytics`, which has no visibility into
+`analytics-web-srv`'s config — so it always applies the wider held-pair rule above for a
+non-admin, knob or no knob. This is a deliberate, accepted asymmetry between the two read paths,
+not a bug: this function is a SQL auditing surface, ungated for every authenticated caller like
+`list_query_denials()` above, and the plan behind it does not invent a second gating channel just
+for this one function.
+
+**Does not show effective read access.** The DB table is one of several sources
+`AudienceReadPolicy` unions to decide what a caller may actually read — `public`, the
+`MICROMEGAS_AUDIENCE_GRANTS` env map, and a per-key `read_audiences` list all also apply and none
+of them appear here.
+
 ### Incident runbook
 
 1. **Find the offender.** Query the [audit log](../query-guide/query-audit-log.md), grouping by

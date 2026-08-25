@@ -719,10 +719,12 @@ pub async fn run_web_server(
     let max_claims_per_caller =
         resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25);
     let max_keys_per_caller = resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER", 100);
+    let max_grants_per_caller =
+        resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER", 50);
     if self_service_mint_enabled {
         info!(
             "MICROMEGAS_SELF_SERVICE_MINT enabled: max_claims_per_caller={max_claims_per_caller} \
-             max_keys_per_caller={max_keys_per_caller}"
+             max_keys_per_caller={max_keys_per_caller} max_grants_per_caller={max_grants_per_caller}"
         );
     }
 
@@ -750,6 +752,7 @@ pub async fn run_web_server(
     let audience_grants_state = audience_grants::AudienceGrantsState {
         pool: analytics_keys_pool,
         self_service_mint_enabled,
+        max_grants_per_caller,
     };
 
     let auth_state = if config.disable_auth {

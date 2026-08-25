@@ -11,9 +11,7 @@ class FakeClient:
     """Records every call and returns canned responses, mirroring
     `test_import_keys.py`/`test_grants.py`'s `FakeClient` lightweight-mocking style."""
 
-    def __init__(
-        self, my_audiences=None, mint_result=None, list_result=None, keys_result=None
-    ):
+    def __init__(self, my_audiences=None, mint_result=None):
         self.calls = []
         self.my_audiences_result = my_audiences or {
             "is_admin": False,
@@ -26,9 +24,8 @@ class FakeClient:
             "name": "laptop",
             "audience": "team-alpha",
             "key": "mmk_secret",
+            "claimed": False,
         }
-        self.list_result = list_result if list_result is not None else []
-        self.keys_result = keys_result if keys_result is not None else []
 
     def my_audiences(self):
         self.calls.append(("my_audiences",))
@@ -40,14 +37,6 @@ class FakeClient:
         if audience is not None:
             result["audience"] = audience
         return result
-
-    def list_audience_grants(self, audience=None, axis=None, limit=None, offset=None):
-        self.calls.append(("list", audience, axis, limit, offset))
-        return self.list_result
-
-    def list_ingestion_api_keys(self, limit=None, offset=None, include_revoked=None):
-        self.calls.append(("list_keys", limit, offset, include_revoked))
-        return self.keys_result
 
     def create_audience_grant(self, audience, axis, selector):
         self.calls.append(("create", audience, axis, selector))
@@ -160,11 +149,10 @@ def test_omitted_audience_non_admin_exactly_one_match_is_used_silently(capsys):
         "email": "alice@example.com",
     }
     args = make_args(audience=None)
-    audience, brand_new = setup_telemetry.resolve_audience(
+    audience = setup_telemetry.resolve_audience(
         client, args, FakeParser(), my_audiences
     )
     assert audience == "team-alpha"
-    assert brand_new is False
 
 
 def test_omitted_audience_non_admin_multiple_matches_is_an_error():
@@ -215,11 +203,10 @@ def test_audience_already_granted_is_used_verbatim_never_prefixed(capsys):
         "email": "alice@example.com",
     }
     args = make_args(audience="team-alpha")
-    audience, brand_new = setup_telemetry.resolve_audience(
+    audience = setup_telemetry.resolve_audience(
         client, args, FakeParser(), my_audiences
     )
     assert audience == "team-alpha"
-    assert brand_new is False
     assert client.calls == []
 
 
@@ -232,11 +219,10 @@ def test_fresh_audience_non_admin_is_prefixed_and_announced_to_stderr(capsys):
         "email": "alice@example.com",
     }
     args = make_args(audience="laptop")
-    audience, brand_new = setup_telemetry.resolve_audience(
+    audience = setup_telemetry.resolve_audience(
         client, args, FakeParser(), my_audiences
     )
     assert audience == "alice-laptop"
-    assert brand_new is False
     err = capsys.readouterr().err
     assert "alice-laptop" in err
 
@@ -255,7 +241,11 @@ def test_fresh_audience_non_admin_with_no_email_is_an_error():
 
 
 def test_admin_audience_is_never_prefixed_even_when_not_in_my_audiences():
-    client = FakeClient(list_result=[])
+    """The admin branch no longer decides (or reports) whether the name is
+    brand-new (#1510) -- the server's mint route runs that check itself and
+    claims the audience server-side when appropriate, so this resolves
+    without any extra client-side calls."""
+    client = FakeClient()
     my_audiences = {
         "is_admin": True,
         "audiences": [],
@@ -263,109 +253,11 @@ def test_admin_audience_is_never_prefixed_even_when_not_in_my_audiences():
         "email": "admin@example.com",
     }
     args = make_args(audience="ci")
-    audience, brand_new = setup_telemetry.resolve_audience(
+    audience = setup_telemetry.resolve_audience(
         client, args, FakeParser(), my_audiences
     )
     assert audience == "ci"
-    assert brand_new is True
-    assert client.calls == [
-        ("list", "ci", None, None, None),
-        ("list_keys", 500, 0, True),
-    ]
-
-
-def test_admin_audience_with_existing_grant_rows_is_not_brand_new():
-    client = FakeClient(
-        list_result=[
-            {
-                "audience": "ci",
-                "axis": "read",
-                "selector": "group:eng",
-                "created_at": "2026-08-19T00:00:00Z",
-                "created_by": "someone@example.com",
-            }
-        ]
-    )
-    my_audiences = {
-        "is_admin": True,
-        "audiences": [],
-        "mint_prefix": None,
-        "email": "admin@example.com",
-    }
-    args = make_args(audience="ci")
-    audience, brand_new = setup_telemetry.resolve_audience(
-        client, args, FakeParser(), my_audiences
-    )
-    assert audience == "ci"
-    assert brand_new is False
-
-
-def test_admin_audience_with_no_grants_but_existing_key_is_not_brand_new():
-    """An audience an admin minted into before any grant row existed has no
-    `audience_grants` row at all, but does have an `ingestion_api_keys` row --
-    the CLI's brand-new check must catch this the same way the server's own
-    broader ownership predicate does (`try_claim_and_mint`), or the admin
-    would silently self-grant `read` on pre-existing data."""
-    client = FakeClient(
-        list_result=[],
-        keys_result=[
-            {
-                "key_id": "key-0",
-                "name": "old-key",
-                "audience": "ci",
-                "created_by": "someone@example.com",
-            }
-        ],
-    )
-    my_audiences = {
-        "is_admin": True,
-        "audiences": [],
-        "mint_prefix": None,
-        "email": "admin@example.com",
-    }
-    args = make_args(audience="ci")
-    audience, brand_new = setup_telemetry.resolve_audience(
-        client, args, FakeParser(), my_audiences
-    )
-    assert audience == "ci"
-    assert brand_new is False
-
-
-def test_admin_audience_check_pages_through_ingestion_keys():
-    """A match on a later page (not just the first) must still count."""
-    first_page = [
-        {"key_id": f"k{i}", "name": "n", "audience": "other", "created_by": "x"}
-        for i in range(setup_telemetry._KEY_PAGE_SIZE)
-    ]
-    second_page = [
-        {"key_id": "k-last", "name": "n", "audience": "ci", "created_by": "x"}
-    ]
-
-    class PagingClient(FakeClient):
-        def list_ingestion_api_keys(
-            self, limit=None, offset=None, include_revoked=None
-        ):
-            self.calls.append(("list_keys", limit, offset, include_revoked))
-            return first_page if offset == 0 else second_page
-
-    client = PagingClient(list_result=[])
-    my_audiences = {
-        "is_admin": True,
-        "audiences": [],
-        "mint_prefix": None,
-        "email": "admin@example.com",
-    }
-    args = make_args(audience="ci")
-    audience, brand_new = setup_telemetry.resolve_audience(
-        client, args, FakeParser(), my_audiences
-    )
-    assert audience == "ci"
-    assert brand_new is False
-    assert client.calls == [
-        ("list", "ci", None, None, None),
-        ("list_keys", 500, 0, True),
-        ("list_keys", 500, 500, True),
-    ]
+    assert client.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +294,10 @@ def test_run_non_admin_claim_does_not_call_create_audience_grant(monkeypatch, ca
     assert "Authorization=Bearer mmk_secret" in out
 
 
-def test_run_admin_brand_new_claim_writes_mint_and_read_grants(monkeypatch, capsys):
+def test_run_never_calls_create_audience_grant(monkeypatch):
+    """The server now claims a brand-new audience itself as part of the mint
+    request, for admin and non-admin callers alike (#1510, §4) -- `run()`
+    never writes a grant row client-side any more."""
     client = FakeClient(
         my_audiences={
             "is_admin": True,
@@ -415,19 +310,18 @@ def test_run_admin_brand_new_claim_writes_mint_and_read_grants(monkeypatch, caps
             "name": "laptop",
             "audience": "ci",
             "key": "mmk_secret",
+            "claimed": True,
         },
-        list_result=[],
     )
     monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
     args = make_args(audience="ci", otlp_endpoint="http://ingest:9000/ingestion/otlp")
     setup_telemetry.run(args, FakeParser())
 
     assert ("mint", "laptop", "ci") in client.calls
-    assert ("create", "ci", "mint", "user:admin@example.com") in client.calls
-    assert ("create", "ci", "read", "user:admin@example.com") in client.calls
+    assert not any(call[0] == "create" for call in client.calls)
 
 
-def test_run_admin_non_brand_new_audience_skips_grant_calls(monkeypatch):
+def test_run_reports_claimed_audience_on_stderr_when_claimed_true(monkeypatch, capsys):
     client = FakeClient(
         my_audiences={
             "is_admin": True,
@@ -438,18 +332,34 @@ def test_run_admin_non_brand_new_audience_skips_grant_calls(monkeypatch):
         mint_result={
             "key_id": "key-1",
             "name": "laptop",
+            "audience": "ci",
+            "key": "mmk_secret",
+            "claimed": True,
+        },
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(audience="ci", otlp_endpoint="http://ingest:9000/ingestion/otlp")
+    setup_telemetry.run(args, FakeParser())
+
+    err = capsys.readouterr().err
+    assert "claimed audience ci" in err
+
+
+def test_run_omits_claimed_line_when_claimed_false(monkeypatch, capsys):
+    client = FakeClient(
+        my_audiences={
+            "is_admin": False,
+            "audiences": ["team-alpha"],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+        },
+        mint_result={
+            "key_id": "key-1",
+            "name": "laptop",
             "audience": "team-alpha",
             "key": "mmk_secret",
+            "claimed": False,
         },
-        list_result=[
-            {
-                "audience": "team-alpha",
-                "axis": "mint",
-                "selector": "*",
-                "created_at": "2026-08-19T00:00:00Z",
-                "created_by": "admin@example.com",
-            }
-        ],
     )
     monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
     args = make_args(
@@ -457,7 +367,8 @@ def test_run_admin_non_brand_new_audience_skips_grant_calls(monkeypatch):
     )
     setup_telemetry.run(args, FakeParser())
 
-    assert not any(call[0] == "create" for call in client.calls)
+    err = capsys.readouterr().err
+    assert "claimed audience" not in err
 
 
 def test_run_writes_env_file_with_secure_permissions_and_prints_its_path(
@@ -525,46 +436,6 @@ def test_run_env_file_write_failure_prints_key_to_stdout_and_reraises(
     assert "Authorization=Bearer mmk_secret" in captured.out
     assert "warning" in captured.err.lower()
     assert "/no/such/place.env" in captured.err
-
-
-def test_run_env_file_write_failure_still_writes_admin_self_grant(monkeypatch, capsys):
-    """Regression test: an `--env-file` write failure must not skip the admin
-    self-grant for a brand-new audience -- once skipped, a retry finds the
-    audience no longer brand-new and the grants would be lost forever."""
-    client = FakeClient(
-        my_audiences={
-            "is_admin": True,
-            "audiences": [],
-            "mint_prefix": None,
-            "email": "admin@example.com",
-        },
-        mint_result={
-            "key_id": "key-1",
-            "name": "laptop",
-            "audience": "ci",
-            "key": "mmk_secret",
-        },
-        list_result=[],
-    )
-    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
-
-    def boom(path, content):
-        raise OSError("Read-only file system")
-
-    monkeypatch.setattr(setup_telemetry, "write_env_file", boom)
-
-    args = make_args(
-        audience="ci",
-        otlp_endpoint="http://ingest:9000/ingestion/otlp",
-        env_file="/no/such/place.env",
-    )
-
-    with pytest.raises(OSError):
-        setup_telemetry.run(args, FakeParser())
-
-    assert ("mint", "laptop", "ci") in client.calls
-    assert ("create", "ci", "mint", "user:admin@example.com") in client.calls
-    assert ("create", "ci", "read", "user:admin@example.com") in client.calls
 
 
 def test_main_exits_non_zero_on_env_file_os_error(monkeypatch, capsys):

@@ -48,7 +48,7 @@ use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
-use micromegas_auth::policy::ReadPolicy;
+use micromegas_auth::policy::{ReadPolicy, caller_selectors};
 use micromegas_auth::types::{AuthContext, ProviderUnavailable};
 use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
 use micromegas_tracing::prelude::*;
@@ -593,7 +593,11 @@ impl FlightSqlServiceImpl {
         let identity = validate_and_resolve_user_attribution_grpc(md)
             .ok()
             .map(|attr| attr.user_id);
-        let read_scope = match ext.get::<AuthContext>() {
+        // Read once, up front, so both `read_scope`'s resolution below and `grant_selectors`
+        // (#1489, AbAC Stage 6b) can consult the same `AuthContext` -- the `Some(auth_ctx)` arm's
+        // binding otherwise goes out of scope before the `CallerContext` literal is built.
+        let auth_ctx = ext.get::<AuthContext>();
+        let read_scope = match auth_ctx {
             Some(auth_ctx) => match self.read_policy.resolve(auth_ctx).await {
                 Ok(audiences) => ReadScope::Audiences(audiences.into_inner()),
                 Err(e) => {
@@ -617,6 +621,10 @@ impl FlightSqlServiceImpl {
             // treatment as `isolation_config` above.
             admin_principal_possible: self.admin_principal_possible,
             identity,
+            // Empty when there's no `AuthContext` extension at all (no auth provider configured,
+            // e.g. `--disable-auth`) -- the same absent-extension convention `read_scope` follows
+            // above (#1489, AbAC Stage 6b).
+            grant_selectors: auth_ctx.map(caller_selectors).unwrap_or_default().into(),
         })
     }
 

@@ -9,13 +9,14 @@
 // that part is identical between the two pages.
 import { useState, useEffect, useCallback } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Plus, Trash2, Copy, Check, KeyRound } from 'lucide-react'
+import { Plus, Trash2, KeyRound } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { MintedKeyBanner } from '@/components/MintedKeyBanner'
 import type {
   ApiKeyErrorConstructor,
   ApiKeyListEntry,
@@ -68,7 +69,6 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
   // The cleartext key is shown exactly once, right after minting — never
   // persisted client-side, never refetchable.
   const [mintedKey, setMintedKey] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
   const [revokeTarget, setRevokeTarget] = useState<ApiKeyListEntry | null>(null)
   const [isRevoking, setIsRevoking] = useState(false)
 
@@ -114,7 +114,6 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
       const result = await config.mintKey(mintName.trim(), mintAudience.trim() || undefined)
       setShowMintForm(false)
       setMintedKey(result.key)
-      setCopied(false)
       // A key minted while on a later page would otherwise land on page 1
       // (newest-first ordering) and never show up in the visible table.
       // Resetting to page 1 changes `loadKeys`'s dep and triggers the
@@ -128,18 +127,6 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
       setMintError(err instanceof config.ErrorClass ? err.message : 'Failed to mint key')
     } finally {
       setIsMinting(false)
-    }
-  }
-
-  const handleCopyKey = async () => {
-    if (!mintedKey) return
-    try {
-      await navigator.clipboard.writeText(mintedKey)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard access can fail (permissions, insecure context) — the key
-      // is still visible and selectable, so this is a soft failure.
     }
   }
 
@@ -186,29 +173,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
           )}
 
           {mintedKey && (
-            <div className="mb-4 p-4 rounded-lg border border-accent-warning/40 bg-accent-warning/10">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-theme-text-primary mb-1">
-                    Key minted — copy it now, it won't be shown again
-                  </div>
-                  <code className="block break-all text-sm font-mono text-theme-text-primary bg-app-bg px-2.5 py-1.5 rounded-sm border border-theme-border">
-                    {mintedKey}
-                  </code>
-                </div>
-                <button
-                  onClick={() => setMintedKey(null)}
-                  className="shrink-0 p-1.5 rounded-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-border transition-colors"
-                  aria-label="Dismiss"
-                >
-                  ×
-                </button>
-              </div>
-              <Button variant="outline" onClick={handleCopyKey} className="mt-3 gap-1.5">
-                {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                {copied ? 'Copied' : 'Copy key'}
-              </Button>
-            </div>
+            <MintedKeyBanner keyValue={mintedKey} onDismiss={() => setMintedKey(null)} />
           )}
 
           {showMintForm && (

@@ -80,7 +80,7 @@ class TestImportIngestionApiKeyAudience:
 
 
 class TestAudienceGrants:
-    """#1489, AbAC Stage 6a: `create_audience_grant`/`list_audience_grants`/
+    """#1489, AbAC Stage 6a (list removed by #1510): `create_audience_grant`/
     `delete_audience_grant` payload/params construction."""
 
     def test_create_audience_grant_payload(self):
@@ -92,26 +92,6 @@ class TestAudienceGrants:
             "audience": "team-alpha",
             "axis": "read",
             "selector": "group:eng",
-        }
-
-    def test_list_audience_grants_omits_unset_filters(self):
-        client = _make_client()
-        client.list_audience_grants()
-        call = client.session.get.call_args
-        assert call.args[0] == "http://localhost:9999/api/audience-grants"
-        assert call.kwargs["params"] == {}
-
-    def test_list_audience_grants_includes_set_filters(self):
-        client = _make_client()
-        client.list_audience_grants(
-            audience="team-alpha", axis="mint", limit=10, offset=5
-        )
-        call = client.session.get.call_args
-        assert call.kwargs["params"] == {
-            "audience": "team-alpha",
-            "axis": "mint",
-            "limit": 10,
-            "offset": 5,
         }
 
     def test_delete_audience_grant_passes_natural_key_as_query_params(self):

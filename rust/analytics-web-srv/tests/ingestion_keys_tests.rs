@@ -31,6 +31,7 @@
 //! testing the helper is what keeps the resolution matrix in default
 //! `cargo test`.
 
+use analytics_web_srv::audience_grants::{AudienceGrantsState, audience_grants_router};
 use analytics_web_srv::auth::{AuthToken, ValidatedUser};
 use analytics_web_srv::ingestion_keys::{
     IngestionKeysState, ingestion_keys_router, resolve_audience,
@@ -109,6 +110,19 @@ fn auth_context_for(user: &ValidatedUser) -> AuthContext {
 fn build_handler_router_with_user(state: IngestionKeysState, user: ValidatedUser) -> Router {
     let auth_context = auth_context_for(&user);
     ingestion_keys_router("")
+        .layer(Extension(state))
+        .layer(Extension(AuthToken(String::new())))
+        .layer(Extension(user))
+        .layer(Extension(auth_context))
+}
+
+/// Same wiring as [`build_handler_router_with_user`], but for `audience_grants_router` --
+/// needed only by the regression test below, which exercises `delete_grant` directly to confirm
+/// the claim-marker row it now refuses to remove stays in place across the two modules' shared
+/// `audience_grants` table.
+fn build_grants_router_with_user(state: AudienceGrantsState, user: ValidatedUser) -> Router {
+    let auth_context = auth_context_for(&user);
+    audience_grants_router("")
         .layer(Extension(state))
         .layer(Extension(AuthToken(String::new())))
         .layer(Extension(user))
@@ -748,6 +762,145 @@ async fn live_import_is_idempotent() {
 }
 
 // ---------------------------------------------------------------------------
+// #[ignore], live DB -- admin server-side claim (#1510, AbAC Stage 6c, Design §4)
+// ---------------------------------------------------------------------------
+
+/// An admin minting into a brand-new, never-before-seen audience now claims it server-side:
+/// both `mint` and `read` grant rows for `user:<admin email>` land in `audience_grants`,
+/// `claimed` comes back `true`, and the admin still gets a key.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
+    let pool = live_pool().await;
+    let audience = format!("admin-claim-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: None,
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-claim-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
+    assert_eq!(body["claimed"], true);
+
+    let mut axes: Vec<String> = sqlx::query_scalar(
+        "SELECT axis FROM audience_grants WHERE audience = $1 \
+         AND selector = 'user:admin@example.com'",
+    )
+    .bind(&audience)
+    .fetch_all(&pool)
+    .await
+    .expect("query grants");
+    axes.sort();
+    assert_eq!(axes, vec!["mint".to_string(), "read".to_string()]);
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+/// An admin minting into an audience that already has a grant row (created by someone else)
+/// does not claim it -- `claimed` comes back `false`, and no new grant row is written for the
+/// admin.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
+    let pool = live_pool().await;
+    let audience = format!("admin-existing-test-{}", uuid::Uuid::new_v4());
+    insert_mint_grant(&pool, &audience, "group:eng").await;
+
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: None,
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-existing-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["claimed"], false);
+
+    let admin_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audience_grants WHERE audience = $1 \
+         AND selector = 'user:admin@example.com'",
+    )
+    .bind(&audience)
+    .fetch_one(&pool)
+    .await
+    .expect("query grants");
+    assert_eq!(
+        admin_rows, 0,
+        "admin must not gain a grant on a pre-owned audience"
+    );
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+/// The reserved default-key audience (from `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) is never claimed
+/// for an admin caller either, matching the non-admin lazy-claim path's existing reserved-name
+/// rule.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
+    let pool = live_pool().await;
+    let audience = format!("admin-reserved-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: Some(audience.clone()),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-reserved-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
+    assert_eq!(body["claimed"], false);
+
+    let grant_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE audience = $1")
+            .bind(&audience)
+            .fetch_one(&pool)
+            .await
+            .expect("query grants");
+    assert_eq!(grant_rows, 0);
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+// ---------------------------------------------------------------------------
 // #[ignore], live DB -- self-service mint (AbAC Stage 6, #1374, Design §4/§4a)
 // ---------------------------------------------------------------------------
 
@@ -972,6 +1125,11 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_public_audience() {
 /// a `Forbidden` naming the limit on a claim of one more, distinct fresh audience; a caller one
 /// below the limit still succeeds. Best-effort under sequential use, per that knob's own doc
 /// comment.
+///
+/// The claim count is read from `audience_grants` (see `try_claim_and_mint`'s own comment on that
+/// query): only a row with `axis = 'mint'`, `selector = 'user:<email>'`, *and* `created_by =
+/// <email>` counts -- exactly the shape a lazy claim itself writes -- so seeding the pre-existing
+/// claim here writes both grant rows (plus a key row, exactly what a real claim leaves behind).
 #[ignore]
 #[tokio::test]
 async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
@@ -992,6 +1150,19 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
         .await
         .expect("seed pre-existing claim");
     }
+    let seed_key_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+         VALUES ($1, $2, $3, now(), $4, $5)",
+    )
+    .bind(seed_key_id)
+    .bind(vec![1u8; 32])
+    .bind(format!("seed-key-{seed_key_id}"))
+    .bind(&caller_email)
+    .bind(&preclaimed_audience)
+    .execute(&pool)
+    .await
+    .expect("seed pre-existing claim's key row");
 
     // At the limit (1 already-claimed audience, limit 1): one more fresh claim is denied.
     let over_limit_audience = format!("self-service-over-claims-limit-{}", uuid::Uuid::new_v4());
@@ -1043,6 +1214,163 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
 
     cleanup_audience(&pool, &preclaimed_audience).await;
     cleanup_audience(&pool, &under_limit_audience).await;
+}
+
+/// Regression for the `max_claims_per_caller` backstop being resettable: a non-admin trying to
+/// delete their own `mint`/`user:<email>` `audience_grants` row -- the shape `delete_grant`'s
+/// non-admin own-row arm used to let through as "Remove my access" on the Audience Access page --
+/// must now be refused server-side (403) by `delete_grant` (`audience_grants.rs`), exercised
+/// directly here through `audience_grants_router` since the claim it's protecting lives in
+/// `try_claim_and_mint` (`ingestion_keys.rs`, this file's usual subject) -- both are part of the
+/// same `analytics_web_srv` lib crate, so pulling in the other module's router from this test
+/// binary is unremarkable. Before this round's fix the count was read from `ingestion_api_keys`
+/// instead, which over-counted a different way (see
+/// `live_claim_survives_pre_existing_mint_grants_on_other_audiences` below); this test checks the
+/// row-deletion half of the current fix, and that the claim count is consequently unaffected
+/// since the marker row survives.
+#[ignore]
+#[tokio::test]
+async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
+    let pool = live_pool().await;
+    let caller = unique_non_admin_user();
+    let caller_email = caller.email.clone().expect("caller has an email");
+
+    // Claim a first audience at a limit of 1.
+    let audience = format!("self-service-claim-then-delete-{}", uuid::Uuid::new_v4());
+    let state = IngestionKeysState {
+        pool: Some(pool.clone()),
+        default_audience: None,
+        self_service_mint_enabled: true,
+        max_claims_per_caller: 1,
+        max_keys_per_caller: 100,
+    };
+    let app = build_handler_router_with_user(state.clone(), caller.clone());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "claim-key", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["claimed"], true);
+
+    // Attempt the same deletion `delete_grant`'s non-admin own-row arm used to allow -- "Remove
+    // my access" on the caller's own `mint`/`user:<email>` row on the audience they just claimed.
+    // It must now be refused (403), not silently succeed.
+    let grants_app = build_grants_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
+        },
+        caller.clone(),
+    );
+    // `%3A`/`%40` percent-encode the `:`/`@` in `user:<email>` -- the natural key travels as
+    // query parameters, per `delete_grant`'s own doc comment on why (a `group:<id>` selector can
+    // contain other URL-significant characters a raw path segment can't safely carry).
+    let encoded_selector = format!("user%3A{}", caller_email.replace('@', "%40"));
+    let delete_response = grants_app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=mint&selector={encoded_selector}"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(
+        delete_response.status(),
+        StatusCode::FORBIDDEN,
+        "a non-admin must not be able to delete their own mint claim marker"
+    );
+
+    // The claim count must not have changed (the marker row was never removed): a claim of a
+    // second, distinct fresh audience is still denied at the same limit of 1.
+    let second_audience = format!("self-service-claim-then-delete-2-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(state, caller);
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "second-claim-key", "audience": "{second_audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "the claim count must be unaffected since the marker row still exists"
+    );
+
+    cleanup_audience(&pool, &audience).await;
+    cleanup_audience(&pool, &second_audience).await;
+}
+
+/// The actual bug this round reported: a non-admin who holds pre-existing `mint` grants on
+/// several audiences -- never claimed, just granted (e.g. by an admin) -- and has minted a key
+/// into each one (ordinary use of `max_keys_per_caller`'s separate bound, not a claim) must still
+/// be able to claim a genuinely new, unowned audience without tripping `max_claims_per_caller`.
+/// Before this round's fix, counting distinct audiences in `ingestion_api_keys` conflated those
+/// ordinary mints with real claims and refused this caller even though they had claimed nothing.
+#[ignore]
+#[tokio::test]
+async fn live_claim_survives_pre_existing_mint_grants_on_other_audiences() {
+    let pool = live_pool().await;
+    let caller = unique_non_admin_user();
+    let caller_email = caller.email.clone().expect("caller has an email");
+    let selector = format!("user:{caller_email}");
+
+    // Three pre-existing `mint` grants the caller never claimed -- granted by someone else -- each
+    // with a live key minted into it, exactly like a normal, non-claiming caller who was handed
+    // access by an admin.
+    let mut granted_audiences = Vec::new();
+    for i in 0..3 {
+        let audience = format!("self-service-pre-granted-{i}-{}", uuid::Uuid::new_v4());
+        insert_mint_grant(&pool, &audience, &selector).await;
+        let key_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+             VALUES ($1, $2, $3, now(), $4, $5)",
+        )
+        .bind(key_id)
+        .bind(vec![2u8; 32])
+        .bind(format!("granted-key-{key_id}"))
+        .bind(&caller_email)
+        .bind(&audience)
+        .execute(&pool)
+        .await
+        .expect("seed key minted into a pre-existing grant");
+        granted_audiences.push(audience);
+    }
+
+    // A bound of 1 -- well below the 3 pre-existing grants above -- would deny this claim under
+    // the over-counting bug; with the fix it counts zero real claims, so it succeeds.
+    let fresh_audience = format!("self-service-fresh-after-grants-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: None,
+            self_service_mint_enabled: true,
+            max_claims_per_caller: 1,
+            max_keys_per_caller: 100,
+        },
+        caller,
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "fresh-claim-key", "audience": "{fresh_audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "pre-existing mint grants that were never claimed must not count against the claim bound"
+    );
+
+    for audience in &granted_audiences {
+        cleanup_audience(&pool, audience).await;
+    }
+    cleanup_audience(&pool, &fresh_audience).await;
 }
 
 /// `max_keys_per_caller` (§3, §4): a caller who already holds the configured limit of live keys
