@@ -463,8 +463,10 @@ struct DeleteGrantQuery {
 /// A non-admin may delete only their own direct `user:<email>` row ("remove my access" -- never
 /// offered for `group:`/`*` rows, since those would affect other principals) or a row they
 /// themselves created (the revoke-a-share counterpart of `create_grant`, Design §3). If the
-/// natural key names no row at all, `404`; if it names a row but neither condition matches,
-/// `403`.
+/// natural key names no row at all, `404`; if it names a row but neither condition matches, `403`
+/// -- but only when the caller holds a grant on `(audience, axis)` at all ([`caller_holds_pair`]);
+/// otherwise `404`, so a non-admin can't use the 403-vs-404 split to probe for the existence of a
+/// grant on a pair they can't otherwise see via `/visible`/`list_audience_grants()`.
 async fn delete_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
@@ -520,7 +522,15 @@ async fn delete_grant(
             return Err(AudienceGrantError::NotFound);
         }
         // Distinguish "no such row" (404) from "exists, but not yours" (403) with a follow-up
-        // read -- the delete above already told us this caller's predicate didn't match.
+        // read -- the delete above already told us this caller's predicate didn't match. This
+        // must not become an unscoped existence oracle: a non-admin who holds no grant on
+        // `(audience, axis)` at all gets 404 regardless of whether the row actually exists,
+        // exactly as they'd learn nothing from `/visible` or `list_audience_grants()` either.
+        // `caller_holds_pair` is the same "what pairs can this caller act on" check
+        // `create_grant`'s hold check runs, not the wider read-visibility query.
+        if !caller_holds_pair(&pool, &query.audience, &query.axis, &caller).await? {
+            return Err(AudienceGrantError::NotFound);
+        }
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1 AND axis = $2 \
              AND selector = $3)",

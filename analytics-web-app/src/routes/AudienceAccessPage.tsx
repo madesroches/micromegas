@@ -374,6 +374,8 @@ function MintKeyDialog({
   const prefix = !isAdmin ? me?.mint_prefix ?? null : null
   const composedNew = prefix ? `${prefix}${newAudience}` : newAudience
   const resolvedAudience = audienceChoice === '__new__' ? composedNew : audienceChoice
+  const newAudienceValid = AUDIENCE_PATTERN.test(newAudience)
+  const newAudienceInvalid = audienceChoice === '__new__' && !newAudienceValid
 
   const handleClose = () => {
     if (isMinting) return
@@ -465,9 +467,14 @@ function MintKeyDialog({
                       value={newAudience}
                       onChange={(e) => setNewAudience(e.target.value)}
                     />
+                    {newAudience && !newAudienceValid && (
+                      <p className="mt-1 text-xs text-accent-error">
+                        Must match <code>[A-Za-z0-9_-]</code>, up to 255 characters.
+                      </p>
+                    )}
                     {!isAdmin && (
                       <p className="mt-1 text-xs font-mono text-theme-text-muted">
-                        {newAudience
+                        {newAudienceValid
                           ? `Will claim \`${composedNew}\` and grant you read + mint on it.`
                           : ''}
                       </p>
@@ -485,7 +492,7 @@ function MintKeyDialog({
           {!mintedKey && (
             <Button
               onClick={handleMint}
-              disabled={isMinting || !name.trim() || !resolvedAudience.trim()}
+              disabled={isMinting || !name.trim() || !resolvedAudience.trim() || newAudienceInvalid}
             >
               {isMinting ? (
                 <span className="flex items-center gap-2">

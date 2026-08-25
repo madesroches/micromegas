@@ -632,12 +632,55 @@ async fn live_delete_grant_204_for_a_row_the_caller_created() {
     cleanup_grants(&pool, &audience).await;
 }
 
-/// A row that exists but is neither the caller's own nor one they created is a 403, not a 404.
+/// A row that exists but is neither the caller's own nor one they created is a 403, not a 404 --
+/// but only once the caller holds a grant on the pair at all (here, their own `user:<email>`
+/// row on the same `(audience, axis)`); see `live_delete_grant_404_when_caller_does_not_hold_the_pair`
+/// for the case where they don't.
 #[ignore]
 #[tokio::test]
 async fn live_delete_grant_403_for_someone_elses_row() {
     let pool = live_pool().await;
     let audience = format!("audience-grants-others-row-test-{}", uuid::Uuid::new_v4());
+    insert_grant(
+        &pool,
+        &audience,
+        "read",
+        "user:other@example.com",
+        "other@example.com",
+    )
+    .await;
+    // Gives `reader@example.com` a held grant on this `(audience, read)` pair, distinct from the
+    // row being deleted -- otherwise the corrected scoping (below) would turn this into a 404.
+    insert_grant(&pool, &audience, "read", "user:reader@example.com", "admin").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=read&selector=user%3Aother%40example.com"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// A row that exists but on a `(audience, axis)` pair the caller holds no grant on at all is a
+/// 404, not a 403 -- the delete path's existence check must not become an unscoped oracle for
+/// whether a grant exists on a pair the caller can't otherwise see via `/visible` or
+/// `list_audience_grants()`.
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_404_when_caller_does_not_hold_the_pair() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-unheld-row-test-{}", uuid::Uuid::new_v4());
+    // The row exists, but `reader@example.com` holds no grant at all on this pair.
     insert_grant(
         &pool,
         &audience,
@@ -660,7 +703,7 @@ async fn live_delete_grant_403_for_someone_elses_row() {
         )))
         .await
         .expect("call service");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     cleanup_grants(&pool, &audience).await;
 }
