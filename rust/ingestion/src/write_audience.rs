@@ -6,6 +6,7 @@
 //! `rust/public/src/servers/write_audience.rs::resolve_write_audience`, the caller that applies
 //! this fallback per request.
 
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// The audience [`WriteAudience::default_from_env`] resolves to when `MICROMEGAS_DEFAULT_AUDIENCE`
@@ -50,13 +51,27 @@ impl WriteAudience {
     /// `micromegas_auth::policy::default_audience_from_env` resolves for the key-management
     /// routes. It answers one question in both places -- what audience does something that
     /// arrives without one get -- so an operator configures it once. Fails fast (same posture as
-    /// `IsolationConfig::from_env`) on a malformed value rather than silently falling back.
+    /// `IsolationConfig::from_env`) on a malformed value rather than silently falling back; a
+    /// blank value is malformed, not an opt-out.
+    ///
+    /// Leading/trailing whitespace is trimmed and `warn!`-logged, matching the auth-side resolver
+    /// exactly so one env value can never be accepted by one role and rejected by the other. The
+    /// warning stays because padding is far more likely a templating slip than an intention.
     ///
     /// Reads the unprefixed name only, unlike the auth-side resolver's `{prefix}_DEFAULT_AUDIENCE`
     /// form; this crate has no prefix to resolve against.
     pub fn default_from_env() -> anyhow::Result<Self> {
         match std::env::var("MICROMEGAS_DEFAULT_AUDIENCE") {
-            Ok(raw) => Self::new(&raw),
+            Ok(raw) => {
+                let trimmed = raw.trim();
+                if trimmed != raw {
+                    warn!(
+                        "MICROMEGAS_DEFAULT_AUDIENCE: value {raw:?} has leading or trailing \
+                         whitespace -- using {trimmed:?}"
+                    );
+                }
+                Self::new(trimmed)
+            }
             Err(_) => Self::new(DEFAULT_AUDIENCE),
         }
     }

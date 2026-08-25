@@ -57,11 +57,12 @@ pub fn is_valid_audience(aud: &str) -> bool {
 /// per-request 400. Empty or otherwise invalid ⇒ `Err`: with one knob there is no "unset" state
 /// left for an empty string to mean, so a blank value is a misconfiguration, not an opt-out.
 ///
-/// Leading/trailing whitespace is trimmed and `warn!`-logged. Trimming keeps a value that a
-/// deployment template rendered with stray padding working, and the warning is there because
-/// `micromegas_ingestion::write_audience::WriteAudience::default_from_env` -- the *other* reader
-/// of this same variable -- does not trim: a padded value that this role quietly accepts fails
-/// the ingestion role's startup outright, so the two roles disagreeing must not be silent here.
+/// Leading/trailing whitespace is trimmed and `warn!`-logged, the same way
+/// `micromegas_ingestion::write_audience::WriteAudience::default_from_env` -- the other reader of
+/// this same variable -- handles it, so one env value can never be accepted by one role and
+/// rejected by the other. Trimming keeps a value a deployment template rendered with stray
+/// padding working; the warning stays because padding is far more likely a templating slip than
+/// an intention.
 ///
 /// One knob, one meaning: the audience anything that arrives without one gets. It is what
 /// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes, and
@@ -76,9 +77,7 @@ pub fn default_audience_from_env(prefix: &str) -> Result<String> {
             let trimmed = raw.trim();
             if trimmed != raw {
                 warn!(
-                    "{var}: value {raw:?} has leading or trailing whitespace -- using {trimmed:?}. \
-                     Remove the padding: the ingestion role reads this same variable without \
-                     trimming and rejects it at startup."
+                    "{var}: value {raw:?} has leading or trailing whitespace -- using {trimmed:?}"
                 );
             }
             let raw = trimmed.to_string();

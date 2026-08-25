@@ -108,6 +108,35 @@ fn default_from_env_set_to_a_valid_label() {
     assert_eq!(audience.as_str(), "team-a");
 }
 
+/// Whitespace padding is trimmed rather than rejected -- the same order
+/// `micromegas_auth::policy::default_audience_from_env` applies to this same variable, so a
+/// padded value can never be accepted by the web role and rejected here. The trim is
+/// `warn!`-logged; not asserted, since the log sink is process-wide.
+#[test]
+#[serial]
+fn default_from_env_trims_a_whitespace_padded_label() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(DEFAULT_AUDIENCE_VAR, "  team-a  ");
+    }
+    let audience = WriteAudience::default_from_env().expect("padded but otherwise valid");
+    assert_eq!(audience.as_str(), "team-a");
+}
+
+/// A blank value is a misconfiguration, not an opt-out: there is no "unset" state left for it to
+/// mean now that one knob covers both the key routes and ingestion.
+#[test]
+#[serial]
+fn default_from_env_rejects_a_blank_label() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(DEFAULT_AUDIENCE_VAR, "   ");
+    }
+    assert!(WriteAudience::default_from_env().is_err());
+}
+
 #[test]
 #[serial]
 fn default_from_env_rejects_a_malformed_label() {
