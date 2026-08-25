@@ -38,6 +38,26 @@ already expire at the same retention horizon as their Postgres sources, so every
 is regenerable. The price is one `regenerate_partitions` pass per view and a window during which
 un-regenerated history is invisible (fail-closed, never fail-open).
 
+## Status
+
+**Phases 1–4 below are implemented and committed** on the `audience` branch (`5d3ebd4ef`,
+`4913acfcc`); the workspace compiles clean and the test suite passes. All 24 numbered
+Implementation Steps, every entry in Files to Modify, and every Documentation and CHANGELOG item
+have landed, and step 15 of `tasks/data_isolation/audience_based_access_control_plan.md` is marked
+as landed. Nothing in the original design is outstanding.
+
+**What is *not* done is the [Addendum](#addendum-materialization-time-default-no-postgres-write-side-stamping)**
+at the end of this document. It revises the design *after* the fact: it keeps §1–§3 and §5 (the
+physical column and the direct `audience IN (...)` filter — the point of the change) and replaces
+§0 and §4 (write-side default, startup backfill, conflict-guard and replication rejections, and
+the removal of `MICROMEGAS_UNSTAMPED_AUDIENCE` / `OwnerAudience::Unstamped`) with a
+materialization-time `COALESCE`. A follow-up implementation pass has to *revert* the landed Phase 1
+and part of Phase 3, then build the addendum's smaller design. Nothing of that pass has started.
+
+Read the body below as the design **as built today**; where the addendum contradicts it, the
+addendum wins and the affected sections are flagged inline. `## Open Questions` records the
+questions the *body's* design closed — the addendum reopens two of them, noted there.
+
 ## Current State
 
 ### Where the audience lives today
@@ -255,6 +275,10 @@ JIT (per-process / per-stream) instances rebuild on first query after a bump: `s
 ## Design
 
 ### 0. The invariant: every process has an audience
+
+> **Superseded by the [Addendum](#addendum-materialization-time-default-no-postgres-write-side-stamping).**
+> This section is implemented as written; the addendum reverts all four mechanisms and resolves a
+> missing audience at the `blocks` materialization query instead.
 
 Everything below rests on one statement that becomes true at deploy time and stays true:
 
@@ -550,6 +574,10 @@ property of `SqlBatchView` schema inference, not of the data; document it as suc
 
 ### 4. Removing `MICROMEGAS_UNSTAMPED_AUDIENCE` and `OwnerAudience::Unstamped`
 
+> **Superseded by the [Addendum](#addendum-materialization-time-default-no-postgres-write-side-stamping).**
+> Implemented as written; the addendum keeps the knob and the `Unstamped` state and reverts the
+> `global_rows_visible` rule change with them.
+
 - `IsolationConfig` (`read_scope.rs`) loses `unstamped_audience` and `DEFAULT_UNSTAMPED_AUDIENCE`;
   it keeps `public_view_sets: Vec<String>` (its only other field, `:140`). The hand-written
   `impl Default` (`:143-150`) — whose only reason to exist is the `public` default for the removed
@@ -790,6 +818,9 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 
 ### Phase 1 — every process has an audience (ingestion)
 
+> **Landed, and slated for reversal by the addendum.** Steps 1–7 are all implemented; the
+> addendum's follow-up pass reverts every one of them.
+
 1. `rust/ingestion/src/write_audience.rs`: `WriteAudience(Arc<str>)`; delete `none()`;
    `as_str() -> &str`; add `pub fn default_from_env() -> anyhow::Result<WriteAudience>` reading
    `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`, validated, fail-fast); rewrite the
@@ -862,6 +893,9 @@ At the end of this phase the column exists and is populated; `OwnershipRewrite` 
 semi-join, so the change is observable only as a new column in `SELECT *`.
 
 ### Phase 3 — enforcement: switch to the column, remove the unstamped state
+
+> **Landed.** Step 20 (the direct-column branch) is the point of the change and stays; steps 18,
+> 19, 21 and the matching parts of 22 are reverted by the addendum.
 
 18. `lakehouse/read_scope.rs`: remove `unstamped_audience` / `DEFAULT_UNSTAMPED_AUDIENCE`; replace
     the hand-written `impl Default` (`:143-150`) with `#[derive(Default)]` and drop the `:122-126`
@@ -1229,7 +1263,9 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
 
 ## Open Questions
 
-None outstanding — all resolved during review:
+None outstanding for the body's design — all resolved during review. **Questions 4 and 5 are
+reopened and answered differently by the [Addendum](#addendum-materialization-time-default-no-postgres-write-side-stamping)**;
+the answers below record what was built, not what the follow-up pass will build.
 
 1. ~~Is the retention-bounded history loss of a bump acceptable?~~ **Moot.** Lakehouse partitions
    already expire with their Postgres sources (`retire_expired_partitions`), so a bump costs
@@ -1258,3 +1294,320 @@ None outstanding — all resolved during review:
    `retire_partitions`/`regenerate_partitions`). Global partitions are multi-audience files, so a
    scoped non-admin has no claim to them; the admin tooling (`admin.py`) runs under `Audiences`
    on every auth-enabled deployment, so an allowlist-only rule would have broken it. See §4.
+
+## Addendum: materialization-time default, no Postgres write-side stamping
+
+**Status:** this addendum revises the Design and reduces the Implementation Steps below. §0's plan
+(and the first cut of Phase 1/Phase 3 built from it) is already implemented and committed on the
+`audience` branch (`5d3ebd4ef`, `4913acfcc`) — not merged to `main`. This addendum documents a smaller design that
+a follow-up implementation pass should replace it with; it does not itself change any code.
+
+**Decision.** Resolve a missing audience only where the column is physically extracted — the
+`blocks` view's Postgres query (§1) — with `COALESCE(<subselect>, <configured default>)`. Drop the
+requirement that "every Postgres `processes` row carries a `micromegas.audience` property" (§0). A
+process registered without a bound audience keeps **no** `micromegas.audience` property in
+Postgres, forever, exactly as it does today (pre-#1482) — nothing about the write path, the
+conflict guard, or replication needs to change to get a non-null, physical column.
+
+**Why.** §0's four mechanisms (default-at-write, startup backfill, conflict-guard's reject-null
+arm, replication's reject-unstamped check) exist purely to make Postgres itself satisfy the
+invariant the column needs. That is more moving parts — and a real Postgres mutation on every
+ingestion-role startup — than the column actually requires: the column only needs the *value it
+materializes* to be non-null, not the row it was extracted from. Applying the default at the one
+extraction site already does that.
+
+**The trade this accepts, and why it's fine.** Unlike a value baked into Postgres once, a
+config-supplied default embedded via `COALESCE` at materialization time can disagree across
+partitions materialized under different configuration — an operator who changes the default
+between two `regenerate_partitions` runs gets two different resolved values for the same
+never-stamped process, in different partitions. This is exactly the drift the original §0 was
+designed to avoid, and it does not disappear here — it is accepted instead, on the same terms as a
+schema-hash bump: **changing the default is not a routine operation, and doing it requires
+regenerating all six views over the affected range**, the same operational step already required
+by §7 for schema changes. No new failure mode is introduced; an existing accepted one
+(regeneration-bounded staleness) is reused for a second trigger (config change, not just schema
+change). State this explicitly as an operational rule in the docs/CHANGELOG entry this addendum
+implies: *"Changing the configured default audience does not retroactively relabel already-written
+partitions. Regenerate the six views (§7) over any range that should reflect the new default."*
+
+### What this removes from §0 and Phase 1 (already implemented; a follow-up pass reverts it)
+
+All four of §0's mechanisms, and the Phase 1 steps that implement them, go away in full:
+
+- `rust/ingestion/src/write_audience.rs`: `WriteAudience` reverts to `Option<Arc<str>>` with
+  `none()` restored; `default_from_env()` is deleted; `resolve_write_audience` reverts to
+  returning `WriteAudience::none()` when `bound_audience` is absent, and the malformed-audience
+  case reverts to degrading to `none()` rather than erroring (the "no more unstamped state"
+  argument for rejecting it no longer holds — Prong B still has an unstamped state, see below).
+  **State the trade this re-accepts.** §0 rejected that degrade because the only thing left to
+  degrade *to* was the default audience, i.e. a restricted key's writes landing in `public` — and
+  that argument survives here: under this addendum a malformed `bound_audience` still lands its
+  writes under whatever the `COALESCE` default resolves to. What made it tolerable on `main` was
+  that an operator could set the knob empty for fail-closed; per the sentinel decision above, the
+  empty knob now routes that data to `unassigned` instead, which is ungranted — so the fail-closed
+  posture still works and the degrade is bounded by it. The case stays near-unreachable in practice
+  (`ingestion_api_keys.audience` is `CHECK`-constrained, `sql_migration.rs:164-169`, and the other
+  three `bound_audience` producers hard-code `None`), and it is pinned by
+  `malformed_bound_audience_warns_and_degrades_to_none`.
+- `rust/ingestion/src/web_ingestion_service.rs`: the `default_audience` field, `new(lake,
+  default_audience)` / `new_for_test` split, and the conflict guard's null-arm-becomes-error all
+  revert; `check_process_audience_conflict`'s "no retro-stamp" `None` arm goes back to a no-op.
+- `rust/ingestion/src/audience_backfill.rs`: **deleted entirely**, along with its call sites in
+  `rust/telemetry-ingestion-srv/src/main.rs` and the `roles.ingestion` block of
+  `rust/monolith/src/main.rs`, and its module declaration in `rust/ingestion/src/lib.rs`.
+- `rust/analytics/src/replication.rs` (`ingest_processes`): the reject-unstamped-source-process
+  check is removed — a replicated process with no `micromegas.audience` property is accepted as-is,
+  same as any other never-stamped process.
+- `rust/public/src/servers/write_audience.rs` and its five HTTP-edge callers
+  (`ingestion.rs`, `otlp.rs`, `webhook.rs`, `firehose.rs`, `firehose_cloudwatch_logs.rs`): revert to
+  the pre-#1482 shape — no default to read off the service, no move-before-read ordering
+  constraint.
+- `rust/otel-ingestion/src/identity.rs`: `IdentityContext.audience` reverts to `Option<&str>` with
+  its `Default` derive restored; the OTLP id-derivation "always domain-separate" change reverts to
+  "domain-separate only when `Some`". The ~94-site test churn under old step 7 does not happen.
+- All of Phase 1's compile-fallout (steps 1–7, and their listed test files) is void — the tests
+  stay exactly as they are on `main` today, modulo whatever Phase 2/3 below still touches them.
+
+### What §1's extraction site gains instead
+
+`BlocksView`'s `data_sql` fragment changes from a bare `audience_subselect(...)` to a coalesced
+form carrying the configured default:
+
+```sql
+COALESCE({audience_subselect}, $3) AS audience
+```
+
+The default is **bound**, not interpolated: `data_sql` is already a `format!` (it interpolates
+`audience_subselect("processes.properties")`, `blocks_view.rs:61-74`), so the point of a bind here
+is not to avoid `format!` but to keep an operator-supplied string out of the SQL text.
+The Arrow field stays `Field::new("audience", Utf8, false)` exactly as designed — `COALESCE`
+guarantees the batch never carries a null in that column, so §1's nullability guard in
+`write_partition.rs` keeps its job as a safety net (now guarding against a bug in the `COALESCE`
+expression or a future producer that bypasses it, not against a routine "unstamped process" case).
+The `parent_process_id` nullability fix in the same edit (§1, `blocks_view.rs:306` as built) is
+unrelated to audience and is unaffected by this addendum.
+
+**The empty-knob case must be decided, and the obvious reading is broken.** On `main`,
+`IsolationConfig::from_env` resolves `unstamped_audience` to `Option<String>`: unset ⇒
+`Some("public")`, but an explicitly **empty** value ⇒ `None`, the fail-closed posture
+`mkdocs/docs/admin/authentication.md:366-368` documents as the worked "privacy deployment"
+profile (`export MICROMEGAS_UNSTAMPED_AUDIENCE=`). A `None` has nothing to bind as `$3`, and
+`COALESCE(<subselect>, NULL)` is not a fail-closed read — it is a null in a column declared
+`Utf8, false`, which `check_non_nullable_columns` (`write_partition.rs:694-718`) turns into a
+`bail!` that fails the **whole insert-hour `blocks` write**, retried forever by the daemon
+(`maintenance.rs:77-105`). Since `blocks` is the root of all six views, the documented fail-closed
+configuration would silently stop the lakehouse. **Decision: the materialization default is
+non-optional, and an empty knob resolves to a reserved sentinel label** — `unassigned`, the same
+label §0's operational note already tells fail-closed operators to pick — rather than to `None`:
+
+- unset ⇒ `public` (unchanged from `DEFAULT_UNSTAMPED_AUDIENCE`);
+- explicitly empty ⇒ `unassigned`, a well-formed label no principal is granted by default;
+- anything else ⇒ that label, charset-validated as today.
+
+Prong A and Prong B stay in agreement under both postures: with the knob at `public` the column
+reads `public` and Prong B's `Unstamped` arm admits `public` callers; with the knob empty the
+column reads `unassigned` (which no grant matches, so Prong A denies) and Prong B's
+`unstamped_audience: None` denies outright. The sentinel is an ordinary audience label, not a
+magic value — an operator who grants it makes that data visible on purpose. Document it as
+reserved. *(The alternative — reject an empty knob at startup on the materializing binaries —
+was rejected: it removes the fail-closed posture entirely rather than expressing it.)*
+
+**The JIT / per-process path needs the same `COALESCE`.** `find_process` (`metadata.rs:260-289`)
+reads the audience **straight from Postgres** with the same bare `audience_subselect("properties")`,
+and `process_metadata_from_row` decodes it as `let audience: String = row.try_get("audience")?`
+(`metadata.rs:239`) — a comment there cites §0 as the reason a `NULL` may be a hard error. With §0
+gone that becomes a permanent failure of every `view_instance('log_entries'|'measures'|'images'|
+'otel_spans', <process_id>)` query for a never-stamped process: the error surfaces from
+`jit_update` through `MaterializedView::scan` (`materialized_view.rs:68-72`) before any partition
+is scanned, and `images_view.rs:122` / `otel/spans_view.rs:125` have no `global` short-circuit at
+all. So `find_process` gains the same coalesced fragment (bound as `$2` there — its `$1` is the
+`process_id`) and a `default_audience: &str` parameter, and the `metadata.rs:236-238` /
+`metadata.rs:53-54` comments are rewritten. The other two `ProcessMetadata` producers are already
+safe: `find_process_with_latest_timing` reads the materialized `processes` view and
+`partition_source_data.rs:161,225` reads a `blocks` partition — both downstream of the `COALESCE`.
+Note that `partition_source_data.rs:222-224`'s "the source column is non-nullable" comment now
+rests **entirely** on that `COALESCE`, since `StringColumnAccessor::value` does not null-check and
+the dictionary accessor returns a wrong non-null string on a null slot.
+
+**Binding `$3` is not a local edit.** `data_sql`'s `$1`/`$2` are bound in
+`metadata_partition_spec.rs:151-154` (`sqlx::query(&self.data_sql).bind(begin).bind(end)`) from the
+`insert_range` field, not in `blocks_view.rs`. `BlocksView` is the only user of that module, so the
+change is contained, but it is two edits in a different file: a new field on `MetadataPartitionSpec`
+(`:28-37`) and a 9th parameter on `fetch_metadata_partition_spec` (`:41-50`, which already carries
+`#[expect(clippy::too_many_arguments)]`). The separate `source_count_query` (`metadata_partition_spec.rs:53`)
+must **not** get the bind — it references only `$1`/`$2`.
+
+**New plumbing this requires.** `BlocksView::new()` currently takes no parameters; it needs a
+`default_audience: Arc<str>` constructor parameter to bind as `$3`. There are **8** production call
+sites and **16** test call sites. Exactly one of the production sites is the shared factory
+(`view_factory.rs:302`, inside `default_view_factory`); the other **seven** are inside
+`async fn jit_update(&self, ...)` bodies of other views (`log_view.rs:171`, `metrics_view.rs:173`,
+`otel/spans_view.rs:132`, `net_spans_view.rs:350`, `images_view.rs:128`, `async_events_view.rs:156`,
+`thread_spans_view.rs:382`). `jit_update`'s signature is fixed by the `View` trait, so the value
+cannot be passed in as an argument: each of those seven view structs must **carry** the default as
+a field, set once when its `*ViewMaker::make_view` constructs it — the same shape
+`default_view_factory` already uses to construct each maker once at startup. Those same seven views
+are also the ones that call `find_process`, so one field serves both. This is a considerably larger
+ripple than "mechanical", and a follow-up pass should treat it as its own step.
+
+**Where the value is resolved — the addendum's earlier claim here was wrong.** It is *not* true
+that each binary already resolves `IsolationConfig::from_env` where the view factory is built:
+
+- `telemetry-maintenance-srv/src/main.rs` — the binary that actually materializes `blocks` — never
+  calls `IsolationConfig::from_env` at all. Its whole `main` is `LakehouseContext::from_env()`,
+  `default_view_factory(runtime, lake)`, `get_global_views_with_update_group`, `daemon(...)`. It
+  needs a new resolution.
+- `flight_sql_server.rs` builds the view factory at `:244`, **before** it resolves
+  `IsolationConfig::from_env("")` at `:315` — the resolution has to move ahead of the factory (or
+  be duplicated).
+- `monolith/src/main.rs` resolves `IsolationConfig::from_env("MICROMEGAS_ANALYTICS")` only when
+  `roles.flightsql && !args.disable_auth` (`:286-291`), while the maintenance role builds its own
+  `default_view_factory` at `:367-369` inside a spawned task, independent of that value. The
+  monolith therefore needs the default resolved unconditionally, not through
+  `analytics_isolation_config`.
+
+The cleanest shape is a small standalone resolver (the knob is read on the materialization side,
+not through `IsolationConfig`) called by all three binaries and passed into `default_view_factory`
+alongside `runtime`/`lake`. This plumbing is new work this addendum adds that §0's design did not
+need — there, the default lived entirely on the ingestion side, which already resolves its own env
+at its own startup.
+
+### What reverts in Phase 3 (already implemented; a follow-up pass reverts it)
+
+Removing §0's guarantee means Postgres can still, permanently, contain a `processes` row with no
+`micromegas.audience` property — so Prong B (`audience_guard.rs`), which resolves straight from
+Postgres, still needs an explicit state for that case, resolved the same way it is today on `main`:
+
+- `OwnerAudience::Unstamped` **stays** (do not delete it): a `None` audience from Postgres maps to
+  `Unstamped`, not folded into `Unknown`. `is_readable` keeps its `Unstamped` arm, admitted only
+  when the (surviving) unstamped-audience value is in the caller's scope.
+- `IsolationConfig.unstamped_audience` / `DEFAULT_UNSTAMPED_AUDIENCE` **stay** in `read_scope.rs`;
+  `MICROMEGAS_UNSTAMPED_AUDIENCE` is not removed and `from_env` does not fail-fast on it. This is
+  the same knob §1's `COALESCE` above reads for the materialization-time default — one knob, two
+  consumers (Prong B's query-time fallback, unchanged from `main`; Prong A's write-time `COALESCE`,
+  new) — rather than the two separate knobs (`MICROMEGAS_UNSTAMPED_AUDIENCE` read-side,
+  `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` write-side) the original §0 design introduced. This is a
+  strict simplification of the original design's own complaint about knob proliferation
+  (`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` vs. `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, Trade-offs) — it
+  now collapses to a single knob instead of two.
+- `AudienceGuard::global_rows_visible` **reverts** to its pre-#1482 rule ("public allowlist or
+  `unstamped_audience` in the caller's scope"). The "public allowlist or lakehouse admin" rule
+  (§4, already implemented in `query.rs`'s `lakehouse_admin` plumbing) was justified *only* by
+  `Unstamped` disappearing from Prong B; with `Unstamped` staying, its removal is no longer
+  motivated and should be reverted along with the two tests §4 rewrote
+  (`audience_guard_tests.rs:208-228`, `prong_b_guard_db_test.rs:619-641`) back to their pre-#1482
+  form. `AudienceGuard::new` reverts to taking `unstamped_audience: Option<String>` in the slot
+  `lakehouse_admin: bool` occupies today; `query.rs`'s `lakehouse_admin` binding (just added by this
+  branch's review-loop fix) is then unused by `AudienceGuard` and only feeds the admin UDTF/UDF
+  gate, exactly as `main` has it today.
+- `ownership_rewrite.rs` **does not revert at all.** Its §5 branch — the direct `audience IN (...)`
+  filter on the physical column — is the entire point of this plan, and it only depends on the
+  column being present and non-null, which `COALESCE` still guarantees regardless of how the value
+  got there. `resolved_predicate()` keeps its `coalesce`-free form too: an earlier draft of this
+  addendum said it must revert because the aggregate "can still see a genuinely `NULL`
+  `properties`-derived audience" for the five view sets that don't carry the column (`net_spans`,
+  `otel_spans`, `images`, `async_events`, `thread_spans`) — **that is wrong.**
+  `per_process_audience()` no longer derives anything from `properties`; as built it is
+  `max(col("audience"))` over `__processes__partitions` (`ownership_rewrite.rs:159-170`), and that
+  column is the coalesced, non-null one propagated from `blocks` (`processes_view.rs:42,65`). Those
+  five view sets resolve *through* that column, so no `NULL` can reach the aggregate and no
+  `unstamped_audience` field is needed on `OwnershipRewrite`. Prong A is finished; only Prong B and
+  `read_scope.rs` revert.
+
+### §6 rewritten: why per-row filtering is still sound
+
+The original §6 argument ("write-once and always present in Postgres") no longer holds — Postgres
+can permanently lack the property. Soundness instead rests on **materialization-once, not
+write-once**: within a single execution of `BlocksView`'s query, `COALESCE(..., $3)` evaluates the
+same bound default for every row in that insert-hour window, so every row of one partition that
+lacks the property agrees. Rows in *different* partitions can disagree only if the configured
+default changed between the two materializations — and that is precisely the case this addendum
+requires an operator to close by regenerating (see "The trade this accepts" above), not a case
+per-row filtering has to tolerate silently.
+
+### Testing Strategy changes
+
+- Delete: the backfill DB test, the replication-reject test, the conflict-guard-errors-on-null
+  test, the malformed-bound-audience-rejects conversion (`resolve_write_audience_tests.rs:97-105`
+  stays a "degrades to `none()`" test, unchanged from `main`), and all `IdentityContext`/
+  `WriteAudience::none()` compile-fallout churn listed under old step 7.
+- Revert: the two `global_rows_visible` tests (`audience_guard_tests.rs:208-228`,
+  `prong_b_guard_db_test.rs:619-641`) to their `main` form; `ownership_rewrite_config_tests.rs`'s
+  `*_UNSTAMPED_AUDIENCE`-is-a-startup-error case is removed (the var is not being removed).
+- Add: a test exercising `BlocksView`'s `data_sql` (or a DB-backed integration test) asserting a
+  process with no `micromegas.audience` property still yields a non-null `audience` column equal to
+  the configured default; a test that materializes the same never-stamped process under two
+  different configured defaults (two separate `regenerate_partitions`-style runs) and asserts the
+  two partitions carry the two different values — documenting the accepted drift as intended
+  behavior, not chasing it as a bug.
+- Add, for the two cases this addendum's own design turns on:
+  - the **empty-knob sentinel**: with the knob set to an empty string, a never-stamped process
+    materializes `audience = 'unassigned'` on `blocks` and the write **succeeds** — the regression
+    test for the failure mode the naive `COALESCE(..., NULL)` reading would have produced (a
+    `check_non_nullable_columns` `bail!` failing the whole insert-hour, forever).
+  - the **JIT / per-process path**: `view_instance('log_entries', <never-stamped process_id>)`
+    resolves and returns rows carrying the configured default, rather than failing in `jit_update`
+    with a `try_get` error out of `find_process`.
+- `ownership_rewrite_db_test.rs`'s acceptance-vehicle assertions (stamped processes visible per
+  `ReadScope`, `audience` present/non-null on all six views) are unaffected — they exercise §1/§2/§3
+  and §5, none of which this addendum changes in shape, only in how the value at the extraction
+  site is produced. Its unstamped-process fixture goes back to `WriteAudience::none()`, and that
+  process's visibility assertions key on the *materialization* default rather than a write-side one.
+
+### Files to Modify — net effect of this addendum
+
+Relative to the plan's original "Files to Modify" list:
+
+**Reverted in full** — every file under **"Ingestion — default audience and backfill"**
+(`write_audience.rs` in both crates and its five HTTP-edge callers, `web_ingestion_service.rs`,
+`audience_backfill.rs` — deleted — and its two call sites, `identity.rs`, `ingestion.rs`,
+`monolith/src/main.rs`, `telemetry-ingestion-srv/src/main.rs`, `sql_migration.rs`'s doc comment),
+plus `rust/analytics/src/replication.rs`, which drops back out of scope entirely.
+
+**Changed further** — `rust/analytics/src/lakehouse/blocks_view.rs` (the `COALESCE`, the `$3`
+bind, the `BlocksView::new` parameter), `rust/analytics/src/lakehouse/metadata_partition_spec.rs`
+(new spec field + 9th `fetch_metadata_partition_spec` parameter), `rust/analytics/src/metadata.rs`
+(`find_process`'s own `COALESCE` and `default_audience` parameter), the seven JIT view structs and
+their makers that must carry the default (`log_view.rs`, `metrics_view.rs`, `otel/spans_view.rs`,
+`net_spans_view.rs`, `images_view.rs`, `async_events_view.rs`, `thread_spans_view.rs`),
+`rust/analytics/src/lakehouse/view_factory.rs` (`default_view_factory`'s new parameter), and the
+three binaries that must resolve the default (`telemetry-maintenance-srv/src/main.rs`,
+`public/src/servers/flight_sql_server.rs`, `monolith/src/main.rs`).
+
+**Reverted under "Analytics — enforcement"** — `read_scope.rs`, `audience_guard.rs` and `query.rs`
+revert their §4 changes (`Unstamped`, `unstamped_audience`, `global_rows_visible`);
+`ownership_rewrite.rs` does **not** revert anything.
+
+**Comment debt.** A number of in-code comments assert the invariant §0 established and become
+false; each must be rewritten by the same pass: `metadata.rs:53-54` and `:236-238`,
+`blocks_view.rs:312-314` ("Never `NULL` in practice"), `partition_source_data.rs:222-224`,
+`audience.rs:1-4`, `audience_guard.rs`'s module doc and `owner_query_sql` comment,
+`ownership_rewrite.rs`'s module doc and `resolved_predicate` / `audience_column_predicate` doc
+comments (all of which cite "#1482 §0").
+
+**Docs and CHANGELOG — the concrete list.** The landed change removed
+`MICROMEGAS_UNSTAMPED_AUDIENCE` from user-facing docs entirely and documented
+`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` in its place. All of that flips back:
+
+- `mkdocs/docs/admin/ingestion.md`, `monolith.md`, `authentication.md`, `api-keys.md` — every
+  `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` mention reverts to the unstamped knob, and the backfill /
+  rolling-upgrade / conflict-guard-closes-the-gap prose is deleted.
+- `mkdocs/docs/admin/flight-sql.md` and `monolith.md` — the `*_UNSTAMPED_AUDIENCE` env-table rows
+  come back, with their descriptions extended: the knob now has **two** consumers (Prong B's
+  query-time fallback and the `blocks` materialization default), it is read by the materializing
+  binaries as well as the query ones, and an empty value means `unassigned` there.
+- `mkdocs/docs/admin/functions-reference.md` — the `list_partitions` `'global'`-row note reverts to
+  the unstamped-audience rule.
+- `CHANGELOG.md` — the removed-env-var startup-failure notice is deleted; the Unreleased entries
+  amended by this branch (Prong A, Prong B, the stamping entry, the Ingestion API breaking-change
+  clause) revert to describing the unstamped state, and the deleted "no retro-stamp" known-gap
+  bullet comes back. The new Analytics entry keeps its column/hash-bump content and gains the
+  operational rule: *changing the configured default audience does not retroactively relabel
+  already-written partitions — regenerate the six views (§7) over any range that should reflect the
+  new default.*
+- `mkdocs/docs/query-guide/schema-reference.md` and `doc/how_to_query/README.md` — the `audience`
+  rows stay; only the prose sourcing the value ("written from the authenticated ingestion
+  credential or `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`") is rewritten to "written from the
+  authenticated ingestion credential, or the deployment's unstamped-audience default when the
+  credential carries none".
+- `tasks/data_isolation/audience_based_access_control_plan.md` — step 15 stays marked landed.
