@@ -107,7 +107,7 @@ and before the unresolved-selection check) rather than leaving them live and mer
 
 ### Horizontal-group children
 
-HG children are edited by `ChildEditorView` (`HorizontalGroupCell.tsx:278-393`), which renders name +
+HG children are edited by `ChildEditorView` (`HorizontalGroupCell.tsx:279-396`), which renders name +
 `DataSourceField` + the type editor — it has **no** `CellTimeRangeField` today (`CellEditor.tsx` is
 `CellTimeRangeField`'s only render site). So there is nothing to *hide* for children — but the override
 is nevertheless already honoured for them (see the next paragraph), which means the working feature is
@@ -181,7 +181,14 @@ const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 `shouldShowTimeRange(child, variables, defaultDataSource)`. Like `CellEditor`, it **already receives
 both** `variables: Record<string, VariableValue>` and `defaultDataSource?: string`, so this needs no new
 props — only the two imports (`CellTimeRangeField` from `@/components/CellTimeRangeField`, and
-`shouldShowTimeRange` added to the existing `../notebook-utils` import at `HorizontalGroupCell.tsx:33`).
+`shouldShowTimeRange` added to the existing `../notebook-utils` import at `HorizontalGroupCell.tsx:35`).
+The field's `value` is `value={'timeRange' in child ? child.timeRange : undefined}` — `CellEditor.tsx:150`
+supplies the equivalent value via an explicit `(cell as QueryBackedCellConfig)` cast after the same `in`
+check, but the cast is unnecessary: verified against HEAD's types, `'timeRange' in child` alone narrows
+`child` enough for `child.timeRange` to type-check directly (`QueryBackedCellConfig` is mixed into every
+`CellConfig` union member that declares `timeRange`, so TypeScript's `in`-narrowing already excludes the
+members that don't). That's what keeps the two-import claim true — no `QueryBackedCellConfig` import
+needed here.
 
 Placement mirrors `CellEditor.tsx:148-153`: immediately after the existing
 `shouldShowDataSource(child.type) && <DataSourceField … />` block (`HorizontalGroupCell.tsx:355-367`)
@@ -335,10 +342,11 @@ which is right for that single-query shape. Inspecting per-query sources would m
    to `shouldShowTimeRange`.
 7. **`analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`** — import
    `CellTimeRangeField` from `@/components/CellTimeRangeField` and add `shouldShowTimeRange` to the
-   existing `../notebook-utils` import (line 33). In `ChildEditorView`, render `<CellTimeRangeField>`
+   existing `../notebook-utils` import (line 35). In `ChildEditorView`, render `<CellTimeRangeField>`
    gated on `shouldShowTimeRange(child, variables, defaultDataSource)` — both already props — placed
    right after the `shouldShowDataSource(child.type) && <DataSourceField … />` block (lines 355-367)
-   and before `<meta.EditorComponent …>`. Wire `onChange` through the same children-map pattern
+   and before `<meta.EditorComponent …>`. Pass `value={'timeRange' in child ? child.timeRange : undefined}`
+   (no cast needed — see Design → "Second caller"). Wire `onChange` through the same children-map pattern
    `DataSourceField` uses there: `config.children.map((c) => c.name === child.name ? { ...c, timeRange: tr } : c)`,
    then `onChange({ ...config, children: newChildren })`. No new props.
 8. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`** — update both the
@@ -359,11 +367,15 @@ which is right for that single-query shape. Inspecting per-query sources would m
    cell carrying a `timeRange` override returns the global range for `result.timeRange` (the override
    is ignored), while the existing remote-source case alongside it keeps proving the override is
    honoured.
-11. **`analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`** — one
-   small case in the existing `describe('child editor view')` block (next to "DataSourceField not shown
-   for markdown type", line ~628): the **Query Time Range** label renders for a remote-source child and
-   is absent for a child with `dataSource: 'notebook'` (`makeChild` already takes config overrides, and
-   `createEditorProps` already accepts `defaultDataSource`/`showNotebookOption`).
+11. **`analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`** — two
+   small cases in the existing `describe('child editor view')` block (next to "DataSourceField not shown
+   for markdown type", line ~628): (a) the **Query Time Range** label renders for a remote-source child
+   and is absent for a child with `dataSource: 'notebook'` (`makeChild` already takes config overrides,
+   and `createEditorProps` already accepts `defaultDataSource`/`showNotebookOption`); (b) on a two-child
+   group, typing into the field's **From** input for the selected child asserts `onChange` was called
+   with the edited child's `timeRange` set and the sibling child left unchanged — mirroring "name change
+   updates config with sanitized name" (line 592) and "remove button removes child from config" (line
+   518), which assert the same way on the same `config.children.map`/`onChange` pattern this field reuses.
 12. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
    that for cells whose data source resolves to `notebook`, the field is hidden *and* any existing
    override is ignored entirely — `$from`/`$to` and the display axis follow the screen's global range —
@@ -373,12 +385,13 @@ which is right for that single-query shape. Inspecting per-query sources would m
    check skips the `cellTimeRange` clauses for a `notebook`-source cell — both need a "does not apply
    when the cell's data source resolves to `notebook`" qualifier. Amend the bullet saying the field is
    shown "for every cell type that supports it" (`variables.md:121`) to note it is not shown when the
-   cell's data source resolves to `notebook`. Also update
+   cell's data source resolves to `notebook`, and that it is also offered for horizontal-group children
+   whose query runs server-side (hidden there too under the same rule). Also update
    `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every query-backed cell at
    the shared `timeRange` field, and `cell-types.md:114`, which tells the Flame Graph cell's author to
    "use the cell-level `timeRange` field instead" to change what the cell's SQL fetches — both with the
    same `notebook`-source qualifier. Add to the Horizontal Group "Features" list
-   (`cell-types.md:181`) that each child also has its own query time range.
+   (`cell-types.md:186`) that each child also has its own query time range.
 13. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing the hidden
    field, the behaviour change for cells already carrying a saved override, and the field now being
    offered on server-query HG children.
@@ -460,7 +473,7 @@ which is right for that single-query shape. Inspecting per-query sources would m
   (`execution.md` is left as-is: its "Local WASM Query Engine" section already doesn't mention the
   per-cell override, so there's nothing there to correct.)
 - `mkdocs/docs/web-app/notebooks/cell-types.md` — the Horizontal Group "Features" bullet saying each
-  child has "independent execution, state, and data source settings" (line ~181) also gets the per-cell
+  child has "independent execution, state, and data source settings" (line 186) also gets the per-cell
   query time range. (Nothing in `mkdocs/docs/web-app/notebooks/` currently claims HG children *lack*
   the field — checked — so there is no wrong statement to correct, only this one to extend.)
 - `CHANGELOG.md` under `## Unreleased` → `**Web App:**`: hide the per-cell **Query Time Range** field,
@@ -473,9 +486,10 @@ which is right for that single-query shape. Inspecting per-query sources would m
 
 Unit tests in `notebook-utils.test.ts`, across both affected describe blocks, plus one case each in
 `useCellExecution.test.ts` and `notebook-cell-view.test.ts` for the two call sites whose correctness
-isn't covered by the `notebook-utils.ts` unit tests alone, and one small case in
-`HorizontalGroupCell.test.tsx` for the newly added field — keep them proportional to the change; no new
-CellEditor render test is warranted for a visibility flag whose rule is already unit-tested:
+isn't covered by the `notebook-utils.ts` unit tests alone, and two small cases in
+`HorizontalGroupCell.test.tsx` for the newly added field — its visibility gate and its `onChange` wiring
+are both new surface, the latter not covered anywhere else — keep them proportional to the change; no
+new CellEditor render test is warranted for a visibility flag whose rule is already unit-tested:
 
 **`shouldShowTimeRange`:**
 
@@ -519,8 +533,15 @@ CellEditor render test is warranted for a visibility flag whose rule is already 
 
 - One case in the existing `describe('child editor view')` block (alongside "DataSourceField not shown
   for markdown type"): with a `table` child, the **Query Time Range** label is present; with the same
-  child carrying `dataSource: 'notebook'`, it is absent. That's the whole new surface — the gate's logic
-  itself is covered by the `shouldShowTimeRange` unit tests above, so nothing more is warranted here.
+  child carrying `dataSource: 'notebook'`, it is absent. The gate's logic itself is covered by the
+  `shouldShowTimeRange` unit tests above, so nothing more is warranted for visibility.
+- A second case, on a **two-child** group: type into the field's **From** input for the selected child
+  and assert `onChange` was called with `expect.objectContaining({ children: [...] })` where the edited
+  child carries the new `timeRange` and the sibling is unchanged — mirroring "name change updates config
+  with sanitized name" (line 592) and "remove button removes child from config" (line 518) in the same
+  describe block. This is the one piece of genuinely new production logic in step 7 (the `value` read
+  and the children-map `onChange` mutation) that no other planned test touches; a mis-wire here (wrong
+  child, dropped siblings, missing `onChange`) would silently corrupt saved screen JSON.
 
 Manual check: open a notebook, add a table cell with a **Query Time Range** override set, confirm it
 narrows the result; switch the cell's data source to **Notebook**, confirm the field disappears *and*
