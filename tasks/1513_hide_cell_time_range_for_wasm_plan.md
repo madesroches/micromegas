@@ -76,9 +76,11 @@ always a real (remote) data source — `notebook` is only ever selectable per-ce
 For a `notebook`-source cell the first of these is the only live path, and only through macro
 substitution: the SQL string a WASM cell runs has `$from`/`$to` replaced by the resolved override, so
 an override on a WASM cell is not *strictly* inert — it moves `$from`/`$to` if the cell author wrote
-`WHERE t BETWEEN '$from' AND '$to'` by hand. What's absent is the automatic enforcement the server
-gives every remote view for free. See [Trade-offs](#trade-offs) for why this plan leaves that path
-alone.
+`WHERE t BETWEEN '$from' AND '$to'` by hand. That residual path buys nothing, though: whatever
+expression the author would type into the cell's `from`/`to` they can type directly into the local
+SQL instead, and the override still can't reach rows the upstream remote fetch never pulled. What's
+absent is the automatic enforcement the server gives every remote view for free, and there's no
+capability to preserve — hence hiding rather than annotating the field.
 
 ### Horizontal-group children
 
@@ -181,18 +183,20 @@ which is right for that single-query shape. Inspecting per-query sources would m
 
 ## Trade-offs
 
-- **Hide vs. show-disabled.** A disabled-but-visible field would keep a stale override readable, but
-  it can't be cleared and adds a `disabled`/note prop to `CellTimeRangeField` for a control that is
-  advisory at best. The issue asks for hiding; hiding also matches how `shouldShowDataSource` already
-  removes irrelevant fields rather than greying them out.
+- **Hide vs. show-disabled vs. keep-and-annotate.** Annotating the field ("for notebook cells this
+  only sets `$from`/`$to`") was considered and rejected: that use is redundant — the same expression
+  can be written straight into the local SQL — so the annotation would document a feature with no
+  reason to exist. A disabled-but-visible field keeps a stale override readable but uncleatable, and
+  adds a prop to `CellTimeRangeField` for an advisory control. Hiding matches how
+  `shouldShowDataSource` already removes irrelevant fields rather than greying them out.
 - **UI-only vs. also ignoring the override at execution.** This plan does **not** change
   `resolveQueryTimeRange` or `useCellExecution`. A cell that already has an override saved and is
   later switched to `notebook` keeps feeding that range into `$from`/`$to` for its locally-executed
-  SQL. Forcing the global range for notebook-source cells would make "hidden" and "no effect"
-  identical, but it would silently break any notebook that hand-wrote
-  `WHERE t BETWEEN '$from' AND '$to'` against a local table — a real, if narrow, capability, and a
-  behaviour change on saved user configs. Keeping execution untouched makes this a pure visibility
-  change with no migration risk. Flagged in [Open Questions](#open-questions).
+  SQL — an invisible-but-live effect, the one wart of the UI-only approach. Forcing the global range
+  for notebook-source cells would make "hidden" and "no effect" identical, at the cost of a silent
+  behaviour change on saved configs that hand-wrote `WHERE t BETWEEN '$from' AND '$to'` against a
+  local table. Keeping execution untouched makes this a pure visibility change with no migration
+  risk; the residual path stays reachable only by editing the screen JSON.
 - **Not attempting to make the override work for WASM.** Enforcing a range locally would require a
   per-table time-column declaration (registered alongside `engine.register_table`) plus a rewrite that
   injects the bound — and even then it could only narrow within whatever range the *upstream* remote
@@ -234,10 +238,11 @@ previously entered value intact.
 
 ## Open Questions
 
-1. Should a `notebook`-source cell also **ignore** a previously saved `timeRange` at execution
-   (forcing the global range), so hidden and inert mean the same thing? This plan says no — it would
-   change behaviour for hand-written `$from`/`$to` filters on local SQL. Confirm before implementing
-   if you'd rather have the stricter semantics.
-2. Should HG children gain the **Query Time Range** field at all? They don't have it today, so #1513
+1. Should HG children gain the **Query Time Range** field at all? They don't have it today, so #1513
    doesn't apply to them — but the gap is worth its own issue if per-cell ranges are meant to work
    inside groups.
+
+**Settled:** whether a `notebook`-source cell should also *ignore* a previously saved `timeRange` at
+execution — no. Hiding the control is the fix; execution stays as-is (see Trade-offs). The
+`$from`/`$to`-only path it leaves behind is redundant with writing the expression directly in the
+local SQL, so nothing is lost by making it unreachable from the UI.
