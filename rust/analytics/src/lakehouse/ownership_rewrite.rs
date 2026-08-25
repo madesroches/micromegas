@@ -208,10 +208,14 @@ impl OwnershipRewrite {
             return lit(false);
         }
         let raw = Expr::Column(Column::new(Some(table_name.clone()), "audience"));
-        // This rule runs after DataFusion's own TypeCoercion pass, so a Dictionary(Int32, Utf8)
-        // column (log_entries/measures/log_stats) must be cast to compare against Utf8 literals.
-        // blocks/processes/streams carry plain Utf8 -- skip the no-op cast there, as §4 already
-        // does for `processes.process_id`, so PruningPredicate sees a bare column reference.
+        // This rule runs after DataFusion's own TypeCoercion pass, so the Dictionary(Int32, Utf8)
+        // column every one of the six views carries must be cast to compare against Utf8
+        // literals. The cast is not a pruning barrier: `PruningPredicate` rewrites `cast(col) op
+        // lit` by applying the same cast to the column's min/max statistics
+        // (`datafusion-pruning`'s `rewrite_expr_to_prunable`), and a Dictionary -> Utf8 cast is on
+        // its supported list (`verify_support_type_for_prune` unwraps dictionaries), with `IN`
+        // lists up to 20 items expanded to such comparisons. The bare-column arm below is
+        // therefore just a no-op-cast skip, kept for a future view that carries plain `Utf8`.
         let lhs = if field.data_type() == &DataType::Utf8 {
             raw
         } else {

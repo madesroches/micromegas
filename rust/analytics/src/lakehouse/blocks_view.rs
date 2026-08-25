@@ -312,11 +312,20 @@ pub fn blocks_view_schema() -> Schema {
         // Appended last (#1482): the audience of the owning process, extracted once here from
         // Postgres and propagated structurally into every downstream view. Never `NULL` in
         // practice -- every process carries one, always (see `audience.rs`, `audience_backfill.rs`).
-        Field::new("audience", DataType::Utf8, false),
+        // Dictionary-encoded like every other view's audience column (`log_entries_table.rs`,
+        // `metrics_table.rs`, `log_stats_view.rs`): one distinct value per partition in practice.
+        // `sql_arrow_bridge` delivers it as plain `Utf8` (its mapping is keyed on the Postgres
+        // type name), so `metadata_partition_spec::cast_to_file_schema` casts it to this declared
+        // type before the write.
+        Field::new(
+            "audience",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
     ])
 }
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![4] // Bumped from vec![3] for the first-class `audience` column (#1482)
+    vec![5] // Bumped from vec![4] for the dictionary-encoded `audience` column (#1482)
 }

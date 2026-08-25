@@ -53,6 +53,13 @@ Implementation Steps, every entry in Files to Modify, and every Documentation an
 have landed, and step 15 of `tasks/data_isolation/audience_based_access_control_plan.md` is marked
 as landed. Nothing in the original design is outstanding.
 
+One follow-up landed on top of that first cut and is folded into §1/§2/§5 below: the column is
+declared `Dictionary(Int32, Utf8)` rather than plain `Utf8`, so its type is the same on all six
+views. That added `metadata_partition_spec::cast_to_file_schema` (the `blocks` batch is inferred
+from Postgres, which can only produce `Utf8` for a `TEXT` subselect), the `arrow_cast` wrapper on
+`processes`/`streams` that `log_stats` already had, and one more `blocks_file_schema_hash()` bump
+(`vec![4]` → `vec![5]`).
+
 **What is *not* done is the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read)**
 at the end of this document. It revises the design *after* the fact, around one rule: *when a
 process has no audience, use the default.* It keeps §1–§5 (the physical column, the direct
@@ -454,11 +461,40 @@ Consequences worth stating plainly:
 ```
 
 ```rust
-Field::new("audience", DataType::Utf8, false),   // appended last, NOT NULL
+// appended last, NOT NULL, dictionary-encoded like every other view's audience column
+Field::new(
+    "audience",
+    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+    false,
+),
 ```
 
 Both appends are last and move in lock-step (positional write, Current State). The batch column
-arrives as nullable `Utf8` from the PG bridge; the declared field is non-nullable. **The parquet
+arrives as nullable `Utf8` from the PG bridge; the declared field is non-nullable.
+
+**The declared type is a dictionary, so the batch needs one cast.** `sql_arrow_bridge`'s mapping
+is keyed on the Postgres type name alone (`make_column_reader`, `sql_arrow_bridge.rs:319-366`), so
+a `TEXT`-typed subselect result can only ever arrive as plain `Utf8` — it cannot know the column is
+declared narrower downstream. `metadata_partition_spec::cast_to_file_schema` closes that gap: after
+`rows_to_record_batch`, each column whose type differs from the declared file schema's field at the
+same position is `cast` to it, and the batch is rebuilt (`flush_chunk` gains a `&Schema`
+parameter). Positional, matching how the parquet writer zips declared fields against batch columns
+with no name check; nullability and metadata come from the *batch*, so this stays a pure type
+alignment and leaves the `NOT NULL` verdict to the guard below. It is a no-op for every other
+`blocks` column, and it is what makes the declared schema authoritative for the one view whose
+batch schema is inferred rather than declared.
+
+Dictionary-encoding it is not cosmetic, but neither is it a disk-size argument (parquet
+dictionary-encodes a low-cardinality `Utf8` column anyway): it makes the column the same type on
+all six views — `log_entries`/`measures` build it with a `StringDictionaryBuilder` (§3) and
+`log_stats` casts it (§2) — which keeps `OwnershipRewrite::audience_column_predicate` (§5) on one
+branch, keeps the in-memory footprint at one key per row for a column holding one distinct value
+per partition, and matches the `process_id` treatment in those same schemas. It costs no pruning:
+`PruningPredicate` rewrites `cast(col) op lit` by applying the same cast to the column's min/max
+statistics (`rewrite_expr_to_prunable`, `datafusion-pruning-54.1.0/src/pruning_predicate.rs:1117`),
+`Dictionary` → `Utf8` is on its supported list (`verify_support_type_for_prune`, `:1214-1237`,
+which unwraps dictionaries), and an `IN` list of up to 20 items is expanded into exactly those
+comparisons (`:1465`). **The parquet
 writer does not enforce that.** For a required top-level leaf `ArrowLevels` has no definition
 levels and `write_leaf` treats every index as non-null (`parquet-58.3.0/src/arrow/arrow_writer/levels.rs:655-690`),
 so a `NULL` would be silently written as `""` — a mislabelled row, not an error. Therefore
@@ -489,7 +525,7 @@ Two things the guard forces into the open:
   `blocks_view_schema()` labels it `Utf8, false` while it is `NULL` for every OTLP and root
   process; the guard as specified would reject essentially every fresh `blocks` partition. Flip
   the declaration to `true` in the same edit that appends `audience` (`blocks_view.rs:298`) — free,
-  since the hash is bumping to `vec![4]` anyway, and both readers keep working:
+  since the hash is bumping anyway, and both readers keep working:
   `partition_source_data.rs:201-206` (`is_empty()` on the accessor's value; a real null reads as
   `""` through `StringColumnAccessor`) and `metadata.rs:349` (`is_null(0)`). It is the only field
   that is null in practice (Current State — the DDL has no `NOT NULL` anywhere on these tables, so
@@ -497,10 +533,25 @@ Two things the guard forces into the open:
   already checked by `RecordBatch::try_new`, so the guard can be universal.
 
 The correlated scalar subselect runs once per block row over an insert-hour window (unlike
-`audience_guard.rs`'s point lookups). `unnest` of a handful of properties per row is cheap, but
-the `LEFT JOIN LATERAL (...) aud ON true` form `audience_guard.rs:141-177` already uses is an
-equivalent alternative if the planner disagrees — either way the fragment comes from
-`audience_subselect()` below, so switching is a one-site change.
+`audience_guard.rs`'s point lookups). `unnest` of a handful of properties per row is cheap, and
+this is not a `property_get` comparison at all: Postgres has no such function, the properties there
+are a `micromegas_property[]` composite array, and the win over today's read path is *frequency*
+plus plan shape — once per block row at materialization instead of per process row on every query,
+with the join and the per-process aggregate gone and the predicate prunable (§5).
+
+If the subselect ever does show up in a materialization profile, note which alternative actually
+differs. The `LEFT JOIN LATERAL (...) aud ON true` form `audience_guard.rs:141-177` already uses is
+*the same cost class* — once per output row either way. What changes the count is hoisting the
+extraction to once per **process** row scanned, by taking `processes` as a derived table:
+
+```sql
+ FROM blocks, streams,
+      (SELECT process_id, ..., <audience_subselect> AS audience FROM processes) processes
+```
+
+A process with N blocks in the insert-hour is unnested N times today and once that way. Both forms
+take the fragment from `audience_subselect()` below, so either switch is a one-site change; neither
+is worth making pre-emptively.
 
 **One constant.** A new top-level `rust/analytics/src/audience.rs` re-exports the telemetry
 constant (`pub use micromegas_telemetry::property_names::PROPERTY_AUDIENCE as AUDIENCE_PROPERTY;`)
@@ -521,19 +572,21 @@ equivalent; leave it (optional DRY follow-up).
 
 Append one aggregate to each transform **and** merge query:
 
-- `processes_view.rs`: `max(audience) as audience`, appended **last** in the SELECT list of both
-  the transform (`:25-45`, after `last_block_end_time`) and the merge query (`:47-68`), so the
-  inferred schema grows only at the end. Note the column is referenced **unquoted**: the
+All three take the same expression, `arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as
+audience`, for the same reason: `max` **coerces a dictionary input to its value type**
+(`get_min_max_result_type`, `min_max.rs:58-77`, called from `Max::coerce_types` at `:360`), so a
+bare `max(audience)` over §1's dictionary column would infer `Utf8` and silently break the
+one-type-on-all-six-views property the column is declared for. `process_id` in these same views
+stays `Dictionary(Int32, Utf8)` without a cast only because it is a `GROUP BY` key.
+
+- `processes_view.rs`: appended **last** in the SELECT list of both the transform (`:25-45`, after
+  `last_block_end_time`) and the merge query (`:47-68`), so the inferred schema grows only at the
+  end. Note the column is referenced **unquoted**: the
   neighbouring `"processes.exe"`-style names are quoted because the dots are literal characters in
   the `blocks` field names; `audience` has no prefix and `"processes.audience"` would not resolve.
 - `streams_view.rs`: same, after `last_update_time` (transform `:25-38`, merge `:40-54`).
-- `log_stats_view.rs`: `arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience`,
-  appended after `count` in both the transform (`:32-45`) and the merge query (`:50-59`). The cast
-  is not optional: `max` **coerces a dictionary input to its value type** (`get_min_max_result_type`,
-  `min_max.rs:58-77`, called from `Max::coerce_types` at `:360`), so a bare `max(audience)` would
-  infer `Utf8` — unlike `process_id`
-  in the same view, which stays `Dictionary(Int32, Utf8)` only because it is a `GROUP BY` key. The
-  cast keeps the view's two process-scoped columns the same type and the column dictionary-cheap.
+- `log_stats_view.rs`: appended after `count` in both the transform (`:32-45`) and the merge query
+  (`:50-59`).
   Left out of the `GROUP BY` on purpose: audience is functionally determined by `process_id`, so
   grouping on it cannot change row counts, and leaving the key list alone keeps the declared
   `(time_bin, process_id, level, target)` merge sort order (`log_stats_view.rs:84-89`) exactly as
@@ -580,7 +633,8 @@ property of `SqlBatchView` schema inference, not of the data; document it as suc
   array goes **last** in the `finish` column vector (positional write).
 - `SCHEMA_VERSION`: `log_view.rs` 6 → 7, `metrics_view.rs` 7 → 8. Those two files change only that
   constant — they delegate everything else to the `*_table_schema()` functions.
-- `blocks_file_schema_hash()`: `vec![3]` → `vec![4]`.
+- `blocks_file_schema_hash()`: `vec![3]` → `vec![5]` (`vec![4]` was the first cut on the
+  branch, before the column was re-declared as a dictionary).
 
 ### 4. Removing `MICROMEGAS_UNSTAMPED_AUDIENCE` and `OwnerAudience::Unstamped`
 
@@ -678,10 +732,10 @@ fn audience_column_predicate(&self, table_name: &TableReference, field: &Field) 
         return lit(false);
     }
     let raw = Expr::Column(Column::new(Some(table_name.clone()), "audience"));
-    // This rule runs after DataFusion's own TypeCoercion pass, so a Dictionary(Int32, Utf8)
-    // column (log_entries/measures/log_stats) must be cast to compare against Utf8 literals.
-    // blocks/processes/streams carry plain Utf8 -- skip the no-op cast there, as §3 already
-    // does for `processes.process_id`, so PruningPredicate sees a bare column reference.
+    // This rule runs after DataFusion's own TypeCoercion pass, so the Dictionary(Int32, Utf8)
+    // column all six views carry must be cast to compare against Utf8 literals. Not a pruning
+    // barrier -- see below. The bare-column arm is a no-op-cast skip, kept for a future view
+    // that carries plain Utf8.
     let lhs = if field.data_type() == &DataType::Utf8 { raw } else { cast(raw, DataType::Utf8) };
     lhs.in_list(
         audiences.iter().map(|a| lit(ScalarValue::Utf8(Some(a.clone())))).collect(),
@@ -699,9 +753,14 @@ existing `process_id` predicate already resolves against
 mapping is the one `resolved_predicate` uses at `:219-225`; `get_file_schema()` returns
 `Arc<Schema>` (`view.rs:71`), so `field_with_name` yields `Result<&Field, ArrowError>`; the only
 new import is `arrow::datatypes::Field` (the file imports `DataType` alone today, `:94`). The `IN`
-list is the shape Parquet's `PruningPredicate` can evaluate against row-group
-statistics; whether pruning actually engages through the `cast` on dictionary views is for the
-pruning follow-up to verify, not a claim this change makes.
+list is the shape Parquet's `PruningPredicate` can evaluate against row-group statistics, and the
+`cast` every view now needs does not stand in its way: `rewrite_expr_to_prunable`
+(`datafusion-pruning-54.1.0/src/pruning_predicate.rs:1117`) handles `cast(col) op lit` by applying
+the same cast to the column's min/max statistics, `verify_support_type_for_prune` (`:1214-1237`)
+unwraps dictionaries and accepts `Dictionary(_, Utf8)` → `Utf8`, and an `IN` list of at most 20
+items is expanded into exactly those comparisons (`:1465`). What is *not* verified here is that
+`blocks`/`processes`/`streams` row groups actually carry useful audience statistics in a given
+deployment — that is a data property, not a planner one.
 
 The per-process JIT instances of `log_entries` and `measures` share `log_table_schema()` /
 `metrics_table_schema()` with their global instances (`ViewMaker::get_schema`, `log_view.rs:69-71` /
@@ -747,7 +806,7 @@ not one with two labels. Per-row filtering hands each row to the audience that p
 
 ### 7. Migration: bump all six, regenerate over the retention window
 
-**Hashes.** `blocks_file_schema_hash()` `vec![3]` → `vec![4]`; `log_view.rs` `SCHEMA_VERSION`
+**Hashes.** `blocks_file_schema_hash()` `vec![3]` → `vec![5]`; `log_view.rs` `SCHEMA_VERSION`
 6 → 7; `metrics_view.rs` 7 → 8; `processes`/`streams`/`log_stats` bump automatically with their
 inferred schema. On deploy every pre-existing partition of the six views goes invisible.
 
@@ -893,13 +952,16 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 9. `lakehouse/blocks_view.rs`: `format!` the subselect into `data_sql` (today a plain `r#"…"#`
    literal; the `blocks` query binds only `$1`/`$2`, `metadata_partition_spec.rs:155-156`, so the
    fragment is inlined, not bound),
-   append `Field::new("audience", Utf8, false)` to `blocks_view_schema()`, re-declare
-   `processes.parent_process_id` nullable (`:298`), `blocks_file_schema_hash()` → `vec![4]`
-   (`:309`). `lakehouse/write_partition.rs`: `write_rows_and_track_times` gains a `&Schema`
+   append `Field::new("audience", Dictionary(Int32, Utf8), false)` to `blocks_view_schema()`,
+   re-declare `processes.parent_process_id` nullable (`:298`), `blocks_file_schema_hash()` →
+   `vec![5]` (`:309`). `lakehouse/metadata_partition_spec.rs`: `cast_to_file_schema` plus the
+   `&Schema` parameter on `flush_chunk`, so the PG-inferred `Utf8` column reaches the writer as
+   the declared dictionary (§1). `lakehouse/write_partition.rs`: `write_rows_and_track_times` gains a `&Schema`
    parameter (passed from `:926`'s declared schema) and the non-nullable-column guard (§1), error
    naming view + column + insert range; update its three test callers.
-10. `lakehouse/processes_view.rs`, `lakehouse/streams_view.rs`: append `max("audience") as audience`
-    to transform + merge queries.
+10. `lakehouse/processes_view.rs`, `lakehouse/streams_view.rs`: append
+    `arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience` to transform + merge
+    queries.
 11. `metadata.rs`: `ProcessMetadata::audience: Arc<str>`; populate it in
     `process_metadata_from_row` (extend `find_process`'s SELECT) and in
     `find_process_with_latest_timing` (extend its SELECT).
@@ -1026,6 +1088,7 @@ checklist. Steps 25–27 revert, 28–32 build, 33–34 finish — and 25–27 m
 **Analytics — materialization**
 - `rust/analytics/src/lakehouse/blocks_view.rs`
 - `rust/analytics/src/lakehouse/write_partition.rs` (nullability guard)
+- `rust/analytics/src/lakehouse/metadata_partition_spec.rs` (`cast_to_file_schema`)
 - `rust/analytics/src/lakehouse/processes_view.rs`
 - `rust/analytics/src/lakehouse/streams_view.rs`
 - `rust/analytics/src/lakehouse/log_stats_view.rs`
@@ -1306,9 +1369,15 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   test) or add a sibling: a source batch whose process lacks `micromegas.audience` is rejected
   naming the `process_id`; one that carries it is inserted with the property intact.
 - **Unit-level**: a pure test over `audience_column_predicate` for the empty and non-empty
-  audience sets and for a `Utf8` vs. `Dictionary` field (cast present only for the latter), one
+  audience sets and for a `Utf8` vs. `Dictionary` field (cast present only for the latter — no
+  real view takes the `Utf8` arm any more, so this is the arm's only coverage), one
   over `WriteAudience::default_from_env` (unset ⇒ `public`, malformed ⇒ `Err`), and
   `resolve_write_audience_tests.rs:97-105`'s malformed case flipped to "rejects".
+- **Type alignment**: `tests/metadata_partition_spec_tests.rs` over `cast_to_file_schema` — a
+  `Utf8` column reaching a declared `Dictionary(Int32, Utf8)` is cast (values intact), declared
+  non-nullability is *not* applied to the batch (that verdict stays with the write path's guard, so
+  a null must survive to reach it), an all-matching schema is returned untouched, and a column past
+  the end of the declared schema passes through.
 - **Backfill**: a DB-backed test in `rust/ingestion/tests/` (the SQL is the thing under test) —
   insert a stamped and an unstamped process (one with `properties = NULL`), run
   `backfill_default_audience`, assert the unstamped ones now carry the configured default and the
@@ -1517,7 +1586,7 @@ is not to avoid `format!` but to keep an operator-supplied string out of the SQL
 `audience.rs` a second helper next to `audience_subselect` — `coalesced_audience_subselect(properties_expr, param)`
 — so all three read sites share one shape.
 
-The Arrow field stays `Field::new("audience", Utf8, false)` exactly as designed — `COALESCE`
+The Arrow field stays `Field::new("audience", Dictionary(Int32, Utf8), false)` exactly as designed — `COALESCE`
 guarantees the batch never carries a null in that column, so §1's nullability guard in
 `write_partition.rs` keeps its job as a safety net (now guarding against a bug in the `COALESCE`
 expression or a future producer that bypasses it, not against a routine "unstamped process" case).

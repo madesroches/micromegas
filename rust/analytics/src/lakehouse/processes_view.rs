@@ -40,7 +40,7 @@ SELECT process_id,
        max(insert_time) as last_update_time,
        max(end_ticks) as last_block_end_ticks,
        max(end_time) as last_block_end_time,
-       max(audience) as audience
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM blocks
 GROUP BY process_id
         ;"#,
@@ -63,7 +63,7 @@ SELECT process_id,
        max(last_update_time) as last_update_time,
        max(last_block_end_ticks) as last_block_end_ticks,
        max(last_block_end_time) as last_block_end_time,
-       max(audience) as audience
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM {source}
 GROUP BY process_id
         ;"#,

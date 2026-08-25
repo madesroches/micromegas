@@ -33,7 +33,7 @@ SELECT stream_id,
        first_value("streams.insert_time") as insert_time,
        first_value("streams.format") as format,
        max(insert_time) as last_update_time,
-       max(audience) as audience
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM blocks
 GROUP BY stream_id
         ;"#,
@@ -49,7 +49,7 @@ SELECT stream_id,
        first_value(insert_time) as insert_time,
        first_value(format) as format,
        max(last_update_time) as last_update_time,
-       max(audience) as audience
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM {source}
 GROUP BY stream_id
         ;"#,
