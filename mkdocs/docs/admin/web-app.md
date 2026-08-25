@@ -182,6 +182,11 @@ for a non-admin as the knob-on case. See
 for the knob and [DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a)
 for the write policy the page's Share/Remove/Revoke controls drive.
 
+**Unavailable under `--disable-auth`.** The page's `/visible` and `/my-audiences` reads (and
+every write) 503 with `AUTH_DISABLED` in that mode, same as the admin key-management pages (see
+[`api-keys.md`](api-keys.md#web-app-admin-pages)); the page detects this and renders a single
+explanatory panel instead of the normal list, with no Add grant / Share / Mint / delete controls.
+
 **What a non-admin sees and may do**, once `MICROMEGAS_SELF_SERVICE_MINT` is on:
 
 - **See** every grant on each `(audience, axis)` pair they hold a matching grant on — including

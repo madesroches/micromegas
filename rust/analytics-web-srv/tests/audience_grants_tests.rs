@@ -190,6 +190,32 @@ async fn create_grant_403_for_non_admin_star_selector() {
 }
 
 // ---------------------------------------------------------------------------
+// A non-admin caller may never plant their own `mint`/`user:<email>` claim marker via Share --
+// rejected by `create_grant`'s own check, before the per-pair hold check that would otherwise
+// touch the pool (see the bug this guards against in `create_grant`'s doc comment).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_grant_403_for_non_admin_own_mint_claim_marker() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            r#"{"audience": "team-alpha", "axis": "mint", "selector": "user:reader@example.com"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
 // 400 validation -- checked before any DB access.
 // ---------------------------------------------------------------------------
 

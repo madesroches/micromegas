@@ -376,20 +376,24 @@ async fn caller_holds_pair(
 /// `POST {base_path}/api/audience-grants` -- creates (or reports the pre-existing) grant row.
 /// `201` when this call created it, `200` when it already existed.
 ///
-/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, three further checks
+/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, four further checks
 /// that need the parsed body and so live here rather than in the gate (Design §3):
 ///
 /// 1. `selector` must be `user:…`/`group:…` -- `*` is refused with 403, since a caller who can
 ///    read an audience must not be able to open it to every authenticated principal.
-/// 2. The caller must hold `(audience, axis)` via an identity selector ([`caller_holds_pair`]).
+/// 2. `(axis, selector)` must not be the caller's own `mint`/`user:<email>` claim marker -- that
+///    row is what `try_claim_and_mint` (`ingestion_keys.rs`) writes for a real claim, and letting
+///    Share plant a byte-identical one would make it permanently undeletable by its own creator
+///    and silently burn a `max_claims_per_caller` slot.
+/// 3. The caller must hold `(audience, axis)` via an identity selector ([`caller_holds_pair`]).
 ///    Delegation is per axis: a `read` grant lets you share `read`, a `mint` grant lets you share
 ///    `mint`, and neither confers the other.
-/// 3. The caller must be under `max_grants_per_caller` distinct rows already created
+/// 4. The caller must be under `max_grants_per_caller` distinct rows already created
 ///    (`created_by = <caller>`, counted across every pair, excluding the caller's own
 ///    `user:<email>` identity-selector rows -- see the check's own comment) -- otherwise a
 ///    caller who holds one grant could plant unlimited `group:<arbitrary-id>` rows on that pair.
 ///
-/// An admin bypasses all three checks entirely, exactly as before.
+/// An admin bypasses all four checks entirely, exactly as before.
 async fn create_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
@@ -405,6 +409,21 @@ async fn create_grant(
         if body.selector == "*" {
             return Err(AudienceGrantError::Forbidden(
                 "non-admin callers may not grant '*' (every authenticated principal) access"
+                    .to_string(),
+            ));
+        }
+        // Refuse a caller planting their own `mint`/`user:<email>` row via Share: it is
+        // byte-identical to the claim marker `try_claim_and_mint` (`ingestion_keys.rs`) writes,
+        // which makes it permanently undeletable by its own creator (`delete_grant`'s own-claim
+        // guard above) and lets it silently consume one of the caller's `max_claims_per_caller`
+        // slots without ever claiming anything. Route them to the mint endpoint instead.
+        if let Some(email) = &caller.email
+            && body.axis == "mint"
+            && body.selector == format!("user:{email}")
+        {
+            return Err(AudienceGrantError::Forbidden(
+                "you cannot create your own mint claim marker via self-service; claim the \
+                 audience through the mint route instead"
                     .to_string(),
             ));
         }

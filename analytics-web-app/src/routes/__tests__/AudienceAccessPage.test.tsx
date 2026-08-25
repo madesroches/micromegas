@@ -529,6 +529,63 @@ describe('AudienceAccessPage — non-admin, self-service disabled', () => {
   })
 })
 
+describe('AudienceAccessPage — auth disabled', () => {
+  it('renders a single explanatory panel, with no write controls, when /my-audiences 503s AUTH_DISABLED', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/visible')) {
+        return jsonResponse(200, [])
+      }
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(503, {
+          code: 'AUTH_DISABLED',
+          message: 'key management is unavailable when auth is disabled',
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Audience grant management is unavailable when authentication is disabled/)
+      ).toBeInTheDocument()
+    )
+    expect(screen.queryByRole('button', { name: /Add grant/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Mint ingestion key/i })).not.toBeInTheDocument()
+  })
+
+  it('renders the same panel when /visible 503s AUTH_DISABLED', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/visible')) {
+        return jsonResponse(503, {
+          code: 'AUTH_DISABLED',
+          message: 'key management is unavailable when auth is disabled',
+        })
+      }
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(503, {
+          code: 'AUTH_DISABLED',
+          message: 'key management is unavailable when auth is disabled',
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Audience grant management is unavailable when authentication is disabled/)
+      ).toBeInTheDocument()
+    )
+  })
+})
+
 describe('AudienceAccessPage — errors and reload', () => {
   it('shows an error banner with retry when the list read fails', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

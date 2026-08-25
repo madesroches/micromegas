@@ -549,7 +549,7 @@ them):
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403 |
 | `GET {base_path}/api/audience-grants/visible` | 200 `[{"audience","axis","selector","created_at","created_by"}]` — the caller-scoped read backing the Audience Access page's own list (below) |
-| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, and the caller's own email. |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
 
 There is no more paginated `GET` over the whole collection — that route is
 deleted outright. Listing arbitrary rows from SQL now goes through the

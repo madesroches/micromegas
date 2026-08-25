@@ -36,14 +36,14 @@ interface UseVisibleGrantsReturn {
   execute: () => Promise<void>
   isComplete: boolean
   isStreaming: boolean
-  error: { message: string } | null
+  error: { message: string; code?: string } | null
   getGrants: () => AudienceGrant[]
 }
 
 function useVisibleGrants(): UseVisibleGrantsReturn {
   const [isComplete, setIsComplete] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
-  const [error, setError] = useState<{ message: string } | null>(null)
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null)
   const [grants, setGrants] = useState<AudienceGrant[]>([])
 
   const execute = useCallback(async () => {
@@ -56,6 +56,7 @@ function useVisibleGrants(): UseVisibleGrantsReturn {
     } catch (err) {
       setError({
         message: err instanceof AudienceGrantError ? err.message : 'Failed to load grants',
+        code: err instanceof AudienceGrantError ? err.code : undefined,
       })
     } finally {
       setIsStreaming(false)
@@ -524,6 +525,12 @@ function AudienceAccessPageContent() {
   const [me, setMe] = useState<MyAudiences | null>(null)
   const [selfServiceOff, setSelfServiceOff] = useState(false)
   const [myAudiencesError, setMyAudiencesError] = useState<string | null>(null)
+  // Set from either `/visible` or `/my-audiences` when the server reports `AUTH_DISABLED`
+  // (`--disable-auth`'s `key_management_disabled_router` answers every `/api/audience-grants*`
+  // route with a fixed 503, but `/auth/me` still reports `is_admin: true` in that mode, so
+  // without this the page would otherwise render its normal admin/non-admin body against writes
+  // that all 503). Once set, the whole page body is replaced by a single explanatory panel.
+  const [authDisabled, setAuthDisabled] = useState(false)
 
   const [axisFilter, setAxisFilter] = useState<GrantAxis | null>(null)
   const [findText, setFindText] = useState('')
@@ -557,7 +564,9 @@ function AudienceAccessPageContent() {
       setSelfServiceOff(false)
       setMyAudiencesError(null)
     } catch (err) {
-      if (err instanceof AudienceGrantError && err.status === 403) {
+      if (err instanceof AudienceGrantError && err.code === 'AUTH_DISABLED') {
+        setAuthDisabled(true)
+      } else if (err instanceof AudienceGrantError && err.status === 403) {
         setMe(null)
         setSelfServiceOff(true)
         setMyAudiencesError(null)
@@ -586,6 +595,9 @@ function AudienceAccessPageContent() {
     void (() => {
       if (listQuery.isComplete) {
         if (listQuery.error) {
+          if (listQuery.error.code === 'AUTH_DISABLED') {
+            setAuthDisabled(true)
+          }
           setListError(listQuery.error.message)
         } else {
           setListError(null)
@@ -728,6 +740,24 @@ function AudienceAccessPageContent() {
   // audience options in the dialog's <select>. `me` being legitimately still-loading also
   // reads as null here, which is fine: Mint just doesn't show yet.
   const showMintButton = me !== null && (isAdmin || !selfServiceOff)
+
+  // `--disable-auth` reports `is_admin: true` from `/auth/me` while every
+  // `/api/audience-grants*` route 503s (`AUTH_DISABLED`) -- render one explanatory panel instead
+  // of the normal admin/non-admin body, since every write control below would also 503.
+  if (authDisabled) {
+    return (
+      <AuthGuard>
+        <PageLayout>
+          <div className="p-6 flex flex-col h-full items-center justify-center text-center">
+            <Users className="w-10 h-10 text-theme-text-muted opacity-40 mb-3" />
+            <p className="text-theme-text-muted max-w-md">
+              Audience grant management is unavailable when authentication is disabled.
+            </p>
+          </div>
+        </PageLayout>
+      </AuthGuard>
+    )
+  }
 
   return (
     <AuthGuard>
