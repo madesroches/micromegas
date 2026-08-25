@@ -1111,6 +1111,10 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_public_audience() {
 /// a `Forbidden` naming the limit on a claim of one more, distinct fresh audience; a caller one
 /// below the limit still succeeds. Best-effort under sequential use, per that knob's own doc
 /// comment.
+///
+/// The claim count is read from `ingestion_api_keys`, not `audience_grants` (see
+/// `try_claim_and_mint`'s own comment on that query), so seeding the pre-existing claim here
+/// writes a key row alongside the two grant rows -- exactly what a real claim leaves behind.
 #[ignore]
 #[tokio::test]
 async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
@@ -1131,6 +1135,19 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
         .await
         .expect("seed pre-existing claim");
     }
+    let seed_key_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
+         VALUES ($1, $2, $3, now(), $4, $5)",
+    )
+    .bind(seed_key_id)
+    .bind(vec![1u8; 32])
+    .bind(format!("seed-key-{seed_key_id}"))
+    .bind(&caller_email)
+    .bind(&preclaimed_audience)
+    .execute(&pool)
+    .await
+    .expect("seed pre-existing claim's key row");
 
     // At the limit (1 already-claimed audience, limit 1): one more fresh claim is denied.
     let over_limit_audience = format!("self-service-over-claims-limit-{}", uuid::Uuid::new_v4());
@@ -1182,6 +1199,75 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
 
     cleanup_audience(&pool, &preclaimed_audience).await;
     cleanup_audience(&pool, &under_limit_audience).await;
+}
+
+/// Regression for the `max_claims_per_caller` backstop being resettable: a non-admin deleting
+/// their own `mint`/`user:<email>` `audience_grants` row -- exactly what `delete_grant`'s
+/// non-admin own-row arm (`audience_grants.rs`) lets them do via "Remove my access" on the
+/// Audience Access page -- must not lower the claim count `try_claim_and_mint` checks. Before the
+/// fix the count was `SELECT COUNT(DISTINCT audience) FROM audience_grants WHERE axis = 'mint'
+/// AND selector = ... AND created_by = ...`, which dropped back down the moment that row was
+/// deleted, letting the caller claim a fresh audience again at the same limit. It is now read
+/// from `ingestion_api_keys`, which a non-admin has no route to delete from (`revoke_key` is
+/// `AdminUser`-gated), so the count survives the grant-row deletion.
+#[ignore]
+#[tokio::test]
+async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
+    let pool = live_pool().await;
+    let caller = unique_non_admin_user();
+    let caller_email = caller.email.clone().expect("caller has an email");
+
+    // Claim a first audience at a limit of 1.
+    let audience = format!("self-service-claim-then-delete-{}", uuid::Uuid::new_v4());
+    let state = IngestionKeysState {
+        pool: Some(pool.clone()),
+        default_audience: None,
+        self_service_mint_enabled: true,
+        max_claims_per_caller: 1,
+        max_keys_per_caller: 100,
+    };
+    let app = build_handler_router_with_user(state.clone(), caller.clone());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "claim-key", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["claimed"], true);
+
+    // Simulate `delete_grant`'s non-admin own-row deletion arm removing the caller's own
+    // `mint`/`user:<email>` row on the audience they just claimed -- "Remove my access."
+    sqlx::query(
+        "DELETE FROM audience_grants WHERE audience = $1 AND axis = 'mint' AND selector = $2",
+    )
+    .bind(&audience)
+    .bind(format!("user:{caller_email}"))
+    .execute(&pool)
+    .await
+    .expect("delete own mint grant row");
+
+    // The claim count must not have reset: a claim of a second, distinct fresh audience is still
+    // denied at the same limit of 1.
+    let second_audience = format!("self-service-claim-then-delete-2-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(state, caller);
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "second-claim-key", "audience": "{second_audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "deleting the caller's own mint grant row must not reset the claim count"
+    );
+
+    cleanup_audience(&pool, &audience).await;
+    cleanup_audience(&pool, &second_audience).await;
 }
 
 /// `max_keys_per_caller` (§3, §4): a caller who already holds the configured limit of live keys

@@ -717,12 +717,19 @@ async fn try_claim_and_mint(
         // Best-effort under concurrency: exact against another claim for *this same* audience
         // (serialized by the lock above), but not against concurrent claims by the same caller
         // for other, distinct fresh audience names, which take different locks.
+        //
+        // Counted from `ingestion_api_keys`, not `audience_grants`: this same function writes a
+        // `mint`/`user:<email>` `audience_grants` row for every claim below, but `delete_grant`
+        // (`audience_grants.rs`) lets a non-admin delete their own `user:<email>` row on any
+        // `(audience, axis)` pair -- including the `mint` row a claim just wrote -- as "remove my
+        // access." Counting that row would let the caller reset this bound at will: claim, delete
+        // the `mint` row, claim again. `ingestion_api_keys` has no such non-admin escape hatch --
+        // `revoke_key` is `AdminUser`-gated -- so the row this same claim inserts a few lines below
+        // persists for the count even after the `audience_grants` row is gone.
         if !caller.is_admin {
             let claim_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(DISTINCT audience) FROM audience_grants
-                 WHERE axis = 'mint' AND selector = $1 AND created_by = $2",
+                "SELECT COUNT(DISTINCT audience) FROM ingestion_api_keys WHERE created_by = $1",
             )
-            .bind(&selector)
             .bind(caller_email)
             .fetch_one(&mut *tx)
             .await?;
