@@ -596,13 +596,27 @@ async fn live_create_grant_403_when_max_grants_per_caller_reached() {
         "audience-grants-max-per-caller-test-{}",
         uuid::Uuid::new_v4()
     );
-    // Caller's own row: makes `caller_holds_pair(audience, "read")` true, and is itself the one
-    // row that already puts the caller at the (deliberately tiny) bound below.
+    // Caller's own identity row: makes `caller_holds_pair(audience, "read")` true. The cap query
+    // excludes rows whose selector is the caller's own `user:<email>` selector, so this row does
+    // not by itself count toward the bound below.
     insert_grant(
         &pool,
         &audience,
         "read",
         "user:reader@example.com",
+        "reader@example.com",
+    )
+    .await;
+    // A genuine share the caller already made (`created_by` = caller, selector is *not* the
+    // caller's own identity selector) -- this is what the cap query actually counts, on a
+    // different axis to also show the count spans every pair, not just the one being shared into
+    // below. It is itself the one row that already puts the caller at the (deliberately tiny)
+    // bound below.
+    insert_grant(
+        &pool,
+        &audience,
+        "mint",
+        "group:filler",
         "reader@example.com",
     )
     .await;
