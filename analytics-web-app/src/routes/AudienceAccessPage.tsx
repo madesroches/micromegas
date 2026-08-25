@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { Users, Plus, Share2, X, KeyRound } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -339,11 +339,18 @@ function MintKeyDialog({
   const [isMinting, setIsMinting] = useState(false)
   const [mintError, setMintError] = useState<string | null>(null)
   const [mintedKey, setMintedKey] = useState<MintApiKeyResponse | null>(null)
+  const wasOpenRef = useRef(false)
 
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
     void (() => {
-      if (open) {
+      // Reset only on the false->true transition of `open`, not on every render while the
+      // dialog stays open -- `me` can get a fresh identity from a `loadMyAudiences()` refetch
+      // (e.g. after a claimed mint) while this dialog is still showing the one-time key banner,
+      // and that must not wipe `mintedKey`.
+      const justOpened = open && !wasOpenRef.current
+      wasOpenRef.current = open
+      if (justOpened) {
         setName('')
         setMintError(null)
         setMintedKey(null)
@@ -588,6 +595,15 @@ function AudienceAccessPageContent() {
     )
   }, [grants, axisFilter, findLower])
 
+  // Unfiltered-by-axis lookup, keyed by audience: used to tell "this row is genuinely empty"
+  // apart from "this row is only empty because the Axis filter stripped it" (`groups` above
+  // reflects the axis-filtered set, so group.read/group.mint can't answer that on their own).
+  const unfilteredByAudience = useMemo(() => {
+    const map = new Map<string, AudienceGroup>()
+    for (const g of groupGrants(grants)) map.set(g.audience, g)
+    return map
+  }, [grants])
+
   const totalCount = grants.length
   const totalAudiences = new Set(grants.map((g) => g.audience)).size
 
@@ -621,12 +637,13 @@ function AudienceAccessPageContent() {
     setAlreadyExistedNote(null)
     try {
       const { grant, created } = await createAudienceGrant(audience, axis, selector)
-      if (!created) {
+      if (created) {
+        setDialogTarget(null)
+      } else {
         setAlreadyExistedNote(
           `That grant already existed (created ${formatDate(new Date(grant.created_at))} by ${grant.created_by}).`
         )
       }
-      setDialogTarget(null)
       loadGrants()
     } catch (err) {
       setShareError(err instanceof AudienceGrantError ? err.message : 'Failed to create grant')
@@ -878,14 +895,29 @@ function AudienceAccessPageContent() {
                     {(['read', 'mint'] as GrantAxis[]).map((axis) => {
                       const rows = axis === 'read' ? group.read : group.mint
                       if (rows.length === 0) {
+                        const trueRows = axis === 'read'
+                          ? unfilteredByAudience.get(group.audience)?.read ?? []
+                          : unfilteredByAudience.get(group.audience)?.mint ?? []
+                        // Emptied only by the Axis filter (grants exist pre-filter) -- render
+                        // nothing for this row rather than a misleading empty-state sentence.
+                        if (trueRows.length > 0) return null
                         if (!isAdmin) return null
                         return (
                           <div key={axis} className="text-sm text-theme-text-muted">
                             <span className="inline-block px-2 py-0.5 rounded-sm bg-app-card text-xs uppercase mr-2">
                               {axis}
                             </span>
-                            No mint grants — nobody can issue ingestion keys stamped with this
-                            audience.
+                            {axis === 'mint' ? (
+                              <>
+                                No mint grants — nobody can issue ingestion keys stamped with
+                                this audience.
+                              </>
+                            ) : (
+                              <>
+                                No read grants — only <code>public</code> and any env-map grants
+                                apply here.
+                              </>
+                            )}
                           </div>
                         )
                       }
@@ -904,7 +936,7 @@ function AudienceAccessPageContent() {
                                 <Share2 className="w-3 h-3" />+ Share {axis} access
                               </button>
                             )}
-                            {axis === 'mint' && !isAdmin && (
+                            {axis === 'mint' && !isAdmin && showMintButton && (
                               <button
                                 onClick={() => openMintDialog(group.audience)}
                                 className="text-xs text-accent-link hover:underline inline-flex items-center gap-1"
