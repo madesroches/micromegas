@@ -199,10 +199,10 @@ impl IsolationConfig {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
         if std::env::var(&unstamped_var).is_ok() {
             anyhow::bail!(
-                "{unstamped_var} is no longer supported: the audience column is now a physical,\
-                 non-nullable column materialized on every global view (#1482), so there is no\
-                 more query-time \"unstamped\" fallback to configure. Assign legacy data an\
-                 audience with MICROMEGAS_DEFAULT_INGESTION_AUDIENCE on the ingestion side\
+                "{unstamped_var} is no longer supported: the audience column is now a physical, \
+                 non-nullable column materialized on every global view (#1482), so there is no \
+                 more query-time \"unstamped\" fallback to configure. Assign legacy data an \
+                 audience with MICROMEGAS_DEFAULT_INGESTION_AUDIENCE on the ingestion side \
                  instead, and remove this variable."
             );
         }

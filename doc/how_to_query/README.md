@@ -266,7 +266,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Utf8` | The audience of the owning process -- server-written, never `NULL` (see [Schema Reference](../mkdocs/docs/query-guide/schema-reference.md#audience)) |
+| `audience` | `Utf8` | The audience of the owning process -- server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
 
 #### `streams`
 Contains information about data streams within processes.
@@ -398,7 +398,7 @@ Text-based log entries with levels and structured data.
 
 #### `log_stats`
 Materialized view providing aggregated log statistics by process, minute, level, and target. See
-[Schema Reference](../mkdocs/docs/query-guide/schema-reference.md#log_stats) for the full field
+[Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#log_stats) for the full field
 table.
 
 | Field | Type | Description |

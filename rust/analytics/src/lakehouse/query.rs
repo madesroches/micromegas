@@ -131,9 +131,12 @@ pub fn register_lakehouse_functions(
     // `parse_block`, `get_payload`, and `list_partitions`' row filter. `ReadScope::All` makes every
     // one of its checks a no-op, so this costs nothing for internal/maintenance callers or an
     // auth-unset deployment.
+    // An admin, or a deployment that can never produce one at all (`CallerContext::
+    // admin_principal_possible`'s doc comment).
+    let lakehouse_admin = caller.is_admin || !caller.admin_principal_possible;
     let audience_guard = Arc::new(AudienceGuard::new(
         caller.read_scope.clone(),
-        caller.is_admin || !caller.admin_principal_possible,
+        lakehouse_admin,
         caller.isolation_config.public_view_sets.clone(),
         lakehouse.audience_index().clone(),
     ));
@@ -199,9 +202,7 @@ pub fn register_lakehouse_functions(
         )))
         .into_scalar_udf(),
     );
-    // An admin, or a deployment that can never produce one at all (`CallerContext::
-    // admin_principal_possible`'s doc comment).
-    if caller.is_admin || !caller.admin_principal_possible {
+    if lakehouse_admin {
         ctx.register_udtf(
             "retire_partitions",
             Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
