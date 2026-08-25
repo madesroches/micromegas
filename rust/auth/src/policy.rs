@@ -19,7 +19,7 @@ use crate::env::resolve_prefixed_var;
 use crate::types::AuthContext;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use micromegas_tracing::info;
+use micromegas_tracing::{info, warn};
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use std::collections::BTreeMap;
@@ -55,7 +55,13 @@ pub fn is_valid_audience(aud: &str) -> bool {
 /// **the** deployment default audience, defaulting to [`PUBLIC_AUDIENCE`] when unset. Resolved
 /// **once at startup** (`web_server.rs`) so a typo fails fast rather than surfacing as a
 /// per-request 400. Empty or otherwise invalid ⇒ `Err`: with one knob there is no "unset" state
-/// left for an empty string to mean.
+/// left for an empty string to mean, so a blank value is a misconfiguration, not an opt-out.
+///
+/// Leading/trailing whitespace is trimmed and `warn!`-logged. Trimming keeps a value that a
+/// deployment template rendered with stray padding working, and the warning is there because
+/// `micromegas_ingestion::write_audience::WriteAudience::default_from_env` -- the *other* reader
+/// of this same variable -- does not trim: a padded value that this role quietly accepts fails
+/// the ingestion role's startup outright, so the two roles disagreeing must not be silent here.
 ///
 /// One knob, one meaning: the audience anything that arrives without one gets. It is what
 /// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes, and
@@ -67,7 +73,15 @@ pub fn default_audience_from_env(prefix: &str) -> Result<String> {
     let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {
         Ok(raw) => {
-            let raw = raw.trim().to_string();
+            let trimmed = raw.trim();
+            if trimmed != raw {
+                warn!(
+                    "{var}: value {raw:?} has leading or trailing whitespace -- using {trimmed:?}. \
+                     Remove the padding: the ingestion role reads this same variable without \
+                     trimming and rejects it at startup."
+                );
+            }
+            let raw = trimmed.to_string();
             if is_valid_audience(&raw) {
                 raw
             } else {

@@ -734,7 +734,9 @@ fn default_audience_from_env_valid_value_is_returned() {
 }
 
 /// A whitespace-padded value is trimmed before validation and storage -- matching
-/// `IsolationConfig::from_env`'s trim-then-validate order in `read_scope.rs`.
+/// `IsolationConfig::from_env`'s trim-then-validate order in `read_scope.rs`. The trim is
+/// `warn!`-logged (not asserted here, since the log sink is process-wide): the ingestion role
+/// reads this same variable without trimming and would reject the padded form at startup.
 #[test]
 #[serial]
 fn default_audience_from_env_whitespace_padded_value_is_trimmed() {
