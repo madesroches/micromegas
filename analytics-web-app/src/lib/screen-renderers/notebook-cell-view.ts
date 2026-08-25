@@ -15,6 +15,8 @@ export interface CellViewContext {
   allVariableValues: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   isEditing: boolean
+  /** The cell's already-resolved data source (`resolveCellDataSource`'s result), for gating
+   * `resolveQueryTimeRange` on `notebook`-sourced cells (#1513). */
   dataSource?: string
   /** Originating notebook name (the screen's saved name), for query attribution. Undefined for an unsaved new screen. */
   notebookName?: string
@@ -218,6 +220,7 @@ export function buildCellRendererProps(
       timeRange: context.timeRange,
       cellResults: context.cellResults,
       cellSelections: context.cellSelections,
+      cellDataSource: context.dataSource,
     })
   } catch {
     // fall back to the global range

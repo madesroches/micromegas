@@ -110,7 +110,7 @@ export interface CellConfigBase {
 /** Fields shared by cells that run a query. */
 export interface QueryBackedCellConfig {
   dataSource?: string
-  /** Optional per-cell query time range override (raw strings; macro-resolved). Defaults to the screen's global range when unset. */
+  /** Optional per-cell query time range override (raw strings; macro-resolved). Defaults to the screen's global range when unset. Ignored entirely when the cell's resolved data source is `notebook` (#1513). */
   timeRange?: TimeRange
 }
 

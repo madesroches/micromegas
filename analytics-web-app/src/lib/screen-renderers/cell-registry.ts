@@ -72,6 +72,9 @@ export interface CellExecutionContext {
   runQuery: (sql: string) => Promise<Table>
   runQueryAs?: (sql: string, tableName: string, dataSource?: string) => Promise<Table>
   registerTable?: (ipcBytes: Uint8Array) => void
+  /** The cell's already-resolved data source (`resolveCellDataSource`'s result), for gating
+   * `resolveQueryTimeRange` on `notebook`-sourced cells (#1513). */
+  cellDataSource: string | undefined
 }
 
 /**

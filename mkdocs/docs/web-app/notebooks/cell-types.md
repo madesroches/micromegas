@@ -4,7 +4,7 @@ Notebooks support 15 cell types. Each cell has a `name` (unique within the noteb
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
-Every query-backed cell type below also accepts an optional `timeRange: { from, to }` field — a per-cell override of the notebook's global time range. See [Per-Cell Query Time Range](variables.md#per-cell-query-time-range) for details; it isn't repeated in each cell type's field table below.
+Every query-backed cell type below also accepts an optional `timeRange: { from, to }` field — a per-cell override of the notebook's global time range. See [Per-Cell Query Time Range](variables.md#per-cell-query-time-range) for details; it isn't repeated in each cell type's field table below. The override is ignored, and the field hidden in the editor, for a cell whose data source resolves to `notebook` (local WASM execution).
 
 ---
 
@@ -111,7 +111,7 @@ Interactive span visualization rendered with WebGL. Spans are grouped into lanes
 | `initialFrom` | string | Initial zoomed-in start time (accepts `$variable`, relative like `now-1h`, or absolute) |
 | `initialTo` | string | Initial zoomed-in end time |
 
-`initialFrom`/`initialTo` only set the initial *view* window inside the flame graph (further zoom/pan is interactive) — they don't affect the *query*. To change what data the cell's SQL fetches, use the cell-level `timeRange` field instead (see [Per-Cell Query Time Range](variables.md#per-cell-query-time-range)).
+`initialFrom`/`initialTo` only set the initial *view* window inside the flame graph (further zoom/pan is interactive) — they don't affect the *query*. To change what data the cell's SQL fetches, use the cell-level `timeRange` field instead (see [Per-Cell Query Time Range](variables.md#per-cell-query-time-range)) — this does not apply when the cell's data source resolves to `notebook`, since that override is ignored there.
 
 **Required columns:**
 
@@ -183,7 +183,7 @@ A container cell that arranges its children side by side in a horizontal layout.
 - Reorder via a drag handle (appears on hover over a child)
 - Drag a child vertically more than ~30px outside the group bounds to extract it back to the main cell list
 - Add new children via the group editor; remove a child via the "Remove from group" context-menu entry
-- Each child has independent execution, state, and data source settings
+- Each child has independent execution, state, and data source settings, including its own **Query Time Range** override (hidden when the child's data source resolves to `notebook`, same rule as a top-level cell)
 - Aggregate stats (row count, byte size) displayed in the group header
 
 **Constraints:**

@@ -641,6 +641,56 @@ describe('HorizontalGroupCellEditor', () => {
       )
       expect(screen.queryByText('Data Source')).not.toBeInTheDocument()
     })
+
+    it('Query Time Range field shown for a remote-source child, hidden for a notebook-source child', () => {
+      const children = [makeChild('q', 'table')]
+      const { rerender } = render(
+        <HorizontalGroupCellEditor
+          {...createEditorProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children },
+            selectedChildName: 'q',
+          })}
+        />
+      )
+      expect(screen.getByText('Query Time Range')).toBeInTheDocument()
+
+      const notebookChildren = [makeChild('q', 'table', { dataSource: 'notebook' })]
+      rerender(
+        <HorizontalGroupCellEditor
+          {...createEditorProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children: notebookChildren },
+            selectedChildName: 'q',
+          })}
+        />
+      )
+      expect(screen.queryByText('Query Time Range')).not.toBeInTheDocument()
+    })
+
+    it('editing the Query Time Range From input updates only the selected child', () => {
+      const onChange = vi.fn()
+      const children = [makeChild('first', 'table'), makeChild('second', 'chart')]
+      render(
+        <HorizontalGroupCellEditor
+          {...createEditorProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children },
+            selectedChildName: 'first',
+            onChange,
+          })}
+        />
+      )
+      const fromInput = screen.getByPlaceholderText('$from, now-1h, or macro (empty = screen range)')
+      fireEvent.change(fromInput, { target: { value: 'now-1h' } })
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          children: [
+            expect.objectContaining({ name: 'first', timeRange: { from: 'now-1h', to: '' } }),
+            expect.objectContaining({ name: 'second' }),
+          ],
+        })
+      )
+      const secondChildArg = onChange.mock.calls[0][0].children[1]
+      expect(secondChildArg.timeRange).toBeUndefined()
+    })
   })
 })
 
