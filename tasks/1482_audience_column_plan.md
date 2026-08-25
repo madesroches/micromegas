@@ -23,8 +23,8 @@ default audience assigned at write time is the concept that survives, a query-ti
 of missing data is not.
 
 > **The paragraph above is superseded by the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).**
-> `MICROMEGAS_DEFAULT_AUDIENCE` and the startup backfill are implemented but reverted by
-> the follow-up pass. What survives: the column is still non-nullable, because a *read-side*
+> The write-side `MICROMEGAS_DEFAULT_AUDIENCE` stamp and the startup backfill landed first and
+> were then reverted by the follow-up pass; neither exists in the code. What survives: the column is still non-nullable, because a *read-side*
 > default — `MICROMEGAS_DEFAULT_AUDIENCE`, applied as `COALESCE(<extraction>, $n)` at each of the
 > three places the audience is read out of Postgres — makes a `NULL` unrepresentable downstream.
 > `MICROMEGAS_UNSTAMPED_AUDIENCE` and `OwnerAudience::Unstamped` are still removed.
@@ -60,20 +60,20 @@ from Postgres, which can only produce `Utf8` for a `TEXT` subselect), the `arrow
 `processes`/`streams` that `log_stats` already had, and one more `blocks_file_schema_hash()` bump
 (`vec![4]` → `vec![5]`).
 
-**What is *not* done is the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read)**
-at the end of this document. It revises the design *after* the fact, around one rule: *when a
-process has no audience, use the default.* It keeps §1–§5 (the physical column, the direct
-`audience IN (...)` filter, and everything §4 removed) and replaces §0's four write-side mechanisms
-— default-at-write, startup backfill, conflict-guard rejection, replication rejection — with a
-`COALESCE(<extraction>, <default>)` at each of the three places the audience is read out of
-Postgres. A follow-up implementation pass has to *revert* the landed Phase 1, then build the
-addendum's smaller design; Phase 3 stays as built and Phase 2 is extended. Nothing of that pass has
-started — its ordered checklist is **[Phase 5](#phase-5--the-addendums-follow-up-pass-not-started)**
-(steps 25–34), and the addendum below is its rationale.
+**The [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read) is also
+implemented and committed** (`c84b7daae`, `8b674f942`, `993c07b23`). It revised the design *after*
+the fact, around one rule: *when a process has no audience, use the default.* It kept §1–§5 (the
+physical column, the direct `audience IN (...)` filter, and everything §4 removed) and replaced
+§0's four write-side mechanisms — default-at-write, startup backfill, conflict-guard rejection,
+replication rejection — with a `COALESCE(<extraction>, <default>)` at each of the three places the
+audience is read out of Postgres. All ten of its steps (25–34,
+**[Phase 5](#phase-5--the-addendums-follow-up-pass)**) have landed; the workspace compiles clean,
+`cargo clippy --workspace --all-targets` is warning-free, and all 230 non-DB test binaries pass.
 
-Read the body below as the design **as built today**; where the addendum contradicts it, the
-addendum wins and the affected sections are flagged inline. `## Open Questions` records the
-questions the *body's* design closed — the addendum reopens two of them, noted there.
+**Nothing in this plan is outstanding.** Read the body below as the design **as originally built**;
+where the addendum contradicts it, the addendum wins, the affected sections are flagged inline, and
+the addendum is what the code now does. `## Open Questions` records the questions the *body's*
+design closed — the addendum reopens two of them, noted there.
 
 ## Current State
 
@@ -903,8 +903,10 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 
 ### Phase 1 — every process has an audience (ingestion)
 
-> **Landed, and slated for reversal by the addendum.** Steps 1–7 are all implemented; the
-> addendum's follow-up pass reverts every one of them.
+> **Landed, then reverted.** Steps 1–7 were all implemented in `5d3ebd4ef`/`4913acfcc`; the
+> addendum's follow-up pass reverted every one of them in `c84b7daae`. They are recorded here as
+> history — none of this is in the code. See
+> [Phase 5](#phase-5--the-addendums-follow-up-pass) for what replaced them.
 
 1. `rust/ingestion/src/write_audience.rs`: `WriteAudience(Arc<str>)`; delete `none()`;
    `as_str() -> &str`; add `pub fn default_from_env() -> anyhow::Result<WriteAudience>` reading
@@ -1025,12 +1027,37 @@ semi-join, so the change is observable only as a new column in `SELECT *`.
 24. Mark step 15 of `tasks/data_isolation/audience_based_access_control_plan.md` as landed and
     point it at this plan.
 
-### Phase 5 — the addendum's follow-up pass (not started)
+### Phase 5 — the addendum's follow-up pass (landed)
 
-The only outstanding work. Full rationale in the
+Full rationale in the
 [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read); this is its ordered
-checklist. Steps 25–27 revert, 28–32 build, 33–34 finish — and 25–27 must land before 28, since the
-`COALESCE` sites take `&str` defaults that the reverted `WriteAudience` no longer supplies.
+checklist, all of it now implemented. Steps 25–27 revert, 28–32 build, 33–34 finish — and 25–27 had
+to land before 28, since the `COALESCE` sites take `&str` defaults that the reverted `WriteAudience`
+no longer supplies. It went in as three commits: `c84b7daae` (25–27), `8b674f942` (28–33),
+`993c07b23` (34).
+
+**What the pass found that the checklist did not predict**, all folded into the steps below:
+
+- `LakehouseContext::new` had to become **fallible** (`Result<Self>`) for step 29's
+  "malformed ⇒ startup error" to be true — the knob is read there, and `new` returned a bare
+  `Self`. That propagates through `from_env`/`from_connection` (already `Result`) and cost `?` or
+  `.expect` at its 25 call sites, nearly all tests. Recorded as a **Minor breaking change**.
+- The default is carried on `MetadataPartitionSpec` as `Option<Arc<str>>`, not a bare `Arc<str>`:
+  the bind is applied only when present, so a future `data_sql` referencing just `$1`/`$2` cannot
+  acquire a stray third parameter. `source_count_query` is left alone, as the addendum required.
+- `micromegas-analytics` does not depend on `micromegas-auth`, so step 29's knob resolution needed
+  a **third** local copy of the `[A-Za-z0-9_-]{1,255}` charset check, in `audience.rs` beside the
+  new `default_audience_from_env`. Its trim-and-`warn!` behavior deliberately mirrors
+  `micromegas_auth::policy::default_audience_from_env` so one env value can never be accepted by
+  one role and rejected by another. That auth-side doc comment referenced the now-deleted
+  `WriteAudience::default_from_env` and was repointed.
+- Two `default_view_factory` test call sites (`sql_view_test.rs`, `histo_view_test.rs`) build no
+  `LakehouseContext` at all, so they pass `Arc::from(audience::DEFAULT_AUDIENCE)` directly rather
+  than sourcing the value from a context. A `DEFAULT_AUDIENCE` constant was added for them.
+- The `blocks_file_schema_hash()` comment still claimed a `vec![4]` predecessor — a value that only
+  ever existed inside this branch. Corrected to `vec![3]`, which is what `main` carries.
+- `flight_sql_server.rs`'s `ViewFactoryFn` injection seam needed no change: its only production
+  user calls `default_view_factory` where a `LakehouseContext` is already in scope.
 
 25. **Revert the ingestion write path.** `rust/ingestion/src/write_audience.rs` back to
     `Option<Arc<str>>` with `none()` and no `default_from_env`;
@@ -1480,11 +1507,11 @@ what was built, not what the follow-up pass will build.
 
 ## Addendum: one default audience, resolved where the audience is read
 
-**Status:** this addendum revises the Design and reduces the Implementation Steps below. §0's plan
-(and the first cut of Phase 1/Phase 3 built from it) is already implemented and committed on the
-`audience` branch (`5d3ebd4ef`, `4913acfcc`) — not merged to `main`. This addendum documents a
-smaller design that a follow-up implementation pass should replace it with; it does not itself
-change any code.
+**Status: implemented.** This addendum revises the Design and reduces the Implementation Steps
+below. §0's plan (and the first cut of Phase 1/Phase 3 built from it) landed first on the
+`audience` branch (`5d3ebd4ef`, `4913acfcc`); the follow-up pass then reverted §0 and built this
+smaller design in its place (`c84b7daae`, `8b674f942`, `993c07b23`). None of it is merged to
+`main`. Where this addendum and the body disagree, **this is what the code does**.
 
 **Decision — one rule, one knob.** *When a process has no audience, use the default.* The default
 is `MICROMEGAS_DEFAULT_AUDIENCE`, a single non-optional label (default `public`, validated against
@@ -1549,9 +1576,10 @@ subject to this: Prong B resolves live from Postgres, so it always uses the *cur
 while Prong A uses whatever was current when the partition was written. They agree except across an
 un-regenerated default change — which the operational rule already tells operators to close.
 
-### What this removes from §0 and Phase 1 (already implemented; a follow-up pass reverts it)
+### What this removed from §0 and Phase 1 (landed, then reverted)
 
-All four of §0's mechanisms, and the Phase 1 steps that implement them, go away in full:
+All four of §0's mechanisms, and the Phase 1 steps that implemented them, are gone in full —
+reverted in `c84b7daae`, mostly by restoring `main`'s version of each file verbatim:
 
 - `rust/ingestion/src/write_audience.rs`: `WriteAudience` reverts to `Option<Arc<str>>` with
   `none()` restored; `default_from_env()` is deleted; `resolve_write_audience` reverts to
