@@ -420,5 +420,20 @@ describe('buildCellRendererProps', () => {
       const result = buildCellRendererProps(cell, makeState(), context, makeCallbacks())
       expect(result.timeRange).toBe(context.timeRange)
     })
+
+    it('ignores the override entirely when the cell resolves to the notebook data source', () => {
+      const cell = makeCell({
+        dataSource: 'notebook',
+        timeRange: { from: '2023-06-01T00:00:00.000Z', to: '2023-06-02T00:00:00.000Z' },
+      })
+      const context = makeContext({
+        timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+        dataSource: 'notebook',
+      })
+
+      const result = buildCellRendererProps(cell, makeState(), context, makeCallbacks())
+
+      expect(result.timeRange).toEqual(context.timeRange)
+    })
   })
 })

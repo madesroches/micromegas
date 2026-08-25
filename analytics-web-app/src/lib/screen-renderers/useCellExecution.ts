@@ -153,6 +153,14 @@ export function useCellExecution({
         if (selection) availableCellSelections[prevCell.name] = selection
       }
 
+      // Resolve the cell's effective data source before the unresolved-selection check:
+      // a `notebook`-source cell's timeRange override has no effect (resolveQueryTimeRange
+      // ignores it below), so it must not be able to block execution over an unresolved
+      // selection macro either (#1513). The SQL clause stays unconditional — a notebook
+      // cell's own SQL can still legitimately reference a selection macro.
+      const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
+      const isNotebookSource = cellDataSource === 'notebook'
+
       // Check for unresolved $cell.selected.column macros — if the SQL or the
       // cell's timeRange override contains a selection reference but no row is
       // selected, show a waiting placeholder
@@ -160,8 +168,8 @@ export function useCellExecution({
       const cellTimeRange = 'timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined
       const unresolvedCell =
         (cellSql && findUnresolvedSelectionMacro(cellSql, availableCellSelections)) ||
-        (cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
-        (cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
+        (!isNotebookSource && cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
+        (!isNotebookSource && cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
       if (unresolvedCell) {
         completeCellExecution(cell.name, {
           status: 'blocked',
@@ -199,16 +207,16 @@ export function useCellExecution({
           timeRange: globalTimeRange,
           cellResults: availableCellResults,
           cellSelections: availableCellSelections,
+          cellDataSource,
         })
 
         // Create execution context - use per-cell data source with fallback to global
-        const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
-        const isNotebookSource = cellDataSource === 'notebook'
         const context: CellExecutionContext = {
           variables: availableVariables,
           cellResults: availableCellResults,
           cellSelections: availableCellSelections,
           timeRange,
+          cellDataSource,
           registerTable: engine
             ? (ipcBytes: Uint8Array) => { engine.register_table(cell.name, ipcBytes) }
             : undefined,

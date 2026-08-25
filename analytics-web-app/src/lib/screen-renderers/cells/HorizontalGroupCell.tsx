@@ -32,10 +32,11 @@ import type {
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
-import { resolveCellDataSource, shouldShowDataSource, validateCellName, sanitizeCellName } from '../notebook-utils'
+import { resolveCellDataSource, shouldShowDataSource, shouldShowTimeRange, validateCellName, sanitizeCellName } from '../notebook-utils'
 import { buildCellRendererProps } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
+import { CellTimeRangeField } from '@/components/CellTimeRangeField'
 import { arrowTableToCsv, triggerCsvDownload } from './arrow-to-csv'
 import { SortableChild, HgChildPane } from './HgChildPane'
 
@@ -363,6 +364,17 @@ function ChildEditorView({
           }}
           datasourceVariables={datasourceVariables}
           showNotebookOption={showNotebookOption}
+        />
+      )}
+      {shouldShowTimeRange(child, variables, defaultDataSource) && (
+        <CellTimeRangeField
+          value={'timeRange' in child ? child.timeRange : undefined}
+          onChange={(tr) => {
+            const newChildren = config.children.map((c) =>
+              c.name === child.name ? { ...c, timeRange: tr } : c,
+            )
+            onChange({ ...config, children: newChildren })
+          }}
         />
       )}
       <meta.EditorComponent

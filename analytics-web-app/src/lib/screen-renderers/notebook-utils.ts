@@ -307,17 +307,27 @@ interface MacroCtx {
   timeRange: { begin: string; end: string }
   cellResults: Record<string, Table>
   cellSelections: Record<string, Record<string, unknown>>
+  /** The cell's already-resolved data source (`resolveCellDataSource`'s result). Required so every
+   * call site is forced to supply it — each of the three already computes or has access to this
+   * value, and a caller that doesn't know it can't correctly decide whether to shadow the range. */
+  cellDataSource: string | undefined
 }
 
 /**
  * Resolve a cell's optional timeRange override to a runtime { begin, end }.
  * Each empty/unset bound falls back to the global range. Throws on an
  * unparseable bound (caller decides whether to error the cell or fall back).
+ *
+ * A cell whose resolved data source is `notebook` (local WASM) always gets the
+ * global range: a WASM-registered table has no designated time column to bound,
+ * so a saved override would otherwise silently replace `$from`/`$to` inside that
+ * cell's own SQL with no way to see or clear it (#1513).
  */
 export function resolveQueryTimeRange(
   config: CellConfig,
   ctx: MacroCtx,
 ): { begin: string; end: string } {
+  if (ctx.cellDataSource === 'notebook') return ctx.timeRange
   const raw = 'timeRange' in config ? (config as QueryBackedCellConfig).timeRange : undefined
   const fromStr = raw?.from?.trim() || ''
   const toStr = raw?.to?.trim() || ''
@@ -336,19 +346,32 @@ export function resolveQueryTimeRange(
 }
 
 /**
- * Returns true if a cell type should show the per-cell query time range field.
+ * Returns true if a cell should show the per-cell query time range field.
+ *
+ * Cells that resolve to the `notebook` (local WASM) data source never show it:
+ * a WASM-registered table is plain Arrow batches with no designated time column,
+ * so there is no column-agnostic way to enforce a begin/end the way a server-side
+ * view does. Hiding it keeps the editor from offering a control that can't be
+ * honoured (#1513).
+ *
  * Distinct from `shouldShowDataSource`, which excludes `chart` for per-query
  * data-source reasons that don't apply to the cell-level time window.
  */
-export function shouldShowTimeRange(cell: CellConfig): boolean {
+export function shouldShowTimeRange(
+  cell: CellConfig,
+  variables: Record<string, VariableValue>,
+  notebookDataSource: string | undefined,
+): boolean {
   switch (cell.type) {
     case 'markdown':
     case 'referencetable':
     case 'hg':
       return false
     case 'variable':
-      return cell.variableType === 'combobox' || cell.variableType === 'expression'
+      if (cell.variableType !== 'combobox' && cell.variableType !== 'expression') return false
+      break
     default:
-      return true // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart
+      break // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart
   }
+  return resolveCellDataSource(cell, variables, notebookDataSource) !== 'notebook'
 }

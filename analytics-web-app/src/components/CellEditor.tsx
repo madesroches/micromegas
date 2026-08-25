@@ -87,7 +87,7 @@ export function CellEditor({
   )
 
   const showDataSource = shouldShowDataSource(cell.type)
-  const showTimeRange = shouldShowTimeRange(cell)
+  const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 
   // Determine if this cell can run
   const canRun = !!meta.execute

@@ -218,6 +218,7 @@ export function buildCellRendererProps(
       timeRange: context.timeRange,
       cellResults: context.cellResults,
       cellSelections: context.cellSelections,
+      cellDataSource: context.dataSource,
     })
   } catch {
     // fall back to the global range

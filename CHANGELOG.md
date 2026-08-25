@@ -6,6 +6,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 * **Web App:**
   * Require and pre-fill the audience field in the ingestion API key mint dialog: it now defaults to `public` instead of hinting that a blank value falls back to a server-side `MICROMEGAS_DEFAULT_KEY_AUDIENCE` default, and the Mint button is gated on a non-blank value.
+  * Hide the per-cell **Query Time Range** field, and ignore any saved override, for a notebook cell whose data source resolves to `notebook` (local WASM execution) — a WASM-registered table has no designated time column to bound a `begin`/`end` against, so the screen's global range now applies there unconditionally, at execution, at render, and in macro substitution. This is a behaviour change for any cell already carrying a saved override under that data source: it silently reverts to the screen's global range instead of the override the next time the screen loads. The same field is now also offered on horizontal-group children whose query runs server-side, hidden there under the identical rule (#1513).
 * **Analytics:**
   * Merges (`QueryMerger`, the path every non-ordering-declaring view uses -- `measures`,
     `log_entries`, `async_events`, `images`, `net_spans`, `otel_spans`, `export_log`, `blocks`'

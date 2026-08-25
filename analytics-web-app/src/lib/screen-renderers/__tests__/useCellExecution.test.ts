@@ -887,6 +887,41 @@ describe('useCellExecution', () => {
         expect(result.current.cellStates['Details'].status).toBe('blocked')
         expect(result.current.cellStates['Details'].error).toContain('Processes')
       })
+
+      it('does not block a notebook-source cell whose timeRange override references an unresolved row selection', async () => {
+        mockFetchQueryIPC.mockResolvedValue(new Uint8Array([1]))
+        const engine = createMockEngine()
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Processes', sql: 'SELECT process_id FROM processes', layout: { height: 'auto' } },
+          {
+            type: 'table',
+            name: 'Details',
+            sql: 'SELECT * FROM Processes',
+            dataSource: 'notebook',
+            timeRange: { from: '$Processes.selected.start_time', to: 'now' },
+            layout: { height: 'auto' },
+          },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: vi.fn(),
+            refreshTrigger: 0,
+            engine,
+          })
+        )
+
+        await waitFor(() => {
+          expect(result.current.cellStates['Details']?.status).toBe('success')
+        })
+
+        expect(result.current.cellStates['Details'].error).toBeUndefined()
+      })
     })
   })
 

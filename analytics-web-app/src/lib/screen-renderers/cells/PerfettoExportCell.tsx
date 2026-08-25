@@ -384,6 +384,7 @@ export const perfettoExportMetadata: CellTypeMetadata = {
       timeRange: context.timeRange,
       cellResults: context.cellResults,
       cellSelections: context.cellSelections,
+      cellDataSource: context.cellDataSource,
     })
     return { status: 'success', meta: { effectiveTimeRange: effective } }
   },

@@ -1233,7 +1233,7 @@ describe('resolveMacro', () => {
 
 describe('resolveQueryTimeRange', () => {
   const globalRange = { begin: '2024-01-01T00:00:00.000Z', end: '2024-01-02T00:00:00.000Z' }
-  const baseCtx = { variables: {}, timeRange: globalRange, cellResults: {}, cellSelections: {} }
+  const baseCtx = { variables: {}, timeRange: globalRange, cellResults: {}, cellSelections: {}, cellDataSource: 'remote-src' }
 
   const baseCell: CellConfig = {
     name: 'cell1',
@@ -1298,32 +1298,79 @@ describe('resolveQueryTimeRange', () => {
     const cell = { ...baseCell, timeRange: { from: 'not-a-time', to: '' } }
     expect(() => resolveQueryTimeRange(cell, baseCtx)).toThrow()
   })
+
+  it('ignores a saved override entirely when the resolved data source is notebook', () => {
+    const cell = { ...baseCell, timeRange: { from: 'now-1h', to: 'now' } }
+    const ctx = { ...baseCtx, cellDataSource: 'notebook' }
+    expect(resolveQueryTimeRange(cell, ctx)).toEqual(globalRange)
+  })
+
+  it('still honours the override when the resolved data source is remote', () => {
+    const cell = { ...baseCell, timeRange: { from: 'now-1h', to: 'now' } }
+    const result = resolveQueryTimeRange(cell, baseCtx)
+    expect(result).not.toEqual(globalRange)
+  })
 })
 
 describe('shouldShowTimeRange', () => {
   const base = { name: 'c', layout: { height: 200 } }
+  const remoteDs = 'remote-src'
 
   it('returns false for markdown, referencetable, and hg cells', () => {
-    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig)).toBe(false)
-    expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig)).toBe(false)
-    expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig, {}, remoteDs)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig, {}, remoteDs)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig, {}, remoteDs)).toBe(false)
   })
 
   it('returns true for combobox/expression variable cells, false for datasource/text', () => {
-    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'combobox' } as CellConfig)).toBe(true)
-    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'expression' } as CellConfig)).toBe(true)
-    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'datasource' } as CellConfig)).toBe(false)
-    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'text' } as CellConfig)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'combobox' } as CellConfig, {}, remoteDs)).toBe(true)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'expression' } as CellConfig, {}, remoteDs)).toBe(true)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'datasource' } as CellConfig, {}, remoteDs)).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'variable', variableType: 'text' } as CellConfig, {}, remoteDs)).toBe(false)
   })
 
-  it('returns true for all query-backed cell types', () => {
+  it('returns true for all query-backed cell types when the resolved data source is remote', () => {
     const types = [
       'table', 'chart', 'log', 'propertytimeline', 'swimlane',
       'transposed', 'flamegraph', 'map', 'perfettoexport', 'image',
       'piechart',
     ]
     for (const type of types) {
-      expect(shouldShowTimeRange({ ...base, type, sql: '' } as CellConfig)).toBe(true)
+      expect(shouldShowTimeRange({ ...base, type, sql: '' } as CellConfig, {}, remoteDs)).toBe(true)
     }
+  })
+
+  it('returns false for a query-backed cell whose dataSource is notebook', () => {
+    expect(
+      shouldShowTimeRange({ ...base, type: 'table', sql: '', dataSource: 'notebook' } as CellConfig, {}, remoteDs)
+    ).toBe(false)
+  })
+
+  it('resolves a $variable dataSource before deciding', () => {
+    const cell = { ...base, type: 'table', sql: '', dataSource: '$ds' } as CellConfig
+    expect(shouldShowTimeRange(cell, { ds: 'notebook' }, remoteDs)).toBe(false)
+    expect(shouldShowTimeRange(cell, { ds: 'remote' }, remoteDs)).toBe(true)
+  })
+
+  it('falls back to the notebook default when the $variable is missing or empty', () => {
+    const cell = { ...base, type: 'table', sql: '', dataSource: '$missing' } as CellConfig
+    expect(shouldShowTimeRange(cell, {}, remoteDs)).toBe(true)
+    expect(shouldShowTimeRange(cell, { missing: '' }, remoteDs)).toBe(true)
+  })
+
+  it('a combobox variable cell with dataSource notebook is hidden (was shown before #1513)', () => {
+    expect(
+      shouldShowTimeRange(
+        { ...base, type: 'variable', variableType: 'combobox', dataSource: 'notebook' } as CellConfig,
+        {},
+        remoteDs
+      )
+    ).toBe(false)
+  })
+
+  it('markdown/referencetable/hg stay false regardless of resolved data source', () => {
+    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig, {}, 'notebook')).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig, {}, 'notebook')).toBe(false)
+    expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig, {}, 'notebook')).toBe(false)
   })
 })
