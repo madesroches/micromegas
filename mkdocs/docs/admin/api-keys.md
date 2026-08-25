@@ -114,7 +114,7 @@ exactly one admin list to manage (see [Security](#security)).
 
 | Route | Body / result |
 |---|---|
-| `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience"}` |
+| `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience","claimed"}` |
 | `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience"}]` |
 | `DELETE {base_path}/api/ingestion-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
 | `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key","audience"?}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported","audience"}` |
@@ -290,6 +290,17 @@ prefixed or not. See
 [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
 for the full mechanism.
 
+**An admin caller minting into a brand-new audience is now claimed server-side too** (#1510,
+AbAC Stage 6c): the mint route runs the same ownership check for an admin, as its own pre-check
+outside any lock, and if the audience looks unclaimed, writes the admin's own `user:<email>`
+`mint`+`read` rows in the same transaction as the key insert — best-effort, never a mint failure
+if a concurrent claim wins the race in between. `MintResponse.claimed` is `true` only when this
+call actually created the audience's first grant rows. This is exactly what
+`micromegas-setup-telemetry`'s admin branch used to do client-side (mint, then call the admin
+grants API); the script no longer needs to, and the web dialog and any direct `curl` caller now
+get the same behavior. An admin with no email is unaffected — no `user:` row can be formed for
+them either way, same pre-existing gap as before.
+
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) is never
 stamped at all.** That keyring has no audience column to carry one, by
 design (per the umbrella data-isolation plan) — its data stays visible only
@@ -356,6 +367,13 @@ an unconfigured maps store. Neither page has an "import" button — the import
 routes exist for the `micromegas-import-keys` CLI tool only, since a browser
 form for pasting a legacy key in would reintroduce the "key transits a
 browser" exposure mint already avoids.
+
+**A third page, open to every authenticated user, not just admins**: **Audience Access**
+(`/audiences`) is the self-service counterpart of these two admin-only pages — it drives the
+ingestion mint route's non-admin path (claim-and-mint) from a browser dialog, plus the
+audience-grant read/write routes covered in
+[Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a).
+See [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
 **`created_by`/`revoked_by` always reflect the acting admin's own OIDC
 identity, for both key tables.** Every mint/revoke/import handler resolves

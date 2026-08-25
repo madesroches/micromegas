@@ -1,10 +1,11 @@
-//! Audience grant admin API for `analytics-web-srv` (#1489, AbAC Stage 6a).
+//! Audience grant API for `analytics-web-srv` (#1489, AbAC Stage 6a; self-service policy #1510,
+//! AbAC Stage 6c).
 //!
 //! Directly mirrors `ingestion_keys.rs`'s shape (`AudienceGrantsState { pool: Option<PgPool> }`,
-//! an `IntoResponse` error enum, `AdminUser`-gated handlers) over the new `audience_grants` table
-//! (migration v7, `rust/ingestion/src/sql_migration.rs`). This is the admin write surface for the
-//! grant store `micromegas-auth::db_audience_grants::DbAudienceGrantsSource` reads from -- the
-//! store's own snapshot cache picks up rows written here within its cache TTL.
+//! an `IntoResponse` error enum) over the new `audience_grants` table (migration v7,
+//! `rust/ingestion/src/sql_migration.rs`). This is the write surface for the grant store
+//! `micromegas-auth::db_audience_grants::DbAudienceGrantsSource` reads from -- the store's own
+//! snapshot cache picks up rows written here within its cache TTL.
 //!
 //! **Duplication, accepted.** This duplicates most of `ingestion_keys.rs`/`analytics_keys.rs`'s
 //! validation/SQL/error shape -- deliberately, per those modules' own doc comments: a generic
@@ -12,26 +13,34 @@
 //! target is a shape this codebase already declines elsewhere
 //! (`data_sources.rs`/`screens.rs`/`folders.rs`).
 //!
-//! Every handler in this file is [`AdminUser`]-gated except one:
-//! `GET .../audience-grants/my-audiences` (AbAC Stage 6, #1374) is caller-scoped
-//! ([`AuthenticatedUser`]-gated instead) -- it answers only "which audiences does *this* caller's
-//! own identity match," which carries none of the confidentiality sensitivity `list_grants`'s
-//! admin gate exists for. See that handler's own doc comment.
+//! **Gating, not admin-only.** `create_grant`/`delete_grant` are gated by [`GrantGate`]: an
+//! admin acts unconditionally (exactly the old `AdminUser` behavior); a non-admin is admitted
+//! only when `self_service_mint_enabled` is on (the same knob `MintGate` and `/my-audiences`
+//! already gate on -- sharing an audience is the second half of the self-service feature that
+//! introduced it), and then further constrained inside each handler by a per-pair hold/ownership
+//! check that needs the parsed body/query (see `create_grant`/`delete_grant`'s own doc comments).
+//! `GET .../my-audiences` stays [`AuthenticatedUser`]-gated with its own knob check, unchanged.
+//! `GET .../visible` is [`AuthenticatedUser`]-gated with no admin requirement at all -- it is the
+//! Audience Access page's own list read, and narrows for a non-admin when the knob is off (see
+//! its own doc comment); it carries none of the old paginated `list_grants`'s confidentiality
+//! concern differently -- that route is deleted outright, superseded by the caller-scoped
+//! `list_audience_grants()` SQL table function for ad-hoc auditing (`micromegas-query`) and by
+//! this route for the page's own display.
 
-use crate::auth::{AdminUser, AuthenticatedUser};
-use axum::extract::{Extension, Query};
+use crate::auth::{AuthenticatedUser, Unauthenticated};
+use axum::extract::{Extension, FromRequestParts, Query};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use micromegas::auth::policy::{is_valid_audience, valid_selector};
+use micromegas::auth::policy::{caller_selectors, is_valid_audience, valid_selector};
+use micromegas::auth::types::AuthContext;
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-const DEFAULT_LIMIT: i64 = 100;
-const MAX_LIMIT: i64 = 500;
 /// `valid_selector` places no charset/length bound on a `group:<id>` selector (a hierarchical
 /// IdP group name can be arbitrarily long), but the `selector` column is `VARCHAR(255)` -- this
 /// check is what turns an over-long selector into a `400 BadRequest` instead of a `500` at the
@@ -45,11 +54,13 @@ const MAX_SELECTOR_BYTES: usize = 255;
 #[derive(Clone)]
 pub struct AudienceGrantsState {
     pub pool: Option<PgPool>,
-    /// Off-by-default self-service mint gate (AbAC Stage 6, #1374, Design §5). Resolved once at
-    /// startup from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`, the same knob resolved onto
-    /// `IngestionKeysState`), default `false`. Gates `GET .../audience-grants/my-audiences` for
-    /// non-admin callers the same way `MintGate` gates `mint_key` -- that route is new non-admin
-    /// surface too, and must not widen on upgrade any more than the mint route itself does.
+    /// Off-by-default self-service gate (AbAC Stage 6, #1374; widened to grant writes by #1510,
+    /// AbAC Stage 6c). Resolved once at startup from `MICROMEGAS_SELF_SERVICE_MINT`
+    /// (`web_server.rs`, the same knob resolved onto `IngestionKeysState`), default `false`.
+    /// Gates [`GrantGate`] (`create_grant`/`delete_grant`), `GET .../my-audiences`, and the
+    /// non-admin narrowing on `GET .../visible` -- all new non-admin surface introduced by the
+    /// same self-service feature, so none of it must widen on upgrade any more than the mint
+    /// route itself does.
     pub self_service_mint_enabled: bool,
 }
 
@@ -71,12 +82,6 @@ impl ErrorResponse {
 }
 
 /// Errors this API returns.
-///
-/// `Forbidden` (AbAC Stage 6, #1374) is returned only by `/my-audiences`'s own knob-gate check --
-/// the one handler in this file [`AdminUser`] doesn't cover (see that handler's doc comment).
-/// Every other handler here is still `AdminUser`-gated, whose rejection renders as
-/// `AdminRequired`'s own 403 body before the handler even starts running, so `Forbidden` is never
-/// constructed by any of them.
 #[derive(Debug)]
 pub enum AudienceGrantError {
     /// Request body/query failed validation.
@@ -91,9 +96,14 @@ pub enum AudienceGrantError {
     /// The create statement (see [`insert_or_get`]) returned zero rows twice in a row -- an
     /// internal error, not a caller mistake (see that function's doc comment).
     Internal(String),
-    /// `/my-audiences`'s off-by-default self-service gate denied a non-admin caller
-    /// (`MICROMEGAS_SELF_SERVICE_MINT` is off).
+    /// `GrantGate`'s knob-off denial for a non-admin caller, `/my-audiences`'s identical check,
+    /// a non-admin `create_grant` naming `selector: "*"`, or a non-admin's per-pair
+    /// hold/ownership check failing on `create_grant`/`delete_grant`.
     Forbidden(String),
+    /// [`GrantGate`]/[`AuthenticatedUser`] found no `AuthContext` extension in the request --
+    /// normally unreachable once routing is wired correctly; mirrors
+    /// `ingestion_keys.rs::IngestionKeyError::Unauthenticated`.
+    Unauthenticated(String),
 }
 
 impl IntoResponse for AudienceGrantError {
@@ -141,6 +151,11 @@ impl IntoResponse for AudienceGrantError {
                 Json(ErrorResponse::new("FORBIDDEN", msg)),
             )
                 .into_response(),
+            AudienceGrantError::Unauthenticated(msg) => (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse::new("UNAUTHENTICATED", msg)),
+            )
+                .into_response(),
         }
     }
 }
@@ -148,6 +163,15 @@ impl IntoResponse for AudienceGrantError {
 impl From<sqlx::Error> for AudienceGrantError {
     fn from(err: sqlx::Error) -> Self {
         AudienceGrantError::Database(err)
+    }
+}
+
+/// `GrantGate`'s fallback when `AuthenticatedUser` itself finds no `AuthContext` extension --
+/// reached only in the same normally-unreachable case that extractor's own doc comment
+/// documents.
+impl From<Unauthenticated> for AudienceGrantError {
+    fn from(_: Unauthenticated) -> Self {
+        AudienceGrantError::Unauthenticated("authentication required".to_string())
     }
 }
 
@@ -185,6 +209,51 @@ fn validate_selector(selector: &str) -> Result<(), AudienceGrantError> {
         )));
     }
     Ok(())
+}
+
+/// `caller`'s own identity for `created_by`/ownership purposes: email if present, else subject --
+/// the same resolution every mint/revoke/import handler in this crate uses.
+fn caller_identity(caller: &AuthContext) -> String {
+    caller
+        .email
+        .clone()
+        .unwrap_or_else(|| caller.subject.clone())
+}
+
+/// `FromRequestParts` extractor for `create_grant`/`delete_grant`, modeled directly on
+/// `ingestion_keys.rs`'s `MintGate`: yields the caller's `AuthContext` after enforcing the
+/// off-by-default self-service knob for a non-admin caller (Design §3). Because this is a
+/// `FromRequestParts` impl, axum runs it -- like `AuthenticatedUser` itself -- before
+/// `Json<CreateGrantRequest>` (or the delete query) ever parses, so a knob-off non-admin caller
+/// is rejected before the body is ever touched (`auth/handlers.rs`'s own rationale for why
+/// `AdminUser` is an extractor, not an in-body check).
+///
+/// This only enforces the knob half of the gate. The per-pair hold/ownership check below it
+/// genuinely needs the parsed body/query, so it stays in each handler, run after `GrantGate` has
+/// already admitted the request.
+struct GrantGate(AuthContext);
+
+impl<S: Send + Sync> FromRequestParts<S> for GrantGate {
+    type Rejection = AudienceGrantError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let AuthenticatedUser(caller) = AuthenticatedUser::from_request_parts(parts, state).await?;
+        let grants_state = parts
+            .extensions
+            .get::<AudienceGrantsState>()
+            .cloned()
+            // Reachable only if routing is misconfigured; the 503 body's wording doesn't
+            // literally describe this cause, but a 503 fail-closed beats a panic for a case that
+            // should never happen in a correctly wired router -- mirrors `MintGate`'s identical
+            // `.ok_or(...)`.
+            .ok_or(AudienceGrantError::NotConfigured)?;
+        if !caller.is_admin && !grants_state.self_service_mint_enabled {
+            return Err(AudienceGrantError::Forbidden(
+                "self-service grant management is disabled".to_string(),
+            ));
+        }
+        Ok(GrantGate(caller))
+    }
 }
 
 #[derive(Deserialize)]
@@ -267,11 +336,50 @@ async fn insert_or_get(
     )))
 }
 
+/// Whether `caller` holds `(audience, axis)` via an identity selector -- `SELECT
+/// EXISTS(... selector = ANY($3))` with the leading `"*"` stripped from `caller_selectors`
+/// (Design §3): a `*` row on the pair makes it publicly readable/mintable, but must not let
+/// every authenticated user plant durable `user:`/`group:` rows on that pair, which would outlive
+/// the `*` grant once an admin deletes it, silently re-widening access the admin thought they'd
+/// just closed.
+async fn caller_holds_pair(
+    pool: &PgPool,
+    audience: &str,
+    axis: &str,
+    caller: &AuthContext,
+) -> Result<bool, AudienceGrantError> {
+    let identity_selectors: Vec<String> = caller_selectors(caller)
+        .into_iter()
+        .filter(|s| s != "*")
+        .collect();
+    let held: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1 AND axis = $2 \
+         AND selector = ANY($3))",
+    )
+    .bind(audience)
+    .bind(axis)
+    .bind(&identity_selectors)
+    .fetch_one(pool)
+    .await?;
+    Ok(held)
+}
+
 /// `POST {base_path}/api/audience-grants` -- creates (or reports the pre-existing) grant row.
 /// `201` when this call created it, `200` when it already existed.
+///
+/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, two further checks that
+/// need the parsed body and so live here rather than in the gate (Design §3):
+///
+/// 1. `selector` must be `user:…`/`group:…` -- `*` is refused with 403, since a caller who can
+///    read an audience must not be able to open it to every authenticated principal.
+/// 2. The caller must hold `(audience, axis)` via an identity selector ([`caller_holds_pair`]).
+///    Delegation is per axis: a `read` grant lets you share `read`, a `mint` grant lets you share
+///    `mint`, and neither confers the other.
+///
+/// An admin bypasses both checks entirely, exactly as before.
 async fn create_grant(
     Extension(state): Extension<AudienceGrantsState>,
-    AdminUser(user): AdminUser,
+    GrantGate(caller): GrantGate,
     Json(body): Json<CreateGrantRequest>,
 ) -> Result<(StatusCode, Json<GrantResponse>), AudienceGrantError> {
     let pool = require_pool(&state)?;
@@ -279,7 +387,22 @@ async fn create_grant(
     validate_axis(&body.axis)?;
     validate_selector(&body.selector)?;
 
-    let created_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
+    if !caller.is_admin {
+        if body.selector == "*" {
+            return Err(AudienceGrantError::Forbidden(
+                "non-admin callers may not grant '*' (every authenticated principal) access"
+                    .to_string(),
+            ));
+        }
+        if !caller_holds_pair(&pool, &body.audience, &body.axis, &caller).await? {
+            return Err(AudienceGrantError::Forbidden(format!(
+                "you have no {} grant on {} to share",
+                body.axis, body.audience
+            )));
+        }
+    }
+
+    let created_by = caller_identity(&caller);
     let row = insert_or_get(
         &pool,
         &body.audience,
@@ -310,111 +433,17 @@ async fn create_grant(
     ))
 }
 
-#[derive(Deserialize)]
-struct ListQuery {
-    audience: Option<String>,
-    axis: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
+/// Row shape shared by `GET .../visible` and (via `micromegas-query`) the SQL table function's
+/// column order -- kept as its own type (renamed from the deleted `list_grants`'s
+/// `GrantListEntry`) since `GET .../visible` is a distinct route with its own visibility rule
+/// (Design §3), not the same handler.
 #[derive(Serialize, sqlx::FromRow)]
-struct GrantListEntry {
+struct VisibleGrantRow {
     audience: String,
     axis: String,
     selector: String,
     created_at: DateTime<Utc>,
     created_by: String,
-}
-
-/// `GET {base_path}/api/audience-grants?audience=&axis=&limit=&offset=` -- lists rows, optionally
-/// filtered, newest first. Admin-gated like the write side: revealing who can read which audience
-/// is itself confidentiality-sensitive.
-async fn list_grants(
-    Extension(state): Extension<AudienceGrantsState>,
-    AdminUser(_user): AdminUser,
-    Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<GrantListEntry>>, AudienceGrantError> {
-    let pool = require_pool(&state)?;
-
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
-    if limit <= 0 {
-        return Err(AudienceGrantError::BadRequest(
-            "limit must be > 0".to_string(),
-        ));
-    }
-    // A read endpoint, so capping is safer than erroring: silently clamp rather than reject
-    // values above MAX_LIMIT.
-    let limit = limit.min(MAX_LIMIT);
-    let offset = query.offset.unwrap_or(0);
-    if offset < 0 {
-        return Err(AudienceGrantError::BadRequest(
-            "offset must be >= 0".to_string(),
-        ));
-    }
-    if let Some(axis) = &query.axis {
-        validate_axis(axis)?;
-    }
-
-    let rows = match (&query.audience, &query.axis) {
-        (None, None) => {
-            sqlx::query_as::<_, GrantListEntry>(
-                "SELECT audience, axis, selector, created_at, created_by
-                 FROM audience_grants
-                 ORDER BY created_at DESC
-                 LIMIT $1 OFFSET $2",
-            )
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&pool)
-            .await?
-        }
-        (Some(audience), None) => {
-            sqlx::query_as::<_, GrantListEntry>(
-                "SELECT audience, axis, selector, created_at, created_by
-                 FROM audience_grants
-                 WHERE audience = $1
-                 ORDER BY created_at DESC
-                 LIMIT $2 OFFSET $3",
-            )
-            .bind(audience)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&pool)
-            .await?
-        }
-        (None, Some(axis)) => {
-            sqlx::query_as::<_, GrantListEntry>(
-                "SELECT audience, axis, selector, created_at, created_by
-                 FROM audience_grants
-                 WHERE axis = $1
-                 ORDER BY created_at DESC
-                 LIMIT $2 OFFSET $3",
-            )
-            .bind(axis)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&pool)
-            .await?
-        }
-        (Some(audience), Some(axis)) => {
-            sqlx::query_as::<_, GrantListEntry>(
-                "SELECT audience, axis, selector, created_at, created_by
-                 FROM audience_grants
-                 WHERE audience = $1 AND axis = $2
-                 ORDER BY created_at DESC
-                 LIMIT $3 OFFSET $4",
-            )
-            .bind(audience)
-            .bind(axis)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&pool)
-            .await?
-        }
-    };
-
-    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
@@ -426,36 +455,158 @@ struct DeleteGrantQuery {
 
 /// `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` -- natural key passed as
 /// query parameters, not path segments: `valid_selector` places no charset restriction on a
-/// `group:<id>` selector (a hierarchical IdP group name can contain `/`, `?`, or other
-/// URL-significant characters), so encoding it as a raw path segment the way every other route's
-/// `Uuid` id does would be unsafe here. `404` if no such row.
+/// `group:<id>` selector (a hierarchical IdP group name can contain `/`), so encoding it as a raw
+/// path segment the way every other route's `Uuid` id does would be unsafe here. `204` / `404`.
+///
+/// Gated by [`GrantGate`] (the knob check). An admin deletes any row unconditionally, including
+/// their own -- admin access never depends on grant rows, so this is not a restriction on them.
+/// A non-admin may delete only their own direct `user:<email>` row ("remove my access" -- never
+/// offered for `group:`/`*` rows, since those would affect other principals) or a row they
+/// themselves created (the revoke-a-share counterpart of `create_grant`, Design §3). If the
+/// natural key names no row at all, `404`; if it names a row but neither condition matches,
+/// `403`.
 async fn delete_grant(
     Extension(state): Extension<AudienceGrantsState>,
-    AdminUser(user): AdminUser,
+    GrantGate(caller): GrantGate,
     Query(query): Query<DeleteGrantQuery>,
 ) -> Result<StatusCode, AudienceGrantError> {
     let pool = require_pool(&state)?;
     validate_axis(&query.axis)?;
 
-    let result = sqlx::query(
-        "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3",
-    )
-    .bind(&query.audience)
-    .bind(&query.axis)
-    .bind(&query.selector)
-    .execute(&pool)
-    .await?;
+    let deleted_by = caller_identity(&caller);
+    let rows_affected = if caller.is_admin {
+        sqlx::query(
+            "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3",
+        )
+        .bind(&query.audience)
+        .bind(&query.axis)
+        .bind(&query.selector)
+        .execute(&pool)
+        .await?
+        .rows_affected()
+    } else if let Some(email) = &caller.email {
+        let own_selector = format!("user:{email}");
+        sqlx::query(
+            "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3 \
+             AND (selector = $4 OR created_by = $5)",
+        )
+        .bind(&query.audience)
+        .bind(&query.axis)
+        .bind(&query.selector)
+        .bind(&own_selector)
+        .bind(&deleted_by)
+        .execute(&pool)
+        .await?
+        .rows_affected()
+    } else {
+        // No email at all -- the own-row arm can never match (there is no `user:<email>`
+        // selector to be), so it's dropped from the predicate entirely rather than bound to a
+        // sentinel that could never occur naturally but would still read as a real comparison.
+        sqlx::query(
+            "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3 \
+             AND created_by = $4",
+        )
+        .bind(&query.audience)
+        .bind(&query.axis)
+        .bind(&query.selector)
+        .bind(&deleted_by)
+        .execute(&pool)
+        .await?
+        .rows_affected()
+    };
 
-    if result.rows_affected() == 0 {
-        return Err(AudienceGrantError::NotFound);
+    if rows_affected == 0 {
+        if caller.is_admin {
+            return Err(AudienceGrantError::NotFound);
+        }
+        // Distinguish "no such row" (404) from "exists, but not yours" (403) with a follow-up
+        // read -- the delete above already told us this caller's predicate didn't match.
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1 AND axis = $2 \
+             AND selector = $3)",
+        )
+        .bind(&query.audience)
+        .bind(&query.axis)
+        .bind(&query.selector)
+        .fetch_one(&pool)
+        .await?;
+        return Err(if exists {
+            AudienceGrantError::Forbidden(
+                "this grant is neither your own direct access nor one you created".to_string(),
+            )
+        } else {
+            AudienceGrantError::NotFound
+        });
     }
 
-    let deleted_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
     info!(
         "deleted audience grant audience={} axis={} selector={} deleted_by={deleted_by}",
         query.audience, query.axis, query.selector
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET {base_path}/api/audience-grants/visible` -- the unpaginated read backing the Audience
+/// Access page's own list (#1510, Design §3, §6). [`AuthenticatedUser`]-gated, no admin
+/// requirement -- built the same way `/my-audiences` already is: no pagination, reading
+/// `AudienceGrantsState.pool` directly.
+///
+/// **Visibility, by caller:**
+/// - **Admin**: every row.
+/// - **Non-admin, self-service knob on**: every grant on each `(audience, axis)` pair the caller
+///   holds a matching grant on -- the same held-pair `EXISTS` query `list_audience_grants()`
+///   (the SQL table function) runs, bound to the caller's *unfiltered* `caller_selectors` (`*`
+///   is fine here, unlike the write-side hold check in `create_grant`).
+/// - **Non-admin, self-service knob off**: narrows to the caller's own rows only
+///   (`selector = ANY(caller_selectors)`) -- never a sibling's `selector`/`created_by`. This
+///   route (unlike the table function) *can* read the knob, since it lives in this same crate,
+///   and a default knob-off deployment must not hand a browsing non-admin the wider disclosure
+///   the held-pair query carries (the same reasoning `/my-audiences` already applies).
+///
+/// This function is what makes the two read paths deliberately asymmetric:
+/// `list_audience_grants()` cannot check this knob at all (a different crate/service), so it
+/// always runs the wider held-pair query for a non-admin -- an accepted, intentional exception,
+/// not a bug (Design §2/§3, Trade-offs).
+async fn visible_grants(
+    Extension(state): Extension<AudienceGrantsState>,
+    AuthenticatedUser(caller): AuthenticatedUser,
+) -> Result<Json<Vec<VisibleGrantRow>>, AudienceGrantError> {
+    let pool = require_pool(&state)?;
+    let rows = if caller.is_admin {
+        sqlx::query_as::<_, VisibleGrantRow>(
+            "SELECT audience, axis, selector, created_at, created_by
+             FROM audience_grants
+             ORDER BY audience, axis, selector",
+        )
+        .fetch_all(&pool)
+        .await?
+    } else if state.self_service_mint_enabled {
+        let selectors = caller_selectors(&caller);
+        sqlx::query_as::<_, VisibleGrantRow>(
+            "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by
+             FROM audience_grants g
+             WHERE EXISTS (
+               SELECT 1 FROM audience_grants h
+               WHERE h.audience = g.audience AND h.axis = g.axis AND h.selector = ANY($1)
+             )
+             ORDER BY g.audience, g.axis, g.selector",
+        )
+        .bind(&selectors)
+        .fetch_all(&pool)
+        .await?
+    } else {
+        let selectors = caller_selectors(&caller);
+        sqlx::query_as::<_, VisibleGrantRow>(
+            "SELECT audience, axis, selector, created_at, created_by
+             FROM audience_grants
+             WHERE selector = ANY($1)
+             ORDER BY audience, axis, selector",
+        )
+        .bind(&selectors)
+        .fetch_all(&pool)
+        .await?
+    };
+    Ok(Json(rows))
 }
 
 /// Derives the caller-scoped namespace prefix `micromegas-setup-telemetry` mints fresh audiences
@@ -513,21 +664,19 @@ struct MyAudiencesResponse {
 }
 
 /// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
-/// per the DB store's current rows (no cache -- this reads `pool` directly, same as
-/// `list_grants`), plus the caller's own `is_admin` flag, `mint_prefix`, and `email` (AbAC Stage
-/// 6, #1374, Design §5).
+/// per the DB store's current rows (no cache -- this reads `pool` directly), plus the caller's
+/// own `is_admin` flag, `mint_prefix`, and `email` (AbAC Stage 6, #1374, Design §5).
 ///
-/// Caller-scoped, so [`AuthenticatedUser`] (any authenticated caller), not [`AdminUser`]: unlike
-/// `list_grants`, this can never reveal another principal's selector, only whether *this*
-/// caller's own email/groups match one, plus facts about the caller's own identity. `is_admin`,
-/// `mint_prefix`, and `email` all ride on this response because there is no other route
-/// reachable from a CLI caller (authenticated purely with a Bearer header) that exposes any of
-/// them -- `/auth/me` reads its ID token only from the browser's `id_token` cookie, with no
-/// `Authorization: Bearer` fallback.
+/// Caller-scoped, so [`AuthenticatedUser`] (any authenticated caller), not admin-gated: this can
+/// never reveal another principal's selector, only whether *this* caller's own email/groups
+/// match one, plus facts about the caller's own identity. `is_admin`, `mint_prefix`, and `email`
+/// all ride on this response because there is no other route reachable from a CLI caller
+/// (authenticated purely with a Bearer header) that exposes any of them -- `/auth/me` reads its
+/// ID token only from the browser's `id_token` cookie, with no `Authorization: Bearer` fallback.
 ///
-/// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate` enforces for the
-/// mint route itself, for the same reason: this is new non-admin surface too, and must not widen
-/// on upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
+/// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate`/`GrantGate`
+/// enforce, for the same reason: this is new non-admin surface too, and must not widen on
+/// upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
 /// `!caller.is_admin` condition.
 async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
@@ -543,12 +692,9 @@ async fn my_audiences(
     // filtering with `selector_matches`: `*` plus the caller's own `user:`/`group:` selectors
     // are exactly the selectors `selector_matches` would accept, and binding them as an array
     // lets Postgres do the filtering instead of materializing the whole (monotonically-growing)
-    // mint axis on every call.
-    let mut selectors: Vec<String> = vec!["*".to_string()];
-    if let Some(email) = &caller.email {
-        selectors.push(format!("user:{email}"));
-    }
-    selectors.extend(caller.groups.iter().map(|g| format!("group:{g}")));
+    // mint axis on every call. `caller_selectors` (AbAC Stage 6a/6b) is the shared builder for
+    // this exact list.
+    let selectors = caller_selectors(&caller);
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT audience FROM audience_grants WHERE axis = 'mint' AND selector = ANY($1)",
     )
@@ -570,11 +716,20 @@ async fn my_audiences(
 /// Routes only -- [`AudienceGrantsState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `analytics_keys_state`/
 /// `ingestion_keys_state` are.
+///
+/// The collection path (`POST`/`DELETE {base_path}/api/audience-grants`) no longer answers
+/// `GET` -- the old paginated `list_grants` is deleted outright (Design §3); the Audience Access
+/// page's own list lives at `GET {base_path}/api/audience-grants/visible` instead, and ad-hoc
+/// auditing goes through `micromegas-query`/`list_audience_grants()`.
 pub fn audience_grants_router(base_path: &str) -> Router {
     Router::new()
         .route(
             &format!("{base_path}/api/audience-grants"),
-            post(create_grant).get(list_grants).delete(delete_grant),
+            post(create_grant).delete(delete_grant),
+        )
+        .route(
+            &format!("{base_path}/api/audience-grants/visible"),
+            get(visible_grants),
         )
         .route(
             &format!("{base_path}/api/audience-grants/my-audiences"),

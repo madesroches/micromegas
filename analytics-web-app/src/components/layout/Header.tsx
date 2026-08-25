@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
-import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut } from 'lucide-react'
+import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut, Users } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
 import { getConfig } from '@/lib/config'
 import { navigateTo } from '@/lib/navigation'
@@ -163,6 +163,14 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
                         <p className="text-xs text-theme-text-muted truncate">{user.email}</p>
                       )}
                     </div>
+                    <AppLink
+                      href="/audiences"
+                      onClick={() => setIsUserMenuOpen(false)}
+                      className="w-full flex items-center px-4 py-2 text-sm text-theme-text-primary hover:bg-theme-border"
+                    >
+                      <Users className="h-4 w-4 mr-2" />
+                      Audience access
+                    </AppLink>
                     <button
                       onClick={handleLogout}
                       disabled={isLoggingOut}

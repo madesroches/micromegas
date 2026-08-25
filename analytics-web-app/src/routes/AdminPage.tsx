@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Database, Download, Upload, Map, KeyRound, ShieldCheck, ShieldBan } from 'lucide-react'
+import { Database, Download, Upload, Map, KeyRound, ShieldCheck, ShieldBan, Users } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -100,6 +100,18 @@ function AdminPageContent() {
                 <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Query Deny List</h3>
                 <p className="text-sm text-theme-text-muted leading-relaxed">
                   Reject a misbehaving query at the FlightSQL service, without a deploy.
+                </p>
+              </div>
+            </AppLink>
+
+            <AppLink href="/audiences" className="block">
+              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-blue-500/15 text-blue-500">
+                  <Users className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Audience Access</h3>
+                <p className="text-sm text-theme-text-muted leading-relaxed">
+                  See who can read from and mint into each audience, and grant access.
                 </p>
               </div>
             </AppLink>

@@ -158,6 +158,7 @@ fn caller(read_scope: ReadScope) -> CallerContext {
         isolation_config: Arc::new(IsolationConfig::default()),
         admin_principal_possible: true,
         identity: None,
+        grant_selectors: Arc::from([]),
     }
 }
 

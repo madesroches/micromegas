@@ -748,6 +748,145 @@ async fn live_import_is_idempotent() {
 }
 
 // ---------------------------------------------------------------------------
+// #[ignore], live DB -- admin server-side claim (#1510, AbAC Stage 6c, Design §4)
+// ---------------------------------------------------------------------------
+
+/// An admin minting into a brand-new, never-before-seen audience now claims it server-side:
+/// both `mint` and `read` grant rows for `user:<admin email>` land in `audience_grants`,
+/// `claimed` comes back `true`, and the admin still gets a key.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
+    let pool = live_pool().await;
+    let audience = format!("admin-claim-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: None,
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-claim-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
+    assert_eq!(body["claimed"], true);
+
+    let mut axes: Vec<String> = sqlx::query_scalar(
+        "SELECT axis FROM audience_grants WHERE audience = $1 \
+         AND selector = 'user:admin@example.com'",
+    )
+    .bind(&audience)
+    .fetch_all(&pool)
+    .await
+    .expect("query grants");
+    axes.sort();
+    assert_eq!(axes, vec!["mint".to_string(), "read".to_string()]);
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+/// An admin minting into an audience that already has a grant row (created by someone else)
+/// does not claim it -- `claimed` comes back `false`, and no new grant row is written for the
+/// admin.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
+    let pool = live_pool().await;
+    let audience = format!("admin-existing-test-{}", uuid::Uuid::new_v4());
+    insert_mint_grant(&pool, &audience, "group:eng").await;
+
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: None,
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-existing-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["claimed"], false);
+
+    let admin_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audience_grants WHERE audience = $1 \
+         AND selector = 'user:admin@example.com'",
+    )
+    .bind(&audience)
+    .fetch_one(&pool)
+    .await
+    .expect("query grants");
+    assert_eq!(
+        admin_rows, 0,
+        "admin must not gain a grant on a pre-owned audience"
+    );
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+/// The reserved default-key audience (from `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) is never claimed
+/// for an admin caller either, matching the non-admin lazy-claim path's existing reserved-name
+/// rule.
+#[ignore]
+#[tokio::test]
+async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
+    let pool = live_pool().await;
+    let audience = format!("admin-reserved-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: Some(audience.clone()),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let name = format!("admin-reserved-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response).await;
+    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
+    assert_eq!(body["claimed"], false);
+
+    let grant_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE audience = $1")
+            .bind(&audience)
+            .fetch_one(&pool)
+            .await
+            .expect("query grants");
+    assert_eq!(grant_rows, 0);
+
+    cleanup_audience(&pool, &audience).await;
+}
+
+// ---------------------------------------------------------------------------
 // #[ignore], live DB -- self-service mint (AbAC Stage 6, #1374, Design §4/§4a)
 // ---------------------------------------------------------------------------
 

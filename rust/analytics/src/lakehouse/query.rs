@@ -1,20 +1,28 @@
 use super::{
-    answer::Answer, deny_queries_table_function::DenyQueriesTableFunction,
-    get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
+    answer::Answer,
+    deny_queries_table_function::DenyQueriesTableFunction,
+    get_payload_function::GetPayload,
+    lakehouse_context::LakehouseContext,
+    list_audience_grants_table_function::{GrantVisibility, ListAudienceGrantsTableFunction},
     list_partitions_table_function::ListPartitionsTableFunction,
     list_query_denials_table_function::ListQueryDenialsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
-    parse_block_table_function::ParseBlockTableFunction, partition::Partition,
-    partition_cache::QueryPartitionProvider, partitioned_table_provider::PartitionedTableProvider,
+    parse_block_table_function::ParseBlockTableFunction,
+    partition::Partition,
+    partition_cache::QueryPartitionProvider,
+    partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
-    process_spans_table_function::ProcessSpansTableFunction, reader_factory::ReaderFactory,
+    process_spans_table_function::ProcessSpansTableFunction,
+    reader_factory::ReaderFactory,
     regenerate_partitions_table_function::RegeneratePartitionsTableFunction,
     remove_query_denial_udf::make_remove_query_denial_udf,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partition_by_metadata_udf::make_retire_partition_by_metadata_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction,
-    session_configurator::SessionConfigurator, view::View, view_factory::ViewFactory,
+    session_configurator::SessionConfigurator,
+    view::View,
+    view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -139,6 +147,21 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "list_view_sets",
         Arc::new(ListViewSetsTableFunction::new(view_factory.clone())),
+    );
+    // Caller-scoped, not admin-gated (#1489, AbAC Stage 6b, Design §2): registered for every
+    // caller, admin or not, with the visibility split decided here rather than inside the
+    // function -- an admin sees every row, a non-admin only the pairs their `grant_selectors`
+    // hold.
+    ctx.register_udtf(
+        "list_audience_grants",
+        Arc::new(ListAudienceGrantsTableFunction::new(
+            lakehouse.lake().db_pool.clone(),
+            if caller.is_admin {
+                GrantVisibility::All
+            } else {
+                GrantVisibility::Held(caller.grant_selectors.clone())
+            },
+        )),
     );
     ctx.register_udtf(
         "perfetto_trace_chunks",

@@ -75,6 +75,14 @@ pub struct CallerContext {
     /// `created_by` is the only consumer anywhere in that plan, so a richer identity type would
     /// be written at every construction site and read nowhere.
     pub identity: Option<String>,
+    /// The grant selectors this caller matches -- `"*"`, `"user:<email>"` when an email is present,
+    /// and one `"group:<g>"` per claimed group -- precomputed by `rust/public` from the
+    /// `AuthContext` (`micromegas_auth::policy::caller_selectors`), so `micromegas-analytics` never
+    /// needs the auth crate. Empty for internal and maintenance callers and for a request with no
+    /// `AuthContext` at all (`--disable-auth`). Consumed by `list_audience_grants()`
+    /// (`list_audience_grants_table_function.rs`, #1489, AbAC Stage 6b); admins do not need it --
+    /// they see every row.
+    pub grant_selectors: Arc<[String]>,
 }
 
 impl CallerContext {
@@ -91,6 +99,7 @@ impl CallerContext {
             isolation_config: Arc::new(IsolationConfig::default()),
             admin_principal_possible: true,
             identity: None,
+            grant_selectors: Arc::from([]),
         }
     }
 
@@ -105,6 +114,7 @@ impl CallerContext {
             isolation_config: Arc::new(IsolationConfig::default()),
             admin_principal_possible: true,
             identity: None,
+            grant_selectors: Arc::from([]),
         }
     }
 }

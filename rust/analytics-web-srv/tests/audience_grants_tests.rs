@@ -1,19 +1,22 @@
-//! Tests for `audience_grants.rs` — the audience-grant admin routes (#1489, AbAC Stage 6a).
+//! Tests for `audience_grants.rs` — the audience-grant routes (#1489, AbAC Stage 6a; self-service
+//! write policy #1510, AbAC Stage 6c).
 //!
 //! Modeled on `ingestion_keys_tests.rs`'s pattern exactly: routes are wired the same way
 //! `build_protected_routes` wires them, but with `cookie_auth_middleware` bypassed by
 //! pre-inserting a synthetic `ValidatedUser` extension (the same shape `--disable-auth` uses) --
-//! this exercises the real `AdminUser` extractor, unlike a plain `Extension(test_user())`
-//! handler-as-function call, which never runs an extractor at all.
+//! this exercises the real `GrantGate`/`AuthenticatedUser` extractors, unlike a plain
+//! `Extension(test_user())` handler-as-function call, which never runs an extractor at all.
 //!
 //! Every non-`#[ignore]`d test here uses a lazily-connected pool (`sqlx::PgPool::connect_lazy`)
-//! and never actually reaches the database: most 403 cases are rejected by the `AdminUser`
-//! extractor before any handler runs, except `/my-audiences`'s non-admin-when-disabled 403, which
-//! comes from the handler's own knob check instead (AbAC Stage 6, #1374) -- still before
-//! `require_pool`/any DB access. The 400 cases fail validation before touching the pool, and the
-//! `NotConfigured` cases use `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`,
-//! which never touches `state.pool` at all. Live-DB round trips are `#[ignore]`d, run manually
-//! against a real, v7-migrated Postgres, per `ingestion_keys_tests.rs`'s precedent.
+//! and never actually reaches the database: the knob-off 403 and the non-admin `*`-selector 403
+//! are both rejected before any query runs -- the former by `GrantGate` itself before the
+//! handler body starts, the latter by `create_grant`'s own check, which runs before the
+//! per-pair hold check that would otherwise touch the pool. The 400 cases fail validation before
+//! touching the pool, and the `NotConfigured` cases use `AudienceGrantsState { pool: None,
+//! self_service_mint_enabled: false }`, which never touches `state.pool` at all. Every other §3
+//! branch -- held-pair create, own-row/created-by delete, `GET .../visible`'s three visibility
+//! cases -- reaches Postgres and is `#[ignore]`d, run manually against a real, v7-migrated
+//! Postgres, per `ingestion_keys_tests.rs`'s precedent.
 
 use analytics_web_srv::audience_grants::{
     AudienceGrantsState, audience_grants_router, mint_prefix_for,
@@ -118,13 +121,12 @@ fn delete_request(uri: &str) -> Request<Body> {
 }
 
 // ---------------------------------------------------------------------------
-// The gate: 403 for a non-admin `ValidatedUser`, on every route. The
-// `AdminUser` extractor rejects before any handler body runs -- never
-// touches the pool.
+// The gate: 403 for a non-admin `ValidatedUser` when the self-service knob is off, on both
+// write routes. `GrantGate` rejects before the handler body runs -- never touches the pool.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_grant_403_for_non_admin() {
+async fn create_grant_403_for_non_admin_when_knob_disabled() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
@@ -135,7 +137,7 @@ async fn create_grant_403_for_non_admin() {
     let response = app
         .oneshot(post_request(
             "/api/audience-grants",
-            r#"{"audience": "team-alpha", "axis": "read", "selector": "*"}"#,
+            r#"{"audience": "team-alpha", "axis": "read", "selector": "user:reader@example.com"}"#,
         ))
         .await
         .expect("call service");
@@ -143,23 +145,7 @@ async fn create_grant_403_for_non_admin() {
 }
 
 #[tokio::test]
-async fn list_grants_403_for_non_admin() {
-    let app = build_handler_router_with_user(
-        AudienceGrantsState {
-            pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-        },
-        non_admin_user(),
-    );
-    let response = app
-        .oneshot(get_request("/api/audience-grants"))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn delete_grant_403_for_non_admin() {
+async fn delete_grant_403_for_non_admin_when_knob_disabled() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
@@ -170,6 +156,30 @@ async fn delete_grant_403_for_non_admin() {
     let response = app
         .oneshot(delete_request(
             "/api/audience-grants?audience=team-alpha&axis=read&selector=%2A",
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// A non-admin caller may never grant `*` -- rejected by `create_grant`'s own check, before the
+// per-pair hold check that would otherwise touch the pool (Design §3).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_grant_403_for_non_admin_star_selector() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            r#"{"audience": "team-alpha", "axis": "read", "selector": "*"}"#,
         ))
         .await
         .expect("call service");
@@ -236,54 +246,6 @@ async fn create_grant_400_for_overlong_selector() {
     );
     let response = app
         .oneshot(post_request("/api/audience-grants", &body))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn list_grants_400_for_zero_limit() {
-    let app = build_handler_router_with_user(
-        AudienceGrantsState {
-            pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(get_request("/api/audience-grants?limit=0"))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn list_grants_400_for_negative_limit() {
-    let app = build_handler_router_with_user(
-        AudienceGrantsState {
-            pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(get_request("/api/audience-grants?limit=-1"))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn list_grants_400_for_negative_offset() {
-    let app = build_handler_router_with_user(
-        AudienceGrantsState {
-            pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(get_request("/api/audience-grants?offset=-1"))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -392,22 +354,6 @@ async fn create_grant_503_when_pool_unconfigured() {
 }
 
 #[tokio::test]
-async fn list_grants_503_when_pool_unconfigured() {
-    let app = build_handler_router_with_user(
-        AudienceGrantsState {
-            pool: None,
-            self_service_mint_enabled: false,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(get_request("/api/audience-grants"))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-}
-
-#[tokio::test]
 async fn delete_grant_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
@@ -420,6 +366,22 @@ async fn delete_grant_503_when_pool_unconfigured() {
         .oneshot(delete_request(
             "/api/audience-grants?audience=team-alpha&axis=read&selector=%2A",
         ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn visible_503_when_pool_unconfigured() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: None,
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -444,9 +406,23 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("parsing response body as json")
 }
 
+/// Reads the rows for one audience directly via `sqlx` -- the round trip below no longer has a
+/// list route to read back through (`list_grants` is deleted, Design §3); ad-hoc auditing now
+/// goes through `micromegas-query`/`list_audience_grants()` instead.
+async fn direct_read(pool: &sqlx::PgPool, audience: &str) -> Vec<(String, String, String)> {
+    sqlx::query_as::<_, (String, String, String)>(
+        "SELECT audience, axis, selector FROM audience_grants WHERE audience = $1 \
+         ORDER BY axis, selector",
+    )
+    .bind(audience)
+    .fetch_all(pool)
+    .await
+    .expect("direct read")
+}
+
 #[ignore]
 #[tokio::test]
-async fn live_create_list_delete_round_trip() {
+async fn live_create_delete_round_trip() {
     let pool = live_pool().await;
     let app = build_handler_router_with_user(
         AudienceGrantsState {
@@ -479,18 +455,9 @@ async fn live_create_list_delete_round_trip() {
         .expect("call service");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let response = app
-        .clone()
-        .oneshot(get_request(&format!(
-            "/api/audience-grants?audience={audience}"
-        )))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::OK);
-    let rows = json_body(response).await;
-    let rows = rows.as_array().expect("array of grants");
+    let rows = direct_read(&pool, &audience).await;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["selector"].as_str(), Some("group:eng"));
+    assert_eq!(rows[0].2, "group:eng");
 
     let response = app
         .clone()
@@ -501,6 +468,8 @@ async fn live_create_list_delete_round_trip() {
         .expect("call service");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
+    assert!(direct_read(&pool, &audience).await.is_empty());
+
     // A second delete of the now-gone row is a 404.
     let response = app
         .clone()
@@ -510,6 +479,329 @@ async fn live_create_list_delete_round_trip() {
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// #[ignore], live DB -- non-admin write policy (#1510, AbAC Stage 6c, Design §3)
+// ---------------------------------------------------------------------------
+
+async fn insert_grant(
+    pool: &sqlx::PgPool,
+    audience: &str,
+    axis: &str,
+    selector: &str,
+    created_by: &str,
+) {
+    sqlx::query(
+        "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+         VALUES ($1, $2, $3, now(), $4)",
+    )
+    .bind(audience)
+    .bind(axis)
+    .bind(selector)
+    .bind(created_by)
+    .execute(pool)
+    .await
+    .expect("insert grant");
+}
+
+async fn cleanup_grants(pool: &sqlx::PgPool, audience: &str) {
+    let _ = sqlx::query("DELETE FROM audience_grants WHERE audience = $1")
+        .bind(audience)
+        .execute(pool)
+        .await;
+}
+
+/// A non-admin with no matching grant on the pair at all is refused.
+#[ignore]
+#[tokio::test]
+async fn live_create_grant_403_when_caller_does_not_hold_the_pair() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-hold-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            &format!(
+                r#"{{"audience": "{audience}", "axis": "read", "selector": "user:someone-else@example.com"}}"#
+            ),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// A non-admin who holds `(audience, axis)` only via a `group:` row may still share it with a
+/// `user:`/`group:` selector -- holding through a group counts (Design §3).
+#[ignore]
+#[tokio::test]
+async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-group-hold-test-{}", uuid::Uuid::new_v4());
+    insert_grant(&pool, &audience, "read", "group:eng", "test").await;
+
+    let app = build_handler_router_with_user_and_groups(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+        vec!["eng".to_string()],
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            &format!(
+                r#"{{"audience": "{audience}", "axis": "read", "selector": "user:teammate@example.com"}}"#
+            ),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Removing one's own direct `user:<email>` row succeeds (204).
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_204_for_own_row() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-own-delete-test-{}", uuid::Uuid::new_v4());
+    insert_grant(
+        &pool,
+        &audience,
+        "read",
+        "user:reader@example.com",
+        "someone-else",
+    )
+    .await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=read&selector=user%3Areader%40example.com"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Removing a row the caller created (but whose selector is a `group:`, not their own) succeeds
+/// (204) -- the revoke-a-share counterpart of sharing.
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_204_for_a_row_the_caller_created() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-created-by-delete-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(&pool, &audience, "read", "group:eng", "reader@example.com").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=read&selector=group%3Aeng"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// A row that exists but is neither the caller's own nor one they created is a 403, not a 404.
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_403_for_someone_elses_row() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-others-row-test-{}", uuid::Uuid::new_v4());
+    insert_grant(
+        &pool,
+        &audience,
+        "read",
+        "user:other@example.com",
+        "other@example.com",
+    )
+    .await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=read&selector=user%3Aother%40example.com"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// A row that doesn't exist at all is a 404, for a non-admin exactly as for an admin.
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_404_for_a_nonexistent_row() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-absent-test-{}", uuid::Uuid::new_v4());
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=read&selector=user%3Areader%40example.com"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// #[ignore], live DB -- GET .../visible (#1510, Design §3)
+// ---------------------------------------------------------------------------
+
+#[ignore]
+#[tokio::test]
+async fn live_visible_admin_sees_every_row() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-visible-admin-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(&pool, &audience, "read", "group:eng", "test").await;
+    insert_grant(&pool, &audience, "mint", "user:carol@example.com", "test").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: false,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json_body(response).await;
+    let rows = rows.as_array().expect("array of grants");
+    let matching = rows
+        .iter()
+        .filter(|r| r["audience"].as_str() == Some(audience.as_str()))
+        .count();
+    assert_eq!(matching, 2);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Non-admin, knob on: sees every grant on a pair it holds, including a sibling row it did not
+/// create, but not a different pair.
+#[ignore]
+#[tokio::test]
+async fn live_visible_non_admin_knob_on_sees_held_pairs() {
+    let pool = live_pool().await;
+    let audience = format!("audience-grants-visible-held-test-{}", uuid::Uuid::new_v4());
+    insert_grant(&pool, &audience, "read", "user:reader@example.com", "test").await;
+    insert_grant(&pool, &audience, "read", "user:sibling@example.com", "test").await;
+    insert_grant(&pool, &audience, "mint", "user:other@example.com", "test").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json_body(response).await;
+    let rows = rows.as_array().expect("array of grants");
+    let selectors: Vec<&str> = rows
+        .iter()
+        .filter(|r| r["audience"].as_str() == Some(audience.as_str()))
+        .map(|r| r["selector"].as_str().expect("selector"))
+        .collect();
+    assert_eq!(
+        selectors.len(),
+        2,
+        "expected both rows on the held (audience, read) pair, got {selectors:?}"
+    );
+    assert!(selectors.contains(&"user:reader@example.com"));
+    assert!(selectors.contains(&"user:sibling@example.com"));
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Non-admin, knob off: narrows to the caller's own rows only -- never a sibling's, even on a
+/// pair the caller holds.
+#[ignore]
+#[tokio::test]
+async fn live_visible_non_admin_knob_off_sees_own_rows_only() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-visible-knob-off-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(&pool, &audience, "read", "user:reader@example.com", "test").await;
+    insert_grant(&pool, &audience, "read", "user:sibling@example.com", "test").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: false,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json_body(response).await;
+    let rows = rows.as_array().expect("array of grants");
+    let selectors: Vec<&str> = rows
+        .iter()
+        .filter(|r| r["audience"].as_str() == Some(audience.as_str()))
+        .map(|r| r["selector"].as_str().expect("selector"))
+        .collect();
+    assert_eq!(selectors, vec!["user:reader@example.com"]);
+
+    cleanup_grants(&pool, &audience).await;
 }
 
 #[ignore]

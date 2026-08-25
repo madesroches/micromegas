@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""CLI tool for managing DB-backed audience grants (#1489, AbAC Stage 6a).
+"""CLI tool for managing DB-backed audience grants (#1489, AbAC Stage 6a; #1510).
 
 Talks to `analytics-web-srv`'s `/api/audience-grants` routes over HTTP via
 `WebClient` -- never direct Postgres access, the same convention every CLI in
 this codebase follows (`screens.py`, `import_keys.py`). Modeled on
 `import_keys.py`'s `--url`/`--profile` argument shape rather than
 `screens.py`'s local-config-file shape: there is no local state to track here,
-just a thin wrapper over three HTTP calls.
+just a thin wrapper over two HTTP calls (`create`/`delete`).
+
+**No `list` subcommand.** The `GET /api/audience-grants` route it used to
+call is deleted server-side (#1510): listing now goes through
+`micromegas-query --all "SELECT * FROM list_audience_grants()"` instead,
+which as a bonus gives a non-admin caller their own scoped view and an admin
+`WHERE`/`ORDER BY` to work with.
 """
 
 import argparse
-import json
 import os
 import sys
 
@@ -70,33 +75,6 @@ def cmd_create(args):
     )
 
 
-def cmd_list(args):
-    """List audience grant rows, optionally filtered."""
-    client = make_client(args)
-    rows = client.list_audience_grants(
-        audience=args.audience,
-        axis=args.axis,
-        limit=args.limit,
-        offset=args.offset,
-    )
-
-    if args.format == "json":
-        print(json.dumps(rows, indent=2, ensure_ascii=False))
-        return
-
-    if not rows:
-        print("No audience grants.")
-        return
-
-    print(f"{'Audience':<30} {'Axis':<6} {'Selector':<40} {'Created By'}")
-    print("-" * 100)
-    for row in rows:
-        print(
-            f"{row['audience']:<30} {row['axis']:<6} {row['selector']:<40} "
-            f"{row['created_by']}"
-        )
-
-
 def cmd_delete(args):
     """Delete one audience grant row, keyed by its natural triple."""
     client = make_client(args)
@@ -108,6 +86,12 @@ def main():
     parser = argparse.ArgumentParser(
         prog="micromegas-grants",
         description="Manage DB-backed audience grants (analytics-web-srv /api/audience-grants)",
+        epilog=(
+            "To list grants, query the SQL function instead: "
+            'micromegas-query --all "SELECT * FROM list_audience_grants()" '
+            "-- a non-admin caller gets their own scoped view; an admin gets every row, "
+            "filterable with WHERE and ORDER BY."
+        ),
     )
     add_version_argument(parser)
     parser.add_argument(
@@ -127,17 +111,6 @@ def main():
     p_create.add_argument("axis", choices=["read", "mint"], help="Grant axis")
     p_create.add_argument("selector", help="'*', 'user:<id>', or 'group:<id>'")
     p_create.set_defaults(func=cmd_create)
-
-    # list
-    p_list = subparsers.add_parser("list", help="List audience grants")
-    p_list.add_argument("--audience", help="Filter by audience name")
-    p_list.add_argument("--axis", choices=["read", "mint"], help="Filter by axis")
-    p_list.add_argument("--limit", type=int, help="Max rows to return")
-    p_list.add_argument("--offset", type=int, help="Rows to skip")
-    p_list.add_argument(
-        "--format", choices=["table", "json"], default="table", help="Output format"
-    )
-    p_list.set_defaults(func=cmd_list)
 
     # delete
     p_delete = subparsers.add_parser("delete", help="Delete an audience grant")

@@ -70,6 +70,17 @@ See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) for details.
 
+#### `list_audience_grants()` 🔧
+
+**Administrative Function** - Lists rows of the DB-backed audience grant store, scoped to what
+the calling principal may see: an admin sees every row, a non-admin sees every grant on each
+`(audience, axis)` pair they hold a matching grant on. Not admin-gated — every authenticated
+caller can call it, which is why it's the way to list your own audience grants from
+`micromegas-query` (`micromegas-query --all "SELECT * FROM list_audience_grants()"`) or a
+notebook.
+
+See [Admin Functions Reference](../admin/functions-reference.md#list_audience_grants) for details.
+
 #### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
 **Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
