@@ -10,7 +10,8 @@
 //! caller holds a matching grant on -- deliberately wider than "rows whose selector matches me":
 //! if a caller may read an audience, they may see who else may, which is exactly the "who can
 //! see this audience" question the Audience Access page (and this function) exists to answer.
-//! An empty selector list (internal/maintenance callers) yields zero rows.
+//! An empty selector list (internal/maintenance callers, or an identity-less caller once the
+//! always-present `"*"` is stripped -- see `scan`) yields zero rows.
 //!
 //! **What this is not.** This function reads the DB table directly on every call, never
 //! `DbAudienceGrantsSource`'s TTL snapshot, so a write is visible immediately. It also does not
@@ -42,8 +43,9 @@ pub enum GrantVisibility {
     /// Every row -- an admin caller.
     All,
     /// Every grant on each `(audience, axis)` pair covered by one of these selectors -- a
-    /// non-admin caller's `grant_selectors`. Empty for internal/maintenance callers and for a
-    /// request with no `AuthContext` at all.
+    /// non-admin caller's `grant_selectors`, `"*"` included. Empty for internal/maintenance
+    /// callers and for a request with no `AuthContext` at all. `scan` strips the leading `"*"`
+    /// before binding it into the held-pair query -- see the note there for why.
     Held(Arc<[String]>),
 }
 
@@ -144,11 +146,22 @@ impl TableProvider for ListAudienceGrantsTableProvider {
                 .await
                 .map_err(|e| DataFusionError::External(e.into()))?,
             GrantVisibility::Held(selectors) => {
-                // An empty selector list (internal/maintenance callers) still runs the query --
-                // `= ANY($1)` over an empty array matches no row, giving zero rows rather than a
+                // `caller_selectors` always leads with `"*"` -- even for an identity-less caller
+                // (no email, no groups) -- so binding it unfiltered would match every pair that
+                // carries a `*` grant row and leak every sibling row on it. Strip `"*"` first,
+                // the same way `caller_holds_pair`'s write-side hold check does: a `*` grant is
+                // not something a caller individually *holds*, only something that lets them
+                // *read* via `AudienceReadPolicy`. An empty list after filtering (or an already-
+                // empty list, for internal/maintenance callers) still runs the query -- `=
+                // ANY($1)` over an empty array matches no row, giving zero rows rather than a
                 // separate short-circuit branch to keep in sync with the SQL above.
+                let identity_selectors: Vec<String> = selectors
+                    .iter()
+                    .filter(|s| s.as_str() != "*")
+                    .cloned()
+                    .collect();
                 sqlx::query(SELECT_HELD_SQL)
-                    .bind(selectors.as_ref())
+                    .bind(&identity_selectors)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| DataFusionError::External(e.into()))?

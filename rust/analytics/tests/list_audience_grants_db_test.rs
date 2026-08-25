@@ -1,8 +1,9 @@
 //! DB-backed tests for `list_audience_grants()` (#1489, AbAC Stage 6b) -- the visibility rule
 //! from the plan's Design §2: admin sees every row, a non-admin sees every grant on each
-//! `(audience, axis)` pair covered by one of their `grant_selectors` (including a `group:` hold
-//! and its sibling rows on the same pair, and never a different pair), and an empty selector
-//! list (internal/maintenance callers) sees zero rows. Also asserts the schema's column
+//! `(audience, axis)` pair covered by one of their identity `grant_selectors` (including a
+//! `group:` hold and its sibling rows on the same pair, and never a different pair), and an
+//! empty selector list (internal/maintenance callers, or a `["*"]`-only list once the
+//! always-present `"*"` is stripped) sees zero rows. Also asserts the schema's column
 //! order/types. `#[ignore]`d, requires a live `MICROMEGAS_SQL_CONNECTION_STRING` /
 //! `MICROMEGAS_OBJECT_STORE_URI` -- mirrors `query_deny_list_db_test.rs`'s convention; does not
 //! run under a plain `cargo test`.
@@ -222,6 +223,35 @@ async fn empty_selector_list_yields_zero_rows() -> Result<()> {
     let (_, batches) = query(
         lakehouse.clone(),
         caller(false, &[]),
+        &format!(
+            "SELECT audience, axis, selector FROM list_audience_grants() WHERE created_by = '{tag}'"
+        ),
+    )
+    .await?;
+    assert!(decode_triples(&batches).is_empty());
+
+    cleanup(&pool, &tag).await;
+    Ok(())
+}
+
+#[ignore]
+#[tokio::test]
+async fn star_only_selector_list_yields_zero_rows() -> Result<()> {
+    let lakehouse = lakehouse().await?;
+    let pool = lakehouse.lake().db_pool.clone();
+    let tag = format!("list-audience-grants-db-test-{}", Uuid::new_v4());
+    let aud_a = format!("{tag}-a");
+
+    // A `*` grant makes this pair publicly readable, but a caller with no email/groups holds
+    // no identity selector of their own -- `caller_selectors` always leads with `"*"`, so this
+    // guards against binding that `"*"` unfiltered into the held-pair query, which would match
+    // every pair carrying a `*` row and leak every sibling row on it.
+    insert_grant(&pool, &aud_a, "read", "*", &tag).await?;
+    insert_grant(&pool, &aud_a, "read", "user:bob@example.com", &tag).await?;
+
+    let (_, batches) = query(
+        lakehouse.clone(),
+        caller(false, &["*"]),
         &format!(
             "SELECT audience, axis, selector FROM list_audience_grants() WHERE created_by = '{tag}'"
         ),

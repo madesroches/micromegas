@@ -422,6 +422,7 @@ behind one off-by-default deployment knob:
 | `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers. |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
 
 **Audiences are created lazily, not pre-provisioned.** A non-admin caller who
 names a brand-new, never-before-granted audience *and supplies the name

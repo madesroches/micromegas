@@ -523,6 +523,7 @@ function AudienceAccessPageContent() {
   const [listError, setListError] = useState<string | null>(null)
   const [me, setMe] = useState<MyAudiences | null>(null)
   const [selfServiceOff, setSelfServiceOff] = useState(false)
+  const [myAudiencesError, setMyAudiencesError] = useState<string | null>(null)
 
   const [axisFilter, setAxisFilter] = useState<GrantAxis | null>(null)
   const [findText, setFindText] = useState('')
@@ -554,10 +555,19 @@ function AudienceAccessPageContent() {
       const result = await fetchMyAudiences()
       setMe(result)
       setSelfServiceOff(false)
+      setMyAudiencesError(null)
     } catch (err) {
       if (err instanceof AudienceGrantError && err.status === 403) {
         setMe(null)
         setSelfServiceOff(true)
+        setMyAudiencesError(null)
+      } else {
+        // Genuine failure (500, network, parse) -- keep `me` at whatever it was (most likely
+        // still null) and surface a retryable error instead of silently leaving the Mint
+        // affordances gated open on a null identity.
+        setMyAudiencesError(
+          err instanceof AudienceGrantError ? err.message : 'Failed to load your audiences'
+        )
       }
     }
   }, [])
@@ -707,7 +717,11 @@ function AudienceAccessPageContent() {
     }
   }
 
-  const showMintButton = isAdmin || !selfServiceOff
+  // `me !== null` guards against a genuine my-audiences fetch failure (myAudiencesError):
+  // without it, Mint controls would stay active with a null identity -- wrong prefix, no
+  // audience options in the dialog's <select>. `me` being legitimately still-loading also
+  // reads as null here, which is fine: Mint just doesn't show yet.
+  const showMintButton = me !== null && (isAdmin || !selfServiceOff)
 
   return (
     <AuthGuard>
@@ -814,13 +828,24 @@ function AudienceAccessPageContent() {
           </div>
 
           {listError && <ErrorBanner title="Failed to load grants" message={listError} onRetry={loadGrants} />}
+          {myAudiencesError && (
+            <ErrorBanner
+              title="Failed to load your audiences"
+              message={myAudiencesError}
+              onRetry={() => void loadMyAudiences()}
+            />
+          )}
           {(shareError || deleteError) && !dialogTarget && !deleteTarget && (
             <ErrorBanner title="Error" message={(shareError || deleteError) ?? ''} />
           )}
 
           <GrantDialog
             target={dialogTarget}
-            onClose={() => setDialogTarget(null)}
+            onClose={() => {
+              setDialogTarget(null)
+              setShareError(null)
+              setAlreadyExistedNote(null)
+            }}
             onSubmit={handleGrantSubmit}
             isSubmitting={isSharing}
             error={shareError}
@@ -845,7 +870,7 @@ function AudienceAccessPageContent() {
           />
 
           <MintKeyDialog
-            open={mintOpen}
+            open={mintOpen && me !== null}
             prefillAudience={mintPrefillAudience}
             me={me}
             onClose={() => setMintOpen(false)}
