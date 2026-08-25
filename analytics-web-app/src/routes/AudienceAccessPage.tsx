@@ -719,7 +719,9 @@ function AudienceAccessPageContent() {
 
   const deleteMessage = deleteTarget
     ? isAdmin || !isOwnRow(deleteTarget)
-      ? `Delete the ${deleteTarget.axis} grant on \`${deleteTarget.audience}\` for \`${deleteTarget.selector}\`? Principals matching this selector lose access once the grant cache expires (up to 60 s).`
+      ? deleteTarget.axis === 'mint'
+        ? `Delete the mint grant on \`${deleteTarget.audience}\` for \`${deleteTarget.selector}\`? Principals matching this selector lose access immediately.`
+        : `Delete the read grant on \`${deleteTarget.audience}\` for \`${deleteTarget.selector}\`? Principals matching this selector lose access once the grant cache expires (default 60 s).`
       : `Remove your direct ${deleteTarget.axis} grant on \`${deleteTarget.audience}\`? Unless a group or everyone grant also covers you, you lose access to this audience and cannot restore it yourself — an admin or someone who holds it would have to share it again.`
     : ''
 
