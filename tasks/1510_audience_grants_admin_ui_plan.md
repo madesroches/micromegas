@@ -241,6 +241,13 @@ audience" question the page exists to answer, and it is the same set you are all
 An empty selector list (`--disable-auth`, internal callers) yields zero rows. An API-key caller
 has no email or groups, so it sees only pairs that carry a `*` grant.
 
+This function is unconditional: it cannot read `analytics-web-srv`'s `self_service_mint_enabled`
+knob (a different crate/service, Current State's stated boundary), so it always applies the
+held-pair rule above to a non-admin regardless of that knob. The REST `GET
+.../audience-grants/visible` (§3), which backs the page's own list, narrows for a non-admin when
+the knob is off; this table function does not follow it there. The two paths are deliberately
+asymmetric — see §3 and Trade-offs.
+
 The function reads the table directly on every call — **not** `DbAudienceGrantsSource`'s
 TTL snapshot — so a reload after a REST write always shows the write. `stream_query.rs`'s
 `BLOCKED_FUNCTIONS` needs no change (read-only function).
@@ -269,6 +276,18 @@ bytes before being rejected — and `MintGate` was created for the exact same
 `AuthenticatedUser` extractor and moving the knob check into the handler body, where
 `Json<CreateGrantRequest>` has already been parsed, would silently drop that guarantee.
 `list_grants`, `ListQuery`, `GrantListEntry`, `DEFAULT_LIMIT` and `MAX_LIMIT` are deleted.
+
+`GrantGate` calling `AuthenticatedUser::from_request_parts` needs somewhere to convert that
+call's `Unauthenticated` rejection, exactly as `MintGate` does. `IngestionKeyError` already
+carries an `Unauthenticated(String)` variant (`ingestion_keys.rs:136`, rendered at :185) plus
+`impl From<Unauthenticated> for IngestionKeyError` (:208-211); `AudienceGrantError` has neither —
+today's `my_audiences` never needed one because it takes `AuthenticatedUser` as a handler
+parameter and lets axum render the rejection directly, but `GrantGate`'s `?`-based extractor body
+does not have that luxury. So `AudienceGrantError` gains its own `Unauthenticated` variant (401,
+`{code:"UNAUTHENTICATED"}`) and matching `From<Unauthenticated>` impl. This is a new variant on
+an already-`pub`, not-`#[non_exhaustive]` enum re-exported through `pub mod audience_grants`, so
+it is recorded as a published-enum addition in the CHANGELOG (Documentation), alongside the
+`GrantGate`/`AdminUser` gate-widening note.
 
 `GrantGate` yields the caller's `AuthContext` and handles only the knob half of the pre-check:
 
@@ -323,15 +342,33 @@ rows anyway. A user who removes their own last `read` row on an audience loses t
 see or re-share it; the confirm dialog says so (§8).
 
 **List, for the page itself (REST, not the UDTF).** New `GET
-{base_path}/api/audience-grants/visible`, `AuthenticatedUser`, no admin gate and no
-`self_service_mint_enabled` check (viewing your own grants works even when the knob is off, §6) —
-built the same way `my_audiences` already is: no pagination, reading `AudienceGrantsState.pool`
-directly. Admin: `SELECT audience, axis, selector, created_at, created_by FROM audience_grants
-ORDER BY audience, axis, selector`. Non-admin: the same `EXISTS`-joined visibility query §2 gives
-`list_audience_grants()`, bound to `caller_selectors(&caller)` (the unfiltered list — `*` is fine
-here, unlike the write hold-check). This exists only so `AudienceAccessPage` (§6) can read from
-the exact pool its own writes hit; `list_audience_grants()` is unaffected and is still how
-`micromegas-query` and other SQL clients read the store (§11, Decision 1).
+{base_path}/api/audience-grants/visible`, `AuthenticatedUser`, no admin gate — built the same way
+`my_audiences` already is: no pagination, reading `AudienceGrantsState.pool` directly. Admin:
+`SELECT audience, axis, selector, created_at, created_by FROM audience_grants ORDER BY audience,
+axis, selector`. Non-admin, **self-service knob on**: the same `EXISTS`-joined held-pair
+visibility query §2 gives `list_audience_grants()`, bound to `caller_selectors(&caller)` (the
+unfiltered list — `*` is fine here, unlike the write hold-check) — every grant row on a pair the
+caller holds, including other principals' `selector` and `created_by`. Non-admin, **self-service
+knob off**: the query narrows to `SELECT audience, axis, selector, created_at, created_by FROM
+audience_grants WHERE selector = ANY($1) ORDER BY audience, axis, selector` with `$1 =
+caller_selectors(&caller)` — the caller's own rows only, never a sibling's.
+
+This narrowing mirrors why `my_audiences` already gates on the same knob (:536-540, "must not
+widen on upgrade regardless of the knob"): unlike `my_audiences`, which only ever reveals whether
+the caller's own identity matches a selector, the held-pair query discloses *other* principals'
+`selector` and `created_by`, so a default knob-off deployment must not hand that to every
+authenticated caller. This exists only so `AudienceAccessPage` (§6) can read from the exact pool
+its own writes hit.
+
+`list_audience_grants()` (§2) cannot enforce this same narrowing: it runs in
+`micromegas-analytics` / flight-sql-srv, which has no access to `analytics-web-srv`'s
+`self_service_mint_enabled` config (Current State's stated crate boundary — `micromegas-analytics`
+deliberately does not depend on `micromegas-auth` or any web-server config). It therefore always
+runs the wider held-pair query for a non-admin, knob or no knob, and is still how
+`micromegas-query` and other SQL clients read the store (§11, Decision 1). The two paths
+deliberately differ: `/visible` narrows because a browsing non-admin should not get this
+disclosure for free on a knob-off deployment; the UDTF does not, because it structurally cannot
+check that knob, and is treated as an accepted, intentional exception (Trade-offs).
 
 ### 4. Mint route: server-side claim for admins, `claimed` in the response
 
@@ -650,16 +687,21 @@ shape for date-ordered auditing, which `list_audience_grants()` now covers from 
 
 **Phase 3 — REST writes + mint**
 
-5. `audience_grants.rs`: delete `list_grants` and its types/constants; new `GrantGate` extractor
-   on create/delete with the §3 policy; add `GET .../visible` (§3); module doc. Router loses the
-   old paginated `GET` on the collection path, gains `GET .../visible`.
+5. `audience_grants.rs`: delete `list_grants` and its types/constants; add `AudienceGrantError::
+   Unauthenticated` and its `From<Unauthenticated>` impl (§3); new `GrantGate` extractor on
+   create/delete with the §3 policy; add `GET .../visible` (§3), including its knob-off narrowing
+   for non-admins; module doc. Router loses the old paginated `GET` on the collection path, gains
+   `GET .../visible`.
 6. `ingestion_keys.rs`: admin claim path + `claimed` on `MintResponse` (§4).
-7. `tests/audience_grants_tests.rs`: drop list tests; add non-admin cases (knob off → 403;
-   `*` → 403; not held → 403; held via `group:` → 201; own-row delete → 204; other's row →
-   403; absent → 404); update `live_create_list_delete_round_trip` to verify via a direct
-   `sqlx` read. `tests/ingestion_keys_tests.rs`: admin fresh-audience mint writes both rows and
-   returns `claimed: true`; existing audience → `claimed: false`; reserved names never claimed.
-   `tests/routing_tests.rs` (disable-auth 503 router) is unaffected.
+7. `tests/audience_grants_tests.rs`: drop list tests; add non-admin cases, split per the file's
+   documented offline/live convention (:9-16). Offline, against the lazy pool: knob off → 403,
+   `*` → 403 (both rejected before any query runs). `#[ignore]`d, live DB: not held → 403, held
+   via `group:` → 201, own-row delete → 204, other's row → 403, absent → 404, plus `GET
+   .../visible` admin/non-admin(knob on)/non-admin(knob off) cases (§3). Update
+   `live_create_list_delete_round_trip` to verify via a direct `sqlx` read. `tests/
+   ingestion_keys_tests.rs`: admin fresh-audience mint writes both rows and returns `claimed:
+   true`; existing audience → `claimed: false`; reserved names never claimed. `tests/
+   routing_tests.rs` (disable-auth 503 router) is unaffected.
 
 **Phase 4 — frontend**
 
@@ -736,6 +778,17 @@ Modified:
   set you can also modify, and "who else can see this" is the question. The cost is that on an
   audience with a `*` read grant every reader sees every other `user:` row on it — acceptable
   for principals who already share the same data.
+- **`/visible`'s non-admin query narrows when the self-service knob is off; `list_audience_grants()`
+  never does.** The REST list route exists only to back this page, so it applies the same
+  narrowing `my_audiences` already relies on: with the knob off, a non-admin's `/visible` call
+  falls back to `selector = ANY(caller_selectors)` (own rows only) instead of the held-pair
+  `EXISTS` query, so a default knob-off deployment never discloses one principal's grants to
+  another through this route. The table function can't make the same call — `micromegas-analytics`
+  / flight-sql-srv has no visibility into `analytics-web-srv`'s config — so `list_audience_grants()`
+  always runs the wider held-pair query for a non-admin, exactly as an admin sees every row. This
+  is a deliberate, accepted asymmetry: the function is a SQL auditing surface (like
+  `list_query_denials()`), already ungated for every authenticated caller, and this plan does not
+  invent a second gating channel for it.
 - **`grant_selectors` as plain strings on `CallerContext`** rather than an `analytics` →
   `auth` crate dependency, honoring the existing architectural line in `read_scope.rs`. The
   cost is that selector grammar is now interpreted in two places (built in auth, matched in SQL
@@ -807,6 +860,9 @@ Modified:
     the new `GET .../audience-grants/visible` route backing the page's own list. **Minor breaking
     change** stays only on the gate widening from `AdminUser` to the new `GrantGate` extractor —
     a genuine published-Rust-API change — not on the removed `GET` route, which never released.
+    The same note also covers `AudienceGrantError` gaining an `Unauthenticated` variant and its
+    `From<Unauthenticated>` impl (§3) — a second, smaller published-enum addition `GrantGate`
+    needs to compile.
   - A new **Analytics** bullet documents `list_audience_grants()` (§2) — this one really is new,
     not an amendment.
   - The **Python** bullet for #1489 drops `list` from the CLI subcommands and
@@ -825,12 +881,16 @@ Modified:
 **Rust** — `rust/analytics`: `lakehouse_admin_gate_test.rs` proves `list_audience_grants()`
 plans for admin and non-admin alike (`NON_MUTATING_CALLS`); `list_audience_grants_db_test.rs`
 (`#[ignore]`, live DB) covers the visibility rule. `rust/auth`: `caller_selectors` unit cases
-(no email, groups, both). `rust/analytics-web-srv`: handler tests via
-`build_handler_router_with_user_and_groups` for every §3 branch (knob off, `*` refused, not
-held, held via `user:`, held via `group:`, own-row delete, created-by delete, 403 vs 404), plus
-admin behavior unchanged; `GET .../visible` for admin-sees-all, non-admin-sees-held-pairs (mirroring
-`list_audience_grants_db_test.rs`'s cases), and that it works with the knob off; `ingestion_keys_tests.rs`
-for §4.
+(no email, groups, both). `rust/analytics-web-srv`, split per `audience_grants_tests.rs:9-16`'s
+documented offline/live convention: two branches stay offline against the lazy pool (`sqlx::
+PgPool::connect_lazy`, never reaching the database) because `GrantGate`/the pre-query check
+reject them before any SQL runs — knob off → 403, `*` refused → 403 — via
+`build_handler_router_with_user_and_groups`. Every other §3 branch reaches Postgres and is
+`#[ignore]`d, live DB only: not held → 403, held via `user:` → 201, held via `group:` → 201,
+own-row delete → 204, created-by delete → 204, absent → 404, plus admin behavior unchanged; `GET
+.../visible` for admin-sees-all, non-admin-sees-held-pairs (knob on), and
+non-admin-sees-own-rows-only (knob off, mirroring `list_audience_grants_db_test.rs`'s cases and
+§3's narrowing); `ingestion_keys_tests.rs` for §4.
 
 **Frontend** (vitest + Testing Library, `QueryDenyListPage.test.tsx`'s harness minus its
 data-source and `streamQuery` mocks (this page has no `DataSourceField` and reads via REST, not
@@ -893,3 +953,10 @@ principals; knob off as non-admin.
 6. **Web-server and analytics admin lists may differ in split mode** (`MICROMEGAS_ADMINS` vs
    `MICROMEGAS_ANALYTICS_ADMINS`). Accepted: admin role is assigned through OIDC and the two
    variables are expected to agree; the monolith shares one.
+7. **`/visible` narrows for a non-admin when the self-service knob is off; `list_audience_grants()`
+   does not.** The REST list route can read `analytics-web-srv`'s `self_service_mint_enabled`
+   config and falls back to own-rows-only when it's off, mirroring why `my_audiences` gates on the
+   same knob. The table function runs in a different crate/service with no access to that config,
+   so it always applies the full held-pair rule for a non-admin — accepted as an intentional
+   exception because it is a SQL auditing surface, already ungated for every authenticated caller,
+   like `list_query_denials()`.
