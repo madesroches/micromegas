@@ -182,8 +182,8 @@ telemetry-ingestion-srv --disable-auth
     knob.** Under the grant-map model (see [Audiences and Grants](#audiences-and-grants) below),
     every authenticated caller's readable set always includes `public`, regardless of identity —
     there is no caller kind whose resolved set is otherwise empty the way an API key's was under
-    the identity-derived model this replaced. `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`'s default of
-    `public` (the write-side knob, see [Ingestion](ingestion.md#environment-variables)) restores
+    the identity-derived model this replaced. `MICROMEGAS_DEFAULT_AUDIENCE`'s default of
+    `public` (see [Ingestion](ingestion.md#environment-variables)) restores
     visibility for every caller kind that never binds an audience of its own.
 
     **The two prongs read different copies of `micromegas.audience`, with different freshness.**
@@ -220,7 +220,7 @@ ingestion credential**, never trusted from the client payload. Ingestion strips 
 client-supplied `micromegas.*` property and always stamps `micromegas.audience` before the
 process's first block is ever materialized — from the credential's bound audience when it has
 one (a DB-backed `ingestion_api_keys` row), or from the deployment's
-`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`) otherwise. There is no unstamped
+`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) otherwise. There is no unstamped
 state any more: an idempotent backfill, run at every ingestion-service startup, stamps that same
 default onto any legacy `processes` row that predates this change. See
 [Ingestion → What gets stamped](ingestion.md#what-gets-stamped) for the full mechanism,
@@ -350,16 +350,15 @@ other knob on this page follows.
 
 ```bash
 # Open deployment: everyone reads everything, no grant map needed at all.
-# MICROMEGAS_DEFAULT_INGESTION_AUDIENCE left unset: it defaults to public, on the ingestion side.
-export MICROMEGAS_DEFAULT_KEY_AUDIENCE=public
+# MICROMEGAS_DEFAULT_AUDIENCE can be left unset -- it defaults to public.
 
-# Privacy deployment: a team's data stays inside the team.
+# Privacy deployment: a team's data stays inside the team. One knob covers both
+# sides (#1482): keys minted without an explicit audience, and processes whose
+# credential carries no audience, both land on this label. Point it at a label
+# nobody is granted, so anything that omits an audience is invisible rather than
+# published, and name the audience explicitly on every key you mint.
 export MICROMEGAS_AUDIENCE_GRANTS='{"team-alpha": ["group:eng"]}'
-export MICROMEGAS_DEFAULT_KEY_AUDIENCE=team-alpha
-# Set on the ingestion side (not a read-side knob any more, #1482): a process whose credential
-# carries no audience is stamped with this label instead of "public", so legacy/never-stamped
-# data lands somewhere no read grant reaches -- e.g. a label nobody is granted.
-export MICROMEGAS_DEFAULT_INGESTION_AUDIENCE=unassigned
+export MICROMEGAS_DEFAULT_AUDIENCE=unassigned
 ```
 
 Worked **mint** profile, granting a non-admin caller mint authority for their
@@ -422,12 +421,12 @@ transaction that mints the key. Naming an audience that already has *any*
 grant row — admin-created, self-claimed earlier, or someone else's
 in-flight claim — still requires a matching grant exactly as above; only a
 genuinely fresh, unowned name is claimable this way. `public` and the
-deployment's own `MICROMEGAS_DEFAULT_KEY_AUDIENCE` can never be claimed.
+deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed.
 
 **Before turning on `MICROMEGAS_SELF_SERVICE_MINT`, pre-create a placeholder
 grant row — any selector, on either axis — for every audience name that
-exists only outside the DB:** a custom `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`
-on the ingestion side (irrelevant if left at its `public` default, since
+exists only outside the DB:** a custom `MICROMEGAS_DEFAULT_AUDIENCE`
+(irrelevant if left at its `public` default, since
 `public` can never be claimed), and *every* key of `{prefix}_AUDIENCE_GRANTS`
 (mint-relevant or read-only alike; see the note above). Via the admin grants
 API:

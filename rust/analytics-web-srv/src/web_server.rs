@@ -732,12 +732,12 @@ pub async fn run_web_server(
     // `MICROMEGAS_SQL_CONNECTION_STRING` — reuse the same pool rather than
     // opening a second one.
     //
-    // Resolved once at startup, per `default_key_audience_from_env`'s doc comment, so a typo
-    // in `MICROMEGAS_DEFAULT_KEY_AUDIENCE` fails fast rather than surfacing as a per-request
+    // Resolved once at startup, per `default_audience_from_env`'s doc comment, so a typo
+    // in `MICROMEGAS_DEFAULT_AUDIENCE` fails fast rather than surfacing as a per-request
     // 400 (AbAC Stage 4, #1372).
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
         pool: analytics_keys_pool.clone(),
-        default_audience: micromegas::auth::policy::default_key_audience_from_env("")?,
+        default_audience: micromegas::auth::policy::default_audience_from_env("")?,
         self_service_mint_enabled,
         max_claims_per_caller,
         max_keys_per_caller,

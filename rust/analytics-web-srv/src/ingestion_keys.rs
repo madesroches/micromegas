@@ -59,11 +59,11 @@ const MAX_LIMIT: i64 = 500;
 #[derive(Clone)]
 pub struct IngestionKeysState {
     pub pool: Option<PgPool>,
-    /// Resolved once at startup from `{prefix}_DEFAULT_KEY_AUDIENCE`
-    /// (`micromegas::auth::policy::default_key_audience_from_env`, `web_server.rs`). `None`
-    /// when the knob is unset -- `mint` then requires an explicit `audience` (400 otherwise);
-    /// `import` falls back further, to `PUBLIC_AUDIENCE`. See [`resolve_audience`].
-    pub default_audience: Option<String>,
+    /// The deployment default audience, resolved once at startup from `{prefix}_DEFAULT_AUDIENCE`
+    /// (`micromegas::auth::policy::default_audience_from_env`, `web_server.rs`), `public` when
+    /// unset. Always present: both `mint` and `import` fall back to it when a request names no
+    /// audience. See [`resolve_audience`].
+    pub default_audience: String,
     /// Off-by-default self-service mint gate (AbAC Stage 6, #1374). Resolved once at startup
     /// from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`), default `false`. Checked by
     /// [`MintGate`] for every non-admin caller before `mint_key`'s body runs at all -- with the
@@ -238,29 +238,27 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
 /// case folding. `fallback`: `None` for `mint` (an unresolved mint is a `BadRequest`, never a
 /// silent `public`), `Some(PUBLIC_AUDIENCE)` for `import` (continuity with the v6 backfill).
 ///
-/// Resolution order: `requested` → `state.default_audience` → `fallback`; the first
-/// non-absent value is validated with [`is_valid_audience`] and returned. `BadRequest` when
-/// nothing resolves at all.
+/// Resolution order: `requested` → `state.default_audience`, which is itself never absent
+/// (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset), so this always resolves *something* and
+/// the only failure left is a malformed explicit request.
 ///
 /// This is format/defaulting validation only -- it runs before `mint_key`'s
 /// `MintPolicy::resolve_audience` authorization decision (AbAC Stage 6, #1374, Design §4), and is
-/// unaware of grants or claims.
+/// unaware of grants or claims. Defaulting is not a grant: the policy call is still what decides
+/// whether this caller may mint for the audience that came out of here.
 pub fn resolve_audience(
     state: &IngestionKeysState,
     requested: Option<&str>,
-    fallback: Option<&str>,
 ) -> Result<String, IngestionKeyError> {
-    let requested = requested.filter(|s| !s.is_empty());
-    let default_audience = state.default_audience.as_deref();
-    let candidate = requested.or(default_audience).or(fallback);
-    match candidate {
-        Some(aud) if is_valid_audience(aud) => Ok(aud.to_string()),
-        Some(aud) => Err(IngestionKeyError::BadRequest(format!(
-            "invalid audience {aud:?}: must match [A-Za-z0-9_-]{{1,255}}"
-        ))),
-        None => Err(IngestionKeyError::BadRequest(
-            "no audience given and MICROMEGAS_DEFAULT_KEY_AUDIENCE is not set".to_string(),
-        )),
+    let candidate = requested
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&state.default_audience);
+    if is_valid_audience(candidate) {
+        Ok(candidate.to_string())
+    } else {
+        Err(IngestionKeyError::BadRequest(format!(
+            "invalid audience {candidate:?}: must match [A-Za-z0-9_-]{{1,255}}"
+        )))
     }
 }
 
@@ -335,12 +333,13 @@ async fn mint_key(
 ) -> Result<(StatusCode, Json<MintResponse>), IngestionKeyError> {
     let pool = require_pool(&state)?;
     validate_name(&body.name)?;
-    // `fallback: None` -- a new credential must never silently default to `public`; with
-    // neither an explicit `audience` nor `MICROMEGAS_DEFAULT_KEY_AUDIENCE` configured, this
-    // is a `BadRequest`, not a fail-open publish grant. `?` here is what preserves the exact
-    // existing 400 bodies -- `MintPolicy::resolve_audience`'s own `requested: None` /
-    // malformed-audience arms are never reached from this route at all.
-    let candidate = resolve_audience(&state, body.audience.as_deref(), None)?;
+    // A request naming no audience mints for the deployment default (`MICROMEGAS_DEFAULT_AUDIENCE`,
+    // `public` when unset) -- the same value data written by a credential with no bound audience is
+    // stamped with. What still gates the mint is `MintPolicy::resolve_audience` below, which asks
+    // whether *this caller* may mint for that audience; the default only decides which audience
+    // gets asked about. `?` here still rejects a malformed explicit `audience` with the existing
+    // 400, so `MintPolicy::resolve_audience`'s own malformed arm stays unreachable from this route.
+    let candidate = resolve_audience(&state, body.audience.as_deref())?;
 
     // Key material, generated here -- before the policy call, not after -- so both the
     // ordinary and the lazy-claim path share one value to insert.
@@ -418,8 +417,7 @@ async fn mint_key(
             // email (an admin with no email can't be granted a `user:` row; the pre-existing gap
             // #1374's client-side `setup_telemetry.py` also had, now decided server-side).
             if caller.is_admin {
-                let reserved = aud == PUBLIC_AUDIENCE
-                    || Some(aud.as_str()) == state.default_audience.as_deref();
+                let reserved = aud == PUBLIC_AUDIENCE || aud.as_str() == state.default_audience;
                 if !reserved && caller.email.is_some() {
                     let already_owned: bool = sqlx::query_scalar(
                         "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1)
@@ -692,7 +690,7 @@ async fn try_claim_and_mint(
         // grant and approved the mint directly. (`mint_key`'s own admin pre-check already skips
         // calling this function at all for a reserved name, so this arm is unreachable for an
         // admin in practice; the `caller.is_admin` fallback stays for defense in depth.)
-        if audience == PUBLIC_AUDIENCE || Some(audience) == state.default_audience.as_deref() {
+        if audience == PUBLIC_AUDIENCE || audience == state.default_audience {
             tx.rollback().await?;
             if caller.is_admin {
                 return insert_key(
@@ -981,10 +979,10 @@ async fn import_key(
             "key must not be empty".to_string(),
         ));
     }
-    // `fallback: Some(PUBLIC_AUDIENCE)` -- continuity with the v6 backfill: a legacy key's
-    // already-ingested history was just stamped `public`, so an import with no explicit
-    // audience and no knob keeps the new rows under the same audience rather than a 400.
-    let audience = resolve_audience(&state, body.audience.as_deref(), Some(PUBLIC_AUDIENCE))?;
+    // No route-specific fallback any more: the deployment default is `public` unless configured
+    // otherwise, which is the same continuity with the v6 backfill this route used to spell out
+    // for itself (a legacy key's already-ingested history was stamped `public`).
+    let audience = resolve_audience(&state, body.audience.as_deref())?;
 
     let hash = hash_key(&body.key);
     let key_id = Uuid::new_v4();

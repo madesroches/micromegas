@@ -73,7 +73,7 @@
 //!
 //! Every process is stamped with `micromegas.audience` at registration -- from the authenticated
 //! credential's `AuthContext.bound_audience` when present, or the deployment's
-//! `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` otherwise (#1482 §0) -- so there is no more unstamped
+//! `MICROMEGAS_DEFAULT_AUDIENCE` otherwise (#1482 §0) -- so there is no more unstamped
 //! state: a client can neither assert, suppress, nor omit the stamp. Registration
 //! (`insert_process`/`register_otel_process`) rejects a same-`process_id`, different-audience
 //! re-registration outright -- needed because the OTLP `process_id` derivation formula is public,

@@ -405,7 +405,7 @@ fn disabled_auth_app() -> Router {
     let analytics_keys_state = AnalyticsKeysState { pool: None };
     let ingestion_keys_state = IngestionKeysState {
         pool: None,
-        default_audience: None,
+        default_audience: "public".to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,

@@ -1,16 +1,18 @@
 //! The authenticated write audience a request ingests under (AbAC Stage 5, #1373).
 //!
 //! Every process gets an audience, always: the credential's `bound_audience` when it has one,
-//! `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`) otherwise. There is no "unstamped"
+//! `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) otherwise. There is no "unstamped"
 //! state any more -- see [`WriteAudience::default_from_env`] and
 //! `rust/public/src/servers/write_audience.rs::resolve_write_audience`, the caller that applies
 //! this fallback per request.
 
 use std::sync::Arc;
 
-/// The default env var read by [`WriteAudience::default_from_env`] when
-/// `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` is unset.
-pub const DEFAULT_INGESTION_AUDIENCE: &str = "public";
+/// The audience [`WriteAudience::default_from_env`] resolves to when `MICROMEGAS_DEFAULT_AUDIENCE`
+/// is unset. Same value as `micromegas_auth::policy::PUBLIC_AUDIENCE`, duplicated here for the
+/// same crate-boundary reason [`WriteAudience::new`]'s charset check is (this crate does not
+/// depend on `micromegas-auth`).
+pub const DEFAULT_AUDIENCE: &str = "public";
 
 /// The audience a process is stamped with at registration (AbAC Stage 5, #1373).
 ///
@@ -41,18 +43,21 @@ impl WriteAudience {
         }
     }
 
-    /// Resolves the deployment's default ingestion audience from
-    /// `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default [`DEFAULT_INGESTION_AUDIENCE`]).
+    /// Resolves the deployment's default audience from `MICROMEGAS_DEFAULT_AUDIENCE` (default
+    /// [`DEFAULT_AUDIENCE`]).
     ///
-    /// Named deliberately parallel to, and not to be confused with,
-    /// `micromegas_auth::policy::MICROMEGAS_DEFAULT_KEY_AUDIENCE` -- that one says what audience a
-    /// *newly minted key* gets; this one says what audience *data written without one* gets.
-    /// Fails fast (same posture as `IsolationConfig::from_env`) on a malformed value rather than
-    /// silently falling back to the default.
+    /// One knob for the whole deployment: the same variable
+    /// `micromegas_auth::policy::default_audience_from_env` resolves for the key-management
+    /// routes. It answers one question in both places -- what audience does something that
+    /// arrives without one get -- so an operator configures it once. Fails fast (same posture as
+    /// `IsolationConfig::from_env`) on a malformed value rather than silently falling back.
+    ///
+    /// Reads the unprefixed name only, unlike the auth-side resolver's `{prefix}_DEFAULT_AUDIENCE`
+    /// form; this crate has no prefix to resolve against.
     pub fn default_from_env() -> anyhow::Result<Self> {
-        match std::env::var("MICROMEGAS_DEFAULT_INGESTION_AUDIENCE") {
+        match std::env::var("MICROMEGAS_DEFAULT_AUDIENCE") {
             Ok(raw) => Self::new(&raw),
-            Err(_) => Self::new(DEFAULT_INGESTION_AUDIENCE),
+            Err(_) => Self::new(DEFAULT_AUDIENCE),
         }
     }
 

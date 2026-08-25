@@ -49,8 +49,7 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` | No | JSON object keyed by audience name, granting read/mint access to selectors (`*`/`user:<email>`/`group:<g>`) for FlightSQL callers (falls back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`) — see [Audiences and Grants](authentication.md#audiences-and-grants) |
 | `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering; falls back to unprefixed `MICROMEGAS_PUBLIC_VIEW_SETS`) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
-| `MICROMEGAS_DEFAULT_KEY_AUDIENCE` | No | Audience the `web` role's ingestion-key mint/import routes fall back to when a request supplies none (falling back further to `public` for `import` only; `mint` is a **400** if neither this knob nor the request resolves one) — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry). Not to be confused with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` below: that one stamps *data written without a bound audience*; this one is the fallback for *minting a new key* |
-| `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` | No | Audience stamped onto a process whose credential carries none (default `public`). Read unprefixed by the ingestion role, joining the list in the note below |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint/import routes fall back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* what the ingestion role stamps onto a process whose credential carries none. One knob for both, read unprefixed by either role, joining the list in the note below |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374) |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Caps how many live keys one non-admin caller may hold at once (default `100`) |
@@ -60,19 +59,20 @@ cargo run --bin micromegas-monolith -- \
 
 !!! note "One prefix asymmetry, pre-existing"
     Inside the monolith, `MICROMEGAS_INGESTION_API_KEYS` (see [Authentication](#authentication)
-    below) resolves under the ingestion role's own prefix, while `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
-    (the mint-side default above) is always resolved **unprefixed**, even in-process. So one
+    below) resolves under the ingestion role's own prefix, while `MICROMEGAS_DEFAULT_AUDIENCE`
+    (the default audience above) is always resolved **unprefixed**, even in-process. So one
     monolith reads `MICROMEGAS_INGESTION_API_KEYS` for ingestion auth but only
-    `MICROMEGAS_DEFAULT_KEY_AUDIENCE` for mint defaults — not
-    `MICROMEGAS_INGESTION_DEFAULT_KEY_AUDIENCE`. Pre-existing and out of scope for #1373; noted
+    `MICROMEGAS_DEFAULT_AUDIENCE` for audience defaults — not
+    `MICROMEGAS_INGESTION_DEFAULT_AUDIENCE`. Pre-existing and out of scope for #1373; noted
     here so it doesn't surprise an operator reaching for a `MICROMEGAS_INGESTION_` prefix on both.
     The three self-service knobs above (`MICROMEGAS_SELF_SERVICE_MINT` and its two per-caller
-    bounds) follow `MICROMEGAS_DEFAULT_KEY_AUDIENCE`'s convention, not
+    bounds) follow `MICROMEGAS_DEFAULT_AUDIENCE`'s convention, not
     `MICROMEGAS_INGESTION_API_KEYS`'s: they stay unprefixed under monolith too, since they belong
     to `analytics-web-srv`'s own standalone-service, empty-prefix convention, the same as every
-    other knob this section owns. `WriteAudience::default_from_env()`'s
-    `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (#1482) joins this same unprefixed list — the
-    ingestion role reads it directly, with no `MICROMEGAS_INGESTION_` variant to fall back from.
+    other knob this section owns. The `web` role does resolve a `{prefix}_DEFAULT_AUDIENCE` form
+    (`micromegas_auth::policy::default_audience_from_env`, prefix `""` under monolith); the
+    ingestion role reads the unprefixed name directly and has no prefixed variant at all, so a
+    prefixed spelling would split the two roles onto different defaults — set the unprefixed name.
 
 ## CLI flags
 

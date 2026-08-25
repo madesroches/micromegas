@@ -194,7 +194,7 @@ impl IsolationConfig {
     /// deployment built from `main` between the two changes might be -- for a fail-closed
     /// posture, silently dropping the knob would be exactly the kind of silent behavior change
     /// this project's env-var conventions exist to avoid. The fix named in the error is
-    /// `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`, the write-side knob that replaces it (#1482 §0).
+    /// `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that replaces it (#1482 §0).
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
         if std::env::var(&unstamped_var).is_ok() {
@@ -202,8 +202,7 @@ impl IsolationConfig {
                 "{unstamped_var} is no longer supported: the audience column is now a physical, \
                  non-nullable column materialized on every global view (#1482), so there is no \
                  more query-time \"unstamped\" fallback to configure. Assign legacy data an \
-                 audience with MICROMEGAS_DEFAULT_INGESTION_AUDIENCE on the ingestion side \
-                 instead, and remove this variable."
+                 audience with MICROMEGAS_DEFAULT_AUDIENCE instead, and remove this variable."
             );
         }
         let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");

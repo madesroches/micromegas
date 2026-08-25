@@ -6,7 +6,7 @@
 //! [`micromegas_ingestion::write_audience::WriteAudience`]. Every process gets an audience,
 //! always (#1482 §0): a credential carrying a bound audience gets stamped with it, and one
 //! without (or with no auth provider at all, `ctx: None`) gets the deployment's
-//! `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`.
+//! `MICROMEGAS_DEFAULT_AUDIENCE`.
 
 use axum::Extension;
 use micromegas_auth::types::AuthContext;

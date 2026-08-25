@@ -29,7 +29,7 @@ binary as its entrypoint.
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
-| `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` | No | Audience stamped onto a process whose credential carries none (default: `public`). Read unprefixed, unlike most ingestion-role knobs elsewhere — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. Not to be confused with `MICROMEGAS_DEFAULT_KEY_AUDIENCE` (`analytics-web-srv`, [API Keys](api-keys.md)): that one is what audience a *newly minted key* gets; this one is what audience *data written without one* gets. |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — stamped onto a process whose credential carries none, and the same value `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). One knob, one meaning: what anything arriving without an audience gets. Read unprefixed by this role, unlike most ingestion-role knobs elsewhere — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags
@@ -80,13 +80,13 @@ there is no unstamped state (#1482).
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process a key registers is stamped with that audience.
 - **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no bound audience
-  of their own. Data ingested under them is stamped with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`
+  of their own. Data ingested under them is stamped with `MICROMEGAS_DEFAULT_AUDIENCE`
   (default `public`) instead.
 - **No auth provider configured** (`--disable-auth`): stamped with the same default, for the
   same reason.
 
 An idempotent backfill runs at every ingestion-service startup, appending
-`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` onto any `processes` row from before this change that has
+`MICROMEGAS_DEFAULT_AUDIENCE` onto any `processes` row from before this change that has
 no `micromegas.audience` property at all — safe to re-run, and what repairs a row an old replica
 wrote mid-rollout during an upgrade. Set the var *before* upgrading if `public` is not the label
 legacy data should carry.

@@ -16,7 +16,7 @@
 //! query-time "unstamped" fallback to configure. What used to be several parsing cases for that
 //! knob collapses to one: setting it at all (prefixed or unprefixed, including to an empty
 //! string) is now a startup error naming its replacement,
-//! `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (the write-side knob, `rust/ingestion`).
+//! `MICROMEGAS_DEFAULT_AUDIENCE` (the deployment default audience).
 
 #![cfg(test)]
 
@@ -78,8 +78,7 @@ fn a_set_unstamped_audience_var_is_a_startup_error() {
         .expect_err("a set *_UNSTAMPED_AUDIENCE must be rejected, not silently ignored");
     let msg = err.to_string();
     assert!(
-        msg.contains(PREFIXED_UNSTAMPED_VAR)
-            && msg.contains("MICROMEGAS_DEFAULT_INGESTION_AUDIENCE"),
+        msg.contains(PREFIXED_UNSTAMPED_VAR) && msg.contains("MICROMEGAS_DEFAULT_AUDIENCE"),
         "expected the error to name the offending var and its replacement, got: {msg}"
     );
 }

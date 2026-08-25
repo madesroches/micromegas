@@ -157,7 +157,7 @@ pub struct WebIngestionService {
     /// separate, memory-only bound.
     process_audience_cache: Cache<Uuid, WriteAudience>,
     /// The audience stamped onto a process whose credential carries none
-    /// (`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`, default `public`). Resolved once at startup by
+    /// (`MICROMEGAS_DEFAULT_AUDIENCE`, default `public`). Resolved once at startup by
     /// the caller (`from_env`, or the `telemetry-ingestion-srv` / `monolith` binaries) and read by
     /// `rust/public`'s HTTP-edge handlers through [`Self::default_audience`].
     default_audience: WriteAudience,

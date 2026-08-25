@@ -148,8 +148,8 @@ retrievable afterwards. `mmk_` marks the key as a Micromegas secret for
 scanners; validation covers the whole string via its hash, so imported legacy
 keys of any shape keep working. **400** if `name` is empty or exceeds 255
 bytes (stricter than the `VARCHAR(255)` column, which bounds characters, not
-bytes); for ingestion, also **400** if `audience` is neither a valid audience
-name nor resolvable from `MICROMEGAS_DEFAULT_KEY_AUDIENCE` — see
+bytes); for ingestion, also **400** if an explicitly supplied `audience` is not
+a valid audience name — an omitted one resolves to the deployment default, see
 [What audience does a key carry](#what-audience-does-a-key-carry).
 
 **List** (`GET .../{table}-api-keys?limit=&offset=&include_revoked=`) — **200**,
@@ -262,23 +262,23 @@ already-ingested data with a wider audience is a *grants* edit (add a
 selector to the audience's entry in `{prefix}_AUDIENCE_GRANTS`), never a
 restamping of the key or its already-ingested history.
 
-**`mint` requires an explicit audience or a working
-`MICROMEGAS_DEFAULT_KEY_AUDIENCE` — there is
-no built-in default.** A new credential's *entire future* ingestion history
-follows this one choice, so an unresolvable mint is a **400**, never a silent
-`public`: defaulting a fresh write credential to a universally-readable
-audience would publish everything it ever ingests. `import` is different — a
-legacy key's already-ingested history is either stamped with the deployment's
-`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`, applied by the
-ingestion-side backfill, #1482) or, once migration v6's backfill has run,
-already `public` — so `import` falls back to `public` when neither the
-request nor the knob supplies one, matching that continuity rather than
-erroring.
+**A request that names no audience gets the deployment default**
+(`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value the
+ingestion role stamps onto data written by a credential with no bound audience.
+One knob answers one question, on every route: what does something that arrives
+without an audience get. A new credential's *entire future* ingestion history
+follows that choice, so **name the audience explicitly when minting a key for
+anything that is not deployment-wide-public data**, or set
+`MICROMEGAS_DEFAULT_AUDIENCE` to a label no principal is granted (e.g.
+`unassigned`) so an omission fails visibly at read time instead of publishing.
+An explicitly supplied but malformed `audience` is still a **400**. The
+authorization check is unchanged either way: minting for the resolved audience
+still requires a matching `mint` grant (or a lazy claim, below), so the default
+decides *which* audience is asked about, never whether the caller may have it.
 
 **A non-admin caller naming a brand-new audience explicitly claims it**
-(AbAC Stage 6, #1374), once `MICROMEGAS_SELF_SERVICE_MINT` is on — the same
-400-never-`public` rule above still applies (no audience at all is still a
-400), but a genuinely fresh, never-before-granted name is minted *and*
+(AbAC Stage 6, #1374), once `MICROMEGAS_SELF_SERVICE_MINT` is on — a
+genuinely fresh, never-before-granted name is minted *and*
 granted in the same request rather than rejected for lack of a pre-existing
 grant. `micromegas-setup-telemetry` (the setup script) applies its own
 client-side naming convention on top of this: a non-admin's fresh claim is
@@ -305,7 +305,7 @@ them either way, same pre-existing gap as before.
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
 audience of its own.** That keyring has no audience column, by design (per
 the umbrella data-isolation plan) — its data is stamped with the
-deployment's `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`)
+deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`)
 instead, the same default that covers any process ingested before #1482
 existed (via the ingestion-side backfill).
 
@@ -339,8 +339,8 @@ curl -X POST https://analytics.example.com/api/ingestion-api-keys \
   -d '{"name": "grafana-datasource", "audience": "team-alpha"}'
 ```
 
-Omitting `audience` returns **400** unless `MICROMEGAS_DEFAULT_KEY_AUDIENCE`
-is configured server-side — see [What audience does a key
+Omitting `audience` mints for `MICROMEGAS_DEFAULT_AUDIENCE` (`public` when
+unset) — see [What audience does a key
 carry](#what-audience-does-a-key-carry).
 
 **Revoke** — `DELETE {base_path}/api/{ingestion,analytics}-api-keys/{key_id}`,
@@ -580,8 +580,8 @@ only affects carrying *existing* key strings forward.
    `--table ingestion`; a per-entry `"audience"` in the keyring wins over it).
    This is a **different** audience than the one already threaded through
    this same tool for OIDC token validation (`MICROMEGAS_OIDC_AUDIENCE`) — the
-   flag name coincidence is unrelated. Neither given, the server applies
-   `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, falling back to `public` — see
+   flag name coincidence is unrelated. Neither given, the server applies its
+   `MICROMEGAS_DEFAULT_AUDIENCE` (`public` when unset) — see
    [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry).
    Auth
    follows the same OIDC setup as `micromegas-screens`/`-query`

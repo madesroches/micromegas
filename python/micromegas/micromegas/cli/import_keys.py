@@ -301,8 +301,8 @@ def main():
             "only; analytics_api_keys has no such column). Not the OIDC token audience "
             "already configured via --profile/MICROMEGAS_OIDC_AUDIENCE -- unrelated setting, "
             'same flag name coincidence. A keyring entry\'s own "audience" field wins over '
-            "this flag. Neither given: the server applies MICROMEGAS_DEFAULT_KEY_AUDIENCE, "
-            "falling back to 'public'."
+            "this flag. Neither given: the server applies its deployment default audience "
+            "(MICROMEGAS_DEFAULT_AUDIENCE, 'public' when unset)."
         ),
     )
     args = parser.parse_args()

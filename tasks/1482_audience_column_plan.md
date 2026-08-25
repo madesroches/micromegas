@@ -15,7 +15,7 @@ process row.
 
 The column can be non-nullable because this plan also closes the last source of processes with
 *no* audience: **every process gets one, always.** A new write-side knob,
-`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`), is stamped onto any process whose
+`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`), is stamped onto any process whose
 credential carries no audience, and an idempotent backfill, run at every ingestion-service startup,
 stamps the same value onto the legacy rows that were never stamped. With "unstamped" gone as a state, the read-side fallback knob
 `MICROMEGAS_UNSTAMPED_AUDIENCE` and Prong B's `OwnerAudience::Unstamped` variant are removed — a
@@ -23,7 +23,7 @@ default audience assigned at write time is the concept that survives, a query-ti
 of missing data is not.
 
 > **The paragraph above is superseded by the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).**
-> `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` and the startup backfill are implemented but reverted by
+> `MICROMEGAS_DEFAULT_AUDIENCE` and the startup backfill are implemented but reverted by
 > the follow-up pass. What survives: the column is still non-nullable, because a *read-side*
 > default — `MICROMEGAS_DEFAULT_AUDIENCE`, applied as `COALESCE(<extraction>, $n)` at each of the
 > three places the audience is read out of Postgres — makes a `NULL` unrepresentable downstream.
@@ -303,13 +303,17 @@ Everything below rests on one statement that becomes true at deploy time and sta
 
 Four mechanisms establish and keep it, each closing one way a `NULL` could appear:
 
-1. **Write path — a default audience.** `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`;
+1. **Write path — a default audience.** `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`;
    validated against the `[A-Za-z0-9_-]{1,255}` charset; malformed ⇒ startup error, the same
    fail-fast `IsolationConfig::from_env` uses) is resolved once at ingestion-server startup by
-   `WriteAudience::default_from_env()`. The name is deliberately parallel to the existing
-   `MICROMEGAS_DEFAULT_KEY_AUDIENCE` (`rust/auth/src/policy.rs:54-63`, the web role's fallback
-   audience for a *newly minted key*) and must not be confused with it: one says what audience a
-   new key gets, the other what audience *data written without one* gets. It is stored on
+   `WriteAudience::default_from_env()`. **One knob for the whole deployment**: the same variable
+   `micromegas_auth::policy::default_audience_from_env` resolves for `analytics-web-srv`'s key
+   mint/import routes, which used to have their own `MICROMEGAS_DEFAULT_KEY_AUDIENCE`. An earlier
+   revision of this plan kept the two apart on the grounds that "what audience a *newly minted key*
+   gets" and "what audience *data written without one* gets" are different questions; they are the
+   same question about two doorways into the same deployment, and separating them only ever made an
+   operator set the same label twice — or set one and forget the other. See the Trade-offs entry
+   below for what collapsing them costs. It is stored on
    `WebIngestionService` as `default_audience: WriteAudience`, which means
    `WebIngestionService::new(lake, default_audience)` gains the parameter, `from_env` resolves it
    itself, and `serve_ingestion`'s public signature (`rust/public/src/servers/ingestion.rs:131`)
@@ -395,7 +399,7 @@ Four mechanisms establish and keep it, each closing one way a `NULL` could appea
    Migration v6 (#1372, `sql_migration.rs:152-175`) is the precedent for the *shape* — it
    backfilled `ingestion_api_keys.audience` to the literal `'public'`; this backfill uses the knob
    instead, so a deployment that wants its legacy data under a different label sets
-   `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` *before* upgrading and gets exactly that.
+   `MICROMEGAS_DEFAULT_AUDIENCE` *before* upgrading and gets exactly that.
 3. **Conflict guard — no `NULL` arm.** In `check_process_audience_conflict`, the
    `let Some(incoming) = audience.as_str() else { return Ok(()) }` early-out goes (there is no
    unstamped write any more), and the `None =>` "no retro-stamp" arm becomes an error: a row
@@ -427,7 +431,7 @@ Consequences worth stating plainly:
   both the old read knob and the new write knob) nothing observable changes: what was "unstamped,
   visible to `public`" is now "stamped `public`, visible to `public`". An operator who had set
   `MICROMEGAS_UNSTAMPED_AUDIENCE` to a non-default label, or to the empty string (fail-closed),
-  must pick a `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` before upgrading — for the fail-closed case,
+  must pick a `MICROMEGAS_DEFAULT_AUDIENCE` before upgrading — for the fail-closed case,
   a label that no principal is granted (e.g. `unassigned`). The startup check in §4 makes
   forgetting this loud rather than silent.
 - **A rolling upgrade has a residual window.** Rows written by an old replica after the *last*
@@ -651,7 +655,7 @@ property of `SqlBatchView` schema inference, not of the data; document it as suc
   callers (`CallerContext::internal`/`maintenance`, `flight_sql_server.rs:283, :327`, tests) compile
   unchanged. `from_env` **errors** if `{prefix}_UNSTAMPED_AUDIENCE` or
   `MICROMEGAS_UNSTAMPED_AUDIENCE` is set — "removed in <version>; assign legacy data an audience
-  with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` on the ingestion side" — rather than silently
+  with `MICROMEGAS_DEFAULT_AUDIENCE` on the ingestion side" — rather than silently
   ignoring a knob an operator may be relying on for fail-closed behaviour. The `resolved_var`
   helper (`:201-212`) already centralizes the prefix fallback, so one
   `std::env::var(&resolved_var(prefix, "UNSTAMPED_AUDIENCE")).is_ok()` catches both spellings,
@@ -826,7 +830,7 @@ after `migrate_db` and before the listener binds (both binaries `await` the lake
 sequentially before serving — `telemetry-ingestion-srv/src/main.rs:51-75`, and the monolith's
 `roles.ingestion` block, `monolith/src/main.rs:302-316`), and the writer stamps the default from its first request, so the
 §0 invariant holds before the first post-deploy partition is written, modulo the rolling-upgrade
-window §0 describes. Set `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` first if the default is not what
+window §0 describes. Set `MICROMEGAS_DEFAULT_AUDIENCE` first if the default is not what
 legacy data should be labelled.
 
 **Regeneration**, in dependency order, over the retention window:
@@ -904,7 +908,7 @@ bucket yields whatever sources remain; it is gone within a day regardless.
 
 1. `rust/ingestion/src/write_audience.rs`: `WriteAudience(Arc<str>)`; delete `none()`;
    `as_str() -> &str`; add `pub fn default_from_env() -> anyhow::Result<WriteAudience>` reading
-   `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (default `public`, validated, fail-fast); rewrite the
+   `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`, validated, fail-fast); rewrite the
    module doc (it is entirely about `None`).
 2. `rust/ingestion/src/web_ingestion_service.rs`: `default_audience: WriteAudience` field;
    `new(lake, default_audience)` and a `new_for_test(lake)` helper (default `public`); `from_env`
@@ -1185,12 +1189,27 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   monolith's non-ingestion roles, which have no business carrying the ingestion knob. A statement
   that is safe to re-run costs one cheap scan per ingestion start and needs no version, no
   `migrate_db` parameter, and no `sql_migration_test.rs` fixture.
-- **`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` vs. `MICROMEGAS_DEFAULT_AUDIENCE`.** The shorter name
-  would sit two rows from `MICROMEGAS_DEFAULT_KEY_AUDIENCE` in the monolith's env table with a
-  different meaning; the longer one names what it defaults. (The
-  [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read) reverses this: once
-  the knob is read on the analytics side rather than at ingestion, `_INGESTION_` is actively wrong
-  and the shorter name is correct — the env-table contrast is spelled out in prose instead.)
+- **One default-audience knob, not two.** The first cut shipped
+  `MICROMEGAS_DEFAULT_AUDIENCE` next to the pre-existing
+  `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, on the reasoning that the shorter name would sit two rows from
+  it in the monolith's env table with a different meaning. Both are now the single
+  `MICROMEGAS_DEFAULT_AUDIENCE`: the two names asked the same question — what does something that
+  arrives without an audience get — of two doorways into one deployment, so the "different meaning"
+  the longer name protected was a distinction without a difference, and the failure it invited (set
+  one, forget the other, discover the mismatch when a key's data lands somewhere nobody can read
+  it) was worse than the ambiguity it avoided. **Two things fall out of the collapse, both
+  deliberate.** (a) There is no "unset" state left for the knob to have, so an empty value is a
+  startup error rather than "not configured" — an operator who wants writes to land somewhere
+  unreadable names a label no principal is granted. (b) Because the default always resolves,
+  `mint` with no `audience` no longer 400s; it mints for the default. That drops a fail-closed
+  check whose whole point was that a fresh write credential must never *silently* become
+  universally readable, so the docs now say plainly: name the audience on every key you mint, and
+  point `MICROMEGAS_DEFAULT_AUDIENCE` at an ungranted label if you want an omission to fail
+  visibly. The authorization decision is untouched — `MintPolicy::resolve_audience` still needs a
+  matching grant for whatever audience resolves.
+  (The [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read) had already
+  planned the `_INGESTION_` half of this rename for a different reason: once the knob is read on
+  the analytics side rather than at ingestion, `_INGESTION_` is actively wrong.)
 - **`global_rows_visible`: "public allowlist or lakehouse admin" vs. allowlist-only vs. "default
   audience in scope".** See §4. Allowlist-only was the first draft and rested on a false premise
   (admin tooling under `ReadScope::All` — true only with auth disabled); "default audience in
@@ -1217,7 +1236,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
 > **Superseded by the [Addendum](#addendum-one-default-audience-resolved-where-the-audience-is-read).**
 > This section is implemented as written and describes the write-side knob. The addendum's
 > "Docs and CHANGELOG — the concrete list" is the authority for the follow-up pass: every
-> `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` below becomes `MICROMEGAS_DEFAULT_AUDIENCE` with a
+> `MICROMEGAS_DEFAULT_AUDIENCE` below becomes `MICROMEGAS_DEFAULT_AUDIENCE` with a
 > read-side explanation, the backfill / rolling-upgrade / conflict-guard prose is deleted,
 > `maintenance.md` joins the list, and the CHANGELOG's write-side-stamping claims revert.
 
@@ -1229,7 +1248,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   second (`:111-116`) is already missing `streams.format` (`blocks_view.rs:278`); fix that tail
   while there. This is a **documented, stable column**, so the prose should say:
   - what it is: the audience of the owning process, written server-side from the authenticated
-    ingestion credential or the deployment's `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`; never client-settable;
+    ingestion credential or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`; never client-settable;
     never `NULL` in the data.
   - `Utf8` on `processes`/`streams`/`blocks`, `Dictionary(Int32, Utf8)` on
     `log_entries`/`measures`/`log_stats`. Both compare against string literals normally; the
@@ -1248,11 +1267,11 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
 - `mkdocs/docs/admin/authentication.md` — "Audience Filtering Activation" (`:152-205`) and
   "Write-Side Stamping" (`:207`), plus every later mention of the removed knob — `:224`, `:233`,
   `:266`, `:273`, the worked env-example block `:355-370` (`export MICROMEGAS_UNSTAMPED_AUDIENCE=`
-  at `:360, :366, :368`, next to `MICROMEGAS_DEFAULT_KEY_AUDIENCE` at `:361, :365`, where the new
-  knob belongs), and the `{prefix}_UNSTAMPED_AUDIENCE` override note at `:434`. Content: the
+  at `:360, :366, :368`, where the new knob belongs), and the `{prefix}_UNSTAMPED_AUDIENCE`
+  override note at `:434`. Content: the
   audience is a physical column on the global views; the
   query-time property lookup is gone from those plans; `MICROMEGAS_UNSTAMPED_AUDIENCE` is removed
-  and `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` replaces it on the write side; the "two prongs read
+  and `MICROMEGAS_DEFAULT_AUDIENCE` replaces it on the write side; the "two prongs read
   different copies" paragraph (`:184-190`) is rewritten — both copies are now non-null and
   write-once, so the prongs can never disagree about the *value*; the remaining skew is
   lakehouse-vs-Postgres lag in both directions — materialization lag on the way in (a row is
@@ -1260,15 +1279,14 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   the Postgres row, Prong B resolves `Unknown` → deny while Prong A still admits from partitions
   that survive until `retire_expired_partitions`, `audience_guard.rs:52-55` already notes this).
 - `mkdocs/docs/admin/ingestion.md` — "What gets stamped" (`:71-91`): the env-keyring / OIDC /
-  `--disable-auth` bullets now say "stamped with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`"; add the
-  var to the ingestion env table with a sentence contrasting it with
-  `MICROMEGAS_DEFAULT_KEY_AUDIENCE`; the startup backfill and the rolling-upgrade note; the OTLP
-  id-churn note.
+  `--disable-auth` bullets now say "stamped with `MICROMEGAS_DEFAULT_AUDIENCE`"; add the
+  var to the ingestion env table, saying that the one knob covers the key routes too; the startup
+  backfill and the rolling-upgrade note; the OTLP id-churn note.
 - `mkdocs/docs/admin/flight-sql.md:33`, `monolith.md:51` — remove the `*_UNSTAMPED_AUDIENCE` rows;
-  add `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` to the monolith table (ingestion role), next to
-  `MICROMEGAS_DEFAULT_KEY_AUDIENCE` (`:53`) with the same contrasting sentence. `monolith.md:60-73`
+  replace the monolith table's `MICROMEGAS_DEFAULT_KEY_AUDIENCE` row (`:53`) with one
+  `MICROMEGAS_DEFAULT_AUDIENCE` row covering both roles. `monolith.md:60-73`
   ("One prefix asymmetry, pre-existing") enumerates which knobs the ingestion role reads prefixed
-  vs. unprefixed; `default_from_env()` reads `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` unprefixed,
+  vs. unprefixed; `default_from_env()` reads `MICROMEGAS_DEFAULT_AUDIENCE` unprefixed,
   so it joins that list.
 - `mkdocs/docs/admin/api-keys.md:271-299` (two mentions, `:272` and `:296`),
   `mkdocs/docs/admin/functions-reference.md:75` (the `list_partitions` note — which also gains the
@@ -1301,7 +1319,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   - **Amend the Unreleased entries in place** so they describe what ships: `:34` (Prong A) now
     filters the six column-carrying views directly on `audience` and keeps the semi-join/`EXISTS`
     shapes only for the five JIT view sets; `:35` (Prong B) loses `Unstamped`; `:39` (stamping)
-    says every process is stamped, with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` when the
+    says every process is stamped, with `MICROMEGAS_DEFAULT_AUDIENCE` when the
     credential has no audience; the `:40` known-gap bullet is **deleted** (the gap no longer
     exists), the `:41` OTLP-churn note gains the "previously-unstamped deployments churn once on
     upgrade" case, and `:44` (the Ingestion API clause) is extended with the non-optional
@@ -1317,7 +1335,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
     `processes`/`streams`/`log_entries`/`measures`), then rebuild `log_stats` via retire +
     `materialize_partitions` at a small delta (§7); the daemon covers the trailing window within
     one daily cycle; until then those views show post-deploy data only. Ingestion backfills
-    `micromegas.audience` onto never-stamped processes with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`
+    `micromegas.audience` onto never-stamped processes with `MICROMEGAS_DEFAULT_AUDIENCE`
     at every startup — set it before upgrading if `public` is not the label legacy data should
     carry; after a rolling upgrade, restart one ingestion replica if the maintenance log reports a
     `blocks` write rejected for a null `audience`. Lakehouse replication rejects source processes
@@ -1356,7 +1374,7 @@ and `tests/max_sort_key_time_persistence_db_test.rs`, whose `vec![3]` literals a
   (`:293-311`); `public_view_set_plans_with_no_injected_predicate` (`:248-262`) must keep passing —
   it is what pins the branch placement.
 - **`tests/ownership_rewrite_config_tests.rs`** — the `*_UNSTAMPED_AUDIENCE` parsing cases become
-  one: a set var is a startup error naming `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`. Keeps its
+  one: a set var is a startup error naming `MICROMEGAS_DEFAULT_AUDIENCE`. Keeps its
   `#[serial]` + `EnvGuard` pattern (`:27-39`).
 - **Prong B**: `prong_b_guard_db_test.rs` / `audience_guard_tests.rs` unstamped cases → deleted or
   converted to default-audience; add one asserting a `None` audience row resolves to `Unknown`
@@ -1446,7 +1464,7 @@ what was built, not what the follow-up pass will build.
    nothing permanent, and its price was a two-meaning `NULL`, a permanent `OR audience IS NULL`
    disjunct, and an operational ordering precondition. See Trade-offs.
 4. ~~Keep `MICROMEGAS_UNSTAMPED_AUDIENCE` as the value coalesced in at materialization?~~ **No —
-   replace it with `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` on the write side and remove the
+   replace it with `MICROMEGAS_DEFAULT_AUDIENCE` on the write side and remove the
    unstamped state from both prongs.** "What audience does data with no explicit audience get" is
    a write-time question; answered at ingestion (and by the startup backfill for legacy rows) it
    never has to be asked at read time again. See §0 and §4.
@@ -1506,13 +1524,14 @@ knob keeps one type and one meaning. `MICROMEGAS_UNSTAMPED_AUDIENCE` stays remov
 `read_scope.rs`'s startup rejection of it stays, with its message renamed to point at
 `MICROMEGAS_DEFAULT_AUDIENCE`.
 
-**Naming.** Not `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` (the knob is no longer read on the
+**Naming.** Not `MICROMEGAS_DEFAULT_AUDIENCE` (the knob is no longer read on the
 ingestion side at all) and not `MICROMEGAS_UNSTAMPED_AUDIENCE` (the value is now baked into
 partitions at materialization, not a query-time reinterpretation). `MICROMEGAS_DEFAULT_AUDIENCE`
-names what it is. It sits near `MICROMEGAS_DEFAULT_KEY_AUDIENCE` (`rust/auth/src/policy.rs:54-63`)
-in the env tables with a different meaning — one says what audience a newly minted *key* gets, the
-other what audience *data with no audience* is read as — so both docs entries must state the
-contrast explicitly.
+names what it is — and it is now the *only* default-audience knob: the key-minting default that
+used to live beside it as `MICROMEGAS_DEFAULT_KEY_AUDIENCE` has been folded into it (see the
+Trade-offs entry above), so `micromegas_auth::policy::default_audience_from_env` and this knob are
+one and the same. What the addendum changes is only where the value is *applied* — at the three
+read sites instead of at ingestion — not how many knobs name it.
 
 **The trade this accepts, and why it's fine.** Unlike a value baked into Postgres once, a
 config-supplied default resolved at materialization time can disagree across partitions
@@ -1799,7 +1818,7 @@ comment, and `ownership_rewrite.rs`'s module doc and `resolved_predicate` /
 `audience_column_predicate` doc comments (all of which cite "#1482 §0").
 
 **Docs and CHANGELOG — the concrete list.** The landed change documented
-`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` as a write-side knob; it becomes
+`MICROMEGAS_DEFAULT_AUDIENCE` as a write-side knob; it becomes
 `MICROMEGAS_DEFAULT_AUDIENCE`, read-side, with a different explanation:
 
 - `mkdocs/docs/admin/ingestion.md`, `api-keys.md`, `authentication.md` — the "what gets stamped"
@@ -1808,8 +1827,7 @@ comment, and `ownership_rewrite.rs`'s module doc and `resolved_predicate` /
   `export MICROMEGAS_DEFAULT_AUDIENCE=unassigned` instead of the old empty-string form.
 - `mkdocs/docs/admin/flight-sql.md`, `monolith.md`, **`maintenance.md`** — a
   `MICROMEGAS_DEFAULT_AUDIENCE` row on every role that builds a `LakehouseContext` (not just the
-  ingestion role), stating the contrast with `MICROMEGAS_DEFAULT_KEY_AUDIENCE` and the "changing it
-  requires regeneration" rule. `maintenance.md` is the one the original plan never touched and the
+  ingestion role), stating the "changing it requires regeneration" rule. `maintenance.md` is the one the original plan never touched and the
   one that matters most: `telemetry-maintenance-srv/src/main.rs:35` builds its `LakehouseContext`
   from env, so the maintenance role is what actually *bakes* the default into the six views'
   partitions — a deployment that sets the knob only on the FlightSQL role materializes under the

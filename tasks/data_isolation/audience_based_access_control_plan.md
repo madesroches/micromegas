@@ -1257,7 +1257,11 @@ rather than left as the pre-implementation plan.
     but it should be a planned edit, not a surprise. **`mint` requires an explicit audience or a
     configured `MICROMEGAS_DEFAULT_KEY_AUDIENCE`** (400 otherwise — never a silent `public`, since
     that would publish a new credential's entire future ingestion history); `import` alone falls
-    back to `public`, matching the backfill's continuity assumption.
+    back to `public`, matching the backfill's continuity assumption. *(Superseded by #1482: the two
+    default-audience knobs are collapsed into one `MICROMEGAS_DEFAULT_AUDIENCE` that always resolves
+    — `public` when unset — so both routes fall back to it and the mint-side 400 is gone. Naming
+    the audience explicitly on every minted key, or pointing the knob at an ungranted label, is now
+    what carries the intent this 400 protected.)*
 
 ### Stage 4b — Read grants on analytics keys (service accounts)
 

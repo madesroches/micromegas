@@ -51,35 +51,34 @@ pub fn is_valid_audience(aud: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Resolves `{prefix}_DEFAULT_KEY_AUDIENCE` (falling back to `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) --
-/// resolved **once at startup** (`web_server.rs`) so a typo fails fast rather than surfacing as a
-/// per-request 400. `None` when neither is set or the value is empty. Invalid ⇒ `Err`.
+/// Resolves `{prefix}_DEFAULT_AUDIENCE` (falling back to `MICROMEGAS_DEFAULT_AUDIENCE`) --
+/// **the** deployment default audience, defaulting to [`PUBLIC_AUDIENCE`] when unset. Resolved
+/// **once at startup** (`web_server.rs`) so a typo fails fast rather than surfacing as a
+/// per-request 400. Empty or otherwise invalid ⇒ `Err`: with one knob there is no "unset" state
+/// left for an empty string to mean.
 ///
-/// Consumed by `ingestion_keys.rs::resolve_audience`'s `import` fallback (`Some(PUBLIC_AUDIENCE)`)
-/// and `mint`'s (`None` -- an unresolved mint is a 400, never a silent `public`). See
-/// `tasks/1372_audience_on_keys_plan.md` §5 for why the two routes differ only when this knob is
-/// unset.
-pub fn default_key_audience_from_env(prefix: &str) -> Result<Option<String>> {
-    let var = resolve_prefixed_var(prefix, "DEFAULT_KEY_AUDIENCE");
+/// One knob, one meaning: the audience anything that arrives without one gets. It is what
+/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes, and
+/// the same value `micromegas_ingestion::write_audience::WriteAudience::default_from_env` stamps
+/// onto data written by a credential with no bound audience -- the two used to be
+/// `MICROMEGAS_DEFAULT_KEY_AUDIENCE` and `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`, a distinction
+/// that only ever made an operator configure the same value twice.
+pub fn default_audience_from_env(prefix: &str) -> Result<String> {
+    let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {
         Ok(raw) => {
             let raw = raw.trim().to_string();
-            if raw.is_empty() {
-                None
-            } else if is_valid_audience(&raw) {
-                Some(raw)
+            if is_valid_audience(&raw) {
+                raw
             } else {
                 return Err(anyhow!(
                     "{var}: {raw:?} is not a valid audience name -- must match [A-Za-z0-9_-]{{1,255}}"
                 ));
             }
         }
-        Err(_) => None,
+        Err(_) => PUBLIC_AUDIENCE.to_owned(),
     };
-    match &resolved {
-        Some(aud) => info!("{var}: default key audience = {aud}"),
-        None => info!("{var}: no default key audience configured"),
-    }
+    info!("{var}: default audience = {resolved}");
     Ok(resolved)
 }
 

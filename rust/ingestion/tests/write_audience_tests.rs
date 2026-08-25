@@ -68,7 +68,7 @@ fn write_audience_rejects_non_ascii() {
 // WriteAudience::default_from_env
 // ---------------------------------------------------------------------------
 
-const DEFAULT_AUDIENCE_VAR: &str = "MICROMEGAS_DEFAULT_INGESTION_AUDIENCE";
+const DEFAULT_AUDIENCE_VAR: &str = "MICROMEGAS_DEFAULT_AUDIENCE";
 
 /// Clears the env var on drop so a failing assertion in one test can't leak state into the
 /// next (tests are serialized via `#[serial]` since they all mutate this process-wide var).

@@ -253,7 +253,7 @@ async fn main() -> Result<()> {
     // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
     // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
     // (#1482) -- every process is stamped with an audience at write time
-    // (`MICROMEGAS_DEFAULT_INGESTION_AUDIENCE` defaults to `public` on the ingestion side), so
+    // (`MICROMEGAS_DEFAULT_AUDIENCE` defaults to `public` on the ingestion side), so
     // there is no more query-time unstamped fallback to configure here.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
