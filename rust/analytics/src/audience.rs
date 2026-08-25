@@ -103,3 +103,37 @@ pub fn default_audience_from_env() -> anyhow::Result<String> {
     micromegas_tracing::info!("{VAR}: default audience = {resolved}");
     Ok(resolved)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesced_subselect_wraps_the_bare_one_and_binds_the_default() {
+        let bare = audience_subselect("processes.properties");
+        let coalesced = coalesced_audience_subselect("processes.properties", 3);
+        assert_eq!(coalesced, format!("COALESCE({bare}, $3)"));
+        // The default is bound, never inlined: an operator-supplied label must not reach the
+        // SQL text even though `properties_expr` does.
+        assert!(!coalesced.contains(DEFAULT_AUDIENCE));
+    }
+
+    #[test]
+    fn each_read_site_can_pick_its_own_placeholder_index() {
+        // `blocks`' `data_sql` binds $1/$2 for the insert range, so its default is $3;
+        // `find_process` binds $1 for the process id, so its default is $2.
+        assert!(coalesced_audience_subselect("properties", 2).ends_with(", $2)"));
+        assert!(coalesced_audience_subselect("processes.properties", 3).ends_with(", $3)"));
+    }
+
+    #[test]
+    fn charset_matches_the_other_two_copies() {
+        assert!(is_valid_audience("public"));
+        assert!(is_valid_audience("team-alpha_1"));
+        assert!(!is_valid_audience(""));
+        assert!(!is_valid_audience("team alpha"));
+        assert!(!is_valid_audience("user:alice@example.com"));
+        assert!(!is_valid_audience(&"a".repeat(256)));
+        assert!(is_valid_audience(&"a".repeat(255)));
+    }
+}

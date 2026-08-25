@@ -29,7 +29,7 @@ binary as its entrypoint.
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
-| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — stamped onto a process whose credential carries none, and the same value `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). One knob, one meaning: what anything arriving without an audience gets. Read unprefixed by this role, unlike most ingestion-role knobs elsewhere — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). The ingestion role itself does **not** read it: a process whose credential carries no audience is stamped with nothing, and the default is applied where the audience is read, by the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)). One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags
@@ -71,30 +71,24 @@ instead — see [API Keys](api-keys.md).
 
 ## What gets stamped
 
-Every process ingestion registers is stamped with a `micromegas.audience` property,
-server-written from the authenticated credential — never trusted from the client payload. This
-is what makes the analytics-side audience filter ([Authentication](authentication.md)) a real
-security boundary instead of a client-asserted label. Every process gets one, unconditionally —
-there is no unstamped state (#1482).
+A process registered under a credential that carries a write audience is stamped with a
+`micromegas.audience` property, server-written from that credential — never trusted from the
+client payload. This is what makes the analytics-side audience filter
+([Authentication](authentication.md)) a real security boundary instead of a client-asserted
+label.
 
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process a key registers is stamped with that audience.
 - **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no bound audience
-  of their own. Data ingested under them is stamped with `MICROMEGAS_DEFAULT_AUDIENCE`
-  (default `public`) instead.
-- **No auth provider configured** (`--disable-auth`): stamped with the same default, for the
-  same reason.
+  of their own. A process registered under one is stamped with nothing.
+- **No auth provider configured** (`--disable-auth`): stamped with nothing, for the same reason.
 
-An idempotent backfill runs at every ingestion-service startup, appending
-`MICROMEGAS_DEFAULT_AUDIENCE` onto any `processes` row from before this change that has
-no `micromegas.audience` property at all — safe to re-run, and what repairs a row an old replica
-wrote mid-rollout during an upgrade. Set the var *before* upgrading if `public` is not the label
-legacy data should carry.
-
-**Rolling-upgrade note**: a row an old replica writes after the *last* new replica has started is
-repaired only at that replica's next restart. Until then, an insert-hour containing such a row
-fails its `blocks` materialization (fail-closed, retried by the maintenance daemon every tick,
-visible in its logs) — restart one ingestion replica once the rollout completes if you see this.
+Ingestion writes no audience of its own, and there is no startup backfill: a process with no
+stamp keeps none in Postgres, permanently. The deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
+(default `public`) is applied on the **read** side instead — see
+[Authentication → The default audience](authentication.md#audience-stamping-and-the-default)
+— so such a process is materialized and enforced under that label without anything being
+written back to `processes`. Nothing about a rolling upgrade needs sequencing on this account.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
 property a client sends is dropped at ingestion and logged (`warn!`), naming the key. In

@@ -304,10 +304,11 @@ them either way, same pre-existing gap as before.
 
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
 audience of its own.** That keyring has no audience column, by design (per
-the umbrella data-isolation plan) — its data is stamped with the
-deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`)
-instead, the same default that covers any process ingested before #1482
-existed (via the ingestion-side backfill).
+the umbrella data-isolation plan) — its processes are stamped with nothing and
+are *read* as the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (default
+`public`), the same treatment any process ingested before #1482 existed gets.
+See [Authentication → Audience stamping and the
+default](authentication.md#audience-stamping-and-the-default).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly** —
 the audience is cached alongside the rest of the row

@@ -167,10 +167,11 @@ telemetry-ingestion-srv --disable-auth
     **`audience` is now a physical, non-nullable column on `blocks`, `processes`, `streams`,
     `log_entries`, `measures`, and `log_stats` (#1482)** — extracted once from Postgres at write
     time and propagated structurally into every downstream view, the same way `properties`
-    already does. There is no more query-time "unstamped" fallback to configure: every process
-    is stamped with an audience unconditionally at ingestion (see
-    [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)), and a startup backfill
-    stamps the same default onto any legacy row that predates this. **Prong A** filters those six
+    already does. There is no more `MICROMEGAS_UNSTAMPED_AUDIENCE` knob to configure: a process
+    whose credential carried no audience keeps no property at all (see
+    [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)), and every site that reads
+    an audience out of Postgres resolves that to `MICROMEGAS_DEFAULT_AUDIENCE`, which is what
+    makes the column non-nullable. **Prong A** filters those six
     views directly on the column; the `net_spans`/`otel_spans`/`images` view sets (which don't
     carry the column yet) keep the semi-join through `processes`, and `async_events`/
     `thread_spans` keep their literal `EXISTS` shapes. **Prong B**'s `list_partitions()`
@@ -212,26 +213,43 @@ telemetry-ingestion-srv --disable-auth
     every query in the deployment via `deny_queries` — safe only when no admin principal exists
     in the deployment, unsafe the moment it also has personal or per-team audiences.
 
-### Write-Side Stamping (AbAC Stage 5, extended by #1482)
+### Audience stamping and the default {#audience-stamping-and-the-default}
 
 The read-side filter above is only trustworthy because of what happens on the write side
-(ingestion, #1373/#1482): `micromegas.audience` is now **server-written from the authenticated
+(ingestion, #1373/#1482): `micromegas.audience` is **server-written from the authenticated
 ingestion credential**, never trusted from the client payload. Ingestion strips any
-client-supplied `micromegas.*` property and always stamps `micromegas.audience` before the
-process's first block is ever materialized — from the credential's bound audience when it has
-one (a DB-backed `ingestion_api_keys` row), or from the deployment's
-`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) otherwise. There is no unstamped
-state any more: an idempotent backfill, run at every ingestion-service startup, stamps that same
-default onto any legacy `processes` row that predates this change. See
+client-supplied `micromegas.*` property and stamps `micromegas.audience` before the process's
+first block is ever materialized, whenever the credential has a bound audience (a DB-backed
+`ingestion_api_keys` row). A credential with none stamps nothing. See
 [Ingestion → What gets stamped](ingestion.md#what-gets-stamped) for the full mechanism,
 credential-by-credential.
+
+**A process with no stamp is read as the deployment default.** `MICROMEGAS_DEFAULT_AUDIENCE`
+(default `public`) is applied at each of the three places the audience is read out of Postgres —
+the `blocks` view's materialization, the per-process JIT path, and Prong B's id lookups — so a
+never-stamped process has a real, non-null audience everywhere it is enforced, without anything
+being written back to `processes`. Set it on **every role that builds a lakehouse**: FlightSQL,
+maintenance, and the monolith. The maintenance role is the one that bakes the value into
+partitions, so a deployment that sets the knob on only the query role materializes under the
+wrong default.
+
+!!! warning "Changing the default is not a routine operation"
+    A partition keeps the default that was configured when it was materialized. Changing
+    `MICROMEGAS_DEFAULT_AUDIENCE` does **not** retroactively relabel already-written partitions
+    — regenerate the six views (see the
+    [Maintenance](maintenance.md) role's `regenerate_partitions`) over any range that should
+    reflect the new value. Two consequences follow from the same rule: partitions materialized
+    on either side of a change disagree about a never-stamped process, and `FROM log_entries`
+    can disagree with `view_instance('log_entries', <pid>)` for such a process, since the two
+    are materialized at different times. Prong B is not affected — it reads Postgres live, so it
+    always uses the *current* default.
 
 Two consequences worth knowing before you flip this stage on:
 
 - **OTLP `process_id` re-derivation.** OTLP-derived identity (`process_id`, and therefore
   `block_id`) is now audience-scoped, so two audiences posting identical resource attributes
   never collapse onto one process — but a deployment that starts stamping (or a previously
-  unstamped deployment upgrading to #1482's mandatory default) re-derives every OTLP producer's
+  deployment that begins binding audiences to its ingestion keys) re-derives every OTLP producer's
   `process_id` the moment it does. The same logical process appears as a new row; its
   pre-upgrade data keeps the old id, now permanently labelled with whatever default was in effect
   at upgrade time. Rotating an ingestion key to a different audience likewise splits a long-lived
@@ -272,12 +290,12 @@ Two consequences worth knowing before you flip this stage on:
     streams and the retention window has elapsed -- a squatter that also writes a stream keeps
     the row alive indefinitely.
 
-    **The unstamped-pre-registration variant of this gap is closed (#1482).** Every process now
-    gets an audience unconditionally, so the conflict guard's old `NULL`-tolerant "no retro-stamp"
-    branch is gone: a re-registration against an existing row with no `micromegas.audience`
-    property at all is now itself an invariant violation, rejected as a database error rather than
-    silently left alone. There is no longer a way to pre-register a victim's future `process_id`
-    unstamped and have it stay silently unstamped forever.
+    **Known gap — no retro-stamp.** The guard compares against what the existing row carries. A
+    row registered with *no* `micromegas.audience` property is left alone rather than stamped on a
+    later registration, so a credential with no bound audience can still pre-register a victim's
+    future `process_id` and have it stay unstamped — read, like any never-stamped process, as the
+    deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. A deployment that cares sets that knob to a label
+    no principal is granted, which makes such a row unreadable rather than merely unlabelled.
 
 ## Audiences and Grants
 
@@ -325,10 +343,10 @@ mint authority. Selectors:
 
 - **`public` is always readable**, by every authenticated principal, whether
   or not it appears in the map at all — writing `{"public": ["*"]}` changes
-  nothing. This built-in rule doesn't extend to legacy data, though: the
-  startup backfill stamps it with the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
-  (not necessarily `public`), so its visibility is governed by whatever grants
-  exist for that audience.
+  nothing. Note this covers never-stamped data only while
+  `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such data is read as
+  whatever that knob names, so pointing it at another label puts it under that
+  label's grants instead.
 - **There is no self-audience rule.** A caller is never granted an audience
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary
@@ -356,9 +374,11 @@ other knob on this page follows.
 
 # Privacy deployment: a team's data stays inside the team. One knob covers both
 # sides (#1482): keys minted without an explicit audience, and processes whose
-# credential carries no audience, both land on this label. Point it at a label
+# credential carried no audience, both land on this label. Point it at a label
 # nobody is granted, so anything that omits an audience is invisible rather than
-# published, and name the audience explicitly on every key you mint.
+# published, and name the audience explicitly on every key you mint. Set it on
+# every role that builds a lakehouse -- FlightSQL, maintenance, monolith -- and
+# regenerate the six views if you ever change it.
 export MICROMEGAS_AUDIENCE_GRANTS='{"team-alpha": ["group:eng"]}'
 export MICROMEGAS_DEFAULT_AUDIENCE=unassigned
 ```

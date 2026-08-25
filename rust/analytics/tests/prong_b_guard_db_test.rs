@@ -380,8 +380,8 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
     )
     .await
     .expect_err(
-        "a default-audience process must stay denied for a caller whose scope doesn't include \
-         'public'",
+        "a never-stamped process resolves to the default audience, so it must stay denied for a \
+         caller whose scope doesn't include 'public'",
     );
     let default_audience_rows = row_count(
         f.lakehouse.clone(),
@@ -393,7 +393,7 @@ async fn process_spans_guard_enforces_audience() -> Result<()> {
     .await?;
     assert!(
         default_audience_rows > 0,
-        "a caller holding the default audience ('public') must see the default-audience process"
+        "a caller holding the default audience ('public') must see the never-stamped process"
     );
 
     Ok(())

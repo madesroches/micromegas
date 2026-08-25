@@ -266,7 +266,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- from the authenticated ingestion credential, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` when the credential carried none; server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
 
 #### `streams`
 Contains information about data streams within processes.
