@@ -507,11 +507,18 @@ struct DeleteGrantQuery {
 /// their own -- admin access never depends on grant rows, so this is not a restriction on them.
 /// A non-admin may delete only their own direct `user:<email>` row ("remove my access" -- never
 /// offered for `group:`/`*` rows, since those would affect other principals) or a row they
-/// themselves created (the revoke-a-share counterpart of `create_grant`, Design §3). If the
-/// natural key names no row at all, `404`; if it names a row but neither condition matches, `403`
-/// -- but only when the caller holds a grant on `(audience, axis)` at all ([`caller_holds_pair`]);
-/// otherwise `404`, so a non-admin can't use the 403-vs-404 split to probe for the existence of a
-/// grant on a pair they can't otherwise see via `/visible`/`list_audience_grants()`.
+/// themselves created (the revoke-a-share counterpart of `create_grant`, Design §3) -- **except**
+/// their own `mint`/`user:<email>` row, which "remove my access" no longer covers. That row is
+/// exactly the shape `try_claim_and_mint`'s (`ingestion_keys.rs`) self-service claim marker takes,
+/// and its own per-caller claim count is read straight from `audience_grants` on that predicate;
+/// letting a non-admin delete it would let them claim, delete, and re-claim to dodge
+/// `max_claims_per_caller` for free. Their `read`-axis own-row removal is unaffected, and so is
+/// removing any row -- `mint` axis included -- that they merely created for someone else rather
+/// than for themselves. If the natural key names no row at all, `404`; if it names a row but no
+/// condition matches, `403` -- but only when the caller holds a grant on `(audience, axis)` at all
+/// ([`caller_holds_pair`]); otherwise `404`, so a non-admin can't use the 403-vs-404 split to
+/// probe for the existence of a grant on a pair they can't otherwise see via
+/// `/visible`/`list_audience_grants()`.
 async fn delete_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
@@ -533,9 +540,16 @@ async fn delete_grant(
         .rows_affected()
     } else if let Some(email) = &caller.email {
         let own_selector = format!("user:{email}");
+        // The trailing `AND NOT ($2 = 'mint' AND selector = $4)` carves the caller's own
+        // `mint`/`user:<email>` claim-marker row out of *both* preceding arms, not just the
+        // `selector = $4` one -- a self-claim also sets `created_by` to the same caller, so
+        // leaving the `created_by = $5` arm unguarded would still let it through. See this
+        // function's own doc comment for why that row specifically must stay undeletable by its
+        // own subject.
         sqlx::query(
             "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3 \
-             AND (selector = $4 OR created_by = $5)",
+             AND (selector = $4 OR created_by = $5) \
+             AND NOT ($2 = 'mint' AND selector = $4)",
         )
         .bind(&query.audience)
         .bind(&query.axis)
@@ -585,12 +599,22 @@ async fn delete_grant(
         .bind(&query.selector)
         .fetch_one(&pool)
         .await?;
-        return Err(if exists {
+        let is_own_mint_claim_marker = query.axis == "mint"
+            && caller
+                .email
+                .as_deref()
+                .is_some_and(|email| query.selector == format!("user:{email}"));
+        return Err(if !exists {
+            AudienceGrantError::NotFound
+        } else if is_own_mint_claim_marker {
+            AudienceGrantError::Forbidden(
+                "your own mint claim marker cannot be removed via self-service; ask an admin"
+                    .to_string(),
+            )
+        } else {
             AudienceGrantError::Forbidden(
                 "this grant is neither your own direct access nor one you created".to_string(),
             )
-        } else {
-            AudienceGrantError::NotFound
         });
     }
 

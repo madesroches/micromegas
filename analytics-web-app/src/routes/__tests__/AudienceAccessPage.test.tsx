@@ -386,6 +386,35 @@ describe('AudienceAccessPage — non-admin', () => {
     ).not.toBeInTheDocument()
   })
 
+  it("hides the chip delete control on the caller's own mint row (the claim marker)", async () => {
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'mint',
+          selector: 'user:reader@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'reader@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('user:reader@example.com')).toBeInTheDocument())
+    // Unlike the read-axis own row above, the server refuses to delete this one -- it's the
+    // self-service claim marker `max_claims_per_caller` counts from -- so the button must not
+    // render at all rather than render and 403 on click.
+    expect(
+      screen.queryByRole('button', { name: /user:reader@example.com/ })
+    ).not.toBeInTheDocument()
+  })
+
   it('renders a 403 on create inline in the dialog', async () => {
     installFetchMock({
       grants: [

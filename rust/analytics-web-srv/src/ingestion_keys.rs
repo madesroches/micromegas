@@ -718,18 +718,26 @@ async fn try_claim_and_mint(
         // (serialized by the lock above), but not against concurrent claims by the same caller
         // for other, distinct fresh audience names, which take different locks.
         //
-        // Counted from `ingestion_api_keys`, not `audience_grants`: this same function writes a
-        // `mint`/`user:<email>` `audience_grants` row for every claim below, but `delete_grant`
-        // (`audience_grants.rs`) lets a non-admin delete their own `user:<email>` row on any
-        // `(audience, axis)` pair -- including the `mint` row a claim just wrote -- as "remove my
-        // access." Counting that row would let the caller reset this bound at will: claim, delete
-        // the `mint` row, claim again. `ingestion_api_keys` has no such non-admin escape hatch --
-        // `revoke_key` is `AdminUser`-gated -- so the row this same claim inserts a few lines below
-        // persists for the count even after the `audience_grants` row is gone.
+        // Counted from `audience_grants`, not `ingestion_api_keys`: counting distinct audiences
+        // in `ingestion_api_keys` over-counts, because that table can't tell a self-service claim
+        // apart from an ordinary mint into an audience the caller already held a `mint` grant on
+        // for some other reason (an admin grant, a `group:` share). A non-admin who legitimately
+        // holds pre-existing `mint` grants on many audiences and mints keys into each would be
+        // refused on their next genuinely fresh claim despite never having claimed anything.
+        // `audience_grants` with this exact predicate -- `axis = 'mint' AND selector =
+        // 'user:<email>' AND created_by = <email>` -- matches only the row shape a lazy claim
+        // itself writes below, so it counts claims and nothing else.
+        //
+        // This predicate alone would be resettable (delete the caller's own `mint`/`user:<email>`
+        // row via `delete_grant`'s "remove my access" own-row arm, then re-claim), so
+        // `delete_grant` (`audience_grants.rs`) refuses that specific deletion for a non-admin --
+        // see its own comment. That closes the reset hole without reintroducing the over-count.
         if !caller.is_admin {
             let claim_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(DISTINCT audience) FROM ingestion_api_keys WHERE created_by = $1",
+                "SELECT COUNT(DISTINCT audience) FROM audience_grants \
+                 WHERE axis = 'mint' AND selector = $1 AND created_by = $2",
             )
+            .bind(&selector)
             .bind(caller_email)
             .fetch_one(&mut *tx)
             .await?;

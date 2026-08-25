@@ -732,6 +732,48 @@ async fn live_delete_grant_204_for_own_row() {
     cleanup_grants(&pool, &audience).await;
 }
 
+/// A non-admin's own `mint`/`user:<email>` row -- the exact shape `try_claim_and_mint`
+/// (`ingestion_keys.rs`) writes for a self-service claim, and the row its own claim-count query
+/// reads back -- is the one own-row shape "remove my access" does *not* cover: unlike
+/// `live_delete_grant_204_for_own_row` (a `read`-axis own row, unaffected), this must 403 even
+/// though the row is both the caller's own selector and their own `created_by`, so it can't slip
+/// through the "row I created" arm either. See `delete_grant`'s own doc comment for why.
+#[ignore]
+#[tokio::test]
+async fn live_delete_grant_403_for_own_mint_claim_marker() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-own-mint-marker-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(
+        &pool,
+        &audience,
+        "mint",
+        "user:reader@example.com",
+        "reader@example.com",
+    )
+    .await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(delete_request(&format!(
+            "/api/audience-grants?audience={audience}&axis=mint&selector=user%3Areader%40example.com"
+        )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
 /// Removing a row the caller created (but whose selector is a `group:`, not their own) succeeds
 /// (204) -- the revoke-a-share counterpart of sharing.
 #[ignore]

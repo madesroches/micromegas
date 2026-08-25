@@ -573,8 +573,11 @@ exactly as before. A non-admin is admitted only when
   ("remove my access" — never offered for `group:`/`*` rows, since those
   would affect other principals and there are no negative grants), or a row
   the caller themselves created (the revoke-a-share counterpart of
-  sharing). A row that doesn't exist at all is 404; one that exists but
-  matches neither condition is 403.
+  sharing) — except their own `mint`/`user:<email>` row, which "remove my
+  access" does not cover: that row is the self-service claim marker
+  `max_claims_per_caller` counts from, so a non-admin can't delete it
+  themselves (an admin still can). A row that doesn't exist at all is 404;
+  one that exists but matches no condition is 403.
 
 `DELETE` still takes the natural key as query parameters rather than path
 segments: a `group:<id>` selector can contain `/` or other URL-significant

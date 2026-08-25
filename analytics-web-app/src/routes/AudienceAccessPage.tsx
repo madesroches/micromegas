@@ -640,6 +640,12 @@ function AudienceAccessPageContent() {
   const canDeleteChip = (chip: AudienceGrant): boolean => {
     if (isAdmin) return true
     if (selfServiceOff) return false
+    // The server refuses this specific deletion even for the caller's own row: it's the
+    // self-service claim marker `max_claims_per_caller` counts from (`ingestion_keys.rs`), and a
+    // non-admin deleting it would let them dodge that bound by claiming, deleting, re-claiming.
+    // Matched on shape, not provenance, so it also covers an admin-granted `mint` row on the
+    // caller themselves -- same as the server-side check.
+    if (chip.axis === 'mint' && chip.selector === `user:${myEmail}`) return false
     return chip.selector === `user:${myEmail}` || chip.createdBy === myEmail
   }
 
