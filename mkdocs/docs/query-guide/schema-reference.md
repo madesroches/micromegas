@@ -44,7 +44,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Utf8` | The audience of the owning process -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -75,7 +75,7 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
-| `audience` | `Utf8` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -135,7 +135,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.insert_time` | `Timestamp(Nanosecond)` | When process was inserted |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `Dictionary(Int32, Binary)` | Process properties (JSONB format) |
-| `audience` | `Utf8` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -626,9 +626,7 @@ authenticated ingestion credential (or the deployment's default ingestion audien
 credential carries none) and never client-settable. It is never `NULL`: every process carries an
 audience unconditionally.
 
-`Utf8` on `processes`/`streams`/`blocks`; `Dictionary(Int32, Utf8)` on
-`log_entries`/`log_stats`/`measures`. Both compare against string literals normally -- the
-difference only matters to a client reading Arrow types directly.
+`Dictionary(Int32, Utf8)` on all six views -- it compares against string literals normally.
 
 It is **not a filter a query needs to apply**: enforcement happens unconditionally underneath
 every query, and a caller only ever sees rows whose audience is within their own read scope. The

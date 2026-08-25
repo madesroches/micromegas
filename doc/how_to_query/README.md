@@ -266,7 +266,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Utf8` | The audience of the owning process -- server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
 
 #### `streams`
 Contains information about data streams within processes.
@@ -282,7 +282,7 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
-| `audience` | `Utf8` | The audience of the owning process; never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 #### `blocks`
 Core table containing telemetry block metadata with joined process and stream information.
@@ -318,7 +318,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.insert_time` | `Timestamp(Nanosecond)` | Process insertion time |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `List<Struct>` | Process properties |
-| `audience` | `Utf8` | The audience of the owning process; never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 #### `async_events`
 Asynchronous span events for tracking async operations.
