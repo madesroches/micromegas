@@ -629,6 +629,75 @@ async fn live_create_grant_403_when_max_grants_per_caller_reached() {
     cleanup_grants(&pool, &audience).await;
 }
 
+/// The caller's own `user:<email>` identity-selector rows (the shape `try_claim_and_mint` writes
+/// per lazy claim, `ingestion_keys.rs`) do not count against `max_grants_per_caller` -- claiming
+/// and sharing must not compete for the same budget. A caller already at the bound purely via
+/// own-identity rows can still create a genuine share (a `group:` row on a *different* pair they
+/// hold via a non-identity row).
+#[ignore]
+#[tokio::test]
+async fn live_create_grant_201_when_bound_reached_only_via_own_identity_rows() {
+    let pool = live_pool().await;
+    let claimed_audience = format!(
+        "audience-grants-own-identity-claimed-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    let share_audience = format!(
+        "audience-grants-own-identity-share-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    // Two rows shaped exactly like `try_claim_and_mint`'s per-claim insert: both
+    // `created_by = reader@example.com`, both `selector = "user:reader@example.com"`. On their
+    // own these would already put the caller at a bound of 2 under the old, undifferentiated
+    // count.
+    insert_grant(
+        &pool,
+        &claimed_audience,
+        "mint",
+        "user:reader@example.com",
+        "reader@example.com",
+    )
+    .await;
+    insert_grant(
+        &pool,
+        &claimed_audience,
+        "read",
+        "user:reader@example.com",
+        "reader@example.com",
+    )
+    .await;
+    // Gives the caller a held `group:` row on a different pair, so `caller_holds_pair` passes
+    // for the share below without itself being an own-identity row.
+    insert_grant(&pool, &share_audience, "read", "group:eng", "test").await;
+
+    let app = build_handler_router_with_user_and_groups(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 2,
+        },
+        non_admin_user(),
+        vec!["eng".to_string()],
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            &format!(
+                r#"{{"audience": "{share_audience}", "axis": "read", "selector": "user:teammate@example.com"}}"#
+            ),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "own-identity claim rows must not count against the sharing bound"
+    );
+
+    cleanup_grants(&pool, &claimed_audience).await;
+    cleanup_grants(&pool, &share_audience).await;
+}
+
 /// Removing one's own direct `user:<email>` row succeeds (204).
 #[ignore]
 #[tokio::test]
@@ -873,6 +942,92 @@ async fn live_visible_non_admin_knob_on_sees_held_pairs() {
     );
     assert!(selectors.contains(&"user:reader@example.com"));
     assert!(selectors.contains(&"user:sibling@example.com"));
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Non-admin, knob on: a pair visible only through a `*` row does not leak its sibling rows to a
+/// caller who holds nothing directly on that pair -- `caller_selectors` always leads with `"*"`,
+/// so binding it unfiltered into the held-pair `EXISTS` query would match every pair carrying a
+/// `*` row and leak every sibling row on it (mirrors
+/// `list_audience_grants_db_test.rs::star_only_selector_list_yields_zero_rows`, the SQL table
+/// function's counterpart of this same case).
+#[ignore]
+#[tokio::test]
+async fn live_visible_non_admin_knob_on_star_row_does_not_leak_siblings() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-visible-star-on-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(&pool, &audience, "read", "*", "test").await;
+    insert_grant(&pool, &audience, "read", "user:sibling@example.com", "test").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json_body(response).await;
+    let rows = rows.as_array().expect("array of grants");
+    let matching = rows
+        .iter()
+        .filter(|r| r["audience"].as_str() == Some(audience.as_str()))
+        .count();
+    assert_eq!(
+        matching, 0,
+        "a caller holding nothing directly on a `*`-only pair must see none of its rows"
+    );
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// Non-admin, knob off: the caller's own-rows-only narrowing must not fall back to every
+/// `*`-selector row in the store -- `selector = ANY($1)` with an unfiltered `caller_selectors`
+/// would match the `*` row itself (and, worse, every unrelated `*` row store-wide), even though
+/// neither is one of the caller's own `user:`/`group:` rows.
+#[ignore]
+#[tokio::test]
+async fn live_visible_non_admin_knob_off_star_row_does_not_leak_siblings() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-visible-star-off-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    insert_grant(&pool, &audience, "read", "*", "test").await;
+    insert_grant(&pool, &audience, "read", "user:sibling@example.com", "test").await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(get_request("/api/audience-grants/visible"))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json_body(response).await;
+    let rows = rows.as_array().expect("array of grants");
+    let matching = rows
+        .iter()
+        .filter(|r| r["audience"].as_str() == Some(audience.as_str()))
+        .count();
+    assert_eq!(
+        matching, 0,
+        "a caller with no own row on this pair must not see the `*` row or its sibling"
+    );
 
     cleanup_grants(&pool, &audience).await;
 }

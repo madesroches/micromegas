@@ -385,8 +385,9 @@ async fn caller_holds_pair(
 ///    Delegation is per axis: a `read` grant lets you share `read`, a `mint` grant lets you share
 ///    `mint`, and neither confers the other.
 /// 3. The caller must be under `max_grants_per_caller` distinct rows already created
-///    (`created_by = <caller>`, counted across every pair) -- otherwise a caller who holds one
-///    grant could plant unlimited `group:<arbitrary-id>` rows on that pair.
+///    (`created_by = <caller>`, counted across every pair, excluding the caller's own
+///    `user:<email>` identity-selector rows -- see the check's own comment) -- otherwise a
+///    caller who holds one grant could plant unlimited `group:<arbitrary-id>` rows on that pair.
 ///
 /// An admin bypasses all three checks entirely, exactly as before.
 async fn create_grant(
@@ -417,11 +418,28 @@ async fn create_grant(
         // of this same knob): without it, a caller who holds one grant on a pair could plant
         // unlimited `group:<arbitrary-id>` rows on it -- the PK only blocks exact duplicates.
         // Best-effort under concurrency, not a hard ceiling -- same caveat as the mint bounds.
-        let grant_count: i64 =
+        //
+        // Excludes the caller's own `user:<email>` identity-selector rows: `try_claim_and_mint`
+        // (`ingestion_keys.rs`) writes two such rows (`mint` and `read`) per lazy claim, also
+        // with `created_by = <caller>`, and those rows represent claiming, not sharing -- this
+        // bound exists to cap the latter (per the comment above: unlimited `group:<arbitrary-id>`
+        // rows), not to make claiming and sharing compete for the same budget. Mirrors
+        // `delete_grant`'s own has-email/no-email split for the same `user:<email>` predicate.
+        let grant_count: i64 = if let Some(email) = &caller.email {
+            let own_selector = format!("user:{email}");
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM audience_grants WHERE created_by = $1 AND selector <> $2",
+            )
+            .bind(&created_by)
+            .bind(&own_selector)
+            .fetch_one(&pool)
+            .await?
+        } else {
             sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE created_by = $1")
                 .bind(&created_by)
                 .fetch_one(&pool)
-                .await?;
+                .await?
+        };
         if grant_count >= state.max_grants_per_caller {
             return Err(AudienceGrantError::Forbidden(format!(
                 "you have created the maximum number of grants ({})",
@@ -592,13 +610,16 @@ async fn delete_grant(
 /// - **Admin**: every row.
 /// - **Non-admin, self-service knob on**: every grant on each `(audience, axis)` pair the caller
 ///   holds a matching grant on -- the same held-pair `EXISTS` query `list_audience_grants()`
-///   (the SQL table function) runs, bound to the caller's *unfiltered* `caller_selectors` (`*`
-///   is fine here, unlike the write-side hold check in `create_grant`).
+///   (the SQL table function) runs, bound to the caller's identity selectors with the leading
+///   `"*"` stripped from `caller_selectors` (the same [`caller_holds_pair`] convention): binding
+///   the unfiltered list would match every pair carrying a `*` grant row, leaking every sibling
+///   row on it to a caller who holds nothing there directly.
 /// - **Non-admin, self-service knob off**: narrows to the caller's own rows only
-///   (`selector = ANY(caller_selectors)`) -- never a sibling's `selector`/`created_by`. This
-///   route (unlike the table function) *can* read the knob, since it lives in this same crate,
-///   and a default knob-off deployment must not hand a browsing non-admin the wider disclosure
-///   the held-pair query carries (the same reasoning `/my-audiences` already applies).
+///   (`selector = ANY(...)`, `"*"` stripped the same way) -- never a sibling's
+///   `selector`/`created_by`. This route (unlike the table function) *can* read the knob, since
+///   it lives in this same crate, and a default knob-off deployment must not hand a browsing
+///   non-admin the wider disclosure the held-pair query carries (the same reasoning
+///   `/my-audiences` already applies).
 ///
 /// This function is what makes the two read paths deliberately asymmetric:
 /// `list_audience_grants()` cannot check this knob at all (a different crate/service), so it
@@ -618,7 +639,13 @@ async fn visible_grants(
         .fetch_all(&pool)
         .await?
     } else if state.self_service_mint_enabled {
-        let selectors = caller_selectors(&caller);
+        // `"*"` stripped before binding -- the same `caller_holds_pair` convention. Left in, it
+        // would match every pair carrying a `*` grant row and leak every sibling row on it to a
+        // caller who holds nothing there directly.
+        let identity_selectors: Vec<String> = caller_selectors(&caller)
+            .into_iter()
+            .filter(|s| s != "*")
+            .collect();
         sqlx::query_as::<_, VisibleGrantRow>(
             "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by
              FROM audience_grants g
@@ -628,18 +655,23 @@ async fn visible_grants(
              )
              ORDER BY g.audience, g.axis, g.selector",
         )
-        .bind(&selectors)
+        .bind(&identity_selectors)
         .fetch_all(&pool)
         .await?
     } else {
-        let selectors = caller_selectors(&caller);
+        // `"*"` stripped before binding -- otherwise this would return every `*`-selector row in
+        // the entire store rather than just the caller's own `user:`/`group:` rows.
+        let identity_selectors: Vec<String> = caller_selectors(&caller)
+            .into_iter()
+            .filter(|s| s != "*")
+            .collect();
         sqlx::query_as::<_, VisibleGrantRow>(
             "SELECT audience, axis, selector, created_at, created_by
              FROM audience_grants
              WHERE selector = ANY($1)
              ORDER BY audience, axis, selector",
         )
-        .bind(&selectors)
+        .bind(&identity_selectors)
         .fetch_all(&pool)
         .await?
     };
