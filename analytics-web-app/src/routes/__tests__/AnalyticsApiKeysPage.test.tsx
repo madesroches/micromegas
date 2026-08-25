@@ -43,8 +43,9 @@ vi.mock('@/components/layout', () => ({
 
 // Page size for the pagination tests. Small on purpose: a "full page" case
 // has to return exactly `pageSize` rows for the Next button to appear, and
-// rendering the real default (the server's 500-row max) in jsdom took ~5s —
-// enough to trip vitest's default test timeout on a loaded CI runner.
+// rendering the real default (the server's 500-row max) in jsdom is
+// noticeably slower — using a small page size here keeps this file's test
+// time roughly 6x faster.
 const TEST_PAGE_SIZE = 3
 
 function renderPage(pageSize?: number) {

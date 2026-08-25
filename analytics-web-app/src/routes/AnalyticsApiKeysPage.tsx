@@ -39,7 +39,7 @@ export interface AnalyticsApiKeysPageProps {
 
 export default function AnalyticsApiKeysPage({
   pageSize = MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
-}: AnalyticsApiKeysPageProps = {}) {
+}: AnalyticsApiKeysPageProps) {
   return (
     <Suspense
       fallback={

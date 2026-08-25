@@ -40,7 +40,7 @@ export interface IngestionApiKeysPageProps {
 
 export default function IngestionApiKeysPage({
   pageSize = MAX_INGESTION_API_KEYS_LIST_LIMIT,
-}: IngestionApiKeysPageProps = {}) {
+}: IngestionApiKeysPageProps) {
   return (
     <Suspense
       fallback={
