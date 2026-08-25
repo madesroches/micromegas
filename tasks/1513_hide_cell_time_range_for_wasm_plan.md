@@ -11,10 +11,14 @@ executed locally by the WASM DataFusion engine. Server-side views know their own
 the cell author doing anything. Tables registered into the WASM engine are plain Arrow batches with no
 "this is the time column" metadata, so there is no column-agnostic place to apply the same bound.
 
-Per the issue's decision, the fix is UI-side and small: `shouldShowTimeRange` stops deciding from
+Per the issue's decision, the fix has two parts. `shouldShowTimeRange` stops deciding from
 `cell.type` alone and also accounts for the *resolved* data source (`resolveCellDataSource`), so the
-**Query Time Range** field disappears from the cell editor for cells that run locally. No execution
-semantics change.
+**Query Time Range** field disappears from the cell editor for cells that run locally. And because
+hiding the field alone leaves a saved override live and invisible — see below — `resolveQueryTimeRange`
+itself is gated on the same resolved data source, so the override has no effect at execution, at
+render, or in macro substitution either. The guiding principle for both parts: **a cell whose resolved
+data source is `notebook` has no per-cell time range — its effective range is always the screen's
+global range.**
 
 ## Current State
 
@@ -70,17 +74,22 @@ always a real (remote) data source — `notebook` is only ever selectable per-ce
 
 - `useCellExecution.ts:197` — `resolveQueryTimeRange(cell, …)` shadows the global range so both the
   server query window (`params.begin/end`) **and** `$from`/`$to` macro substitution pick it up.
-- `notebook-cell-view.ts:216` — display-axis resolution for Swimlane / PropertyTimeline / Map.
+- `notebook-cell-view.ts:216` — `buildCellRendererProps` resolves the same override for *every* cell,
+  with no data-source check, and passes it as the `timeRange` prop. That prop draws the displayed
+  Swimlane/PropertyTimeline axis and bounds Map playback, and feeds render-time `$from`/`$to`
+  substitution in Table/TransposedTable link templates and Chart/PieChart unit/label text.
 - `PerfettoExportCell.tsx:382` — the Perfetto cell's own resolution.
 
-For a `notebook`-source cell the first of these is the only live path, and only through macro
-substitution: the SQL string a WASM cell runs has `$from`/`$to` replaced by the resolved override, so
-an override on a WASM cell is not *strictly* inert — it moves `$from`/`$to` if the cell author wrote
-`WHERE t BETWEEN '$from' AND '$to'` by hand. That residual path buys nothing, though: whatever
-expression the author would type into the cell's `from`/`to` they can type directly into the local
-SQL instead, and the override still can't reach rows the upstream remote fetch never pulled. What's
-absent is the automatic enforcement the server gives every remote view for free, and there's no
-capability to preserve — hence hiding rather than annotating the field.
+None of these paths reach a server for a `notebook`-source cell — there is no server query to bound —
+but all three are live today regardless: the first still moves `$from`/`$to` inside the cell's own
+locally-run SQL, the second still redraws a display-axis cell's axis/playback window and render-time
+templates, and the third resolves independently of whatever the editor shows. That is the bug this
+plan fixes, not a capability worth preserving: the override's shadowing in `resolveQueryTimeRange`
+doesn't add a filter on top of the global range, it *replaces* what `$from`/`$to` mean inside that
+cell's SQL — so a saved override on a `notebook`-source cell makes the screen's own global range
+unreachable from that cell's macros, with (once the field is hidden) no UI left to see or clear it.
+The Design section below closes all three paths at their common root (`resolveQueryTimeRange`) rather
+than leaving them live and merely un-editable.
 
 ### Horizontal-group children
 
@@ -136,16 +145,87 @@ const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 
 ### Behaviour after the change
 
-| Cell's data source | Field |
-|---|---|
-| unset (→ notebook default, always remote) | shown |
-| an explicit remote data source | shown |
-| `notebook` | **hidden** |
-| `$var` resolving to `notebook` | **hidden** |
-| `$var` resolving to a remote source, or unset/empty (→ notebook default) | shown |
+| Cell's data source | Field | Effective range at execution / render / macros |
+|---|---|---|
+| unset (→ notebook default, always remote) | shown | override (if set), else global |
+| an explicit remote data source | shown | override (if set), else global |
+| `notebook` | **hidden** | **always global** — override ignored |
+| `$var` resolving to `notebook` | **hidden** | **always global** — override ignored |
+| `$var` resolving to a remote source, or unset/empty (→ notebook default) | shown | override (if set), else global |
 
 The field reappears the moment the user switches the cell back to a remote data source — the config
-value is never mutated by this change, so an override set before the switch survives round-tripping.
+value is never mutated by this change, so an override set before the switch is honoured again, and
+its effective range reverts to the global one only for as long as the cell stays `notebook`-sourced.
+
+### Execution/render-time enforcement — gate `resolveQueryTimeRange` on the resolved data source
+
+Hiding the field is not sufficient on its own: `resolveQueryTimeRange` currently shadows the global
+range for *any* cell with a saved override, with no data-source check, so a `notebook`-source cell
+whose override was set before this change (or edited directly in the screen JSON) keeps having its
+SQL's `$from`/`$to`, its Swimlane/PropertyTimeline axis, its Map playback window, and its
+Table/Chart/PieChart render-time macros all resolve against the override instead of the screen's
+global range — invisibly, since the field that would show or clear it is now hidden. That is a bug
+(the screen's own global range becomes unreachable from that cell), not a capability worth preserving.
+
+There are exactly three production call sites of `resolveQueryTimeRange`: `useCellExecution.ts:197`,
+`notebook-cell-view.ts:216`, and `PerfettoExportCell.tsx:382`. Rather than repeat a data-source check
+at each one (and risk them drifting), the gate lives once inside `resolveQueryTimeRange` itself, via a
+new required field on its `MacroCtx` parameter (`notebook-utils.ts:305`):
+
+```ts
+interface MacroCtx {
+  variables: Record<string, VariableValue>
+  timeRange: { begin: string; end: string }
+  cellResults: Record<string, Table>
+  cellSelections: Record<string, Record<string, unknown>>
+  /** The cell's already-resolved data source (`resolveCellDataSource`'s result). Required so every
+   * call site is forced to supply it — each of the three already computes or has access to this
+   * value, and a caller that doesn't know it can't correctly decide whether to shadow the range. */
+  cellDataSource: string | undefined
+}
+
+export function resolveQueryTimeRange(
+  config: CellConfig,
+  ctx: MacroCtx,
+): { begin: string; end: string } {
+  if (ctx.cellDataSource === 'notebook') return ctx.timeRange
+  const raw = 'timeRange' in config ? (config as QueryBackedCellConfig).timeRange : undefined
+  // ...unchanged from here
+}
+```
+
+Required, not optional, for the same reason `shouldShowTimeRange`'s new parameters are required above:
+`MacroCtx` is built as an object literal at all three call sites, so the compiler enumerates every one
+of them rather than letting a fourth, future call site silently default to "always honour the
+override." `CellExecutionContext` (`cell-registry.ts:67-75`) gets the same field, required, for the
+same reason — see `PerfettoExportCell.tsx` below.
+
+What each call site supplies:
+
+- **`useCellExecution.ts:197`** — already computes `resolveCellDataSource(...)` for `isNotebookSource`,
+  but at line 205, *after* the `resolveQueryTimeRange` call at line 197. Move that computation above
+  it, and pass `cellDataSource` into both the `MacroCtx` literal and the `CellExecutionContext` literal
+  built a few lines below (which downstream `execute` functions, including Perfetto's, receive).
+- **`notebook-cell-view.ts:216`** — no new lookup needed. `buildCellRendererProps`'s `context.dataSource`
+  is *already* the cell's resolved data source, not the notebook-level default: `NotebookRenderer.tsx`
+  computes `resolveCellDataSource(cell, availableVariables, dataSource)` once at line 633 and passes
+  that result as `dataSource: cellDataSource` into the `CellViewContext` literal at line 646 — the same
+  field `buildCellRendererProps` already forwards unchanged as `CellRendererProps.dataSource` (line
+  246). So this site passes `context.dataSource` straight through as `cellDataSource`. (Calling
+  `resolveCellDataSource` a second time here, as if `context.dataSource` were the notebook-level
+  default, would in fact be harmless — the function is idempotent on an already-resolved value — but
+  it's an unnecessary second call and a new import; passing the value straight through is simpler.)
+- **`PerfettoExportCell.tsx:382`** — its `execute` receives only `CellExecutionContext`, which has no
+  data-source field today. Add `cellDataSource: string | undefined`, required, to the interface
+  (`cell-registry.ts:67-75`); `useCellExecution.ts` is the only production site that constructs this
+  interface as an object literal (verified — every other reference destructures it as a parameter
+  type), so this is a one-site change there, using the same value the previous bullet already computes.
+
+Test files that build `CellExecutionContext`-shaped literals to call a cell type's `execute` directly
+(e.g. `PerfettoExportCell.test.tsx`, `VariableCell.test.tsx`) are not affected by making the field
+required: `tsconfig.json` excludes `*.test.ts(x)` and `__tests__` from type-checking, so those literals
+aren't compiler-checked, and an omitted field reads as `undefined` at runtime — which is `!== 'notebook'`
+and so behaves exactly as before. No changes needed there.
 
 ### Chart cells
 
@@ -159,26 +239,51 @@ which is right for that single-query shape. Inspecting per-query sources would m
 
 ## Implementation Steps
 
-1. **`analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`** — widen `shouldShowTimeRange`
-   to `(cell, variables, notebookDataSource)` and return `false` when
-   `resolveCellDataSource(...) === 'notebook'`. Update the doc comment to name the reason and #1513.
-   `resolveCellDataSource` is defined in the same module — no new imports.
-2. **`analytics-web-app/src/components/CellEditor.tsx:90`** — pass `variables` and `defaultDataSource`.
-3. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts:1303`** — update the
-   existing `shouldShowTimeRange` describe block for the new signature and add the notebook-source cases.
-4. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
-   that the field is hidden (and the override not enforced) for cells whose data source resolves to
-   `notebook`, and why.
-5. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**`.
-6. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
-   `analytics-web-app/`.
+1. **`analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`** —
+   a. Widen `shouldShowTimeRange` to `(cell, variables, notebookDataSource)` and return `false` when
+      `resolveCellDataSource(...) === 'notebook'`. Update the doc comment to name the reason and #1513.
+   b. Add the required `cellDataSource: string | undefined` field to `MacroCtx` (line 305), and make
+      `resolveQueryTimeRange` return `ctx.timeRange` unchanged when `ctx.cellDataSource === 'notebook'`.
+   `resolveCellDataSource` is defined in the same module — no new imports for (a).
+2. **`analytics-web-app/src/lib/screen-renderers/cell-registry.ts`** — add the required
+   `cellDataSource: string | undefined` field to `CellExecutionContext` (lines 67-75).
+3. **`analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`** — move the existing
+   `resolveCellDataSource(...)`/`isNotebookSource` computation (currently at line 205) above the
+   `resolveQueryTimeRange` call (line 197), and pass `cellDataSource` into both that call's `MacroCtx`
+   literal and the `CellExecutionContext` literal built below it.
+4. **`analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts:216`** — pass `context.dataSource`
+   (already the cell's resolved data source) as `cellDataSource` in the `resolveQueryTimeRange` call's
+   `MacroCtx` literal.
+5. **`analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx:382`** — pass
+   `context.cellDataSource` as `cellDataSource` in its `resolveQueryTimeRange` call's `MacroCtx` literal.
+6. **`analytics-web-app/src/components/CellEditor.tsx:90`** — pass `variables` and `defaultDataSource`
+   to `shouldShowTimeRange`.
+7. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`** — update both the
+   `shouldShowTimeRange` describe block (line ~1303, new signature, notebook-source cases) and the
+   `resolveQueryTimeRange` describe block (line ~1234: add `cellDataSource` to `baseCtx`, plus cases
+   proving a `notebook` data source returns the global range even with an override set, and a remote
+   data source still honours the override).
+8. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
+   that for cells whose data source resolves to `notebook`, the field is hidden *and* any existing
+   override is ignored entirely — `$from`/`$to` and the display axis follow the screen's global range —
+   and why. Also update `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every
+   query-backed cell at the shared `timeRange` field, with the same `notebook`-source qualifier.
+9. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing both the hidden
+   field and the behaviour change for cells already carrying a saved override.
+10. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
+    `analytics-web-app/`.
 
 ## Files to Modify
 
 - `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`
+- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
+- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`
+- `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts`
+- `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx`
 - `analytics-web-app/src/components/CellEditor.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`
 - `mkdocs/docs/web-app/notebooks/variables.md`
+- `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -189,14 +294,25 @@ which is right for that single-query shape. Inspecting per-query sources would m
   reason to exist. A disabled-but-visible field keeps a stale override readable but uncleatable, and
   adds a prop to `CellTimeRangeField` for an advisory control. Hiding matches how
   `shouldShowDataSource` already removes irrelevant fields rather than greying them out.
-- **UI-only vs. also ignoring the override at execution.** This plan does **not** change
-  `resolveQueryTimeRange` or `useCellExecution`. A cell that already has an override saved and is
-  later switched to `notebook` keeps feeding that range into `$from`/`$to` for its locally-executed
-  SQL — an invisible-but-live effect, the one wart of the UI-only approach. Forcing the global range
-  for notebook-source cells would make "hidden" and "no effect" identical, at the cost of a silent
-  behaviour change on saved configs that hand-wrote `WHERE t BETWEEN '$from' AND '$to'` against a
-  local table. Keeping execution untouched makes this a pure visibility change with no migration
-  risk; the residual path stays reachable only by editing the screen JSON.
+- **UI-only vs. also ignoring the override at execution.** Rejected. An earlier draft of this plan
+  stayed UI-only, leaving `resolveQueryTimeRange` unchanged, on the theory that a `notebook`-source
+  cell's residual paths (moving `$from`/`$to` in its own SQL; narrowing a display-axis cell's axis or
+  playback window) were harmless leftovers reachable only by editing the screen JSON. That
+  understatement missed what the shadowing actually does: it doesn't add a filter on top of the global
+  range, it *replaces* what `$from`/`$to` mean inside the cell's SQL — so a saved override makes the
+  screen's own global range unreachable from that cell's macros, with no UI left to see or clear it.
+  That is a bug, not a preserved capability, so this plan takes the second option: `resolveQueryTimeRange`
+  now ignores the override whenever `cellDataSource === 'notebook'`, making "hidden" and "no effect"
+  identical everywhere the override is consumed.
+
+  This is a deliberate, silent behaviour change on any already-saved screen: a `notebook`-source cell
+  that hand-wrote `WHERE t BETWEEN '$from' AND '$to'` against an override, or a Swimlane/PropertyTimeline/
+  Map cell whose axis or playback window an override narrowed, will render against the wider global
+  range the next time the screen loads — no migration path is provided, because the prior behaviour is
+  the thing being fixed, not a feature being deprecated. The hand-written-`WHERE`-against-an-override
+  path is judged effectively unused in practice (the same bound can be written directly into the SQL,
+  without the override, to the same effect), so this risk is treated as hypothetical rather than as a
+  reason to keep the bug.
 - **Not attempting to make the override work for WASM.** Enforcing a range locally would require a
   per-table time-column declaration (registered alongside `engine.register_table`) plus a rewrite that
   injects the bound — and even then it could only narrow within whatever range the *upstream* remote
@@ -207,22 +323,27 @@ which is right for that single-query shape. Inspecting per-query sources would m
 
 ## Documentation
 
-- `mkdocs/docs/web-app/notebooks/variables.md` — "Per-Cell Query Time Range": add a bullet that the
-  field is not offered for cells whose data source resolves to `notebook`, because a WASM-registered
-  table has no designated time column to bound; use SQL (`WHERE`) or narrow the upstream cell's range
-  instead. Amend the existing bullet that says the field is shown "for every cell type that supports it".
+- `mkdocs/docs/web-app/notebooks/variables.md` — "Per-Cell Query Time Range": add a bullet that for
+  cells whose data source resolves to `notebook`, the field is not offered *and* any override is
+  ignored entirely — `$from`/`$to` macros, the display axis, and playback all follow the screen's
+  global range instead, because a WASM-registered table has no designated time column to bound. Use
+  SQL (`WHERE`) or narrow the upstream cell's range instead. Amend the existing bullet that says the
+  field is shown "for every cell type that supports it".
 - `mkdocs/docs/web-app/notebooks/cell-types.md:7` — the sentence pointing every query-backed cell at
-  the shared `timeRange` field should get the same "not for `notebook`-source cells" qualifier.
-- `mkdocs/docs/web-app/notebooks/execution.md` — optional: a line in "Local WASM Query Engine" noting
-  local queries are bounded by whatever range the upstream fetch used, not by a per-cell override.
-- `CHANGELOG.md` under `## Unreleased` → `**Web App:**`: hide the per-cell **Query Time Range** field
-  for cells whose data source resolves to `notebook` (local WASM), since there's no designated time
-  column on a WASM-registered table to enforce it against (#1513).
+  the shared `timeRange` field gets the same "ignored for `notebook`-source cells" qualifier.
+  (`execution.md` is left as-is: its "Local WASM Query Engine" section already doesn't mention the
+  per-cell override, so there's nothing there to correct.)
+- `CHANGELOG.md` under `## Unreleased` → `**Web App:**`: hide the per-cell **Query Time Range** field,
+  and ignore any saved override, for cells whose data source resolves to `notebook` (local WASM) — the
+  screen's global range now applies there unconditionally, since there's no designated time column on
+  a WASM-registered table to enforce a per-cell override against (#1513).
 
 ## Testing Strategy
 
-Unit tests in `notebook-utils.test.ts` (`shouldShowTimeRange` describe block) — keep them proportional
-to the change; no new CellEditor render test is warranted for a visibility flag:
+Unit tests in `notebook-utils.test.ts`, across both affected describe blocks — keep them proportional
+to the change; no new CellEditor or renderer render test is warranted for a visibility/gating flag:
+
+**`shouldShowTimeRange`:**
 
 - Existing type-based cases, updated for the new signature (`{}` variables, a remote default) — they
   must still pass unchanged in outcome.
@@ -232,9 +353,21 @@ to the change; no new CellEditor render test is warranted for a visibility flag:
 - A combobox variable cell with `dataSource: 'notebook'` → `false` (it was `true` before).
 - `markdown`/`referencetable`/`hg` stay `false` regardless of data source.
 
-Manual check: open a notebook, add a table cell, confirm **Query Time Range** is present; switch its
-data source to **Notebook**, confirm the field disappears; switch back, confirm it returns with any
-previously entered value intact.
+**`resolveQueryTimeRange`:**
+
+- Add `cellDataSource` to the existing `baseCtx` literal (a non-`'notebook'` value, e.g. `'remote-src'`)
+  so all existing cases keep exercising the "remote" path explicitly rather than relying on an implicit
+  `undefined`.
+- `cellDataSource: 'notebook'` with a `timeRange` override set on the cell → returns `ctx.timeRange`
+  (the global range) unchanged, proving the override is ignored, not just narrowed.
+- `cellDataSource` set to a remote source with the same override → still resolves the override, exactly
+  as today — proving the new gate is additive for remote-sourced cells.
+
+Manual check: open a notebook, add a table cell with a **Query Time Range** override set, confirm it
+narrows the result; switch the cell's data source to **Notebook**, confirm the field disappears *and*
+the cell now runs and (for a display-axis cell) renders against the screen's global range, not the
+override; switch back to a remote source, confirm the field reappears with the override intact and
+back in effect.
 
 ## Open Questions
 
@@ -243,6 +376,11 @@ previously entered value intact.
    inside groups.
 
 **Settled:** whether a `notebook`-source cell should also *ignore* a previously saved `timeRange` at
-execution — no. Hiding the control is the fix; execution stays as-is (see Trade-offs). The
-`$from`/`$to`-only path it leaves behind is redundant with writing the expression directly in the
-local SQL, so nothing is lost by making it unreachable from the UI.
+execution/render time — yes. An earlier draft of this plan answered no and kept execution/rendering
+untouched, on the theory that the residual `$from`/`$to`-substitution and axis/playback-narrowing paths
+were harmless leftovers. That was wrong: the override doesn't add a filter, it *replaces* what
+`$from`/`$to` mean inside the cell's SQL, so leaving it live made the screen's own global range
+unreachable from that cell's macros with no UI left to see or clear it — a bug. `resolveQueryTimeRange`
+is now gated on the resolved data source (see Design), so a `notebook`-source cell's effective range is
+always the screen's global range, at execution, at render, and in macros, matching what the hidden
+field already implies.
