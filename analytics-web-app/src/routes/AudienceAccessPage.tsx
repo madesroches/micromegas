@@ -614,10 +614,17 @@ function AudienceAccessPageContent() {
   const totalCount = grants.length
   const totalAudiences = new Set(grants.map((g) => g.audience)).size
 
-  const canShareRow = (row: AudienceGrant[]): boolean => {
+  // Ground truth for "can I share this pair" is `me.held_pairs`, not anything visible in
+  // `grants`: `/visible` returns every row on a pair the caller can merely *see* (wider than
+  // what they *hold* -- it includes pairs visible only via a `*` row, or a `group:` row the
+  // caller isn't actually a member of), and the client has no group-membership info of its own
+  // to tell those apart. Scanning selector prefixes on the row would just guess.
+  const heldPairs = useMemo(() => new Set(me?.held_pairs ?? []), [me])
+
+  const canShareRow = (audience: string, axis: GrantAxis): boolean => {
     if (isAdmin) return true
     if (selfServiceOff) return false
-    return row.some((r) => r.selector === `user:${myEmail}` || r.selector.startsWith('group:'))
+    return heldPairs.has(`${audience}:${axis}`)
   }
 
   const canDeleteChip = (chip: AudienceGrant): boolean => {
@@ -928,7 +935,7 @@ function AudienceAccessPageContent() {
                           </div>
                         )
                       }
-                      const shareable = canShareRow(rows)
+                      const shareable = canShareRow(group.audience, axis)
                       return (
                         <div key={axis}>
                           <div className="flex items-center gap-2 mb-2">

@@ -42,6 +42,7 @@ interface MockOptions {
     audiences: string[]
     mint_prefix: string | null
     email: string | null
+    held_pairs?: string[]
   }
   onCreate?: (body: unknown) => { status: number; body: unknown }
   onDelete?: () => { status: number; body?: unknown }
@@ -279,6 +280,7 @@ describe('AudienceAccessPage — non-admin', () => {
         audiences: ['team-alpha'],
         mint_prefix: 'reader-',
         email: 'reader@example.com',
+        held_pairs: ['team-alpha:read'],
       },
     })
     renderPage()
@@ -292,6 +294,60 @@ describe('AudienceAccessPage — non-admin', () => {
     expect(screen.queryByRole('button', { name: /^everyone$/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^user$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^group$/i })).toBeInTheDocument()
+  })
+
+  it('hides Share on a pair visible only via a group: row the caller is not confirmed to hold', async () => {
+    // Regression test: `/visible` returns every row on a pair the caller can merely *see*
+    // (wider than what they *hold*) -- a `group:eng` row here does not, by itself, tell the
+    // client whether `reader@example.com` is actually a member of `eng`. Without a held-pairs
+    // pair in `myAudiences`, the client must not guess "yes" from the selector prefix alone.
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'read',
+          selector: 'group:eng',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: [],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('group:eng')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Share read access/i })).not.toBeInTheDocument()
+  })
+
+  it('shows Share on a pair the caller holds per held_pairs, even via a group: row', async () => {
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'read',
+          selector: 'group:eng',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:read'],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('group:eng')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Share read access/i })).toBeInTheDocument()
   })
 
   it('shows the chip delete control only on the caller\'s own row', async () => {
@@ -346,6 +402,10 @@ describe('AudienceAccessPage — non-admin', () => {
         audiences: ['team-alpha'],
         mint_prefix: 'reader-',
         email: 'reader@example.com',
+        // Client believes it holds this pair (so the Share button renders at all); this test
+        // exercises the dialog's inline-403 rendering for the case where the server disagrees
+        // (e.g. the hold was revoked between the page load and the share attempt).
+        held_pairs: ['team-alpha:read'],
       },
       onCreate: () => ({
         status: 403,

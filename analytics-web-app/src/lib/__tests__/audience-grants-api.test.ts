@@ -161,6 +161,23 @@ describe('audience-grants-api', () => {
     await expect(fetchMyAudiences()).rejects.toBeInstanceOf(AudienceGrantError)
   })
 
+  it('fetchMyAudiences decodes held_pairs alongside the existing fields', async () => {
+    mockFetch({
+      ok: true,
+      status: 200,
+      json: () => ({
+        is_admin: false,
+        audiences: ['team-alpha'],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:read', 'team-alpha:mint'],
+      }),
+    })
+
+    const result = await fetchMyAudiences()
+    expect(result.held_pairs).toEqual(['team-alpha:read', 'team-alpha:mint'])
+  })
+
   describe('validateSelector', () => {
     it('accepts *, user:<id>, and group:<id>', () => {
       expect(validateSelector('*')).toBeNull()

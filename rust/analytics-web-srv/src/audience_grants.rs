@@ -62,6 +62,15 @@ pub struct AudienceGrantsState {
     /// same self-service feature, so none of it must widen on upgrade any more than the mint
     /// route itself does.
     pub self_service_mint_enabled: bool,
+    /// `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER`, default 50 -- caps how many rows one
+    /// non-admin caller may have created in `audience_grants` (`created_by = <caller>`,
+    /// counted across every audience/axis/selector, not just the pair being shared into),
+    /// checked in `create_grant` before the insert. Mirrors `IngestionKeysState`'s
+    /// `max_claims_per_caller`/`max_keys_per_caller` bounds on the mint side of the same
+    /// `MICROMEGAS_SELF_SERVICE_MINT` knob: without it, a non-admin holding one grant on a pair
+    /// could plant unlimited `group:<arbitrary-id>` rows on it. Best-effort under concurrency,
+    /// not a hard ceiling -- same caveat as those two bounds. Skipped for an admin.
+    pub max_grants_per_caller: i64,
 }
 
 /// JSON error body returned by every handler in this module. Same `{code, message}` shape as
@@ -367,16 +376,19 @@ async fn caller_holds_pair(
 /// `POST {base_path}/api/audience-grants` -- creates (or reports the pre-existing) grant row.
 /// `201` when this call created it, `200` when it already existed.
 ///
-/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, two further checks that
-/// need the parsed body and so live here rather than in the gate (Design §3):
+/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, three further checks
+/// that need the parsed body and so live here rather than in the gate (Design §3):
 ///
 /// 1. `selector` must be `user:…`/`group:…` -- `*` is refused with 403, since a caller who can
 ///    read an audience must not be able to open it to every authenticated principal.
 /// 2. The caller must hold `(audience, axis)` via an identity selector ([`caller_holds_pair`]).
 ///    Delegation is per axis: a `read` grant lets you share `read`, a `mint` grant lets you share
 ///    `mint`, and neither confers the other.
+/// 3. The caller must be under `max_grants_per_caller` distinct rows already created
+///    (`created_by = <caller>`, counted across every pair) -- otherwise a caller who holds one
+///    grant could plant unlimited `group:<arbitrary-id>` rows on that pair.
 ///
-/// An admin bypasses both checks entirely, exactly as before.
+/// An admin bypasses all three checks entirely, exactly as before.
 async fn create_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
@@ -386,6 +398,7 @@ async fn create_grant(
     validate_audience(&body.audience)?;
     validate_axis(&body.axis)?;
     validate_selector(&body.selector)?;
+    let created_by = caller_identity(&caller);
 
     if !caller.is_admin {
         if body.selector == "*" {
@@ -400,9 +413,23 @@ async fn create_grant(
                 body.axis, body.audience
             )));
         }
+        // Per-caller bound (mirrors `IngestionKeysState::max_keys_per_caller` on the mint side
+        // of this same knob): without it, a caller who holds one grant on a pair could plant
+        // unlimited `group:<arbitrary-id>` rows on it -- the PK only blocks exact duplicates.
+        // Best-effort under concurrency, not a hard ceiling -- same caveat as the mint bounds.
+        let grant_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE created_by = $1")
+                .bind(&created_by)
+                .fetch_one(&pool)
+                .await?;
+        if grant_count >= state.max_grants_per_caller {
+            return Err(AudienceGrantError::Forbidden(format!(
+                "you have created the maximum number of grants ({})",
+                state.max_grants_per_caller
+            )));
+        }
     }
 
-    let created_by = caller_identity(&caller);
     let row = insert_or_get(
         &pool,
         &body.audience,
@@ -671,6 +698,14 @@ struct MyAudiencesResponse {
     audiences: Vec<String>,
     mint_prefix: Option<String>,
     email: Option<String>,
+    /// `"{audience}:{axis}"` for every `(audience, axis)` pair `caller` holds a grant on via an
+    /// identity selector -- i.e. the pairs [`caller_holds_pair`] would return `true` for. Lets
+    /// the Audience Access page tell "a pair I hold" apart from "a pair I can merely see" (e.g.
+    /// visible only via a `*` row, or a `group:` row the caller isn't actually a member of --
+    /// the client has no group-membership info of its own to make that call). Always empty for
+    /// an admin: `isAdmin` already grants Share everywhere on the client, and every pair is a
+    /// held pair for an admin's own writes anyway.
+    held_pairs: Vec<String>,
 }
 
 /// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
@@ -715,11 +750,36 @@ async fn my_audiences(
     audiences.sort();
     let mint_prefix = mint_prefix_for(&caller.email);
     let email = caller.email.clone();
+
+    // Ground truth for `canShareRow` on the client (the fix for the Share-button-on-pairs-I-
+    // don't-hold issue): the caller's own distinct held `(audience, axis)` pairs, by the exact
+    // same rule `caller_holds_pair` checks -- `*` filtered out of `caller_selectors`, matching
+    // that write-hold-check convention (a `*` row must not let a non-admin claim they "hold"
+    // every pair). An admin needs none of this on the client, so skip the query entirely.
+    let held_pairs = if caller.is_admin {
+        Vec::new()
+    } else {
+        let identity_selectors: Vec<String> = caller_selectors(&caller)
+            .into_iter()
+            .filter(|s| s != "*")
+            .collect();
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT DISTINCT audience, axis FROM audience_grants WHERE selector = ANY($1)",
+        )
+        .bind(&identity_selectors)
+        .fetch_all(&pool)
+        .await?;
+        rows.into_iter()
+            .map(|(audience, axis)| format!("{audience}:{axis}"))
+            .collect()
+    };
+
     Ok(Json(MyAudiencesResponse {
         is_admin: caller.is_admin,
         audiences,
         mint_prefix,
         email,
+        held_pairs,
     }))
 }
 

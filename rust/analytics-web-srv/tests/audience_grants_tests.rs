@@ -131,6 +131,7 @@ async fn create_grant_403_for_non_admin_when_knob_disabled() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -150,6 +151,7 @@ async fn delete_grant_403_for_non_admin_when_knob_disabled() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -173,6 +175,7 @@ async fn create_grant_403_for_non_admin_star_selector() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -196,6 +199,7 @@ async fn create_grant_400_for_invalid_axis() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -215,6 +219,7 @@ async fn create_grant_400_for_invalid_audience() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -237,6 +242,7 @@ async fn create_grant_400_for_overlong_selector() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -264,6 +270,7 @@ async fn my_audiences_403_for_non_admin_when_knob_disabled() {
         AudienceGrantsState {
             pool: Some(lazy_pool()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -280,6 +287,7 @@ async fn my_audiences_503_when_pool_unconfigured() {
         AudienceGrantsState {
             pool: None,
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -340,6 +348,7 @@ async fn create_grant_503_when_pool_unconfigured() {
         AudienceGrantsState {
             pool: None,
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -359,6 +368,7 @@ async fn delete_grant_503_when_pool_unconfigured() {
         AudienceGrantsState {
             pool: None,
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -377,6 +387,7 @@ async fn visible_503_when_pool_unconfigured() {
         AudienceGrantsState {
             pool: None,
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -428,6 +439,7 @@ async fn live_create_delete_round_trip() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -522,6 +534,7 @@ async fn live_create_grant_403_when_caller_does_not_hold_the_pair() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -551,6 +564,7 @@ async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
         vec!["eng".to_string()],
@@ -565,6 +579,52 @@ async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::CREATED);
+
+    cleanup_grants(&pool, &audience).await;
+}
+
+/// A non-admin who already holds the pair is still refused once they are at
+/// `max_grants_per_caller` distinct rows already created -- the per-caller bound (mirrors
+/// `IngestionKeysState::max_keys_per_caller` on the mint side of this same knob), which caps how
+/// many `audience_grants` rows one non-admin may have `created_by`, counted across every pair,
+/// not just the one being shared into here.
+#[ignore]
+#[tokio::test]
+async fn live_create_grant_403_when_max_grants_per_caller_reached() {
+    let pool = live_pool().await;
+    let audience = format!(
+        "audience-grants-max-per-caller-test-{}",
+        uuid::Uuid::new_v4()
+    );
+    // Caller's own row: makes `caller_holds_pair(audience, "read")` true, and is itself the one
+    // row that already puts the caller at the (deliberately tiny) bound below.
+    insert_grant(
+        &pool,
+        &audience,
+        "read",
+        "user:reader@example.com",
+        "reader@example.com",
+    )
+    .await;
+
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(pool.clone()),
+            self_service_mint_enabled: true,
+            max_grants_per_caller: 1,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            &format!(
+                r#"{{"audience": "{audience}", "axis": "read", "selector": "user:teammate@example.com"}}"#
+            ),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     cleanup_grants(&pool, &audience).await;
 }
@@ -588,6 +648,7 @@ async fn live_delete_grant_204_for_own_row() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -618,6 +679,7 @@ async fn live_delete_grant_204_for_a_row_the_caller_created() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -657,6 +719,7 @@ async fn live_delete_grant_403_for_someone_elses_row() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -694,6 +757,7 @@ async fn live_delete_grant_404_when_caller_does_not_hold_the_pair() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -719,6 +783,7 @@ async fn live_delete_grant_404_for_a_nonexistent_row() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -750,6 +815,7 @@ async fn live_visible_admin_sees_every_row() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -784,6 +850,7 @@ async fn live_visible_non_admin_knob_on_sees_held_pairs() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -827,6 +894,7 @@ async fn live_visible_non_admin_knob_off_sees_own_rows_only() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -866,6 +934,7 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         non_admin_user(),
     );
@@ -881,6 +950,15 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
         audiences.iter().any(|a| a == &audience),
         "expected {audience:?} in {audiences:?}"
     );
+    // `held_pairs` reports the same `(audience, axis)` pair, formatted as `"{audience}:{axis}"`
+    // -- the ground truth the web app's `canShareRow` checks instead of guessing from a
+    // `group:` selector prefix.
+    let held_pairs = body["held_pairs"].as_array().expect("held_pairs array");
+    let expected_pair = format!("{audience}:mint");
+    assert!(
+        held_pairs.iter().any(|p| p == &expected_pair),
+        "expected {expected_pair:?} in {held_pairs:?}"
+    );
 
     // A caller with no matching selector doesn't see it.
     let other = ValidatedUser {
@@ -893,6 +971,7 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: true,
+            max_grants_per_caller: 50,
         },
         other,
     );
@@ -906,6 +985,11 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
     assert!(
         !audiences.iter().any(|a| a == &audience),
         "unexpected {audience:?} in {audiences:?}"
+    );
+    let held_pairs = body["held_pairs"].as_array().expect("held_pairs array");
+    assert!(
+        held_pairs.is_empty(),
+        "expected no held pairs for a caller with no matching selector, got {held_pairs:?}"
     );
 
     sqlx::query("DELETE FROM audience_grants WHERE audience = $1")
@@ -923,6 +1007,7 @@ async fn live_my_audiences_admin_gets_a_normal_response_regardless_of_knob() {
         AudienceGrantsState {
             pool: Some(pool.clone()),
             self_service_mint_enabled: false,
+            max_grants_per_caller: 50,
         },
         admin_user(),
     );
@@ -933,4 +1018,12 @@ async fn live_my_audiences_admin_gets_a_normal_response_regardless_of_knob() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body["is_admin"], true);
+    // `held_pairs` is always empty for an admin -- `isAdmin` alone already grants Share
+    // everywhere on the client, so the field carries no information for this caller.
+    assert!(
+        body["held_pairs"]
+            .as_array()
+            .expect("held_pairs array")
+            .is_empty()
+    );
 }

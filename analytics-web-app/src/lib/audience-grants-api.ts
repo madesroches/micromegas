@@ -128,6 +128,14 @@ export interface MyAudiences {
   audiences: string[]
   mint_prefix: string | null
   email: string | null
+  /** `"{audience}:{axis}"` for every pair the caller holds a grant on via an identity selector
+   *  (i.e. the pairs the server's own hold check would accept for a create/delete) -- always
+   *  empty for an admin, who doesn't need it (Share is offered everywhere on the client for an
+   *  admin regardless). Ground truth for `canShareRow`: the client has no group-membership info
+   *  of its own, so it can't otherwise tell "a pair I hold" apart from "a pair I can merely
+   *  see" via `/visible` (which is wider -- includes pairs visible only through a `*` row or a
+   *  `group:` row the caller isn't actually a member of). */
+  held_pairs: string[]
 }
 
 /** `GET {base}/api/audience-grants/my-audiences`. A 403 (self-service knob off for a

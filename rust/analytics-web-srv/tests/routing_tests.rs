@@ -413,6 +413,7 @@ fn disabled_auth_app() -> Router {
     let audience_grants_state = AudienceGrantsState {
         pool: None,
         self_service_mint_enabled: false,
+        max_grants_per_caller: 50,
     };
     build_protected_routes(
         "",
