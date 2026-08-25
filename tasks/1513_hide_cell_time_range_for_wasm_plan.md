@@ -20,6 +20,12 @@ render, or in macro substitution either. The guiding principle for both parts: *
 data source is `notebook` has no per-cell time range — its effective range is always the screen's
 global range.**
 
+The same rule also settles a gap the field never covered: horizontal-group (HG) children have no
+**Query Time Range** field today even though a JSON-set override on a child *is* honoured at execution
+and at render. This plan adds the field to `ChildEditorView` under the identical resolved-data-source
+gate — shown for a remote-source child, hidden for a `notebook`-source one — so the same invariant
+holds inside groups (see Open Questions → Settled).
+
 ## Current State
 
 ### Visibility gate — `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts:343`
@@ -103,8 +109,11 @@ and before the unresolved-selection check) rather than leaving them live and mer
 
 HG children are edited by `ChildEditorView` (`HorizontalGroupCell.tsx:278-393`), which renders name +
 `DataSourceField` + the type editor — it has **no** `CellTimeRangeField` today (`CellEditor.tsx` is
-`CellTimeRangeField`'s only render site). There is still no field to hide for children, so the
-visibility half of this plan has nothing to do there.
+`CellTimeRangeField`'s only render site). So there is nothing to *hide* for children — but the override
+is nevertheless already honoured for them (see the next paragraph), which means the working feature is
+reachable only by hand-editing the screen JSON. This plan closes that asymmetry: it **adds** the field
+to `ChildEditorView` under the same resolved-data-source rule as a top-level cell — shown for a child
+whose resolved source is remote, hidden for a `notebook`-source child (see Design).
 
 The enforcement half, however, does reach them. `NotebookRenderer.tsx:333` flattens HG children into
 `cells` via `flattenCellsForExecution` before handing them to the single `useCellExecution` run, so a
@@ -116,8 +125,9 @@ passing `dataSource: resolveCellDataSource(child, variables, defaultDataSource)`
 *resolved* source, the same shape `notebook-cell-view.ts:216` gates on. So a JSON-set override on a
 `notebook`-source HG child is honoured today, at both execution and render, and will be ignored after
 this change too — consistent with the plan's invariant, not an exception to it. Both paths already
-pass a resolved data source, so this needs no extra implementation step; it's a behaviour note, not new
-scope. Open Question 1 (whether children should gain the field at all) is unaffected and left as-is.
+pass a resolved data source, so the enforcement half needs no extra implementation step there; it's a
+behaviour note, not new scope. It is also why adding the editor control is a small, self-contained
+addition rather than a new feature: both consumers already do the right thing with a child's override.
 
 ## Design
 
@@ -164,6 +174,31 @@ Caller, `CellEditor.tsx:90`:
 ```ts
 const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 ```
+
+### Second caller — the HG child editor
+
+`ChildEditorView` (`HorizontalGroupCell.tsx:279`, props at `:261`) gains the field under the same gate,
+`shouldShowTimeRange(child, variables, defaultDataSource)`. Like `CellEditor`, it **already receives
+both** `variables: Record<string, VariableValue>` and `defaultDataSource?: string`, so this needs no new
+props — only the two imports (`CellTimeRangeField` from `@/components/CellTimeRangeField`, and
+`shouldShowTimeRange` added to the existing `../notebook-utils` import at `HorizontalGroupCell.tsx:33`).
+
+Placement mirrors `CellEditor.tsx:148-153`: immediately after the existing
+`shouldShowDataSource(child.type) && <DataSourceField … />` block (`HorizontalGroupCell.tsx:355-367`)
+and before `<meta.EditorComponent …>`. The update path is the children-map pattern `DataSourceField`'s
+`onChange` already uses there:
+
+```ts
+const newChildren = config.children.map((c) =>
+  c.name === child.name ? { ...c, timeRange: tr } : c,
+)
+onChange({ ...config, children: newChildren })
+```
+
+This makes `shouldShowTimeRange` have two production callers instead of one, both passing the same
+resolution context, so the visibility rule stays identical inside and outside a group. The
+"Behaviour after the change" table below applies verbatim to a child, reading "cell's data source" as
+the child's own `dataSource` (children resolve against the same notebook default).
 
 ### Behaviour after the change
 
@@ -298,25 +333,38 @@ which is right for that single-query shape. Inspecting per-query sources would m
    `context.cellDataSource` as `cellDataSource` in its `resolveQueryTimeRange` call's `MacroCtx` literal.
 6. **`analytics-web-app/src/components/CellEditor.tsx:90`** — pass `variables` and `defaultDataSource`
    to `shouldShowTimeRange`.
-7. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`** — update both the
+7. **`analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`** — import
+   `CellTimeRangeField` from `@/components/CellTimeRangeField` and add `shouldShowTimeRange` to the
+   existing `../notebook-utils` import (line 33). In `ChildEditorView`, render `<CellTimeRangeField>`
+   gated on `shouldShowTimeRange(child, variables, defaultDataSource)` — both already props — placed
+   right after the `shouldShowDataSource(child.type) && <DataSourceField … />` block (lines 355-367)
+   and before `<meta.EditorComponent …>`. Wire `onChange` through the same children-map pattern
+   `DataSourceField` uses there: `config.children.map((c) => c.name === child.name ? { ...c, timeRange: tr } : c)`,
+   then `onChange({ ...config, children: newChildren })`. No new props.
+8. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`** — update both the
    `shouldShowTimeRange` describe block (line ~1303, new signature, notebook-source cases) and the
    `resolveQueryTimeRange` describe block (line ~1234: add `cellDataSource` to `baseCtx`, plus cases
    proving a `notebook` data source returns the global range even with an override set, and a remote
    data source still honours the override).
-8. **`analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`** — add a case
+9. **`analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`** — add a case
    next to the existing "blocks when the timeRange override references an unresolved row selection"
    test (line 858): the same unresolved-selection-in-`timeRange` setup, but on a `notebook`-source
    cell and with `engine: createMockEngine()` supplied (the helper already defined at line 77 and used
    for exactly this purpose at lines 1334, 1369, 1432, 1466), asserting the cell's status reaches
    `'success'` — proving the unresolved-selection check's `cellTimeRange` clauses are actually skipped
    for that data source and the cell runs end-to-end, not merely that it avoids `'blocked'`.
-9. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`** — add a case
+10. **`analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`** — add a case
    to the existing `describe('per-cell timeRange override')` block (line ~396): using the `makeContext`
    helper's `dataSource` override, prove `buildCellRendererProps` with `dataSource: 'notebook'` and a
    cell carrying a `timeRange` override returns the global range for `result.timeRange` (the override
    is ignored), while the existing remote-source case alongside it keeps proving the override is
    honoured.
-10. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
+11. **`analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`** — one
+   small case in the existing `describe('child editor view')` block (next to "DataSourceField not shown
+   for markdown type", line ~628): the **Query Time Range** label renders for a remote-source child and
+   is absent for a child with `dataSource: 'notebook'` (`makeChild` already takes config overrides, and
+   `createEditorProps` already accepts `defaultDataSource`/`showNotebookOption`).
+12. **Docs** — `mkdocs/docs/web-app/notebooks/variables.md` "Per-Cell Query Time Range" section: note
    that for cells whose data source resolves to `notebook`, the field is hidden *and* any existing
    override is ignored entirely — `$from`/`$to` and the display axis follow the screen's global range —
    and why. Also qualify the two bullets this change invalidates: **Errors** (`variables.md:119`),
@@ -329,10 +377,12 @@ which is right for that single-query shape. Inspecting per-query sources would m
    `mkdocs/docs/web-app/notebooks/cell-types.md:7`, which currently points every query-backed cell at
    the shared `timeRange` field, and `cell-types.md:114`, which tells the Flame Graph cell's author to
    "use the cell-level `timeRange` field instead" to change what the cell's SQL fetches — both with the
-   same `notebook`-source qualifier.
-11. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing both the hidden
-   field and the behaviour change for cells already carrying a saved override.
-12. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
+   same `notebook`-source qualifier. Add to the Horizontal Group "Features" list
+   (`cell-types.md:181`) that each child also has its own query time range.
+13. **`CHANGELOG.md`** — one bullet under `## Unreleased` → `**Web App:**` describing the hidden
+   field, the behaviour change for cells already carrying a saved override, and the field now being
+   offered on server-query HG children.
+14. Run `yarn lint`, `yarn tsc --noEmit` (or the repo's typecheck script), and `yarn test` in
     `analytics-web-app/`.
 
 ## Files to Modify
@@ -343,9 +393,11 @@ which is right for that single-query shape. Inspecting per-query sources would m
 - `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/PerfettoExportCell.tsx`
 - `analytics-web-app/src/components/CellEditor.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/useCellExecution.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-cell-view.test.ts`
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
 - `mkdocs/docs/web-app/notebooks/variables.md`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `CHANGELOG.md`
@@ -392,7 +444,9 @@ which is right for that single-query shape. Inspecting per-query sources would m
   ignored entirely — `$from`/`$to` macros, the display axis, and playback all follow the screen's
   global range instead, because a WASM-registered table has no designated time column to bound. Use
   SQL (`WHERE`) or narrow the upstream cell's range instead. Amend the existing bullet that says the
-  field is shown "for every cell type that supports it" (`variables.md:121`). Also qualify the **Errors** bullet
+  field is shown "for every cell type that supports it" (`variables.md:121`) to add that it is also
+  offered for horizontal-group children whose query runs server-side, and hidden there too when the
+  child's data source resolves to `notebook`. Also qualify the **Errors** bullet
   (`variables.md:119`) and the **Waiting for selection** bullet (`variables.md:120`) as not applying
   to a cell whose data source resolves to `notebook`: the former because the early return in
   `resolveQueryTimeRange` never reaches `parseRelativeTime`, so an unparseable override on such a cell
@@ -405,17 +459,23 @@ which is right for that single-query shape. Inspecting per-query sources would m
   apply when the cell's data source resolves to `notebook`" qualifier.
   (`execution.md` is left as-is: its "Local WASM Query Engine" section already doesn't mention the
   per-cell override, so there's nothing there to correct.)
+- `mkdocs/docs/web-app/notebooks/cell-types.md` — the Horizontal Group "Features" bullet saying each
+  child has "independent execution, state, and data source settings" (line ~181) also gets the per-cell
+  query time range. (Nothing in `mkdocs/docs/web-app/notebooks/` currently claims HG children *lack*
+  the field — checked — so there is no wrong statement to correct, only this one to extend.)
 - `CHANGELOG.md` under `## Unreleased` → `**Web App:**`: hide the per-cell **Query Time Range** field,
   and ignore any saved override, for cells whose data source resolves to `notebook` (local WASM) — the
   screen's global range now applies there unconditionally, since there's no designated time column on
-  a WASM-registered table to enforce a per-cell override against (#1513).
+  a WASM-registered table to enforce a per-cell override against; the same field is now also offered on
+  horizontal-group children whose query runs server-side (#1513).
 
 ## Testing Strategy
 
 Unit tests in `notebook-utils.test.ts`, across both affected describe blocks, plus one case each in
 `useCellExecution.test.ts` and `notebook-cell-view.test.ts` for the two call sites whose correctness
-isn't covered by the `notebook-utils.ts` unit tests alone — keep them proportional to the change; no
-new CellEditor or renderer render test is warranted for a visibility/gating flag:
+isn't covered by the `notebook-utils.ts` unit tests alone, and one small case in
+`HorizontalGroupCell.test.tsx` for the newly added field — keep them proportional to the change; no new
+CellEditor render test is warranted for a visibility flag whose rule is already unit-tested:
 
 **`shouldShowTimeRange`:**
 
@@ -455,17 +515,34 @@ new CellEditor or renderer render test is warranted for a visibility/gating flag
   wiring (`NotebookRenderer.tsx:646`, `HorizontalGroupCell.tsx:192`) actually reaches the gate. The
   existing remote-source case in the same block continues to prove the override is honoured there.
 
+**HG child field (`cells/__tests__/HorizontalGroupCell.test.tsx`):**
+
+- One case in the existing `describe('child editor view')` block (alongside "DataSourceField not shown
+  for markdown type"): with a `table` child, the **Query Time Range** label is present; with the same
+  child carrying `dataSource: 'notebook'`, it is absent. That's the whole new surface — the gate's logic
+  itself is covered by the `shouldShowTimeRange` unit tests above, so nothing more is warranted here.
+
 Manual check: open a notebook, add a table cell with a **Query Time Range** override set, confirm it
 narrows the result; switch the cell's data source to **Notebook**, confirm the field disappears *and*
 the cell now runs and (for a display-axis cell) renders against the screen's global range, not the
 override; switch back to a remote source, confirm the field reappears with the override intact and
-back in effect.
+back in effect. Repeat once on a horizontal-group child: select the child in the group editor, confirm
+the **Query Time Range** field is now offered and narrows that child's results, then switch the child's
+data source to **Notebook** and confirm the field disappears and the child runs against the screen's
+global range.
 
 ## Open Questions
 
-1. Should HG children gain the **Query Time Range** field at all? They don't have it today, so #1513
-   doesn't apply to them — but the gap is worth its own issue if per-cell ranges are meant to work
-   inside groups.
+None outstanding.
+
+**Settled:** whether HG children should gain the **Query Time Range** field — yes, for children whose
+resolved data source is remote, under the same `notebook`-source hiding rule as a top-level cell. An
+earlier draft left this open as possibly its own issue. It isn't: a JSON-set override on an HG child is
+*already* honoured today, at execution (children are flattened into the single `useCellExecution` run)
+and at render (`HorizontalGroupCell.tsx:192` passes each child's resolved data source into
+`buildCellRendererProps`). The only missing piece was the editor control, so leaving it out would keep
+a working feature reachable only by hand-editing the screen JSON. Adding the field closes that
+asymmetry, and costs no new props (see Design → "Second caller").
 
 **Settled:** whether a `notebook`-source cell should also *ignore* a previously saved `timeRange` at
 execution/render time — yes. An earlier draft of this plan answered no and kept execution/rendering
